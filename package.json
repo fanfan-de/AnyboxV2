@@ -1,0 +1,26 @@
+{
+  "name": "anybox-v2",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "build": "npm run build --workspace @anybox/application",
+    "typecheck": "npm run typecheck --workspace @anybox/application",
+    "test": "npm run test --workspace @anybox/application",
+    "check": "npm run typecheck && npm test",
+    "predemo": "npm run build",
+    "demo": "node examples/demo.mjs",
+    "prestart": "npm run build",
+    "start": "node examples/host.mjs",
+    "predev": "npm run build",
+    "dev": "node examples/host.mjs --dev",
+    "nya:build": "npm --prefix ../NyaCore run build",
+    "nya:watch": "npm --prefix ../NyaCore run dev:core"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "5.9.3"
+  }
+}
