@@ -32,8 +32,8 @@ test('the normal host starts its components and exits after cleanup', { timeout:
   assert.match(host.output(), /application started/)
 })
 
-test('the development host closes its watchers after a host shutdown request', { timeout: 10_000 }, async t => {
-  const host = launch(t, ['--dev'])
+test('the long-running host exits after a host shutdown request', { timeout: 10_000 }, async t => {
+  const host = launch(t, [])
   await waitFor(Promise.race([
     host.ready,
     host.exited.then(result => { throw new Error(`host exited before ready: ${result.code}\n${host.output()}`) }),
@@ -42,5 +42,4 @@ test('the development host closes its watchers after a host shutdown request', {
   host.child.send('close')
   const result = await waitFor(host.exited, t.signal)
   assert.equal(result.code, 0, host.output())
-  assert.match(host.output(), /HMR applied/)
 })

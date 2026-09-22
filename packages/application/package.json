@@ -21,8 +21,9 @@
     "@nya/core": "file:../../../NyaCore/packages/core",
     "@nya/loader": "file:../../../NyaCore/packages/loader",
     "@nya/include": "file:../../../NyaCore/packages/include",
-    "@nya/hmr": "file:../../../NyaCore/packages/hmr",
-    "@nya/logger-console": "file:../../../NyaCore/packages/logger-console",
+    "@nya/logger-console": "file:../../../NyaCore/packages/logger-console"
+  },
+  "devDependencies": {
     "@nya/timer": "file:../../../NyaCore/packages/timer"
   }
 }

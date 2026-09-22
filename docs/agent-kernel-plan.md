@@ -27,7 +27,7 @@
 
 ### 1.2 当前已有与待建内容
 
-- [application](../packages/application/src/index.ts)已装配 Core、Loader、Include、HMR、Timer、ConsoleLogger，并提供通用配置与生命周期控制。
+- [application](../packages/application/src/index.ts)已装配 Core、Loader、Include 和 ConsoleLogger，并提供通用配置与生命周期控制。Timer 仅以 Effect 函数按需使用，HMR 不属于稳定 application 装配。
 - [现有公共接口](../packages/application/src/types.ts)只有应用启动、关闭、配置和框架 Context 等能力。
 - 模型、工具、会话、Run、上下文与交互服务均待开发。
 - 当前空配置示例和 application 测试继续作为框架装配回归基线。
@@ -313,9 +313,10 @@ interrupted 是后续持久化恢复需要的结束原因预留。Memory 模式�
 - workDone 表示业务工作及调用级清理停止，不能依赖自己的 Fiber.dispose；父协调者负责剩余结构清理。资源释放完成和终态提交完成分别记录，避免相互等待。
 - StateService 保留到必要终态提交完成；共享模型客户端保留到使用者停止。
 - 如果必要提交已经确定失败，StateService 的保留条件改为等待全部真实工作停止及有限的结算尝试完成。释放执行许可，close 随后释放其余资源并聚合拒绝，不无限等待终态写入成功；完成通知与清理不得依赖已故障的事件发布链路。
-- 外部请求每次取得当前 Nya 服务；不缓存跨组件重启的旧 facade。
+- 组件通过 `inject` 声明服务，从 `apply(ctx, config, deps)` 的 `deps` 使用本轮依赖快照；根控制面的外部请求每次通过 `context.get()` 取得当前 Nya 服务，不使用 Context 服务属性代理，不缓存跨组件重启的旧服务值或句柄。
 - 注册撤销绑定确切 owner/generation，旧 disposer 不能删除相同 ID 的新注册。
-- HMR 仅显式开发模式；受影响 Run 停止并结算，依赖恢复后不自动重放。
+- Nya Fiber `FAILED` 是粘性状态；依赖变化只更新目标，组合根必须显式 update/restart，或通过 Loader/Include 恢复失败条目。
+- 开发期组件变更由宿主关闭当前应用、等待资源清理后重启进程；受影响 Run 停止并结算，重启后不自动重放。
 - 进程信号、强制退出和退出期限由使用方处理；内核关闭幂等，并等待真实工作结束。
 
 ## 7. 拟定 API 与代码组织
@@ -361,7 +362,7 @@ examples/
   agent-kernel-demo.mjs         后续新增，有限、无网络的完整闭环
 ```
 
-- agent-kernel 的实现只依赖公共 @nya/core、按需的 Nya Timer 和通用库，不依赖具体供应商 SDK。
+- agent-kernel 的实现只依赖公共 `@nya/core`、按需的 `@nya/timer` 函数和通用库，不安装 Timer Service，不依赖具体供应商 SDK。
 - contracts/spi 子入口导入不启动内核；公共领域数据类型不引用供应商类型，Nya 集成类型单独放在嵌入入口。
 - agent-adapters 依赖 agent-kernel/spi，内核不反向导入具体适配器。
 - 第三方桥接同样放在实现边界内；不在 agent-kernel 公共导出中重导出第三方类型。其他组件只依赖自有契约，不依赖默认实现类。
@@ -443,7 +444,7 @@ examples/
 - [ ] 用第二个最小执行策略和替代上下文/工具实现验证扩展入口。
 - [ ] 所有职责组件均可从组合根显式选择实现；逐组件验证消费者不导入具体实现，所用第三方桥接通过该组件合约套件。
 - [ ] 对每项第三方依赖检查类型/错误/数据泄漏、关闭路径及退出条件；至少选一个实际借用模块完成自研替代验证。首版未采用第三方模块时，用独立替代实现验证关键替换边界并记录适用范围。
-- [ ] 验证提供方卸载、Agent 关闭、配置更新、开发 HMR 和失败清理。
+- [ ] 验证提供方卸载、Agent 关闭、配置更新、开发进程重启和失败清理。
 - [ ] 增加 agent-kernel-demo，演示工具、事件和取消，默认无网络且有限结束。
 - [ ] 接入 application 的同树组合，保留现有空配置示例。
 - [ ] 补充使用文档、支持能力、Memory 保证及未实现功能说明。

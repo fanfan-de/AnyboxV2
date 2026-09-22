@@ -1,37 +1,23 @@
 /** 可执行组件宿主：终端、进程信号和退出期限留在这里。 */
 import { createInterface } from 'node:readline'
 import { resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { createApplication } from '@anybox/application'
 
 const args = process.argv.slice(2)
 let configPath = fileURLToPath(new URL('./application/config.json', import.meta.url))
-let development = false
 let once = false
-const entries = []
 for (let index = 0; index < args.length; index++) {
   const argument = args[index]
-  if (argument === '--dev') development = true
-  else if (argument === '--once') once = true
-  else if ((argument === '--config' || argument === '--entry') && args[index + 1]) {
-    const value = resolve(args[++index])
-    if (argument === '--config') configPath = value
-    else entries.push(pathToFileURL(value).href)
+  if (argument === '--once') once = true
+  else if (argument === '--config' && args[index + 1]) {
+    configPath = resolve(args[++index])
   } else {
-    throw new Error('用法：npm start -- [--dev] [--once] [--config file.json] [--entry component.mjs]')
+    throw new Error('用法：npm start -- [--once] [--config file.json]')
   }
 }
-// 通过 --entry 明确列出代码入口；空配置也可以只观察配置文件变化。
 const application = createApplication({
   configPath,
-  development: development ? {
-    entries,
-    watch: !once,
-    onReport(report) {
-      console.log(`HMR ${report.status} (${report.phase}), generation=${report.generation}, pid=${report.pid}`)
-      for (const error of report.errors) console.error(error)
-    },
-  } : undefined,
 })
 let requestStop
 const stopped = new Promise(resolve => { requestStop = resolve })
@@ -72,11 +58,6 @@ void application.failure.then(error => {
   console.error(error)
   void stop(1)
 })
-void application.restartRequested.then(() => {
-  console.error('开发环境需要重启；关闭完成后请重新运行命令。')
-  void stop(75)
-})
-
 try {
   await application.start()
   if (!stopping) {

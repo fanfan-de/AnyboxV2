@@ -1,8 +1,8 @@
 # Anybox Agent 产品架构
 
-状态：目标设计。旧 harness 已删除，当前仅保留通用 Nya 应用基础，Runtime 从零制作。日期：2026-09-06。
+状态：目标设计。旧 harness 已删除，当前仅保留通用 Nya 应用基础，Runtime 从零制作。日期：2026-09-21。
 
-本文确定组件职责和开发边界。[协议草案](runtime-protocol.md)定义客户端与 Runtime 的交互；[Client SDK 设计](client-sdk.md)定义共享客户端能力；[开发计划](development-plan.md)定义产品实施顺序；[Runtime v1 制作计划](runtime-implementation-plan.md)把内核职责细化为 48 类组件及具体任务、依赖、事务和验收条件。
+本文确定组件职责和开发边界。[协议草案](runtime-protocol.md)定义客户端与 Runtime 的交互；[Client SDK 设计](client-sdk.md)定义共享客户端能力；[开发计划](development-plan.md)定义产品实施顺序；[通用 Agent 内核 v1 计划](agent-kernel-plan.md)是当前内核范围和验收依据。[旧 Runtime 制作计划](runtime-implementation-plan.md)保留 48 类组件的较大范围设计，不作为当前首版的固定数量要求。
 
 ## 1. 产品目标与基本决策
 
@@ -55,24 +55,25 @@ flowchart TB
 | 宿主 | 装配、配置来源、监听地址、身份认证接入、进程管理、退出期限 | 决定 Runtime 在哪里运行和使用哪些适配器 |
 | NyaCore | Component、Service、Fiber、Effect 以及配套设施 | Agent 的业务语义由 Anybox 实现 |
 
-## 3. NyaCore 六个包如何使用
+## 3. NyaCore 五个发布包如何使用
 
 | 包 | 在本产品中的位置 | 使用边界 |
 | --- | --- | --- |
 | `@nya/core` | Runtime 的公共组件运行基础 | 所有框架能力从公共入口导入，基础设施和业务使用同一应用 Context |
 | `@nya/loader` | 装配受管组件、协调依赖和启停 | 管理组件实例；对外仅暴露经过授权的产品操作 |
 | `@nya/include` | 宿主的 JSON 组件配置来源 | 管理部署配置，不存会话、消息、运行事件或密钥明文 |
-| `@nya/hmr` | 显式开发模式 | 组件开发热替换；生产升级由宿主发布与重启处理 |
-| `@nya/timer` | Runtime 的超时、期限检查、维护调度 | 取消未来调度后，还要显式等待已开始的异步任务 |
+| `@nya/timer` | Runtime 的超时、期限检查、维护调度 | 按需调用 `timeout(ctx, ...)` / `interval(ctx, ...)`，不安装 Timer Service；取消未来调度后还要显式等待已开始的异步任务 |
 | `@nya/logger-console` | 本地和服务端宿主的可选日志输出 | 消费结构化日志；宿主单独采集日志，避免输出到 TUI 绘制区域 |
 
-当前 `@anybox/application` 已装配六个包。目标 Runtime 保留这种框架集成，但允许宿主选择配置来源和可选设施；内嵌使用不必提供一个磁盘 JSON 文件。
+当前 `@anybox/application` 装配 Core、Loader、Include 和可选 ConsoleLogger；Timer 由真正拥有定时器的业务组件直接调用函数。HMR 已移到 NyaCore `experimental/`，不参与稳定构建、测试和发布；开发期变更由宿主进程重启生效。目标 Runtime 保留这种框架集成，但允许宿主选择配置来源和可选设施；内嵌使用不必提供一个磁盘 JSON 文件。
+
+组件通过 `inject` 声明服务并从 `apply(ctx, config, deps)` 的 `deps` 使用本轮依赖快照。受信根控制面每次处理外部请求时用 `context.get()` 取得当前服务；Context 不代理具名服务属性，服务引用也不跨组件重启缓存。
 
 组件、会话和包是三个不同概念：**组件按服务与生命周期划分，包按依赖和发布边界划分，会话等业务对象按数据模型保存。** 不需要把每个服务立即拆成一个 npm 包，也不需要为每条历史会话保留一个 Fiber。
 
 ## 4. Runtime 的九类职责域
 
-下表保留产品层的职责域概览，名称不代表目前已经存在的导出，也不限定为九个实现组件。具体制作采用 [48 类组件划分](runtime-implementation-plan.md#5-48-类组件制作清单)：Agent 接口与驱动、收件箱、提示词、模型、工具和单次执行分别拆开；Gateway 位于内核之外。组件开始时可以放在同一个 `packages/runtime` 中。
+下表保留产品层的职责域概览，名称不代表目前已经存在的导出，也不限定为九个实现组件。具体制作以[通用 Agent 内核 v1 计划](agent-kernel-plan.md)的契约、职责与资源作用域为准；Gateway 位于内核之外。组件开始时可以放在同一个 `packages/runtime` 或当前计划的 `packages/agent-kernel` 边界中，开始实施时先统一命名。
 
 | 职责域（概览名称） | 提供的服务与职责 | 注入的依赖 / 资源归属 |
 | --- | --- | --- |
@@ -160,7 +161,7 @@ examples/                       当前为无网络组件宿主；后续增加 Ru
 VS Code Webview → 扩展内部消息桥 → Extension Host 中的 client → protocol
 宿主入口 → application → runtime + gateway + 选定 adapters + Nya 配套组件
 gateway → runtime 的门面接口 + protocol
-runtime → protocol + @nya/core（按需 Timer）
+runtime → protocol + @nya/core（按需 @nya/timer 函数）
 adapters → runtime/spi + 必要的第三方库
 ```
 
@@ -187,7 +188,7 @@ TUI、Desktop 或本地 VS Code 扩展通过本地宿主管理接口发现/启�
 
 首个部署版本采用单实例写入，持久数据与容器生命周期分离，并具备 TLS 接入、身份认证、健康/就绪检查、数据迁移和备份恢复流程。具体数据库及服务框架在实现相应适配器时选定，不影响公共协议。
 
-如果提供托管多用户服务，增加账号/工作区路由和隔离的 Runtime worker。身份、存储权限和工具执行都必须按工作区校验；能执行任意代码的工作区需要进程/容器等执行隔离。不能把 Nya 的 `Context.isolate()` 当作用户或系统安全隔离。
+如果提供托管多用户服务，增加账号/工作区路由和隔离的 Runtime worker。身份、存储权限和工具执行都必须按工作区校验；能执行任意代码的工作区需要进程/容器等执行隔离。Nya Context 只表达组件作用域，不是用户或系统安全隔离。
 
 需要横向扩容时再实现持久队列、任务归属租约和防止旧 worker 继续写入的版本校验。未实现这些能力前，不部署多个调度器共同消费一份运行数据库。
 
@@ -295,11 +296,13 @@ Runtime 正常关闭顺序：停止接收新任务 → 保留查询/订阅用于
 
 ### 8.1 Nya 生命周期实现约束
 
-- 每个 Runtime 实例有一个应用 Root；长期组件安装在该树内，AgentInstance 拥有局部资源子树，活动 RunScope 及 Turn/Step 是该树内实际的子 Component/Fiber。RunCoordinator 的状态控制权与 Fiber 资源所有权分开。`extend()` / `isolate()` 只改变 Context 视图，不能作为新的清理所有者。
+- 每个 Runtime 实例有一个应用 Root；长期组件安装在该树内，AgentInstance 拥有局部资源子树，活动 RunScope 及 Turn/Step 是该树内实际的子 Component/Fiber。RunCoordinator 的状态控制权与 Fiber 资源所有权分开；只有组件安装建立新的 Fiber/Effect 所有权。
 - Run 组件在 `apply()` 中完成初始化、登记 Effect 并返回。协调器确认其 ACTIVE 后启动执行；初始化 Promise 和任务完成 Promise 分离。
 - 清理中中止并等待执行循环，不能等待一个反过来依赖当前 Fiber 清理完成的 Promise。公开的终态完成通知由协调器在清理与持久化后发出。
 - 外部请求每次获取当前服务；Run 内只持有归属于该次运行的句柄。不要跨组件重启缓存旧 Context 服务。
-- 稳定模型/工具注册表内部的条目删除不会自动触发 Nya 依赖重启。注销必须停止新获取、取消并等待受影响任务，再销毁实现。第一版无需保证热更过程中的任务无中断。
+- 组件的具名依赖来自 `deps`，根控制面的实时查找来自 `context.get()`；不使用 `ctx.serviceName` 形式的属性代理。
+- Fiber `FAILED` 是粘性状态。依赖恢复只更新目标，不自动重试；管理者必须根据错误和当前目标显式调用 update、restart、Loader/Include 恢复或 dispose。
+- 稳定模型/工具注册表内部的条目删除不会自动触发 Nya 依赖重启。注销必须停止新获取、取消并等待受影响任务，再销毁实现。第一版无需保证提供方切换或宿主重启期间的任务无中断。
 - `await fiber` 和 `awaitIdle()` 表示生命周期协调完成，仍须检查就绪状态；它们不代表 Run 完成。
 - 模型或工具业务失败归属于该 Run；关键基础设施失败会影响 Runtime 就绪状态。不能把每个 Run 的业务错误都升级为整个进程退出。
 - Effect 清理失败应完整报告。框架没有替任意异步代码强制超时，宿主退出期限与库内清理承诺分开。
@@ -339,7 +342,7 @@ Runtime 登录凭证与模型 API Key 分开。Gateway 从登录凭证建立受�
 
 | 能力 | 当前状态 |
 | --- | --- |
-| 六个 Nya 包装配、JSON 配置、开发 HMR | 已实现于 `packages/application` |
+| Core/Loader/Include/ConsoleLogger 装配与 JSON 配置 | 已实现于 `packages/application`；开发变更由宿主进程重启 |
 | 通用组件启动、失败清理、幂等关闭 | 已实现于 `packages/application` |
 | 空配置启动/关闭示例、终端宿主示例 | 已实现；终端宿主不是完整 TUI 或后台服务 |
 | Agent 实例、模型调用、运行取消与执行循环 | 待从零实现 |

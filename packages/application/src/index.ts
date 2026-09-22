@@ -4,12 +4,10 @@ import { pathToFileURL } from 'node:url'
 import { Context, FiberState } from '@nya/core'
 import type { Fiber } from '@nya/core'
 import { Loader } from '@nya/loader'
+import type { LoaderService } from '@nya/loader'
 import { Include } from '@nya/include'
-import type { IncludeReport } from '@nya/include'
-import { Hmr } from '@nya/hmr'
-import type { HmrReport } from '@nya/hmr'
+import type { IncludeReport, IncludeService } from '@nya/include'
 import { ConsoleLogger } from '@nya/logger-console'
-import { Timer } from '@nya/timer'
 import { ApplicationClosedError, ApplicationNotReadyError } from './types.js'
 import type { Application, ApplicationOptions } from './types.js'
 
@@ -44,10 +42,6 @@ export function createApplication(options: ApplicationOptions): Application {
   }
   const configPath = resolve(options.configPath)
   const loggerOptions = options.logger === false ? false : { level: 'info' as const, ...options.logger }
-  const development = options.development && {
-    ...options.development,
-    entries: options.development.entries && [...options.development.entries],
-  }
   const context = new Context()
   let state: 'new' | 'starting' | 'running' | 'closing' | 'closed' = 'new'
   let startup: Promise<void> | undefined
@@ -56,8 +50,6 @@ export function createApplication(options: ApplicationOptions): Application {
   let firstFailure: { error: unknown } | undefined
   let resolveFailure!: (error: unknown) => void
   const failure = new Promise<unknown>(resolve => { resolveFailure = resolve })
-  let requestRestart!: (report: HmrReport) => void
-  const restartRequested = new Promise<HmrReport>(resolve => { requestRestart = resolve })
 
   const reportFailure = (error: unknown) => {
     if (firstFailure) return
@@ -75,6 +67,16 @@ export function createApplication(options: ApplicationOptions): Application {
   const assertRunning = () => {
     assertOpen()
     if (state !== 'running') throw new ApplicationNotReadyError(context.fiber.inspect())
+  }
+  const requireInclude = (): IncludeService => {
+    const include = context.get<IncludeService>('include')
+    if (!include) throw new ApplicationNotReadyError(context.fiber.inspect())
+    return include
+  }
+  const requireLoader = (): LoaderService => {
+    const loader = context.get<LoaderService>('loader')
+    if (!loader) throw new ApplicationNotReadyError(context.fiber.inspect())
+    return loader
   }
   const control = <T>(operation: () => Promise<T>): Promise<T> => {
     try { assertRunning() } catch (error) { return Promise.reject(error) }
@@ -107,7 +109,6 @@ export function createApplication(options: ApplicationOptions): Application {
   return {
     context,
     failure,
-    restartRequested,
     start() {
       try { assertOpen() } catch (error) { return Promise.reject(error) }
       if (startup) return startup
@@ -120,10 +121,6 @@ export function createApplication(options: ApplicationOptions): Application {
           assertOpen()
           requireActive(logger)
         }
-        const timer = context.installComponent(Timer)
-        await timer
-        assertOpen()
-        requireActive(timer)
         const loader = context.installComponent(Loader, { baseUrl: pathToFileURL(configPath).href })
         await loader
         assertOpen()
@@ -133,32 +130,10 @@ export function createApplication(options: ApplicationOptions): Application {
         assertOpen()
         requireActive(include)
 
-        if (development) {
-          const hmr = context.installComponent(Hmr, {
-            baseUrl: pathToFileURL(configPath).href,
-            ...development,
-            include: context.include,
-            onReport(report) {
-              if (report.status === 'restart-required') requestRestart(report)
-              development.onReport?.(report)
-            },
-          })
-          await hmr
-          assertOpen()
-          requireActive(hmr)
-          // 先准备 HMR 的代码 Resolver，再由 start() 读取 Include 声明。
-          const report = await context.hmr.start()
-          assertOpen()
-          if (report.status !== 'applied' && report.status !== 'unchanged') {
-            throwErrors(report.errors, `application development startup: ${report.status}`)
-          }
-          requireConfiguration(context.include.report()!)
-        } else {
-          const report = await context.include.refresh()
-          assertOpen()
-          requireConfiguration(report)
-        }
-        await context.loader.awaitIdle()
+        const report = await requireInclude().refresh()
+        assertOpen()
+        requireConfiguration(report)
+        await requireLoader().awaitIdle()
         assertOpen()
         state = 'running'
         context.logger.info('application started')
@@ -172,10 +147,10 @@ export function createApplication(options: ApplicationOptions): Application {
       void startup.catch(() => {})
       return startup
     },
-    previewConfig: (document, filename) => control(() => context.include.preview(document, filename)),
-    saveConfig: (document, filename) => control(() => context.include.save(document, filename)),
-    refreshConfig: () => control(() => context.include.refresh()),
-    recover: id => control(() => context.include.recover(id)),
+    previewConfig: (document, filename) => control(() => requireInclude().preview(document, filename)),
+    saveConfig: (document, filename) => control(() => requireInclude().save(document, filename)),
+    refreshConfig: () => control(() => requireInclude().refresh()),
+    recover: id => control(() => requireInclude().recover(id)),
     close,
   }
 }

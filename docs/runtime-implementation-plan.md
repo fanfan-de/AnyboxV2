@@ -1,8 +1,8 @@
 # Anybox Runtime v1 制作计划
 
-状态：历史范围的待实施设计参考。日期：2026-09-06。
+状态：历史范围设计参考，不是当前执行计划。最后契约校准：2026-09-21。
 
-2026-09-07 范围调整：当前通用内核开发以[Agent 内核 v1 计划](agent-kernel-plan.md)为依据。下文固定 48 类组件、持久化后端和产品集成批次保留为参考，不作为当前首版的强制范围；下文 API 仍未实现。
+2026-09-07 范围调整：当前通用内核开发以[Agent 内核 v1 计划](agent-kernel-plan.md)为依据。下文固定 48 类组件、持久化后端和产品集成批次只保留设计参考价值，不作为当前首版的强制范围；下文 API 仍未实现。开始任何实施前，先以当前计划收敛职责和数据契约，不得仅按本文的编号生成空组件。
 
 本文件把已讨论的 **9 组、48 类组件**细化为从零制作计划：定义组件边界、服务契约、依赖、资源所有权、数据一致性、实施顺序和验收条件。表中的名称、方法、服务键和目录均为拟定设计，不能当作当前可调用 API。旧 harness 已删除，以下 Runtime 制作任务均未完成。
 
@@ -12,9 +12,9 @@
 
 ### 1.1 当前基线
 
-- [application](../packages/application/src/index.ts) 已装配 Core、Loader、Include、HMR、Timer、ConsoleLogger；已有通用配置控制、启动失败清理和幂等关闭，空配置可以启动。
+- [application](../packages/application/src/index.ts) 已装配 Core、Loader、Include 和 ConsoleLogger；已有通用配置控制、启动失败清理和幂等关闭，空配置可以启动。Timer 不是组件或服务，HMR 不在稳定发布集。
 - 旧 Agent 组件、模型注入和单次 run 接口已删除。Agent 实例、执行算法、模型 SPI 和 Run 生命周期均按本计划从零实现。
-- [现有 application 测试](../packages/application/tests/application.test.mjs)及 HMR、宿主测试是框架基础的回归基线，不能代替新增 Runtime 行为验收。
+- [现有 application 测试](../packages/application/tests/application.test.mjs)及宿主测试是框架基础的回归基线，不能代替新增 Runtime 行为验收。
 - 当前没有 Session/Run 持久化、模型调用、工具循环、流式事件协议或客户端 SDK；默认示例仅启动并关闭空组件应用。
 
 ### 1.2 Runtime v1 的交付结果
@@ -66,7 +66,7 @@ Anybox 保留自己的 Run 产品契约。DeepSeek 的 `followup()` 表达入队
 | 上下文 | 输入持久化与进入模型上下文分开；Step 只使用已领取输入和允许的历史边界 |
 | 运行失败 | 普通模型/工具失败写入本次 Run；关键设施故障关闭接收门并影响就绪状态 |
 | 崩溃恢复 | 旧实例全部非终态 Run（包括 queued）转 interrupted；不自动续跑或重试外部副作用 |
-| 热替换 | HMR 仅显式开发模式；受影响运行中断，后续显式提交使用新服务 |
+| 开发更新 | 宿主关闭并等待旧应用清理后重启进程；受影响运行中断，后续显式提交使用新服务 |
 | 对外类型 | 协议仅包含可序列化数据；Context、Fiber、AbortSignal、Promise 和句柄留在宿主/SPI |
 | 关闭 | 默认取消并等待；进程信号、强制退出和退出期限由宿主负责 |
 
@@ -158,22 +158,23 @@ flowchart TD
     Step --> T2[ToolInvocation B]
 ```
 
-图中的“安装范围”是所有权组织设施，不增加第 49 类业务组件。实际可以使用明确的子组件安装范围；不能用一次 `extend()` 冒充独立清理所有者。
+图中的“安装范围”是所有权组织设施，不增加第 49 类业务组件。实际使用明确的子组件安装建立独立 Fiber/Effect 所有权；Context 视图本身不是新的清理所有者。
 
 1. Factory 拥有创建的 Agent 子树；创建者取得显式 dispose 句柄。Registry 索引不能成为第二份清理任务。
-2. 每个组件使用同一 Root 下的子 Context/Fiber。`isolate()` 是严格服务地址解析，不自动提供全局到局部的回退合并。
+2. 每个组件使用同一 Root 下的子 Context/Fiber。服务依赖在 `inject` 中声明，组件从 `apply(ctx, config, deps)` 的 `deps` 使用本轮快照；根控制面每次用 `context.get()` 查找实时服务。
 3. Prompt/Tool/Context Registry 显式实现全局贡献与 Agent 局部覆盖，注册记录带 owner/generation；撤销 Effect 时仅移除该次注册。
 4. 组件入口只初始化。协调器等待 Fiber 稳定并检查 ACTIVE 后，显式调用一次性执行入口。
 5. AgentLoop 的等待循环也属于受管后台任务；组件初始化返回的 Promise 不等待永久循环。
 6. 每个动态组件自身 cleanup 都 abort 并 await 真实工作。依赖失效可能先触发消费者卸载，不能仅依赖根部 drain 或注册先后。
 7. 对外门面关闭先同步关闭接收门；随后并行请求所有 Run 取消，再等待它们。需要保留共享 Store 到最终状态提交完成。
 8. `workDone` 仅表示业务工作停止，不能依赖自身 Fiber 的 dispose；`resourcesDone` 由父协调器等待释放；`terminalDone` 在终态提交后完成。三种边界不能相互递归等待。
+9. Fiber `FAILED` 是粘性状态。依赖变化只更新目标，必须由所有者显式 update/restart，或由 Loader/Include 对失败条目执行恢复；不得把依赖重新出现当作自动重试。
 
 Nya 当前公共入口和生命周期依据：[Context](../../NyaCore/packages/core/src/context.ts)、[Fiber](../../NyaCore/packages/core/src/fiber.ts)、[Effect 清理](../../NyaCore/packages/core/src/disposable.ts)。框架层若出现缺口，先在 NyaCore 仓库提出修改并补行为测试。
 
 ## 5. 48 类组件制作清单
 
-所有名称省略 `Component` 后缀。服务键为拟定的 `Context` augmentation；表中方法是语义草案，最终签名在 R0/R2 的 SPI 中固定。动态组件通过父级取得的本次句柄及私有作用域服务通信，不在根上重复提供同名实例服务。
+所有名称省略 `Component` 后缀。表中服务键是拟定的具名 Service，不是 Context 属性；表中方法是语义草案，最终签名在 R0/R2 的 SPI 中固定。动态组件通过 `deps` 中的本轮服务快照、父级传入的本次句柄及私有作用域服务通信，不在根上重复提供同名实例服务。
 
 表中的“可选依赖”表示按已启用能力选择组件配置及安装依赖；不能把未安装的服务放进必需 inject 后期望组件仍 ACTIVE。每批组合必须明确能力开关、必要提供方和未启用时的错误行为。
 
@@ -207,7 +208,7 @@ Nya 当前公共入口和生命周期依据：[Context](../../NyaCore/packages/c
 | ID / 组件 | 拟定服务或句柄 | 首批方法与职责 | 依赖 / 所有权 |
 | --- | --- | --- | --- |
 | C14 RunCoordinator | `anyboxRuns` | start、claimQueued、cancel、settle、wait；Run 唯一状态入口 | C02/C03/C07/C11/C20/C35；持有索引与完成通知，不复制执行控制器 |
-| C15 RunScheduler | `anyboxRunScheduler` | wake、scanQueued、stopAndDrain；并发许可与队列 | C14、Timer；持有非重叠扫描任务与有限许可 |
+| C15 RunScheduler | `anyboxRunScheduler` | wake、scanQueued、stopAndDrain；并发许可与队列 | C14、按需的 `@nya/timer` 函数；定时器归该组件 Context，持有非重叠扫描任务与有限许可 |
 | C16 RunScope | 本次 `RunHandle` | startOnce、requestStop、workDone、dispose | C12 子树；拥有 Run AbortController、计数器、Turn 和本次能力句柄 |
 | C17 AgentLoop | Agent 局部 driver | wake、driveRun、whenIdle；默认继续/停止策略 | C13 静态依赖；C16 通过 driveRun(runHandle) 传入，不能静态 inject；无活动 Run 也须 ACTIVE |
 | C18 Turn | 本次 Turn 句柄 | open、runSteps、finish | C16 子组件；拥有 Turn 状态、Step 序列及取消范围 |
@@ -257,7 +258,7 @@ AgentLoop 负责策略推进；Turn/Step 各自提交自己的领域状态。Run
 | --- | --- | --- | --- |
 | C35 AccessPolicy | `anyboxAccess` | assertWorkspace、assertObjectAccess | 受信宿主身份与工作区归属；所有公共读写均检查 |
 | C36 ToolPermission | `anyboxToolPermission` | decide、guardBeforeDispatch | Profile、调用参数、C35/C40；允许/拒绝/审批策略及不可反向覆盖的拒绝 |
-| C37 ApprovalCoordinator | `anyboxApprovals` | request、decide、expire、invalidate | C01/C02/C35、Timer；条件提交决定，等待句柄归 ToolInvocation |
+| C37 ApprovalCoordinator | `anyboxApprovals` | request、decide、expire、invalidate | C01/C02/C35、按需的 `@nya/timer` 函数；条件提交决定，等待句柄归 ToolInvocation |
 | C38 Credentials | `anyboxCredentials` | describe、resolveForOperation、rotate、revoke | C39/C35；管理引用与元数据，每次操作重新解析 |
 | C39 SecretBackend | `anyboxSecretBackend` | read、write、delete、close | 本地系统或服务端受保护后端；拥有秘密存储连接和自建资源 |
 
@@ -280,7 +281,7 @@ AgentLoop 负责策略推进；Turn/Step 各自提交自己的领域状态。Run
 | ID / 组件 | 拟定服务或句柄 | 首批方法与职责 | 依赖 / 所有权 |
 | --- | --- | --- | --- |
 | C45 RuntimeApi | `anyboxRuntime` | describe、sessions、agents、runs、approvals | 每次获取当前 C11/C14/C05 等服务；持有接收门，不缓存跨代服务 |
-| C46 EventFeed | `anyboxEventFeed` | readAfter、subscribe、closeSubscription | C01/C05/C35、提交后通知、Timer；每订阅独立缓冲与清理 |
+| C46 EventFeed | `anyboxEventFeed` | readAfter、subscribe、closeSubscription | C01/C05/C35、提交后通知、按需的 `@nya/timer` 函数；每订阅独立缓冲与清理 |
 | C47 RuntimeHealth | `anyboxRuntimeHealth` | describeReadiness、watchFailure | Nya 生命周期观察与恢复屏障；区分必需/可选能力，不参与业务循环 |
 | C48 Telemetry | `anyboxTelemetry` | observe、usageSnapshot、exportMetrics | Nya Logger/事件及已提交事实；拥有 sink/订阅，观测异常不能改任务结果 |
 
@@ -319,7 +320,7 @@ examples/runtime-demo.mjs          新增有限无网络 Runtime 示例（后续
 
 每个组件目录至少包含入口、类型/服务声明和职责说明；有纯规则时另设 domain 模块。分包依据发布/依赖边界，细分组件无需立即变成 48 个工作区。
 
-目标依赖：`application → runtime + adapters`；`runtime → protocol + @nya/core/Timer`；`adapters → runtime/spi`。执行算法与生命周期组件共同位于 runtime，纯状态规则可以放入 domain。`runtime/spi` 导入不得加载组件入口、真实 SDK 或启动 Root。浏览器 protocol/client 使用独立 tsconfig，不继承 Node 类型环境。
+目标依赖：`application → runtime + adapters`；`runtime → protocol + @nya/core + 按需的 @nya/timer`；`adapters → runtime/spi`。执行算法与生命周期组件共同位于 runtime，纯状态规则可以放入 domain。`runtime/spi` 导入不得加载组件入口、真实 SDK 或启动 Root。浏览器 protocol/client 使用独立 tsconfig，不继承 Node 类型环境。
 
 ### 6.2 配置归属
 
@@ -422,7 +423,7 @@ examples/runtime-demo.mjs          新增有限无网络 Runtime 示例（后续
 
 ### 9.1 调度与一次性启动
 
-同一时刻只有一个调度扫描执行。Timer 回调只唤醒任务，不返回永久循环；异步扫描必须登记 completion 并在关闭时等待。调度顺序使用 acceptedAt 与稳定 ID 排序，Session 单非终态约束始终有效。
+同一时刻只有一个调度扫描执行。调度组件用 `timeout(ctx, ...)` / `interval(ctx, ...)` 登记归自身 Context 所有的定时器；回调只唤醒任务，不返回永久循环。定时器清理只阻止未来调度；异步扫描必须另行登记 completion 并在关闭时等待。调度顺序使用 acceptedAt 与稳定 ID 排序，Session 单非终态约束始终有效。
 
 认领前取得并发许可；CAS 失败释放许可。认领提交后即使创建 RunScope 失败，也必须由 Coordinator 结算该 Run。每个动态组件使用跨 `apply()` 代际保持的一次性启动门，加上 Run 的 executionToken/状态检查；组件重启不能重新消费同一个 token。
 
@@ -480,11 +481,11 @@ stateDiagram-v2
 
 跨代恢复只修复上一实例或已确认停止的旧 generation。旧 queued 也标 interrupted；当前实例已提交 queued 的兜底扫描不是崩溃重放。恢复过程可重复执行，重复启动检查不能重复生成关闭事实。
 
-### 9.5 HMR 与组件停用
+### 9.5 开发进程重启与组件停用
 
-Storage、SessionLog 和迁移入口属于稳定设施，v1 不支持其带任务热替换；此类更新报告 restart-required。模型/工具提供方卸载、替换，或管理员显式禁用旧 Profile revision 时，停止并等待受影响执行；已运行的该轮 Run 标 interrupted，后续新 Run 使用新定义。仅新增或编辑出一个 Profile revision 不影响已接受的 Run；它继续使用冻结的旧 revision。排队时必需版本被撤销且无法开始的任务明确失败，不偷偷替换版本。
+代码、Storage、SessionLog 和迁移入口更新通过宿主进程重启生效：先停止接受，结算或中断受影响 Run，等待清理完成，再启动新进程。稳定 application 不提供同进程 HMR 或 `restart-required` 通道。模型/工具提供方卸载、替换，或管理员显式禁用旧 Profile revision 时，停止并等待受影响执行；已运行的该轮 Run 标 interrupted，后续新 Run 使用新定义。仅新增或编辑出一个 Profile revision 不影响已接受的 Run；它继续使用冻结的旧 revision。排队时必需版本被撤销且无法开始的任务明确失败，不偷偷替换版本。
 
-稳定注册表内部条目变化不一定触发 Nya 服务依赖重启，所以条目自己的使用追踪、注销和 drain 必须实现。Registry 恢复、Fiber 再次 ACTIVE 或代码热更新均不能重新提交用户输入。
+稳定注册表内部条目变化不一定触发 Nya 服务依赖重启，所以条目自己的使用追踪、注销和 drain 必须实现。Registry 恢复、Fiber 再次 ACTIVE 或宿主进程重启均不能重新提交用户输入。
 
 ## 10. 建议默认限制
 
@@ -604,7 +605,7 @@ Storage、SessionLog 和迁移入口属于稳定设施，v1 不支持其带任�
 - [ ] R5.1 压缩提案、来源范围、基线冲突检查和替换提交；压缩调用本身可取消、可限制。
 - [ ] R5.2 实现运行限制的全部路径：Step、时长、输入/上下文/输出/工具结果、队列、订阅和存储配额。
 - [ ] R5.3 执行接受/claim/输出/工具/终态提交各断点的独立进程崩溃测试。
-- [ ] R5.4 实现模型/工具卸载、业务组件 HMR、稳定设施 restart-required 和旧服务句柄测试。
+- [ ] R5.4 实现模型/工具卸载、开发宿主进程重启、稳定设施变更和旧服务句柄测试。
 - [ ] R5.5 验证事件保留、游标过期和完整历史重建；慢消费者不拖慢无关 Run。
 - [ ] R5.6 验证通用 application 与新 Runtime 的同树装配；同步文档和构建顺序；分别验证空配置示例与 Runtime 示例。
 - [ ] R5.7 验证 SQLite 备份恢复、迁移失败保留原数据、单写者接管和数据集身份规则。
@@ -635,7 +636,7 @@ R0 契约与技术验证
 | runtime/spi | 从零定义通用消息、模型流、工具、Storage 和 Agent 驱动契约 | 取消信号到达真实操作，完成与清理边界明确；没有旧模型接口包装 |
 | Storage/SessionLog | 先实现事务与事实日志，再接入 Session、Profile 和 Run 接受 | 内存与持久实现跑相同合约，持久化另有真实进程验证 |
 | AgentLoop/Turn/Step | 在 runtime 内从零实现执行与 Nya 资源归属 | 只保留一套执行规则；组件初始化不能阻塞于任务或永久循环 |
-| application createApplication | 保留通用装配；通过配置或组合入口接入新 Runtime 组件 | 空配置仍可启动；六包同 Root、Include 来源管理、显式 HMR、启动失败清理 |
+| application createApplication | 保留通用装配；通过配置或组合入口接入新 Runtime 组件 | 空配置仍可启动；Core/Loader/Include/ConsoleLogger 同 Root、Include 来源管理、宿主开发重启、启动失败清理 |
 | RuntimeApi | 按新契约实现接受、查询、取消、等待和订阅 | 请求中止不等于取消 Run；业务 API 不塞回通用 application |
 | application.failure | 保留生命周期错误通道；普通 Run 结果经 Runtime 业务通道 | 不把一次模型失败升级成整个应用关闭 |
 | examples | 保留 demo/host 的通用示例，另增 runtime-demo | 默认不访问网络；有限示例有明确最终退出 |
@@ -679,7 +680,7 @@ Root Fiber dispose 后框架可能仍允许重新安装；应用和 Runtime 自�
 | V28 | 慢消费者、重复/过期/未来游标 | 有界缓冲，错误与重建行为明确，不阻塞执行 | R2/R5 |
 | V29 | 存储写失败、磁盘满、锁丢失 | 停止新接受和后续副作用；不伪造成功/持久终态 | R5 |
 | V30 | 进程重启，含旧 queued 与 running | 历史保留，所有旧非终态 interrupted，无自动模型/工具调用 | R2/R5 |
-| V31 | 模型/工具条目撤销及组件 HMR | 受影响任务取消等待；旧句柄失效；依赖恢复不重放 | R5 |
+| V31 | 模型/工具条目撤销及宿主开发重启 | 受影响任务取消等待；旧句柄失效；进程重启不重放 | R5 |
 | V32 | 关闭、接受、claim、cleanup 失败竞争 | 接收门立即生效；错误完整保留；独立清理继续；重复 close 同结果 | R2/R5 |
 | V33 | 压缩期间输入/历史基线变化 | 提案条件提交失败或重算，不覆盖新事实或拆断工具配对 | R5 |
 | V34 | 替代 adapter 跑相同合约 | 业务语义不依赖具体 SDK/Store；借入资源不被误关闭 | R5 |
@@ -702,7 +703,7 @@ Root Fiber dispose 后框架可能仍允许重新安装；应用和 Runtime 自�
 - [ ] 接受、执行、取消、事件、恢复与关闭通过第 14 节矩阵。
 - [ ] 存储、模型、工具、驱动、凭据和环境适配器可按各自接口替换。
 - [ ] 默认有限示例无网络可运行；真实提供方与隔离后端列明已验证版本和平台。
-- [ ] 通用 application 配置/HMR/生命周期与空配置 demo 回归通过；TypeScript strict 和 Nya 公共入口约束保持。
+- [ ] 通用 application 的 Include 配置/生命周期、宿主开发重启与空配置 demo 回归通过；TypeScript strict 和 Nya 公共入口约束保持。
 - [ ] 源码实际支持的能力决定 Runtime.describe；未实现或未验证的能力不能报告可用。
 
 下一层工作包括 HTTP Gateway、身份认证接入、SSE 传输、Client SDK、本地/服务端宿主及四端 UI，沿用既有产品计划。MCP 工具提供方、技能、长期记忆、子 Agent、后台 Job 和自动化可作为后续独立组件族接入；本次 48 类不虚报这些能力已经完成。

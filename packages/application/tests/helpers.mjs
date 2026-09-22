@@ -40,8 +40,8 @@ const consumerSource = `
 export default {
   name: 'test-consumer',
   inject: ['testValue'],
-  apply(ctx) {
-    ctx.provide('testConsumer', { value: ctx.testValue.value })
+  apply(ctx, _config, deps) {
+    ctx.provide('testConsumer', { value: deps.testValue.value })
   },
 }
 `
@@ -51,7 +51,7 @@ export async function fixture(t, options = {}, document) {
   const configPath = join(directory, 'config.json')
   const valuePath = join(directory, 'value.mjs')
   const config = document ?? {
-    version: 1,
+    version: 2,
     entries: [
       { id: 'value', name: './value.mjs', config: { value: 'one' } },
       { id: 'consumer', name: './consumer.mjs' },

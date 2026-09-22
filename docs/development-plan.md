@@ -1,8 +1,8 @@
 # 开发计划
 
-状态：待执行的计划，2026-09-06。旧 harness 已删除，Runtime 从零制作；当前仅保留通用 Nya 应用基础。目标架构见 [architecture.md](architecture.md)，客户端契约见 [runtime-protocol.md](runtime-protocol.md)，共享能力见 [Client SDK 设计](client-sdk.md)。未来组件和客户端尚未实现。
+状态：待执行的计划，2026-09-21。旧 harness 已删除，Runtime 从零制作；当前仅保留通用 Nya 应用基础。目标架构见 [architecture.md](architecture.md)，客户端契约见 [runtime-protocol.md](runtime-protocol.md)，共享能力见 [Client SDK 设计](client-sdk.md)。未来组件和客户端尚未实现。
 
-[Runtime v1 制作计划](runtime-implementation-plan.md)是本计划的内核实施细案：9 组 48 类组件，R0—R2 对应 P1 的内核工作，R3—R5 推进 P2 内核能力。本文继续负责 P0—P4 产品路线；内核完成不替代 Gateway、SDK、两个宿主及客户端的验收。
+[通用 Agent 内核 v1 计划](agent-kernel-plan.md)是当前内核实施和验收细案。[Runtime v1 制作计划](runtime-implementation-plan.md)仅保留 9 组 48 类组件的较大范围历史设计，不是当前首版要求。本文继续负责 P0—P4 产品路线；内核完成不替代 Gateway、SDK、两个宿主及客户端的验收。
 
 ## 1. 开发顺序
 
@@ -10,7 +10,7 @@
 
 | 阶段 | 交付结果 | 完成标志 |
 | --- | --- | --- |
-| P0 现有基础 | Nya 六包装配、JSON 配置控制、启动/关闭、开发 HMR | 已有代码与行为测试；空配置 demo 可启动关闭 |
+| P0 现有基础 | Core/Loader/Include/ConsoleLogger 装配、JSON 配置控制、启动/关闭 | 已有代码与行为测试；空配置 demo 可启动关闭 |
 | P1 Runtime 闭环 | 协议、SDK、持久会话/Run、模拟流、本地与服务端宿主 | 同一客户端测试分别连接两个宿主，完成开始/补读/取消 |
 | P2 完整 Agent 能力 | 一个真实模型适配器、两种 BYOK 后端、工具循环、工作区与审批 | 本地和服务端使用相同 Profile/工具契约，权限与取消生效 |
 | P3 四类客户端与自部署 | TUI、Desktop、VS Code 扩展、手机 Web/PWA，单用户云端发布包 | 编辑器/电脑开始云任务，手机接续查看与审批；客户端关闭不杀任务 |
@@ -57,7 +57,7 @@
 - [ ] 增加 `apps/runtime-server`，负责网络绑定、认证适配器、就绪状态和服务器生命周期。
 - [ ] 两个宿主使用同一个 Runtime 组合入口，差异仅由配置与适配器决定。
 - [ ] 增加一个薄命令行客户端用于端到端验收，暂不实现完整 TUI。
-- [ ] 保留 JSON/Include 默认装配，内嵌宿主可以直接注入实现；开发 HMR 由宿主显式开启。
+- [ ] 保留 JSON/Include 默认装配，内嵌宿主可以直接注入实现；开发期由宿主进程重启加载代码变更，不把同进程 HMR 纳入稳定 application 契约。
 
 验收：在两个独立进程上运行同一套 SDK 合约测试；关闭客户端不停止本地后台任务；显式停止 Runtime 后没有受管任务继续运行，重复关闭结果一致。
 
@@ -102,7 +102,7 @@ VS Code 子任务：
 - [ ] 分别验收普通桌面、Remote SSH、Dev Containers，明确宿主类型与实际执行位置；纯浏览器扩展入口后续单独验收。
 - [ ] 生成可安装的 VSIX 并验证激活、停用、窗口重载、升级重连；独立 Runtime 的分发与版本检查不依赖 VS Code 内置 Node 满足 Nya 要求。
 
-云端交付包括：可独立安装的包/镜像、挂载数据目录、认证/TLS 配置样例、数据库迁移、备份恢复和宿主退出策略。检查依赖和构建产物不再要求旁边存在 `../NyaCore`；六个框架包使用同批固定版本交付物并完成独立安装验证。
+云端交付包括：可独立安装的包/镜像、挂载数据目录、认证/TLS 配置样例、数据库迁移、备份恢复和宿主退出策略。检查依赖和构建产物不再要求旁边存在 `../NyaCore`；实际使用的 Nya 包从五包发布集的同批固定版本交付物安装，并完成独立安装验证。
 
 验收场景：
 
@@ -137,12 +137,12 @@ VS Code 子任务：
 | `packages/application/src/index.ts` | 保留通用 Nya 装配；后续将 Runtime 作为同树组件接入 | 空配置可启动、启动失败清理、幂等关闭、每次请求读取当前服务 |
 | `packages/application/src/types.ts` | 保持宿主配置/生命周期入口；新 Runtime 业务 API 独立定义 | 无旧 run/model/agent 兼容接口；Context 仅用于受信宿主/扩展 |
 | Include 配置 API | 保留在宿主管理入口，选择磁盘配置时由 Include 独占文件声明 | 预览、保存冲突、saved 与运行 partial 分开判断 |
-| HMR 控制 | 保留在显式开发装配；新 Run 组件变化增加受影响任务测试 | 不自动重放用户请求；restart-required 交给宿主 |
+| 开发重启 | 由宿主观察代码变更，先关闭并等待旧进程清理，再启动新进程 | 不自动重放用户请求；不把 experimental HMR 当作稳定依赖 |
 | `examples/host.mjs` | 保留教学示例；提取其信号/期限经验到产品宿主 | 库内无进程信号和强制退出；产品后台进程不随 UI EOF 关闭 |
 | `examples/demo.mjs` | 保留空配置启动/关闭示例；另增有限、无网络 Runtime 示例 | 框架基础与新增 Runtime 都能分别验证，不要求配置真实 Key |
 | 根 `package.json` / tsconfig | 按新依赖顺序加入 workspace、构建和检查；区分 Node 与浏览器配置 | TypeScript strict；不引入两份 Core 或源码深层导入 |
 
-旧 harness 代码、模型注入、Agent 就绪检查和 application.run 已移除。后续直接按新契约实现 Runtime，不保留旧接口包装；组件装配、配置/HMR 和宿主生命周期继续复用现有 application。
+旧 harness 代码、模型注入、Agent 就绪检查和 application.run 已移除。后续直接按新契约实现 Runtime，不保留旧接口包装；组件装配、Include 配置和宿主生命周期继续复用现有 application。
 
 ## 7. 验证策略与开发约定
 
@@ -154,7 +154,7 @@ VS Code 子任务：
 | 宿主 | 初始化失败、运行关闭、进程信号、后台独立寿命、退出期限 |
 | 客户端 | 同一协议下展示一致、审批防重复、切换连接、前后台恢复；VS Code 视图重建、远程工作区映射和文档冲突 |
 
-现有测试覆盖框架装配、配置、HMR 和生命周期，是保留基础的回归基线。新增 Runtime 测试围绕行为与真实边界，不为每个转发函数重复写一套断言。
+现有测试覆盖框架装配、配置和生命周期，是保留基础的回归基线。新增 Runtime 测试围绕行为与真实边界，不为每个转发函数重复写一套断言。
 
 完成变更运行 `npm run check`；修改示例后运行 `npm run demo`。修改 NyaCore 时在相邻仓库实施，先停止 `nya:watch`，等待 `npm run nya:build` 成功后再验证 AnyboxV2。框架公开入口、Effect 资源归属与 strict 类型约束继续适用。
 
