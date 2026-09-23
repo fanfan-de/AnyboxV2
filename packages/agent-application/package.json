@@ -1,0 +1,21 @@
+{
+  "name": "@anybox/agent-application",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+  "scripts": {
+    "build": "npm run build --workspace @anybox/application && npm run build --workspace @anybox/agent-kernel && tsc -p tsconfig.json",
+    "typecheck": "npm run build --workspace @anybox/application && npm run build --workspace @anybox/agent-kernel && tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@anybox/agent-contracts": "0.0.0",
+    "@anybox/agent-kernel": "0.0.0",
+    "@anybox/application": "0.0.0",
+    "@nya/core": "file:../../../NyaCore/packages/core"
+  }
+}

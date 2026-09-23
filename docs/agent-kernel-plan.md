@@ -1,8 +1,8 @@
 # 通用 Agent 内核 v1 开发计划
 
-状态：待实施的设计与验收计划。日期：2026-09-07。
+状态：完整内核设计与验收计划，已有最小 Run、受控工具循环和持久 Agent 应用增量实现。设计日期：2026-09-07；基线更新：2026-09-22。
 
-本文确定基于 NyaCore 的通用 Agent 内核需要哪些组件、各自承担什么职责、如何适配不同 LLM API，以及从零实现的顺序。所有组件名称、方法和目录均为拟定设计，当前没有对应的 Agent 内核实现。
+本文确定基于 NyaCore 的完整通用 Agent 内核需要哪些组件、各自承担什么职责、如何适配不同 LLM API，以及实施顺序。未单独标注完成的接口与组件仍是目标设计；当前实际能力见[持久 Agent 应用](agent-application-v1.md)、[Harness 首批实现](agent-harness-v1.md)与[第一版 Run 协调组件](run-coordinator-v1.md)，不能将本文的完整 API 当作已实现接口。
 
 架构原则：项目拥有自己的组件契约、领域数据和执行规则；开发初期允许使用成熟开源方案作为组件的阶段性实现，最终逐项替换为自研实现。可替换性适用于所有内核组件、作用域实现和策略模块，不能仅停留在 LLM 或存储适配器层。
 
@@ -23,13 +23,16 @@
 5. 提供有限并发、上下文及输出上限、超时和失败处理。
 6. 基于 Nya 管理注册、服务、实例与在途调用，关闭后没有受管工作遗留。
 
-本轮专注通用内核，不设计或实现客户端、网络 Gateway、部署宿主、账号产品或设备同步。
+本文原始 v1 范围专注通用内核；后续新增的本地 HTTP 宿主与持久应用由[独立应用增量](agent-application-v1.md)记录，不将其等同于生产网络 Gateway、账号产品或设备同步。
 
 ### 1.2 当前已有与待建内容
 
 - [application](../packages/application/src/index.ts)已装配 Core、Loader、Include 和 ConsoleLogger，并提供通用配置与生命周期控制。Timer 仅以 Effect 函数按需使用，HMR 不属于稳定 application 装配。
 - [现有公共接口](../packages/application/src/types.ts)只有应用启动、关闭、配置和框架 Context 等能力。
-- 模型、工具、会话、Run、上下文与交互服务均待开发。
+- `@anybox/agent-kernel` 已实现一个固定 Agent、多会话、内存事务、一次 Mock 调用、Run 查询/取消/等待及清理；采用项目自有契约和同树 Nya 装配。
+- 新增 RunRuntime、每 Run 策略、Step/ModelAttempt/ToolCall、串行工具循环、可替换上下文/工具策略和原子事件分页查询；保留原文本入口与生命周期行为。
+- 已增加 SQLite 单实例持久化、纯函数 interrupted 恢复、自动初始化与常驻本地 HTTP 宿主，详见[持久 Agent 应用](agent-application-v1.md)。
+- 完整模型协议、动态 Agent 管理、实时事件订阅、交互、数据库增量存储和自动续跑仍待开发。当前工具/事件子集不代表 G0/G1/G2 整体完成，详见[Harness 实现与验证范围](agent-harness-v1.md)。
 - 当前空配置示例和 application 测试继续作为框架装配回归基线。
 
 ### 1.3 第一版的收敛选择
@@ -338,14 +341,20 @@ interrupted 是后续持久化恢复需要的结束原因预留。Memory 模式�
 
 普通命令使用对象参数与 Promise；事件流使用 AsyncIterable；模型、工具和状态实现通过 SPI 接入。领域记录保持可序列化，AbortSignal、Promise、Nya Context 和清理句柄只存在于嵌入控制接口及 SPI。
 
-### 7.2 建议目录
+### 7.2 后续扩展目录参考
+
+当前已实现的目录以 [仓库 README](../README.md#代码结构) 和 [内核目录说明](../packages/agent-kernel/README.md) 为准。下面是后续完整内核的扩展参考，尚未实现的组件、作用域及适配器不预建空目录。
 
 ```text
 packages/
   application/                  现有 Nya 组合与应用生命周期
+  agent-contracts/              已抽取首版契约，后续按审计结果扩展
+    src/                        领域数据与 api、spi 公共入口
+    src/spi/                    模型、内存状态、策略与资源所有权接口
+    tests/                      独立消费与公共异常语义验证
   agent-kernel/                 新增，按批次逐步创建
-    src/contracts/              领域类型、命令、事件、错误
-    src/spi/                    所有组件的服务、工厂与策略契约
+    src/contracts.ts            旧领域契约兼容入口
+    src/spi.ts                  旧 SPI 兼容入口；构造选项留在实现包
     src/components/             K01—K12 的服务实现
     src/scopes/                 S01—S04 的资源所有权
     src/domain/                 状态机、事务变更计划、校验
@@ -363,8 +372,8 @@ examples/
 ```
 
 - agent-kernel 的实现只依赖公共 `@nya/core`、按需的 `@nya/timer` 函数和通用库，不安装 Timer Service，不依赖具体供应商 SDK。
-- contracts/spi 子入口导入不启动内核；公共领域数据类型不引用供应商类型，Nya 集成类型单独放在嵌入入口。
-- agent-adapters 依赖 agent-kernel/spi，内核不反向导入具体适配器。
+- agent-contracts 的领域、api、spi 入口不启动内核，不依赖 Nya、具体实现或供应商类型；Nya 集成类型留在实现包。首版状态 SPI 只承诺内存事务，不代表完整持久化接口已冻结。
+- agent-adapters 与 agent-kernel 共同依赖 agent-contracts，内核不反向导入具体适配器；旧 agent-kernel/contracts 和 agent-kernel/spi 入口继续兼容。
 - 第三方桥接同样放在实现边界内；不在 agent-kernel 公共导出中重导出第三方类型。其他组件只依赖自有契约，不依赖默认实现类。
 - application 作为组合根按需接入内核与适配器，基础设施和业务共用一棵 Root Context。
 - 第一版无需为每个组件创建包；需要独立版本或较重依赖时再拆适配器包。
@@ -523,6 +532,6 @@ G0 → G1 → G2 → G3 为内核主链。G0 冻结模型 SPI 后，G4 的协议
 
 仓库检查要求：完成变更运行 npm run check；修改现有示例后运行 npm run demo。新增内核示例时增加对应脚本并实际验证。修改 NyaCore 时先停止 nya:watch，在框架仓库实施并补行为测试，等待 npm run nya:build 成功后再验证本项目；运行完整框架构建或检查前同样停止 watch。
 
-首批实施从 G0 开始，随后完成 G1 的无网络闭环。当前所有实施复选框保持未完成；本文的写成不代表内核功能已实现。
+首批已交付的 Run 子集及行为证据见[实现说明](run-coordinator-v1.md)。上面的复选框对应更广的完整内核要求，尚未整项验收，不因一个子集通过而自动勾选；后续继续补齐 G0/G1。
 
 参考入口：[NyaCore 公共能力](../../NyaCore/packages/core/README.md)、[现有应用](../packages/application/src/index.ts)、[OpenAI Responses 流式事件](https://developers.openai.com/api/docs/guides/streaming-responses)。协议适配实现时记录使用的官方版本与验证日期。

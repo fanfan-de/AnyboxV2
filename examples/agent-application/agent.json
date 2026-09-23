@@ -1,0 +1,11 @@
+{
+  "id": "local-agent",
+  "revision": 1,
+  "instructions": "Answer briefly. This application currently uses the offline Mock model.",
+  "model": {
+    "protocolId": "mock",
+    "providerId": "local",
+    "modelId": "demo",
+    "configRevision": 1
+  }
+}
