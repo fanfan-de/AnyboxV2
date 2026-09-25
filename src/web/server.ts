@@ -8,14 +8,20 @@ import { LLMFailure } from '../llm/port.js'
 import { CredentialFailure } from '../credentials/port.js'
 import { UnmanagedCredentialError } from '../credentials/settings.js'
 import type { ManagedCredentialStatus } from '../credentials/settings.js'
+import { isProjectUnavailableError } from '../project/component.js'
+import type { Project } from '../project/component.js'
 
 export interface WebCommands {
   listAgents(): readonly { readonly id: string }[]
-  createSession(agentId: string): Session
-  getSession(id: string): Session | undefined
-  startRun(input: RunInput): Run
-  getRun(id: string): Run | undefined
-  cancelRun(id: string): Run | undefined
+  openProject(path: string): Promise<Project>
+  listProjects(): Promise<readonly Project[]>
+  createSession(projectId: string, agentId: string): Promise<Session>
+  getSession(id: string): Promise<Session | undefined>
+  listSessions(projectId: string): Promise<readonly Session[]>
+  startRun(input: RunInput): Promise<Run>
+  getRun(id: string): Promise<Run | undefined>
+  listRuns(sessionId: string): Promise<readonly Run[]>
+  cancelRun(id: string): Promise<Run | undefined>
   listCredentials(): Promise<readonly ManagedCredentialStatus[]>
   saveCredential(id: string, secret: string): Promise<ManagedCredentialStatus>
   deleteCredential(id: string): Promise<ManagedCredentialStatus>
@@ -46,8 +52,9 @@ function knownFailure(error: unknown): HttpFailure {
   if (error instanceof LLMFailure) return failure(503, 'service-unavailable')
   if (error instanceof CredentialFailure) return failure(503, 'credential-unavailable')
   if (error instanceof UnmanagedCredentialError) return failure(404, 'not-found')
+  if (isProjectUnavailableError(error)) return failure(409, 'project-unavailable')
   if (error instanceof Error) {
-    if (/^unknown (agent|session) /.test(error.message)) return failure(404, 'not-found')
+    if (/^unknown (agent|session|project) /.test(error.message)) return failure(404, 'not-found')
     if (/idempotency key already used|session already has an active run/.test(error.message)) {
       return failure(409, 'conflict')
     }
@@ -65,7 +72,7 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 
 function sessionView(session: Session): object {
   return {
-    id: session.id, agentId: session.agentId, createdAt: session.createdAt,
+    id: session.id, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
     turns: session.turns.map(turn => ({ input: turn.input, output: turn.output })),
   }
 }
@@ -132,6 +139,20 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         json(response, 200, commands.listAgents())
         return
       }
+      if (method === 'GET' && path === '/api/v1/projects') {
+        json(response, 200, await commands.listProjects())
+        return
+      }
+      if (method === 'POST' && path === '/api/v1/projects') {
+        const body = await requestObject(request, ['path'])
+        json(response, 200, await commands.openProject(body.path as string))
+        return
+      }
+      const projectSessionsMatch = /^\/api\/v1\/projects\/([^/]+)\/sessions$/.exec(path)
+      if (method === 'GET' && projectSessionsMatch) {
+        json(response, 200, (await commands.listSessions(decodeURIComponent(projectSessionsMatch[1]))).map(sessionView))
+        return
+      }
       if (method === 'GET' && path === '/api/v1/credentials') {
         json(response, 200, await commands.listCredentials())
         return
@@ -150,13 +171,18 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         return
       }
       if (method === 'POST' && path === '/api/v1/sessions') {
-        const body = await requestObject(request, ['agentId'])
-        json(response, 200, sessionView(commands.createSession(body.agentId as string)))
+        const body = await requestObject(request, ['projectId', 'agentId'])
+        json(response, 200, sessionView(await commands.createSession(body.projectId as string, body.agentId as string)))
+        return
+      }
+      const sessionRunsMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs$/.exec(path)
+      if (method === 'GET' && sessionRunsMatch) {
+        json(response, 200, (await commands.listRuns(decodeURIComponent(sessionRunsMatch[1]))).map(runView))
         return
       }
       const sessionMatch = /^\/api\/v1\/sessions\/([^/]+)$/.exec(path)
       if (method === 'GET' && sessionMatch) {
-        const session = commands.getSession(decodeURIComponent(sessionMatch[1]))
+        const session = await commands.getSession(decodeURIComponent(sessionMatch[1]))
         if (!session) throw failure(404, 'not-found')
         json(response, 200, sessionView(session))
         return
@@ -164,7 +190,7 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       const createRunMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs$/.exec(path)
       if (method === 'POST' && createRunMatch) {
         const body = await requestObject(request, ['input', 'idempotencyKey'])
-        const run = commands.startRun({
+        const run = await commands.startRun({
           sessionId: decodeURIComponent(createRunMatch[1]),
           input: body.input as string,
           idempotencyKey: body.idempotencyKey as string,
@@ -174,7 +200,7 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       }
       const runMatch = /^\/api\/v1\/runs\/([^/]+)$/.exec(path)
       if (method === 'GET' && runMatch) {
-        const run = commands.getRun(decodeURIComponent(runMatch[1]))
+        const run = await commands.getRun(decodeURIComponent(runMatch[1]))
         if (!run) throw failure(404, 'not-found')
         json(response, 200, runView(run))
         return
@@ -183,7 +209,7 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       if (method === 'POST' && cancelMatch) {
         const body = await requestObject(request, [])
         void body
-        const run = commands.cancelRun(decodeURIComponent(cancelMatch[1]))
+        const run = await commands.cancelRun(decodeURIComponent(cancelMatch[1]))
         if (!run) throw failure(404, 'not-found')
         json(response, 200, runView(run))
         return

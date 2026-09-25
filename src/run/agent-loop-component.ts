@@ -4,16 +4,16 @@ import { LLMFailure, llmServiceKey, normalizeLLMFailure } from '../llm/port.js'
 import type { LLMPort } from '../llm/port.js'
 import { buildLLMMessages } from './domain.js'
 import type { Run, RunOutcome } from './domain.js'
-import { stateServiceKey } from './memory-state.js'
-import type { StatePort } from './memory-state.js'
+import { stateServiceKey } from './sqlite-state.js'
+import type { StatePort } from './sqlite-state.js'
 
 export const agentLoopServiceKey = 'harness.agent-loop'
 
 export type LoopCancelReason = 'user-requested' | 'owner-disposed' | 'dependency-unavailable'
 
 export interface AgentLoopPort {
-  start(runId: string): Run
-  cancel(runId: string, reason: LoopCancelReason): void
+  start(runId: string): Promise<Run>
+  cancel(runId: string, reason: LoopCancelReason): Promise<void>
   wait(runId: string): Promise<Run | undefined>
 }
 
@@ -34,11 +34,13 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
       const state = deps[stateServiceKey]
       const llm = deps[llmServiceKey]
       const active = new Map<string, ActiveRun>()
+      const starting = new Set<Promise<Run>>()
       const failures: unknown[] = []
       let accepting = true
 
       ctx.effect(() => async () => {
         accepting = false
+        await Promise.allSettled([...starting])
         const pending = [...active.entries()]
         for (const [, item] of pending) item.cancel('dependency-unavailable')
         for (const result of await Promise.allSettled(pending.map(([, item]) => item.finished))) {
@@ -50,18 +52,25 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
 
       const service: AgentLoopPort = {
         start(runId) {
-          const run = state.getRun(runId)
+          const task = (async (): Promise<Run> => {
+          const run = await state.getRun(runId)
           if (!run) throw new Error(`unknown run ${runId}`)
-          if (!accepting) {
+          if (run.status !== 'running') return run
+          const [session, prompts, plan] = await Promise.all([
+            state.getSession(run.sessionId), state.getRunPrompts(run.id), state.getRunPlan(run.id),
+          ])
+          if (!accepting || !session || !prompts || !plan) {
             const failure = new LLMFailure('dependency-unavailable')
             return state.settleRun(runId, { kind: 'failed', error: failure.message, category: failure.category }, inputs.now())
           }
-          const session = state.getSession(run.sessionId)!
+          // Cancellation may have settled the Run while the persisted inputs were loading.
+          const current = await state.getRun(runId)
+          if (!current) throw new Error(`unknown run ${runId}`)
+          if (current.status !== 'running') return current
           let call: OwnedCall<string>
           try {
             call = llm.call({
-              plan: state.getRunPlan(run.id)!,
-              messages: buildLLMMessages(state.getRunPrompts(run.id)!, session, run.input),
+              plan, messages: buildLLMMessages(prompts, session, run.input),
             })
           } catch (error) {
             const failure = normalizeLLMFailure(error)
@@ -92,7 +101,7 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
               outcome = { kind: 'cleanup-failed', error: new LLMFailure('cleanup-failure').message, category: 'cleanup-failure' }
               failures.push(new LLMFailure('cleanup-failure'))
             }
-            if (dependencyLost && state.getRun(run.id)?.status !== 'cancelling' && outcome.kind !== 'cleanup-failed') {
+            if (dependencyLost && (await state.getRun(run.id))?.status !== 'cancelling' && outcome.kind !== 'cleanup-failed') {
               const failure = new LLMFailure('dependency-unavailable')
               outcome = { kind: 'failed', error: failure.message, category: failure.category }
             }
@@ -108,14 +117,21 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
           active.set(run.id, item)
           void finished.finally(() => { active.delete(run.id) }).catch(error => { failures.push(error) })
           return run
+          })()
+          starting.add(task)
+          void task.finally(() => starting.delete(task)).catch(() => {})
+          return task
         },
-        cancel(runId, reason) {
-          if (reason !== 'dependency-unavailable') state.requestCancellation(runId, inputs.now())
-          const run = state.getRun(runId)
+        async cancel(runId, reason) {
+          const run = reason !== 'dependency-unavailable'
+            ? await state.requestCancellation(runId, inputs.now()) : await state.getRun(runId)
           const item = active.get(runId)
           if (run && (run.status === 'running' || run.status === 'cancelling') && item) item.cancel(reason)
+          else if (run && (run.status === 'running' || run.status === 'cancelling')) {
+            await state.settleRun(runId, { kind: 'cancelled' }, inputs.now())
+          }
         },
-        wait(runId) { return active.get(runId)?.finished ?? Promise.resolve(state.getRun(runId)) },
+        wait(runId) { return active.get(runId)?.finished ?? state.getRun(runId) },
       }
       ctx.provide(agentLoopServiceKey, service)
     },

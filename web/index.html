@@ -16,9 +16,16 @@
     </header>
     <main class="workspace">
       <aside class="sidebar" aria-label="会话设置">
-        <div class="sidebar-heading"><span>工作区</span><span class="sidebar-index">01 / 01</span></div>
-        <h2>开始一段对话</h2>
-        <p>选择 Agent，创建会话，然后发送消息。运行由本机 Harness 处理。</p>
+        <div class="sidebar-heading"><span>项目与会话</span></div>
+        <h2>本地项目</h2>
+        <form id="project-form" class="project-form">
+          <label for="project-path">添加目录</label>
+          <input id="project-path" type="text" placeholder="输入本机绝对路径" required>
+          <button id="add-project" type="submit">添加项目</button>
+        </form>
+        <div id="project-list" class="navigation-list" aria-label="项目列表"></div>
+        <div id="session-list" class="navigation-list" aria-label="当前项目的会话"></div>
+        <label for="agent-select">新会话使用的 Agent</label>
         <label for="agent-select">新会话使用的 Agent</label>
         <select id="agent-select" aria-label="新会话使用的 Agent"></select>
         <button id="new-session" class="new-session" type="button">＋ 新建会话</button>
@@ -40,7 +47,7 @@
           <button id="delete-key" type="button">删除当前 Key</button>
           <p id="key-notice" role="alert" hidden></p>
         </section>
-        <p class="storage-note">会话暂存于本机服务内存。服务重启后，请创建新会话。</p>
+        <p class="storage-note">项目、会话和运行历史保存在本机。切换项目不会停止运行。</p>
       </aside>
       <section class="conversation" aria-label="会话">
         <div class="conversation-heading"><div><span class="eyebrow">CONVERSATION</span><h1>会话</h1></div><span id="run-status" class="run-status" role="status">待开始</span></div>

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -38,11 +38,12 @@ async function fixture(directory) {
     const harness = await createHarness(root, {
       agents: [{ id: 'assistant', modelProfileId: 'default', instructions: 'Private instructions.' }],
     })
+    const project = await harness.openProject(directory)
     const webFiber = root.installComponent(createWebFrontendComponent())
     await webFiber
     const web = root.get(webFrontendServiceKey)
     assert.ok(web)
-    return { root, keyFiber, apiFiber, webFiber, harness, llm, web, secrets, close: () => harness.close() }
+    return { root, keyFiber, apiFiber, webFiber, harness, project, llm, web, secrets, close: () => harness.close() }
   } catch (error) { await root.fiber.dispose(); throw error }
 }
 
@@ -105,7 +106,7 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     const agents = await request(f.web, 'GET', '/agents')
     assert.deepEqual(agents.data, [{ id: 'assistant' }])
     assert.doesNotMatch(JSON.stringify(agents.data), /Private instructions/)
-    const created = await request(f.web, 'POST', '/sessions', { agentId: 'assistant' })
+    const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     assert.equal(created.response.status, 200)
     const sessionId = created.data.id
     const body = { input: 'Hello', idempotencyKey: 'send-1' }
@@ -137,13 +138,13 @@ test('Web host rejects cross-origin writes, maps errors, and waits for cancellat
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-'))
   const f = await fixture(directory)
   try {
-    const cross = await request(f.web, 'POST', '/sessions', { agentId: 'assistant' }, 'https://example.invalid')
+    const cross = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' }, 'https://example.invalid')
     assert.equal(cross.response.status, 403)
     assert.equal(cross.data.error.code, 'forbidden-origin')
     assert.equal(cross.response.headers.get('access-control-allow-origin'), null)
-    const invalid = await request(f.web, 'POST', '/sessions', { agentId: 'missing' })
+    const invalid = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'missing' })
     assert.equal(invalid.response.status, 404)
-    const created = await request(f.web, 'POST', '/sessions', { agentId: 'assistant' })
+    const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     const path = `/sessions/${created.data.id}/runs`
     const run = await request(f.web, 'POST', path, { input: 'Cancel me', idempotencyKey: 'one' })
     const conflict = await request(f.web, 'POST', path, { input: 'Again', idempotencyKey: 'two' })
@@ -171,17 +172,17 @@ test('Web host rejects cross-origin writes, maps errors, and waits for cancellat
   }
 })
 
-test('a fresh Web host reports old in-memory sessions as missing', async () => {
+test('a fresh Web host restores persistent sessions', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-'))
   let f = await fixture(directory)
   try {
-    const created = await request(f.web, 'POST', '/sessions', { agentId: 'assistant' })
+    const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     const oldId = created.data.id
     await f.close()
     f = await fixture(directory)
     const old = await request(f.web, 'GET', `/sessions/${oldId}`)
-    assert.equal(old.response.status, 404)
-    assert.deepEqual(old.data, { error: { code: 'not-found' } })
+    assert.equal(old.response.status, 200)
+    assert.equal(old.data.id, oldId)
   } finally {
     await f.close()
     rmSync(directory, { recursive: true, force: true })
@@ -192,7 +193,7 @@ test('Web host shutdown cancels and joins an accepted Run before releasing Harne
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-'))
   const f = await fixture(directory)
   try {
-    const created = await request(f.web, 'POST', '/sessions', { agentId: 'assistant' })
+    const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     const accepted = await request(f.web, 'POST', `/sessions/${created.data.id}/runs`, {
       input: 'Stay active', idempotencyKey: 'one',
     })
@@ -240,7 +241,7 @@ test('the Web frontend can be replaced without closing Harness', async () => {
     const port = Number(new URL(f.web.url).port)
     await f.webFiber.dispose()
     assert.equal(f.root.get(webFrontendServiceKey), undefined)
-    const session = f.harness.createSession('assistant')
+    const session = await f.harness.createSession(f.project.id, 'assistant')
     assert.equal(session.agentId, 'assistant')
     await f.root.installComponent(createWebFrontendComponent(port))
     const replacement = f.root.get(webFrontendServiceKey)
@@ -252,4 +253,41 @@ test('the Web frontend can be replaced without closing Harness', async () => {
     await f.close()
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test('Web project routes register directories and switching views leaves Runs active', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-projects-'))
+  const secondPath = join(directory, 'second')
+  mkdirSync(secondPath)
+  const f = await fixture(directory)
+  try {
+    const listed = await request(f.web, 'GET', '/projects')
+    assert.equal(listed.data.length, 1)
+    assert.equal(listed.data[0].id, f.project.id)
+    const duplicate = await request(f.web, 'POST', '/projects', { path: directory })
+    assert.equal(duplicate.data.id, f.project.id)
+    const added = await request(f.web, 'POST', '/projects', { path: secondPath })
+    assert.equal(added.response.status, 200)
+    const invalid = await request(f.web, 'POST', '/projects', { path: 'relative' })
+    assert.equal(invalid.response.status, 400)
+    const session = await request(f.web, 'POST', '/sessions', {
+      projectId: f.project.id, agentId: 'assistant',
+    })
+    assert.equal(session.data.projectId, f.project.id)
+    const run = await request(f.web, 'POST', `/sessions/${session.data.id}/runs`, {
+      input: 'Keep running', idempotencyKey: 'one',
+    })
+    const otherSessions = await request(f.web, 'GET', `/projects/${added.data.id}/sessions`)
+    assert.deepEqual(otherSessions.data, [])
+    assert.deepEqual(f.llm.calls[0].cancellations, [])
+    const projectSessions = await request(f.web, 'GET', `/projects/${f.project.id}/sessions`)
+    assert.equal(projectSessions.data[0].id, session.data.id)
+    f.llm.calls[0].result.resolve('Still running')
+    f.llm.calls[0].done.resolve()
+    await f.harness.waitRun(run.data.id)
+    const history = await request(f.web, 'GET', `/sessions/${session.data.id}/runs`)
+    assert.equal(history.data[0].output, 'Still running')
+    const unknownHistory = await request(f.web, 'GET', '/sessions/missing/runs')
+    assert.equal(unknownHistory.response.status, 404)
+  } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })

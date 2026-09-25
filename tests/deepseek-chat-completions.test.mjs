@@ -113,9 +113,14 @@ async function serviceReady(root, name) {
   await probe.dispose()
 }
 
-const start = (harness, idempotencyKey = 'one') => {
-  const session = harness.createSession('assistant')
-  return harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey })
+const start = async (harness, idempotencyKey = 'one') => {
+  const session = await createSession(harness)
+  return await harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey })
+}
+
+async function createSession(harness) {
+  const project = await harness.openProject(process.cwd())
+  return harness.createSession(project.id, 'assistant')
 }
 
 test('the component sends a native Chat Completions request and returns the final answer', async () => {
@@ -152,13 +157,13 @@ test('a Harness Run completes through DeepSeek without exposing credentials', as
   })
   const f = await harnessFixture({ baseUrl: server.baseUrl })
   try {
-    const run = start(f.harness)
+    const run = await start(f.harness)
     assert.deepEqual(run.llmSnapshot, { profileId: 'default', configVersion: 'v1' })
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'Hello from DeepSeek')
     assert.equal(JSON.stringify(terminal).includes('local-key'), false)
-    assert.deepEqual(f.harness.getSession(run.sessionId).turns, [{ input: 'Hello', output: 'Hello from DeepSeek' }])
+    assert.deepEqual((await f.harness.getSession(run.sessionId)).turns, [{ input: 'Hello', output: 'Hello from DeepSeek' }])
   } finally { await f.close(); await server.close() }
 })
 
@@ -166,7 +171,7 @@ test('Harness starts without a key and settles an unconfigured Run explicitly', 
   const held = heldFetch()
   const f = await harnessFixture({ fetch: held.fetch }, config(), '')
   try {
-    const run = start(f.harness)
+    const run = await start(f.harness)
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'credential-missing')
@@ -278,16 +283,16 @@ test('timeout fails the result first, aborts the request, and waits for the tran
   const held = heldFetch()
   const f = await harnessFixture({ fetch: held.fetch }, config('v1', [profile({ timeoutMs: 10 })]))
   try {
-    const run = start(f.harness)
+    const run = await start(f.harness)
     assert.equal(await (await requestAt(held, 0)).aborted.promise, 'timeout')
     await new Promise(resolve => setImmediate(resolve))
-    assert.equal(f.harness.getRun(run.id).status, 'running')
+    assert.equal((await f.harness.getRun(run.id)).status, 'running')
     held.release()
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'timeout')
     assert.equal(terminal.error, 'model call timed out')
-    assert.deepEqual(f.harness.getSession(run.sessionId).turns, [])
+    assert.deepEqual((await f.harness.getSession(run.sessionId)).turns, [])
   } finally { held.release(); await f.close() }
 })
 
@@ -295,16 +300,16 @@ test('cancelling and closing abort the request and settle only after it exits', 
   const held = heldFetch()
   const f = await harnessFixture({ fetch: held.fetch })
   try {
-    const run = start(f.harness)
+    const run = await start(f.harness)
     const waiting = f.harness.waitRun(run.id)
     await requestAt(held, 0)
-    assert.equal(f.harness.cancelRun(run.id).status, 'cancelling')
+    assert.equal((await f.harness.cancelRun(run.id)).status, 'cancelling')
     assert.equal(await (await requestAt(held, 0)).aborted.promise, 'user-requested')
     let closed = false
     const closing = f.harness.close().then(() => { closed = true })
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(closed, false)
-    assert.throws(() => f.harness.startRun({ sessionId: run.sessionId, input: 'Late', idempotencyKey: 'late' }), /closing/)
+    await assert.rejects(async () => f.harness.startRun({ sessionId: run.sessionId, input: 'Late', idempotencyKey: 'late' }), /closing/)
     held.release()
     assert.equal((await waiting).status, 'cancelled')
     await closing
@@ -315,7 +320,7 @@ test('cancelling and closing abort the request and settle only after it exits', 
   const closing = heldFetch()
   const g = await harnessFixture({ fetch: closing.fetch })
   try {
-    const run = start(g.harness)
+    const run = await start(g.harness)
     const waiting = g.harness.waitRun(run.id)
     let closed = false
     await requestAt(closing, 0)
@@ -335,9 +340,9 @@ test('revoking the API component fails accepted Runs and a replacement serves ne
   const f = await harnessFixture({ fetch: held.fetch }, config(), 'first-key')
   let server
   try {
-    const session = f.harness.createSession('assistant')
+    const session = await createSession(f.harness)
     const request = { sessionId: session.id, input: 'Hello', idempotencyKey: 'first' }
-    const run = f.harness.startRun(request)
+    const run = await f.harness.startRun(request)
     assert.equal((await requestAt(held, 0)).init.headers.Authorization, 'Bearer first-key')
     const waiting = f.harness.waitRun(run.id)
     let disposed = false
@@ -352,7 +357,7 @@ test('revoking the API component fails accepted Runs and a replacement serves ne
     await stopping
     assert.equal(f.root.get(llmServiceKey), undefined)
     assert.equal(f.root.get(runServiceKey), undefined)
-    assert.equal(f.harness.getSession(session.id).id, session.id)
+    assert.equal((await f.harness.getSession(session.id)).id, session.id)
 
     let authorization
     server = await localServer((incoming, response) => {
@@ -363,8 +368,8 @@ test('revoking the API component fails accepted Runs and a replacement serves ne
     f.credentials.secrets.set(deepSeekCredentialId, 'second-key')
     await f.root.installComponent(createDeepSeekChatCompletionsComponent(config('v2'), { baseUrl: server.baseUrl }))
     await serviceReady(f.root, runServiceKey)
-    assert.equal(f.harness.startRun(request), f.harness.getRun(run.id))
-    const fresh = f.harness.startRun({ ...request, idempotencyKey: 'second' })
+    assert.deepEqual(await f.harness.startRun(request), await f.harness.getRun(run.id))
+    const fresh = await f.harness.startRun({ ...request, idempotencyKey: 'second' })
     assert.equal(fresh.llmSnapshot.configVersion, 'v2')
     assert.equal((await f.harness.waitRun(fresh.id)).output, 'Replaced')
     assert.equal(authorization, 'Bearer second-key')
@@ -403,18 +408,19 @@ test('rotation and deletion affect only calls whose credential read starts after
   }
   const f = await harnessFixture({ fetch }, config(), 'first-key')
   try {
-    const session = f.harness.createSession('assistant')
-    const run = key => f.harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: key })
-    const first = run('first')
+    const session = await createSession(f.harness)
+    const run = async key => f.harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: key })
+    const first = await run('first')
     for (let i = 0; i < 100 && !requests[0]; i++) await new Promise(resolve => setImmediate(resolve))
     assert.equal(requests[0].authorization, 'Bearer first-key')
     f.credentials.secrets.set(deepSeekCredentialId, 'second-key')
-    const secondAttempt = f.harness.startRun({ sessionId: f.harness.createSession('assistant').id, input: 'Hello', idempotencyKey: 'second' })
+    const secondSession = await createSession(f.harness)
+    const secondAttempt = await f.harness.startRun({ sessionId: secondSession.id, input: 'Hello', idempotencyKey: 'second' })
     for (let i = 0; i < 100 && !requests[1]; i++) await new Promise(resolve => setImmediate(resolve))
     assert.equal(requests[1].authorization, 'Bearer second-key')
     f.credentials.secrets.delete(deepSeekCredentialId)
-    const missingSession = f.harness.createSession('assistant')
-    const missing = f.harness.startRun({ sessionId: missingSession.id, input: 'Hello', idempotencyKey: 'third' })
+    const missingSession = await createSession(f.harness)
+    const missing = await f.harness.startRun({ sessionId: missingSession.id, input: 'Hello', idempotencyKey: 'third' })
     const terminal = await f.harness.waitRun(missing.id)
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'credential-missing')
@@ -432,10 +438,10 @@ test('cancelling during a held credential read settles result before done and jo
   const f = await harnessFixture({ fetch: held.fetch })
   f.credentials.holding = true
   try {
-    const run = start(f.harness)
+    const run = await start(f.harness)
     const read = await readAt(f.credentials, 0)
     const waiting = f.harness.waitRun(run.id)
-    assert.equal(f.harness.cancelRun(run.id).status, 'cancelling')
+    assert.equal((await f.harness.cancelRun(run.id)).status, 'cancelling')
     assert.equal(await read.aborted.promise, 'user-requested')
     let exited = false
     void waiting.then(() => { exited = true })
@@ -472,7 +478,7 @@ test('revoking the credential source stops the API component and its Runs until 
   const held = heldFetch()
   const f = await harnessFixture({ fetch: held.fetch })
   try {
-    const run = start(f.harness)
+    const run = await start(f.harness)
     const waiting = f.harness.waitRun(run.id)
     let revoked = false
     await requestAt(held, 0)
@@ -491,7 +497,7 @@ test('revoking the credential source stops the API component and its Runs until 
     await f.root.installComponent(replacement.component())
     await serviceReady(f.root, runServiceKey)
     assert.equal(f.api.state, FiberState.ACTIVE)
-    const fresh = f.harness.startRun({ sessionId: run.sessionId, input: 'Again', idempotencyKey: 'again' })
+    const fresh = await f.harness.startRun({ sessionId: run.sessionId, input: 'Again', idempotencyKey: 'again' })
     assert.equal((await requestAt(held, 1)).init.headers.Authorization, 'Bearer replacement-key')
     held.release()
     await f.harness.waitRun(fresh.id)

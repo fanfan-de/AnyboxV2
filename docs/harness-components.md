@@ -1,12 +1,12 @@
 # Harness 组件说明
 
-状态：2026-09-25，对应当前代码。本文逐个说明 Harness 运行时的 Nya 组件：它负责什么、提供哪个服务、依赖谁、持有哪些资源、关闭时如何清理。阶段计划见 [Agent Harness 重建计划](./agent-harness-plan.md)，建模方法见 [用函数式思想建模 Agent Harness 的开发](./functional-agent-harness-development.md)，Prompt 与存储的专题设计见 [Prompt 管理模块设计](./prompt-management-design.md) 和 [本地 SQLite 存储组件](./local-sqlite-storage.md)。
+状态：2026-09-26，对应当前代码。本文逐个说明 Harness 运行时的 Nya 组件：它负责什么、提供哪个服务、依赖谁、持有哪些资源、关闭时如何清理。阶段计划见 [Agent Harness 重建计划](./agent-harness-plan.md)，建模方法见 [用函数式思想建模 Agent Harness 的开发](./functional-agent-harness-development.md)，Prompt 与存储的专题设计见 [Prompt 管理模块设计](./prompt-management-design.md) 和 [本地 SQLite 存储组件](./local-sqlite-storage.md)。
 
 ## 总览
 
 ### 放置规则
 
-当前只使用一个应用根 Context。应用先安装凭据组件、大模型 API 组件和本地 SQLite，`createHarness` 再把 Agent、Prompt、状态、Session、Run、AgentLoop 等组件直接安装在同一个根上。本机 Web 宿主使用一个自包含的 API Key 服务组件，再在同一根上安装 Web 前端组件。组件按职责和依赖拆分，不为 Harness、项目或任务建立额外的 Nya 作用域。Nya 服务按名称注册在根上；同一个根只安装一套 Harness 服务，也只安装一种凭据组件和一种大模型 API 组件。
+当前只使用一个应用根 Context。应用先安装凭据组件、大模型 API 组件和本地 SQLite，`createHarness` 再把 Agent、Projects、Prompt、状态、Session、Run、AgentLoop 等组件直接安装在同一个根上。本机 Web 宿主使用一个自包含的 API Key 服务组件，再在同一根上安装 Web 前端组件。组件按职责和依赖拆分，不为 Harness、项目或任务建立额外的 Nya 作用域。Nya 服务按名称注册在根上；同一个根只安装一套 Harness 服务，也只安装一种凭据组件和一种大模型 API 组件。
 
 应用拥有根上组件的生命周期。`harness.close()` 是当前的应用关闭入口：先停止接受外部调用，再卸载根上的全部组件，等待清理。大模型 API 组件的在途请求和数据库连接也会关闭；该 Harness 门面关闭后不可复用。重启应用时需重新装配组件，通常新建根。
 
@@ -21,13 +21,14 @@
 │  └─ 提供 llm；注入 credentials.read（只安装其中一种）
 ├─ 本地 SQLite ....... 提供 local-storage
 ├─ Agent ............ 提供 harness.agents
-├─ 内存状态 .......... 提供 harness.state
-├─ Session .......... 提供 harness.sessions       注入 agents、state
+├─ Projects ......... 提供 harness.projects      注入 local-storage
+├─ SQLite 状态 ...... 提供 harness.state         注入 local-storage、projects
+├─ Session .......... 提供 harness.sessions       注入 agents、projects、state
 ├─ Prompt ........... 提供 harness.prompts        注入 local-storage
 ├─ Agent Prompt ..... 提供 harness.agent-prompts  注入 agents、prompts、local-storage
 ├─ AgentLoop ........ 提供 harness.agent-loop     注入 state、llm
-├─ Run .............. 提供 harness.runs           注入 agents、state、agent-prompts、llm、agent-loop
-└─ Web 前端 ......... 提供 web.frontend            注入 agents、sessions、runs、credentials.settings
+├─ Run .............. 提供 harness.runs           注入 agents、projects、state、agent-prompts、llm、agent-loop
+└─ Web 前端 ......... 提供 web.frontend            注入 agents、projects、sessions、runs、credentials.settings
 ```
 
 `createHarness` 按上面的依赖顺序安装业务组件；关闭时由 Nya 按依赖关系先清理消费者，再清理其资源提供者。
@@ -42,7 +43,8 @@
 | 本地 SQLite | 应用根 | `src/storage/sqlite.ts`、`src/storage/port.ts` |
 | 组合根 | 安装到应用根 | `src/harness.ts` |
 | Agent | 应用根 | `src/agent/component.ts`、`src/agent/domain.ts` |
-| 内存状态 | 应用根 | `src/run/memory-state.ts` |
+| Projects | 应用根 | `src/project/component.ts` |
+| SQLite 状态 | 应用根 | `src/run/sqlite-state.ts` |
 | Session | 应用根 | `src/run/session-component.ts` |
 | Prompt | 应用根 | `src/prompt/component.ts`、`domain.ts`、`sqlite-storage.ts`、`legacy-json-import.ts` |
 | Agent Prompt | 应用根 | `src/agent/prompt-binding-component.ts`、`prompt-binding-storage.ts` |
@@ -190,36 +192,27 @@ Agent 组件保存本次 Harness 可用的 Agent 定义。每个定义包含 `id
 
 Agent 定义是静态的，不持久化；修改时需替换 Agent 组件或创建新的应用根。`modelProfileId` 引用的是当前大模型 API 组件配置中的 profile，这个引用直到 Run 准入时才检查：profile 不存在时，新 Run 以 `model is unavailable` 被拒绝，不会写入任何状态。
 
-### 内存状态
+### Projects
 
-**服务** `harness.state` · **注入** 无 · **创建** `createMemoryStateComponent()`
+**服务** `harness.projects` · **注入** `local-storage` · **创建** `createProjectComponent(inputs)`
 
-内存状态是 Session 和 Run 数据的唯一所有者。它在内存中持有 Session、Run、每个 Run 的 Prompt 快照、LLM 调用计划，以及幂等键索引。
+登记绝对路径所指的现有目录；`realpath` 规范化后以路径去重，同一路径再次录入返回原 ID。项目包含稳定 ID、目录名、完整路径和动态计算的 `available` 状态。提供异步 `openProject(path)`、`listProjects()`、`getProject(id)` 与供 Session/Run 使用的 `requireAvailable(id)`。目录失效不删除记录，历史仍可读；创建会话和新 Run 被拒绝。第一版没有删除、迁移目录或项目专属配置。Projects 只注入 SQLite，不反向依赖 Session 或 Run；卸载时等待已接收操作。
 
-**服务接口**（`StatePort`）：
+### SQLite 状态
 
-- `createSession(id, agentId, now)`、`getSession(id)`：创建和读取 Session。
-- `findAcceptedRun(input)`：准入前检查。Session 必须存在；同一 Session 下同一幂等键、同样输入时返回已有的 Run，输入不同则报错；同一 Session 已有进行中的 Run 时报错。
-- `acceptRun(id, input, now, prompts, plan)`：重新检查上述条件，然后一次性写入 Run、Prompt 快照、调用计划和幂等键。整个过程是同步的，所以检查和写入之间不会插入其他操作。
-- `getRun(id)`：对外可见的 Run。
-- `getRunPrompts(id)`、`getRunPlan(id)`：Run 的内部快照，只给 AgentLoop 使用，不能对外暴露。
-- `requestCancellation(id, now)`：把 `running` 改为 `cancelling`。
-- `settleRun(id, outcome, now)`：写入终态。Run 成功时，这次的输入和输出会作为一个新轮次追加到 Session。
+**服务** `harness.state` · **注入** `local-storage`、`harness.projects` · **创建** `createSqliteStateComponent(inputs)`
 
-状态转换本身是 `src/run/domain.ts` 中的纯函数，内存状态只负责保存结果。
+Session、Run、幂等键、Prompt 内容快照和模型可见配置快照由同一个 SQLite 状态组件持有，按 `run-state` 领域登记表迁移。原生 LLM 调用计划只在本进程的活动 Run 中保留，重启时不重放。
 
-**清理与限制。** 卸载时停止接收并清空全部数据，没有重启恢复。Session、AgentLoop 和 Run 都依赖它，它被卸载时这三个组件会先停下。反过来，AgentLoop 或 Run 单独重启时数据不受影响，已有的 Session 和 Run 仍可查询。持久化 Run 状态属于 H3 阶段。
+`StatePort` 的读写均返回 Promise：`createSession(id, projectId, agentId, now)`、`getSession(id)`、`listSessions(projectId)`、`findAcceptedRun(input)`、`acceptRun(id, input, now, prompts, plan)`、`getRun(id)`、`listRuns(sessionId)`、`getRunPrompts(id)`、`getRunPlan(id)`、`requestCancellation(id, now)`、`settleRun(id, outcome, now)`。接受 Run 的事务再次检查同键与同会话活动 Run，并原子保存 Run 和快照；成功终态与新增 Session 轮次在同一事务提交。同键同输入始终返回原 Run，同键不同输入拒绝。
+
+启动时在事务中将遗留的 `running`、`cancelling` 结算为 `interrupted`，保留幂等键与历史，允许 Session 用新键继续。卸载时停止接收并等待已接受的存储操作；Nya 先让 Session、AgentLoop 和 Run 等消费者退出。状态数据留在 SQLite 中。
 
 ### Session
 
-**服务** `harness.sessions` · **注入** `harness.agents`、`harness.state` · **创建** `createSessionComponent(inputs)`
+**服务** `harness.sessions` · **注入** `harness.agents`、`harness.projects`、`harness.state` · **创建** `createSessionComponent(inputs)`
 
-Session 组件是创建和查询会话的入口：
-
-- `createSession(agentId)`：确认 Agent 存在后，用 `newId` 和 `now` 在内存状态中创建 Session。
-- `getSession(id)`：读取 Session 及其已完成的轮次。
-
-它本身不保存数据，之所以单独成为组件，是为了有自己的依赖范围：它只依赖 Agent 和内存状态，所以大模型 API 组件、AgentLoop 或 Run 被替换时，创建和查询 Session 不受影响。
+Session 是创建和查询会话的入口。`createSession(projectId, agentId)` 显式指定项目，先校验全局 Agent 和项目目录可用，再在持久状态中创建会话。`getSession(id)` 和 `listSessions(projectId)` 返回已存历史；目录后来不可访问时仍可查看。Session 自己不存数据，也不依赖模型或 AgentLoop。
 
 ### Prompt
 
@@ -279,7 +272,7 @@ AgentLoop 是已接受 Run 的执行者，独占每个 Run 的在途调用，直
 
 **服务接口**（`AgentLoopPort`）：
 
-- `start(runId)`：从内存状态读出 Run 的 Prompt 快照、调用计划和 Session 历史，用纯函数 `buildLLMMessages` 组装消息，然后调用 `llm.call`。如果调用在发起时就同步失败（例如 `unsupported-request`），Run 立即结算为 `failed`。
+- `start(runId)`：从 SQLite 状态读出 Run 的 Prompt 快照、调用计划和 Session 历史，用纯函数 `buildLLMMessages` 组装消息，然后调用 `llm.call`。如果调用在发起时就同步失败（例如 `unsupported-request`），Run 立即结算为 `failed`。
 - `cancel(runId, reason)`：取消一个 Run 的在途调用，见下文的取消原因。
 - `wait(runId)`：返回该 Run 最终结算后的值；Run 已经结束时直接返回当前状态。
 
@@ -291,7 +284,7 @@ AgentLoop 是已接受 Run 的执行者，独占每个 Run 的在途调用，直
 2. 先等 `result` 得出完成或失败，然后无论如何都等 `done`。
 3. `done` 失败或取消时抛出异常，结果都改为 `cleanup-failure`。这类失败还会记录下来，在组件卸载时抛出，因此 `harness.close()` 会以失败结束。
 4. Run 没有处于取消中，而这个 Run 是因依赖撤销被取消的，结果改为 `dependency-unavailable`。
-5. 最后交给内存状态写入终态。
+5. 最后交给 SQLite 状态写入终态。
 
 **取消原因。**
 
@@ -305,28 +298,28 @@ AgentLoop 是已接受 Run 的执行者，独占每个 Run 的在途调用，直
 
 ### Run
 
-**服务** `harness.runs` · **注入** `harness.agents`、`harness.state`、`harness.agent-prompts`、`llm`、`harness.agent-loop` · **创建** `createRunComponent(inputs, isHarnessClosing)`
+**服务** `harness.runs` · **注入** `harness.agents`、`harness.projects`、`harness.state`、`harness.agent-prompts`、`llm`、`harness.agent-loop` · **创建** `createRunComponent(inputs, isHarnessClosing)`
 
 Run 组件是 Run 的准入与对外控制入口。它决定一个请求能否成为 Run，并在接受时固定这次 Run 使用的配置；实际执行交给 AgentLoop。
 
 **服务接口**（`RunPort`）：
 
 - `startRun({ sessionId, input, idempotencyKey })`：按下面的准入步骤接受 Run 并启动执行。输入中不能携带模型选择。
-- `getRun(id)`：查询 Run。
+- `getRun(id)`、`listRuns(sessionId)`：查询 Run 和会话历史。
 - `cancelRun(id)`：以 `user-requested` 取消并返回当前状态。
 - `waitRun(id)`：等待终态。
 
 **准入步骤。**
 
 1. 校验输入。
-2. 用 `findAcceptedRun` 检查重复请求。同一幂等键会原样返回最初的 Run，即使之后配置或 Prompt 绑定已经改变，也不重新解析配置、不发起第二次调用。
-3. 读取 Agent 定义，调用 `resolveRunPrompts` 固定 Prompt 快照，调用 `llm.prepare` 固定调用计划。
+2. 按 Session 的幂等键先用 `findAcceptedRun` 检查重复请求。同一幂等键会原样返回最初的 Run，即使之后配置或 Prompt 绑定已经改变，也不重新解析配置、不发起第二次调用。
+3. 通过 Session 检查项目目录可用，读取全局 Agent 定义，调用 `resolveRunPrompts` 固定 Prompt 快照，调用 `llm.prepare` 固定调用计划。
 4. 用 `acceptRun` 原子地写入 Run 和快照。
 5. 交给 `AgentLoop.start` 执行。
 
-第 2 步到第 4 步都是同步的，不会与其他请求交错。因此，同一 Session 同时只会有一个 Run 在执行，同一个幂等键也只会产生一次调用。
+准入按 Session 排队，SQLite 接受事务内再次检查同键和活动 Run。因此同一 Session 同时只会有一个活动 Run；同一项目的不同 Session 以及不同项目可以并行。
 
-**对外可见的 Run** 包含 ID、Session、输入、幂等键、状态、时间、`promptVersionIds` 和 `llmSnapshot`（profile ID 和配置版本），终态时还有 `output`，或 `error` 与 `errorCategory`。Prompt 内容、模型参数和凭据都不会出现在对外的 Run 中。状态只有五种：`running`、`cancelling`、`completed`、`cancelled`、`failed`。
+**对外可见的 Run** 包含 ID、Session、输入、幂等键、状态、时间、`promptVersionIds` 和 `llmSnapshot`（profile ID 和配置版本），终态时还有 `output`，或 `error` 与 `errorCategory`。Prompt 内容、模型参数和凭据都不会出现在对外的 Run 中。状态有 `running`、`cancelling`、`completed`、`cancelled`、`failed` 和异常退出后恢复的 `interrupted`。
 
 **清理。** 卸载时停止接收，逐个取消自己接受的 Run 并等待全部结算。取消原因由关闭方式决定：应用根正在关闭时用 `owner-disposed`，Run 因为依赖被撤销而卸载时用 `dependency-unavailable`。
 
@@ -340,33 +333,33 @@ Run 组件是 Run 的准入与对外控制入口。它决定一个请求能否�
 
 ## 本机 Web 前端组件
 
-**服务** `web.frontend`（本机访问 URL）· **注入** `harness.agents`、`harness.sessions`、`harness.runs`、`credentials.settings` · **创建** `createWebFrontendComponent(port?)`
+**服务** `web.frontend`（本机访问 URL）· **注入** `harness.agents`、`harness.projects`、`harness.sessions`、`harness.runs`、`credentials.settings` · **创建** `createWebFrontendComponent(port?)`
 
-本机宿主在 `createHarness` 后将它安装到同一个应用根。组件持有只监听 `127.0.0.1` 的 HTTP 服务，提供静态页面和同源 `/api/v1`；HTTP 层构造公开的 Agent ID、Session、Run 视图和已注册凭据状态。浏览器脚本是可替换的薄客户端，不导入 Nya 或 Harness。组件通过本轮 `deps` 调用 Agent、Session、Run 和通用凭据设置服务，不缓存跨重启的服务引用。
+本机宿主在 `createHarness` 后将它安装到同一个应用根。组件持有只监听 `127.0.0.1` 的 HTTP 服务，提供静态页面和同源 `/api/v1`；HTTP 层构造公开的 Agent ID、Session、Run 视图和已注册凭据状态。浏览器脚本是可替换的薄客户端，不导入 Nya 或 Harness。组件通过本轮 `deps` 调用 Agent、Projects、Session、Run 和通用凭据设置服务，不缓存跨重启的服务引用。
 
 HTTP 监听器由组件的 Effect 清理：卸载时停止接收请求并等待服务关闭，再由 Nya 清理其依赖。依赖撤销时，Web 组件随之停下；依赖恢复后，组件在原监听端口重新提供服务。进程的 SIGINT/SIGTERM 由 `src/web/serve.ts` 接收，并通过 `harness.close()` 卸载整个根。协议、同源限制与刷新恢复见 [薄 Web 客户端设计](./web-client-design.md)。
 
 ## 一次 Run 经过的组件
 
 1. 宿主调用 `harness.startRun`，组合根取到当前的 Run 服务。
-2. **Run** 校验输入，通过**内存状态**检查重复请求和进行中的 Run。
-3. **Run** 从 **Agent** 读取定义，从 **Agent Prompt** 取得 Prompt 快照，再请所选的大模型 API 组件通过 `llm.prepare` 固定调用计划。这一步不读取凭据。
-4. **Run** 通过**内存状态**原子地接受 Run，然后调用 **AgentLoop**。
+2. **Run** 校验输入，通过**SQLite 状态**检查重复请求和进行中的 Run。
+3. **Run** 从 **Projects** 检查会话目录，再从 **Agent** 读取定义，从 **Agent Prompt** 取得 Prompt 快照，再请所选的大模型 API 组件通过 `llm.prepare` 固定调用计划。这一步不读取凭据。
+4. **Run** 通过**SQLite 状态**原子地接受 Run，然后调用 **AgentLoop**。
 5. **AgentLoop** 组装消息并调用 `llm.call`；所选的大模型 API 组件先读取本次调用的 Key，再映射消息并发送原生请求。
-6. 请求退出后，该组件完成解析和错误归一，**AgentLoop** 确定结果并在**内存状态**中结算；Run 成功时，这一轮对话追加到 Session。
+6. 请求退出后，该组件完成解析和错误归一，**AgentLoop** 确定结果并在**SQLite 状态**中结算；Run 成功时，这一轮对话追加到 Session。
 7. `harness.waitRun` 返回终态。
 
 ## 撤销与关闭时发生什么
 
 | 事件 | 先停下的组件 | 在途 Run | 不受影响 |
 | --- | --- | --- | --- |
-| `harness.close()` | 应用根全部组件；先退出依赖消费者，再清理资源提供者 | `cancelled`；内存数据随之清空 | 无；DeepSeek 请求中止、SQLite 也关闭 |
-| 应用替换或重启大模型 API 组件 | Run、AgentLoop，然后等旧组件的请求退出 | `failed`，`dependency-unavailable` | Agent、Session、Prompt、Agent Prompt、内存状态、SQLite、凭据组件 |
+| `harness.close()` | 应用根全部组件；先退出依赖消费者，再清理资源提供者 | `cancelled`；历史保留在 SQLite 中 | 无；DeepSeek 请求中止、SQLite 也关闭 |
+| 应用替换或重启大模型 API 组件 | Run、AgentLoop，然后等旧组件的请求退出 | `failed`，`dependency-unavailable` | Agent、Session、Prompt、Agent Prompt、Projects、SQLite 状态、SQLite、凭据组件 |
 | Web 保存或删除 Key | 无 | 已取得 Key 的 Run 继续；后续 Run 读取新状态 | 所有组件 |
-| 应用卸载凭据组件 | Run、AgentLoop、大模型 API 组件，然后中止并等待凭据库操作 | `failed`，`dependency-unavailable` | Agent、Session、Prompt、Agent Prompt、内存状态、SQLite |
-| 应用卸载 SQLite | Run、Agent Prompt、Prompt，然后关闭连接并释放锁 | `failed`，`dependency-unavailable` | Agent、Session、内存状态、AgentLoop、大模型 API 组件 |
-| Agent 被移除 | Run、Agent Prompt、Session | `failed`，`dependency-unavailable` | Prompt、内存状态、AgentLoop、大模型 API 组件 |
-| 内存状态被卸载 | Run、AgentLoop、Session | `failed`，`dependency-unavailable`；随后数据清空 | Agent、Prompt、Agent Prompt、大模型 API 组件 |
+| 应用卸载凭据组件 | Run、AgentLoop、大模型 API 组件，然后中止并等待凭据库操作 | `failed`，`dependency-unavailable` | Agent、Session、Prompt、Agent Prompt、Projects、SQLite 状态、SQLite |
+| 应用卸载 SQLite | Run、AgentLoop、Session、SQLite 状态、Projects、Agent Prompt、Prompt，然后关闭连接并释放锁 | `failed`，`dependency-unavailable` | Agent、大模型 API 组件 |
+| Agent 被移除 | Run、Agent Prompt、Session | `failed`，`dependency-unavailable` | Prompt、SQLite 状态、AgentLoop、大模型 API 组件 |
+| SQLite 状态被卸载 | Run、AgentLoop、Session | `failed`，`dependency-unavailable`；历史仍在数据库中 | Agent、Prompt、Agent Prompt、Projects、大模型 API 组件 |
 
 所有情况下，停下的组件都会先拒绝新请求，再等已接受的操作真正退出。单个依赖组件恢复后，其消费者由 Nya 自动重启，组合根的下一次调用会取到新实例。`harness.close()` 后该门面保持关闭，重新启动须再次装配组件。
 

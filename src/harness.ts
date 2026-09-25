@@ -9,11 +9,13 @@ import type { AgentPromptPort } from './agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from './run/component.js'
 import type { RunPort } from './run/component.js'
 import { createAgentLoopComponent } from './run/agent-loop-component.js'
-import { createMemoryStateComponent } from './run/memory-state.js'
+import { createSqliteStateComponent } from './run/sqlite-state.js'
 import { createSessionComponent, sessionServiceKey } from './run/session-component.js'
 import type { SessionPort } from './run/session-component.js'
 import { createPromptComponent, promptServiceKey } from './prompt/component.js'
 import type { PromptPort } from './prompt/component.js'
+import { createProjectComponent, projectServiceKey } from './project/component.js'
+import type { ProjectPort } from './project/component.js'
 
 /** The application root must provide the LLM API and local storage services before the Harness starts. */
 export interface HarnessOptions extends Partial<RuntimeInputs> {
@@ -24,7 +26,8 @@ export interface HarnessOptions extends Partial<RuntimeInputs> {
   readonly canManageAgent?: (actorId: string, agentId: string) => boolean
 }
 
-export interface Harness extends RunPort, SessionPort, Omit<PromptPort, 'getPublishedVersion'>,
+export interface Harness extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable'>,
+  Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts'> {
   close(): Promise<void>
 }
@@ -65,6 +68,12 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     if (!service) throw new Error('session service is unavailable')
     return service
   }
+  const currentProjects = (): ProjectPort => {
+    if (closing) throw new Error('harness is closing')
+    const service = context.get<ProjectPort>(projectServiceKey)
+    if (!service) throw new Error('project service is unavailable')
+    return service
+  }
   const currentPrompts = (): PromptPort => {
     if (closing) throw new Error('harness is closing')
     const service = context.get<PromptPort>(promptServiceKey)
@@ -80,7 +89,8 @@ export async function createHarness(context: Context, options: HarnessOptions): 
   try {
     for (const component of [
       createAgentComponent(options.agents),
-      createMemoryStateComponent(),
+      createProjectComponent(inputs),
+      createSqliteStateComponent(inputs),
       createSessionComponent(inputs),
       createPromptComponent(inputs, options.legacyPromptStorePath),
       createAgentPromptComponent(inputs, options.canManageAgent ?? (() => true), options.legacyPromptStorePath),
@@ -98,10 +108,15 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     throw error
   }
   return {
-    createSession: agentId => currentSessions().createSession(agentId),
+    openProject: path => currentProjects().openProject(path),
+    listProjects: () => currentProjects().listProjects(),
+    getProject: id => currentProjects().getProject(id),
+    createSession: (projectId, agentId) => currentSessions().createSession(projectId, agentId),
     getSession: id => currentSessions().getSession(id),
+    listSessions: id => currentSessions().listSessions(id),
     startRun: input => current().startRun(input),
     getRun: id => current().getRun(id),
+    listRuns: id => current().listRuns(id),
     cancelRun: id => current().cancelRun(id),
     waitRun: id => current().waitRun(id),
     createPrompt: (actorId, input) => currentPrompts().createPrompt(actorId, input),

@@ -1,8 +1,8 @@
 # AnyboxV2
 
-从 NyaCore 直接构建 Agent Harness。本分支已完成 [H1 无网络闭环](docs/agent-harness-plan.md)，并加入 [Prompt 管理模块](docs/prompt-management-design.md)：用户可编辑草稿、发布版本，将不同用途和消息角色的 prompt 绑定到 Agent。Prompt 文档、版本和绑定通过 [SQLite 存储组件](docs/local-sqlite-storage.md)持久化；大模型调用由应用安装的唯一一个 API 组件承担，可选择 DeepSeek 非流式 Chat Completions 或 OpenAI 非流式 Responses。当前本机 Web 宿主使用 DeepSeek。工具循环、Run 状态持久化、流式输出和工具调用仍在后续阶段。
+从 NyaCore 直接构建 Agent Harness。本分支已完成 [H1 无网络闭环](docs/agent-harness-plan.md)，并加入 [Prompt 管理模块](docs/prompt-management-design.md)：用户可编辑草稿、发布版本，将不同用途和消息角色的 prompt 绑定到 Agent。Prompt 文档、版本和绑定通过 [SQLite 存储组件](docs/local-sqlite-storage.md)持久化；大模型调用由应用安装的唯一一个 API 组件承担，可选择 DeepSeek 非流式 Chat Completions 或 OpenAI 非流式 Responses。当前本机 Web 宿主使用 DeepSeek。项目、Session 和 Run 已持久化；工具循环、流式输出和工具调用仍在后续阶段。
 
-应用只使用一个 Nya 根 Context：凭据组件、大模型 API 组件、本地 SQLite、Agent、Prompt、Agent Prompt、内存状态、Session、Run 和 AgentLoop 都直接安装在根上。组件通过 `inject` 声明依赖，由 Nya 负责就绪、重启和清理顺序。凭据组件提供 `credentials.read`：系统凭据库组件把密钥交给 macOS Keychain、Windows Credential Manager 或 Linux Secret Service 保存，并另提供受信宿主使用的 `credentials.manage`；无桌面环境改装外部来源组件，只把部署方的读取函数接进来。大模型 API 组件按 API 格式划分，不再有单独的供应商适配器层：它注入 `credentials.read`、每次 `llm.call()` 读取一次密钥，提供 `llm` 服务，直接拥有原生请求格式、HTTP 传输、密钥使用、响应解析、超时、取消和清理；Run 和 AgentLoop 只依赖 `src/llm/port.ts` 中的最小契约 `prepare(profileId)` 与 `call({ plan, messages })`。Run 负责准入、固定配置快照与对外控制；AgentLoop 注入 `llm` 和状态服务，独占在途调用、取消和退出等待。Session 服务负责创建与查询，Session 和 Run 数据仍由同一个内存状态组件持有。Prompt 组件只依赖 SQLite，负责文档所有权、草稿、版本及已提交数据的读投影；Agent Prompt 组件依赖 Agent、Prompt 和 SQLite，负责绑定权限、默认指令、绑定持久化与 Run 使用的版本解析。SQLite 组件排他持有连接和事务，并按领域记录迁移版本；各领域组件启动时登记自己的表迁移。调用的 `result` 是业务结果，`done` 表示调用及资源实际退出；取消或卸载会等待 `done` 完成。
+应用只使用一个 Nya 根 Context：凭据组件、大模型 API 组件、本地 SQLite、Agent、Prompt、Agent Prompt、Projects、持久状态、Session、Run 和 AgentLoop 都直接安装在根上。组件通过 `inject` 声明依赖，由 Nya 负责就绪、重启和清理顺序。Projects 登记本地目录身份，Session 和 Run 数据由同一个 SQLite 状态组件持有；项目不创建独立 Context 或数据库。Prompt、绑定和 Agent 定义全局共享。凭据组件提供 `credentials.read`；大模型 API 组件提供 `llm`，负责原生请求、HTTP、密钥、超时、取消和清理。Run 负责准入、配置快照与控制；AgentLoop 独占在途调用。SQLite 排他持有连接，各领域组件登记自己的表迁移。调用的 `result` 是业务结果，`done` 表示调用及资源实际退出；取消或卸载会等待 `done` 完成。
 
 ## 最小调用
 
@@ -44,17 +44,18 @@ try {
   })
   const version = await harness.publishPrompt('alice', edited.id)
   await harness.bindPrompt('alice', 'demo', version.id)
-  const session = harness.createSession('demo')
-  const run = harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'request-1' })
+  const project = await harness.openProject(process.cwd())
+  const session = await harness.createSession(project.id, 'demo')
+  const run = await harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'request-1' })
   console.log(await harness.waitRun(run.id))
 } finally {
   await harness.close()
 }
 ```
 
-首版用途类型为 `agent-instruction`、`task-template` 和 `context`。消息角色与用途类型分别校验；`task-template` 须且仅须包含一个 `{{input}}`。用户编辑的是草稿，发布后还需显式绑定，新 Run 才会使用新版本。已接受的 Run 在内存状态中保存 Prompt 内容与 LLM 调用计划；对外 `llmSnapshot` 只包含 profile ID 和配置版本，不暴露 Prompt 内容、模型参数或凭据。传给 Prompt API 的 `actorId` 必须由受信宿主认证，不能直接信任客户端自报身份；默认允许已认证用户配置 Agent，产品宿主应按需设置 `canManageAgent`。
+首版用途类型为 `agent-instruction`、`task-template` 和 `context`。消息角色与用途类型分别校验；`task-template` 须且仅须包含一个 `{{input}}`。用户编辑的是草稿，发布后还需显式绑定，新 Run 才会使用新版本。已接受的 Run 在 SQLite 中保存 Prompt 内容与可见模型配置快照；原生 LLM 调用计划只在本进程执行期间保留。对外 `llmSnapshot` 只包含 profile ID 和配置版本，不暴露 Prompt 内容、模型参数或凭据。传给 Prompt API 的 `actorId` 必须由受信宿主认证，不能直接信任客户端自报身份；默认允许已认证用户配置 Agent，产品宿主应按需设置 `canManageAgent`。
 
-应用以本地文件路径安装 SQLite 组件，Harness 启动时缺少 `llm` 或 SQLite 服务会报出所缺服务名。所选大模型 API 组件在密钥缺失时仍提供 `llm`，Harness 和 Web 可以启动；未配置 Key 的 Run 以 `credential-missing` 失败。创建、编辑、发布和绑定为异步操作，成功返回表示事务已提交。SQLite 组件用同目录的 `.lock` 目录阻止两个活跃实例同时持有数据库；异常退出遗留的锁需确认原进程停止后手动清理。`harness.close()` 先阻止新调用，再卸载应用根上的全部组件：Nya 先停止 Run 和 AgentLoop 并等待在途调用退出，等待 Prompt 写入，然后中止剩余的模型请求并关闭数据库连接，释放锁。该 Harness 门面关闭后不可复用；重新装配组件和 Harness 后，Prompt 文档、版本与绑定可从 SQLite 恢复，Session、Run、幂等键和 Run 快照仍只在内存中。若需从旧 JSON 存储迁入，可首次启动时另传 `legacyPromptStorePath: './data/prompts.json'`；Prompt 与 Agent Prompt 各自在一个事务内导入自己的数据并记录来源，源文件保持不变，后续带同一路径重启不会重复导入。
+应用以本地文件路径安装 SQLite 组件，Harness 启动时缺少 `llm` 或 SQLite 服务会报出所缺服务名。所选大模型 API 组件在密钥缺失时仍提供 `llm`，Harness 和 Web 可以启动；未配置 Key 的 Run 以 `credential-missing` 失败。项目、Session、Run、Prompt 与绑定的写入均为异步操作，成功返回表示事务已提交。SQLite 组件用同目录的 `.lock` 目录阻止两个活跃实例同时持有数据库；异常退出遗留的锁需确认原进程停止后手动清理。`harness.close()` 先阻止新调用，再卸载应用根上的全部组件，取消并等待在途调用，最后关闭数据库并释放锁。重新装配后，项目、Session、Run、幂等键、Run 快照及 Prompt 数据可从 SQLite 恢复；遗留的在途 Run 结算为 `interrupted`，不会自动重放。若需从旧 JSON 存储迁入，可首次启动时另传 `legacyPromptStorePath: './data/prompts.json'`；Prompt 与 Agent Prompt 各自在一个事务内导入自己的数据并记录来源。
 
 ## 凭据组件
 
@@ -99,7 +100,7 @@ await root.installComponent(createApiKeyServiceComponent({
 
 第一版提供可替换的薄客户端参考实现。Web 前端是单独的 Nya 组件，注入 Agent、Session、Run 和通用凭据设置服务，拥有 HTTP 监听器及静态页面。运行 `npm run web` 后打开终端打印的 `http://127.0.0.1:<port>` 地址；首次启动无需 Key，可在侧栏 API Key 管理中选择已注册的服务并保存、替换或删除。写入成功即生效。
 
-页面可选择 Agent、创建 Session、提交消息、查看完整回答或失败状态，以及取消在途 Run。当前没有流式输出；页面通过 `/api/v1` 查询服务端状态。浏览器只保存当前标签页的待提交幂等键与输入，用于刷新或丢失响应后的安全重试。Session 和 Run 仍只在内存中，服务重启后旧会话不可恢复。宿主只监听 `127.0.0.1`，不支持远程访问或账号。协议及边界见 [薄 Web 客户端设计](docs/web-client-design.md)。
+页面可登记本地项目目录、切换项目和会话、选择 Agent、提交消息、查看历史与完整回答或失败状态，以及取消在途 Run。当前没有流式输出；页面通过 `/api/v1` 查询服务端状态。浏览器按 Session 保存当前标签页的待提交幂等键与输入，用于刷新或丢失响应后的安全重试。项目、Session 和 Run 历史由服务端持久化，重启后可恢复。宿主只监听 `127.0.0.1`，不支持远程访问或账号。协议及边界见 [薄 Web 客户端设计](docs/web-client-design.md)。
 
 ## 本地验证
 
@@ -130,7 +131,8 @@ npm run check
 | `src/llm/port.ts` | `llm` 服务契约：调用计划、消息与失败类别；Run 和 AgentLoop 只依赖它 |
 | `src/llm/deepseek-chat-completions/` | DeepSeek Chat Completions API 组件：`domain.ts` 是配置校验、原生请求组装与响应解析的纯函数，`component.ts` 每次调用读取密钥、HTTP 传输、超时、取消与清理 |
 | `src/llm/openai-responses/` | OpenAI Responses API 组件：同样提供 `llm`，支持 `developer` 文本消息及非流式最终文本，独立拥有原生协议和资源清理 |
-| `src/run/` | Session 与 Run 值、纯函数，以及 Session、Run 准入、AgentLoop 和内存状态组件 |
+| `src/project/` | 项目目录规范化、可用性检查与 Projects 服务组件 |
+| `src/run/` | Session 与 Run 值、纯函数，以及 Session、Run 准入、AgentLoop 和 SQLite 状态组件 |
 | `src/prompt/domain.ts`、`src/prompt/component.ts` | Prompt 草稿与版本的纯函数，以及权限、规则和管理服务 |
 | `src/prompt/sqlite-storage.ts` | Prompt 表迁移、文档与版本的读写投影及旧 JSON 导入 |
 | `src/prompt/legacy-json-import.ts` | 旧 JSON 格式读取与校验，仅供显式迁入使用 |
@@ -143,4 +145,4 @@ npm run check
 | `docs/agent-harness-plan.md` | 后续阶段与验收边界 |
 | `docs/harness-components.md` | 各组件的职责、服务、依赖与清理行为 |
 
-通用配置文件格式、远程产品宿主和账号体系留待后续阶段决定；本机 Web 宿主处理 SIGINT 与 SIGTERM，通过 `harness.close()` 卸载应用根并等待 Web 监听器及 Harness 清理。同键请求始终返回原 Run，显式重试需新幂等键。SQLite 组件已接入 Prompt，尚未接入 State；当前 Run 状态不提供重启恢复保证。
+通用配置文件格式、远程产品宿主和账号体系留待后续阶段决定；本机 Web 宿主处理 SIGINT 与 SIGTERM，通过 `harness.close()` 卸载应用根并等待 Web 监听器及 Harness 清理。同键请求始终返回原 Run，显式重试需新幂等键。SQLite 同时供 Prompt、Projects 和 Run 状态使用；异常退出的在途 Run 在重启时结算为 `interrupted`。

@@ -10,12 +10,13 @@ export interface Turn {
 
 export interface Session {
   readonly id: string
+  readonly projectId: string
   readonly agentId: string
   readonly createdAt: string
   readonly turns: readonly Turn[]
 }
 
-export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed'
+export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 
 export interface Run {
   readonly id: string
@@ -55,8 +56,8 @@ export function validateRunInput(input: RunInput): RunInput {
   })
 }
 
-export function createSession(id: string, agentId: string, now: string): Session {
-  return Object.freeze({ id, agentId, createdAt: now, turns: Object.freeze([]) })
+export function createSession(id: string, projectId: string, agentId: string, now: string): Session {
+  return Object.freeze({ id, projectId, agentId, createdAt: now, turns: Object.freeze([]) })
 }
 
 export function createRun(id: string, input: RunInput, prompts: readonly PromptSnapshot[], plan: LLMPlan, now: string): Run {

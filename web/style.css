@@ -20,6 +20,12 @@ button:disabled{cursor:not-allowed;opacity:.52}
 .sidebar p{color:#778379;font-size:13px;line-height:1.7;margin:0 0 32px}
 .sidebar label,.composer label{display:block;font-size:11px;letter-spacing:.1em;font-weight:700;color:#5f7163;text-transform:uppercase;margin-bottom:10px}
 .sidebar select{width:100%;padding:12px 14px;border:1px solid #d4ddd2;border-radius:10px;background:#fff;color:#24362b;outline-color:#7b9f80}
+.project-form{margin-bottom:18px}.project-form input{width:100%;padding:10px;border:1px solid #d4ddd2;border-radius:8px;background:#fff}
+.project-form button{margin-top:8px;padding:9px 12px;border:0;border-radius:8px;background:#295b43;color:#fff}
+.navigation-list{display:flex;flex-direction:column;gap:6px;margin-bottom:18px;max-height:180px;overflow:auto}
+.navigation-list button{width:100%;border:1px solid transparent;border-radius:8px;background:transparent;color:#304a37;text-align:left;padding:9px 10px;overflow-wrap:anywhere}
+.navigation-list button.selected{border-color:#b7cdb9;background:#dce8da}.navigation-list button:hover{background:#e1e9df}
+.navigation-list small{display:block;font-size:10px;color:#718474;margin-top:4px}
 .new-session{width:100%;margin-top:13px;padding:12px 14px;border:0;border-radius:10px;background:#295b43;color:#fff;font-weight:650;text-align:left}
 .new-session:hover:not(:disabled),.send-button:hover:not(:disabled){background:#1e4935}
 .sidebar-note{margin-top:44px;padding:22px 0;border-top:1px solid #d2dcd1;display:flex;flex-direction:column;gap:6px}

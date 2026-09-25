@@ -9,7 +9,8 @@ import { createAgentComponent } from '../dist/agent/component.js'
 import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from '../dist/run/component.js'
 import { createAgentLoopComponent } from '../dist/run/agent-loop-component.js'
-import { createMemoryStateComponent } from '../dist/run/memory-state.js'
+import { createSqliteStateComponent } from '../dist/run/sqlite-state.js'
+import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
 import { createSessionComponent, sessionServiceKey } from '../dist/run/session-component.js'
 import { createPromptComponent, promptServiceKey } from '../dist/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
@@ -46,12 +47,22 @@ async function createTestHarness(options) {
 
 const agents = [{ id: 'assistant', modelProfileId: 'default', instructions: 'Default instruction.' }]
 
+async function createSession(harness, agentId = 'assistant') {
+  const project = await harness.openProject(process.cwd())
+  return harness.createSession(project.id, agentId)
+}
+
+async function createRootSession(root) {
+  const project = await root.get(projectServiceKey).openProject(process.cwd())
+  return root.get(sessionServiceKey).createSession(project.id, 'assistant')
+}
+
 test('editing and activating a prompt changes new runs while accepted runs keep their snapshot', async () => {
   const llm = controlledLLM()
   const harness = await createTestHarness({ agents, llm, newId: ids(), now: () => 'now' })
   try {
-    const firstSession = harness.createSession('assistant')
-    const first = harness.startRun({ sessionId: firstSession.id, input: 'First', idempotencyKey: 'first' })
+    const firstSession = await createSession(harness)
+    const first = await harness.startRun({ sessionId: firstSession.id, input: 'First', idempotencyKey: 'first' })
     const document = await harness.createPrompt('alice', {
       name: 'Custom', kind: 'agent-instruction', role: 'system', content: 'Draft instruction.',
     })
@@ -62,13 +73,13 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
     assert.equal(harness.getAgentPrompts('alice', 'assistant')[0].content, 'Default instruction.')
     await harness.bindPrompt('alice', 'assistant', version.id)
 
-    const secondSession = harness.createSession('assistant')
+    const secondSession = await createSession(harness)
     const secondInput = { sessionId: secondSession.id, input: 'Second', idempotencyKey: 'second' }
-    const second = harness.startRun(secondInput)
+    const second = await harness.startRun(secondInput)
     assert.deepEqual(llm.calls[0].input.messages[0], { role: 'system', content: 'Default instruction.' })
     assert.deepEqual(llm.calls[1].input.messages[0], { role: 'system', content: 'Published instruction.' })
     assert.notDeepEqual(first.promptVersionIds, second.promptVersionIds)
-    assert.equal(JSON.stringify(harness.getRun(second.id)).includes('Published instruction.'), false)
+    assert.equal(JSON.stringify(await harness.getRun(second.id)).includes('Published instruction.'), false)
 
     const revised = await harness.editPrompt('alice', document.id, 2, { content: 'Later instruction.' })
     await assert.rejects(harness.editPrompt('alice', document.id, 2, { content: 'Lost edit.' }), /revision conflict/)
@@ -76,16 +87,16 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
     assert.equal(revised.draft.revision, 3)
     const later = await harness.publishPrompt('alice', document.id)
     await harness.bindPrompt('alice', 'assistant', later.id)
-    assert.equal(harness.startRun(secondInput).id, second.id)
+    assert.equal((await harness.startRun(secondInput)).id, second.id)
     assert.equal(llm.calls.length, 2)
 
     for (const call of llm.calls) { call.result.resolve('Answer'); call.done.resolve() }
     assert.equal((await harness.waitRun(first.id)).status, 'completed')
     assert.equal((await harness.waitRun(second.id)).status, 'completed')
-    assert.deepEqual(first.promptVersionIds, harness.getRun(first.id).promptVersionIds)
+    assert.deepEqual(first.promptVersionIds, (await harness.getRun(first.id)).promptVersionIds)
 
-    const thirdSession = harness.createSession('assistant')
-    const third = harness.startRun({ sessionId: thirdSession.id, input: 'Third', idempotencyKey: 'third' })
+    const thirdSession = await createSession(harness)
+    const third = await harness.startRun({ sessionId: thirdSession.id, input: 'Third', idempotencyKey: 'third' })
     assert.deepEqual(llm.calls[2].input.messages[0], { role: 'system', content: 'Later instruction.' })
     llm.calls[2].result.resolve('Done')
     llm.calls[2].done.resolve()
@@ -109,8 +120,8 @@ test('prompt kinds and roles compose into structured model messages', async () =
       const version = await harness.publishPrompt('alice', document.id)
       await harness.bindPrompt('alice', 'assistant', version.id)
     }
-    const session = harness.createSession('assistant')
-    const run = harness.startRun({ sessionId: session.id, input: 'What happened?', idempotencyKey: 'one' })
+    const session = await createSession(harness)
+    const run = await harness.startRun({ sessionId: session.id, input: 'What happened?', idempotencyKey: 'one' })
     assert.deepEqual(llm.calls[0].input.messages, [
       { role: 'developer', content: 'Follow team policy.' },
       { role: 'user', content: 'Reference data.' },
@@ -152,8 +163,8 @@ test('a new Harness restores prompts and the active binding from local storage',
     second = await createHostHarness({ agents, databasePath, llm })
     assert.equal(second.getPrompt('alice', document.id).draft.content, 'Persisted instruction.')
     assert.equal(second.getPromptVersions('alice', document.id)[0].id, version.id)
-    const session = second.createSession('assistant')
-    const run = second.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'one' })
+    const session = await createSession(second)
+    const run = await second.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'one' })
     assert.deepEqual(llm.calls[0].input.messages[0], {
       role: 'system', content: 'Persisted instruction.',
     })
@@ -304,7 +315,8 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   const llm = controlledLLM()
   const inputs = { newId: ids(), now: () => 'now' }
   const agentsFiber = root.installComponent(createAgentComponent(agents))
-  const stateFiber = root.installComponent(createMemoryStateComponent())
+  const projectsFiber = root.installComponent(createProjectComponent(inputs))
+  const stateFiber = root.installComponent(createSqliteStateComponent(inputs))
   const sessionFiber = root.installComponent(createSessionComponent(inputs))
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   const promptFiber = root.installComponent(createPromptComponent(inputs))
@@ -326,8 +338,8 @@ test('removing the prompt component cancels and joins dependent runs', async () 
     const version = await prompts.publishPrompt('alice', document.id)
     await root.get(agentPromptServiceKey).bindPrompt('alice', 'assistant', version.id)
     const runs = root.get(runServiceKey)
-    const session = root.get(sessionServiceKey).createSession('assistant')
-    const run = runs.startRun({ sessionId: session.id, input: 'Work', idempotencyKey: 'one' })
+    const session = await createRootSession(root)
+    const run = await runs.startRun({ sessionId: session.id, input: 'Work', idempotencyKey: 'one' })
     const waiting = runs.waitRun(run.id)
     let disposed = false
     const stopping = promptFiber.dispose().then(() => { disposed = true })
@@ -345,8 +357,8 @@ test('removing the prompt component cancels and joins dependent runs', async () 
     await loopFiber
     await runsFiber
     const current = root.get(runServiceKey)
-    const nextSession = root.get(sessionServiceKey).createSession('assistant')
-    const next = current.startRun({
+    const nextSession = await createRootSession(root)
+    const next = await current.startRun({
       sessionId: nextSession.id, input: 'Next', idempotencyKey: 'next',
     })
     assert.equal(llm.calls.length, 2)

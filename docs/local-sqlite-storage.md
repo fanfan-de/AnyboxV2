@@ -1,6 +1,6 @@
 # 本地 SQLite 存储组件
 
-状态：基础提供方已实现，安装在应用唯一的 Nya 根上，Prompt 与 Agent Prompt 组件各自登记表迁移。Session/Run 仍使用内存状态；旧 JSON 读取逻辑仅供显式迁入。
+状态：提供方安装在应用唯一的 Nya 根上，Prompt、Agent Prompt、Projects 与 Run 状态组件各自登记表迁移；旧 JSON 读取逻辑仅供 Prompt 显式迁入。
 
 ## 公开接口
 
@@ -16,8 +16,8 @@
 
 锁由 Effect 持有。第二个提供方占用同一数据库文件时启动失败，错误码为 `occupied`。关闭时先拒绝新操作，等待所有已接受的读、事务与迁移结束，再关闭连接并释放锁。应用根卸载时，Nya 先撤回存储服务并等待消费组件退出，再执行上述清理。异常退出后若遗留 `.lock`，须在确认原进程已退出后手动清理。数据库文件和目录不会在正常卸载时删除。
 
-## 后续接入
+## 当前领域
 
 Prompt 领域（`prompt`）持有文档、版本和旧 JSON 导入记录表；Agent Prompt 领域（`agent-prompt`）持有绑定表和自己的导入记录。绑定写入先提交 SQLite 事务，再更新该投影；两类写入成功返回时均已提交。可选的旧 JSON 导入由两个组件各自在一个事务内完成并记录来源：Prompt 先导入文档与版本，Agent Prompt 随后导入绑定并校验所引用的版本。若后者失败，重启时只补做未完成的一方，不会重复导入。
 
-State 领域下一步可以 `run-state` 等领域名登记 Session、Run、幂等键及快照表与恢复规则。各领域共用同一数据库，需要时在同一 `transaction` 回调中共同提交。接入 State 时仍需专门处理异常退出的在途 Run：明确结算为 `interrupted`，不能自动重放外部副作用。届时也应重新评估当前 Prompt 读缓存与 Run 接受的共同事务边界。
+Projects 领域（`projects`）登记规范化目录身份表；Run 状态领域（`run-state`）登记 Session、Run、幂等键、Prompt 内容与模型可见配置快照。各领域共用同一数据库。状态组件在一笔事务内接受 Run，并在另一笔事务内同时提交成功终态与 Session 轮次。启动时在事务中把遗留的 `running`、`cancelling` 结算为 `interrupted`；旧调用计划不会重放。Prompt 和 Agent Prompt 仍保留各自的已提交读投影，新 Run 在接受前解析全局绑定，状态事务内重新校验幂等键与同会话活动 Run。
