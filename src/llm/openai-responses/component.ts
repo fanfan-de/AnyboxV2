@@ -4,34 +4,31 @@ import { credentialReadServiceKey } from '../../credentials/port.js'
 import type { CredentialReadPort } from '../../credentials/port.js'
 import { LLMFailure, llmServiceKey } from '../port.js'
 import type { LLMPlan, LLMPort } from '../port.js'
-import {
-  buildChatCompletionRequest, chatCompletionsEndpoint, parseChatCompletion, validateDeepSeekConfiguration,
-} from './domain.js'
-import type { DeepSeekConfiguration, DeepSeekSelection } from './domain.js'
+import { buildResponsesRequest, parseResponsesOutput, responsesEndpoint, validateOpenAIResponsesConfiguration } from './domain.js'
+import type { OpenAIResponsesConfiguration, OpenAIResponsesSelection } from './domain.js'
 
-export interface DeepSeekTransport {
-  /** Override only when routing through a compatible endpoint. */
+export interface OpenAIResponsesTransport {
+  /** Override when routing through a Responses-compatible endpoint. */
   readonly baseUrl?: string
-  /** Lets a host or test supply the HTTP transport. */
   readonly fetch?: typeof globalThis.fetch
 }
 
-/** The credential this component reads once per run. The host stores the key under it through `credentials.manage`. */
-export const deepSeekCredentialId = 'llm/deepseek-chat-completions/default'
+/** The host writes this credential through credentials.manage; each call reads it once. */
+export const openAIResponsesCredentialId = 'llm/openai-responses/default'
 
-/** The application's LLM API component for DeepSeek's non-streaming Chat Completions. */
-export function createDeepSeekChatCompletionsComponent(
-  config: DeepSeekConfiguration, transport: DeepSeekTransport = {},
+/** One non-streaming OpenAI Responses API implementation of the project's llm port. */
+export function createOpenAIResponsesComponent(
+  config: OpenAIResponsesConfiguration, transport: OpenAIResponsesTransport = {},
 ): Component.Object<void, { [credentialReadServiceKey]: CredentialReadPort }> {
-  const selections = validateDeepSeekConfiguration(config)
-  const endpoint = chatCompletionsEndpoint(transport?.baseUrl)
+  const selections = validateOpenAIResponsesConfiguration(config)
+  const endpoint = responsesEndpoint(transport?.baseUrl)
   const request = transport?.fetch ?? globalThis.fetch
-  if (typeof request !== 'function') throw new TypeError('DeepSeek fetch must be a function')
+  if (typeof request !== 'function') throw new TypeError('OpenAI Responses fetch must be a function')
   return {
-    name: 'deepseek-chat-completions',
+    name: 'openai-responses',
     inject: [credentialReadServiceKey],
     async apply(ctx, _config, deps) {
-      const plans = new WeakMap<LLMPlan, DeepSeekSelection>()
+      const plans = new WeakMap<LLMPlan, OpenAIResponsesSelection>()
       const active = new Set<OwnedCall<string>>()
       const failures: unknown[] = []
       let accepting = true
@@ -42,8 +39,8 @@ export function createDeepSeekChatCompletionsComponent(
         for (const call of pending) call.cancel('llm-disposed')
         await Promise.allSettled(pending.map(call => call.done))
         if (failures.length === 1) throw failures[0]
-        if (failures.length > 1) throw new AggregateError(failures, 'DeepSeek request cleanup failed')
-      }, 'abort and join DeepSeek requests')
+        if (failures.length > 1) throw new AggregateError(failures, 'OpenAI Responses request cleanup failed')
+      }, 'abort and join OpenAI Responses requests')
 
       const service: LLMPort = {
         prepare(profileId) {
@@ -60,7 +57,7 @@ export function createDeepSeekChatCompletionsComponent(
           if (!accepting) throw new LLMFailure('dependency-unavailable')
           const selection = plans.get(input.plan)
           if (!selection) throw new LLMFailure('model-unavailable')
-          const body = JSON.stringify(buildChatCompletionRequest(selection, input.messages))
+          const body = JSON.stringify(buildResponsesRequest(selection, input.messages))
           const controller = new AbortController()
           let timedOut = false
           let cleanupFailed = false
@@ -72,11 +69,12 @@ export function createDeepSeekChatCompletionsComponent(
             controller.abort('timeout')
             rejectOnTimeout(new LLMFailure('timeout'))
           }, selection.timeoutMs)
+          const abortedFailure = () => new LLMFailure(timedOut ? 'timeout' : 'provider-failure')
           const operation = (async (): Promise<string> => {
             let apiKey: string | undefined
-            try { apiKey = await deps[credentialReadServiceKey].read(deepSeekCredentialId, controller.signal) }
+            try { apiKey = await deps[credentialReadServiceKey].read(openAIResponsesCredentialId, controller.signal) }
             catch { throw new LLMFailure('credential-unavailable') }
-            if (controller.signal.aborted) throw new LLMFailure(timedOut ? 'timeout' : 'provider-failure')
+            if (controller.signal.aborted) throw abortedFailure()
             if (!apiKey?.trim()) throw new LLMFailure('credential-missing')
             let response: Response
             try {
@@ -86,16 +84,19 @@ export function createDeepSeekChatCompletionsComponent(
                 body,
                 signal: controller.signal,
               })
-            } catch { throw new LLMFailure(timedOut ? 'timeout' : 'provider-failure') }
+            } catch { throw abortedFailure() }
             if (!response.ok) {
               try { await response.body?.cancel() } catch { cleanupFailed = true }
               throw new LLMFailure('provider-failure')
             }
+            if (controller.signal.aborted) throw abortedFailure()
             let payload: unknown
-            try { payload = await response.json() } catch { throw new LLMFailure(timedOut ? 'timeout' : 'invalid-response') }
-            return parseChatCompletion(payload)
+            try { payload = await response.json() } catch {
+              throw controller.signal.aborted ? abortedFailure() : new LLMFailure('invalid-response')
+            }
+            if (controller.signal.aborted) throw abortedFailure()
+            return parseResponsesOutput(payload)
           })()
-          // The request has exited once fetch and body consumption settled, whatever the business result.
           const done = operation.then(() => {}, () => {}).then(() => {
             clearTimeout(timer)
             if (cleanupFailed) throw new LLMFailure('cleanup-failure')

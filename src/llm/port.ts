@@ -29,6 +29,7 @@ export interface LLMPort {
 export type LLMFailureCategory =
   | 'model-unavailable' | 'dependency-unavailable' | 'unsupported-request' | 'timeout'
   | 'provider-failure' | 'invalid-response' | 'cleanup-failure'
+  | 'credential-missing' | 'credential-unavailable'
 
 /** Failures carry a fixed category and message; provider details never cross into Run state. */
 export class LLMFailure extends Error {
@@ -41,6 +42,8 @@ export class LLMFailure extends Error {
       'provider-failure': 'model provider failed',
       'invalid-response': 'model response is invalid',
       'cleanup-failure': 'model call cleanup failed',
+      'credential-missing': 'model API key is not configured',
+      'credential-unavailable': 'model API key could not be read',
     }[category])
     this.name = 'LLMFailure'
   }

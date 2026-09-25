@@ -6,7 +6,7 @@
 
 ### 放置规则
 
-当前只使用一个应用根 Context。应用先安装大模型 API 组件和本地 SQLite，`createHarness` 再把 Agent、Prompt、状态、Session、Run、AgentLoop 等组件直接安装在同一个根上。组件按职责和依赖拆分，不为 Harness、项目或任务建立额外的 Nya 作用域。Nya 服务按名称注册在根上；同一个根只安装一套 Harness 服务，也只安装一种大模型 API 组件。
+当前只使用一个应用根 Context。应用先安装凭据组件、大模型 API 组件和本地 SQLite，`createHarness` 再把 Agent、Prompt、状态、Session、Run、AgentLoop 等组件直接安装在同一个根上。本机 Web 宿主使用一个自包含的 API Key 服务组件，再在同一根上安装 Web 前端组件。组件按职责和依赖拆分，不为 Harness、项目或任务建立额外的 Nya 作用域。Nya 服务按名称注册在根上；同一个根只安装一套 Harness 服务，也只安装一种凭据组件和一种大模型 API 组件。
 
 应用拥有根上组件的生命周期。`harness.close()` 是当前的应用关闭入口：先停止接受外部调用，再卸载根上的全部组件，等待清理。大模型 API 组件的在途请求和数据库连接也会关闭；该 Harness 门面关闭后不可复用。重启应用时需重新装配组件，通常新建根。
 
@@ -14,7 +14,11 @@
 
 ```text
 应用根 Context
-├─ DeepSeek Chat Completions  提供 llm
+├─ API Key 服务 ..... 提供 credentials.read、credentials.settings；无注入依赖
+│  （或系统凭据库 ..... 提供 credentials.read、credentials.manage）
+│  （或外部凭据来源 .. 只提供 credentials.read）
+├─ DeepSeek Chat Completions 或 OpenAI Responses
+│  └─ 提供 llm；注入 credentials.read（只安装其中一种）
 ├─ 本地 SQLite ....... 提供 local-storage
 ├─ Agent ............ 提供 harness.agents
 ├─ 内存状态 .......... 提供 harness.state
@@ -22,14 +26,19 @@
 ├─ Prompt ........... 提供 harness.prompts        注入 local-storage
 ├─ Agent Prompt ..... 提供 harness.agent-prompts  注入 agents、prompts、local-storage
 ├─ AgentLoop ........ 提供 harness.agent-loop     注入 state、llm
-└─ Run .............. 提供 harness.runs           注入 agents、state、agent-prompts、llm、agent-loop
+├─ Run .............. 提供 harness.runs           注入 agents、state、agent-prompts、llm、agent-loop
+└─ Web 前端 ......... 提供 web.frontend            注入 agents、sessions、runs、credentials.settings
 ```
 
 `createHarness` 按上面的依赖顺序安装业务组件；关闭时由 Nya 按依赖关系先清理消费者，再清理其资源提供者。
 
 | 组件 | 位置 | 源码 |
 | --- | --- | --- |
+| API Key 服务 | 应用根，本机 Web 宿主使用 | `src/credentials/settings.ts` 是 Nya 适配层；自包含服务在 `packages/api-key-manager/` |
+| 系统凭据库 | 应用根 | `src/credentials/system-keyring.ts` 是 Nya 适配层；系统存储、顺序和等待实现在 `packages/api-key-manager/` |
+| 外部凭据来源 | 应用根 | `src/credentials/external-source.ts` |
 | DeepSeek Chat Completions | 应用根 | `src/llm/deepseek-chat-completions/component.ts`、`domain.ts`；服务契约在 `src/llm/port.ts` |
+| OpenAI Responses | 应用根，替代 DeepSeek | `src/llm/openai-responses/component.ts`、`domain.ts`；提供同一 `llm` 服务 |
 | 本地 SQLite | 应用根 | `src/storage/sqlite.ts`、`src/storage/port.ts` |
 | 组合根 | 安装到应用根 | `src/harness.ts` |
 | Agent | 应用根 | `src/agent/component.ts`、`src/agent/domain.ts` |
@@ -39,6 +48,7 @@
 | Agent Prompt | 应用根 | `src/agent/prompt-binding-component.ts`、`prompt-binding-storage.ts` |
 | AgentLoop | 应用根 | `src/run/agent-loop-component.ts` |
 | Run | 应用根 | `src/run/component.ts`、`src/run/domain.ts` |
+| Web 前端 | 应用根；由本机宿主安装 | `src/web/component.ts`、`server.ts`、`client.ts`、`web/` |
 
 ### 所有组件共用的约定
 
@@ -47,20 +57,53 @@
 - **停止接收 → 取消 → 等待**：持有在途操作的组件都有一个 `accepting` 标志。清理时先置为 `false` 拒绝新请求，再取消已接受的操作，最后等它们真正退出。
 - **`OwnedCall`**（`src/contracts.ts`）：可取消的调用分成 `result`（业务结果）、`cancel(reason)` 和 `done`（实际工作与资源都已退出）。`result` 已结算不代表资源已释放，只有 `done` 才代表。
 - **`llm` 服务契约**（`src/llm/port.ts`）：Run 和 AgentLoop 只依赖 `prepare(profileId)` 和 `call({ plan, messages })` 两个方法，以及项目自有的消息、调用计划和失败类别。提供该服务的 API 组件把原生请求、响应类型和凭据留在自己内部。
+- **凭据契约**（`src/credentials/port.ts`）：`credentials.read` 提供 `read(id, signal?)`，缺失返回 `undefined`；`credentials.manage` 有 `write(id, secret)` 和 `delete(id)`。两者分开注册是给受信宿主的命名约定，不是访问边界：Nya 服务按名称寻址，根上任何组件都能注入。失败是带固定类别的 `CredentialFailure`：`store-unavailable`、`operation-failed`、`closed`、`cancelled`，不携带系统信息、条目名或密钥。
 - **纯函数与副作用分离**：各目录下的 `domain.ts` 放校验和状态转换的纯函数，返回冻结的新值；时间和 ID 通过 `RuntimeInputs`（`now`、`newId`）从外部传入。`component.ts` 才接触 Nya、存储和 HTTP。
 - **错误不泄露细节**：提供方的原始错误在边界处归一为固定类别和固定文案，不把第三方错误或传输细节带进 Run。
 
 ## 应用根中的资源组件
 
+### 系统凭据库
+
+**服务** `credentials.read`、`credentials.manage` · **注入** 无 · **创建** `createSystemKeyringComponent({ namespace, openEntry? })`
+
+系统凭据库把应用的密钥交给操作系统的凭据库保存，并独占对它的每次访问。它固定依赖 `@napi-rs/keyring@2.1.0` 的异步 API：macOS 接入 Keychain，Windows 接入 Credential Manager，Linux 明确指定 Secret Service（gnome-keyring、KWallet 等）。库在 Linux 默认会在没有 Secret Service 时静默改用内核 keyring，而那份存储重启即失，所以组件用 `{ linux: { store: 'secret-service' } }` 禁止回退。
+
+**条目。** `namespace` 是条目的 service 名，凭据标识是条目的账户名：DeepSeek 使用 `llm/deepseek-chat-completions/default`，OpenAI Responses 使用 `llm/openai-responses/default`。不同安装、开发库与正式库、测试与正式必须用不同命名空间，否则共用同名条目。`openEntry` 只供测试替换条目来源，默认打开平台凭据库。
+
+**启动。** `apply` 先打开一个探测条目：打开条目不读写内容，但在没有 Secret Service 的 Linux 上会失败，于是组件在安装时就以 `store-unavailable` 失败，而不是等 DeepSeek 首次读取。macOS 和 Windows 的真实访问发生在读取时。
+
+**服务接口。**
+
+- `read(id, signal?)`：读取密钥，缺失返回 `undefined`；取消会等待底层读取退出。
+- `write(id, secret)`：写入或替换；密钥必须是非空字符串，不做修剪，也不出现在任何错误信息中。
+- `delete(id)`：删除；只在条目不存在时返回 `false`，凭据库拒绝删除时抛出。
+
+标识和密钥的校验错误是 `TypeError`；打开条目失败是 `store-unavailable`；凭据库的读写拒绝（锁定、无权限、条目歧义等）一律归一为 `operation-failed`，原生错误不挂在 `cause` 上。
+
+**清理。** 卸载时停止接收（新操作以 `closed` 拒绝），对已接受的操作发出中止信号，然后等它们全部退出。原生调用一旦开始就无法打断，中止只对尚未开始的任务生效；被中止后才退出的操作以 `cancelled` 拒绝，即使底层库在中止后返回了值。同一个凭据 ID 的读取、写入、删除按接收顺序串行执行；写入完成后的新读取取得新值。
+
+**安全边界。** 凭据库只保护静态存储。密钥经 `read` 进入进程内存后由一次模型调用的闭包持有，模型请求期间一直存在，JavaScript 无法擦除字符串。macOS 的 Keychain 条目访问权绑定创建它的可执行文件；换用其他路径的 Node 二进制读取时系统可能弹出授权提示，无人值守时表现为读取阻塞或失败。
+
+### 外部凭据来源
+
+**服务** `credentials.read` · **注入** 无 · **创建** `createExternalCredentialSourceComponent({ read })`
+
+给没有桌面凭据库的 Linux 部署使用：密钥的持久化由部署方负责，本组件只把受信宿主的异步读取函数 `read(id, signal)` 接成 `credentials.read`。它不落盘、不缓存、不注册 `credentials.manage`。读取函数返回 `undefined` 或 `null` 表示缺失，返回非字符串是 `TypeError`，抛错一律归一为 `store-unavailable`，调用中的 LLM 将其转为 `credential-unavailable`，不会退回到 SQLite 或明文文件。
+
+清理与系统凭据库相同：拒绝新读取，向在途读取的 `signal` 发出中止，等读取函数退出。行为测试用它加一个内存映射充当假凭据组件（`tests/helpers/memory-credentials.mjs`）。
+
 ### DeepSeek Chat Completions
 
-**服务** `llm` · **注入** 无 · **创建** `createDeepSeekChatCompletionsComponent(config, transport)`
+**服务** `llm` · **注入** `credentials.read` · **创建** `createDeepSeekChatCompletionsComponent(config, transport?)`
 
-这是应用当前唯一安装的大模型 API 组件。组件按 API 格式划分，而不是按供应商再抽象一层：它直接拥有 DeepSeek 非流式 Chat Completions 的原生请求格式、HTTP 传输、密钥、响应解析、超时、取消和清理。以后接入其他 API 格式（例如 OpenAI Responses API）时，是另一个提供同一 `llm` 服务的组件；应用启动时只安装其中一个。
+这是本机 Web 宿主当前安装的大模型 API 组件。组件按 API 格式划分，而不是按供应商再抽象一层：它直接拥有 DeepSeek 非流式 Chat Completions 的原生请求格式、HTTP 传输、密钥、响应解析、超时、取消和清理。OpenAI Responses 是另一个提供同一 `llm` 服务的组件；应用启动时只安装其中一个。
 
 **配置。** 构造组件时 `validateDeepSeekConfiguration` 校验配置：`version` 非空；`profiles` 非空，每个 profile 只允许 `id`、`model`、`maxOutputTokens`、`temperature`、`timeoutMs` 这几个字段，ID 唯一；`maxOutputTokens` 为正整数，`temperature` 在 0 到 2 之间，`timeoutMs` 为不超过 2147483647 的正整数。校验结果是冻结的选择项，附带配置版本号。配置或传输选项无效时构造直接抛出 `TypeError`。
 
-**传输与凭据。** `transport` 提供 `apiKey()`、可选的 `baseUrl`（必须是 HTTP 或 HTTPS，默认 `https://api.deepseek.com`）和可选的 `fetch`。`apply` 启动时读取一次密钥，密钥为空则组件启动失败；密钥只存在于组件闭包中，不进入调用计划、Run 状态或对外快照。轮换密钥或修改配置的方式是由应用替换整个组件。
+**传输。** 可选的 `transport` 提供 `baseUrl`（必须是 HTTP 或 HTTPS，默认 `https://api.deepseek.com`）和 `fetch`。
+
+**凭据与轮换。** 组件注入 `credentials.read`，`apply` 只初始化配置与服务，缺少 Key 时也提供 `llm`。每次 `call` 的 `OwnedCall` 内异步读取一次 `deepSeekCredentialId`（`llm/deepseek-chat-completions/default`），再发送 HTTP 请求。缺失或空值为 `credential-missing`；读取失败为 `credential-unavailable`。Key 只由该调用持有，不进入计划、Run 状态、快照或错误。Web 保存或删除后，后续调用自动读取新状态，已取到 Key 的调用继续使用该值，无须重启。当前每个 Run 只有一次调用；加入工具循环时，同一 Run 仍须只读取一次。
 
 **服务接口**（`LLMPort`）：
 
@@ -73,16 +116,30 @@
 - **超时**：超过 profile 的 `timeoutMs` 后中止请求，`result` 立即以 `timeout` 失败；`done` 仍要等传输真正退出才结算。
 - **传输与 HTTP 失败**：`fetch` 抛错归一为 `provider-failure`；非 2xx 响应会先取消响应体，再以 `provider-failure` 失败，响应内容不进入错误信息。
 - **响应校验**：JSON 解析失败、`choices[0].finish_reason` 不是 `stop`、或 `message.content` 不是字符串时，`result` 以 `invalid-response` 失败。被截断的输出和工具调用因此不会被当作成功。
-- **取消**：`cancel(reason)` 通过 `AbortController` 中止请求，原因作为 `signal.reason` 传给传输。传输退出后 `result` 以 `provider-failure` 失败（由超时引起的则是 `timeout`）；`done` 在 fetch 与响应体读取都退出后完成。
+- **取消**：`cancel(reason)` 通过 `AbortController` 中止请求，原因作为 `signal.reason` 传给传输。`result` 立即以 `provider-failure` 失败（由超时引起的则是 `timeout`）；`done` 在凭据读取、fetch 与响应体读取都退出后完成。
 - **清理失败**：取消非 2xx 响应体失败时，`done` 以 `cleanup-failure` 失败，并在组件卸载时一并报告。
 
-失败类别共七种：`model-unavailable`、`dependency-unavailable`、`unsupported-request`、`timeout`、`provider-failure`、`invalid-response`、`cleanup-failure`。每种类别都有固定文案，不带提供方的原始信息。
+失败类别包括：`model-unavailable`、`dependency-unavailable`、`unsupported-request`、`timeout`、`provider-failure`、`invalid-response`、`cleanup-failure`、`credential-missing`、`credential-unavailable`。每种类别都有固定文案，不带提供方的原始信息。
 
 **清理。** 卸载时停止接收，以 `llm-disposed` 中止所有在途请求并等待各自的 `done`，收集到的清理失败统一抛出。
 
-**替换。** 应用卸载旧组件并安装新组件时，Nya 先停下 Run 和 AgentLoop，这期间的在途 Run 以 `dependency-unavailable` 失败；旧组件等请求退出后卸载，新组件一提供 `llm` 服务，Run 和 AgentLoop 就自动重启。同一幂等键仍返回原 Run，新键才使用新配置和新密钥。
+**替换与重启。** 应用卸载旧组件并安装新组件，或对组件调用 `restart()` 时，Nya 先停下 Run 和 AgentLoop，这期间的在途 Run 以 `dependency-unavailable` 失败；旧的一轮等请求退出后卸载，新的一轮一提供 `llm` 服务，Run 和 AgentLoop 就自动重启。同一幂等键仍返回原 Run，新键使用新配置；密钥轮换无需重启。
+
+**凭据组件被撤销。** `credentials.read` 消失时本组件和依赖它的 Run 服务停在 `PENDING`；在途调用被取消，并等待凭据读取或 HTTP 资源实际退出。新凭据组件提供服务后，Nya 自动重新启动消费者。
 
 **尚未支持**：流式输出、工具调用（`tool_calls`）、`developer` 角色、`reasoning_content`、`usage` 统计、`top_p` 等其他采样参数、重试与限流处理。真实 API 尚未联网验收，行为测试全部使用本地 HTTP 服务或可控的 `fetch`。
+
+### OpenAI Responses
+
+**服务** `llm` · **注入** `credentials.read` · **创建** `createOpenAIResponsesComponent(config, transport?)`
+
+它与 DeepSeek Chat Completions 是互斥的 API 格式实现，Run 和 AgentLoop 不区分两者。配置包含版本和非空 profile 列表；profile 有 `id`、`model`、`maxOutputTokens`、`timeoutMs`，可选 `temperature`。组件构造时校验配置及 `transport.baseUrl`、`transport.fetch`，默认端点为 `https://api.openai.com/v1/responses`。实际模型名称由宿主选择。
+
+**凭据与生命周期。** 组件启动时提供 `llm`；每次调用内从 `credentials.read` 读取 `openAIResponsesCredentialId`（`llm/openai-responses/default`）一次。缺失、空值或读取失败使该调用以固定类别失败，密钥只留在调用闭包里。受信宿主通过 `credentials.manage` 写入或轮换后，后续调用自动读取新值。`prepare` 仅公开 profile ID 和配置版本。撤销、重启、关闭会停止接收，取消在途调用并等待 `done` 实际退出。
+
+**原生请求与响应。** `call` 将项目自有的四种文本消息角色按顺序映射到 Responses 的 `input`，非流式 POST 到 `/v1/responses`，设置 `store: false`，不使用服务端会话或 `previous_response_id`。响应必须是 `status: completed`；解析器允许 reasoning 项，忽略 commentary 阶段消息，从最终助手消息的 `output_text` 内容取文本。未完成、拒绝、工具调用、非文本或畸形响应统一为 `invalid-response`；HTTP 与传输失败为 `provider-failure`。超时会立即结算 `result`，但 `done` 等 HTTP 传输退出；取消、清理失败与 DeepSeek 组件使用同一项目自有错误类别。原生请求、响应及凭据不进入 Run 状态。
+
+**限制。** 当前只返回完整文本，不支持流式输出、工具循环、多模态、服务端会话或用 reasoning 项恢复跨轮上下文。需要特定模型支持的采样参数由宿主选择；省略可选的 `temperature` 可避免向不支持它的模型发送该字段。真实 OpenAI API 尚未联网验收，本地行为测试覆盖协议映射、响应校验、Run 接入、凭据失败、密钥轮换、取消、超时与关闭等待。本机 Web 宿主仍安装 DeepSeek；使用本组件的宿主须在 `createHarness` 前选择并安装它。
 
 ### 本地 SQLite
 
@@ -106,7 +163,7 @@
 
 **源码** `src/harness.ts` · **形态** 将业务组件安装到现有根的受信函数
 
-`createHarness(root, options)` 是受信的组合根。它只接受宿主的根 Context，要求根上已经有 `llm` 和 `local-storage` 服务。
+`createHarness(root, options)` 是受信的组合根。它只接受宿主的根 Context，要求根上已经有 `llm` 和 `local-storage` 服务。缺少密钥时 `llm` 仍启动，未配置就提交的 Run 以 `credential-missing` 失败。
 
 **选项**（`HarnessOptions`）：
 
@@ -273,14 +330,30 @@ Run 组件是 Run 的准入与对外控制入口。它决定一个请求能否�
 
 **清理。** 卸载时停止接收，逐个取消自己接受的 Run 并等待全部结算。取消原因由关闭方式决定：应用根正在关闭时用 `owner-disposed`，Run 因为依赖被撤销而卸载时用 `dependency-unavailable`。
 
+## 自包含 API Key 服务组件
+
+**服务** `credentials.read`、`credentials.settings` · **注入** 无 · **创建** `createApiKeyServiceComponent({ namespace, definitions })`
+
+可移植包 `packages/api-key-manager` 的 `createApiKeyService` 自己持有系统凭据库存储、已注册凭据清单和操作顺序，不依赖 Anybox 的其他组件。Anybox 只用一个无注入依赖的 Nya 适配层提供读取与管理服务。受信宿主注册 `{ id, label, category }` 清单；DeepSeek、视频模型和其他服务使用相同的 `read`、`list`、`write`、`delete` 方法。`list()` 只返回公开元数据和 `configured` 状态；写入与删除只返回该项状态，不回传原 Key。未注册 ID 被拒绝。关闭时组件等待在途凭据操作实际退出。现有 DeepSeek ID 和 `anybox` 命名空间不变，无需迁移钥匙串条目。
+
+单独的系统凭据库组件仍可供不需要管理清单的宿主使用；外部来源组件供部署方提供只读凭据。当前 Web 宿主只安装自包含 API Key 服务组件，不叠加安装这些备选组件。
+
+## 本机 Web 前端组件
+
+**服务** `web.frontend`（本机访问 URL）· **注入** `harness.agents`、`harness.sessions`、`harness.runs`、`credentials.settings` · **创建** `createWebFrontendComponent(port?)`
+
+本机宿主在 `createHarness` 后将它安装到同一个应用根。组件持有只监听 `127.0.0.1` 的 HTTP 服务，提供静态页面和同源 `/api/v1`；HTTP 层构造公开的 Agent ID、Session、Run 视图和已注册凭据状态。浏览器脚本是可替换的薄客户端，不导入 Nya 或 Harness。组件通过本轮 `deps` 调用 Agent、Session、Run 和通用凭据设置服务，不缓存跨重启的服务引用。
+
+HTTP 监听器由组件的 Effect 清理：卸载时停止接收请求并等待服务关闭，再由 Nya 清理其依赖。依赖撤销时，Web 组件随之停下；依赖恢复后，组件在原监听端口重新提供服务。进程的 SIGINT/SIGTERM 由 `src/web/serve.ts` 接收，并通过 `harness.close()` 卸载整个根。协议、同源限制与刷新恢复见 [薄 Web 客户端设计](./web-client-design.md)。
+
 ## 一次 Run 经过的组件
 
 1. 宿主调用 `harness.startRun`，组合根取到当前的 Run 服务。
 2. **Run** 校验输入，通过**内存状态**检查重复请求和进行中的 Run。
-3. **Run** 从 **Agent** 读取定义，从 **Agent Prompt** 取得 Prompt 快照，再请 **DeepSeek Chat Completions** 通过 `llm.prepare` 固定调用计划。
+3. **Run** 从 **Agent** 读取定义，从 **Agent Prompt** 取得 Prompt 快照，再请所选的大模型 API 组件通过 `llm.prepare` 固定调用计划。这一步不读取凭据。
 4. **Run** 通过**内存状态**原子地接受 Run，然后调用 **AgentLoop**。
-5. **AgentLoop** 组装消息并调用 `llm.call`；**DeepSeek Chat Completions** 把消息映射为原生请求并发送。
-6. 请求退出后，**DeepSeek Chat Completions** 完成解析和错误归一，**AgentLoop** 确定结果并在**内存状态**中结算；Run 成功时，这一轮对话追加到 Session。
+5. **AgentLoop** 组装消息并调用 `llm.call`；所选的大模型 API 组件先读取本次调用的 Key，再映射消息并发送原生请求。
+6. 请求退出后，该组件完成解析和错误归一，**AgentLoop** 确定结果并在**内存状态**中结算；Run 成功时，这一轮对话追加到 Session。
 7. `harness.waitRun` 返回终态。
 
 ## 撤销与关闭时发生什么
@@ -288,7 +361,9 @@ Run 组件是 Run 的准入与对外控制入口。它决定一个请求能否�
 | 事件 | 先停下的组件 | 在途 Run | 不受影响 |
 | --- | --- | --- | --- |
 | `harness.close()` | 应用根全部组件；先退出依赖消费者，再清理资源提供者 | `cancelled`；内存数据随之清空 | 无；DeepSeek 请求中止、SQLite 也关闭 |
-| 应用替换大模型 API 组件 | Run、AgentLoop，然后等旧组件的请求退出 | `failed`，`dependency-unavailable` | Agent、Session、Prompt、Agent Prompt、内存状态、SQLite |
+| 应用替换或重启大模型 API 组件 | Run、AgentLoop，然后等旧组件的请求退出 | `failed`，`dependency-unavailable` | Agent、Session、Prompt、Agent Prompt、内存状态、SQLite、凭据组件 |
+| Web 保存或删除 Key | 无 | 已取得 Key 的 Run 继续；后续 Run 读取新状态 | 所有组件 |
+| 应用卸载凭据组件 | Run、AgentLoop、大模型 API 组件，然后中止并等待凭据库操作 | `failed`，`dependency-unavailable` | Agent、Session、Prompt、Agent Prompt、内存状态、SQLite |
 | 应用卸载 SQLite | Run、Agent Prompt、Prompt，然后关闭连接并释放锁 | `failed`，`dependency-unavailable` | Agent、Session、内存状态、AgentLoop、大模型 API 组件 |
 | Agent 被移除 | Run、Agent Prompt、Session | `failed`，`dependency-unavailable` | Prompt、内存状态、AgentLoop、大模型 API 组件 |
 | 内存状态被卸载 | Run、AgentLoop、Session | `failed`，`dependency-unavailable`；随后数据清空 | Agent、Prompt、Agent Prompt、大模型 API 组件 |

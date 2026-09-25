@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f3ee">
+  <title>Anybox · 本机会话</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/client.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">A</span><div><strong>Anybox</strong><small>Local Agent Workspace</small></div></div>
+      <div class="local-badge"><span aria-hidden="true"></span>本机运行</div>
+    </header>
+    <main class="workspace">
+      <aside class="sidebar" aria-label="会话设置">
+        <div class="sidebar-heading"><span>工作区</span><span class="sidebar-index">01 / 01</span></div>
+        <h2>开始一段对话</h2>
+        <p>选择 Agent，创建会话，然后发送消息。运行由本机 Harness 处理。</p>
+        <label for="agent-select">新会话使用的 Agent</label>
+        <select id="agent-select" aria-label="新会话使用的 Agent"></select>
+        <button id="new-session" class="new-session" type="button">＋ 新建会话</button>
+        <div class="sidebar-note">
+          <span class="note-label">当前会话</span>
+          <strong id="current-agent">尚未创建</strong>
+          <span id="session-id" class="session-id">选择 Agent 后开始</span>
+        </div>
+        <section class="key-settings" aria-labelledby="key-settings-title">
+          <h3 id="key-settings-title">API Key 管理</h3>
+          <label for="key-select">服务</label>
+          <select id="key-select" aria-label="选择服务"></select>
+          <p id="key-status" role="status">正在检查 API Key…</p>
+          <form id="key-form" autocomplete="off">
+            <label for="key-input">API Key</label>
+            <input id="key-input" type="password" autocomplete="new-password" placeholder="输入所选服务的新 Key" required>
+            <button id="save-key" type="submit">保存 Key</button>
+          </form>
+          <button id="delete-key" type="button">删除当前 Key</button>
+          <p id="key-notice" role="alert" hidden></p>
+        </section>
+        <p class="storage-note">会话暂存于本机服务内存。服务重启后，请创建新会话。</p>
+      </aside>
+      <section class="conversation" aria-label="会话">
+        <div class="conversation-heading"><div><span class="eyebrow">CONVERSATION</span><h1>会话</h1></div><span id="run-status" class="run-status" role="status">待开始</span></div>
+        <div id="notice" class="notice" role="alert" hidden></div>
+        <div id="transcript" class="transcript" role="log" aria-label="对话内容" aria-live="polite"></div>
+        <div id="empty-state" class="empty-state"><span class="empty-icon" aria-hidden="true">✳</span><h2>从一个想法开始</h2><p>创建会话后，在下方输入你的问题。</p></div>
+        <form id="compose-form" class="composer">
+          <label for="message-input">消息</label>
+          <textarea id="message-input" rows="3" placeholder="输入消息…" disabled></textarea>
+          <div class="composer-footer"><span>Enter 发送 · Shift + Enter 换行</span><div class="actions"><button id="cancel-run" class="cancel-button" type="button" hidden>取消运行</button><button id="send-message" class="send-button" type="submit" disabled>发送消息 <span aria-hidden="true">↗</span></button></div></div>
+        </form>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
