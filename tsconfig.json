@@ -8,7 +8,9 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "types": ["node"]
+    "types": ["node"],
+    "rootDir": "src",
+    "outDir": "dist"
   },
-  "files": []
+  "include": ["src/**/*.ts"]
 }

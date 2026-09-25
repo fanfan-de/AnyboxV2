@@ -3,19 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.12.0" },
-  "workspaces": ["packages/*"],
+  "engines": { "node": ">=22.13.0" },
   "scripts": {
-    "build": "npm run build --workspace @anybox/application",
-    "typecheck": "npm run typecheck --workspace @anybox/application",
-    "test": "npm run test --workspace @anybox/application",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
     "check": "npm run typecheck && npm test",
-    "predemo": "npm run build",
-    "demo": "node examples/demo.mjs",
-    "prestart": "npm run build",
-    "start": "node examples/host.mjs",
     "nya:build": "npm --prefix ../NyaCore run build",
     "nya:watch": "npm --prefix ../NyaCore run dev:core"
+  },
+  "dependencies": {
+    "@nya/core": "file:../NyaCore/packages/core"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

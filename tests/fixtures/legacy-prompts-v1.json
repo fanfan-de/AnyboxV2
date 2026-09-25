@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "documents": [
+    {
+      "id": "old-document",
+      "ownerId": "alice",
+      "name": "Imported",
+      "description": "",
+      "draft": {
+        "revision": 1,
+        "kind": "agent-instruction",
+        "role": "system",
+        "content": "Old instruction.",
+        "updatedAt": "before",
+        "updatedBy": "alice"
+      },
+      "publishedDraftRevision": 1,
+      "versionIds": ["old-version"]
+    }
+  ],
+  "versions": [
+    {
+      "id": "old-version",
+      "documentId": "old-document",
+      "ownerId": "alice",
+      "kind": "agent-instruction",
+      "role": "system",
+      "content": "Old instruction.",
+      "createdAt": "before",
+      "createdBy": "alice"
+    }
+  ],
+  "bindings": [
+    {
+      "agentId": "assistant",
+      "kind": "agent-instruction",
+      "versionId": "old-version",
+      "updatedAt": "before",
+      "updatedBy": "alice"
+    }
+  ]
+}
