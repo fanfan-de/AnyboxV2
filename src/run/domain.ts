@@ -4,9 +4,42 @@ import type { BashResult } from '../tool/bash-component.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import { nonEmpty } from '../validation.js'
 
-export interface Turn {
+export interface ConversationNode {
+  readonly id: string
+  readonly sessionId: string
+  readonly parentId: string | null
   readonly input: string
   readonly output: string
+  readonly sourceRunId: string | null
+}
+
+export type RunHistory =
+  | { readonly kind: 'tree'; readonly parentNodeId: string | null }
+  | { readonly kind: 'legacy-unknown' }
+
+export interface NodePage {
+  readonly nodes: readonly ConversationNode[]
+  readonly nextCursor?: string
+}
+
+export interface NodeQuery { readonly cursor?: string; readonly limit?: number }
+export interface RunQuery { readonly active?: boolean; readonly parentNodeId?: string | null }
+
+export function treeError(code: 'node-not-found' | 'invalid-history' | 'idempotency-conflict'): Error & { readonly code: string } {
+  return Object.assign(new Error(code === 'idempotency-conflict' ? 'idempotency key already used with different input or history' : code), { code })
+}
+
+/** Input is leaf-to-root; validate before exposing a root-to-leaf history. */
+export function assemblePath(sessionId: string, parentId: string | null, ancestors: readonly ConversationNode[]): readonly ConversationNode[] {
+  const seen = new Set<string>()
+  let expected = parentId
+  for (const node of ancestors) {
+    if (node.sessionId !== sessionId || node.id !== expected || seen.has(node.id)) throw treeError('invalid-history')
+    seen.add(node.id)
+    expected = node.parentId
+  }
+  if (expected !== null) throw treeError('invalid-history')
+  return Object.freeze([...ancestors].reverse())
 }
 
 export interface Session {
@@ -14,13 +47,12 @@ export interface Session {
   readonly projectId: string
   readonly agentId: string
   readonly createdAt: string
-  readonly turns: readonly Turn[]
 }
 
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 
 export type RunFailureCategory = LLMFailureCategory |
-  'invalid-tool-request' | 'limit-exceeded' | 'tool-unavailable' | 'tool-timeout' | 'tool-cancelled' | 'tool-cleanup-failure'
+  'invalid-tool-request' | 'limit-exceeded' | 'tool-unavailable' | 'tool-timeout' | 'tool-cancelled' | 'tool-cleanup-failure' | 'state-write-failure'
 
 export class RunFailure extends Error {
   constructor(readonly category: Exclude<RunFailureCategory, LLMFailureCategory>) {
@@ -31,6 +63,7 @@ export class RunFailure extends Error {
       'tool-timeout': 'bash command timed out',
       'tool-cancelled': 'bash command was cancelled',
       'tool-cleanup-failure': 'bash command cleanup failed',
+      'state-write-failure': 'run state could not be persisted',
     }[category])
     this.name = 'RunFailure'
   }
@@ -86,6 +119,10 @@ export interface Run {
   readonly input: string
   readonly idempotencyKey: string
   readonly status: RunStatus
+  readonly history: RunHistory
+  readonly contextVersion: 'dialogue-v1' | null
+  readonly resultNodeId?: string
+  readonly revision: number
   readonly createdAt: string
   readonly updatedAt: string
   readonly promptVersionIds: readonly string[]
@@ -97,6 +134,7 @@ export interface Run {
 
 export interface RunInput {
   readonly sessionId: string
+  readonly parentNodeId: string | null
   readonly input: string
   readonly idempotencyKey: string
 }
@@ -113,18 +151,21 @@ export function validateRunInput(input: RunInput): RunInput {
   }
   return Object.freeze({
     sessionId: nonEmpty(input?.sessionId, 'sessionId'),
+    parentNodeId: input?.parentNodeId === null ? null : nonEmpty(input?.parentNodeId, 'parentNodeId'),
     input: nonEmpty(input?.input, 'input'),
     idempotencyKey: nonEmpty(input?.idempotencyKey, 'idempotencyKey'),
   })
 }
 
 export function createSession(id: string, projectId: string, agentId: string, now: string): Session {
-  return Object.freeze({ id, projectId, agentId, createdAt: now, turns: Object.freeze([]) })
+  return Object.freeze({ id, projectId, agentId, createdAt: now })
 }
 
 export function createRun(id: string, input: RunInput, prompts: readonly PromptSnapshot[], plan: LLMPlan, now: string): Run {
   return Object.freeze({
-    id, ...input, llmSnapshot: plan.snapshot, promptVersionIds: Object.freeze(prompts.map(prompt => prompt.versionId)),
+    id, sessionId: input.sessionId, input: input.input, idempotencyKey: input.idempotencyKey,
+    history: Object.freeze({ kind: 'tree', parentNodeId: input.parentNodeId }), contextVersion: 'dialogue-v1', revision: 0,
+    llmSnapshot: plan.snapshot, promptVersionIds: Object.freeze(prompts.map(prompt => prompt.versionId)),
     status: 'running', createdAt: now, updatedAt: now,
   })
 }
@@ -135,7 +176,8 @@ export function requestCancellation(run: Run, now: string): Run {
 
 export function settleRun(run: Run, outcome: RunOutcome, now: string): Run {
   if (run.status !== 'running' && run.status !== 'cancelling') return run
-  if (outcome.kind === 'cleanup-failed') {
+  // Infrastructure failure must remain visible even if cancellation was already requested.
+  if (outcome.kind === 'cleanup-failed' || (outcome.kind === 'failed' && outcome.category === 'state-write-failure')) {
     return Object.freeze({ ...run, status: 'failed', error: outcome.error, errorCategory: outcome.category, updatedAt: now })
   }
   if (run.status === 'cancelling') return Object.freeze({ ...run, status: 'cancelled', updatedAt: now })
@@ -148,20 +190,13 @@ export function settleRun(run: Run, outcome: RunOutcome, now: string): Run {
   return Object.freeze({ ...run, status: 'cancelled', updatedAt: now })
 }
 
-export function appendTurn(session: Session, input: string, output: string): Session {
-  return Object.freeze({
-    ...session,
-    turns: Object.freeze([...session.turns, Object.freeze({ input, output })]),
-  })
-}
-
-export function buildLLMMessages(prompts: readonly PromptSnapshot[], session: Session, input: string): readonly LLMMessage[] {
+export function buildLLMMessages(prompts: readonly PromptSnapshot[], history: readonly ConversationNode[], input: string): readonly LLMMessage[] {
   const messages: LLMMessage[] = []
   for (const kind of ['agent-instruction', 'context'] as const) {
     const prompt = prompts.find(item => item.kind === kind)
     if (prompt) messages.push(Object.freeze({ role: prompt.role, content: prompt.content }))
   }
-  for (const turn of session.turns) {
+  for (const turn of history) {
     messages.push(Object.freeze({ role: 'user', content: turn.input }))
     messages.push(Object.freeze({ role: 'assistant', content: turn.output }))
   }

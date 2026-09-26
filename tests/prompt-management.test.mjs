@@ -62,7 +62,7 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
   const harness = await createTestHarness({ agents, llm, newId: ids(), now: () => 'now' })
   try {
     const firstSession = await createSession(harness)
-    const first = await harness.startRun({ sessionId: firstSession.id, input: 'First', idempotencyKey: 'first' })
+    const first = await harness.startRun({ sessionId: firstSession.id, parentNodeId: null, input: 'First', idempotencyKey: 'first' })
     const document = await harness.createPrompt('alice', {
       name: 'Custom', kind: 'agent-instruction', role: 'system', content: 'Draft instruction.',
     })
@@ -74,7 +74,7 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
     await harness.bindPrompt('alice', 'assistant', version.id)
 
     const secondSession = await createSession(harness)
-    const secondInput = { sessionId: secondSession.id, input: 'Second', idempotencyKey: 'second' }
+    const secondInput = { sessionId: secondSession.id, parentNodeId: null, input: 'Second', idempotencyKey: 'second' }
     const second = await harness.startRun(secondInput)
     assert.deepEqual(llm.calls[0].input.messages[0], { role: 'system', content: 'Default instruction.' })
     assert.deepEqual(llm.calls[1].input.messages[0], { role: 'system', content: 'Published instruction.' })
@@ -96,7 +96,7 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
     assert.deepEqual(first.promptVersionIds, (await harness.getRun(first.id)).promptVersionIds)
 
     const thirdSession = await createSession(harness)
-    const third = await harness.startRun({ sessionId: thirdSession.id, input: 'Third', idempotencyKey: 'third' })
+    const third = await harness.startRun({ sessionId: thirdSession.id, parentNodeId: null, input: 'Third', idempotencyKey: 'third' })
     assert.deepEqual(llm.calls[2].input.messages[0], { role: 'system', content: 'Later instruction.' })
     llm.calls[2].result.resolve('Done')
     llm.calls[2].done.resolve()
@@ -121,7 +121,7 @@ test('prompt kinds and roles compose into structured model messages', async () =
       await harness.bindPrompt('alice', 'assistant', version.id)
     }
     const session = await createSession(harness)
-    const run = await harness.startRun({ sessionId: session.id, input: 'What happened?', idempotencyKey: 'one' })
+    const run = await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'What happened?', idempotencyKey: 'one' })
     assert.deepEqual(llm.calls[0].input.messages, [
       { role: 'developer', content: 'Follow team policy.' },
       { role: 'user', content: 'Reference data.' },
@@ -164,7 +164,7 @@ test('a new Harness restores prompts and the active binding from local storage',
     assert.equal(second.getPrompt('alice', document.id).draft.content, 'Persisted instruction.')
     assert.equal(second.getPromptVersions('alice', document.id)[0].id, version.id)
     const session = await createSession(second)
-    const run = await second.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'one' })
+    const run = await second.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'one' })
     assert.deepEqual(llm.calls[0].input.messages[0], {
       role: 'system', content: 'Persisted instruction.',
     })
@@ -337,7 +337,7 @@ test('removing the prompt component cancels and joins dependent runs', async () 
     await root.get(agentPromptServiceKey).bindPrompt('alice', 'assistant', version.id)
     const runs = root.get(runServiceKey)
     const session = await createRootSession(root)
-    const run = await runs.startRun({ sessionId: session.id, input: 'Work', idempotencyKey: 'one' })
+    const run = await runs.startRun({ sessionId: session.id, parentNodeId: null, input: 'Work', idempotencyKey: 'one' })
     const waiting = runs.waitRun(run.id)
     let disposed = false
     const stopping = promptFiber.dispose().then(() => { disposed = true })
@@ -357,7 +357,7 @@ test('removing the prompt component cancels and joins dependent runs', async () 
     const current = root.get(runServiceKey)
     const nextSession = await createRootSession(root)
     const next = await current.startRun({
-      sessionId: nextSession.id, input: 'Next', idempotencyKey: 'next',
+      sessionId: nextSession.id, parentNodeId: null, input: 'Next', idempotencyKey: 'next',
     })
     assert.equal(llm.calls.length, 2)
     assert.deepEqual(llm.calls[1].input.messages[0], { role: 'system', content: 'Selected instruction.' })

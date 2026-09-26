@@ -60,7 +60,7 @@ async function serviceReady(root, name) {
 
 const start = async harness => {
   const session = await createSession(harness)
-  return await harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'one' })
+  return await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'one' })
 }
 
 async function createSession(harness, agentId = 'assistant') {
@@ -73,13 +73,13 @@ async function createRootSession(root) {
   return root.get(sessionServiceKey).createSession(project.id, 'assistant')
 }
 
-test('H1 runs deduplicate requests, serialize a session and retain completed turns', async () => {
+test('Runs deduplicate requests and build explicit immutable history', async () => {
   const f = await createTestHarness({ agents, newId: ids(), now: () => '2026-09-23T00:00:00.000Z' })
   const { harness, llm } = f
   try {
     const session = await createSession(harness)
     assert.equal(session.id, 'id-2')
-    const input = { sessionId: session.id, input: 'Hello', idempotencyKey: 'first' }
+    const input = { sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'first' }
     const run = await harness.startRun(input)
     assert.equal(run.status, 'running')
     assert.deepEqual(run.llmSnapshot, { profileId: 'default', configVersion: 'v1' })
@@ -90,7 +90,6 @@ test('H1 runs deduplicate requests, serialize a session and retain completed tur
       { role: 'system', content: 'Answer briefly.' }, { role: 'user', content: 'Hello' },
     ])
     await assert.rejects(async () => await harness.startRun({ ...input, input: 'Different' }), /idempotency key/)
-    await assert.rejects(async () => await harness.startRun({ ...input, idempotencyKey: 'another' }), /active run/)
 
     let finished = false
     const waiting = harness.waitRun(run.id).then(value => { finished = true; return value })
@@ -99,10 +98,13 @@ test('H1 runs deduplicate requests, serialize a session and retain completed tur
     assert.equal(finished, false)
     assert.equal((await harness.getRun(run.id)).status, 'running')
     llm.calls[0].done.resolve()
-    assert.deepEqual(await waiting, { ...run, status: 'completed', output: 'Hi' })
-    assert.deepEqual((await harness.getSession(session.id)).turns, [{ input: 'Hello', output: 'Hi' }])
+    const completed = await waiting
+    assert.equal(completed.status, 'completed')
+    assert.equal(completed.output, 'Hi')
+    assert.ok(completed.resultNodeId)
+    assert.deepEqual((await harness.listNodes(session.id, null)).nodes.map(({ input, output }) => ({ input, output })), [{ input: 'Hello', output: 'Hi' }])
 
-    const second = await harness.startRun({ sessionId: session.id, input: 'Again', idempotencyKey: 'second' })
+    const second = await harness.startRun({ sessionId: session.id, parentNodeId: completed.resultNodeId, input: 'Again', idempotencyKey: 'second' })
     assert.deepEqual(llm.calls[1].input.messages, [
       { role: 'system', content: 'Answer briefly.' },
       { role: 'user', content: 'Hello' }, { role: 'assistant', content: 'Hi' },
@@ -111,7 +113,7 @@ test('H1 runs deduplicate requests, serialize a session and retain completed tur
     llm.calls[1].result.resolve('Again answered')
     llm.calls[1].done.resolve()
     assert.equal((await harness.waitRun(second.id)).status, 'completed')
-    assert.equal((await harness.getSession(session.id)).turns.length, 2)
+    assert.equal((await harness.getNodePath(session.id, (await harness.getRun(second.id)).resultNodeId)).length, 2)
   } finally {
     for (const call of llm.calls) call.done.resolve()
     await f.close()
@@ -123,7 +125,7 @@ test('Run admission rejects LLM overrides and unknown profiles without state wri
   try {
     const session = await createSession(f.harness)
     await assert.rejects(async () => await f.harness.startRun({
-      sessionId: session.id, input: 'Hello', idempotencyKey: 'x', modelProfileId: 'other',
+      sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'x', modelProfileId: 'other',
     }), /cannot override/)
     assert.equal(f.llm.calls.length, 0)
   } finally { await f.close() }
@@ -131,10 +133,10 @@ test('Run admission rejects LLM overrides and unknown profiles without state wri
   const missing = await createTestHarness({ agents: [{ ...agents[0], modelProfileId: 'missing' }], newId: ids() })
   try {
     const session = await createSession(missing.harness)
-    await assert.rejects(async () => await missing.harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'x' }),
+    await assert.rejects(async () => await missing.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'x' }),
       /model is unavailable/)
     assert.equal(missing.llm.calls.length, 0)
-    assert.deepEqual((await missing.harness.getSession(session.id)).turns, [])
+    assert.deepEqual((await missing.harness.listNodes(session.id, null)).nodes.map(({ input, output }) => ({ input, output })), [])
   } finally { await missing.close() }
   assert.deepEqual(missing.llm.events, ['disposed'])
 })
@@ -157,7 +159,7 @@ test('cancelling while AgentLoop loads a persisted Run never starts a model call
       }
       return value
     }
-    const starting = f.harness.startRun({ sessionId: session.id, input: 'Race', idempotencyKey: 'race' })
+    const starting = f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Race', idempotencyKey: 'race' })
     await loading.promise
     const [accepted] = await f.harness.listRuns(session.id)
     assert.equal(accepted.status, 'running')
@@ -175,7 +177,7 @@ test('cancellation and close wait until the LLM call actually exits', async () =
   const f = await createTestHarness({ agents, newId: ids() })
   const { harness, llm } = f
   const session = await createSession(harness)
-  const run = await harness.startRun({ sessionId: session.id, input: 'Wait', idempotencyKey: 'wait' })
+  const run = await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Wait', idempotencyKey: 'wait' })
   const waiting = harness.waitRun(run.id)
   assert.equal((await harness.cancelRun(run.id)).status, 'cancelling')
   assert.deepEqual(llm.calls[0].cancellations, ['user-requested'])
@@ -184,7 +186,7 @@ test('cancellation and close wait until the LLM call actually exits', async () =
   await Promise.resolve()
   assert.equal(closed, false)
   assert.equal(llm.calls[0].cancellations[0], 'user-requested')
-  await assert.rejects(async () => await harness.startRun({ sessionId: session.id, input: 'Late', idempotencyKey: 'late' }), /closing/)
+  await assert.rejects(async () => await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Late', idempotencyKey: 'late' }), /closing/)
   llm.calls[0].result.reject(new Error('aborted'))
   await Promise.resolve()
   assert.equal(closed, false)
@@ -260,7 +262,7 @@ test('removing the LLM API component waits for the run consumer and its call', a
     assert.equal(owner.state, FiberState.ACTIVE)
     const service = root.get(runServiceKey)
     const session = await createRootSession(root)
-    const run = await service.startRun({ sessionId: session.id, input: 'Work', idempotencyKey: 'key' })
+    const run = await service.startRun({ sessionId: session.id, parentNodeId: null, input: 'Work', idempotencyKey: 'key' })
     const waiting = service.waitRun(run.id)
     let disposed = false
     const stopping = api.dispose().then(() => { disposed = true })
@@ -283,7 +285,7 @@ test('removing the LLM API component waits for the run consumer and its call', a
     await owner
     assert.equal(owner.state, FiberState.ACTIVE)
     const current = root.get(runServiceKey)
-    const next = await current.startRun({ sessionId: session.id, input: 'Again', idempotencyKey: 'next' })
+    const next = await current.startRun({ sessionId: session.id, parentNodeId: null, input: 'Again', idempotencyKey: 'next' })
     assert.equal(next.llmSnapshot.configVersion, 'v2')
     assert.equal(replacement.calls.length, 1)
     assert.equal(llm.calls.length, 1)
@@ -302,7 +304,7 @@ test('replacing the LLM API component serves only new Run keys', async () => {
   const first = f.llm
   try {
     const session = await createSession(f.harness)
-    const request = { sessionId: session.id, input: 'First', idempotencyKey: 'first' }
+    const request = { sessionId: session.id, parentNodeId: null, input: 'First', idempotencyKey: 'first' }
     const old = await f.harness.startRun(request)
     first.calls[0].result.resolve('Old')
     first.calls[0].done.resolve()
@@ -346,7 +348,7 @@ test('AgentLoop owns in-flight calls while Session and Run state survive its rep
     await loop
     await runs
     const session = await createRootSession(root)
-    const run = await root.get(runServiceKey).startRun({ sessionId: session.id, input: 'Work', idempotencyKey: 'one' })
+    const run = await root.get(runServiceKey).startRun({ sessionId: session.id, parentNodeId: null, input: 'Work', idempotencyKey: 'one' })
     const waiting = root.get(runServiceKey).waitRun(run.id)
     let stopped = false
     const stopping = loop.dispose().then(() => { stopped = true })
@@ -363,7 +365,7 @@ test('AgentLoop owns in-flight calls while Session and Run state survive its rep
     const replacement = root.installComponent(createAgentLoopComponent(inputs))
     await replacement
     await runs
-    const next = await root.get(runServiceKey).startRun({ sessionId: session.id, input: 'Next', idempotencyKey: 'two' })
+    const next = await root.get(runServiceKey).startRun({ sessionId: session.id, parentNodeId: null, input: 'Next', idempotencyKey: 'two' })
     llm.calls[1].result.resolve('Done')
     llm.calls[1].done.resolve()
     assert.equal((await root.get(runServiceKey).waitRun(next.id)).status, 'completed')
@@ -380,12 +382,12 @@ test('invalid input and synchronous LLM failure become explicit outcomes', async
   try {
     await assert.rejects(async () => await createSession(f.harness, 'missing'), /unknown agent/)
     const session = await createSession(f.harness)
-    await assert.rejects(async () => await f.harness.startRun({ sessionId: session.id, input: ' ', idempotencyKey: 'x' }), /input/)
-    const run = await f.harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'x' })
+    await assert.rejects(async () => await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: ' ', idempotencyKey: 'x' }), /input/)
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'x' })
     assert.equal(run.status, 'failed')
     assert.equal(run.error, 'model provider failed')
     assert.equal(run.errorCategory, 'provider-failure')
-    assert.deepEqual((await f.harness.getSession(session.id)).turns, [])
+    assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes.map(({ input, output }) => ({ input, output })), [])
   } finally {
     await f.close()
   }
@@ -404,7 +406,7 @@ test('a result failure waits for cleanup before becoming terminal', async () => 
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.error, 'model provider failed')
     assert.equal(terminal.errorCategory, 'provider-failure')
-    assert.deepEqual((await harness.getSession(run.sessionId)).turns, [])
+    assert.deepEqual((await harness.listNodes(run.sessionId, null)).nodes.map(({ input, output }) => ({ input, output })), [])
   } finally {
     for (const call of llm.calls) call.done.resolve()
     await f.close()

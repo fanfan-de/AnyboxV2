@@ -8,6 +8,7 @@ import { bashObservationMessage, buildLLMMessages, RunFailure, runLimits, valida
 import type { Run, RunOutcome, ValidatedBashRequest } from './domain.js'
 import { stateServiceKey } from './sqlite-state.js'
 import type { StatePort } from './sqlite-state.js'
+import { createWaiters } from './waiters.js'
 
 export const agentLoopServiceKey = 'harness.agent-loop'
 
@@ -16,12 +17,13 @@ export type LoopCancelReason = 'user-requested' | 'owner-disposed' | 'dependency
 export interface AgentLoopPort {
   start(runId: string): Promise<Run>
   cancel(runId: string, reason: LoopCancelReason): Promise<void>
-  wait(runId: string): Promise<Run | undefined>
+  wait(runId: string, signal?: AbortSignal): Promise<Run | undefined>
 }
 
 interface ActiveRun {
+  readonly started: Promise<Run>
   readonly finished: Promise<Run>
-  cancel(reason: LoopCancelReason): void
+  cancel(reason: LoopCancelReason): Promise<void>
 }
 
 type Observation<T> =
@@ -67,213 +69,196 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
       const llm = deps[llmServiceKey]
       const bash = deps[bashServiceKey]
       const active = new Map<string, ActiveRun>()
-      const starting = new Set<Promise<Run>>()
-      const startingRunIds = new Set<string>()
+      const waitFor = createWaiters<Run | undefined>()
+      // Retain rejected owners until this component exits; a persistence error must never allow replay.
+      const rejected = new Map<string, Promise<Run>>()
       const failures: unknown[] = []
       let accepting = true
 
       ctx.effect(() => async () => {
         accepting = false
-        await Promise.allSettled([...starting])
-        const pending = [...active.entries()]
-        for (const [, item] of pending) item.cancel('dependency-unavailable')
-        for (const result of await Promise.allSettled(pending.map(([, item]) => item.finished))) {
-          if (result.status === 'rejected') failures.push(result.reason)
-        }
+        const pending = [...active.values()]
+        await Promise.allSettled(pending.map(item => item.cancel('dependency-unavailable')))
+        await Promise.allSettled(pending.map(item => item.finished))
         if (failures.length === 1) throw failures[0]
         if (failures.length > 1) throw new AggregateError(failures, 'agent loop cleanup failed')
       }, 'cancel and join agent loop calls')
 
       const service: AgentLoopPort = {
         start(runId) {
-          startingRunIds.add(runId)
-          const task = (async (): Promise<Run> => {
+          const existing = active.get(runId)
+          if (existing) return existing.started
+          const previousFailure = rejected.get(runId)
+          if (previousFailure) return previousFailure
+          if (!accepting) return Promise.reject(new LLMFailure('dependency-unavailable'))
+          let resolveStarted!: (run: Run) => void
+          let rejectStarted!: (error: unknown) => void
+          const started = new Promise<Run>((resolve, reject) => { resolveStarted = resolve; rejectStarted = reject })
+          let current: OwnedCall<unknown> | undefined
+          let currentKind: 'model' | 'bash' = 'model'
+          let reason: LoopCancelReason | undefined
+          let cancelError: unknown
+          let cleanupProblem: LLMFailure | RunFailure | undefined
+          let cancellation: Promise<unknown> = Promise.resolve()
+          const cancelCurrent = () => {
+            try { current?.cancel(reason ?? 'dependency-unavailable') } catch (error) { cancelError = error }
+          }
+          const settle = (outcome: RunOutcome) => state.settleRun(runId, outcome, inputs.now())
+          const fail = (failure: LLMFailure | RunFailure) => settle({ kind: 'failed', error: failure.message, category: failure.category })
+          const cleanupFailure = () => currentKind === 'model' ? new LLMFailure('cleanup-failure') : new RunFailure('tool-cleanup-failure')
+          const rememberCleanupFailure = () => {
+            if (!cleanupProblem) { cleanupProblem = cleanupFailure(); failures.push(cleanupProblem) }
+            return cleanupProblem
+          }
+          const stop = async (): Promise<Run | undefined> => {
+            await cancellation
+            const latest = await state.getRun(runId)
+            if (!latest) throw new Error('missing accepted Run')
+            if (latest.status !== 'running' && latest.status !== 'cancelling') return latest
+            if (latest.status === 'cancelling') return settle({ kind: 'cancelled' })
+            if (!accepting || reason === 'dependency-unavailable') return fail(new LLMFailure('dependency-unavailable'))
+            if (reason) return settle({ kind: 'cancelled' })
+            return undefined
+          }
+          const finished = Promise.resolve().then(async (): Promise<Run> => {
             const run = await state.getRun(runId)
             if (!run) throw new Error(`unknown run ${runId}`)
-            if (run.status === 'cancelling') return state.settleRun(runId, { kind: 'cancelled' }, inputs.now())
-            if (run.status !== 'running') return run
-            const [session, prompts, plan] = await Promise.all([
-              state.getSession(run.sessionId), state.getRunPrompts(run.id), state.getRunPlan(run.id),
+            const stopped = await stop()
+            if (stopped) return stopped
+            if (run.history.kind !== 'tree' || run.contextVersion !== 'dialogue-v1') return fail(new LLMFailure('dependency-unavailable'))
+            const [session, history, prompts, plan] = await Promise.all([
+              state.getSession(run.sessionId), state.getNodePath(run.sessionId, run.history.parentNodeId),
+              state.getRunPrompts(run.id), state.getRunPlan(run.id),
             ])
-            if (!accepting || !session || !prompts || !plan) {
-              const failure = new LLMFailure('dependency-unavailable')
-              return state.settleRun(runId, { kind: 'failed', error: failure.message, category: failure.category }, inputs.now())
-            }
-            const messages: LLMMessage[] = [...buildLLMMessages(prompts, session, run.input)]
-            let current: OwnedCall<unknown> | undefined
-            let currentKind: 'model' | 'bash' = 'model'
-            let currentRequest: ValidatedBashRequest | undefined
-            let dependencyLost = false
-            let cancelError: unknown
-            let launchFailure: Run | undefined
+            if (!session || !prompts || !plan) return fail(new LLMFailure('dependency-unavailable'))
+            const messages: LLMMessage[] = [...buildLLMMessages(prompts, history, run.input)]
+            let request: ValidatedBashRequest | undefined
             let totalToolOutputBytes = 0
-            const settle = (outcome: RunOutcome) => state.settleRun(run.id, outcome, inputs.now())
-            const fail = (failure: LLMFailure | RunFailure) =>
-              settle({ kind: 'failed', error: failure.message, category: failure.category })
-
-            const launchModel = async (): Promise<OwnedCall<ModelReply> | undefined> => {
-              if (!await state.recordRunEvent(run.id, { kind: 'model-started' }, inputs.now())) {
-                launchFailure = await settle({ kind: 'cancelled' })
-                return undefined
+            while (true) {
+              const stopped = await stop()
+              if (stopped) return stopped
+              const intent = currentKind === 'model' ? { kind: 'model-started' as const }
+                : { kind: 'bash-started' as const, call: request! }
+              if (!await state.recordRunEvent(runId, intent, inputs.now())) {
+                return (await stop()) ?? await settle({ kind: 'cancelled' })
               }
-              const latest = await state.getRun(run.id)
-              if (latest?.status !== 'running') {
-                launchFailure = await settle({ kind: 'cancelled' })
-                return undefined
-              }
-              if (!accepting || dependencyLost) {
-                launchFailure = await fail(new LLMFailure('dependency-unavailable'))
-                return undefined
-              }
+              const afterIntent = await stop()
+              if (afterIntent) return afterIntent
+              // No await between the final local cancellation check and taking ownership of the call.
+              if (reason || !accepting) return (await stop())!
               try {
-                const call = llm.call({ plan, messages: Object.freeze([...messages]),
-                  ...(llm.supportsTools ? { tools: Object.freeze([bash.definition]) } : {}) })
-                current = call
-                return call
+                current = currentKind === 'model'
+                  ? llm.call({ plan, messages: Object.freeze([...messages]),
+                    ...(llm.supportsTools ? { tools: Object.freeze([bash.definition]) } : {}) })
+                  : bash.execute({ projectId: session.projectId, command: request!.arguments.command })
               } catch (error) {
-                launchFailure = await fail(normalizeLLMFailure(error))
-                return undefined
+                const failure = currentKind === 'model' ? normalizeLLMFailure(error) : bashFailure(error)
+                if (currentKind === 'bash') await state.recordRunEvent(runId,
+                  { kind: 'bash-failed', requestId: request!.id, category: failure.category }, inputs.now())
+                return fail(failure)
               }
+              // Observe immediately, before exposing successful startup.
+              const observing = observe(current)
+              resolveStarted(run)
+              const observed = await observing
+              current = undefined
+              if (observed.kind === 'cleanup-failed' || cancelError) {
+                const failure = rememberCleanupFailure()
+                if (currentKind === 'bash') await state.recordRunEvent(runId,
+                  { kind: 'bash-failed', requestId: request!.id, category: failure.category }, inputs.now())
+                return settle({ kind: 'cleanup-failed', error: failure.message, category: failure.category })
+              }
+              if (currentKind === 'bash') {
+                await state.recordRunEvent(runId, observed.kind === 'value'
+                  ? { kind: 'bash-observed', requestId: request!.id, result: observed.value as BashResult }
+                  : { kind: 'bash-failed', requestId: request!.id, category: bashFailure(observed.error).category }, inputs.now())
+              }
+              const afterCall = await stop()
+              if (afterCall) return afterCall
+              if (observed.kind === 'error') return fail(currentKind === 'model' ? normalizeLLMFailure(observed.error) : bashFailure(observed.error))
+              if (currentKind === 'model') {
+                const reply = observed.value as ModelReply
+                if (!reply || typeof reply !== 'object') return fail(new LLMFailure('invalid-response'))
+                if (reply.kind === 'final') {
+                  if (typeof reply.text !== 'string' || !reply.text.trim()) return fail(new LLMFailure('invalid-response'))
+                  if (Buffer.byteLength(reply.text, 'utf8') > runLimits.finalBytes) return fail(new RunFailure('limit-exceeded'))
+                  return settle({ kind: 'completed', output: reply.text })
+                }
+                if (reply.kind !== 'tool-calls' || (reply.content !== undefined && reply.content !== null && typeof reply.content !== 'string')) {
+                  return fail(new LLMFailure('invalid-response'))
+                }
+                let batch: readonly ValidatedBashRequest[]
+                try { batch = validateBashBatch(reply.calls) }
+                catch { return fail(new RunFailure('invalid-tool-request')) }
+                await state.recordRunEvent(runId, { kind: 'model-tool-calls', calls: batch }, inputs.now())
+                messages.push(Object.freeze({ role: 'assistant', content: reply.content ?? null, toolCalls: batch }))
+              } else {
+                const result = observed.value as BashResult
+                totalToolOutputBytes += Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8')
+                if (totalToolOutputBytes > runLimits.totalToolOutputBytes) return fail(new RunFailure('limit-exceeded'))
+                messages.push(bashObservationMessage(request!.id, result))
+              }
+              const execution = await state.getRunExecution(runId)
+              if (execution?.phase === 'ready-tool') {
+                request = execution.batch[execution.nextToolIndex]
+                if (!request) throw new Error('missing queued Bash request')
+                currentKind = 'bash'
+              } else if (execution?.phase === 'ready-model') {
+                currentKind = 'model'
+                request = undefined
+              } else throw new Error('Run has no executable next phase')
             }
-
-            const launchBash = async (request: ValidatedBashRequest): Promise<OwnedCall<BashResult> | undefined> => {
-              if (!await state.recordRunEvent(run.id, { kind: 'bash-started', call: request }, inputs.now())) {
-                launchFailure = await settle({ kind: 'cancelled' })
-                return undefined
-              }
-              const latest = await state.getRun(run.id)
-              if (latest?.status !== 'running') {
-                launchFailure = await settle({ kind: 'cancelled' })
-                return undefined
-              }
-              if (!accepting || dependencyLost) {
-                launchFailure = await fail(new LLMFailure('dependency-unavailable'))
-                return undefined
-              }
-              try {
-                const call = bash.execute({ projectId: session.projectId, command: request.arguments.command })
-                current = call
-                return call
-              }
-              catch (error) {
-                const failure = bashFailure(error)
-                await state.recordRunEvent(run.id,
-                  { kind: 'bash-failed', requestId: request.id, category: failure.category }, inputs.now())
-                launchFailure = await fail(failure)
-                return undefined
-              }
+          }).catch(async () => {
+            // State/read/commit failures stop the loop; external operations are never retried.
+            if (current) {
+              cancelCurrent()
+              const exited = await current.done.then(() => true, () => false)
+              void current.result.catch(() => {})
+              current = undefined
+              if (!exited || cancelError) rememberCleanupFailure()
             }
-
-            const first = await launchModel()
-            if (!first) return launchFailure!
-            current = first
-
-            const finished = (async (): Promise<Run> => {
-              while (current) {
-                const observed = await observe(current)
-                current = undefined
-                if (currentKind === 'bash') {
-                  if (observed.kind === 'value') {
-                    await state.recordRunEvent(run.id,
-                      { kind: 'bash-observed', requestId: currentRequest!.id, result: observed.value as BashResult }, inputs.now())
-                  } else {
-                    const failure = observed.kind === 'cleanup-failed' || cancelError
-                      ? new RunFailure('tool-cleanup-failure') : bashFailure(observed.error)
-                    await state.recordRunEvent(run.id,
-                      { kind: 'bash-failed', requestId: currentRequest!.id, category: failure.category }, inputs.now())
-                  }
-                }
-                if (observed.kind === 'cleanup-failed' || cancelError) {
-                  const failure = currentKind === 'model'
-                    ? new LLMFailure('cleanup-failure') : new RunFailure('tool-cleanup-failure')
-                  failures.push(failure)
-                  return settle({ kind: 'cleanup-failed', error: failure.message, category: failure.category })
-                }
-                const latest = await state.getRun(run.id)
-                if (latest?.status === 'cancelling' || latest?.status === 'cancelled') return settle({ kind: 'cancelled' })
-                if (!accepting || dependencyLost) return fail(new LLMFailure('dependency-unavailable'))
-                if (observed.kind === 'error') {
-                  if (currentKind === 'bash') {
-                    return fail(bashFailure(observed.error))
-                  }
-                  return fail(normalizeLLMFailure(observed.error))
-                }
-
-                if (currentKind === 'model') {
-                  const reply = observed.value as ModelReply
-                  if (!reply || typeof reply !== 'object') return fail(new LLMFailure('invalid-response'))
-                  if (reply.kind === 'final') {
-                    if (typeof reply.text !== 'string' || !reply.text.trim()) {
-                      return fail(new LLMFailure('invalid-response'))
-                    }
-                    if (Buffer.byteLength(reply.text, 'utf8') > runLimits.finalBytes) {
-                      return fail(new RunFailure('limit-exceeded'))
-                    }
-                    return settle({ kind: 'completed', output: reply.text })
-                  }
-                  if (reply.kind !== 'tool-calls') return fail(new LLMFailure('invalid-response'))
-                  if (reply.content !== undefined && reply.content !== null && typeof reply.content !== 'string') {
-                    return fail(new LLMFailure('invalid-response'))
-                  }
-                  let batch: readonly ValidatedBashRequest[]
-                  try {
-                    batch = validateBashBatch(reply.calls)
-                  } catch (error) {
-                    return fail(error instanceof RunFailure ? error : new RunFailure('invalid-tool-request'))
-                  }
-                  await state.recordRunEvent(run.id, { kind: 'model-tool-calls', calls: batch }, inputs.now())
-                  messages.push(Object.freeze({ role: 'assistant', content: reply.content ?? null, toolCalls: batch }))
-                } else {
-                  const result = observed.value as BashResult
-                  totalToolOutputBytes += Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8')
-                  if (totalToolOutputBytes > runLimits.totalToolOutputBytes) {
-                    return fail(new RunFailure('limit-exceeded'))
-                  }
-                  messages.push(bashObservationMessage(currentRequest!.id, result))
-                }
-
-                const execution = await state.getRunExecution(run.id)
-                if (execution?.phase === 'ready-tool') {
-                  const request = execution.batch[execution.nextToolIndex]
-                  if (!request) throw new Error('missing queued Bash request')
-                  currentKind = 'bash'
-                  currentRequest = request
-                  current = await launchBash(request)
-                } else if (execution?.phase === 'ready-model') {
-                  currentKind = 'model'
-                  currentRequest = undefined
-                  current = await launchModel()
-                } else throw new Error('Run has no executable next phase')
-                if (!current) return launchFailure!
-              }
-              throw new Error('Run loop exited without a result')
-            })()
-            const item: ActiveRun = {
-              finished,
-              cancel(reason) {
-                if (reason === 'dependency-unavailable') dependencyLost = true
-                try { current?.cancel(reason) } catch (error) { cancelError = error }
-              },
-            }
-            active.set(run.id, item)
-            if ((await state.getRun(run.id))?.status === 'cancelling') item.cancel('user-requested')
-            void finished.finally(() => { active.delete(run.id) }).catch(error => { failures.push(error) })
-            return run
-          })()
-          starting.add(task)
-          void task.finally(() => { starting.delete(task); startingRunIds.delete(runId) }).catch(() => {})
-          return task
+            if (cleanupProblem) return settle({ kind: 'cleanup-failed', error: cleanupProblem.message, category: cleanupProblem.category })
+            return fail(new RunFailure('state-write-failure'))
+          })
+          const entry: ActiveRun = {
+            started, finished,
+            cancel(nextReason) {
+              // Dependency loss cannot replace a user's already requested cancellation.
+              if (!reason || reason === 'dependency-unavailable') reason = nextReason
+              cancelCurrent()
+              const write = nextReason === 'dependency-unavailable' ? Promise.resolve()
+                : state.requestCancellation(runId, inputs.now())
+              cancellation = write
+              void write.catch(() => {})
+              return write.then(() => {})
+            },
+          }
+          active.set(runId, entry)
+          void finished.then(resolveStarted, rejectStarted)
+          void started.catch(() => {})
+          void finished.then(() => { active.delete(runId) }, error => {
+            active.delete(runId)
+            rejected.set(runId, finished)
+            failures.push(error)
+          })
+          return started
         },
         async cancel(runId, reason) {
-          const run = reason !== 'dependency-unavailable'
-            ? await state.requestCancellation(runId, inputs.now()) : await state.getRun(runId)
-          const item = active.get(runId)
-          if (run && (run.status === 'running' || run.status === 'cancelling') && item) item.cancel(reason)
-          else if (run && (run.status === 'running' || run.status === 'cancelling') && !startingRunIds.has(runId)) {
-            await state.settleRun(runId, { kind: 'cancelled' }, inputs.now())
+          const entry = active.get(runId)
+          if (entry) return entry.cancel(reason)
+          const run = reason === 'dependency-unavailable' ? await state.getRun(runId) : await state.requestCancellation(runId, inputs.now())
+          // A handoff can register an owner while the cancellation transaction is pending.
+          const handedOff = active.get(runId)
+          if (handedOff) return handedOff.cancel(reason)
+          if (run?.status === 'running' || run?.status === 'cancelling') {
+            const failure = new LLMFailure('dependency-unavailable')
+            await state.settleRun(runId, reason === 'dependency-unavailable'
+              ? { kind: 'failed', error: failure.message, category: failure.category } : { kind: 'cancelled' }, inputs.now())
           }
         },
-        wait(runId) { return active.get(runId)?.finished ?? state.getRun(runId) },
+        wait(runId, signal) {
+          return waitFor(active.get(runId)?.finished ?? rejected.get(runId) ?? state.getRun(runId), signal)
+        },
       }
       ctx.provide(agentLoopServiceKey, service)
     },

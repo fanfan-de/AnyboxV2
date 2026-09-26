@@ -20,4 +20,11 @@
 
 Prompt 领域（`prompt`）持有文档、版本和旧 JSON 导入记录表；Agent Prompt 领域（`agent-prompt`）持有绑定表和自己的导入记录。绑定写入先提交 SQLite 事务，再更新该投影；两类写入成功返回时均已提交。可选的旧 JSON 导入由两个组件各自在一个事务内完成并记录来源：Prompt 先导入文档与版本，Agent Prompt 随后导入绑定并校验所引用的版本。若后者失败，重启时只补做未完成的一方，不会重复导入。
 
-Projects 领域（`projects`）登记规范化目录身份表；Run 状态领域（`run-state`）登记 Session、Run、幂等键、Prompt 内容与模型可见配置快照。各领域共用同一数据库。状态组件在一笔事务内接受 Run，并在另一笔事务内同时提交成功终态与 Session 轮次。启动时在事务中把遗留的 `running`、`cancelling` 结算为 `interrupted`；旧调用计划不会重放。Prompt 和 Agent Prompt 仍保留各自的已提交读投影，新 Run 在接受前解析全局绑定，状态事务内重新校验幂等键与同会话活动 Run。
+Projects 领域（`projects`）登记规范化目录身份表；Run 状态领域（`run-state`）登记 Session 元数据、完整轮次节点、Run、幂等键、Prompt 内容与模型可见配置快照。各领域共用同一数据库。状态组件在一笔事务内接受 Run，并在另一笔事务内同时提交成功终态、结果节点、Run 结果节点引用、执行阶段与终态事件。启动时在事务中把遗留的 `running`、`cancelling` 结算为 `interrupted`；旧调用计划不会重放。Prompt 和 Agent Prompt 仍保留各自的已提交读投影，新 Run 在接受前解析全局绑定，状态事务内重新校验幂等键、同 Session 父节点与完整祖先链；不再限制同会话或同父节点活动 Run 的数量。数据库连接上的短事务串行不等于整个 Run 串行。
+
+
+`run-state` v3 将 `turns_json` 数组按原始索引迁为单链，生成带 Session/数组索引的确定性 `legacy:` 节点 ID，`sourceRunId` 留空。所有旧 Run 的起点标记为 `legacy-unknown`，保留输入、输出、失败、配置快照及事件，不按时间或内容猜关联。v3 迁移及版本记录原子提交，格式错误使整个 v3 回滚；迁移后删除 `turns_json` 列，只保留迁移读取代码。再执行正常的活动 Run 中断恢复，不自动重放。
+
+`UNIQUE(session_id, idempotency_key)` 保证请求身份；节点的非空 `source_run_id` 唯一。父节点与来源 Run 使用同 Session 复合外键，Run 起点和结果引用通过触发器校验归属。节点不可更新或删除，Run 起点不可改写；节点插入与成功 Run 的父节点、输入、输出必须一致。节点分页用稳定的插入序号游标，只决定列表顺序，不决定祖先关系。
+
+部署前先停止旧应用、确认排他所有权并备份数据库，再启动新版本执行迁移。异常退出的 `.lock` 不能在旧进程仍持有资源时删除。实际数据库不由测试修改；旧格式样本与回滚验证见 `tests/conversation-migration.test.mjs`。

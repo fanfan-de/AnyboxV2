@@ -9,7 +9,8 @@ import { LLMFailure } from '../dist/llm/port.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from '../dist/web/component.js'
 import { createDirectoryPickerComponent } from '../dist/web/directory-picker.js'
-import { controlledLLM } from './helpers/controlled-llm.mjs'
+import { controlledLLM, deferred } from './helpers/controlled-llm.mjs'
+import { promptServiceKey } from '../dist/prompt/component.js'
 import { createApiKeyServiceComponent } from '../dist/credentials/settings.js'
 import { deepSeekCredentialId } from '../dist/llm/deepseek-chat-completions/component.js'
 
@@ -95,6 +96,123 @@ test('Web credential settings manage registered LLM and video keys without expos
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
+test('Web edits, publishes and binds Prompt versions while accepted Runs keep their snapshots', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-prompts-'))
+  let f = await fixture(directory)
+  try {
+    const defaults = await request(f.web, 'GET', '/agents/assistant/prompts')
+    assert.equal(defaults.data[0].content, 'Private instructions.')
+    assert.deepEqual((await request(f.web, 'GET', '/prompts')).data, [])
+    const created = await request(f.web, 'POST', '/prompts', {
+      name: 'Assistant instructions', description: 'Shared across projects',
+      kind: 'agent-instruction', role: 'system', content: 'First instruction.',
+    })
+    assert.equal(created.response.status, 200)
+    const id = created.data.id
+    assert.equal(created.data.draft.revision, 1)
+    assert.equal(created.data.ownerId, undefined)
+    const published = await request(f.web, 'POST', `/prompts/${id}/publish`, { expectedRevision: 1 })
+    assert.equal(published.response.status, 200)
+    const v1 = published.data.id
+    assert.equal((await request(f.web, 'POST', '/agents/assistant/prompts', { versionId: v1 })).response.status, 200)
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const first = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'First', idempotencyKey: 'one' })
+    assert.equal(f.llm.calls[0].input.messages[0].content, 'First instruction.')
+    const edited = await request(f.web, 'POST', `/prompts/${id}`, { expectedRevision: 1, content: 'Second instruction.' })
+    assert.equal(edited.data.draft.revision, 2)
+    assert.equal((await request(f.web, 'GET', '/agents/assistant/prompts')).data[0].content, 'First instruction.')
+    const v2 = (await request(f.web, 'POST', `/prompts/${id}/publish`, { expectedRevision: 2 })).data.id
+    // Publication alone does not change the selected Agent version.
+    assert.equal((await request(f.web, 'GET', '/agents/assistant/prompts')).data[0].versionId, v1)
+    await request(f.web, 'POST', '/agents/assistant/prompts', { versionId: v2 })
+    assert.equal(f.llm.calls[0].input.messages[0].content, 'First instruction.')
+    f.llm.calls[0].result.resolve('First answer')
+    f.llm.calls[0].done.resolve()
+    await f.harness.waitRun(first.data.id)
+    const second = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Second', idempotencyKey: 'two' })
+    assert.equal(f.llm.calls[1].input.messages[0].content, 'Second instruction.')
+    f.llm.calls[1].result.resolve('Second answer')
+    f.llm.calls[1].done.resolve()
+    await f.harness.waitRun(second.data.id)
+    assert.deepEqual((await request(f.web, 'GET', `/prompts/${id}/versions`)).data.map(item => item.content),
+      ['First instruction.', 'Second instruction.'])
+    await f.close()
+    f = await fixture(directory)
+    assert.equal((await request(f.web, 'GET', '/prompts')).data[0].id, id)
+    assert.equal((await request(f.web, 'GET', `/prompts/${id}`)).data.draft.revision, 2)
+    assert.equal((await request(f.web, 'GET', '/agents/assistant/prompts')).data[0].versionId, v2)
+    // Selecting an older immutable version rolls back the binding, not the draft.
+    await request(f.web, 'POST', '/agents/assistant/prompts', { versionId: v1 })
+    assert.equal((await request(f.web, 'GET', '/agents/assistant/prompts')).data[0].content, 'First instruction.')
+    assert.equal((await request(f.web, 'GET', `/prompts/${id}`)).data.draft.content, 'Second instruction.')
+  } finally {
+    for (const call of f.llm.calls) { call.result.resolve('Done'); call.done.resolve() }
+    await f.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('Web Prompt writes enforce host identity, origin, revisions and domain validation', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-prompt-validation-'))
+  const f = await fixture(directory)
+  const input = { name: 'Context', kind: 'context', role: 'user', content: '文'.repeat(30_000) }
+  try {
+    assert.equal((await request(f.web, 'POST', '/prompts', input, 'https://example.com')).response.status, 403)
+    assert.equal((await request(f.web, 'POST', '/prompts', { ...input, actorId: 'someone' })).response.status, 400)
+    assert.equal((await request(f.web, 'POST', '/prompts', { ...input, role: 'system' })).response.status, 400)
+    assert.equal((await request(f.web, 'POST', '/prompts', { ...input, kind: 'task-template' })).response.status, 400)
+    assert.deepEqual((await request(f.web, 'GET', '/prompts')).data, [])
+    // Prompt's character limit is independent of the smaller general HTTP body limit.
+    const created = await request(f.web, 'POST', '/prompts', input)
+    assert.equal(created.response.status, 200)
+    assert.equal(created.data.draft.content, input.content)
+    const id = created.data.id
+    assert.equal((await request(f.web, 'POST', `/prompts/${id}`, { content: 'No revision' })).response.status, 400)
+    const edits = await Promise.all(['a', 'b'].map(content => request(f.web, 'POST', `/prompts/${id}`, { expectedRevision: 1, content })))
+    assert.deepEqual(edits.map(item => item.response.status).sort(), [200, 409])
+    assert.equal(edits.find(item => item.response.status === 409).data.error.code, 'prompt-conflict')
+    assert.equal((await request(f.web, 'POST', `/prompts/${id}/publish`, { expectedRevision: 1 })).data.error.code, 'prompt-conflict')
+    assert.deepEqual((await request(f.web, 'GET', `/prompts/${id}/versions`)).data, [])
+    assert.equal((await request(f.web, 'POST', `/prompts/${id}/publish`, { expectedRevision: 2 })).response.status, 200)
+    assert.equal((await request(f.web, 'POST', `/prompts/${id}/publish`, { expectedRevision: 2 })).data.error.code, 'prompt-publication-conflict')
+    assert.equal((await request(f.web, 'GET', '/prompts/missing')).response.status, 404)
+    assert.equal((await request(f.web, 'GET', '/agents/missing/prompts')).response.status, 404)
+    const foreign = await f.harness.createPrompt('another-owner', { ...input, content: 'Private other user content' })
+    const foreignVersion = await f.harness.publishPrompt('another-owner', foreign.id)
+    for (const suffix of ['', '/versions']) {
+      const denied = await request(f.web, 'GET', `/prompts/${foreign.id}${suffix}`)
+      assert.equal(denied.response.status, 403)
+      assert.doesNotMatch(JSON.stringify(denied.data), /Private other user content/)
+    }
+    assert.equal((await request(f.web, 'POST', '/agents/assistant/prompts', { versionId: foreignVersion.id })).response.status, 403)
+    assert.equal((await request(f.web, 'GET', '/prompts')).data.length, 1)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('Web shutdown joins an accepted Prompt write before its dependencies close', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-prompt-close-'))
+  const f = await fixture(directory)
+  const entered = deferred()
+  const release = deferred()
+  const prompts = f.root.get(promptServiceKey)
+  const original = prompts.createPrompt
+  prompts.createPrompt = async (...args) => { entered.resolve(); await release.promise; return original(...args) }
+  try {
+    const saving = request(f.web, 'POST', '/prompts', { name: 'Held', kind: 'context', role: 'user', content: 'Keep this.' })
+    await entered.promise
+    let closed = false
+    const closing = f.close().then(() => { closed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(closed, false)
+    release.resolve()
+    assert.equal((await saving).response.status, 200)
+    await closing
+    const restored = await fixture(directory)
+    try { assert.equal((await request(restored.web, 'GET', '/prompts')).data[0].draft.content, 'Keep this.') }
+    finally { await restored.close() }
+  } finally { release.resolve(); await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
 test('Web client contract serves assets and completes one idempotent Harness Run', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-'))
   const f = await fixture(directory)
@@ -107,6 +225,14 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     const clientSource = await client.text()
     assert.match(clientSource, /\/api\/v1/)
     assert.doesNotMatch(clientSource, /@nya\/core|deepseek-chat-completions/)
+    for (const asset of ['workspace-client', 'workspace-layout', 'session-client', 'session-view', 'prompt-client']) {
+      const response = await fetch(`${f.web.url}/${asset}.js`)
+      assert.equal(response.status, 200)
+      assert.match(response.headers.get('content-type'), /javascript/)
+      assert.doesNotMatch(await response.text(), /from ['"]@nya\/core/)
+    }
+    assert.equal((await fetch(`${f.web.url}/harness.js`)).status, 404)
+
 
     const agents = await request(f.web, 'GET', '/agents')
     assert.deepEqual(agents.data, [{ id: 'assistant' }])
@@ -114,13 +240,13 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     assert.equal(created.response.status, 200)
     const sessionId = created.data.id
-    const body = { input: 'Hello', idempotencyKey: 'send-1' }
+    const body = { parentNodeId: null, input: 'Hello', idempotencyKey: 'send-1' }
     const first = await request(f.web, 'POST', `/sessions/${sessionId}/runs`, body)
     const replay = await request(f.web, 'POST', `/sessions/${sessionId}/runs`, body)
     assert.equal(first.response.status, 200)
     assert.equal(replay.data.id, first.data.id)
     assert.equal(f.llm.calls.length, 1)
-    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'id', 'input', 'sessionId', 'status', 'updatedAt'])
+    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'history', 'id', 'input', 'revision', 'sessionId', 'status', 'updatedAt'])
     assert.doesNotMatch(JSON.stringify(first.data), /Private instructions|llmSnapshot|promptVersionIds|idempotencyKey/)
     const inFlight = await request(f.web, 'GET', `/runs/${first.data.id}`)
     assert.equal(inFlight.data.status, 'running')
@@ -131,7 +257,9 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     assert.equal(final.data.status, 'completed')
     assert.equal(final.data.output, 'Hello back')
     const session = await request(f.web, 'GET', `/sessions/${sessionId}`)
-    assert.deepEqual(session.data.turns, [{ input: 'Hello', output: 'Hello back' }])
+    assert.equal('turns' in session.data, false)
+    const nodes = await request(f.web, 'GET', `/sessions/${sessionId}/nodes?parentNodeId=root`)
+    assert.deepEqual(nodes.data.nodes.map(({input, output}) => ({input, output})), [{ input: 'Hello', output: 'Hello back' }])
   } finally {
     for (const call of f.llm.calls) call.done.resolve()
     await f.close()
@@ -145,7 +273,7 @@ test('Web serves bounded Run events for an active Bash loop and its completed hi
   try {
     const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     const accepted = await request(f.web, 'POST', `/sessions/${created.data.id}/runs`,
-      { input: 'Inspect output', idempotencyKey: 'events' })
+      { parentNodeId: null, input: 'Inspect output', idempotencyKey: 'events' })
     assert.equal((await request(f.web, 'GET', '/runs/missing/events')).response.status, 404)
     assert.deepEqual((await request(f.web, 'GET', `/runs/${accepted.data.id}/events`)).data.map(event => event.kind),
       ['model-started'])
@@ -191,8 +319,8 @@ test('Web host rejects cross-origin writes, maps errors, and waits for cancellat
     assert.equal(invalid.response.status, 404)
     const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     const path = `/sessions/${created.data.id}/runs`
-    const run = await request(f.web, 'POST', path, { input: 'Cancel me', idempotencyKey: 'one' })
-    const conflict = await request(f.web, 'POST', path, { input: 'Again', idempotencyKey: 'two' })
+    const run = await request(f.web, 'POST', path, { parentNodeId: null, input: 'Cancel me', idempotencyKey: 'one' })
+    const conflict = await request(f.web, 'POST', path, { parentNodeId: null, input: 'Again', idempotencyKey: 'one' })
     assert.equal(conflict.response.status, 409)
     const cancelled = await request(f.web, 'POST', `/runs/${run.data.id}/cancel`, {})
     assert.equal(cancelled.data.status, 'cancelling')
@@ -202,7 +330,7 @@ test('Web host rejects cross-origin writes, maps errors, and waits for cancellat
     await f.harness.waitRun(run.data.id)
     const final = await request(f.web, 'GET', `/runs/${run.data.id}`)
     assert.equal(final.data.status, 'cancelled')
-    const failed = await request(f.web, 'POST', path, { input: 'Fail me', idempotencyKey: 'failure' })
+    const failed = await request(f.web, 'POST', path, { parentNodeId: null, input: 'Fail me', idempotencyKey: 'failure' })
     f.llm.calls[1].result.reject(new LLMFailure('provider-failure'))
     f.llm.calls[1].done.resolve()
     await f.harness.waitRun(failed.data.id)
@@ -240,7 +368,7 @@ test('Web host shutdown cancels and joins an accepted Run before releasing Harne
   try {
     const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     const accepted = await request(f.web, 'POST', `/sessions/${created.data.id}/runs`, {
-      input: 'Stay active', idempotencyKey: 'one',
+      parentNodeId: null, input: 'Stay active', idempotencyKey: 'one',
     })
     assert.equal(accepted.data.status, 'running')
     let closed = false
@@ -327,7 +455,7 @@ test('Web project routes register directories and switching views leaves Runs ac
     })
     assert.equal(session.data.projectId, f.project.id)
     const run = await request(f.web, 'POST', `/sessions/${session.data.id}/runs`, {
-      input: 'Keep running', idempotencyKey: 'one',
+      parentNodeId: null, input: 'Keep running', idempotencyKey: 'one',
     })
     const otherSessions = await request(f.web, 'GET', `/projects/${added.data.id}/sessions`)
     assert.deepEqual(otherSessions.data, [])
@@ -435,4 +563,132 @@ test('disconnecting a picker request cancels the host dialog without adding a pr
     await cancelled
     assert.equal((await request(f.web, 'GET', '/projects')).data.length, 1)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('tree HTTP contract requires ancestry, supports sibling attempts and restores accepted keys read-only', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-tree-'))
+  const f = await fixture(directory)
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const path = `/sessions/${session.id}`
+    const submit = body => request(f.web, 'POST', `${path}/runs`, body)
+    assert.equal((await submit({ input: 'Missing parent', idempotencyKey: 'bad' })).response.status, 400)
+    assert.deepEqual((await request(f.web, 'GET', `${path}/runs`)).data, [])
+    const input = { parentNodeId: null, input: 'Root', idempotencyKey: 'root/key' }
+    const [a, retry, b] = await Promise.all([submit(input), submit(input), submit({ ...input, idempotencyKey: 'other' })])
+    assert.equal(a.data.id, retry.data.id)
+    assert.notEqual(a.data.id, b.data.id)
+    assert.equal(f.llm.calls.length, 2)
+    assert.equal((await request(f.web, 'GET', `${path}/runs?status=active&parentNodeId=root`)).data.length, 2)
+    const recovered = (await request(f.web, 'GET', `${path}/runs/by-key/root%2Fkey`)).data
+    assert.equal(recovered.id, a.data.id)
+    assert.deepEqual(recovered.history, { kind: 'tree', parentNodeId: null })
+    assert.equal(typeof recovered.revision, 'number')
+    assert.equal((await request(f.web, 'GET', `${path}/runs/by-key/missing`)).response.status, 404)
+    assert.equal(f.llm.calls.length, 2)
+    assert.deepEqual((await request(f.web, 'GET', `${path}/nodes?parentNodeId=root`)).data.nodes, [])
+    for (const [i, call] of f.llm.calls.entries()) { call.result.resolve(`Answer ${i}`); call.done.resolve() }
+    await Promise.all([f.harness.waitRun(a.data.id), f.harness.waitRun(b.data.id)])
+    const page = (await request(f.web, 'GET', `${path}/nodes?parentNodeId=root&limit=1`)).data
+    assert.equal(page.nodes.length, 1)
+    assert.ok(page.nextCursor)
+    const rest = (await request(f.web, 'GET', `${path}/nodes?parentNodeId=root&limit=1&cursor=${encodeURIComponent(page.nextCursor)}`)).data
+    assert.equal(rest.nodes.length, 1)
+    assert.equal(rest.nextCursor, undefined)
+    assert.notEqual(rest.nodes[0].id, page.nodes[0].id)
+    const node = page.nodes[0]
+    assert.deepEqual((await request(f.web, 'GET', `${path}/nodes/${node.id}`)).data, node)
+    assert.deepEqual((await request(f.web, 'GET', `${path}/nodes/${node.id}/path`)).data, [node])
+    assert.deepEqual((await request(f.web, 'GET', `${path}/nodes/root/path`)).data, [])
+    assert.equal((await submit({ ...input, parentNodeId: node.id })).response.status, 409)
+    assert.equal((await submit({ ...input, input: 'Changed' })).response.status, 409)
+    const continued = await submit({ parentNodeId: node.id, input: 'Continue', idempotencyKey: 'child' })
+    assert.equal(continued.response.status, 200)
+    assert.equal((await request(f.web, 'GET', `${path}/runs?status=active&parentNodeId=${node.id}`)).data.length, 1)
+    const events = (await request(f.web, 'GET', `/runs/${continued.data.id}/events?afterSeq=0`)).data
+    assert.deepEqual(events.map(e => e.kind), ['model-started'])
+    f.llm.calls[2].result.resolve('Child answer')
+    f.llm.calls[2].done.resolve()
+    const done = await f.harness.waitRun(continued.data.id)
+    assert.deepEqual((await request(f.web, 'GET', `/runs/${done.id}/events?afterSeq=${events[0].seq}`)).data.map(e => e.kind), ['terminal'])
+    assert.equal((await request(f.web, 'GET', `${path}/nodes/${done.resultNodeId}/path`)).data.length, 2)
+    const publicRun = (await request(f.web, 'GET', `/runs/${done.id}`)).data
+    assert.equal(publicRun.resultNodeId, done.resultNodeId)
+    assert.equal(publicRun.llmSnapshot, undefined)
+    assert.equal(publicRun.promptVersionIds, undefined)
+    assert.equal(publicRun.idempotencyKey, undefined)
+    assert.doesNotMatch(JSON.stringify(publicRun), /Private instructions/)
+    for (const suffix of ['/nodes', '/nodes?parentNodeId=root&limit=0', '/nodes?parentNodeId=root&limit=101', '/runs?status=bogus']) {
+      assert.equal((await request(f.web, 'GET', `${path}${suffix}`)).response.status, 400)
+    }
+    assert.equal((await request(f.web, 'GET', `${path}/nodes/missing/path`)).response.status, 404)
+    assert.equal((await request(f.web, 'GET', `/runs/${done.id}/events?afterSeq=-1`)).response.status, 400)
+  } finally {
+    for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('HTTP wait distinguishes timeout from completion and waits for actual resource exit', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-wait-'))
+  const f = await fixture(directory)
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Wait', idempotencyKey: 'wait' })
+    const waiting = `/runs/${run.id}/wait`
+    const timeout = await request(f.web, 'GET', `${waiting}?timeoutMs=0`)
+    assert.equal(timeout.data.done, false)
+    assert.equal(timeout.data.timedOut, true)
+    assert.equal(timeout.data.run.status, 'running')
+    for (const ms of ['-1', '25001', '1.5', 'NaN']) assert.equal((await request(f.web, 'GET', `${waiting}?timeoutMs=${ms}`)).response.status, 400)
+    f.llm.calls[0].result.resolve('Done but still exiting')
+    assert.equal((await request(f.web, 'GET', `${waiting}?timeoutMs=5`)).data.done, false)
+    const joined = request(f.web, 'GET', `${waiting}?timeoutMs=25000`)
+    f.llm.calls[0].done.resolve()
+    const terminal = (await joined).data
+    assert.equal(terminal.done, true)
+    assert.equal(terminal.timedOut, false)
+    assert.equal(terminal.run.status, 'completed')
+    assert.ok(terminal.run.resultNodeId)
+    assert.deepEqual(f.llm.calls[0].cancellations, [])
+  } finally {
+    for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('disconnecting wait and closing Web release waiters without cancelling the Run', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-wait-close-'))
+  const f = await fixture(directory)
+  try {
+    const { runServiceKey } = await import('../dist/run/component.js')
+    const port = f.root.get(runServiceKey)
+    const original = port.waitRun.bind(port)
+    const registrations = []
+    let entered = deferred()
+    port.waitRun = (id, signal) => { registrations.push(signal); entered.resolve(); return original(id, signal) }
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Wait', idempotencyKey: 'wait' })
+    const controller = new AbortController()
+    const connection = fetch(`${f.web.url}/api/v1/runs/${run.id}/wait?timeoutMs=25000`, { signal: controller.signal })
+    await entered.promise
+    controller.abort()
+    await assert.rejects(connection, { name: 'AbortError' })
+    for (let i = 0; i < 30 && !registrations[0].aborted; i++) await new Promise(resolve => setTimeout(resolve, 2))
+    assert.equal(registrations[0].aborted, true)
+    entered = deferred()
+    const pending = request(f.web, 'GET', `/runs/${run.id}/wait?timeoutMs=25000`)
+    await entered.promise
+    await f.webFiber.dispose()
+    assert.equal((await pending).response.status, 503)
+    assert.equal(registrations[1].aborted, true)
+    assert.deepEqual(f.llm.calls[0].cancellations, [])
+    assert.equal((await f.harness.getRun(run.id)).status, 'running')
+    f.llm.calls[0].result.resolve('Still completed')
+    f.llm.calls[0].done.resolve()
+    assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
+  } finally {
+    for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
 })

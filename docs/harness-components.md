@@ -29,7 +29,7 @@
 ├─ Agent Prompt ..... 提供 harness.agent-prompts  注入 prompts、local-storage；接收 Agent 定义
 ├─ AgentLoop ........ 提供 harness.agent-loop     注入 state、llm、tools.bash
 ├─ Run .............. 提供 harness.runs           注入 projects、state、agent-prompts、llm、agent-loop；接收 Agent 定义
-└─ Web 前端 ......... 提供 web.frontend            注入 projects、sessions、runs、credentials.settings、host.directory-picker；接收 Agent ID 列表
+└─ Web 前端 ......... 提供 web.frontend            注入 projects、sessions、runs、prompts、agent-prompts、credentials.settings、host.directory-picker；接收 Agent ID 列表
 ```
 
 `createHarness` 按上面的依赖顺序安装业务组件；关闭时由 Nya 按依赖关系先清理消费者，再清理其资源提供者。
@@ -210,17 +210,17 @@
 
 **服务** `harness.state` · **注入** `local-storage`、`harness.projects` · **创建** `createSqliteStateComponent(inputs)`
 
-Session、Run、幂等键、Prompt 内容快照、模型可见配置快照、Run 执行阶段及事件由同一个 SQLite 状态组件持有，按 `run-state` 领域登记表迁移。原生 LLM 调用计划只在本进程的活动 Run 中保留，重启时不重放。
+Session、不可变完整轮次节点、Run、幂等键、Prompt 内容快照、模型可见配置快照、Run 执行阶段及事件由同一个 SQLite 状态组件持有，按 `run-state` 领域登记表迁移。原生 LLM 调用计划只在本进程的活动 Run 中保留，重启时不重放。
 
-`StatePort` 的读写均返回 Promise：`createSession(id, projectId, agentId, now)`、`getSession(id)`、`listSessions(projectId)`、`findAcceptedRun(input)`、`acceptRun(id, input, now, prompts, plan)`、`getRun(id)`、`listRuns(sessionId)`、`getRunPrompts(id)`、`getRunPlan(id)`、`getRunExecution(id)`、`getRunEvents(id)`、`recordRunEvent(id, event, at)`、`requestCancellation(id, now)`、`settleRun(id, outcome, now)`。接受 Run 的事务再次检查同键与同会话活动 Run，并原子保存 Run 和快照；模型与 Bash 启动事件在外部调用前提交，观察事件在退出后提交。成功终态与新增 Session 轮次在同一事务提交。同键同输入始终返回原 Run，同键不同输入拒绝。
+`StatePort` 的读写均返回 Promise：`createSession(id, projectId, agentId, now)`、`getSession(id)`、`listSessions(projectId)`、`findAcceptedRun(input)`、`acceptRun(id, input, now, prompts, plan)`、`getRun(id)`、`listRuns(sessionId, query?)`、`getRunByKey(sessionId, key)`、`getNode(sessionId, id)`、`getNodePath(sessionId, id)`、`listNodes(sessionId, parentId, query?)`、`getRunPrompts(id)`、`getRunPlan(id)`、`getRunExecution(id)`、`getRunEvents(id, afterSeq?)`、`recordRunEvent(id, event, at)`、`requestCancellation(id, now)`、`settleRun(id, outcome, now)`。接受 Run 的事务再次检查同键、父节点与完整祖先路径，并原子保存 Run、历史定位、组装版本和配置快照；模型与 Bash 启动事件在外部调用前提交，观察事件在退出后提交。成功终态、完整轮次节点、结果节点引用、执行阶段及事件在同一事务提交。同键同输入同父节点返回原 Run，同键换输入或父节点拒绝。
 
-启动时在事务中将遗留的 `running`、`cancelling` 结算为 `interrupted` 并写入恢复事件，保留幂等键与历史，不重放已记录的 Bash 意图；旧版 SQLite Run 表由 `run-state` 第 2 版迁移补齐执行状态与事件表。卸载时停止接收并等待已接受的存储操作；Nya 先让 Session、AgentLoop 和 Run 等消费者退出。状态数据留在 SQLite 中。
+启动时在事务中将遗留的 `running`、`cancelling` 结算为 `interrupted` 并写入恢复事件，保留幂等键与历史，不重放已记录的 Bash 意图；旧版 SQLite Run 表由 `run-state` 第 2 版迁移补齐执行状态与事件表，第 3 版迁移完整轮次树并将旧 Run 标为 `legacy-unknown`。卸载时停止接收并等待已接受的存储操作；Nya 先让 Session、AgentLoop 和 Run 等消费者退出。状态数据留在 SQLite 中。
 
 ### Session
 
 **服务** `harness.sessions` · **注入** `harness.projects`、`harness.state` · **创建** `createSessionComponent(inputs, agents)`
 
-Session 是创建和查询会话的入口。`createSession(projectId, agentId)` 显式指定项目，先校验全局 Agent 和项目目录可用，再在持久状态中创建会话。`getSession(id)` 和 `listSessions(projectId)` 返回已存历史；目录后来不可访问时仍可查看。Session 自己不存数据，也不依赖模型或 AgentLoop。
+Session 是创建和查询会话的入口。`createSession(projectId, agentId)` 显式指定项目，先校验全局 Agent 和项目目录可用，再在持久状态中创建会话。`getSession(id)` 和 `listSessions(projectId)` 返回会话元数据，`getNode(sessionId, id)`、`getNodePath(sessionId, parentId)`、`listNodes(sessionId, parentId, {cursor?, limit?})` 查询节点、祖先路径与分页子节点；目录后来不可访问时仍可查看。Session 自己不存数据，也不依赖模型或 AgentLoop。
 
 ### Prompt
 
@@ -280,11 +280,11 @@ AgentLoop 是已接受 Run 的执行者，独占每个 Run 的在途调用。模
 
 **服务接口**（`AgentLoopPort`）：
 
-- `start(runId)`：从 SQLite 状态读出 Run 的 Prompt 快照、调用计划和 Session 历史，用纯函数 `buildLLMMessages` 组装消息，再按持久执行阶段调用模型或 Bash。如果调用在发起时就同步失败，Run 按固定类别结算为 `failed`。
+- `start(runId)`：从 SQLite 状态读出 Run 的 Prompt 快照、调用计划和固定起点的祖先路径，用纯函数 `buildLLMMessages` 组装消息，再按持久执行阶段调用模型或 Bash。如果调用在发起时就同步失败，Run 按固定类别结算为 `failed`。
 - `cancel(runId, reason)`：取消一个 Run 的在途调用，见下文的取消原因。
-- `wait(runId)`：返回该 Run 最终结算后的值；Run 已经结束时直接返回当前状态。
+- `wait(runId, signal?)`：等待启动、资源退出与结算；Run 已经结束时返回当前状态。取消等待信号仅释放等待者，不取消 Run。
 
-**消息组装顺序**：`agent-instruction` 快照、`context` 快照、Session 历史轮次（依次为 user 和 assistant），最后是当前输入。如果绑定了 `task-template`，当前输入会先填进模板。
+**消息组装顺序**：`agent-instruction` 快照、`context` 快照、Run 固定起点的祖先节点（依次为原文 user 和最终 assistant），最后是当前输入。如果绑定了 `task-template`，当前输入会先填进模板。兄弟分支、失败记录和历史工具轨迹不参与上下文；工具请求及观察只在当前 Run 内累积。
 
 **结算规则。**
 
@@ -293,7 +293,8 @@ AgentLoop 是已接受 Run 的执行者，独占每个 Run 的在途调用。模
 3. `done` 失败或取消时抛出异常，结果都改为 `cleanup-failure`。这类失败还会记录下来，在组件卸载时抛出，因此 `harness.close()` 会以失败结束。
 4. Run 没有处于取消中，而这个 Run 是因依赖撤销被取消的，结果改为 `dependency-unavailable`。
 5. Bash 非零退出码是工具观察，会交给下一次模型调用；工具执行器故障按固定类别结算。模型与 Bash 调用次数只记录进度，不设固定次数上限，循环持续到最终回答、取消或失败；最终文本最多 65536 字节，累计 Bash 输出最多 131072 字节。
-6. 最后交给 SQLite 状态写入终态与事件。
+6. 最后交给 SQLite 状态原子写入终态、执行阶段与事件；成功时还创建节点并写入结果引用。取消先提交则不会创建成功节点，成功先提交则后续取消返回 completed。
+7. 状态读取或写入失败停止推进，取消并等待已取得的调用；可恢复写入时以 `failed` / `state-write-failure` 结算（取消请求不掩盖存储故障），已知清理失败仍优先保留；持续失败则等待者收到持久化错误。失败执行登记保留至组件退出，禁止重复 start 重放；重启只结算 interrupted。
 
 **取消原因。**
 
@@ -303,7 +304,9 @@ AgentLoop 是已接受 Run 的执行者，独占每个 Run 的在途调用。模
 | `owner-disposed` | `harness.close()` 发起应用根关闭 | 同上 |
 | `dependency-unavailable` | 依赖被撤销，或 AgentLoop 自身被卸载 | `failed`，类别为 `dependency-unavailable` |
 
-**清理。** 卸载时停止接收，以 `dependency-unavailable` 取消所有仍在执行的 Run，并等它们全部结算。
+**执行所有权。** 首次异步读取前按 runId 登记唯一启动/完成任务，重复 start 共用登记；启动期间的取消被保留，在发起下一调用前检查。wait 不因尚无调用句柄而提前返回。
+
+**清理。** 卸载时停止接收，以 `dependency-unavailable` 取消所有仍在启动或执行的 Run，并等它们全部退出和结算。
 
 ### Run
 
@@ -313,25 +316,25 @@ Run 组件是 Run 的准入与对外控制入口。它决定一个请求能否�
 
 **服务接口**（`RunPort`）：
 
-- `startRun({ sessionId, input, idempotencyKey })`：按下面的准入步骤接受 Run 并启动执行。输入中不能携带模型选择。
-- `getRun(id)`、`listRuns(sessionId)`：查询 Run 和会话历史。
-- `getRunEvents(id)`：按序读取 Run 的持久事件；未知 Run 返回 `undefined`。
+- `startRun({ sessionId, parentNodeId, input, idempotencyKey })`：按下面的准入步骤接受 Run 并启动执行。输入中不能携带模型选择。
+- `getRun(id)`、`listRuns(sessionId, {active?, parentNodeId?})`、`getRunByKey(sessionId, key)`：按 ID、会话/起点或幂等键查询执行记录。
+- `getRunEvents(id, afterSeq?)`：按序增量读取 Run 的持久事件；未知 Run 返回 `undefined`。
 - `cancelRun(id)`：以 `user-requested` 取消并返回当前状态。
-- `waitRun(id)`：等待终态。
+- `waitRun(id, signal?)`：等待准入交接、启动、资源实际退出和终态。信号仅取消等待，不取消执行。
 
 **准入步骤。**
 
 1. 校验输入。
-2. 按 Session 的幂等键先用 `findAcceptedRun` 检查重复请求。同一幂等键会原样返回最初的 Run，即使之后配置或 Prompt 绑定已经改变，也不重新解析配置、不发起第二次调用。
+2. 按 Session 的幂等键先用 `findAcceptedRun` 检查重复请求。同一幂等键且输入、父节点一致时返回最初的 Run，即使之后配置或 Prompt 绑定已经改变，也不重新解析配置、不发起第二次调用。
 3. 通过 Session 检查项目目录可用，读取全局 Agent 定义，调用 `resolveRunPrompts` 固定 Prompt 快照，调用 `llm.prepare` 固定调用计划。
 4. 用 `acceptRun` 原子地写入 Run 和快照。
 5. 交给 `AgentLoop.start` 执行。
 
-准入按 Session 排队，SQLite 接受事务内再次检查同键和活动 Run。因此同一 Session 同时只会有一个活动 Run；同一项目的不同 Session 以及不同项目可以并行。
+准入按 `(sessionId, idempotencyKey)` 协调，同键冲突立即拒绝，不同键独立准备。同一 Session、同父节点可同时运行；SQLite 仅在短暂提交时串行，不持有 Session 或父节点执行锁。Run 在接受事务前登记交接任务，覆盖“数据库已可读、AgentLoop 尚未接管”的等待窗口。
 
-**对外可见的 Run** 包含 ID、Session、输入、幂等键、状态、时间、`promptVersionIds` 和 `llmSnapshot`（profile ID 和配置版本），终态时还有 `output`，或 `error` 与 `errorCategory`。Prompt 内容、模型参数和凭据都不会出现在对外的 Run 中。状态有 `running`、`cancelling`、`completed`、`cancelled`、`failed` 和异常退出后恢复的 `interrupted`。
+**对外可见的 Run** 包含 ID、Session、输入、幂等键、历史定位 `history`、`contextVersion`、递增 `revision`、状态、时间、`promptVersionIds` 和 `llmSnapshot`（profile ID 和配置版本），成功时还有 `output` 与 `resultNodeId`，否则可能有 `error` 与 `errorCategory`。Prompt 内容、模型参数和凭据都不会出现在对外的 Run 中。状态有 `running`、`cancelling`、`completed`、`cancelled`、`failed` 和异常退出后恢复的 `interrupted`。
 
-**清理。** 卸载时停止接收，逐个取消自己接受的 Run 并等待全部结算。取消原因由关闭方式决定：应用根正在关闭时用 `owner-disposed`，Run 因为依赖被撤销而卸载时用 `dependency-unavailable`。
+**清理。** 卸载时停止接收，立即取消已接管的启动/执行任务，同时等待准入与交接；关停期间刚提交的 Run 在首次调用前取消，最后等待全部结算。取消原因由关闭方式决定：应用根正在关闭时用 `owner-disposed`，Run 因为依赖被撤销而卸载时用 `dependency-unavailable`。
 
 ## 自包含 API Key 服务组件
 
@@ -349,9 +352,13 @@ Run 组件是 Run 的准入与对外控制入口。它决定一个请求能否�
 
 ## 本机 Web 前端组件
 
-**服务** `web.frontend`（本机访问 URL）· **注入** `harness.projects`、`harness.sessions`、`harness.runs`、`credentials.settings`、`host.directory-picker` · **创建** `createWebFrontendComponent(harness.listAgents(), port?)`
+**服务** `web.frontend`（本机访问 URL）· **注入** `harness.projects`、`harness.sessions`、`harness.runs`、`harness.prompts`、`harness.agent-prompts`、`credentials.settings`、`host.directory-picker` · **创建** `createWebFrontendComponent(harness.listAgents(), port?)`
 
-本机宿主在 `createHarness` 后将它安装到同一个应用根，并传入已校验的 Agent ID 列表。组件持有只监听 `127.0.0.1` 的 HTTP 服务，提供静态页面和同源 `/api/v1`；HTTP 层构造公开的 Agent ID、Session、Run、Run 事件视图和已注册凭据状态。`GET /api/v1/runs/:id/events` 通过 Run 服务读取有序事件，输出每个 stdout、stderr 最多 2048 UTF-8 字节的摘要；页面展示 Bash 命令、状态和退出码。浏览器脚本是可替换的薄客户端，不导入 Nya 或 Harness。组件通过本轮 `deps` 调用 Projects、Session、Run、目录选择器和通用凭据设置服务，不缓存跨重启的服务引用。
+本机宿主在 `createHarness` 后将它安装到同一个应用根，并传入已校验的 Agent ID 列表。组件持有只监听 `127.0.0.1` 的 HTTP 服务，提供静态页面和同源 `/api/v1`；HTTP 层构造公开的 Agent ID、Session、Run、Run 事件视图和已注册凭据状态。`GET /api/v1/runs/:id/events` 通过 Run 服务读取有序事件，输出每个 stdout、stderr 最多 2048 UTF-8 字节的摘要；页面展示 Bash 命令、状态和退出码。浏览器脚本是可替换的薄客户端，不导入 Nya 或 Harness。组件通过本轮 `deps` 调用 Projects、Session、Run、Prompt、Agent Prompt、目录选择器和通用凭据设置服务，不缓存跨重启的服务引用。
+
+Prompt 管理以宿主固定的 `local-web-user` 身份调用文档与绑定服务，不接受浏览器声明身份。页面可编辑草稿、发布版本、预览历史并应用到 Agent；编辑与发布携带修订号检查，绑定继续由 Agent Prompt 校验。普通管理操作不重启组件。关闭监听器时等待已接收的写入请求完成，再由 Nya 关闭 Prompt 及绑定服务；管理能力直接复用现有组件，没有在 Web 中另存 Prompt 或拼装 Run 消息。
+
+浏览器工作区支持最多四个跨项目 Session 面板。布局纯函数、工作区管理、会话控制器与面板视图只是前端模块，不是 Nya 组件。每个打开的 Session 独立持有读取 AbortController、串行轮询和视图监听器；移动时复用，关闭/替换时释放。已发出的提交/取消写入保持原对象归属，关闭面板不取消 Run。会话树查看节点、关注 Run 与活动 Run 集合分别管理；显式父节点与待提交键进入请求，布局和查看位置仅保存在浏览器标签页。新增脚本经静态资源白名单提供，后端服务契约和依赖图不变。
 
 HTTP 监听器由组件的 Effect 清理：卸载时停止接收请求，取消在途目录选择并等待服务关闭，再由 Nya 清理其依赖。依赖撤销时，Web 组件随之停下；依赖恢复后，组件在原监听端口重新提供服务。进程的 SIGINT/SIGTERM 由 `src/web/serve.ts` 接收，并通过 `harness.close()` 卸载整个根。协议、同源限制与刷新恢复见 [薄 Web 客户端设计](./web-client-design.md)。
 
@@ -362,7 +369,7 @@ HTTP 监听器由组件的 Effect 清理：卸载时停止接收请求，取消�
 3. **Run** 从 **Projects** 检查会话目录，再从启动时传入的 Agent 定义读取配置，从 **Agent Prompt** 取得 Prompt 快照，再请所选的大模型 API 组件通过 `llm.prepare` 固定调用计划。这一步不读取凭据。
 4. **Run** 通过**SQLite 状态**原子地接受 Run，然后调用 **AgentLoop**。
 5. **AgentLoop** 组装消息并调用 `llm.call`；DeepSeek 在本 Run 首次调用时读取 Key，映射消息和 Bash 定义并发送原生请求。OpenAI Responses 保持一次纯文本调用。
-6. DeepSeek 可返回最终回答或工具请求。**AgentLoop** 整批校验后逐项执行 Bash，将助手请求和对应观察回填给模型，直到最终回答或固定失败；每次模型、Bash 启动和观察写入**SQLite 状态**，成功时这一轮对话追加到 Session。
+6. DeepSeek 可返回最终回答或工具请求。**AgentLoop** 整批校验后逐项执行 Bash，将助手请求和对应观察回填给模型，直到最终回答或固定失败；每次模型、Bash 启动和观察写入**SQLite 状态**，成功时在 Run 固定父节点下创建完整轮次节点，与终态一起原子提交。
 7. `harness.waitRun` 返回终态。
 
 ## 撤销与关闭时发生什么

@@ -58,7 +58,7 @@ const request = (id, command) => ({ id, name: 'bash', arguments: { command } })
 test('one Bash result is persisted, returned to the model, and followed by a final answer', async () => {
   const f = await fixture()
   try {
-    const run = await f.harness.startRun({ sessionId: f.session.id, input: 'Inspect this project', idempotencyKey: 'one' })
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Inspect this project', idempotencyKey: 'one' })
     assert.equal(f.llm.calls[0].input.tools[0].name, 'bash')
     f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [request('tool-1', 'printf hello')] })
     f.llm.calls[0].done.resolve()
@@ -78,7 +78,7 @@ test('one Bash result is persisted, returned to the model, and followed by a fin
     assert.deepEqual((await f.state.getRunEvents(run.id)).map(event => event.kind), [
       'model-started', 'model-tool-calls', 'bash-started', 'bash-observed', 'model-started', 'terminal',
     ])
-    assert.deepEqual((await f.harness.getSession(f.session.id)).turns,
+    assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes.map(({ input, output }) => ({ input, output })),
       [{ input: 'Inspect this project', output: 'The command printed hello.' }])
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
@@ -86,7 +86,7 @@ test('one Bash result is persisted, returned to the model, and followed by a fin
 test('a Bash batch executes serially and returns nonzero exit codes as observations', async () => {
   const f = await fixture()
   try {
-    const run = await f.harness.startRun({ sessionId: f.session.id, input: 'Run both', idempotencyKey: 'batch' })
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Run both', idempotencyKey: 'batch' })
     f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
       request('first', 'printf ready > first-started; while [ ! -f release ]; do sleep 0.02; done; exit 7'),
       request('second', 'printf ready > second-started; printf second'),
@@ -115,7 +115,7 @@ test('a Bash batch executes serially and returns nonzero exit codes as observati
 test('one invalid request rejects the complete batch before any Bash command starts', async () => {
   const f = await fixture()
   try {
-    const run = await f.harness.startRun({ sessionId: f.session.id, input: 'Invalid batch', idempotencyKey: 'invalid' })
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Invalid batch', idempotencyKey: 'invalid' })
     f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
       request('valid', 'printf bad > should-not-exist'),
       { id: 'invalid', name: 'other', arguments: { command: 'pwd' } },
@@ -132,7 +132,7 @@ test('one invalid request rejects the complete batch before any Bash command sta
 test('a Run completes multiple batches beyond the former model and Bash call limits', async () => {
   const f = await fixture()
   try {
-    const run = await f.harness.startRun({ sessionId: f.session.id, input: 'Finish all steps', idempotencyKey: 'many-steps' })
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Finish all steps', idempotencyKey: 'many-steps' })
     for (let step = 0; step < 6; step++) {
       f.llm.calls[step].result.resolve({ kind: 'tool-calls', calls: Array.from({ length: step === 0 ? 5 : 1 }, (_, index) =>
         request(`call-${step}-${index}`, `printf 'step-${step}-${index}'`)) })
@@ -156,7 +156,7 @@ test('a Run completes multiple batches beyond the former model and Bash call lim
 test('the cumulative Bash output limit stops the Run before another model call', async () => {
   const f = await fixture()
   try {
-    const run = await f.harness.startRun({ sessionId: f.session.id, input: 'Large output', idempotencyKey: 'output-limit' })
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Large output', idempotencyKey: 'output-limit' })
     f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [1, 2, 3].map(number =>
       request(`call-${number}`, "printf '%*s' 65536 '' | tr ' ' a")) })
     f.llm.calls[0].done.resolve()
@@ -171,20 +171,20 @@ test('the cumulative Bash output limit stops the Run before another model call',
 test('an oversized final answer fails without adding a Session turn', async () => {
   const f = await fixture()
   try {
-    const run = await f.harness.startRun({ sessionId: f.session.id, input: 'Too long', idempotencyKey: 'final-limit' })
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Too long', idempotencyKey: 'final-limit' })
     f.llm.calls[0].result.resolve('x'.repeat(65_537))
     f.llm.calls[0].done.resolve()
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'limit-exceeded')
-    assert.deepEqual((await f.harness.getSession(f.session.id)).turns, [])
+    assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes.map(({ input, output }) => ({ input, output })), [])
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
 test('cancelling an active Bash command waits for exit and starts no subsequent tool', async () => {
   const f = await fixture()
   try {
-    const run = await f.harness.startRun({ sessionId: f.session.id, input: 'Cancel', idempotencyKey: 'cancel' })
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Cancel', idempotencyKey: 'cancel' })
     f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
       request('first', "trap 'sleep 0.3; exit' TERM; printf ready > started; while :; do sleep 1; done"),
       request('second', 'printf bad > should-not-exist'),
@@ -206,7 +206,7 @@ test('cancelling an active Bash command waits for exit and starts no subsequent 
 test('closing Harness waits for an active Bash command to exit', async () => {
   const f = await fixture()
   try {
-    const run = await f.harness.startRun({ sessionId: f.session.id, input: 'Close', idempotencyKey: 'close-bash' })
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Close', idempotencyKey: 'close-bash' })
     const waiting = f.harness.waitRun(run.id)
     f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
       request('tool-1', "trap 'sleep 0.25; printf stopped > stopped; exit' TERM; printf ready > started; while :; do sleep 1; done"),
@@ -229,7 +229,7 @@ test('cancelling while the first model step starts cannot settle ahead of its ca
   const f = await fixture()
   try {
     const accepted = await f.state.acceptRun('starting-run', {
-      sessionId: f.session.id, input: 'Cancel at startup', idempotencyKey: 'starting',
+      sessionId: f.session.id, parentNodeId: null, input: 'Cancel at startup', idempotencyKey: 'starting',
     }, 'now', [], f.root.get(llmServiceKey).prepare('default'))
     assert.equal(accepted.created, true)
     const originalGetRun = f.state.getRun.bind(f.state)
@@ -261,7 +261,7 @@ test('cancelling before the first Run read finishes still reaches a terminal sta
   const release = deferred()
   try {
     await f.state.acceptRun('early-cancel-run', {
-      sessionId: f.session.id, input: 'Cancel before read', idempotencyKey: 'early-cancel',
+      sessionId: f.session.id, parentNodeId: null, input: 'Cancel before read', idempotencyKey: 'early-cancel',
     }, 'now', [], f.root.get(llmServiceKey).prepare('default'))
     const originalGetRun = f.state.getRun.bind(f.state)
     let held = false
@@ -310,7 +310,7 @@ test('a persisted Bash intent becomes interrupted on restart and is never replay
     const project = await first.projects.openProject(directory)
     const session = await first.state.createSession('session-1', project.id, 'assistant', 'now')
     const accepted = await first.state.acceptRun('run-1', {
-      sessionId: session.id, input: 'Maybe execute', idempotencyKey: 'once',
+      sessionId: session.id, parentNodeId: null, input: 'Maybe execute', idempotencyKey: 'once',
     }, 'now', [], { snapshot: { profileId: 'default', configVersion: 'v1' } })
     assert.equal(accepted.created, true)
     await first.state.recordRunEvent('run-1', { kind: 'model-started' }, 'now')
@@ -328,7 +328,7 @@ test('a persisted Bash intent becomes interrupted on restart and is never replay
       'model-started', 'model-tool-calls', 'bash-started', 'interrupted',
     ])
     assert.equal((await import('node:fs')).readFileSync(join(directory, 'marker'), 'utf8'), 'already-executed')
-    assert.equal((await second.state.findAcceptedRun({ sessionId: session.id,
+    assert.equal((await second.state.findAcceptedRun({ sessionId: session.id, parentNodeId: null,
       input: 'Maybe execute', idempotencyKey: 'once' })).id, 'run-1')
   } finally {
     await second?.root.fiber.dispose()
@@ -418,7 +418,7 @@ test('revoking Bash waits for its done and prevents another model step', async (
     const project = await root.get(projectServiceKey).openProject(directory)
     const session = await root.get(sessionServiceKey).createSession(project.id, 'assistant')
     const runs = root.get(runServiceKey)
-    const run = await runs.startRun({ sessionId: session.id, input: 'Use Bash', idempotencyKey: 'one' })
+    const run = await runs.startRun({ sessionId: session.id, parentNodeId: null, input: 'Use Bash', idempotencyKey: 'one' })
     const waiting = runs.waitRun(run.id)
     llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [request('tool-1', 'printf hello')] })
     llm.calls[0].done.resolve()

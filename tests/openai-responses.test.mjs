@@ -168,13 +168,13 @@ test('completes a Harness Run and keeps the native response and credential out o
   const f = await harnessFixture({ baseUrl: server.baseUrl })
   try {
     const session = await createSession(f.harness)
-    const run = await f.harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'one' })
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'one' })
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'Hello from Responses')
     assert.deepEqual(terminal.llmSnapshot, { profileId: 'default', configVersion: 'v1' })
     assert.equal(JSON.stringify(terminal).includes('local-key'), false)
-    assert.deepEqual((await f.harness.getSession(session.id)).turns, [{ input: 'Hello', output: 'Hello from Responses' }])
+    assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes.map(({ input, output }) => ({ input, output })), [{ input: 'Hello', output: 'Hello from Responses' }])
   } finally { await f.close(); await server.close() }
 })
 
@@ -251,7 +251,7 @@ test('key rotation and deletion apply to later calls without component restart',
   try {
     const start = async key => {
       const session = await createSession(f.harness)
-      return await f.harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: key })
+      return await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: key })
     }
     const first = await start('one')
     for (let i = 0; i < 100 && !requests[0]; i++) await new Promise(resolve => setImmediate(resolve))

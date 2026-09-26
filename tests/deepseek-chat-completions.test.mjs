@@ -116,7 +116,7 @@ async function serviceReady(root, name) {
 
 const start = async (harness, idempotencyKey = 'one') => {
   const session = await createSession(harness)
-  return await harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey })
+  return await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey })
 }
 
 async function createSession(harness) {
@@ -172,7 +172,7 @@ test('DeepSeek tool calls execute Bash, return a linked tool message, and reuse 
     assert.equal(f.root.get(llmServiceKey).supportsTools, true)
     const project = await f.harness.openProject(f.directory)
     const session = await f.harness.createSession(project.id, 'assistant')
-    const run = await f.harness.startRun({ sessionId: session.id, input: 'Run Bash', idempotencyKey: 'tools' })
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Run Bash', idempotencyKey: 'tools' })
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'Bash printed hello.')
@@ -194,7 +194,7 @@ test('DeepSeek tool calls execute Bash, return a linked tool message, and reuse 
     assert.deepEqual((await f.harness.getRunEvents(run.id)).map(event => event.kind), [
       'model-started', 'model-tool-calls', 'bash-started', 'bash-observed', 'model-started', 'terminal',
     ])
-    assert.deepEqual((await f.harness.getSession(session.id)).turns,
+    assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes.map(({ input, output }) => ({ input, output })),
       [{ input: 'Run Bash', output: 'Bash printed hello.' }])
   } finally { await f.close(); await server.close() }
 })
@@ -221,7 +221,7 @@ test('a long DeepSeek Bash heredoc writes the complete file and finishes the Run
   try {
     const project = await f.harness.openProject(f.directory)
     const session = await f.harness.createSession(project.id, 'assistant')
-    const run = await f.harness.startRun({ sessionId: session.id, input: 'Write a long HTML file', idempotencyKey: 'long-file' })
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Write a long HTML file', idempotencyKey: 'long-file' })
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'File saved.')
@@ -249,7 +249,7 @@ test('one malformed DeepSeek function argument rejects the entire batch before B
   try {
     const project = await f.harness.openProject(f.directory)
     const session = await f.harness.createSession(project.id, 'assistant')
-    const run = await f.harness.startRun({ sessionId: session.id, input: 'Invalid', idempotencyKey: 'invalid' })
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Invalid', idempotencyKey: 'invalid' })
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'invalid-tool-request')
@@ -271,7 +271,7 @@ test('a Harness Run completes through DeepSeek without exposing credentials', as
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'Hello from DeepSeek')
     assert.equal(JSON.stringify(terminal).includes('local-key'), false)
-    assert.deepEqual((await f.harness.getSession(run.sessionId)).turns, [{ input: 'Hello', output: 'Hello from DeepSeek' }])
+    assert.deepEqual((await f.harness.listNodes(run.sessionId, null)).nodes.map(({ input, output }) => ({ input, output })), [{ input: 'Hello', output: 'Hello from DeepSeek' }])
   } finally { await f.close(); await server.close() }
 })
 
@@ -408,7 +408,7 @@ test('timeout fails the result first, aborts the request, and waits for the tran
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'timeout')
     assert.equal(terminal.error, 'model call timed out')
-    assert.deepEqual((await f.harness.getSession(run.sessionId)).turns, [])
+    assert.deepEqual((await f.harness.listNodes(run.sessionId, null)).nodes.map(({ input, output }) => ({ input, output })), [])
   } finally { held.release(); await f.close() }
 })
 
@@ -425,7 +425,7 @@ test('cancelling and closing abort the request and settle only after it exits', 
     const closing = f.harness.close().then(() => { closed = true })
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(closed, false)
-    await assert.rejects(async () => f.harness.startRun({ sessionId: run.sessionId, input: 'Late', idempotencyKey: 'late' }), /closing/)
+    await assert.rejects(async () => f.harness.startRun({ sessionId: run.sessionId, parentNodeId: null, input: 'Late', idempotencyKey: 'late' }), /closing/)
     held.release()
     assert.equal((await waiting).status, 'cancelled')
     await closing
@@ -457,7 +457,7 @@ test('revoking the API component fails accepted Runs and a replacement serves ne
   let server
   try {
     const session = await createSession(f.harness)
-    const request = { sessionId: session.id, input: 'Hello', idempotencyKey: 'first' }
+    const request = { sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'first' }
     const run = await f.harness.startRun(request)
     assert.equal((await requestAt(held, 0)).init.headers.Authorization, 'Bearer first-key')
     const waiting = f.harness.waitRun(run.id)
@@ -525,18 +525,18 @@ test('rotation and deletion affect only calls whose credential read starts after
   const f = await harnessFixture({ fetch }, config(), 'first-key')
   try {
     const session = await createSession(f.harness)
-    const run = async key => f.harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: key })
+    const run = async key => f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: key })
     const first = await run('first')
     for (let i = 0; i < 100 && !requests[0]; i++) await new Promise(resolve => setImmediate(resolve))
     assert.equal(requests[0].authorization, 'Bearer first-key')
     f.credentials.secrets.set(deepSeekCredentialId, 'second-key')
     const secondSession = await createSession(f.harness)
-    const secondAttempt = await f.harness.startRun({ sessionId: secondSession.id, input: 'Hello', idempotencyKey: 'second' })
+    const secondAttempt = await f.harness.startRun({ sessionId: secondSession.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'second' })
     for (let i = 0; i < 100 && !requests[1]; i++) await new Promise(resolve => setImmediate(resolve))
     assert.equal(requests[1].authorization, 'Bearer second-key')
     f.credentials.secrets.delete(deepSeekCredentialId)
     const missingSession = await createSession(f.harness)
-    const missing = await f.harness.startRun({ sessionId: missingSession.id, input: 'Hello', idempotencyKey: 'third' })
+    const missing = await f.harness.startRun({ sessionId: missingSession.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'third' })
     const terminal = await f.harness.waitRun(missing.id)
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'credential-missing')
@@ -613,7 +613,7 @@ test('revoking the credential source stops the API component and its Runs until 
     await f.root.installComponent(replacement.component())
     await serviceReady(f.root, runServiceKey)
     assert.equal(f.api.state, FiberState.ACTIVE)
-    const fresh = await f.harness.startRun({ sessionId: run.sessionId, input: 'Again', idempotencyKey: 'again' })
+    const fresh = await f.harness.startRun({ sessionId: run.sessionId, parentNodeId: null, input: 'Again', idempotencyKey: 'again' })
     assert.equal((await requestAt(held, 1)).init.headers.Authorization, 'Bearer replacement-key')
     held.release()
     await f.harness.waitRun(fresh.id)

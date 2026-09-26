@@ -1,0 +1,15 @@
+{
+  "turns": [
+    {"input":"Duplicate","output":"Same answer"},
+    {"input":"Duplicate","output":"Same answer"},
+    {"input":"Final input","output":"Last answer"}
+  ],
+  "runs": [
+    {"id":"z-completed","input":"Duplicate","status":"completed","output":"Same answer"},
+    {"id":"a-completed","input":"Duplicate","status":"completed","output":"Same answer"},
+    {"id":"failed","input":"Duplicate","status":"failed","error":"model request failed","category":"transport-failure"},
+    {"id":"cancelled","input":"Duplicate","status":"cancelled"},
+    {"id":"running","input":"Maybe executed","status":"running"},
+    {"id":"cancelling","input":"Maybe executed","status":"cancelling"}
+  ]
+}

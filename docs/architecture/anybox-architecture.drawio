@@ -1,0 +1,324 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="Electron" agent="Codex" version="31.4.4" type="device">
+  <diagram id="overview" name="01 · 组件架构">
+    <mxGraphModel dx="1560" dy="1410" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1560" pageHeight="1410" math="0" shadow="0" background="#FFFFFF">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="canvas" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=none;strokeWidth=1.2;locked=1;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="1560" height="1410" as="geometry" />
+        </mxCell>
+        <mxCell id="eyebrow" value="ANYBOX V2  /  ARCHITECTURE" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=13;fontColor=#526581;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="34" width="1100" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="title" value="单一根上的 Agent Harness" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=34;fontColor=#172B4D;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="72" width="1100" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="page-index" value="01 / 02" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=right;fontSize=18;fontColor=#526581;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="70" width="140" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="browser" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#172B4D;&quot;&gt;Web 客户端&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;会话树 · 多 Run · 最多四分屏&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F3F6FB;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="80" y="155" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="assembly" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#172B4D;&quot;&gt;应用装配&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;src/web/serve.ts → createHarness(root)&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;安装组件；校验只读 AgentDefinition&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F3F6FB;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="440" y="155" width="660" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="remote" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#172B4D;&quot;&gt;DeepSeek API&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;外部模型服务&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F3F6FB;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="155" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="context" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F8FAFD;strokeColor=#A9BAD1;strokeWidth=1.2;container=1;collapsible=0;recursiveResize=0;rounded=1;arcSize=3;" vertex="1" parent="1">
+          <mxGeometry x="40" y="290" width="1480" height="920" as="geometry" />
+        </mxCell>
+        <mxCell id="context-title" value="单一 Nya 根 Context" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=23;fontColor=#172B4D;fontStyle=1;" vertex="1" parent="context">
+          <mxGeometry x="40" y="18" width="1010" height="31" as="geometry" />
+        </mxCell>
+        <mxCell id="context-subtitle" value="Nya 管理依赖就绪、重启与清理；项目是数据归属边界。" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=15;fontColor=#526581;fontStyle=0;" vertex="1" parent="context">
+          <mxGeometry x="40" y="57" width="1020" height="24" as="geometry" />
+        </mxCell>
+        <object id="web" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;Web Frontend&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;web.frontend&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;本机 HTTP API · 静态页面&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 Sessions · Runs · Projects&lt;br&gt;Prompts · Agent Prompt · Keys · Picker&lt;/div&gt;&lt;/div&gt;" source_file="src/web/component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="40" y="100" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="run" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;Run&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.runs&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;准入 · 幂等 · 快照 · 取消 / 等待&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 Projects · State · Agent Prompt&lt;br&gt;LLM · AgentLoop&lt;/div&gt;&lt;/div&gt;" source_file="src/run/component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="400" y="100" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="loop" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;AgentLoop&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.agent-loop&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;模型 / 工具循环；独占在途调用&lt;br&gt;等待 result 与资源退出 done&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 State · LLM · Bash&lt;/div&gt;&lt;/div&gt;" source_file="src/run/agent-loop-component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="760" y="100" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="llm" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;LLM&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;llm&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;DeepSeek Chat Completions&lt;br&gt;原生协议 · HTTP · 超时 / 取消&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 credentials.read&lt;/div&gt;&lt;/div&gt;" source_file="src/llm/deepseek-chat-completions/component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="1120" y="100" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="sessions" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;Session&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.sessions&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;会话元数据 · 节点与祖先路径&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 Projects · State&lt;/div&gt;&lt;/div&gt;" source_file="src/run/session-component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="40" y="330" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="agentPrompt" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#7853AA;&quot;&gt;Agent Prompt&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.agent-prompts&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;发布版本绑定 · Run Prompt 快照&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 Prompts · Local SQLite&lt;/div&gt;&lt;/div&gt;" source_file="src/agent/prompt-binding-component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="400" y="330" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="bash" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#187C72;&quot;&gt;Bash&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;tools.bash&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;项目 cwd · 子进程 · 有界输出&lt;br&gt;取消并等待进程组退出&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 Projects&lt;/div&gt;&lt;/div&gt;" source_file="src/tool/bash-component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="760" y="330" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="keys" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#A66A16;&quot;&gt;API Key 服务&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;credentials.read / credentials.settings&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;凭据注册 · 串行读写删&lt;br&gt;packages/api-key-manager&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;无注入依赖；密钥存入系统凭据库&lt;/div&gt;&lt;/div&gt;" source_file="src/credentials/settings.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="1120" y="330" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="projects" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#172B4D;&quot;&gt;Projects&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.projects&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;目录规范化 · 身份与可用性&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 Local SQLite&lt;/div&gt;&lt;/div&gt;" source_file="src/project/component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="40" y="560" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="prompts" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#7853AA;&quot;&gt;Prompt&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.prompts&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;草稿 · 发布版本 · 内容存储&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 Local SQLite&lt;/div&gt;&lt;/div&gt;" source_file="src/prompt/component.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="400" y="560" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="state" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#172B4D;&quot;&gt;SQLite State&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.state&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;Session · Nodes · Runs · Events&lt;br&gt;事务结算；异常恢复为 interrupted&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;依赖 Local SQLite · Projects&lt;/div&gt;&lt;/div&gt;" source_file="src/run/sqlite-state.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="760" y="560" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="picker" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#187C72;&quot;&gt;目录选择器&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;host.directory-picker&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;macOS 原生目录选择窗口&lt;br&gt;持有对话框进程并等待退出&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:10px;&quot;&gt;无注入依赖&lt;/div&gt;&lt;/div&gt;" source_file="src/web/directory-picker.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="1120" y="560" width="300" height="170" as="geometry" />
+          </mxCell>
+        </object>
+        <object id="storage" label="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#172B4D;&quot;&gt;Local SQLite&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;local-storage&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;单连接 · 排他所有权 · 串行事务队列；各领域组件自行登记 migrate(domain, migrations)&lt;/div&gt;&lt;/div&gt;" source_file="src/storage/sqlite.ts">
+          <mxCell style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#EAF0F8;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="context">
+            <mxGeometry x="40" y="790" width="1380" height="100" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="database" value="data/harness.sqlite" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#EDF2FA;strokeColor=#CDD7E4;strokeWidth=1.2;shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;align=center;fontSize=19;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="620" y="1245" width="300" height="74" as="geometry" />
+        </mxCell>
+        <mxCell id="keyring" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#A66A16;&quot;&gt;系统凭据库&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;本机：macOS Keychain&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FBF4E8;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="1240" width="300" height="86" as="geometry" />
+        </mxCell>
+        <mxCell id="config-note" value="AgentDefinition 是启动时只读配置，传给&lt;br&gt;Session / Agent Prompt / Run，不是组件。" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=15;fontColor=#526581;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1242" width="480" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="连线展示主调用与存储路径；卡片列出完整 inject 依赖。" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=14;fontColor=#526581;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1345" width="1120" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="snapshot" value="2026-09-26 · 当前工作区（含未提交变更）" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=12;fontColor=#526581;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="80" y="1376" width="1120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-1" value="HTTP /api/v1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="browser" target="web">
+          <mxGeometry relative="1" x="-0.65" as="geometry">
+            <Array as="points">
+              <mxPoint x="230" y="275" />
+              <mxPoint x="60" y="275" />
+              <mxPoint x="60" y="475" />
+            </Array>
+            <mxPoint x="15" y="-12" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-2" value="运行控制" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="web" target="run">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="0" y="-15" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-3" value="启动 / 取消" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="run" target="loop">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="0" y="-15" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-4" value="call" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="loop" target="llm">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="0" y="-15" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="web" target="sessions">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#7853AA;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#7853AA;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="run" target="agentPrompt">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-7" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#187C72;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#187C72;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="loop" target="bash">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-8" value="read" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#A66A16;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#A66A16;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="llm" target="keys">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="23" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-9" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#9BABBF;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#9BABBF;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="sessions" target="projects">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-10" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#7853AA;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#7853AA;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="agentPrompt" target="prompts">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-11" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.72;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="loop" target="state">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="1090" y="222.39999999999998" />
+              <mxPoint x="1090" y="645" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-12" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#9BABBF;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#9BABBF;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.74;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="agentPrompt" target="storage">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="730" y="455.79999999999995" />
+              <mxPoint x="730" y="770" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-13" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#9BABBF;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#9BABBF;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.10869565217391304;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="projects" target="storage">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-14" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#9BABBF;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#9BABBF;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.3695652173913043;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="prompts" target="storage">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-15" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#9BABBF;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#9BABBF;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.6304347826086957;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="context" source="state" target="storage">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-16" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="llm" target="remote">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="34" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-17" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#9BABBF;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#9BABBF;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="storage" target="database">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-18" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#A66A16;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#A66A16;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="keys" target="keyring">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="1490" y="705" />
+              <mxPoint x="1490" y="1283" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="execution" name="02 · Run 执行与结算">
+    <mxGraphModel dx="1560" dy="1180" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1560" pageHeight="1180" math="0" shadow="0" background="#FFFFFF">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="canvas" value="" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FFFFFF;strokeColor=none;strokeWidth=1.2;locked=1;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="1560" height="1180" as="geometry" />
+        </mxCell>
+        <mxCell id="eyebrow" value="ANYBOX V2  /  RUNTIME" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=13;fontColor=#526581;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="34" width="1100" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="title" value="一次 Run 如何执行与结算" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=34;fontColor=#172B4D;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="72" width="1120" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="page-index" value="02 / 02" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=right;fontSize=18;fontColor=#526581;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="70" width="140" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="同父节点可并发；每个 Run 内的模型与工具调用按顺序推进。" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=16;fontColor=#526581;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="70" y="128" width="1300" height="26" as="geometry" />
+        </mxCell>
+        <mxCell id="request" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;01  显式起点&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;startRun(input)&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;sessionId · parentNodeId&lt;br&gt;input · idempotencyKey&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F2F6FF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="70" y="210" width="270" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="admission" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;02  Run 准入&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.runs&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;先查幂等键，再校验项目 / Agent&lt;br&gt;固定 Prompt 快照和模型计划&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F2F6FF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="390" y="210" width="290" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="accepted" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;03  接受事务&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.state&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;验证起点与祖先路径&lt;br&gt;写 Run 与快照；此时不建节点&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F2F6FF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="730" y="210" width="290" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="contextBuild" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;04  组装上下文&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.agent-loop&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;Prompt + 起点的祖先对话&lt;br&gt;+ 本次输入；不读取兄弟分支&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F2F6FF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="210" width="390" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="existing" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#526581;&quot;&gt;返回原 Run&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;相同 Session / 键 / 输入 / 父节点&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;输入或父节点不同则报冲突&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F5F7FA;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="390" y="420" width="290" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="model" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;05  模型调用&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;llm.call()&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;首次调用读取一次凭据&lt;br&gt;取得 result，并等待 done 退出&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F2F6FF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="445" width="390" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="reply" value="回复类型" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F2F6FF;strokeColor=#8BA8E9;strokeWidth=1.2;shape=rhombus;perimeter=rhombusPerimeter;align=center;fontSize=18;fontStyle=1;spacing=6;" vertex="1" parent="1">
+          <mxGeometry x="1170" y="655" width="210" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="tool" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#187C72;&quot;&gt;06  执行 Bash&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;tools.bash&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;逐个执行已校验的工具请求&lt;br&gt;记录观察；等待 result + done&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F0F8F6;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="730" y="635" width="290" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="failure" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#A66A16;&quot;&gt;终态：未生成节点&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.state&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;failed / cancelled / interrupted&lt;br&gt;保存 Run 终态和事件&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#FCF6EC;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="730" y="905" width="290" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="commit" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#356AE6;&quot;&gt;07  成功原子结算&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#526581;margin-top:3px;&quot;&gt;harness.state → Local SQLite&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;completed + 完整对话节点&lt;br&gt;+ resultNodeId + 终态事件&lt;br&gt;父节点固定为准入时的起点&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#ECF5EF;strokeColor=#CDD7E4;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="1080" y="895" width="390" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="tree-note" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#172B4D;&quot;&gt;会话树约束&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;parentNodeId 必填，可为 null（空会话根）。&lt;br&gt;一轮成功回答形成一个不可变节点。&lt;br&gt;重新生成 / 编辑输入创建兄弟节点。&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F7F9FC;strokeColor=none;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="70" y="600" width="570" height="185" as="geometry" />
+        </mxCell>
+        <mxCell id="cleanup-note" value="&lt;div style=&quot;text-align:left;line-height:1.45;color:#172B4D;&quot;&gt;&lt;div style=&quot;font-size:21px;font-weight:700;color:#172B4D;&quot;&gt;退出与恢复&lt;/div&gt;&lt;div style=&quot;font-size:16px;margin-top:10px;&quot;&gt;harness.close() 停止新调用 → 取消并等待在途 Run，&lt;br&gt;再由 Nya 按依赖清理，释放 HTTP、进程与数据库。&lt;br&gt;重启把遗留 running / cancelling 结算为 interrupted；&lt;br&gt;不自动重放模型或工具副作用。&lt;/div&gt;&lt;/div&gt;" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=#F7F9FC;strokeColor=none;strokeWidth=1.2;" vertex="1" parent="1">
+          <mxGeometry x="70" y="835" width="570" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="蓝色：执行 / 结算　绿色：工具循环　虚线：取消 / 错误 / 异常恢复" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=14;fontColor=#526581;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1105" width="1350" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="source" value="依据：src/run/component.ts · agent-loop-component.ts · sqlite-state.ts · docs/session-conversation-tree.md" style="rounded=1;arcSize=8;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontColor=#172B4D;fontSize=16;align=left;verticalAlign=middle;spacing=16;fillColor=none;strokeColor=none;strokeWidth=1.2;rounded=0;spacing=0;align=left;fontSize=12;fontColor=#526581;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1142" width="1420" height="22" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-1" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="request" target="admission">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-2" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="admission" target="accepted">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="accepted" target="contextBuild">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-4" value="已有匹配键" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#9BABBF;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#9BABBF;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="admission" target="existing">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="55" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-5" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="contextBuild" target="model">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-6" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="model" target="reply">
+          <mxGeometry relative="1" x="0" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-7" value="工具请求" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#187C72;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#187C72;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="reply" target="tool">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="0" y="-15" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-8" value="工具观察加入上下文" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#187C72;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#187C72;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="tool" target="model">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="875" y="520" />
+            </Array>
+            <mxPoint x="0" y="-15" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-9" value="最终回答" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#356AE6;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#356AE6;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=0;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="reply" target="commit">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="45" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-10" value="失败 / 取消" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#A66A16;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#A66A16;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.8;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;dashed=1;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="model" target="failure">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <Array as="points">
+              <mxPoint x="1050" y="565" />
+              <mxPoint x="1050" y="985" />
+            </Array>
+            <mxPoint x="-22" y="70" as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge-11" value="失败 / 取消" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;endSize=8;strokeColor=#A66A16;strokeWidth=1.8;fontFamily=Helvetica;fontSize=13;fontColor=#A66A16;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;dashPattern=5 4;jumpStyle=arc;jumpSize=7;" edge="1" parent="1" source="tool" target="failure">
+          <mxGeometry relative="1" x="0" as="geometry">
+            <mxPoint x="47" y="0" as="offset" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

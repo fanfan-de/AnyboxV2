@@ -4,6 +4,8 @@
 
 应用只使用一个 Nya 根 Context：凭据组件、大模型 API 组件、本地 SQLite、Prompt、Agent Prompt、Projects、Bash、持久状态、Session、Run 和 AgentLoop 都直接安装在根上。组件通过 `inject` 声明依赖，由 Nya 负责就绪、重启和清理顺序。Projects 登记本地目录身份，Session 和 Run 数据由同一个 SQLite 状态组件持有；项目不创建独立 Context 或数据库。Prompt、绑定和 Agent 定义全局共享。凭据组件提供 `credentials.read`；大模型 API 组件提供 `llm`，负责原生请求、HTTP、密钥、超时、取消和清理。Run 负责准入、配置快照与控制；AgentLoop 独占在途调用。SQLite 排他持有连接，各领域组件登记自己的表迁移。调用的 `result` 是业务结果，`done` 表示调用及资源实际退出；取消或卸载会等待 `done` 完成。
 
+Session 现在持有完整轮次对话树，允许同一父节点启动多个 Run。新请求必须提供 `parentNodeId`（空会话用 `null`）；成功节点不可变，上下文只继承祖先路径。详见[对话树与分支并发](docs/session-conversation-tree.md)。Web 已接入显式节点查看、多 Run 状态及最多四个跨项目拖拽分屏；提交固定对话起点，布局与查看位置在当前标签页内恢复。受控浏览器验收覆盖拖拽、并行运行、关闭视图、窄窗口与设置入口。
+
 ## 最小调用
 
 ```js
@@ -46,7 +48,7 @@ try {
   await harness.bindPrompt('alice', 'demo', version.id)
   const project = await harness.openProject(process.cwd())
   const session = await harness.createSession(project.id, 'demo')
-  const run = await harness.startRun({ sessionId: session.id, input: 'Hello', idempotencyKey: 'request-1' })
+  const run = await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'request-1' })
   console.log(await harness.waitRun(run.id))
 } finally {
   await harness.close()
@@ -100,13 +102,15 @@ await root.installComponent(createApiKeyServiceComponent({
 
 `createOpenAIResponsesComponent(config, transport?)` 是另一个提供相同 `llm` 服务的 API 格式组件，和 DeepSeek 组件二选一安装。它固定从 `credentials.read` 读取 `openAIResponsesCredentialId`（`llm/openai-responses/default`）；受信宿主可用 `credentials.manage` 写入 OpenAI API key；组件在每次调用内读取，轮换无需重启。每个 profile 需要 `id`、`model`、`maxOutputTokens`、`timeoutMs`，可选 `temperature`；省略温度可兼容不接受该参数的模型。模型名称由宿主配置，不在组件中硬编码。
 
-组件向 `/v1/responses` 发送完整的 `system`、`developer`、`user`、`assistant` 文本消息，使用非流式请求并设置 `store: false`。它从已完成响应的 `output` 中收集最终助手文本，可跳过 reasoning 项；未完成响应、拒绝内容和工具调用不会伪装成成功文本。响应失败、超时、取消与清理仍使用 `src/llm/port.ts` 的固定类别及 `result`/`done` 语义。当前不支持流式输出、工具循环、多模态和服务端会话；Session 历史仍由 Harness 作为文本消息逐次发送。真实 OpenAI API 尚未联网验收，本地 HTTP 与可控传输测试覆盖请求、解析、密钥、Run、取消和等待。`npm run web` 宿主目前仍选择 DeepSeek 组件；使用 OpenAI Responses 的宿主需在装配 Harness 前安装本组件并提供其凭据。
+组件向 `/v1/responses` 发送完整的 `system`、`developer`、`user`、`assistant` 文本消息，使用非流式请求并设置 `store: false`。它从已完成响应的 `output` 中收集最终助手文本，可跳过 reasoning 项；未完成响应、拒绝内容和工具调用不会伪装成成功文本。响应失败、超时、取消与清理仍使用 `src/llm/port.ts` 的固定类别及 `result`/`done` 语义。当前不支持流式输出、工具循环、多模态和服务端会话；Run 的祖先节点路径仍由 Harness 作为文本消息逐次发送。真实 OpenAI API 尚未联网验收，本地 HTTP 与可控传输测试覆盖请求、解析、密钥、Run、取消和等待。`npm run web` 宿主目前仍选择 DeepSeek 组件；使用 OpenAI Responses 的宿主需在装配 Harness 前安装本组件并提供其凭据。
 
 ## 本机 Web 界面
 
-第一版提供可替换的薄客户端参考实现。Web 前端是单独的 Nya 组件，接收 Harness 校验后的 Agent ID 列表，注入 Session、Run 和通用凭据设置服务，拥有 HTTP 监听器及静态页面。运行 `npm run web` 后打开终端打印的 `http://127.0.0.1:<port>` 地址；首次启动无需 Key，可在侧栏 API Key 管理中选择已注册的服务并保存、替换或删除。写入成功即生效。
+第一版提供可替换的薄客户端参考实现。Web 前端是单独的 Nya 组件，接收 Harness 校验后的 Agent ID 列表，注入 Projects、Session、Run、Prompt、Agent Prompt、目录选择器和通用凭据设置服务，拥有 HTTP 监听器及静态页面。运行 `npm run web` 后打开终端打印的 `http://127.0.0.1:<port>` 地址；首次启动无需 Key，可在顶部“设置”的 API Key 管理中选择已注册的服务并保存、替换或删除。写入成功即生效。
 
-页面可登记本地项目目录、切换项目和会话、选择 Agent、提交消息、查看历史与完整回答或失败状态，以及取消在途 Run。页面通过 `/api/v1/runs/:id/events` 展示 Bash 命令、执行状态、退出码和有界输出摘要；当前没有流式输出，活动 Run 通过轮询更新。浏览器按 Session 保存当前标签页的待提交幂等键与输入，用于刷新或丢失响应后的安全重试。项目、Session 和 Run 历史由服务端持久化，重启后可恢复。宿主只监听 `127.0.0.1`，不支持远程访问或账号。协议及边界见 [薄 Web 客户端设计](docs/web-client-design.md)。
+“设置 → Prompt 管理 → 打开 Prompt 编辑器”可创建与编辑草稿、发布并预览版本，再应用到 Agent；“编辑当前指令”可从内置指令开始。绑定对所有项目共享，只影响后续 Run，已接受 Run 保持原快照。页面检查编辑和发布的修订冲突，可重新应用历史版本；保存草稿和发布本身不改变绑定。
+
+原线性页面支持项目与会话导航、Agent 选择、消息与执行过程展示；对话树客户端适配尚未完成。页面通过 `/api/v1/runs/:id/events` 展示 Bash 命令、执行状态、退出码和有界输出摘要；当前没有流式输出，活动 Run 通过轮询更新。旧页面按 Session 保存待提交信息；新客户端需改为按幂等键保存含父节点的完整请求，并先通过 `runs/by-key` 恢复旧请求。项目、Session 和 Run 历史由服务端持久化，重启后可恢复。宿主只监听 `127.0.0.1`，不支持远程访问或账号。协议及边界见 [薄 Web 客户端设计](docs/web-client-design.md)。
 
 ## 本地验证
 

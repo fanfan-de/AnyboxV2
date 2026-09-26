@@ -12,53 +12,99 @@
   <div class="app-shell">
     <header class="topbar">
       <div class="brand"><span class="brand-mark" aria-hidden="true">A</span><div><strong>Anybox</strong><small>Local Agent Workspace</small></div></div>
-      <div class="local-badge"><span aria-hidden="true"></span>本机运行</div>
+      <div class="topbar-actions"><div class="local-badge"><span aria-hidden="true"></span>本机运行</div><button id="open-settings" class="settings-button" type="button" aria-haspopup="dialog" aria-controls="settings-dialog">设置</button></div>
     </header>
     <main class="workspace">
-      <aside class="sidebar" aria-label="会话设置">
+      <aside class="sidebar" aria-label="项目与会话">
         <div class="sidebar-heading"><span>项目与会话</span></div>
-        <h2>本地项目</h2>
-        <div class="project-picker">
-          <button id="add-project" type="button" disabled>添加项目</button>
-          <p id="project-picker-status" role="status">正在检查目录选择器…</p>
+        <div class="sidebar-navigation">
+          <section class="navigation-section" aria-labelledby="projects-title">
+            <div class="section-heading"><h2 id="projects-title">本地项目</h2><button id="add-project" type="button" disabled>＋ 添加项目</button></div>
+            <p id="project-picker-status" role="status">正在检查目录选择器…</p>
+            <div id="project-list" class="navigation-list" aria-label="项目列表" tabindex="0"></div>
+          </section>
+          <section class="navigation-section" aria-labelledby="sessions-title">
+            <div class="section-heading"><h2 id="sessions-title">项目会话</h2></div>
+            <div id="session-list" class="navigation-list" aria-label="当前项目的会话" tabindex="0"></div>
+          </section>
         </div>
-        <div id="project-list" class="navigation-list" aria-label="项目列表"></div>
-        <div id="session-list" class="navigation-list" aria-label="当前项目的会话"></div>
-        <label for="agent-select">新会话使用的 Agent</label>
-        <select id="agent-select" aria-label="新会话使用的 Agent"></select>
-        <button id="new-session" class="new-session" type="button">＋ 新建会话</button>
+        <div class="session-create">
+          <button id="new-session" class="new-session" type="button">＋ 新建会话</button>
+        </div>
         <div class="sidebar-note">
           <span class="note-label">当前会话</span>
           <strong id="current-agent">尚未创建</strong>
-          <span id="session-id" class="session-id">选择 Agent 后开始</span>
+          <span id="session-id" class="session-id">先添加项目</span>
         </div>
-        <section class="key-settings" aria-labelledby="key-settings-title">
-          <h3 id="key-settings-title">API Key 管理</h3>
-          <label for="key-select">服务</label>
-          <select id="key-select" aria-label="选择服务"></select>
-          <p id="key-status" role="status">正在检查 API Key…</p>
-          <form id="key-form" autocomplete="off">
-            <label for="key-input">API Key</label>
-            <input id="key-input" type="password" autocomplete="new-password" placeholder="输入所选服务的新 Key" required>
-            <button id="save-key" type="submit">保存 Key</button>
-          </form>
-          <button id="delete-key" type="button">删除当前 Key</button>
-          <p id="key-notice" role="alert" hidden></p>
-        </section>
-        <p class="storage-note">项目、会话和运行历史保存在本机。切换项目不会停止运行。</p>
+        <p class="storage-note">项目、会话和运行历史保存在本机。拖动会话到面板边缘可分屏，最多 4 个。关闭面板不会停止运行。</p>
       </aside>
-      <section class="conversation" aria-label="会话">
-        <div class="conversation-heading"><div><span class="eyebrow">CONVERSATION</span><h1>会话</h1></div><span id="run-status" class="run-status" role="status">待开始</span></div>
-        <div id="notice" class="notice" role="alert" hidden></div>
-        <div id="transcript" class="transcript" role="log" aria-label="对话内容" aria-live="polite"></div>
-        <div id="empty-state" class="empty-state"><span class="empty-icon" aria-hidden="true">✳</span><h2>从一个想法开始</h2><p>创建会话后，在下方输入你的问题。</p></div>
-        <form id="compose-form" class="composer">
-          <label for="message-input">消息</label>
-          <textarea id="message-input" rows="3" placeholder="输入消息…" disabled></textarea>
-          <div class="composer-footer"><span>Enter 发送 · Shift + Enter 换行</span><div class="actions"><button id="cancel-run" class="cancel-button" type="button" hidden>取消运行</button><button id="send-message" class="send-button" type="submit" disabled>发送消息 <span aria-hidden="true">↗</span></button></div></div>
-        </form>
+      <section class="session-workspace" aria-label="会话工作区">
+        <div id="workspace-notice" class="notice workspace-notice" role="alert" hidden></div>
+        <div id="pane-tabs" class="pane-tabs" role="group" aria-label="切换会话面板" hidden></div>
+        <div id="pane-host" class="pane-host"></div>
       </section>
     </main>
   </div>
+  <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+    <div class="settings-heading"><h2 id="settings-title">设置</h2><button id="close-settings" class="close-settings" type="button" aria-label="关闭设置" autofocus>✕</button></div>
+    <div class="settings-content">
+      <section class="settings-section" aria-labelledby="agent-settings-title">
+        <label id="agent-settings-title" for="agent-select">新会话使用的 Agent</label>
+        <select id="agent-select" aria-label="新会话使用的 Agent" aria-describedby="agent-settings-hint" disabled></select>
+        <p id="agent-settings-hint" class="settings-hint">选择后用于接下来创建的会话。</p>
+      </section>
+      <section class="settings-section" aria-labelledby="key-settings-title">
+        <h3 id="key-settings-title">API Key 管理</h3>
+        <label for="key-select">服务</label>
+        <select id="key-select" aria-label="选择服务"></select>
+        <p id="key-status" role="status">正在检查 API Key…</p>
+        <form id="key-form" autocomplete="off">
+          <label for="key-input">API Key</label>
+          <input id="key-input" type="password" autocomplete="new-password" placeholder="输入所选服务的新 Key" required>
+          <div class="settings-actions"><button id="save-key" type="submit">保存 Key</button><button id="delete-key" type="button">删除当前 Key</button></div>
+        </form>
+        <p id="key-notice" role="alert" hidden></p>
+      </section>
+      <section class="settings-section" aria-labelledby="prompt-settings-title">
+        <h3 id="prompt-settings-title">Prompt 管理</h3>
+        <p>编辑 Agent 指令、任务模板和上下文，发布后应用到 Agent。</p>
+        <button id="open-prompts" type="button" aria-haspopup="dialog" aria-controls="prompt-dialog">打开 Prompt 编辑器</button>
+      </section>
+    </div>
+  </dialog>
+  <dialog id="prompt-dialog" class="settings-dialog prompt-dialog" aria-labelledby="prompt-title">
+    <div class="settings-heading"><div><h2 id="prompt-title">Prompt 管理</h2><p class="settings-hint">保存草稿 → 发布版本 → 应用到 Agent</p></div><button id="close-prompts" class="close-settings" type="button" aria-label="关闭 Prompt 管理" autofocus>✕</button></div>
+    <p id="prompt-notice" class="prompt-notice" role="status" aria-live="polite" hidden></p>
+    <div class="prompt-workspace">
+      <aside class="prompt-library" aria-label="Prompt 文档">
+        <button id="new-prompt" type="button">＋ 新建 Prompt</button>
+        <div id="prompt-list" class="navigation-list" aria-label="Prompt 列表"></div>
+        <p id="prompt-empty">还没有 Prompt。新建一个，或从当前 Agent 指令开始编辑。</p>
+      </aside>
+      <div class="prompt-editor">
+        <section class="settings-section" aria-labelledby="prompt-agent-title">
+          <label id="prompt-agent-title" for="prompt-agent">应用到哪个 Agent</label>
+          <div class="prompt-inline"><select id="prompt-agent"></select><button id="edit-agent-prompt" class="secondary-button" type="button">编辑当前指令</button></div>
+          <div id="prompt-bindings"></div>
+          <p class="settings-hint">绑定对所有项目生效。后续运行使用新版本，正在进行的运行保持原内容。</p>
+        </section>
+        <form id="prompt-form" class="settings-section">
+          <div class="prompt-section-heading"><h3>草稿</h3><span id="prompt-draft-status">新建草稿</span></div>
+          <label for="prompt-name">名称</label><input id="prompt-name" maxlength="200" required placeholder="例如：代码助手指令">
+          <label for="prompt-description">说明（可选）</label><input id="prompt-description" maxlength="2000" placeholder="这个 Prompt 用于什么任务">
+          <div class="prompt-fields"><div><label for="prompt-kind">用途</label><select id="prompt-kind"><option value="agent-instruction">Agent 指令</option><option value="task-template">任务模板</option><option value="context">上下文</option></select></div><div><label for="prompt-role">消息角色</label><select id="prompt-role"></select></div></div>
+          <p id="prompt-content-hint" class="settings-hint"></p>
+          <label for="prompt-content">内容</label><textarea id="prompt-content" rows="9" maxlength="100000" aria-describedby="prompt-content-hint" required placeholder="输入 Prompt 内容…" spellcheck="false"></textarea>
+          <div class="settings-actions"><button id="save-prompt" type="submit">保存草稿</button><button id="publish-prompt" type="button">发布版本</button><button id="discard-prompt" class="secondary-button" type="button">放弃修改 / 重新读取</button></div>
+        </form>
+        <section class="settings-section" aria-labelledby="prompt-versions-title">
+          <h3 id="prompt-versions-title">已发布版本</h3>
+          <label for="prompt-version">版本</label><div class="prompt-inline"><select id="prompt-version"></select><button id="apply-prompt" type="button">应用到 Agent</button></div>
+          <p id="prompt-version-status">保存并发布后，可以在这里应用版本。</p>
+          <pre id="prompt-version-content" class="prompt-preview" tabindex="0" aria-label="已发布版本内容" hidden></pre>
+        </section>
+      </div>
+    </div>
+  </dialog>
 </body>
 </html>

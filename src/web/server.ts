@@ -3,7 +3,7 @@ import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import type { Run, Session } from '../run/domain.js'
-import type { RunInput } from '../run/domain.js'
+import type { RunInput, ConversationNode, NodePage, NodeQuery, RunQuery } from '../run/domain.js'
 import type { RunEvent } from '../run/execution.js'
 import { LLMFailure } from '../llm/port.js'
 import { CredentialFailure } from '../credentials/port.js'
@@ -12,6 +12,8 @@ import type { ManagedCredentialStatus } from '../credentials/settings.js'
 import { isProjectUnavailableError } from '../project/component.js'
 import type { Project } from '../project/component.js'
 import { DirectoryPickerFailure } from './directory-picker.js'
+import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
+  PromptSnapshot, PromptVersion } from '../prompt/domain.js'
 
 export interface WebCommands {
   listAgents(): readonly { readonly id: string }[]
@@ -21,14 +23,27 @@ export interface WebCommands {
   createSession(projectId: string, agentId: string): Promise<Session>
   getSession(id: string): Promise<Session | undefined>
   listSessions(projectId: string): Promise<readonly Session[]>
+  getNode(sessionId: string, id: string): Promise<ConversationNode | undefined>
+  getNodePath(sessionId: string, id: string | null): Promise<readonly ConversationNode[]>
+  listNodes(sessionId: string, parentId: string | null, query?: NodeQuery): Promise<NodePage>
+  getRunByKey(sessionId: string, key: string): Promise<Run | undefined>
+  waitRun(id: string, signal?: AbortSignal): Promise<Run | undefined>
   startRun(input: RunInput): Promise<Run>
   getRun(id: string): Promise<Run | undefined>
-  listRuns(sessionId: string): Promise<readonly Run[]>
-  getRunEvents(id: string): Promise<readonly RunEvent[] | undefined>
+  listRuns(sessionId: string, query?: RunQuery): Promise<readonly Run[]>
+  getRunEvents(id: string, afterSeq?: number): Promise<readonly RunEvent[] | undefined>
   cancelRun(id: string): Promise<Run | undefined>
   listCredentials(): Promise<readonly ManagedCredentialStatus[]>
   saveCredential(id: string, secret: string): Promise<ManagedCredentialStatus>
   deleteCredential(id: string): Promise<ManagedCredentialStatus>
+  listPrompts(): readonly PromptDocument[]
+  getPrompt(id: string): PromptDocument | undefined
+  createPrompt(input: PromptCreateInput): Promise<PromptDocument>
+  editPrompt(id: string, revision: number, patch: PromptEditInput): Promise<PromptDocument>
+  publishPrompt(id: string, revision: number): Promise<PromptVersion>
+  getPromptVersions(id: string): readonly PromptVersion[]
+  getAgentPrompts(id: string): readonly PromptSnapshot[]
+  bindPrompt(id: string, versionId: string): Promise<PromptBinding>
 }
 
 export interface WebServer {
@@ -63,11 +78,18 @@ function knownFailure(error: unknown): HttpFailure {
     return failure(503, 'picker-unavailable')
   }
   if (error instanceof Error) {
-    if (/^unknown (agent|session|project) /.test(error.message)) return failure(404, 'not-found')
-    if (/idempotency key already used|session already has an active run/.test(error.message)) {
+    if (/^unknown (agent|session|project|prompt) /.test(error.message)) return failure(404, 'not-found')
+    if (error.message === 'prompt draft revision conflict') return failure(409, 'prompt-conflict')
+    if (error.message === 'prompt draft has no unpublished changes') return failure(409, 'prompt-publication-conflict')
+    if (error.message === 'prompt access denied' || error.message === 'agent configuration access denied') {
+      return failure(403, 'prompt-forbidden')
+    }
+    if ('code' in error && error.code === 'node-not-found') return failure(404, 'node-not-found')
+    if ('code' in error && error.code === 'invalid-history') return failure(409, 'invalid-history')
+    if (/idempotency key already used/.test(error.message)) {
       return failure(409, 'conflict')
     }
-    if (/service is unavailable|harness is closing|service is closing/.test(error.message)) {
+    if (/service is unavailable|harness is closing|service is closing|prompt storage is closing|agent prompt bindings are closing/.test(error.message)) {
       return failure(503, 'service-unavailable')
     }
   }
@@ -82,18 +104,35 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 function sessionView(session: Session): object {
   return {
     id: session.id, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
-    turns: session.turns.map(turn => ({ input: turn.input, output: turn.output })),
   }
 }
 
 function runView(run: Run): object {
   return {
     id: run.id, sessionId: run.sessionId, input: run.input, status: run.status,
-    createdAt: run.createdAt, updatedAt: run.updatedAt,
+    createdAt: run.createdAt, updatedAt: run.updatedAt, revision: run.revision, history: run.history,
+    ...(run.resultNodeId ? { resultNodeId: run.resultNodeId } : {}),
     ...(run.output === undefined ? {} : { output: run.output }),
     ...(run.error === undefined ? {} : { error: run.error }),
     ...(run.errorCategory === undefined ? {} : { errorCategory: run.errorCategory }),
   }
+}
+
+function promptView(document: PromptDocument): object {
+  const { revision, kind, role, content } = document.draft
+  return { id: document.id, name: document.name, description: document.description,
+    draft: { revision, kind, role, content }, versionIds: document.versionIds,
+    ...(document.publishedDraftRevision === undefined ? {} : { publishedDraftRevision: document.publishedDraftRevision }) }
+}
+
+function promptVersionView(version: PromptVersion): object {
+  const { id, documentId, kind, role, content, createdAt } = version
+  return { id, documentId, kind, role, content, createdAt }
+}
+
+function promptRevision(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) throw failure(400, 'invalid-input')
+  return value
 }
 
 function outputSummary(value: string): { readonly text: string; readonly truncated: boolean } {
@@ -132,7 +171,7 @@ function runEventView(event: RunEvent): object {
   }
 }
 
-async function requestObject(request: IncomingMessage, fields: readonly string[]): Promise<Record<string, unknown>> {
+async function requestObject(request: IncomingMessage, fields: readonly string[], maxBytes = 65_536): Promise<Record<string, unknown>> {
   if (request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
     throw failure(415, 'json-required')
   }
@@ -141,7 +180,7 @@ async function requestObject(request: IncomingMessage, fields: readonly string[]
   for await (const chunk of request) {
     const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     bytes += value.length
-    if (bytes > 65_536) throw failure(413, 'request-too-large')
+    if (bytes > maxBytes) throw failure(413, 'request-too-large')
     chunks.push(value)
   }
   let value: unknown
@@ -151,10 +190,22 @@ async function requestObject(request: IncomingMessage, fields: readonly string[]
   return value as Record<string, unknown>
 }
 
+function integerQuery(url: URL, key: string, fallback: number, min: number, max: number): number {
+  const raw = url.searchParams.get(key)
+  const value = raw === null ? fallback : /^\d+$/.test(raw) ? Number(raw) : NaN
+  if (!Number.isSafeInteger(value) || value < min || value > max) throw failure(400, 'invalid-input')
+  return value
+}
+
 const assets = new Map([
   ['/', { file: fileURLToPath(new URL('../../web/index.html', import.meta.url)), type: 'text/html; charset=utf-8' }],
   ['/style.css', { file: fileURLToPath(new URL('../../web/style.css', import.meta.url)), type: 'text/css; charset=utf-8' }],
   ['/client.js', { file: fileURLToPath(new URL('./client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/prompt-client.js', { file: fileURLToPath(new URL('./prompt-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/workspace-client.js', { file: fileURLToPath(new URL('./workspace-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/workspace-layout.js', { file: fileURLToPath(new URL('./workspace-layout.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/session-client.js', { file: fileURLToPath(new URL('./session-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/session-view.js', { file: fileURLToPath(new URL('./session-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
 ])
 
 /** Hosts the public browser contract, including registered credential status and mutations without raw reads. */
@@ -162,6 +213,7 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
   let origin = ''
   let closing = false
   const pickerRequests = new Set<AbortController>()
+  const waitRequests = new Set<() => void>()
   const server = createServer((request, response) => {
     response.setHeader('Cache-Control', 'no-store')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -183,6 +235,53 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       }
       if (method === 'GET' && path === '/api/v1/agents') {
         json(response, 200, commands.listAgents())
+        return
+      }
+      const promptFields = ['name', 'description', 'kind', 'role', 'content']
+      if (path === '/api/v1/prompts' && method === 'GET') {
+        json(response, 200, commands.listPrompts().map(promptView))
+        return
+      }
+      if (path === '/api/v1/prompts' && method === 'POST') {
+        const body = await requestObject(request, promptFields, 1_048_576)
+        json(response, 200, promptView(await commands.createPrompt(body as unknown as PromptCreateInput)))
+        return
+      }
+      const promptMatch = /^\/api\/v1\/prompts\/([^/]+)$/.exec(path)
+      if (promptMatch && method === 'GET') {
+        const document = commands.getPrompt(decodeURIComponent(promptMatch[1]))
+        if (!document) throw failure(404, 'not-found')
+        json(response, 200, promptView(document))
+        return
+      }
+      if (promptMatch && method === 'POST') {
+        const { expectedRevision, ...patch } = await requestObject(request, [...promptFields, 'expectedRevision'], 1_048_576)
+        json(response, 200, promptView(await commands.editPrompt(decodeURIComponent(promptMatch[1]),
+          promptRevision(expectedRevision), patch as PromptEditInput)))
+        return
+      }
+      const versionsMatch = /^\/api\/v1\/prompts\/([^/]+)\/versions$/.exec(path)
+      if (versionsMatch && method === 'GET') {
+        json(response, 200, commands.getPromptVersions(decodeURIComponent(versionsMatch[1])).map(promptVersionView))
+        return
+      }
+      const publishMatch = /^\/api\/v1\/prompts\/([^/]+)\/publish$/.exec(path)
+      if (publishMatch && method === 'POST') {
+        const body = await requestObject(request, ['expectedRevision'])
+        json(response, 200, promptVersionView(await commands.publishPrompt(decodeURIComponent(publishMatch[1]),
+          promptRevision(body.expectedRevision))))
+        return
+      }
+      const agentPromptsMatch = /^\/api\/v1\/agents\/([^/]+)\/prompts$/.exec(path)
+      if (agentPromptsMatch && method === 'GET') {
+        json(response, 200, commands.getAgentPrompts(decodeURIComponent(agentPromptsMatch[1])))
+        return
+      }
+      if (agentPromptsMatch && method === 'POST') {
+        const body = await requestObject(request, ['versionId'])
+        if (typeof body.versionId !== 'string' || !body.versionId.trim()) throw failure(400, 'invalid-input')
+        const binding = await commands.bindPrompt(decodeURIComponent(agentPromptsMatch[1]), body.versionId)
+        json(response, 200, { kind: binding.kind, versionId: binding.versionId })
         return
       }
       if (method === 'GET' && path === '/api/v1/projects') {
@@ -233,9 +332,42 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         json(response, 200, sessionView(await commands.createSession(body.projectId as string, body.agentId as string)))
         return
       }
+      const nodesMatch = /^\/api\/v1\/sessions\/([^/]+)\/nodes$/.exec(path)
+      if (method === 'GET' && nodesMatch) {
+        const parent = url.searchParams.get('parentNodeId')
+        if (!parent) throw failure(400, 'invalid-input')
+        json(response, 200, await commands.listNodes(decodeURIComponent(nodesMatch[1]), parent === 'root' ? null : parent, {
+          ...(url.searchParams.has('cursor') ? { cursor: url.searchParams.get('cursor')! } : {}),
+          ...(url.searchParams.has('limit') ? { limit: integerQuery(url, 'limit', 50, 1, 100) } : {}),
+        }))
+        return
+      }
+      const nodeMatch = /^\/api\/v1\/sessions\/([^/]+)\/nodes\/([^/]+)(\/path)?$/.exec(path)
+      if (method === 'GET' && nodeMatch) {
+        const sessionId = decodeURIComponent(nodeMatch[1]), id = decodeURIComponent(nodeMatch[2])
+        const value = nodeMatch[3] ? await commands.getNodePath(sessionId, id === 'root' ? null : id)
+          : await commands.getNode(sessionId, id)
+        if (!value) throw failure(404, 'node-not-found')
+        json(response, 200, value)
+        return
+      }
+      const keyMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs\/by-key\/([^/]+)$/.exec(path)
+      if (method === 'GET' && keyMatch) {
+        const run = await commands.getRunByKey(decodeURIComponent(keyMatch[1]), decodeURIComponent(keyMatch[2]))
+        if (!run) throw failure(404, 'not-found')
+        json(response, 200, runView(run))
+        return
+      }
       const sessionRunsMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs$/.exec(path)
       if (method === 'GET' && sessionRunsMatch) {
-        json(response, 200, (await commands.listRuns(decodeURIComponent(sessionRunsMatch[1]))).map(runView))
+        const status = url.searchParams.get('status')
+        if (status !== null && status !== 'active') throw failure(400, 'invalid-input')
+        const parent = url.searchParams.get('parentNodeId')
+        if (parent === '') throw failure(400, 'invalid-input')
+        json(response, 200, (await commands.listRuns(decodeURIComponent(sessionRunsMatch[1]), {
+          ...(status ? { active: true } : {}),
+          ...(parent !== null ? { parentNodeId: parent === 'root' ? null : parent } : {}),
+        })).map(runView))
         return
       }
       const sessionMatch = /^\/api\/v1\/sessions\/([^/]+)$/.exec(path)
@@ -247,9 +379,10 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       }
       const createRunMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs$/.exec(path)
       if (method === 'POST' && createRunMatch) {
-        const body = await requestObject(request, ['input', 'idempotencyKey'])
+        const body = await requestObject(request, ['parentNodeId', 'input', 'idempotencyKey'])
         const run = await commands.startRun({
           sessionId: decodeURIComponent(createRunMatch[1]),
+          parentNodeId: body.parentNodeId as string | null,
           input: body.input as string,
           idempotencyKey: body.idempotencyKey as string,
         })
@@ -265,9 +398,39 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       }
       const runEventsMatch = /^\/api\/v1\/runs\/([^/]+)\/events$/.exec(path)
       if (method === 'GET' && runEventsMatch) {
-        const events = await commands.getRunEvents(decodeURIComponent(runEventsMatch[1]))
+        const events = await commands.getRunEvents(decodeURIComponent(runEventsMatch[1]), integerQuery(url, 'afterSeq', 0, 0, Number.MAX_SAFE_INTEGER))
         if (!events) throw failure(404, 'not-found')
         json(response, 200, events.map(runEventView))
+        return
+      }
+      const waitMatch = /^\/api\/v1\/runs\/([^/]+)\/wait$/.exec(path)
+      if (method === 'GET' && waitMatch) {
+        const id = decodeURIComponent(waitMatch[1])
+        const timeout = integerQuery(url, 'timeoutMs', 25000, 0, 25000)
+        if (!await commands.getRun(id)) throw failure(404, 'not-found')
+        if (closing) throw failure(503, 'service-unavailable')
+        if (response.destroyed) return
+        const waiter = new AbortController()
+        let finish!: () => void
+        const interrupted = new Promise<undefined>(resolve => { finish = () => resolve(undefined) })
+        const timer = setTimeout(finish, timeout)
+        response.once('close', finish)
+        waitRequests.add(finish)
+        try {
+          const terminal = await Promise.race([commands.waitRun(id, waiter.signal), interrupted])
+          if (closing || response.destroyed) {
+            if (!response.destroyed) json(response, 503, { error: { code: 'service-unavailable' } })
+            return
+          }
+          const run = terminal ?? await commands.getRun(id)
+          const ended = run && run.status !== 'running' && run.status !== 'cancelling'
+          json(response, 200, { done: Boolean(ended), timedOut: !ended, run: run ? runView(run) : null })
+        } finally {
+          waiter.abort()
+          clearTimeout(timer)
+          response.off('close', finish)
+          waitRequests.delete(finish)
+        }
         return
       }
       const cancelMatch = /^\/api\/v1\/runs\/([^/]+)\/cancel$/.exec(path)
@@ -305,6 +468,7 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       if (shutdown) return shutdown
       closing = true
       for (const controller of pickerRequests) controller.abort()
+      for (const finish of waitRequests) finish()
       shutdown = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
       return shutdown
     },

@@ -11,8 +11,14 @@ import type { ProjectPort } from '../project/component.js'
 import type { WebCommands, WebServer } from './server.js'
 import { directoryPickerServiceKey } from './directory-picker.js'
 import type { DirectoryPickerPort } from './directory-picker.js'
+import { promptServiceKey } from '../prompt/component.js'
+import type { PromptPort } from '../prompt/component.js'
+import { agentPromptServiceKey } from '../agent/prompt-binding-component.js'
+import type { AgentPromptPort } from '../agent/prompt-binding-component.js'
 
 export const webFrontendServiceKey = 'web.frontend'
+/** Stable identity owned by this single-user host, never supplied by the browser. */
+const localActorId = 'local-web-user'
 
 export interface WebFrontendPort {
   readonly url: string
@@ -25,12 +31,15 @@ export function createWebFrontendComponent(agents: readonly Readonly<{ id: strin
   [credentialSettingsServiceKey]: CredentialSettingsPort
   [projectServiceKey]: ProjectPort
   [directoryPickerServiceKey]: DirectoryPickerPort
+  [promptServiceKey]: PromptPort
+  [agentPromptServiceKey]: AgentPromptPort
 }> {
   let listenPort = port
   const agentIds = Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
   return {
     name: 'web-frontend',
-    inject: [sessionServiceKey, runServiceKey, credentialSettingsServiceKey, projectServiceKey, directoryPickerServiceKey],
+    inject: [sessionServiceKey, runServiceKey, credentialSettingsServiceKey, projectServiceKey,
+      directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey],
     async apply(ctx, _config, deps) {
       let server: WebServer | undefined
       ctx.effect(() => async () => { await server?.close() }, 'stop and join Web requests')
@@ -46,14 +55,32 @@ export function createWebFrontendComponent(agents: readonly Readonly<{ id: strin
         createSession: (projectId, agentId) => deps[sessionServiceKey].createSession(projectId, agentId),
         getSession: id => deps[sessionServiceKey].getSession(id),
         listSessions: id => deps[sessionServiceKey].listSessions(id),
+        getNode: (sessionId, id) => deps[sessionServiceKey].getNode(sessionId, id),
+        getNodePath: (sessionId, id) => deps[sessionServiceKey].getNodePath(sessionId, id),
+        listNodes: (sessionId, parentId, query) => deps[sessionServiceKey].listNodes(sessionId, parentId, query),
+        getRunByKey: (id, key) => deps[runServiceKey].getRunByKey(id, key),
+        waitRun: (id, signal) => deps[runServiceKey].waitRun(id, signal),
         startRun: input => deps[runServiceKey].startRun(input),
         getRun: id => deps[runServiceKey].getRun(id),
-        listRuns: id => deps[runServiceKey].listRuns(id),
-        getRunEvents: id => deps[runServiceKey].getRunEvents(id),
+        listRuns: (id, query) => deps[runServiceKey].listRuns(id, query),
+        getRunEvents: (id, afterSeq) => deps[runServiceKey].getRunEvents(id, afterSeq),
         cancelRun: id => deps[runServiceKey].cancelRun(id),
         listCredentials: () => deps[credentialSettingsServiceKey].list(),
         saveCredential: (id, secret) => deps[credentialSettingsServiceKey].write(id, secret),
         deleteCredential: id => deps[credentialSettingsServiceKey].delete(id),
+        listPrompts: () => deps[promptServiceKey].listPrompts(localActorId),
+        getPrompt: id => deps[promptServiceKey].getPrompt(localActorId, id),
+        createPrompt: input => deps[promptServiceKey].createPrompt(localActorId, input),
+        editPrompt: (id, revision, patch) => deps[promptServiceKey].editPrompt(localActorId, id, revision, patch),
+        publishPrompt(id, revision) {
+          const document = deps[promptServiceKey].getPrompt(localActorId, id)
+          if (!document) throw new Error(`unknown prompt ${id}`)
+          if (document.draft.revision !== revision) throw new Error('prompt draft revision conflict')
+          return deps[promptServiceKey].publishPrompt(localActorId, id)
+        },
+        getPromptVersions: id => deps[promptServiceKey].getPromptVersions(localActorId, id),
+        getAgentPrompts: id => deps[agentPromptServiceKey].getAgentPrompts(localActorId, id),
+        bindPrompt: (id, versionId) => deps[agentPromptServiceKey].bindPrompt(localActorId, id, versionId),
       }
       server = await startWebServer(commands, listenPort)
       listenPort = Number(new URL(server.url).port)

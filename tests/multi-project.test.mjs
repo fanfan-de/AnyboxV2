@@ -51,13 +51,12 @@ test('projects identify canonical directories and isolate sessions while allowin
     assert.deepEqual((await f.harness.listSessions(first.id)).map(item => item.id).sort(), [a1.id, a2.id].sort())
     assert.deepEqual((await f.harness.listSessions(second.id)).map(item => item.id), [b1.id])
     const [one, two, three] = await Promise.all([
-      f.harness.startRun({ sessionId: a1.id, input: 'One', idempotencyKey: 'one' }),
-      f.harness.startRun({ sessionId: a2.id, input: 'Two', idempotencyKey: 'one' }),
-      f.harness.startRun({ sessionId: b1.id, input: 'Three', idempotencyKey: 'one' }),
+      f.harness.startRun({ sessionId: a1.id, parentNodeId: null, input: 'One', idempotencyKey: 'one' }),
+      f.harness.startRun({ sessionId: a2.id, parentNodeId: null, input: 'Two', idempotencyKey: 'one' }),
+      f.harness.startRun({ sessionId: b1.id, parentNodeId: null, input: 'Three', idempotencyKey: 'one' }),
     ])
     assert.equal(f.llm.calls.length, 3)
-    assert.equal((await f.harness.startRun({ sessionId: a1.id, input: 'One', idempotencyKey: 'one' })).id, one.id)
-    await assert.rejects(f.harness.startRun({ sessionId: a1.id, input: 'Next', idempotencyKey: 'two' }), /active run/)
+    assert.equal((await f.harness.startRun({ sessionId: a1.id, parentNodeId: null, input: 'One', idempotencyKey: 'one' })).id, one.id)
     for (const [index, run] of [one, two, three].entries()) {
       const call = f.llm.calls.find(item => item.input.messages.at(-1)?.content === run.input)
       assert.ok(call)
@@ -65,7 +64,7 @@ test('projects identify canonical directories and isolate sessions while allowin
       assert.equal((await f.harness.waitRun(run.id))?.status, 'completed')
     }
     assert.deepEqual((await f.harness.listRuns(a1.id)).map(item => item.id), [one.id])
-    assert.deepEqual((await f.harness.getSession(a1.id))?.turns, [{ input: 'One', output: 'Answer 0' }])
+    assert.deepEqual((await f.harness.listNodes(a1.id, null)).nodes.map(({ input, output }) => ({ input, output })), [{ input: 'One', output: 'Answer 0' }])
   } finally {
     for (const call of f.llm.calls) finish(call, 'Test cleanup')
     await f.harness.close()
@@ -82,20 +81,20 @@ test('persistent history survives restart and unavailable directories do not hid
   try {
     const project = await f.harness.openProject(projectPath)
     const session = await f.harness.createSession(project.id, 'assistant')
-    const accepted = await f.harness.startRun({ sessionId: session.id, input: 'Persist', idempotencyKey: 'same' })
+    const accepted = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Persist', idempotencyKey: 'same' })
     finish(f.llm.calls[0], 'Saved')
     await f.harness.waitRun(accepted.id)
     await f.harness.close()
     f = await host(file)
     assert.equal((await f.harness.getProject(project.id))?.id, project.id)
-    assert.deepEqual((await f.harness.getSession(session.id))?.turns, [{ input: 'Persist', output: 'Saved' }])
+    assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes.map(({ input, output }) => ({ input, output })), [{ input: 'Persist', output: 'Saved' }])
     assert.equal((await f.harness.listRuns(session.id))[0].id, accepted.id)
     rmSync(projectPath, { recursive: true })
     assert.equal((await f.harness.getProject(project.id))?.available, false)
     assert.equal((await f.harness.listSessions(project.id))[0].id, session.id)
-    assert.equal((await f.harness.startRun({ sessionId: session.id, input: 'Persist', idempotencyKey: 'same' })).id, accepted.id)
+    assert.equal((await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Persist', idempotencyKey: 'same' })).id, accepted.id)
     await assert.rejects(f.harness.createSession(project.id, 'assistant'), /unavailable/)
-    await assert.rejects(f.harness.startRun({ sessionId: session.id, input: 'New', idempotencyKey: 'new' }), /unavailable/)
+    await assert.rejects(f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'New', idempotencyKey: 'new' }), /unavailable/)
   } finally { await f.harness.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -113,8 +112,8 @@ test('a new process settles an abandoned Run as interrupted without replaying it
     const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Shared instructions.', modelProfileId: 'default' }] })
     const project = await harness.openProject(process.cwd())
     const session = await harness.createSession(project.id, 'assistant')
-    const run = await harness.startRun({ sessionId: session.id, input: 'Maybe executed', idempotencyKey: 'original' })
-    process.stdout.write(JSON.stringify({ projectId: project.id, sessionId: session.id, runId: run.id }))
+    const run = await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Maybe executed', idempotencyKey: 'original' })
+    process.stdout.write(JSON.stringify({ projectId: project.id, sessionId: session.id, parentNodeId: null, runId: run.id }))
     process.exit(17)
   `
   try {
@@ -129,10 +128,10 @@ test('a new process settles an abandoned Run as interrupted without replaying it
     try {
       assert.equal((await f.harness.getRun(ids.runId))?.status, 'interrupted')
       assert.equal(f.llm.calls.length, 0)
-      const replay = await f.harness.startRun({ sessionId: ids.sessionId, input: 'Maybe executed', idempotencyKey: 'original' })
+      const replay = await f.harness.startRun({ sessionId: ids.sessionId, parentNodeId: null, input: 'Maybe executed', idempotencyKey: 'original' })
       assert.equal(replay.id, ids.runId)
       assert.equal(replay.status, 'interrupted')
-      const next = await f.harness.startRun({ sessionId: ids.sessionId, input: 'New attempt', idempotencyKey: 'next' })
+      const next = await f.harness.startRun({ sessionId: ids.sessionId, parentNodeId: null, input: 'New attempt', idempotencyKey: 'next' })
       assert.equal(f.llm.calls.length, 1)
       finish(f.llm.calls[0], 'Done')
       assert.equal((await f.harness.waitRun(next.id))?.status, 'completed')
@@ -157,11 +156,11 @@ test('global Prompt bindings apply to every project while accepted snapshots sta
     })
     const firstVersion = await f.harness.publishPrompt('alice', document.id)
     await f.harness.bindPrompt('alice', 'assistant', firstVersion.id)
-    const first = await f.harness.startRun({ sessionId: sessionA.id, input: 'A', idempotencyKey: 'a' })
+    const first = await f.harness.startRun({ sessionId: sessionA.id, parentNodeId: null, input: 'A', idempotencyKey: 'a' })
     await f.harness.editPrompt('alice', document.id, 1, { content: 'Second.' })
     const secondVersion = await f.harness.publishPrompt('alice', document.id)
     await f.harness.bindPrompt('alice', 'assistant', secondVersion.id)
-    const second = await f.harness.startRun({ sessionId: sessionB.id, input: 'B', idempotencyKey: 'b' })
+    const second = await f.harness.startRun({ sessionId: sessionB.id, parentNodeId: null, input: 'B', idempotencyKey: 'b' })
     assert.deepEqual(f.llm.calls.map(call => call.input.messages[0].content), ['First.', 'Second.'])
     assert.deepEqual(first.promptVersionIds, [firstVersion.id])
     assert.deepEqual(second.promptVersionIds, [secondVersion.id])
