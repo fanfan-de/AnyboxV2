@@ -1,3 +1,4 @@
+import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -314,6 +315,7 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   const inputs = { newId: ids(), now: () => 'now' }
   const projectsFiber = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createBashComponent())
+  root.installComponent(createApplyPatchComponent())
   const stateFiber = root.installComponent(createSqliteStateComponent(inputs))
   const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))

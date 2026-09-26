@@ -30,7 +30,7 @@ export interface LLMSnapshot {
   readonly configVersion: string
 }
 
-/** An in-memory call plan. The providing component privately binds it to its own profile. */
+/** One Run's in-memory plan. Its provider privately owns the profile and any continuation state. */
 export interface LLMPlan {
   readonly snapshot: LLMSnapshot
 }
@@ -39,7 +39,8 @@ export interface LLMPort {
   readonly supportsTools: boolean
   /** Fixes the profile for a Run at admission. Throws LLMFailure when the profile is unknown. */
   prepare(profileId: string): LLMPlan
-  /** Starts one model step. A synchronous throw means no resource was acquired. */
+  /** Starts one model step with complete local history. Wait for done before reusing the plan.
+   * A synchronous throw means no resource was acquired. */
   call(input: { readonly plan: LLMPlan; readonly messages: readonly LLMMessage[];
     readonly tools?: readonly LLMToolDefinition[] }): OwnedCall<ModelReply>
 }

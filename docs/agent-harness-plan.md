@@ -1,14 +1,16 @@
 # Agent Harness 重建计划
 
-状态：当前开发计划，2026-09-26。起点为 `bd25a97`；本分支直接使用 NyaCore 实现 Harness。H0 资源边界、H1 无网络闭环、Prompt 管理与本地存储、可二选一安装的 DeepSeek Chat Completions 和 OpenAI Responses 非流式大模型 API 组件，以及跨平台的凭据组件已有代码与本地行为测试。Bash 执行边界、受控工具循环、DeepSeek 原生工具协议和 Web 过程展示均已完成本地行为验收。本文确定开发顺序、边界和验收方式，具体公共类型在实现对应阶段时通过代码与测试确定。
+状态：当前开发计划，2026-09-26。起点为 `bd25a97`；本分支直接使用 NyaCore 实现 Harness。H0 资源边界、H1 无网络闭环、Prompt 管理与本地存储、可二选一安装的 DeepSeek Chat Completions 和 OpenAI Responses 非流式大模型 API 组件，以及跨平台的凭据组件已有代码与本地行为测试。Bash 与 Apply Patch 执行边界、受控工具循环、两种 API 的原生工具协议和 Web 过程展示均已接入；本机 Web 在启动时选择 API 和模型配置。本文确定开发顺序、边界和验收方式，具体公共类型在实现对应阶段时通过代码与测试确定。
 
 ## 当前基线
 
-已移除通用 `application` 包及其配置宿主。H0 的可取消调用契约与资源归属探针仍在。H1 增加 Agent 定义、Session、Run、初期内存状态、模型端口和 Nya 组合根；当前已将状态提供方替换为 SQLite 实现。Run 支持接受、查询、等待、取消、同键去重以及同一 Session、同父节点的分支并发；模型提供方撤销和应用关闭会取消并等待在途调用实际退出。Prompt 管理允许受信宿主代表用户创建和编辑草稿、发布不可变版本、绑定三种用途类型与消息角色；Run 接受时固定内容快照，`llm` 服务接收项目自有的结构化消息。本地 SQLite 组件排他持有数据库连接，并按领域记录迁移版本；Prompt 组件独立管理文档和版本，Agent Prompt 组件管理绑定及默认指令，两者分别持有已提交读投影和写入队列；关闭重开后恢复文档、版本和绑定。当前所有组件都直接安装在一个应用 Nya 根上，不建立专门的 Harness 作用域。应用启动时只安装一种大模型 API 组件，按 API 格式划分而不设供应商适配器层；当前的 DeepSeek Chat Completions 组件提供 `llm` 服务，注入 `credentials.read` 并在每个 Run 的首次模型调用中读取一次密钥，直接拥有不可变配置、密钥使用、HTTP 传输、原生请求与响应解析、超时、取消和清理。密钥由凭据组件保管：系统凭据库组件把密钥交给 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，并提供受信宿主使用的 `credentials.manage`；无桌面 Linux 改装只接收部署方读取函数的外部来源组件。录入、轮换或删除成功后影响后续读取，无须重启；缺失时新 Run 明确失败。Session 服务提供创建和查询；Run 服务负责准入、固定调用计划与对外控制；AgentLoop 注入 `llm`、Bash 和状态服务，持有每次调用并在 `done` 后推进或结算。两者只依赖 `src/llm/port.ts` 的最小契约，供应商原生类型和凭据不进入 Run、状态或 Prompt。Session、不可变完整轮次节点与 Run 数据由一个 SQLite 状态组件持有，Projects 组件持有目录身份。对外 Run 仅暴露 profile ID 和配置版本。`harness.close()` 卸载应用根上的全部组件，包括大模型 API 组件的在途请求和数据库；重开需重新装配。DeepSeek 原生工具闭环已通过本地模拟 HTTP 服务验收，并已完成真实 DeepSeek 贪吃蛇生成冒烟验证，仍不支持流式输出、thinking 模式下的工具调用和 `developer` 角色；Bash 工具意图与观察已持久化，并可由 Web 查询展示。真实凭据库的写入、跨进程读取和删除测试以 `ANYBOX_KEYRING_TESTS=1` 门控，须在对应系统上通过才算该平台验收；验收记录见 README。
+已移除通用 `application` 包及其配置宿主。H0 的可取消调用契约与资源归属探针仍在。H1 增加 Agent 定义、Session、Run、初期内存状态、模型端口和 Nya 组合根；当前已将状态提供方替换为 SQLite 实现。Run 支持接受、查询、等待、取消、同键去重以及同一 Session、同父节点的分支并发；模型提供方撤销和应用关闭会取消并等待在途调用实际退出。Prompt 管理允许受信宿主代表用户创建和编辑草稿、发布不可变版本、绑定三种用途类型与消息角色；Run 接受时固定内容快照，`llm` 服务接收项目自有的结构化消息。本地 SQLite 组件排他持有数据库连接，并按领域记录迁移版本；Prompt 组件独立管理文档和版本，Agent Prompt 组件管理绑定及默认指令，两者分别持有已提交读投影和写入队列；关闭重开后恢复文档、版本和绑定。当前所有组件都直接安装在一个应用 Nya 根上，不建立专门的 Harness 作用域。应用启动时只安装一种大模型 API 组件，按 API 格式划分而不设供应商适配器层；当前的 DeepSeek Chat Completions 组件提供 `llm` 服务，注入 `credentials.read` 并在每个 Run 的首次模型调用中读取一次密钥，直接拥有不可变配置、密钥使用、HTTP 传输、原生请求与响应解析、超时、取消和清理。密钥由凭据组件保管：系统凭据库组件把密钥交给 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，并提供受信宿主使用的 `credentials.manage`；无桌面 Linux 改装只接收部署方读取函数的外部来源组件。录入、轮换或删除成功后影响后续读取，无须重启；缺失时新 Run 明确失败。Session 服务提供创建和查询；Run 服务负责准入、固定调用计划与对外控制；AgentLoop 注入 `llm`、Bash、Apply Patch 和状态服务，持有每次调用并在 `done` 后推进或结算。两者只依赖 `src/llm/port.ts` 的最小契约，供应商原生类型和凭据不进入 Run、状态或 Prompt。Session、不可变完整轮次节点与 Run 数据由一个 SQLite 状态组件持有，Projects 组件持有目录身份。对外 Run 仅暴露 profile ID 和配置版本。`harness.close()` 卸载应用根上的全部组件，包括大模型 API 组件的在途请求和数据库；重开需重新装配。DeepSeek 原生工具闭环已通过本地模拟 HTTP 服务验收，并已完成真实 DeepSeek 贪吃蛇生成冒烟验证，仍不支持流式输出、thinking 模式下的工具调用和 `developer` 角色；Bash 与 Apply Patch 工具意图与观察已持久化，并可由 Web 查询展示。真实凭据库的写入、跨进程读取和删除测试以 `ANYBOX_KEYRING_TESTS=1` 门控，须在对应系统上通过才算该平台验收；验收记录见 README。
 
 Harness 之外已有[本机薄 Web 客户端参考实现](./web-client-design.md)：Web 前端作为单独的 Nya 组件安装在应用根，拥有本机 HTTP 监听器；宿主还安装原生目录选择组件，macOS 用户通过系统窗口添加项目，其他平台报告不支持。浏览器通过独立 HTTP 协议连接，不改变 Harness 的业务边界。通用产品 Gateway、Client SDK、多端宿主和完整产品 UI 仍在对应阶段设计；旧方案可从 Git 历史查阅，不作为本分支的实现依据。
 
-OpenAI Responses 组件作为 DeepSeek 的替代实现提供同一个 `llm` 服务，独立读取自己的凭据，支持 `developer` 文本消息，并从非流式响应的最终助手输出取文本。它与 DeepSeek 都用本地可控传输验证请求、取消和清理；真实 OpenAI API 尚未联网验收。本机 Web 宿主仍默认安装 DeepSeek，未提供模型切换界面。
+OpenAI Responses 组件作为 DeepSeek 的替代实现提供同一个 `llm` 服务，支持 `developer` 文本消息、非流式最终文本和 Bash、Apply Patch 函数工具循环。同一 Run 首次模型调用读取一次自己的凭据；原生 reasoning、加密推理上下文、消息 phase 与函数调用只留在组件私有计划上下文中，按原顺序回传，不扩展 `LLMPort` 或 SQLite。最终文本使用 `final_answer`、未设置或 `null` 的 phase，`commentary` 不作为最终回答；成功解析、未取消且清理完成后才在最终 `done` 阶段提交续轮检查点并解锁。同一计划在上一次 `done` 前拒绝重叠调用，失败不自动重试。真实 OpenAI API 尚未联网验收，本地验证使用模拟 HTTP 和可控传输。
+
+本机 Web 宿主默认安装 DeepSeek，也可通过 `ANYBOX_LLM_API=openai-responses` 选择 Responses；后者须提供 `ANYBOX_LLM_MODEL`。`ANYBOX_LLM_*` 还可配置 API 基础地址、超时、可选输出长度与温度，默认值与示例见 [README](../README.md#本机-web-界面)。环境变量在打开凭据库、SQLite 或监听器前校验，不加载 dotenv；只安装选中的模型组件及其凭据注册。Web 沿用通用 Key 管理，没有模型切换界面，修改模型配置需重启。
 
 本机 Web 已接入 Prompt 与 Agent Prompt 服务，在设置中提供草稿编辑、版本发布、历史预览和 Agent 绑定。宿主固定本机操作者身份；编辑与发布检查修订号，普通管理操作不重启组件。Web 关闭先等待已接收的 Prompt 写入请求，再由 Nya 清理其依赖。
 
@@ -30,7 +32,7 @@ OpenAI Responses 组件作为 DeepSeek 的替代实现提供同一个 `llm` 服�
 | --- | --- | --- |
 | H0 契约与资源边界（已完成） | 可取消调用契约；用最小 Nya 组件验证取消和关闭顺序 | strict 类型检查；领域契约不依赖 Nya 或具体实现；在途任务真正退出后才完成清理 |
 | H1 无网络闭环（已完成） | Agent 定义、Session、一次可控模型调用、Run 接受/查询/取消/等待、内存状态 | 输入到终态可查询；同键请求不重复执行；并发与取消竞态有行为测试；无遗留任务 |
-| H2 受控多步循环（已完成） | 模型请求工具、整批校验、串行执行、结果回填、可取消的多轮调用和输出上限 | 无效工具零执行；长文件完整写入；不按固定调用次数中断；取消不开始下一项；状态与事件一致；失败不伪造成功 |
+| H2 受控多步循环（已完成） | 模型请求 Bash 或 Apply Patch、整批参数校验、串行执行、结果回填、可取消的多轮调用和输出上限 | 无效工具零执行；长文件完整写入；不按固定调用次数中断；取消不开始下一项；状态与事件一致；失败不伪造成功 |
 | H3 Run 持久化与恢复（工具意图与观察已接入） | 单实例排他状态提供方、原子记录、关闭后重开、异常退出清算 | 去重与历史可恢复；未完成工具标记不确定；不自动重放副作用 |
 | H4 真实模型与交互（DeepSeek 工具协议已通过本地模拟验收及真实生成冒烟验证） | 按已验证的模型协议适配流式输出、工具调用、审批或提问 | Mock 与真实适配器通过共享契约；凭据与取消边界明确；联网验收与各平台凭据库验收单独记录 |
 
@@ -40,6 +42,18 @@ OpenAI Responses 组件作为 DeepSeek 的替代实现提供同一个 `llm` 服�
 
 H1、[Prompt 管理模块](./prompt-management-design.md) 与大模型 API 组件边界已通过可控 `llm` 替身及本地模拟 DeepSeek、OpenAI Responses 服务验证去重、版本固定、角色组装、权限拒绝、超时、组件撤销与替换、关闭和清理等待。Prompt 默认由 SQLite 持久化，已验证关闭重开恢复、旧 JSON 一次性导入和单实例排他。凭据组件已用假凭据组件验证缺失、来源失败、密钥不进入快照或错误、撤销等待、写入后新 Run 使用新密钥、已有 Run 继续，以及删除后新 Run 失败。H2 已建立 Bash 工具资源组件，并接入 AgentLoop 和 SQLite 执行状态：可控模型请求 Bash 后，整批校验、串行执行、回填结果；每次执行前原子记录意图，退出后记录观察。直接调用和工具循环测试覆盖工作目录、环境、退出码、输出边界、多轮调用、取消竞态、依赖撤销、卸载等待、旧库迁移与异常重启不重放。DeepSeek 原生 `tool_calls` 协议、同一 Run 的凭据复用及 Web 事件查询与过程展示已通过本地模拟 HTTP 与浏览器验收；2026-09-26 已在 macOS 以真实 DeepSeek 完成临时项目中的贪吃蛇生成冒烟验证，7 次模型调用和 8 次 Bash 调用后结算 completed，最长写入命令超过 8 KiB；真实服务的异常、取消与清理仍待专项联网验收。项目、Session 和 Run 已由 SQLite 持久化，用户身份须由未来受信宿主认证。每次改变生命周期、取消或资源归属时同步更新行为测试，并运行 `npm run check`。
 
+
+### Apply Patch 本地验证（2026-09-26）
+
+在现有 Bash 之外加入独立的 Apply Patch 文件资源组件，直接安装在应用根并由 AgentLoop 注入。纯补丁解析和精确文本变更与文件系统副作用分开；两个已知工具使用判别联合，不建立动态注册框架。文件组件持有跨项目串行队列，先检查所有操作，再按文件提交；取消和故障返回已完成变更与未完成项，`done` 等当前提交及清理退出。单文件临时发布不构成多文件事务，Bash 和外部进程也不共享该队列。
+
+新执行记录使用 `toolCalls` 和带工具名的 `tool-started`、`tool-observed`、`tool-failed`；旧 `bashCalls` 与 `bash-*` 仅在读取时归一化，保留事件序号和时间，不重写历史、不增加表或列。异常重启仍结算 `interrupted`，不自动重放补丁。
+
+本地验证覆盖补丁语法、空文件、Unicode、BOM、LF/CRLF、末尾换行、精确与歧义匹配、文件类型、路径冲突、全量预检、部分提交、取消、清理失败和依赖撤销；工具循环及 Web 验证覆盖混合批次、可修正的拒绝结果、历史兼容和两类工具展示。所有测试使用临时文件、受控模型或模拟 HTTP，不构成真实 DeepSeek/OpenAI 对新工具的联网验收。本轮 `npm run check` 已通过，真实凭据库测试仍按原门控跳过。
+
+### Responses 工具循环与启动配置验收（2026-09-26）
+
+已用本地模拟 HTTP、可控传输与临时 SQLite 验证 Responses 非流式工具闭环、reasoning/phase 续传、计划隔离、每 Run 一次的密钥读取、取消及清理等待，并验证 Web 启动配置和所选凭据注册。`npm run check` 通过：共 173 项，171 项通过，2 项真实凭据库测试按门控跳过，0 项失败。公共 `LLMPort` 和数据库结构不变，验证未使用实际业务数据库；真实 OpenAI API 尚未联网验收。
 
 ### Web 分屏验收（2026-09-26）
 

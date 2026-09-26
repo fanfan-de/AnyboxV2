@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import type { Run, Session } from '../run/domain.js'
 import type { RunInput, ConversationNode, NodePage, NodeQuery, RunQuery } from '../run/domain.js'
 import type { RunEvent } from '../run/execution.js'
+import type { ValidatedToolRequest } from '../run/domain.js'
 import { LLMFailure } from '../llm/port.js'
 import { CredentialFailure } from '../credentials/port.js'
 import { UnmanagedCredentialError } from '../credentials/settings.js'
@@ -147,24 +148,28 @@ function outputSummary(value: string): { readonly text: string; readonly truncat
   return { text: value, truncated: false }
 }
 
+function toolCallView(call: ValidatedToolRequest): object {
+  if (call.name === 'bash') return { id: call.id, name: call.name, command: call.arguments.command }
+  const patch = outputSummary(call.arguments.patch)
+  return { id: call.id, name: call.name, patch: patch.text, patchTruncated: patch.truncated }
+}
+
 function runEventView(event: RunEvent): object {
   const base = { seq: event.seq, at: event.at, kind: event.kind }
   switch (event.kind) {
     case 'model-started': return base
-    case 'model-tool-calls':
-      return { ...base, calls: event.calls.map(call => ({
-        id: call.id, name: call.name, command: call.arguments.command,
-      })) }
-    case 'bash-started':
-      return { ...base, requestId: event.call.id, command: event.call.arguments.command }
-    case 'bash-observed': {
+    case 'model-tool-calls': return { ...base, calls: event.calls.map(toolCallView) }
+    case 'tool-started': return { ...base, ...toolCallView(event.call), requestId: event.call.id }
+    case 'tool-observed': {
+      if (event.name === 'apply_patch') return { ...base, name: event.name, requestId: event.requestId, result: event.result }
       const stdout = outputSummary(event.result.stdout)
       const stderr = outputSummary(event.result.stderr)
-      return { ...base, requestId: event.requestId, exitCode: event.result.exitCode,
+      return { ...base, name: event.name, requestId: event.requestId, exitCode: event.result.exitCode,
         signal: event.result.signal, stdout: stdout.text, stderr: stderr.text,
         truncated: event.result.truncated || stdout.truncated || stderr.truncated }
     }
-    case 'bash-failed': return { ...base, requestId: event.requestId, category: event.category }
+    case 'tool-failed': return { ...base, name: event.name, requestId: event.requestId, category: event.category,
+      ...(event.result ? { result: event.result } : {}) }
     case 'terminal': return { ...base, status: event.status,
       ...(event.errorCategory ? { errorCategory: event.errorCategory } : {}) }
     case 'interrupted': return { ...base, previousPhase: event.previousPhase }
@@ -205,6 +210,7 @@ const assets = new Map([
   ['/workspace-client.js', { file: fileURLToPath(new URL('./workspace-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-layout.js', { file: fileURLToPath(new URL('./workspace-layout.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/session-client.js', { file: fileURLToPath(new URL('./session-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/tool-trace.js', { file: fileURLToPath(new URL('./tool-trace.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/session-view.js', { file: fileURLToPath(new URL('./session-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
 ])
 

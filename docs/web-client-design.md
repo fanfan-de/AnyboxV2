@@ -4,9 +4,9 @@
 
 ## 边界
 
-浏览器只通过同源 `/api/v1` 与本机 Web 组件交互。应用宿主在同一个 Nya 根上装配自包含 API Key 服务、DeepSeek、SQLite、Harness、目录选择器和 `web-frontend` 组件；Web 组件拥有 HTTP 监听器与静态页面，应用入口处理进程信号并通过 `harness.close()` 卸载整个根。Harness 负责项目、Session、Run 准入、幂等、执行、取消与结算。浏览器不导入 Nya 或 Harness，不直接访问模型、SQLite 或凭据，也不保存权威业务状态。
+浏览器只通过同源 `/api/v1` 与本机 Web 组件交互。应用宿主在同一个 Nya 根上装配自包含 API Key 服务、启动时选定的 DeepSeek 或 OpenAI Responses、SQLite、Harness、目录选择器和 `web-frontend` 组件；只安装一种模型实现，并注册其凭据。模型由 `ANYBOX_LLM_*` 环境变量在安装资源前校验和选择，参数见 [README](../README.md#本机-web-界面)。Web 组件拥有 HTTP 监听器与静态页面，应用入口处理进程信号并通过 `harness.close()` 卸载整个根。Harness 负责项目、Session、Run 准入、幂等、执行、取消与结算。浏览器不导入 Nya 或 Harness，不直接访问模型、SQLite 或凭据，也不保存权威业务状态。
 
-页面使用原生 TypeScript、HTML 和 CSS。`src/web/client.ts` 负责全局设置与启动；`workspace-layout.ts` 提供纯布局函数，`workspace-client.ts` 管理工作区，`session-client.ts` 管理每个会话的请求，`session-view.ts` 管理面板 DOM，`prompt-client.ts` 保留 Prompt 设置。浏览器模块只依赖浏览器 API；`src/web/component.ts` 接收 Harness 校验后的 Agent ID 列表，通过 Nya 注入 Projects、Session、Run、Prompt、Agent Prompt、目录选择器和通用凭据设置服务，`src/web/server.ts` 把服务映射为 HTTP 接口。公开的 Session、Run 和 Run 事件视图不暴露 Agent 指令、Prompt 内容快照、模型调用计划、密钥或 Nya 服务；Bash 命令与输出摘要会显示给本机页面。Prompt 管理接口单独返回可管理文档、版本和 Agent 当前使用的内容。依赖撤销时 Web 先取消在途目录选择，关闭监听器并等待请求退出（包括已接收的 Prompt 写入），再释放其依赖；依赖恢复后组件在原端口重启。
+页面使用原生 TypeScript、HTML 和 CSS。`src/web/client.ts` 负责全局设置与启动；`workspace-layout.ts` 提供纯布局函数，`workspace-client.ts` 管理工作区，`session-client.ts` 管理每个会话的请求，`session-view.ts` 管理面板 DOM，`tool-trace.ts` 从事件归并两类工具的展示状态，`prompt-client.ts` 保留 Prompt 设置。浏览器模块只依赖浏览器 API；`src/web/component.ts` 接收 Harness 校验后的 Agent ID 列表，通过 Nya 注入 Projects、Session、Run、Prompt、Agent Prompt、目录选择器和通用凭据设置服务，`src/web/server.ts` 把服务映射为 HTTP 接口。公开的 Session、Run 和 Run 事件视图不暴露 Agent 指令、Prompt 内容快照、模型调用计划、密钥或 Nya 服务；Bash 命令与输出摘要、Apply Patch 补丁预览及变更结果会显示给本机页面。Prompt 管理接口单独返回可管理文档、版本和 Agent 当前使用的内容。依赖撤销时 Web 先取消在途目录选择，关闭监听器并等待请求退出（包括已接收的 Prompt 写入），再释放其依赖；依赖恢复后组件在原端口重启。
 
 ## 本机协议
 
@@ -22,7 +22,7 @@
 | `GET /api/v1/sessions/:id/runs` | 列出会话的 Run，支持 `status=active` 和 `parentNodeId` 过滤（`root` 表示虚拟根） |
 | `POST /api/v1/sessions/:id/runs` | 用 `{parentNodeId: string|null,input,idempotencyKey}` 接受 Run；父节点必填 |
 | `GET /api/v1/runs/:id` | 读取公开 Run 的 `history`、`revision`、状态与 `resultNodeId`/结果 |
-| `GET /api/v1/runs/:id/events` | 支持 `afterSeq` 增量读取 Run 的过程事件；Bash 观察的 stdout、stderr 各截为最多 2048 UTF-8 字节，不返回内部快照 |
+| `GET /api/v1/runs/:id/events` | 支持 `afterSeq` 增量读取 Run 的过程事件；按工具名返回 `tool-*` 事件；Bash 的 stdout、stderr 和 Apply Patch 补丁预览分别最多 2048 UTF-8 字节；补丁结果保留变更、未完成项和诊断，不返回内部快照 |
 | `POST /api/v1/runs/:id/cancel` | 请求取消，返回当前 Run 状态 |
 | `GET /api/v1/sessions/:id/nodes/:nodeId` | 完整节点 |
 | `GET /api/v1/sessions/:id/nodes/:nodeId/path` | 根到节点的路径，`root/path` 为空 |
@@ -46,6 +46,8 @@
 Prompt 操作者由 Web 宿主固定为持久身份 `local-web-user`，浏览器不能提交 `actorId` 或所有者字段。组件仍检查文档所有权和 Agent 管理权限；其他宿主身份创建的文档不会自动归属本机用户。修订冲突返回 `409 prompt-conflict`，发布冲突返回 `409 prompt-publication-conflict`，权限拒绝返回 `403 prompt-forbidden`。创建和编辑请求允许最多 1 MiB JSON，随后由 Prompt 领域校验 100000 字符的内容限制；其他请求继续采用 64 KiB 上限。
 
 HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run。详细合约、迁移与客户端语义见[对话树实施记录](./session-conversation-tree.md)。
+
+工具过程按 `name` 区分 `bash` 与 `apply_patch`，事件使用 `tool-started`、`tool-observed`、`tool-failed`；旧 Bash 事件由状态读取边界归一化后再发布。客户端根据事件顺序、请求 ID 和工具名归并当前调用，同一 ID 在后续模型批次重新使用时仍保留两条记录。Apply Patch 卡片显示 `applied/rejected/partial/cancelled`，保留已完成的文件变更、未完成操作和诊断；部分提交或移动未删源不会显示成完整成功。清理失败仍显示已知变更事实，状态显示失败。补丁预览单独标注截断，不影响持久记录或模型收到的工具结果。
 
 ## 页面流程
 
@@ -76,5 +78,7 @@ HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run
 ## 验收
 
 `tests/workspace-layout.test.mjs` 覆盖四方向分割、跨项目移动、上限、关闭收拢、尺寸约束、损坏记录恢复和 URL；`tests/session-client.test.mjs` 覆盖独立运行/取消、关闭和延迟响应、丢响应查键、旧 pending、存储拒绝、revision 合并、显式节点与乱序完成。HTTP 测试验证新增浏览器模块白名单，继续阻止访问宿主模块。
+
+`tests/tool-trace.test.mjs` 与 Web HTTP 测试使用本地受控事件验证混合工具、重复请求 ID、补丁的四种结果、部分移动、清理失败事实和 Unicode 预览截断；此验证不访问真实模型或工作区数据库。
 
 浏览器验收使用 `npm run build` 后运行 `node tests/helpers/workspace-browser-host.mjs`，输出临时测试站点地址；Ctrl+C 关闭并清理临时库。2026-09-26 已验证会话拖入四面板、移动保留草稿、指针与键盘调整尺寸、跨项目导航、刷新恢复、窄屏切换、跨会话提交、关闭后运行继续、显式取消、双标签页发现其他 Run 且保持各自查看位置、设置和 Prompt 编辑器入口。此工具使用受控模型与内存凭据，不能作为真实模型或系统凭据库验收。

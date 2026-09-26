@@ -1,3 +1,4 @@
+import { applyPatchToolDefinition } from '../dist/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -182,7 +183,7 @@ test('DeepSeek tool calls execute Bash, return a linked tool message, and reuse 
     assert.equal(f.credentials.reads.length, 1)
     assert.deepEqual(received.map(item => item.body.thinking),
       [{ type: 'disabled' }, { type: 'disabled' }])
-    assert.deepEqual(received[0].body.tools, [{ type: 'function', function: bashToolDefinition }])
+    assert.deepEqual(received[0].body.tools, [bashToolDefinition, applyPatchToolDefinition].map(definition => ({ type: 'function', function: definition })))
     assert.deepEqual(received[1].body.messages[2], {
       role: 'assistant', content: null, tool_calls: [{
         id: 'call-1', type: 'function', function: { name: 'bash', arguments: '{"command":"printf hello"}' },
@@ -192,7 +193,7 @@ test('DeepSeek tool calls execute Bash, return a linked tool message, and reuse 
     assert.equal(received[1].body.messages[3].tool_call_id, 'call-1')
     assert.equal(JSON.parse(received[1].body.messages[3].content).stdout, 'hello')
     assert.deepEqual((await f.harness.getRunEvents(run.id)).map(event => event.kind), [
-      'model-started', 'model-tool-calls', 'bash-started', 'bash-observed', 'model-started', 'terminal',
+      'model-started', 'model-tool-calls', 'tool-started', 'tool-observed', 'model-started', 'terminal',
     ])
     assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes.map(({ input, output }) => ({ input, output })),
       [{ input: 'Run Bash', output: 'Bash printed hello.' }])
@@ -231,7 +232,7 @@ test('a long DeepSeek Bash heredoc writes the complete file and finishes the Run
     assert.equal(observation.tool_call_id, 'write-html')
     assert.equal(JSON.parse(observation.content).exitCode, 0)
     const events = await f.harness.getRunEvents(run.id)
-    assert.equal(events.find(event => event.kind === 'bash-started').call.arguments.command, command)
+    assert.equal(events.find(event => event.kind === 'tool-started').call.arguments.command, command)
   } finally { await f.close(); await server.close() }
 })
 

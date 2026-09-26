@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import { once } from 'node:events'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -8,11 +10,14 @@ import { createHarness } from '../dist/harness.js'
 import { LLMFailure } from '../dist/llm/port.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from '../dist/web/component.js'
+import { startWebServer } from '../dist/web/server.js'
 import { createDirectoryPickerComponent } from '../dist/web/directory-picker.js'
 import { controlledLLM, deferred } from './helpers/controlled-llm.mjs'
 import { promptServiceKey } from '../dist/prompt/component.js'
 import { createApiKeyServiceComponent } from '../dist/credentials/settings.js'
 import { deepSeekCredentialId } from '../dist/llm/deepseek-chat-completions/component.js'
+import { openAIResponsesCredentialId } from '../dist/llm/openai-responses/component.js'
+import { createWebLLMComponent, parseWebStartupConfig } from '../dist/web/startup-config.js'
 
 const videoCredentialId = 'video/example/default'
 const managed = [
@@ -21,12 +26,12 @@ const managed = [
 ]
 const credentialPath = id => `/credentials/${encodeURIComponent(id)}`
 
-async function fixture(directory, pickerOptions = {}) {
+async function fixture(directory, pickerOptions = {}, startup) {
   const root = new Context()
   const llm = controlledLLM()
   const secrets = new Map()
   try {
-    const keyFiber = root.installComponent(createApiKeyServiceComponent({ namespace: 'web-test', definitions: managed, openEntry(_namespace, id) {
+    const keyFiber = root.installComponent(createApiKeyServiceComponent({ namespace: 'web-test', definitions: startup ? [startup.llm.credential] : managed, openEntry(_namespace, id) {
       return {
         async getPassword() { return secrets.get(id) },
         async setPassword(secret) { secrets.set(id, secret) },
@@ -34,7 +39,7 @@ async function fixture(directory, pickerOptions = {}) {
       }
     } }))
     await keyFiber
-    const apiFiber = root.installComponent(llm.component())
+    const apiFiber = root.installComponent(startup ? createWebLLMComponent(startup.llm) : llm.component())
     await apiFiber
     await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
     const harness = await createHarness(root, {
@@ -94,6 +99,75 @@ test('Web credential settings manage registered LLM and video keys without expos
     assert.equal(f.secrets.get(videoCredentialId), 'video-private-value')
     for (const data of [saved.data, video.data, deleted.data]) assert.doesNotMatch(JSON.stringify(data), /private-value/)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('Web Responses startup registers its key and exposes the existing Bash Run events', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-responses-'))
+  const received = []
+  const server = createServer(async (incoming, response) => {
+    let body = ''
+    for await (const chunk of incoming) body += chunk
+    received.push({ path: incoming.url, authorization: incoming.headers.authorization, body: JSON.parse(body) })
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({
+      object: 'response', status: 'completed',
+      output: received.length === 1 ? [
+        { id: 'reasoning-web', type: 'reasoning', summary: [], encrypted_content: 'private-encrypted-context' },
+        { id: 'message-web', type: 'message', role: 'assistant', status: 'completed', phase: 'commentary',
+          content: [{ type: 'output_text', text: 'Running Bash.' }] },
+        { id: 'function-web', type: 'function_call', status: 'completed', call_id: 'call-web',
+          name: 'bash', arguments: JSON.stringify({ command: 'printf web-response' }) },
+      ] : [
+        { id: 'final-web', type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer',
+          content: [{ type: 'output_text', text: 'Bash printed web-response.' }] },
+      ],
+    }))
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const config = parseWebStartupConfig({
+    ANYBOX_LLM_API: 'openai-responses', ANYBOX_LLM_MODEL: 'compatible-responses-model',
+    ANYBOX_LLM_BASE_URL: `http://127.0.0.1:${server.address().port}/v1`,
+    ANYBOX_LLM_MAX_OUTPUT_TOKENS: '2048', ANYBOX_LLM_TEMPERATURE: '0.2',
+  })
+  let f
+  try {
+    f = await fixture(directory, {}, config)
+    const credentials = await request(f.web, 'GET', '/credentials')
+    assert.deepEqual(credentials.data, [{ ...config.llm.credential, configured: false }])
+    assert.equal((await request(f.web, 'POST', credentialPath(deepSeekCredentialId), { key: 'unregistered' })).response.status, 404)
+    assert.equal((await request(f.web, 'POST', credentialPath(openAIResponsesCredentialId), { key: 'web-secret-key' })).response.status, 200)
+    const session = (await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data
+    const run = (await request(f.web, 'POST', `/sessions/${session.id}/runs`, {
+      parentNodeId: null, input: 'Run Bash', idempotencyKey: 'responses-web',
+    })).data
+    await f.harness.waitRun(run.id)
+    const terminal = (await request(f.web, 'GET', `/runs/${run.id}`)).data
+    assert.equal(terminal.status, 'completed')
+    assert.equal(terminal.output, 'Bash printed web-response.')
+    const events = (await request(f.web, 'GET', `/runs/${run.id}/events?afterSeq=0`)).data
+    assert.deepEqual(events.map(event => event.kind), [
+      'model-started', 'model-tool-calls', 'tool-started', 'tool-observed', 'model-started', 'terminal',
+    ])
+    assert.equal(events.find(event => event.kind === 'tool-observed').stdout, 'web-response')
+    assert.equal(events.find(event => event.kind === 'tool-started').requestId, 'call-web')
+    assert.doesNotMatch(JSON.stringify({ terminal, events }), /private-encrypted-context|web-secret-key|Private instructions/)
+    assert.equal(received.length, 2)
+    for (const incoming of received) {
+      assert.equal(incoming.path, '/v1/responses')
+      assert.equal(incoming.authorization, 'Bearer web-secret-key')
+      assert.equal(incoming.body.model, 'compatible-responses-model')
+      assert.equal(incoming.body.max_output_tokens, 2048)
+      assert.equal(incoming.body.temperature, 0.2)
+    }
+    const observation = received[1].body.input.find(item => item.type === 'function_call_output')
+    assert.equal(observation.call_id, 'call-web')
+    assert.equal(JSON.parse(observation.output).stdout, 'web-response')
+  } finally {
+    await f?.close()
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('Web edits, publishes and binds Prompt versions while accepted Runs keep their snapshots', async () => {
@@ -225,7 +299,7 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     const clientSource = await client.text()
     assert.match(clientSource, /\/api\/v1/)
     assert.doesNotMatch(clientSource, /@nya\/core|deepseek-chat-completions/)
-    for (const asset of ['workspace-client', 'workspace-layout', 'session-client', 'session-view', 'prompt-client']) {
+    for (const asset of ['workspace-client', 'workspace-layout', 'session-client', 'session-view', 'tool-trace', 'prompt-client']) {
       const response = await fetch(`${f.web.url}/${asset}.js`)
       assert.equal(response.status, 200)
       assert.match(response.headers.get('content-type'), /javascript/)
@@ -291,7 +365,7 @@ test('Web serves bounded Run events for an active Bash loop and its completed hi
     const events = await request(f.web, 'GET', `/runs/${accepted.data.id}/events`)
     assert.equal(events.response.status, 200)
     assert.deepEqual(events.data.map(event => event.kind), [
-      'model-started', 'model-tool-calls', 'bash-started', 'bash-observed', 'model-started', 'terminal',
+      'model-started', 'model-tool-calls', 'tool-started', 'tool-observed', 'model-started', 'terminal',
     ])
     assert.equal(events.data[1].calls[0].command, "printf '%*s' 5000 '' | tr ' ' a")
     assert.equal(events.data[2].requestId, 'call-1')
@@ -300,6 +374,65 @@ test('Web serves bounded Run events for an active Bash loop and its completed hi
     assert.equal(events.data[3].truncated, true)
     assert.equal(events.data[5].status, 'completed')
     assert.doesNotMatch(JSON.stringify(events.data), /Private instructions|llmSnapshot|local-key/)
+  } finally {
+    for (const call of f.llm.calls) call.done.resolve()
+    await f.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('Web Apply Patch events bound Unicode previews and preserve partial, cancelled and cleanup results', async () => {
+  const patch = '*** Begin Patch\n*** Add File: 中文.txt\n+' + '字'.repeat(1_000) + '\n*** End Patch'
+  const call = { id: 'patch', name: 'apply_patch', arguments: { patch } }
+  const makeResult = status => ({ status, changes: [{ kind: 'added', path: '/project/中文.txt' }],
+    pending: [{ kind: 'update', path: '/project/old.txt', moveTo: '/project/new.txt' }],
+    diagnostic: { code: 'io-error', message: 'Could not remove source', path: '/project/old.txt' } })
+  const source = [
+    { kind: 'model-tool-calls', calls: [call] }, { kind: 'tool-started', call },
+    ...['applied', 'rejected', 'partial', 'cancelled'].map(status => ({
+      kind: 'tool-observed', name: 'apply_patch', requestId: call.id, result: makeResult(status),
+    })),
+    { kind: 'tool-failed', name: 'apply_patch', requestId: call.id, category: 'tool-cleanup-failure', result: makeResult('partial') },
+  ].map((event, i) => ({ ...event, seq: i + 1, at: '2026-01-01T00:00:00.000Z' }))
+  const web = await startWebServer({ getRunEvents: async (_id, after) => source.filter(event => event.seq > after) })
+  try {
+    const { data: events } = await request(web, 'GET', '/runs/run/events')
+    assert.equal(events[0].calls[0].name, 'apply_patch')
+    assert.equal(events[0].calls[0].patchTruncated, true)
+    assert.ok(Buffer.byteLength(events[0].calls[0].patch, 'utf8') <= 2048)
+    assert.ok(patch.startsWith(events[0].calls[0].patch))
+    assert.doesNotMatch(events[0].calls[0].patch, /�/)
+    assert.equal(events[1].patch, events[0].calls[0].patch)
+    assert.equal(events[1].requestId, call.id)
+    for (let i = 2; i < source.length; i++) assert.deepEqual(events[i].result, source[i].result)
+    assert.equal(events.at(-1).category, 'tool-cleanup-failure')
+    assert.deepEqual((await request(web, 'GET', '/runs/run/events?afterSeq=5')).data.map(event => event.seq), [6, 7])
+  } finally { await web.close() }
+})
+
+test('Web exposes a rejected patch followed by a corrected patch as separate process cards', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-patch-'))
+  const f = await fixture(directory)
+  try {
+    const session = (await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data
+    const run = (await request(f.web, 'POST', `/sessions/${session.id}/runs`, {
+      parentNodeId: null, input: 'Create a file', idempotencyKey: 'patch-events',
+    })).data
+    for (const [index, patch] of ['not a patch', '*** Begin Patch\n*** Add File: created.txt\n+hello\n*** End Patch'].entries()) {
+      f.llm.calls[index].result.resolve({ kind: 'tool-calls', calls: [{ id: 'same-id', name: 'apply_patch', arguments: { patch } }] })
+      f.llm.calls[index].done.resolve()
+      for (let attempt = 0; attempt < 100 && f.llm.calls.length < index + 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
+      assert.equal(f.llm.calls.length, index + 2)
+    }
+    f.llm.calls[2].result.resolve('Created'); f.llm.calls[2].done.resolve()
+    assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
+    const events = (await request(f.web, 'GET', `/runs/${run.id}/events`)).data
+    const observations = events.filter(event => event.kind === 'tool-observed')
+    assert.deepEqual(observations.map(event => event.result.status), ['rejected', 'applied'])
+    assert.equal(observations[0].result.changes.length, 0)
+    assert.equal(observations[1].result.changes[0].kind, 'added')
+    assert.match(observations[1].result.changes[0].path, /created.txt$/)
+    assert.equal(events.filter(event => event.kind === 'tool-started').every(event => event.name === 'apply_patch'), true)
   } finally {
     for (const call of f.llm.calls) call.done.resolve()
     await f.close()

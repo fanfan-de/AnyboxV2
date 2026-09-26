@@ -4,8 +4,11 @@ import { LLMFailure, llmServiceKey, normalizeLLMFailure } from '../llm/port.js'
 import type { LLMMessage, LLMPort, ModelReply } from '../llm/port.js'
 import { BashFailure, bashServiceKey } from '../tool/bash-component.js'
 import type { BashPort, BashResult } from '../tool/bash-component.js'
-import { bashObservationMessage, buildLLMMessages, RunFailure, runLimits, validateBashBatch } from './domain.js'
-import type { Run, RunOutcome, ValidatedBashRequest } from './domain.js'
+import { applyPatchServiceKey, isApplyPatchFailure } from '../tool/apply-patch-component.js'
+import type { ApplyPatchPort } from '../tool/apply-patch-component.js'
+import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
+import { toolObservationMessage, toolOutputBytes, buildLLMMessages, RunFailure, runLimits, validateToolBatch } from './domain.js'
+import type { Run, RunOutcome, ValidatedToolRequest, ToolObservation } from './domain.js'
 import { stateServiceKey } from './sqlite-state.js'
 import type { StatePort } from './sqlite-state.js'
 import { createWaiters } from './waiters.js'
@@ -29,45 +32,58 @@ interface ActiveRun {
 type Observation<T> =
   | { readonly kind: 'value'; readonly value: T }
   | { readonly kind: 'error'; readonly error: unknown }
-  | { readonly kind: 'cleanup-failed' }
+  | { readonly kind: 'cleanup-failed'; readonly value?: T }
 
 /** Observe both promises immediately; an early cleanup failure must not wait forever for result. */
 async function observe<T>(call: OwnedCall<T>): Promise<Observation<T>> {
+  let available: { readonly value: T } | undefined
   const result = call.result.then(
-    value => ({ kind: 'value' as const, value }),
+    value => { available = { value }; return { kind: 'value' as const, value } },
     (error: unknown) => ({ kind: 'error' as const, error }),
   )
   const exited = call.done.then(() => true, () => false)
   const early = exited.then(async (ok): Promise<Observation<T>> =>
     ok ? await result : { kind: 'cleanup-failed' })
   const observed = await Promise.race<Observation<T>>([result, early])
-  if (!await exited) return { kind: 'cleanup-failed' }
+  if (!await exited) return { kind: 'cleanup-failed', ...available }
   return observed
 }
 
-function bashFailure(error: unknown): RunFailure {
+function toolFailure(error: unknown): RunFailure {
   if (error instanceof BashFailure) {
     if (error.category === 'timeout') return new RunFailure('tool-timeout')
     if (error.category === 'cancelled') return new RunFailure('tool-cancelled')
     if (error.category === 'cleanup-failure') return new RunFailure('tool-cleanup-failure')
     if (error.category === 'invalid-request') return new RunFailure('invalid-tool-request')
   }
+  if (isApplyPatchFailure(error)) {
+    if (error.category === 'cleanup-failure') return new RunFailure('tool-cleanup-failure')
+    if (error.category === 'invalid-request') return new RunFailure('invalid-tool-request')
+  }
   return new RunFailure('tool-unavailable')
 }
 
-/** Owns every model and Bash call until its result and actual exit have been observed. */
+function observation(request: ValidatedToolRequest, value: unknown): ToolObservation {
+  return request.name === 'bash'
+    ? { name: 'bash', result: value as BashResult }
+    : { name: 'apply_patch', result: value as ApplyPatchResult }
+}
+
+/** Owns every model and tool call until its result and actual exit have been observed. */
 export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Object<void, {
   [stateServiceKey]: StatePort
   [llmServiceKey]: LLMPort
   [bashServiceKey]: BashPort
+  [applyPatchServiceKey]: ApplyPatchPort
 }> {
   return {
     name: 'harness-agent-loop',
-    inject: [stateServiceKey, llmServiceKey, bashServiceKey],
+    inject: [stateServiceKey, llmServiceKey, bashServiceKey, applyPatchServiceKey],
     apply(ctx, _config, deps) {
       const state = deps[stateServiceKey]
       const llm = deps[llmServiceKey]
       const bash = deps[bashServiceKey]
+      const applyPatch = deps[applyPatchServiceKey]
       const active = new Map<string, ActiveRun>()
       const waitFor = createWaiters<Run | undefined>()
       // Retain rejected owners until this component exits; a persistence error must never allow replay.
@@ -95,7 +111,7 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
           let rejectStarted!: (error: unknown) => void
           const started = new Promise<Run>((resolve, reject) => { resolveStarted = resolve; rejectStarted = reject })
           let current: OwnedCall<unknown> | undefined
-          let currentKind: 'model' | 'bash' = 'model'
+          let currentKind: 'model' | 'tool' = 'model'
           let reason: LoopCancelReason | undefined
           let cancelError: unknown
           let cleanupProblem: LLMFailure | RunFailure | undefined
@@ -132,13 +148,13 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
             ])
             if (!session || !prompts || !plan) return fail(new LLMFailure('dependency-unavailable'))
             const messages: LLMMessage[] = [...buildLLMMessages(prompts, history, run.input)]
-            let request: ValidatedBashRequest | undefined
+            let request: ValidatedToolRequest | undefined
             let totalToolOutputBytes = 0
             while (true) {
               const stopped = await stop()
               if (stopped) return stopped
               const intent = currentKind === 'model' ? { kind: 'model-started' as const }
-                : { kind: 'bash-started' as const, call: request! }
+                : { kind: 'tool-started' as const, call: request! }
               if (!await state.recordRunEvent(runId, intent, inputs.now())) {
                 return (await stop()) ?? await settle({ kind: 'cancelled' })
               }
@@ -149,12 +165,14 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
               try {
                 current = currentKind === 'model'
                   ? llm.call({ plan, messages: Object.freeze([...messages]),
-                    ...(llm.supportsTools ? { tools: Object.freeze([bash.definition]) } : {}) })
-                  : bash.execute({ projectId: session.projectId, command: request!.arguments.command })
+                    ...(llm.supportsTools ? { tools: Object.freeze([bash.definition, applyPatch.definition]) } : {}) })
+                  : request!.name === 'bash'
+                    ? bash.execute({ projectId: session.projectId, command: request!.arguments.command })
+                    : applyPatch.execute({ projectId: session.projectId, patch: request!.arguments.patch })
               } catch (error) {
-                const failure = currentKind === 'model' ? normalizeLLMFailure(error) : bashFailure(error)
-                if (currentKind === 'bash') await state.recordRunEvent(runId,
-                  { kind: 'bash-failed', requestId: request!.id, category: failure.category }, inputs.now())
+                const failure = currentKind === 'model' ? normalizeLLMFailure(error) : toolFailure(error)
+                if (currentKind === 'tool') await state.recordRunEvent(runId,
+                  { kind: 'tool-failed', name: request!.name, requestId: request!.id, category: failure.category }, inputs.now())
                 return fail(failure)
               }
               // Observe immediately, before exposing successful startup.
@@ -164,18 +182,20 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
               current = undefined
               if (observed.kind === 'cleanup-failed' || cancelError) {
                 const failure = rememberCleanupFailure()
-                if (currentKind === 'bash') await state.recordRunEvent(runId,
-                  { kind: 'bash-failed', requestId: request!.id, category: failure.category }, inputs.now())
+                if (currentKind === 'tool') await state.recordRunEvent(runId,
+                  { kind: 'tool-failed', name: request!.name, requestId: request!.id, category: failure.category,
+                    ...(request!.name === 'apply_patch' && 'value' in observed && observed.value !== undefined
+                      ? { result: observed.value as ApplyPatchResult } : {}) }, inputs.now())
                 return settle({ kind: 'cleanup-failed', error: failure.message, category: failure.category })
               }
-              if (currentKind === 'bash') {
+              if (currentKind === 'tool') {
                 await state.recordRunEvent(runId, observed.kind === 'value'
-                  ? { kind: 'bash-observed', requestId: request!.id, result: observed.value as BashResult }
-                  : { kind: 'bash-failed', requestId: request!.id, category: bashFailure(observed.error).category }, inputs.now())
+                  ? { kind: 'tool-observed', requestId: request!.id, ...observation(request!, observed.value) }
+                  : { kind: 'tool-failed', name: request!.name, requestId: request!.id, category: toolFailure(observed.error).category }, inputs.now())
               }
               const afterCall = await stop()
               if (afterCall) return afterCall
-              if (observed.kind === 'error') return fail(currentKind === 'model' ? normalizeLLMFailure(observed.error) : bashFailure(observed.error))
+              if (observed.kind === 'error') return fail(currentKind === 'model' ? normalizeLLMFailure(observed.error) : toolFailure(observed.error))
               if (currentKind === 'model') {
                 const reply = observed.value as ModelReply
                 if (!reply || typeof reply !== 'object') return fail(new LLMFailure('invalid-response'))
@@ -187,22 +207,22 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
                 if (reply.kind !== 'tool-calls' || (reply.content !== undefined && reply.content !== null && typeof reply.content !== 'string')) {
                   return fail(new LLMFailure('invalid-response'))
                 }
-                let batch: readonly ValidatedBashRequest[]
-                try { batch = validateBashBatch(reply.calls) }
+                let batch: readonly ValidatedToolRequest[]
+                try { batch = validateToolBatch(reply.calls) }
                 catch { return fail(new RunFailure('invalid-tool-request')) }
                 await state.recordRunEvent(runId, { kind: 'model-tool-calls', calls: batch }, inputs.now())
                 messages.push(Object.freeze({ role: 'assistant', content: reply.content ?? null, toolCalls: batch }))
               } else {
-                const result = observed.value as BashResult
-                totalToolOutputBytes += Buffer.byteLength(result.stdout, 'utf8') + Buffer.byteLength(result.stderr, 'utf8')
+                const result = observation(request!, observed.value)
+                totalToolOutputBytes += toolOutputBytes(result)
                 if (totalToolOutputBytes > runLimits.totalToolOutputBytes) return fail(new RunFailure('limit-exceeded'))
-                messages.push(bashObservationMessage(request!.id, result))
+                messages.push(toolObservationMessage(request!.id, result))
               }
               const execution = await state.getRunExecution(runId)
               if (execution?.phase === 'ready-tool') {
                 request = execution.batch[execution.nextToolIndex]
-                if (!request) throw new Error('missing queued Bash request')
-                currentKind = 'bash'
+                if (!request) throw new Error('missing queued tool request')
+                currentKind = 'tool'
               } else if (execution?.phase === 'ready-model') {
                 currentKind = 'model'
                 request = undefined

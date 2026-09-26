@@ -1,3 +1,4 @@
+import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -76,7 +77,7 @@ test('one Bash result is persisted, returned to the model, and followed by a fin
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'The command printed hello.')
     assert.deepEqual((await f.state.getRunEvents(run.id)).map(event => event.kind), [
-      'model-started', 'model-tool-calls', 'bash-started', 'bash-observed', 'model-started', 'terminal',
+      'model-started', 'model-tool-calls', 'tool-started', 'tool-observed', 'model-started', 'terminal',
     ])
     assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes.map(({ input, output }) => ({ input, output })),
       [{ input: 'Inspect this project', output: 'The command printed hello.' }])
@@ -106,8 +107,8 @@ test('a Bash batch executes serially and returns nonzero exit codes as observati
     f.llm.calls[1].done.resolve()
     assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
     assert.deepEqual((await f.state.getRunEvents(run.id)).map(event => event.kind), [
-      'model-started', 'model-tool-calls', 'bash-started', 'bash-observed',
-      'bash-started', 'bash-observed', 'model-started', 'terminal',
+      'model-started', 'model-tool-calls', 'tool-started', 'tool-observed',
+      'tool-started', 'tool-observed', 'model-started', 'terminal',
     ])
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
@@ -147,9 +148,9 @@ test('a Run completes multiple batches beyond the former model and Bash call lim
     assert.equal(terminal.output, 'All steps completed.')
     const execution = await f.state.getRunExecution(run.id)
     assert.equal(execution.modelCalls, 7)
-    assert.equal(execution.bashCalls, 10)
+    assert.equal(execution.toolCalls, 10)
     assert.equal(execution.phase, 'terminal')
-    assert.equal((await f.state.getRunEvents(run.id)).filter(event => event.kind === 'bash-observed').length, 10)
+    assert.equal((await f.state.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed').length, 10)
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
@@ -164,7 +165,7 @@ test('the cumulative Bash output limit stops the Run before another model call',
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'limit-exceeded')
     assert.equal(f.llm.calls.length, 1)
-    assert.equal((await f.state.getRunEvents(run.id)).filter(event => event.kind === 'bash-observed').length, 3)
+    assert.equal((await f.state.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed').length, 3)
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
@@ -198,7 +199,7 @@ test('cancelling an active Bash command waits for exit and starts no subsequent 
     assert.equal(existsSync(join(f.directory, 'should-not-exist')), false)
     assert.equal(f.llm.calls.length, 1)
     assert.deepEqual((await f.state.getRunEvents(run.id)).map(event => event.kind), [
-      'model-started', 'model-tool-calls', 'bash-started', 'bash-failed', 'terminal',
+      'model-started', 'model-tool-calls', 'tool-started', 'tool-failed', 'terminal',
     ])
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
@@ -317,7 +318,7 @@ test('a persisted Bash intent becomes interrupted on restart and is never replay
     await first.state.recordRunEvent('run-1',
       { kind: 'model-tool-calls', calls: [request('tool-1', 'printf duplicate >> marker')] }, 'now')
     await first.state.recordRunEvent('run-1',
-      { kind: 'bash-started', call: request('tool-1', 'printf duplicate >> marker') }, 'now')
+      { kind: 'tool-started', call: request('tool-1', 'printf duplicate >> marker') }, 'now')
     // The process might have performed this side effect before losing its result.
     writeFileSync(join(directory, 'marker'), 'already-executed')
     await first.root.fiber.dispose()
@@ -325,7 +326,7 @@ test('a persisted Bash intent becomes interrupted on restart and is never replay
     assert.equal((await second.state.getRun('run-1')).status, 'interrupted')
     assert.equal((await second.state.getRunExecution('run-1')).phase, 'terminal')
     assert.deepEqual((await second.state.getRunEvents('run-1')).map(event => event.kind), [
-      'model-started', 'model-tool-calls', 'bash-started', 'interrupted',
+      'model-started', 'model-tool-calls', 'tool-started', 'interrupted',
     ])
     assert.equal((await import('node:fs')).readFileSync(join(directory, 'marker'), 'utf8'), 'already-executed')
     assert.equal((await second.state.findAcceptedRun({ sessionId: session.id, parentNodeId: null,
@@ -413,6 +414,7 @@ test('revoking Bash waits for its done and prevents another model step', async (
       },
     })
     await bashFiber
+    await root.installComponent(createApplyPatchComponent())
     await root.installComponent(createAgentLoopComponent(inputs))
     await root.installComponent(createRunComponent(inputs, agents))
     const project = await root.get(projectServiceKey).openProject(directory)

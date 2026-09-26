@@ -1,7 +1,8 @@
-import type { BashTrace, RunView, RunEventView } from './client-types.js'
+import type { ToolTrace, RunView, RunEventView } from './client-types.js'
 import type { SessionController } from './session-client.js'
 import { isActive } from './session-client.js'
 import type { Pane } from './workspace-layout.js'
+import { toolTrace } from './tool-trace.js'
 
 export interface SessionPanel {
   readonly element: HTMLElement
@@ -90,45 +91,6 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   transcript.append(item)
 }
 
-function bashTrace(runValue: RunView, events: readonly RunEventView[]): readonly BashTrace[] {
-  const calls: BashTrace[] = []
-  const latest = (id: string, states: readonly BashTrace['state'][]) =>
-    [...calls].reverse().find(call => call.id === id && states.includes(call.state))
-  for (const event of events) {
-    if (event.kind === 'model-tool-calls') {
-      for (const call of event.calls ?? []) calls.push({ id: call.id, command: call.command, state: 'queued' })
-    } else if (event.kind === 'bash-started' && event.requestId) {
-      const call = latest(event.requestId, ['queued'])
-      if (call) call.state = 'running'
-    } else if (event.kind === 'bash-observed' && event.requestId) {
-      const call = latest(event.requestId, ['running'])
-      if (call) {
-        call.state = event.exitCode === 0 ? 'completed' : 'failed'
-        call.exitCode = event.exitCode
-        call.signal = event.signal
-        call.stdout = event.stdout
-        call.stderr = event.stderr
-        call.truncated = event.truncated
-      }
-    } else if (event.kind === 'bash-failed' && event.requestId) {
-      const call = latest(event.requestId, ['running'])
-      if (call) { call.state = 'failed'; call.category = event.category }
-    }
-  }
-  if (runValue.status === 'cancelled' || runValue.status === 'interrupted') {
-    for (const call of calls) {
-      if (call.state === 'queued' || call.state === 'running') call.state = runValue.status
-    }
-  }
-  if (runValue.status === 'failed') {
-    for (const call of calls) {
-      if (call.state === 'queued') call.state = 'skipped'
-      else if (call.state === 'running') call.state = 'failed'
-    }
-  }
-  return calls
-}
-
 function addRunTrace(runValue: RunView, container: HTMLElement = transcript): void {
   const section = document.createElement('section')
   section.className = 'run-trace'
@@ -148,56 +110,14 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       loading.textContent = '正在读取执行过程…'
       section.append(loading)
     } else {
-      const calls = bashTrace(runValue, events)
+      const calls = toolTrace(runValue, events)
       if (!calls.length) {
         const empty = document.createElement('p')
         empty.className = 'trace-empty'
-        empty.textContent = active(runValue) ? '正在等待模型回答或工具请求…' : '本次运行没有 Bash 调用。'
+        empty.textContent = active(runValue) ? '正在等待模型回答或工具请求…' : '本次运行没有工具调用。'
         section.append(empty)
       }
-      for (const call of calls) {
-        const card = document.createElement('article')
-        card.className = 'tool-call'
-        const heading = document.createElement('div')
-        heading.className = 'tool-call-heading'
-        const label = document.createElement('strong')
-        label.textContent = 'Bash'
-        const status = document.createElement('span')
-        status.textContent = {
-          queued: '等待执行', running: '执行中', completed: '已完成',
-          failed: call.exitCode !== undefined ? '非零退出' : '执行失败', skipped: '未执行',
-          cancelled: '已取消', interrupted: '意外中断',
-        }[call.state]
-        heading.append(label, status)
-        const command = document.createElement('code')
-        command.className = 'tool-command'
-        command.textContent = `$ ${call.command}`
-        card.append(heading, command)
-        if (call.exitCode !== undefined || call.category) {
-          const result = document.createElement('p')
-          result.className = 'tool-result'
-          result.textContent = call.category ? `失败类别：${call.category}` :
-            `退出码：${call.exitCode === null ? '无' : call.exitCode}${call.signal ? ` · 信号：${call.signal}` : ''}`
-          card.append(result)
-        }
-        for (const [labelText, content] of [['stdout', call.stdout], ['stderr', call.stderr]] as const) {
-          if (!content) continue
-          const labelElement = document.createElement('span')
-          labelElement.className = 'tool-output-label'
-          labelElement.textContent = labelText
-          const output = document.createElement('pre')
-          output.className = 'tool-output'
-          output.textContent = content
-          card.append(labelElement, output)
-        }
-        if (call.truncated) {
-          const notice = document.createElement('small')
-          notice.className = 'trace-empty'
-          notice.textContent = '输出摘要已截断'
-          card.append(notice)
-        }
-        section.append(card)
-      }
+      for (const call of calls) section.append(createToolCallCard(call))
     }
   }
   container.append(section)
@@ -312,4 +232,65 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
   }
   panel.render()
   return panel
+}
+
+/** A standalone renderer keeps the process cards consistent across every session pane. */
+export function createToolCallCard(call: ToolTrace): HTMLElement {
+  const card = document.createElement('article')
+  card.className = 'tool-call'
+  const heading = document.createElement('div')
+  heading.className = 'tool-call-heading'
+  const label = document.createElement('strong')
+  label.textContent = call.name === 'bash' ? 'Bash' : 'Apply Patch'
+  const status = document.createElement('span')
+  status.textContent = {
+    queued: '等待执行', running: '执行中', completed: '已完成', applied: '已应用',
+    rejected: '已拒绝', partial: '部分完成',
+    failed: call.name === 'bash' && call.exitCode !== undefined ? '非零退出' : '执行失败',
+    skipped: '未执行', cancelled: '已取消', interrupted: '意外中断',
+  }[call.state]
+  heading.append(label, status)
+  card.append(heading)
+  const append = (tag: string, className: string, text: string): void => {
+    const element = document.createElement(tag)
+    element.className = className
+    element.textContent = text
+    card.append(element)
+  }
+  if (call.name === 'bash') {
+    append('code', 'tool-command', `$ ${call.command}`)
+    if (call.exitCode !== undefined || call.category) {
+      append('p', 'tool-result', call.category ? `失败类别：${call.category}` :
+        `退出码：${call.exitCode === null ? '无' : call.exitCode}${call.signal ? ` · 信号：${call.signal}` : ''}`)
+    }
+    for (const [labelText, content] of [['stdout', call.stdout], ['stderr', call.stderr]] as const) {
+      if (!content) continue
+      append('span', 'tool-output-label', labelText)
+      append('pre', 'tool-output', content)
+    }
+    if (call.truncated) append('small', 'trace-empty', '输出摘要已截断')
+  } else {
+    append('pre', 'tool-output', call.patch)
+    if (call.patchTruncated) append('small', 'trace-empty', '补丁预览已截断')
+    if (call.category) append('p', 'tool-result', `失败类别：${call.category}`)
+    if (call.result) {
+      const result = call.result
+      append('p', 'tool-result', `补丁结果：${{ applied: '已应用', rejected: '已拒绝', partial: '部分完成', cancelled: '已取消' }[result.status]}`)
+      if (result.changes.length) {
+        append('span', 'tool-output-label', '实际文件变更')
+        append('pre', 'tool-output', result.changes.map(change =>
+          `${{ added: '创建', updated: '修改', deleted: '删除' }[change.kind]} ${change.path}`).join('\n'))
+      }
+      if (result.pending.length) {
+        append('span', 'tool-output-label', '未完成操作')
+        append('pre', 'tool-output', result.pending.map(operation =>
+          `${{ add: '创建', update: '修改', delete: '删除' }[operation.kind]} ${operation.path}${operation.moveTo ? ` → ${operation.moveTo}` : ''}`).join('\n'))
+      }
+      if (result.diagnostic) {
+        const diagnostic = result.diagnostic
+        append('p', 'tool-result', `${diagnostic.code}：${diagnostic.message}${diagnostic.path ? ` · ${diagnostic.path}` : ''}${diagnostic.line === undefined ? '' : `:${diagnostic.line}`}`)
+      }
+    }
+  }
+  return card
 }

@@ -10,7 +10,7 @@ import {
   assemblePath, treeError, createRun, createSession, requestCancellation, settleRun, validateRunInput,
 } from './domain.js'
 import type { Run, RunInput, RunOutcome, Session, ConversationNode, NodePage, NodeQuery, RunQuery } from './domain.js'
-import { advanceExecution, initialRunExecution, parseRunExecution } from './execution.js'
+import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent } from './execution.js'
 import type { ActiveRunEvent, RunEvent, RunExecution } from './execution.js'
 
 export const stateServiceKey = 'harness.state'
@@ -384,10 +384,7 @@ export function createSqliteStateComponent(inputs: RuntimeInputs): Component.Obj
             if (!reader.get('SELECT id FROM harness_runs WHERE id = ?', [id])) return undefined
             return Object.freeze(reader.all(
               'SELECT seq, at, payload_json FROM harness_run_events WHERE run_id = ? AND seq > ? ORDER BY seq', [id, afterSeq],
-            ).map(row => Object.freeze({
-              ...(JSON.parse(required(row, 'payload_json')) as ActiveRunEvent),
-              seq: Number(row.seq), at: required(row, 'at'),
-            }) as RunEvent))
+            ).map(row => parseRunEvent(required(row, 'payload_json'), Number(row.seq), required(row, 'at'))))
           }))
         },
         recordRunEvent(id, event, at) {
@@ -396,7 +393,7 @@ export function createSqliteStateComponent(inputs: RuntimeInputs): Component.Obj
             if (!row) throw new Error(`unknown run ${id}`)
             const status = required(row, 'status')
             if (status !== 'running' && status !== 'cancelling') return undefined
-            if (status !== 'running' && (event.kind === 'model-started' || event.kind === 'bash-started')) return undefined
+            if (status !== 'running' && (event.kind === 'model-started' || event.kind === 'tool-started')) return undefined
             const next = advanceExecution(parseRunExecution(required(row, 'execution_json')), event)
             tx.execute('UPDATE harness_runs SET execution_json = ?, updated_at = ?, revision = revision + 1 WHERE id = ?',
               [JSON.stringify(next), at, id])

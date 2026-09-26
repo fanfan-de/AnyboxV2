@@ -17,6 +17,7 @@ import type { PromptPort } from './prompt/component.js'
 import { createProjectComponent, projectServiceKey } from './project/component.js'
 import type { ProjectPort } from './project/component.js'
 import { createBashComponent } from './tool/bash-component.js'
+import { createApplyPatchComponent } from './tool/apply-patch-component.js'
 
 /** The application root must provide the LLM API and local storage services before the Harness starts. */
 export interface HarnessOptions extends Partial<RuntimeInputs> {
@@ -94,6 +95,7 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     for (const component of [
       createProjectComponent(inputs),
       createBashComponent(),
+      createApplyPatchComponent(),
       createSqliteStateComponent(inputs),
       createSessionComponent(inputs, agents),
       createPromptComponent(inputs, options.legacyPromptStorePath),

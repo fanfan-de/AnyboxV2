@@ -1,3 +1,5 @@
+import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
+
 export interface AgentView { readonly id: string }
 export interface SessionView {
   readonly id: string
@@ -25,32 +27,40 @@ export interface RunView {
   readonly error?: string
   readonly errorCategory?: string
 }
-export interface RunEventView {
-  readonly seq: number
-  readonly at: string
-  readonly kind: 'model-started' | 'model-tool-calls' | 'bash-started' | 'bash-observed' |
-    'bash-failed' | 'terminal' | 'interrupted'
-  readonly calls?: readonly { readonly id: string; readonly name: string; readonly command: string }[]
-  readonly requestId?: string
-  readonly command?: string
-  readonly exitCode?: number | null
-  readonly signal?: string | null
-  readonly stdout?: string
-  readonly stderr?: string
-  readonly truncated?: boolean
-  readonly category?: string
-}
-export interface BashTrace {
-  readonly id: string
+export type ToolCallView =
+  | { readonly id: string; readonly name: 'bash'; readonly command: string }
+  | { readonly id: string; readonly name: 'apply_patch'; readonly patch: string; readonly patchTruncated: boolean }
+export type RunEventView = { readonly seq: number; readonly at: string } & (
+  | { readonly kind: 'model-started' | 'terminal' | 'interrupted' }
+  | { readonly kind: 'model-tool-calls'; readonly calls: readonly ToolCallView[] }
+  | ({ readonly kind: 'tool-started'; readonly requestId: string } & ToolCallView)
+  | { readonly kind: 'tool-observed'; readonly name: 'bash'; readonly requestId: string;
+      readonly exitCode: number | null; readonly signal: string | null; readonly stdout: string;
+      readonly stderr: string; readonly truncated: boolean }
+  | { readonly kind: 'tool-observed'; readonly name: 'apply_patch'; readonly requestId: string;
+      readonly result: ApplyPatchResult }
+  | { readonly kind: 'tool-failed'; readonly name: 'bash' | 'apply_patch'; readonly requestId: string;
+      readonly category: string; readonly result?: ApplyPatchResult }
+)
+export type ToolTraceState = 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'interrupted' |
+  ApplyPatchResult['status']
+interface ToolTraceBase { readonly id: string; state: ToolTraceState; category?: string }
+export interface BashTrace extends ToolTraceBase {
+  readonly name: 'bash'
   readonly command: string
-  state: 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
   exitCode?: number | null
   signal?: string | null
   stdout?: string
   stderr?: string
   truncated?: boolean
-  category?: string
 }
+export interface ApplyPatchTrace extends ToolTraceBase {
+  readonly name: 'apply_patch'
+  readonly patch: string
+  readonly patchTruncated: boolean
+  result?: ApplyPatchResult
+}
+export type ToolTrace = BashTrace | ApplyPatchTrace
 export interface PendingSubmission {
   readonly sessionId: string
   readonly input: string

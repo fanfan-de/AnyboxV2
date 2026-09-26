@@ -1,6 +1,7 @@
 /** Harness domain values and transitions are independent of Nya and providers. */
 import type { LLMFailureCategory, LLMMessage, LLMPlan, LLMSnapshot, ToolRequest } from '../llm/port.js'
 import type { BashResult } from '../tool/bash-component.js'
+import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import { nonEmpty } from '../validation.js'
 
@@ -59,10 +60,10 @@ export class RunFailure extends Error {
     super({
       'invalid-tool-request': 'model tool request is invalid',
       'limit-exceeded': 'run limit was exceeded',
-      'tool-unavailable': 'bash tool is unavailable',
-      'tool-timeout': 'bash command timed out',
-      'tool-cancelled': 'bash command was cancelled',
-      'tool-cleanup-failure': 'bash command cleanup failed',
+      'tool-unavailable': 'tool is unavailable',
+      'tool-timeout': 'tool call timed out',
+      'tool-cancelled': 'tool call was cancelled',
+      'tool-cleanup-failure': 'tool cleanup failed',
       'state-write-failure': 'run state could not be persisted',
     }[category])
     this.name = 'RunFailure'
@@ -74,43 +75,45 @@ export const runLimits = Object.freeze({
   totalToolOutputBytes: 131_072,
 })
 
-export interface ValidatedBashRequest extends ToolRequest {
-  readonly name: 'bash'
-  readonly arguments: Readonly<{ command: string }>
-}
+export type ValidatedToolRequest =
+  | (ToolRequest & { readonly name: 'bash'; readonly arguments: Readonly<{ command: string }> })
+  | (ToolRequest & { readonly name: 'apply_patch'; readonly arguments: Readonly<{ patch: string }> })
 
-/** Validate a whole model batch before acquiring any tool resource. */
-export function validateBashBatch(calls: unknown): readonly ValidatedBashRequest[] {
-  if (!Array.isArray(calls) || calls.length === 0) {
-    throw new RunFailure('invalid-tool-request')
-  }
+export type ToolObservation =
+  | { readonly name: 'bash'; readonly result: BashResult }
+  | { readonly name: 'apply_patch'; readonly result: ApplyPatchResult }
+
+/** Validate the complete batch envelope before acquiring any tool resource.
+ * Patch syntax is an execution observation so the model can correct it. */
+export function validateToolBatch(calls: unknown): readonly ValidatedToolRequest[] {
+  if (!Array.isArray(calls) || calls.length === 0) throw new RunFailure('invalid-tool-request')
   const ids = new Set<string>()
-  return Object.freeze(calls.map((call: unknown) => {
+  return Object.freeze(calls.map((call: unknown): ValidatedToolRequest => {
     if (!call || typeof call !== 'object' || Array.isArray(call) ||
       !('id' in call) || typeof call.id !== 'string' || !call.id.trim() || call.id.length > 256 ||
-      ids.has(call.id) || !('name' in call) || call.name !== 'bash' ||
-      !('arguments' in call) || !call.arguments || typeof call.arguments !== 'object' ||
-      Array.isArray(call.arguments) || Object.keys(call.arguments).length !== 1 ||
-      !('command' in call.arguments) || typeof call.arguments.command !== 'string' ||
-      !call.arguments.command.trim() || call.arguments.command.includes('\0')) {
-      throw new RunFailure('invalid-tool-request')
-    }
+      ids.has(call.id) || !('name' in call) || !('arguments' in call) ||
+      !call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments) ||
+      Object.keys(call.arguments).length !== 1) throw new RunFailure('invalid-tool-request')
     ids.add(call.id)
-    return Object.freeze({
-      id: call.id, name: 'bash' as const,
-      arguments: Object.freeze({ command: call.arguments.command }),
-    })
+    if (call.name === 'bash' && 'command' in call.arguments && typeof call.arguments.command === 'string' &&
+      call.arguments.command.trim() && !call.arguments.command.includes('\0')) {
+      return Object.freeze({ id: call.id, name: 'bash', arguments: Object.freeze({ command: call.arguments.command }) })
+    }
+    if (call.name === 'apply_patch' && 'patch' in call.arguments && typeof call.arguments.patch === 'string') {
+      return Object.freeze({ id: call.id, name: 'apply_patch', arguments: Object.freeze({ patch: call.arguments.patch }) })
+    }
+    throw new RunFailure('invalid-tool-request')
   }))
 }
 
-export function bashObservationMessage(requestId: string, result: BashResult): LLMMessage {
-  return Object.freeze({
-    role: 'tool', toolCallId: requestId,
-    content: JSON.stringify({
-      exitCode: result.exitCode, signal: result.signal, stdout: result.stdout,
-      stderr: result.stderr, truncated: result.truncated,
-    }),
-  })
+export function toolObservationMessage(requestId: string, observation: ToolObservation): LLMMessage {
+  return Object.freeze({ role: 'tool', toolCallId: requestId, content: JSON.stringify(observation.result) })
+}
+
+export function toolOutputBytes(observation: ToolObservation): number {
+  return observation.name === 'bash'
+    ? Buffer.byteLength(observation.result.stdout, 'utf8') + Buffer.byteLength(observation.result.stderr, 'utf8')
+    : Buffer.byteLength(JSON.stringify(observation.result), 'utf8')
 }
 
 export interface Run {

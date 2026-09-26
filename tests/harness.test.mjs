@@ -1,3 +1,4 @@
+import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -244,6 +245,7 @@ test('removing the LLM API component waits for the run consumer and its call', a
   const inputs = { newId: ids(), now: () => 'now' }
   const projects = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createBashComponent())
+  root.installComponent(createApplyPatchComponent())
   const state = root.installComponent(createSqliteStateComponent(inputs))
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
@@ -332,6 +334,7 @@ test('AgentLoop owns in-flight calls while Session and Run state survive its rep
   const inputs = { newId: ids(), now: () => 'now' }
   const projects = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createBashComponent())
+  root.installComponent(createApplyPatchComponent())
   const state = root.installComponent(createSqliteStateComponent(inputs))
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))

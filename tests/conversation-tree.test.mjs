@@ -261,7 +261,7 @@ test('a failed success commit is classified as state-write-failure without repla
 test('tool observation commit failure stops the batch without repeating the side effect', async t => {
   const f = await fixture(t)
   await f.db.transaction(tx => tx.execute(`CREATE TRIGGER test_fail_observation BEFORE INSERT ON harness_run_events
-    WHEN json_extract(NEW.payload_json, '$.kind') = 'bash-observed'
+    WHEN json_extract(NEW.payload_json, '$.kind') = 'tool-observed'
     BEGIN SELECT RAISE(ABORT, 'injected observation failure'); END`))
   const run = await f.start('Tool fault')
   f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
@@ -276,7 +276,7 @@ test('tool observation commit failure stops the batch without repeating the side
   assert.equal(f.llm.calls.length, 1)
   await f.root.get(agentLoopServiceKey).start(run.id)
   assert.equal(readFileSync(join(f.directory, 'marker'), 'utf8'), 'once')
-  assert.deepEqual((await f.state.getRunEvents(run.id)).map(e => e.kind), ['model-started', 'model-tool-calls', 'bash-started', 'terminal'])
+  assert.deepEqual((await f.state.getRunEvents(run.id)).map(e => e.kind), ['model-started', 'model-tool-calls', 'tool-started', 'terminal'])
 })
 
 test('ancestor validation rejects broken, cyclic and cross-Session paths', () => {
@@ -379,7 +379,7 @@ test('restart interrupts multiple active Runs independently while retaining thei
     await state.recordRunEvent(a.id, { kind: 'model-started' }, now())
     const call = { id: 'bash', name: 'bash', arguments: { command: 'printf uncertain >> marker' } }
     await state.recordRunEvent(a.id, { kind: 'model-tool-calls', calls: [call] }, now())
-    await state.recordRunEvent(a.id, { kind: 'bash-started', call }, now())
+    await state.recordRunEvent(a.id, { kind: 'tool-started', call }, now())
     await state.requestCancellation(b.id, now())
     await root.fiber.dispose()
     restarted = await host(directory)

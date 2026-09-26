@@ -1,8 +1,8 @@
 # AnyboxV2
 
-从 NyaCore 直接构建 Agent Harness。本分支已完成 [H1 无网络闭环](docs/agent-harness-plan.md)，并加入 [Prompt 管理模块](docs/prompt-management-design.md)：用户可编辑草稿、发布版本，将不同用途和消息角色的 prompt 绑定到 Agent。Prompt 文档、版本和绑定通过 [SQLite 存储组件](docs/local-sqlite-storage.md)持久化；大模型调用由应用安装的唯一一个 API 组件承担，可选择 DeepSeek 非流式 Chat Completions 或 OpenAI 非流式 Responses。当前本机 Web 宿主使用 DeepSeek。项目、Session 和 Run 已持久化；Harness 已安装 Bash 工具、可持久记录意图与观察的工具循环，并接通 DeepSeek 原生工具调用协议及 Web 过程展示。OpenAI Responses 仍只支持文本回答。
+从 NyaCore 直接构建 Agent Harness。本分支已完成 [H1 无网络闭环](docs/agent-harness-plan.md)，并加入 [Prompt 管理模块](docs/prompt-management-design.md)：用户可编辑草稿、发布版本，将不同用途和消息角色的 prompt 绑定到 Agent。Prompt 文档、版本和绑定通过 [SQLite 存储组件](docs/local-sqlite-storage.md)持久化；大模型调用由应用安装的唯一一个 API 组件承担，可选择 DeepSeek 非流式 Chat Completions 或 OpenAI 非流式 Responses。本机 Web 宿主默认使用 DeepSeek，也可通过启动环境变量选择 Responses。项目、Session 和 Run 已持久化；Harness 已安装 Bash、Apply Patch 工具及可持久记录意图与观察的工具循环，两种 API 均接通原生工具调用协议及 Web 过程展示。
 
-应用只使用一个 Nya 根 Context：凭据组件、大模型 API 组件、本地 SQLite、Prompt、Agent Prompt、Projects、Bash、持久状态、Session、Run 和 AgentLoop 都直接安装在根上。组件通过 `inject` 声明依赖，由 Nya 负责就绪、重启和清理顺序。Projects 登记本地目录身份，Session 和 Run 数据由同一个 SQLite 状态组件持有；项目不创建独立 Context 或数据库。Prompt、绑定和 Agent 定义全局共享。凭据组件提供 `credentials.read`；大模型 API 组件提供 `llm`，负责原生请求、HTTP、密钥、超时、取消和清理。Run 负责准入、配置快照与控制；AgentLoop 独占在途调用。SQLite 排他持有连接，各领域组件登记自己的表迁移。调用的 `result` 是业务结果，`done` 表示调用及资源实际退出；取消或卸载会等待 `done` 完成。
+应用只使用一个 Nya 根 Context：凭据组件、大模型 API 组件、本地 SQLite、Prompt、Agent Prompt、Projects、Bash、Apply Patch、持久状态、Session、Run 和 AgentLoop 都直接安装在根上。组件通过 `inject` 声明依赖，由 Nya 负责就绪、重启和清理顺序。Projects 登记本地目录身份，Session 和 Run 数据由同一个 SQLite 状态组件持有；项目不创建独立 Context 或数据库。Prompt、绑定和 Agent 定义全局共享。凭据组件提供 `credentials.read`；大模型 API 组件提供 `llm`，负责原生请求、HTTP、密钥、超时、取消和清理。Run 负责准入、配置快照与控制；AgentLoop 独占在途调用。SQLite 排他持有连接，各领域组件登记自己的表迁移。调用的 `result` 是业务结果，`done` 表示调用及资源实际退出；取消或卸载会等待 `done` 完成。
 
 Session 现在持有完整轮次对话树，允许同一父节点启动多个 Run。新请求必须提供 `parentNodeId`（空会话用 `null`）；成功节点不可变，上下文只继承祖先路径。详见[对话树与分支并发](docs/session-conversation-tree.md)。Web 已接入显式节点查看、多 Run 状态及最多四个跨项目拖拽分屏；提交固定对话起点，布局与查看位置在当前标签页内恢复。受控浏览器验收覆盖拖拽、并行运行、关闭视图、窄窗口与设置入口。
 
@@ -19,7 +19,7 @@ import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
 const root = new Context()
 // The operating system's credential store, filed under this application's own namespace.
 await root.installComponent(createSystemKeyringComponent({ namespace: 'anybox' }))
-// Optional provisioning by the trusted host; later calls read the current key.
+// Optional provisioning by the trusted host; new Runs read the current key.
 if (process.env.DEEPSEEK_API_KEY) {
   await root.get(credentialManageServiceKey).write(deepSeekCredentialId, process.env.DEEPSEEK_API_KEY)
 }
@@ -66,7 +66,7 @@ try {
 - **系统凭据库** `createSystemKeyringComponent({ namespace })`：通过 `@napi-rs/keyring` 使用 macOS Keychain、Windows Credential Manager 和 Linux Secret Service（gnome-keyring、KWallet 等）。Linux 上明确要求 Secret Service，没有时组件启动失败，不会退回到重启即失的内核 keyring。`namespace` 是条目的 service 名，标识是条目的账户名；不同安装（开发、正式、测试）必须用不同命名空间，否则共用同一条目。它另提供 `credentials.manage`（`write(id, secret)`、`delete(id)`；`delete` 只在条目不存在时返回 `false`，删除失败会拒绝）。
 - **外部来源** `createExternalCredentialSourceComponent({ read })`：给无桌面环境的部署方使用，只注册 `credentials.read`，把宿主的异步读取函数接进来。它不落盘、不缓存、不提供管理服务；读取函数抛错会以 `store-unavailable` 报告。行为测试也用它充当假凭据组件。
 
-**录入与轮换。** 可移植的 `packages/api-key-manager` 包提供自包含的 `createApiKeyService({ namespace, definitions })`：它自己持有系统凭据库存储，同时提供读取、状态、写入、删除和关闭方法，不依赖 Anybox 的其他组件。Anybox 的 `createApiKeyServiceComponent(options)` 只是无注入依赖的 Nya 适配层。受信宿主注册可管理的凭据 ID、名称和类别。Web 只允许操作已注册的 ID，状态和写入响应只返回公开元数据与是否已配置，不返回 Key。现有 DeepSeek ID 不变；将来视频模型或其他服务可按相同方式注册。DeepSeek 在一个 Run 首次调用模型时读取一次 Key，同一 Run 的后续工具轮次复用该值；OpenAI Responses 当前仍为单次文本调用。写入完成后的新读取取得新 Key，删除完成后的新 Run 以 `credential-missing` 失败；无须重启 LLM、Harness 或 Web。同一 ID 的读取、写入、删除按凭据组件接收顺序执行。读取失败以 `credential-unavailable` 结算 Run。取消等待读取的 Run 时，`result` 可先拒绝，`done` 等底层读取实际退出。
+**录入与轮换。** 可移植的 `packages/api-key-manager` 包提供自包含的 `createApiKeyService({ namespace, definitions })`：它自己持有系统凭据库存储，同时提供读取、状态、写入、删除和关闭方法，不依赖 Anybox 的其他组件。Anybox 的 `createApiKeyServiceComponent(options)` 只是无注入依赖的 Nya 适配层。受信宿主注册可管理的凭据 ID、名称和类别。Web 只允许操作已注册的 ID，状态和写入响应只返回公开元数据与是否已配置，不返回 Key。现有 DeepSeek ID 不变；将来视频模型或其他服务可按相同方式注册。DeepSeek 和 OpenAI Responses 都在一个 Run 首次调用模型时读取一次 Key，同一 Run 的后续工具轮次复用该值。写入完成后的新读取取得新 Key，删除完成后的新 Run 以 `credential-missing` 失败；无须重启 LLM、Harness 或 Web。同一 ID 的读取、写入、删除按凭据组件接收顺序执行。读取失败以 `credential-unavailable` 结算 Run。取消等待读取的 Run 时，`result` 可先拒绝，`done` 等底层读取实际退出。
 
 例如，宿主可把视频服务也加入管理清单，而不修改设置组件或 Web 协议：
 
@@ -84,15 +84,15 @@ await root.installComponent(createApiKeyServiceComponent({
 
 **跨项目复用。** 在 `packages/api-key-manager` 目录运行 `npm pack`，另一个 Node.js 项目安装生成的 `.tgz` 后，直接导入 `createApiKeyService`。包本身不依赖 Anybox、Nya 或 Web 框架；目标项目只需提供自己的命名空间、服务清单，并把管理操作接到它自己的受信入口。包内 [README](packages/api-key-manager/README.md) 给出完整示例。现有 Anybox Web 页面和 Nya 适配层仍属于本项目，不作为跨项目包的一部分。
 
-**安全边界。** 系统凭据库只保护静态存储；模型请求期间密钥仍在进程内存和该次调用的闭包中，JavaScript 无法擦除字符串。`credentials.manage` 与 `credentials.read` 分开注册只是命名约定：Nya 服务按名称寻址，根上任何组件都能注入它，Harness 门面不转发它。凭据错误只有固定类别 `store-unavailable`、`operation-failed`、`closed`、`cancelled`，不携带系统信息、条目名或密钥。卸载凭据组件会撤销依赖服务、取消在途调用，并等待已接受的凭据库读取实际退出。macOS 的 Keychain 条目访问权绑定创建它的可执行文件，换用其他路径的 Node 二进制读取时系统可能弹出授权提示。
+**安全边界。** 系统凭据库只保护静态存储；模型组件按 Run 计划在进程内存中持有已读取的密钥，JavaScript 无法擦除字符串。`credentials.manage` 与 `credentials.read` 分开注册只是命名约定：Nya 服务按名称寻址，根上任何组件都能注入它，Harness 门面不转发它。凭据错误只有固定类别 `store-unavailable`、`operation-failed`、`closed`、`cancelled`，不携带系统信息、条目名或密钥。卸载凭据组件会撤销依赖服务、取消在途调用，并等待已接受的凭据库读取实际退出。macOS 的 Keychain 条目访问权绑定创建它的可执行文件，换用其他路径的 Node 二进制读取时系统可能弹出授权提示。
 
 ## DeepSeek 组件
 
-`createDeepSeekChatCompletionsComponent(config, transport?)` 在构造时校验配置：每个 profile 只允许 `id`、`model`、`maxOutputTokens`、`temperature`、`timeoutMs`。组件注入 `credentials.read`，在同一 Run 首次 `llm.call()` 时读取一次密钥，后续模型轮次复用；缺失或读取失败使 Run 失败。`transport.baseUrl` 可指向兼容端点，`transport.fetch` 可替换传输。组件以非流式方式向 `/chat/completions` 发送文本消息和 Bash 函数定义，解析 `finish_reason: stop` 的最终回答或 `finish_reason: tool_calls` 的工具请求；下一轮将助手工具请求及对应的 `role: tool` 观察回传。启用工具时显式关闭 DeepSeek thinking 模式，异常返回的非空 `reasoning_content` 会被拒绝。超时、HTTP 错误、传输失败和无效响应都归一为固定的失败类别，密钥不会进入 Run 状态。轮换密钥写入成功后影响新 Run；修改配置仍需替换组件。
+`createDeepSeekChatCompletionsComponent(config, transport?)` 在构造时校验配置：每个 profile 只允许 `id`、`model`、`maxOutputTokens`、`temperature`、`timeoutMs`。组件注入 `credentials.read`，在同一 Run 首次 `llm.call()` 时读取一次密钥，后续模型轮次复用；缺失或读取失败使 Run 失败。`transport.baseUrl` 可指向兼容端点，`transport.fetch` 可替换传输。组件以非流式方式向 `/chat/completions` 发送文本消息和 Bash、Apply Patch 函数定义，解析 `finish_reason: stop` 的最终回答或 `finish_reason: tool_calls` 的工具请求；下一轮将助手工具请求及对应的 `role: tool` 观察回传。启用工具时显式关闭 DeepSeek thinking 模式，异常返回的非空 `reasoning_content` 会被拒绝。超时、HTTP 错误、传输失败和无效响应都归一为固定的失败类别，密钥不会进入 Run 状态。轮换密钥写入成功后影响新 Run；修改配置仍需替换组件。
 
-`maxOutputTokens` 可选，只有显式配置时才发送 `max_tokens`，且必须为正整数。本机 Web 不设置该参数，使用模型 API 的默认输出长度，不再附加 1024 token 上限；服务端自身的输出与上下文限制仍然适用，参见 [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)。
+`maxOutputTokens` 可选，只有显式配置时才发送 `max_tokens`，且必须为正整数。本机 Web 默认不设置该参数，可通过 `ANYBOX_LLM_MAX_OUTPUT_TOKENS` 指定；省略时使用模型 API 的默认输出长度，不附加 1024 token 上限。服务端自身的输出与上下文限制仍然适用，参见 [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)。
 
-工具调用不再附加 8192 字节命令长度限制，长 heredoc 可完整写入文件；模型与 Bash 调用也不设固定次数上限，Agent 可继续检查和修改，直到给出最终回答、被取消或发生失败。Bash 执行仍受操作系统进程参数大小限制，单次调用超时与工具输出保留边界见 [组件说明](docs/harness-components.md)。
+工具调用不再附加 8192 字节命令长度限制，长 heredoc 可完整写入文件；模型与工具调用也不设固定次数上限，Agent 可继续检查和修改，直到给出最终回答、被取消或发生失败。Bash 执行仍受操作系统进程参数大小限制，单次调用超时与工具输出保留边界见 [组件说明](docs/harness-components.md)。
 
 本机 Web 默认使用官方当前列出的 `deepseek-flash`；模型名仍由宿主配置，可参照 [DeepSeek Models & Pricing](https://api-docs.deepseek.com/quick_start/pricing/) 选择。
 
@@ -100,17 +100,57 @@ await root.installComponent(createApiKeyServiceComponent({
 
 ## OpenAI Responses 组件
 
-`createOpenAIResponsesComponent(config, transport?)` 是另一个提供相同 `llm` 服务的 API 格式组件，和 DeepSeek 组件二选一安装。它固定从 `credentials.read` 读取 `openAIResponsesCredentialId`（`llm/openai-responses/default`）；受信宿主可用 `credentials.manage` 写入 OpenAI API key；组件在每次调用内读取，轮换无需重启。每个 profile 需要 `id`、`model`、`maxOutputTokens`、`timeoutMs`，可选 `temperature`；省略温度可兼容不接受该参数的模型。模型名称由宿主配置，不在组件中硬编码。
+`createOpenAIResponsesComponent(config, transport?)` 是另一个提供相同 `llm` 服务的 API 格式组件，和 DeepSeek 组件二选一安装。它从 `credentials.read` 读取 `openAIResponsesCredentialId`（`llm/openai-responses/default`），同一 Run 首次调用读取一次，后续工具轮次复用；轮换无需重启，只影响之后的新 Run。每个 profile 需要 `id`、`model`、`timeoutMs`，可选 `maxOutputTokens` 和 `temperature`；省略时不发送相应参数。模型名称由宿主配置，不在组件中硬编码。`transport.baseUrl` 可使用官方或标准 Responses 兼容端点的基础地址。
 
-组件向 `/v1/responses` 发送完整的 `system`、`developer`、`user`、`assistant` 文本消息，使用非流式请求并设置 `store: false`。它从已完成响应的 `output` 中收集最终助手文本，可跳过 reasoning 项；未完成响应、拒绝内容和工具调用不会伪装成成功文本。响应失败、超时、取消与清理仍使用 `src/llm/port.ts` 的固定类别及 `result`/`done` 语义。当前不支持流式输出、工具循环、多模态和服务端会话；Run 的祖先节点路径仍由 Harness 作为文本消息逐次发送。真实 OpenAI API 尚未联网验收，本地 HTTP 与可控传输测试覆盖请求、解析、密钥、Run、取消和等待。`npm run web` 宿主目前仍选择 DeepSeek 组件；使用 OpenAI Responses 的宿主需在装配 Harness 前安装本组件并提供其凭据。
+组件向基础地址下的 `/responses` 发送完整的 `system`、`developer`、`user`、`assistant` 文本消息及函数工具定义，使用非流式请求并设置 `store: false`。原生 `function_call` 转为项目自有工具请求，AgentLoop 整批校验后执行 Bash 或 Apply Patch，再按 `call_id` 回填 `function_call_output`。组件在同一 Run 的计划下私有保留原生 output，包括 reasoning、加密推理上下文及消息 phase，工具续轮按原顺序回传；这些内容不进入 `LLMPort`、Run 状态或数据库。最终文本接受 `final_answer`、未设置或 `null` 的 phase，`commentary` 不作为最终回答；未完成、拒绝和畸形响应仍以固定类别失败。
+
+同一计划的重叠调用会被拒绝，直到上一次 `done` 完成；失败或取消不推进私有续轮上下文，也不自动重试。最终文本会释放续轮上下文。响应失败、超时、取消与清理仍使用 `src/llm/port.ts` 的固定类别及 `result`/`done` 语义。当前不支持流式输出、多模态、内置托管工具和服务端会话；新 Run 的祖先节点路径仍由 Harness 作为文本消息发送。真实 OpenAI API 尚未联网验收，本地验证使用模拟 HTTP 与可控传输，覆盖协议映射、工具闭环、上下文隔离、凭据复用、取消和等待。
+
+## Apply Patch 工具
+
+Harness 在应用根安装 `tools.apply-patch`，向模型提供 `apply_patch({ patch })`；Bash 继续负责命令、检查和测试。补丁采用 `*** Begin Patch` / `*** End Patch`，支持 Add、Delete、Update、Move、多块 `@@`、精确行锚点和 EOF 标记；不接受 heredoc、标准 unified diff 或环境指令。文本解析与修改是纯函数，文件组件独占跨项目串行队列和临时资源，无新工具注册中心。
+
+相对路径基于项目目录，绝对路径和 `..` 按应用用户的文件权限访问，不构成沙箱。仅处理普通 UTF-8 文本文件，拒绝目标符号链接、多硬链接、NUL、无效编码和混合换行；更新保留 BOM、LF/CRLF 与末尾换行习惯。上下文必须精确、唯一并按原文件顺序匹配。全部文件先预检，再逐项提交并检查源文件是否变化；创建和移动目标不能覆盖已有文件。预检不建立跨文件事务，也不能与 Bash 或外部写入者形成文件锁。
+
+工具返回 `applied`、`rejected`、`partial` 或 `cancelled`，包含已经完成的 `changes`、尚未完成的 `pending` 和可选诊断。语法或文件冲突作为观察回填给模型；取消不回滚已完成变更，`done` 等当前文件提交和临时资源清理完成。清理失败使 Run 失败并保留已知变更事实。Web 可展示补丁预览与这些结果；新工具事件使用 `tool-*`，执行计数使用 `toolCalls`，旧 Bash 记录在读取时兼容。本轮 Apply Patch 验证使用本地文件、受控模型及模拟 HTTP，未做真实模型联网验收；详细限制见 [组件说明](docs/harness-components.md#apply-patch-工具)。
 
 ## 本机 Web 界面
 
 第一版提供可替换的薄客户端参考实现。Web 前端是单独的 Nya 组件，接收 Harness 校验后的 Agent ID 列表，注入 Projects、Session、Run、Prompt、Agent Prompt、目录选择器和通用凭据设置服务，拥有 HTTP 监听器及静态页面。运行 `npm run web` 后打开终端打印的 `http://127.0.0.1:<port>` 地址；首次启动无需 Key，可在顶部“设置”的 API Key 管理中选择已注册的服务并保存、替换或删除。写入成功即生效。
 
+宿主在启动前读取以下环境变量并校验，配置无效时不安装凭据库、SQLite 或监听器；已设置但为空的变量也会报错，不自动加载 `.env` 文件。每次启动只安装所选 API 组件并注册它的凭据，设置页沿用通用 Key 管理。切换 API、模型或其他参数需重启宿主。
+
+| 环境变量 | 默认值与要求 |
+| --- | --- |
+| `ANYBOX_LLM_API` | `deepseek-chat-completions`；另一可选值为 `openai-responses` |
+| `ANYBOX_LLM_MODEL` | DeepSeek 默认 `deepseek-flash`；Responses 必须填写所选端点支持的模型名 |
+| `ANYBOX_LLM_BASE_URL` | HTTP(S) API 基础地址，DeepSeek 默认 `https://api.deepseek.com`，Responses 默认 `https://api.openai.com/v1`；不能带用户名、密码、query 或 fragment，也不要包含末尾 `/chat/completions` 或 `/responses` |
+| `ANYBOX_LLM_TIMEOUT_MS` | 默认 `30000`；正整数且不超过 `2147483647` |
+| `ANYBOX_LLM_MAX_OUTPUT_TOKENS` | 可选正整数；省略时不发送输出长度参数 |
+| `ANYBOX_LLM_TEMPERATURE` | 可选的 `0` 到 `2` 数值；DeepSeek 默认 `0.7`，Responses 默认不发送 |
+
+使用 OpenAI 官方 Responses 时，将示例模型名替换为自己选择的模型：
+
+```sh
+ANYBOX_LLM_API=openai-responses \
+ANYBOX_LLM_MODEL=your-responses-model \
+npm run web
+```
+
+使用标准 Responses 兼容服务时，同时指定其 API 基础地址：
+
+```sh
+ANYBOX_LLM_API=openai-responses \
+ANYBOX_LLM_MODEL=your-responses-model \
+ANYBOX_LLM_BASE_URL=https://your-provider.example/v1 \
+npm run web
+```
+
+启动后在设置页填写当前所选 Responses 服务的 Key。组件使用标准 Responses 协议，不添加供应商专属路径或参数。
+
 “设置 → Prompt 管理 → 打开 Prompt 编辑器”可创建与编辑草稿、发布并预览版本，再应用到 Agent；“编辑当前指令”可从内置指令开始。绑定对所有项目共享，只影响后续 Run，已接受 Run 保持原快照。页面检查编辑和发布的修订冲突，可重新应用历史版本；保存草稿和发布本身不改变绑定。
 
-原线性页面支持项目与会话导航、Agent 选择、消息与执行过程展示；对话树客户端适配尚未完成。页面通过 `/api/v1/runs/:id/events` 展示 Bash 命令、执行状态、退出码和有界输出摘要；当前没有流式输出，活动 Run 通过轮询更新。旧页面按 Session 保存待提交信息；新客户端需改为按幂等键保存含父节点的完整请求，并先通过 `runs/by-key` 恢复旧请求。项目、Session 和 Run 历史由服务端持久化，重启后可恢复。宿主只监听 `127.0.0.1`，不支持远程访问或账号。协议及边界见 [薄 Web 客户端设计](docs/web-client-design.md)。
+原线性页面支持项目与会话导航、Agent 选择、消息与执行过程展示；对话树客户端适配尚未完成。页面通过 `/api/v1/runs/:id/events` 展示 Bash 命令、执行状态、退出码和有界输出摘要，以及 Apply Patch 补丁预览、已完成变更、未完成操作与诊断；当前没有流式输出，活动 Run 通过轮询更新。旧页面按 Session 保存待提交信息；新客户端需改为按幂等键保存含父节点的完整请求，并先通过 `runs/by-key` 恢复旧请求。项目、Session 和 Run 历史由服务端持久化，重启后可恢复。宿主只监听 `127.0.0.1`，不支持远程访问或账号。协议及边界见 [薄 Web 客户端设计](docs/web-client-design.md)。
 
 ## 本地验证
 
@@ -140,9 +180,9 @@ npm run check
 | `src/credentials/` | Anybox 的凭据服务契约、Nya 适配层、外部来源组件及其操作接收与等待 |
 | `src/llm/port.ts` | `llm` 服务契约：调用计划、消息与失败类别；Run 和 AgentLoop 只依赖它 |
 | `src/llm/deepseek-chat-completions/` | DeepSeek Chat Completions API 组件：`domain.ts` 负责配置校验、原生工具请求组装与响应解析，`component.ts` 负责每 Run 一次的密钥读取、HTTP 传输、超时、取消与清理 |
-| `src/llm/openai-responses/` | OpenAI Responses API 组件：同样提供 `llm`，支持 `developer` 文本消息及非流式最终文本，独立拥有原生协议和资源清理 |
+| `src/llm/openai-responses/` | OpenAI Responses API 组件：同样提供 `llm`，支持非流式最终文本与工具调用，私有保存同 Run 的原生续轮上下文并负责资源清理 |
 | `src/project/` | 项目目录规范化、可用性检查与 Projects 服务组件 |
-| `src/tool/` | Bash 执行组件：按项目 ID 选择工作目录，持有子进程与清理 |
+| `src/tool/` | Bash 子进程组件与 Apply Patch 文件组件；补丁纯解析、文本修改、跨项目串行队列、预检、提交与清理 |
 | `src/run/` | Session 与 Run 值、执行状态纯转换、Run 准入、AgentLoop 和 SQLite 状态组件 |
 | `src/prompt/domain.ts`、`src/prompt/component.ts` | Prompt 草稿与版本的纯函数，以及权限、规则和管理服务 |
 | `src/prompt/sqlite-storage.ts` | Prompt 表迁移、文档与版本的读写投影及旧 JSON 导入 |
@@ -154,6 +194,6 @@ npm run check
 | `src/resource-probe.ts` | 直接使用 NyaCore 的最小资源归属探针 |
 | `tests/*.test.mjs` | Run、组件撤销、取消、等待、关闭接收门、凭据组件、DeepSeek 与 OpenAI Responses 请求的行为测试；`tests/helpers/controlled-llm.mjs` 是实现 `llm` 契约的可控测试替身，`tests/helpers/memory-credentials.mjs` 是内存假凭据组件；`tests/system-keyring.test.mjs` 是需环境变量启用的真实凭据库测试 |
 | `docs/agent-harness-plan.md` | 后续阶段与验收边界 |
-| `docs/harness-components.md` | 各组件的职责、服务、依赖与清理行为 |
+| [docs/harness-components.md](docs/harness-components.md) | 各组件的职责、服务、依赖、状态与资源归属、清理行为；包含 Run 执行与业务记录的分工示例 |
 
 通用配置文件格式、远程产品宿主和账号体系留待后续阶段决定；本机 Web 宿主处理 SIGINT 与 SIGTERM，通过 `harness.close()` 卸载应用根并等待 Web 监听器及 Harness 清理。同键请求始终返回原 Run，显式重试需新幂等键。SQLite 同时供 Prompt、Projects 和 Run 状态使用；异常退出的在途 Run 在重启时结算为 `interrupted`。
