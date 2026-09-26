@@ -3,10 +3,26 @@ import type { OwnedCall } from '../contracts.js'
 
 export const llmServiceKey = 'llm'
 
-export interface LLMMessage {
-  readonly role: 'system' | 'developer' | 'user' | 'assistant'
-  readonly content: string
+export interface ToolRequest {
+  readonly id: string
+  readonly name: string
+  readonly arguments: unknown
 }
+
+export type LLMMessage =
+  | { readonly role: 'system' | 'developer' | 'user' | 'assistant'; readonly content: string }
+  | { readonly role: 'assistant'; readonly content: string | null; readonly toolCalls: readonly ToolRequest[] }
+  | { readonly role: 'tool'; readonly toolCallId: string; readonly content: string }
+
+export interface LLMToolDefinition {
+  readonly name: string
+  readonly description: string
+  readonly parameters: Readonly<Record<string, unknown>>
+}
+
+export type ModelReply =
+  | { readonly kind: 'final'; readonly text: string }
+  | { readonly kind: 'tool-calls'; readonly content?: string | null; readonly calls: readonly ToolRequest[] }
 
 /** Run-visible metadata for one accepted profile choice. It carries no parameters or credentials. */
 export interface LLMSnapshot {
@@ -20,10 +36,12 @@ export interface LLMPlan {
 }
 
 export interface LLMPort {
+  readonly supportsTools: boolean
   /** Fixes the profile for a Run at admission. Throws LLMFailure when the profile is unknown. */
   prepare(profileId: string): LLMPlan
-  /** Starts one text completion. A synchronous throw means no resource was acquired. */
-  call(input: { readonly plan: LLMPlan; readonly messages: readonly LLMMessage[] }): OwnedCall<string>
+  /** Starts one model step. A synchronous throw means no resource was acquired. */
+  call(input: { readonly plan: LLMPlan; readonly messages: readonly LLMMessage[];
+    readonly tools?: readonly LLMToolDefinition[] }): OwnedCall<ModelReply>
 }
 
 export type LLMFailureCategory =

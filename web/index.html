@@ -18,14 +18,12 @@
       <aside class="sidebar" aria-label="会话设置">
         <div class="sidebar-heading"><span>项目与会话</span></div>
         <h2>本地项目</h2>
-        <form id="project-form" class="project-form">
-          <label for="project-path">添加目录</label>
-          <input id="project-path" type="text" placeholder="输入本机绝对路径" required>
-          <button id="add-project" type="submit">添加项目</button>
-        </form>
+        <div class="project-picker">
+          <button id="add-project" type="button" disabled>添加项目</button>
+          <p id="project-picker-status" role="status">正在检查目录选择器…</p>
+        </div>
         <div id="project-list" class="navigation-list" aria-label="项目列表"></div>
         <div id="session-list" class="navigation-list" aria-label="当前项目的会话"></div>
-        <label for="agent-select">新会话使用的 Agent</label>
         <label for="agent-select">新会话使用的 Agent</label>
         <select id="agent-select" aria-label="新会话使用的 Agent"></select>
         <button id="new-session" class="new-session" type="button">＋ 新建会话</button>

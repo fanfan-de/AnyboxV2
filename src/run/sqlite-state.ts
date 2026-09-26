@@ -10,6 +10,8 @@ import {
   appendTurn, createRun, createSession, requestCancellation, settleRun, validateRunInput,
 } from './domain.js'
 import type { Run, RunInput, RunOutcome, Session } from './domain.js'
+import { advanceExecution, initialRunExecution, parseRunExecution } from './execution.js'
+import type { ActiveRunEvent, RunEvent, RunExecution } from './execution.js'
 
 export const stateServiceKey = 'harness.state'
 
@@ -25,6 +27,9 @@ export interface StatePort {
   getRunPrompts(id: string): Promise<readonly PromptSnapshot[] | undefined>
   /** The native plan exists only while this process owns the accepted Run. */
   getRunPlan(id: string): Promise<LLMPlan | undefined>
+  getRunExecution(id: string): Promise<RunExecution | undefined>
+  getRunEvents(id: string): Promise<readonly RunEvent[] | undefined>
+  recordRunEvent(id: string, event: ActiveRunEvent, at: string): Promise<RunExecution | undefined>
   requestCancellation(id: string, now: string): Promise<Run | undefined>
   settleRun(id: string, outcome: RunOutcome, now: string): Promise<Run>
 }
@@ -46,6 +51,17 @@ const migrations: readonly StorageMigration[] = [{
       UNIQUE(session_id, idempotency_key)
     )`)
     tx.execute('CREATE INDEX harness_runs_session ON harness_runs(session_id, created_at, id)')
+  },
+}, {
+  version: 2,
+  up(tx) {
+    tx.execute(`ALTER TABLE harness_runs ADD COLUMN execution_json TEXT NOT NULL DEFAULT '${JSON.stringify(initialRunExecution)}'`)
+    tx.execute(`CREATE TABLE harness_run_events (
+      run_id TEXT NOT NULL REFERENCES harness_runs(id), seq INTEGER NOT NULL,
+      at TEXT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(run_id, seq)
+    )`)
+    tx.execute(`UPDATE harness_runs SET execution_json = ? WHERE status NOT IN ('running', 'cancelling')`,
+      [JSON.stringify({ ...initialRunExecution, phase: 'terminal' })])
   },
 }]
 
@@ -138,8 +154,17 @@ export function createSqliteStateComponent(inputs: RuntimeInputs): Component.Obj
       await db.migrate('run-state', migrations)
       // A previous process cannot own an in-flight call. Never replay its side effects.
       await db.transaction(tx => {
-        tx.execute("UPDATE harness_runs SET status = 'interrupted', updated_at = ? WHERE status IN ('running', 'cancelling')",
-          [inputs.now()])
+        for (const row of tx.all("SELECT id, execution_json FROM harness_runs WHERE status IN ('running', 'cancelling')")) {
+          const id = required(row, 'id')
+          const prior = parseRunExecution(required(row, 'execution_json'))
+          const at = inputs.now()
+          const event = { kind: 'interrupted' as const, previousPhase: prior.phase }
+          const next = advanceExecution(prior, event)
+          tx.execute("UPDATE harness_runs SET status = 'interrupted', updated_at = ?, execution_json = ? WHERE id = ?",
+            [at, JSON.stringify(next), id])
+          tx.execute('INSERT INTO harness_run_events (run_id, seq, at, payload_json) VALUES (?, ?, ?, ?)',
+            [id, next.revision, at, JSON.stringify(event)])
+        }
       })
       const plans = new Map<string, LLMPlan>()
       let accepting = true
@@ -220,6 +245,38 @@ export function createSqliteStateComponent(inputs: RuntimeInputs): Component.Obj
           }))
         },
         getRunPlan(id) { return track(async () => plans.get(id)) },
+        getRunExecution(id) {
+          return track(() => db.read(reader => {
+            const row = reader.get('SELECT execution_json FROM harness_runs WHERE id = ?', [id])
+            return row ? parseRunExecution(required(row, 'execution_json')) : undefined
+          }))
+        },
+        getRunEvents(id) {
+          return track(() => db.read(reader => {
+            if (!reader.get('SELECT id FROM harness_runs WHERE id = ?', [id])) return undefined
+            return Object.freeze(reader.all(
+              'SELECT seq, at, payload_json FROM harness_run_events WHERE run_id = ? ORDER BY seq', [id],
+            ).map(row => Object.freeze({
+              ...(JSON.parse(required(row, 'payload_json')) as ActiveRunEvent),
+              seq: Number(row.seq), at: required(row, 'at'),
+            }) as RunEvent))
+          }))
+        },
+        recordRunEvent(id, event, at) {
+          return track(() => db.transaction(tx => {
+            const row = tx.get('SELECT status, execution_json FROM harness_runs WHERE id = ?', [id])
+            if (!row) throw new Error(`unknown run ${id}`)
+            const status = required(row, 'status')
+            if (status !== 'running' && status !== 'cancelling') return undefined
+            if (status !== 'running' && (event.kind === 'model-started' || event.kind === 'bash-started')) return undefined
+            const next = advanceExecution(parseRunExecution(required(row, 'execution_json')), event)
+            tx.execute('UPDATE harness_runs SET execution_json = ?, updated_at = ? WHERE id = ?',
+              [JSON.stringify(next), at, id])
+            tx.execute('INSERT INTO harness_run_events (run_id, seq, at, payload_json) VALUES (?, ?, ?, ?)',
+              [id, next.revision, at, JSON.stringify(event)])
+            return next
+          }))
+        },
         requestCancellation(id, now) {
           return track(() => db.transaction(tx => {
             const run = getRun(tx, id)
@@ -237,9 +294,16 @@ export function createSqliteStateComponent(inputs: RuntimeInputs): Component.Obj
               if (!run) throw new Error(`unknown run ${id}`)
               const next = settleRun(run, outcome, now)
               if (next === run) return run
-              tx.execute(`UPDATE harness_runs SET status = ?, updated_at = ?, output = ?, error = ?, error_category = ?
-                WHERE id = ?`, [next.status, next.updatedAt, next.output ?? null,
-                next.error ?? null, next.errorCategory ?? null, id])
+              const row = tx.get('SELECT execution_json FROM harness_runs WHERE id = ?', [id])!
+              const execution = advanceExecution(parseRunExecution(required(row, 'execution_json')),
+                { kind: 'terminal', status: next.status, ...(next.errorCategory ? { errorCategory: next.errorCategory } : {}) })
+              const event = { kind: 'terminal', status: next.status,
+                ...(next.errorCategory ? { errorCategory: next.errorCategory } : {}) }
+              tx.execute(`UPDATE harness_runs SET status = ?, updated_at = ?, output = ?, error = ?, error_category = ?,
+                execution_json = ? WHERE id = ?`, [next.status, next.updatedAt, next.output ?? null,
+                next.error ?? null, next.errorCategory ?? null, JSON.stringify(execution), id])
+              tx.execute('INSERT INTO harness_run_events (run_id, seq, at, payload_json) VALUES (?, ?, ?, ?)',
+                [id, execution.revision, now, JSON.stringify(event)])
               if (next.status === 'completed') {
                 const row = tx.get('SELECT * FROM harness_sessions WHERE id = ?', [run.sessionId])
                 if (!row) throw new Error(`unknown session ${run.sessionId}`)

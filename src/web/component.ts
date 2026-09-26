@@ -1,6 +1,4 @@
 import type { Component } from '@nya/core'
-import { agentServiceKey } from '../agent/component.js'
-import type { AgentPort } from '../agent/component.js'
 import { runServiceKey } from '../run/component.js'
 import type { RunPort } from '../run/component.js'
 import { sessionServiceKey } from '../run/session-component.js'
@@ -11,6 +9,8 @@ import type { CredentialSettingsPort } from '../credentials/settings.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 import type { WebCommands, WebServer } from './server.js'
+import { directoryPickerServiceKey } from './directory-picker.js'
+import type { DirectoryPickerPort } from './directory-picker.js'
 
 export const webFrontendServiceKey = 'web.frontend'
 
@@ -19,23 +19,29 @@ export interface WebFrontendPort {
 }
 
 /** One Nya component owns the static client and its local HTTP listener. */
-export function createWebFrontendComponent(port = 0): Component.Object<void, {
-  [agentServiceKey]: AgentPort
+export function createWebFrontendComponent(agents: readonly Readonly<{ id: string }>[], port = 0): Component.Object<void, {
   [sessionServiceKey]: SessionPort
   [runServiceKey]: RunPort
   [credentialSettingsServiceKey]: CredentialSettingsPort
   [projectServiceKey]: ProjectPort
+  [directoryPickerServiceKey]: DirectoryPickerPort
 }> {
   let listenPort = port
+  const agentIds = Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
   return {
     name: 'web-frontend',
-    inject: [agentServiceKey, sessionServiceKey, runServiceKey, credentialSettingsServiceKey, projectServiceKey],
+    inject: [sessionServiceKey, runServiceKey, credentialSettingsServiceKey, projectServiceKey, directoryPickerServiceKey],
     async apply(ctx, _config, deps) {
       let server: WebServer | undefined
       ctx.effect(() => async () => { await server?.close() }, 'stop and join Web requests')
       const commands: WebCommands = {
-        listAgents: () => Object.freeze(deps[agentServiceKey].list().map(agent => Object.freeze({ id: agent.id }))),
-        openProject: path => deps[projectServiceKey].openProject(path),
+        listAgents: () => agentIds,
+        directoryPickerSupported: () => deps[directoryPickerServiceKey].supported,
+        async pickProject(signal) {
+          const path = await deps[directoryPickerServiceKey].pick(signal)
+          if (!path || signal.aborted) return null
+          return deps[projectServiceKey].openProject(path)
+        },
         listProjects: () => deps[projectServiceKey].listProjects(),
         createSession: (projectId, agentId) => deps[sessionServiceKey].createSession(projectId, agentId),
         getSession: id => deps[sessionServiceKey].getSession(id),
@@ -43,6 +49,7 @@ export function createWebFrontendComponent(port = 0): Component.Object<void, {
         startRun: input => deps[runServiceKey].startRun(input),
         getRun: id => deps[runServiceKey].getRun(id),
         listRuns: id => deps[runServiceKey].listRuns(id),
+        getRunEvents: id => deps[runServiceKey].getRunEvents(id),
         cancelRun: id => deps[runServiceKey].cancelRun(id),
         listCredentials: () => deps[credentialSettingsServiceKey].list(),
         saveCredential: (id, secret) => deps[credentialSettingsServiceKey].write(id, secret),

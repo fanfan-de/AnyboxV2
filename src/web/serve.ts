@@ -4,6 +4,7 @@ import { createDeepSeekChatCompletionsComponent, deepSeekCredentialId } from '..
 import { createLocalSqliteComponent } from '../storage/sqlite.js'
 import { createHarness } from '../harness.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from './component.js'
+import { createDirectoryPickerComponent } from './directory-picker.js'
 import type { WebFrontendPort } from './component.js'
 
 async function main(): Promise<void> {
@@ -13,16 +14,17 @@ async function main(): Promise<void> {
       { id: deepSeekCredentialId, label: 'DeepSeek Chat', category: '大语言模型' },
     ] }))
     await root.installComponent(createDeepSeekChatCompletionsComponent({
-      version: 'web-v1',
-      profiles: [{ id: 'default', model: 'deepseek-chat', maxOutputTokens: 1024, temperature: 0.7, timeoutMs: 30_000 }],
+      version: 'web-v3',
+      profiles: [{ id: 'default', model: 'deepseek-flash', temperature: 0.7, timeoutMs: 30_000 }],
     }))
     await root.installComponent(createLocalSqliteComponent('./data/harness.sqlite'))
     const harness = await createHarness(root, {
       agents: [{ id: 'assistant', instructions: 'You are a helpful assistant.', modelProfileId: 'default' }],
     })
+    await root.installComponent(createDirectoryPickerComponent())
     const port = process.env.ANYBOX_WEB_PORT === undefined ? 0 : Number(process.env.ANYBOX_WEB_PORT)
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new TypeError('ANYBOX_WEB_PORT must be a TCP port')
-    await root.installComponent(createWebFrontendComponent(port))
+    await root.installComponent(createWebFrontendComponent(harness.listAgents(), port))
     const web = root.get<WebFrontendPort>(webFrontendServiceKey)
     if (!web) throw new Error('Web frontend is unavailable')
     process.stdout.write(`Anybox Web: ${web.url}\n`)

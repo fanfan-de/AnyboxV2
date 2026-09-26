@@ -3,7 +3,7 @@ import type { OwnedCall } from '../../contracts.js'
 import { credentialReadServiceKey } from '../../credentials/port.js'
 import type { CredentialReadPort } from '../../credentials/port.js'
 import { LLMFailure, llmServiceKey } from '../port.js'
-import type { LLMPlan, LLMPort } from '../port.js'
+import type { LLMPlan, LLMPort, ModelReply } from '../port.js'
 import { buildResponsesRequest, parseResponsesOutput, responsesEndpoint, validateOpenAIResponsesConfiguration } from './domain.js'
 import type { OpenAIResponsesConfiguration, OpenAIResponsesSelection } from './domain.js'
 
@@ -29,7 +29,7 @@ export function createOpenAIResponsesComponent(
     inject: [credentialReadServiceKey],
     async apply(ctx, _config, deps) {
       const plans = new WeakMap<LLMPlan, OpenAIResponsesSelection>()
-      const active = new Set<OwnedCall<string>>()
+      const active = new Set<OwnedCall<ModelReply>>()
       const failures: unknown[] = []
       let accepting = true
 
@@ -43,6 +43,7 @@ export function createOpenAIResponsesComponent(
       }, 'abort and join OpenAI Responses requests')
 
       const service: LLMPort = {
+        supportsTools: false,
         prepare(profileId) {
           if (!accepting) throw new LLMFailure('dependency-unavailable')
           const selection = selections.get(profileId)
@@ -55,6 +56,7 @@ export function createOpenAIResponsesComponent(
         },
         call(input) {
           if (!accepting) throw new LLMFailure('dependency-unavailable')
+          if (input.tools?.length) throw new LLMFailure('unsupported-request')
           const selection = plans.get(input.plan)
           if (!selection) throw new LLMFailure('model-unavailable')
           const body = JSON.stringify(buildResponsesRequest(selection, input.messages))
@@ -70,7 +72,7 @@ export function createOpenAIResponsesComponent(
             rejectOnTimeout(new LLMFailure('timeout'))
           }, selection.timeoutMs)
           const abortedFailure = () => new LLMFailure(timedOut ? 'timeout' : 'provider-failure')
-          const operation = (async (): Promise<string> => {
+          const operation = (async (): Promise<ModelReply> => {
             let apiKey: string | undefined
             try { apiKey = await deps[credentialReadServiceKey].read(openAIResponsesCredentialId, controller.signal) }
             catch { throw new LLMFailure('credential-unavailable') }
@@ -95,13 +97,13 @@ export function createOpenAIResponsesComponent(
               throw controller.signal.aborted ? abortedFailure() : new LLMFailure('invalid-response')
             }
             if (controller.signal.aborted) throw abortedFailure()
-            return parseResponsesOutput(payload)
+            return Object.freeze({ kind: 'final' as const, text: parseResponsesOutput(payload) })
           })()
           const done = operation.then(() => {}, () => {}).then(() => {
             clearTimeout(timer)
             if (cleanupFailed) throw new LLMFailure('cleanup-failure')
           })
-          const call: OwnedCall<string> = {
+          const call: OwnedCall<ModelReply> = {
             result: Promise.race([operation, timeout]),
             done: done.finally(() => { active.delete(call) }),
             cancel(reason) { controller.abort(reason); rejectOnTimeout(new LLMFailure('provider-failure')) },

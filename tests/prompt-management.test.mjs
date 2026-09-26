@@ -5,10 +5,10 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createHarness } from '../dist/harness.js'
-import { createAgentComponent } from '../dist/agent/component.js'
 import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from '../dist/run/component.js'
 import { createAgentLoopComponent } from '../dist/run/agent-loop-component.js'
+import { createBashComponent } from '../dist/tool/bash-component.js'
 import { createSqliteStateComponent } from '../dist/run/sqlite-state.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
 import { createSessionComponent, sessionServiceKey } from '../dist/run/session-component.js'
@@ -264,20 +264,19 @@ test('ownership and agent management permissions protect prompt editing and bind
   }
 })
 
-test('Prompt stays available when Agent is removed and accepted binding writes finish', async () => {
+test('Prompt stays available when Agent Prompt is removed and accepted binding writes finish', async () => {
   const root = new Context()
   const directory = mkdtempSync(join(tmpdir(), 'anybox-prompts-'))
   const inputs = { newId: ids(), now: () => 'now' }
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
-  const agentFiber = root.installComponent(createAgentComponent(agents))
   const promptFiber = root.installComponent(createPromptComponent(inputs))
-  const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, () => true))
+  const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   let release
   const gate = new Promise(resolve => { release = resolve })
   let entered
   const inside = new Promise(resolve => { entered = resolve })
   try {
-    await Promise.all([databaseFiber, agentFiber])
+    await databaseFiber
     await promptFiber
     await agentPromptFiber
     const prompts = root.get(promptServiceKey)
@@ -289,7 +288,7 @@ test('Prompt stays available when Agent is removed and accepted binding writes f
     await inside
     const binding = root.get(agentPromptServiceKey).bindPrompt('alice', 'assistant', version.id)
     let removed = false
-    const removing = agentFiber.dispose().then(() => { removed = true })
+    const removing = agentPromptFiber.dispose().then(() => { removed = true })
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(removed, false)
     assert.deepEqual(root.get(promptServiceKey).getPrompt('alice', document.id).versionIds, [version.id])
@@ -298,9 +297,8 @@ test('Prompt stays available when Agent is removed and accepted binding writes f
     assert.equal(root.get(agentPromptServiceKey), undefined)
     assert.deepEqual(root.get(promptServiceKey).getPrompt('alice', document.id).versionIds, [version.id])
 
-    const replacement = root.installComponent(createAgentComponent(agents))
+    const replacement = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
     await replacement
-    await agentPromptFiber
     assert.equal(root.get(agentPromptServiceKey).getAgentPrompts('alice', 'assistant')[0].versionId, version.id)
   } finally {
     release?.()
@@ -314,18 +312,18 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   const directory = mkdtempSync(join(tmpdir(), 'anybox-prompts-'))
   const llm = controlledLLM()
   const inputs = { newId: ids(), now: () => 'now' }
-  const agentsFiber = root.installComponent(createAgentComponent(agents))
   const projectsFiber = root.installComponent(createProjectComponent(inputs))
+  root.installComponent(createBashComponent())
   const stateFiber = root.installComponent(createSqliteStateComponent(inputs))
-  const sessionFiber = root.installComponent(createSessionComponent(inputs))
+  const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   const promptFiber = root.installComponent(createPromptComponent(inputs))
-  const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, () => true))
+  const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const llmFiber = root.installComponent(llm.component())
   const loopFiber = root.installComponent(createAgentLoopComponent(inputs))
-  const runsFiber = root.installComponent(createRunComponent(inputs))
+  const runsFiber = root.installComponent(createRunComponent(inputs, agents))
   try {
-    await Promise.all([agentsFiber, stateFiber, databaseFiber, llmFiber])
+    await Promise.all([stateFiber, databaseFiber, llmFiber])
     await loopFiber
     await sessionFiber
     await promptFiber

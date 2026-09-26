@@ -51,6 +51,7 @@ export function controlledLLM({ version = 'v1', profiles = ['default'], call } =
           events.push('disposed')
         }, 'join controlled LLM calls')
         ctx.provide(llmServiceKey, {
+          supportsTools: true,
           prepare(profileId) {
             if (!accepting) throw new LLMFailure('dependency-unavailable')
             if (!profiles.includes(profileId)) throw new LLMFailure('model-unavailable')
@@ -61,7 +62,12 @@ export function controlledLLM({ version = 'v1', profiles = ['default'], call } =
           call(input) {
             if (!accepting) throw new LLMFailure('dependency-unavailable')
             if (!plans.has(input.plan)) throw new LLMFailure('model-unavailable')
-            const owned = (api.call ?? record)(input)
+            const raw = (api.call ?? record)(input)
+            const owned = {
+              result: raw.result.then(value => typeof value === 'string' ? { kind: 'final', text: value } : value),
+              done: raw.done,
+              cancel: reason => raw.cancel(reason),
+            }
             active.add(owned)
             void owned.done.then(() => active.delete(owned), () => active.delete(owned))
             void owned.result.catch(() => {})

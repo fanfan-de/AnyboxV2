@@ -25,6 +25,32 @@ interface RunView {
   readonly error?: string
   readonly errorCategory?: string
 }
+interface RunEventView {
+  readonly seq: number
+  readonly at: string
+  readonly kind: 'model-started' | 'model-tool-calls' | 'bash-started' | 'bash-observed' |
+    'bash-failed' | 'terminal' | 'interrupted'
+  readonly calls?: readonly { readonly id: string; readonly name: string; readonly command: string }[]
+  readonly requestId?: string
+  readonly command?: string
+  readonly exitCode?: number | null
+  readonly signal?: string | null
+  readonly stdout?: string
+  readonly stderr?: string
+  readonly truncated?: boolean
+  readonly category?: string
+}
+interface BashTrace {
+  readonly id: string
+  readonly command: string
+  state: 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'interrupted'
+  exitCode?: number | null
+  signal?: string | null
+  stdout?: string
+  stderr?: string
+  truncated?: boolean
+  category?: string
+}
 interface PendingSubmission {
   readonly sessionId: string
   readonly input: string
@@ -46,8 +72,8 @@ function required<T extends HTMLElement>(id: string): T {
 }
 
 const agentSelect = required<HTMLSelectElement>('agent-select')
-const projectForm = required<HTMLFormElement>('project-form')
-const projectPath = required<HTMLInputElement>('project-path')
+const addProjectButton = required<HTMLButtonElement>('add-project')
+const projectPickerStatus = required<HTMLElement>('project-picker-status')
 const projectList = required<HTMLElement>('project-list')
 const sessionList = required<HTMLElement>('session-list')
 const newSessionButton = required<HTMLButtonElement>('new-session')
@@ -85,6 +111,11 @@ let routeVersion = 0
 let credentials: readonly CredentialView[] = []
 let keyBusy = false
 let credentialLoadError: string | undefined
+let pickerStatus: 'loading' | 'supported' | 'unsupported' | 'error' = 'loading'
+let pickerBusy = false
+const eventCache = new Map<string, readonly RunEventView[]>()
+const loadingEvents = new Set<string>()
+const expandedTraces = new Set<string>()
 
 function apiError(error: unknown): error is ApiError {
   return error instanceof Error && 'status' in error && 'code' in error
@@ -117,12 +148,26 @@ function messageFor(error: unknown): string {
     'project-unavailable': '项目目录不可访问。历史仍可查看，请检查目录路径。',
     'service-unavailable': '服务暂时不可用，请稍后重试。',
     'credential-unavailable': '无法访问系统凭据库，请稍后重试。',
+    'picker-busy': '目录选择窗口已打开，请先完成当前选择。',
+    'picker-unsupported': '当前系统暂不支持原生目录选择。',
+    'picker-unavailable': '无法打开目录选择窗口，请稍后重试。',
   }[error.code] ?? '请求未能完成，请重试。'
 }
 
 function showNotice(message?: string): void {
   notice.hidden = !message
   notice.textContent = message ?? ''
+}
+
+function renderProjectPicker(): void {
+  addProjectButton.disabled = pickerStatus !== 'supported' || pickerBusy
+  projectPickerStatus.hidden = pickerStatus === 'supported' && !pickerBusy
+  projectPickerStatus.textContent = pickerBusy ? '请在系统窗口中选择项目目录…' : {
+    loading: '正在检查目录选择器…',
+    supported: '',
+    unsupported: '当前系统暂不支持原生目录选择。',
+    error: '无法检查目录选择器，请刷新页面。',
+  }[pickerStatus]
 }
 
 function renderCredentialSettings(): void {
@@ -239,6 +284,134 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   transcript.append(item)
 }
 
+function bashTrace(runValue: RunView, events: readonly RunEventView[]): readonly BashTrace[] {
+  const calls: BashTrace[] = []
+  const latest = (id: string, states: readonly BashTrace['state'][]) =>
+    [...calls].reverse().find(call => call.id === id && states.includes(call.state))
+  for (const event of events) {
+    if (event.kind === 'model-tool-calls') {
+      for (const call of event.calls ?? []) calls.push({ id: call.id, command: call.command, state: 'queued' })
+    } else if (event.kind === 'bash-started' && event.requestId) {
+      const call = latest(event.requestId, ['queued'])
+      if (call) call.state = 'running'
+    } else if (event.kind === 'bash-observed' && event.requestId) {
+      const call = latest(event.requestId, ['running'])
+      if (call) {
+        call.state = event.exitCode === 0 ? 'completed' : 'failed'
+        call.exitCode = event.exitCode
+        call.signal = event.signal
+        call.stdout = event.stdout
+        call.stderr = event.stderr
+        call.truncated = event.truncated
+      }
+    } else if (event.kind === 'bash-failed' && event.requestId) {
+      const call = latest(event.requestId, ['running'])
+      if (call) { call.state = 'failed'; call.category = event.category }
+    }
+  }
+  if (runValue.status === 'cancelled' || runValue.status === 'interrupted') {
+    for (const call of calls) {
+      if (call.state === 'queued' || call.state === 'running') call.state = runValue.status
+    }
+  }
+  if (runValue.status === 'failed') {
+    for (const call of calls) {
+      if (call.state === 'queued') call.state = 'skipped'
+      else if (call.state === 'running') call.state = 'failed'
+    }
+  }
+  return calls
+}
+
+function addRunTrace(runValue: RunView): void {
+  const section = document.createElement('section')
+  section.className = 'run-trace'
+  const toggle = document.createElement('button')
+  toggle.type = 'button'
+  toggle.className = 'trace-toggle'
+  toggle.dataset.traceRunId = runValue.id
+  const expanded = expandedTraces.has(runValue.id)
+  toggle.setAttribute('aria-expanded', String(expanded))
+  toggle.textContent = expanded ? '执行过程 ▾' : '执行过程 ▸'
+  section.append(toggle)
+  if (expanded) {
+    const events = eventCache.get(runValue.id)
+    if (!events) {
+      const loading = document.createElement('p')
+      loading.className = 'trace-empty'
+      loading.textContent = loadingEvents.has(runValue.id) ? '正在读取执行过程…' : '执行过程尚未载入。'
+      section.append(loading)
+    } else {
+      const calls = bashTrace(runValue, events)
+      if (!calls.length) {
+        const empty = document.createElement('p')
+        empty.className = 'trace-empty'
+        empty.textContent = active(runValue) ? '正在等待模型回答或工具请求…' : '本次运行没有 Bash 调用。'
+        section.append(empty)
+      }
+      for (const call of calls) {
+        const card = document.createElement('article')
+        card.className = 'tool-call'
+        const heading = document.createElement('div')
+        heading.className = 'tool-call-heading'
+        const label = document.createElement('strong')
+        label.textContent = 'Bash'
+        const status = document.createElement('span')
+        status.textContent = {
+          queued: '等待执行', running: '执行中', completed: '已完成',
+          failed: call.exitCode !== undefined ? '非零退出' : '执行失败', skipped: '未执行',
+          cancelled: '已取消', interrupted: '意外中断',
+        }[call.state]
+        heading.append(label, status)
+        const command = document.createElement('code')
+        command.className = 'tool-command'
+        command.textContent = `$ ${call.command}`
+        card.append(heading, command)
+        if (call.exitCode !== undefined || call.category) {
+          const result = document.createElement('p')
+          result.className = 'tool-result'
+          result.textContent = call.category ? `失败类别：${call.category}` :
+            `退出码：${call.exitCode === null ? '无' : call.exitCode}${call.signal ? ` · 信号：${call.signal}` : ''}`
+          card.append(result)
+        }
+        for (const [labelText, content] of [['stdout', call.stdout], ['stderr', call.stderr]] as const) {
+          if (!content) continue
+          const labelElement = document.createElement('span')
+          labelElement.className = 'tool-output-label'
+          labelElement.textContent = labelText
+          const output = document.createElement('pre')
+          output.className = 'tool-output'
+          output.textContent = content
+          card.append(labelElement, output)
+        }
+        if (call.truncated) {
+          const notice = document.createElement('small')
+          notice.className = 'trace-empty'
+          notice.textContent = '输出摘要已截断'
+          card.append(notice)
+        }
+        section.append(card)
+      }
+    }
+  }
+  transcript.append(section)
+}
+
+async function loadRunEvents(id: string, expandWhenBash = false): Promise<void> {
+  if (loadingEvents.has(id)) return
+  loadingEvents.add(id)
+  try {
+    const events = await api<readonly RunEventView[]>(`/runs/${encodeURIComponent(id)}/events`)
+    eventCache.set(id, events)
+    if (expandWhenBash && events.some(event => event.kind === 'model-tool-calls')) expandedTraces.add(id)
+  } catch (error) {
+    if (runs.some(item => item.id === id)) showNotice(messageFor(error))
+  } finally {
+    loadingEvents.delete(id)
+    if (runs.some(item => item.id === id)) render()
+  }
+}
+
 function renderNavigation(): void {
   projectList.replaceChildren(...projects.map(item => {
     const button = document.createElement('button')
@@ -273,6 +446,7 @@ function render(): void {
   transcript.replaceChildren()
   for (const item of runs) {
     addMessage('user', item.input)
+    addRunTrace(item)
     if (item.status === 'completed') addMessage('assistant', item.output ?? '')
     else if (item.status === 'failed') addMessage('assistant', `运行失败：${item.error ?? '未知错误'}`)
     else if (item.status === 'cancelled') addMessage('assistant', '运行已取消')
@@ -307,7 +481,9 @@ function replaceRun(value: RunView): void {
 }
 
 async function acceptRun(value: RunView): Promise<void> {
+  if (!runs.some(item => item.id === value.id)) expandedTraces.add(value.id)
   replaceRun(value)
+  void loadRunEvents(value.id)
   if (pending) savePending({ ...pending, runId: value.id })
   if (active(value)) { schedulePoll(); return }
   clearPoll()
@@ -388,6 +564,10 @@ async function loadRoute(): Promise<void> {
       runs = await api<readonly RunView[]>(`/sessions/${encodeURIComponent(sessionId)}/runs`)
       if (version !== routeVersion) return
       run = [...runs].reverse().find(active) ?? runs.at(-1)
+      if (run) {
+        if (active(run)) expandedTraces.add(run.id)
+        void loadRunEvents(run.id, true)
+      }
       pending = pendingBySession[sessionId]
       if (pending?.runId) {
         let existing = runs.find(item => item.id === pending?.runId)
@@ -409,15 +589,18 @@ async function loadRoute(): Promise<void> {
   }
 }
 
-projectForm.addEventListener('submit', event => {
-  event.preventDefault()
-  const path = projectPath.value.trim()
-  if (!path) return
-  void api<ProjectView>('/projects', { path }).then(async opened => {
-    projectPath.value = ''
+addProjectButton.addEventListener('click', () => {
+  if (pickerStatus !== 'supported' || pickerBusy) return
+  pickerBusy = true
+  renderProjectPicker()
+  void api<ProjectView | null>('/projects/pick', {}).then(async opened => {
+    if (!opened) return
     await refreshProjects()
     location.hash = `#/projects/${encodeURIComponent(opened.id)}`
-  }).catch(error => showNotice(messageFor(error)))
+  }).catch(error => showNotice(messageFor(error))).finally(() => {
+    pickerBusy = false
+    renderProjectPicker()
+  })
 })
 
 projectList.addEventListener('click', event => {
@@ -430,6 +613,18 @@ sessionList.addEventListener('click', event => {
   if (project && button?.dataset.sessionId) {
     location.hash = `#/projects/${encodeURIComponent(project.id)}/sessions/${encodeURIComponent(button.dataset.sessionId)}`
   }
+})
+
+transcript.addEventListener('click', event => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-trace-run-id]')
+  const id = button?.dataset.traceRunId
+  if (!id) return
+  if (expandedTraces.has(id)) expandedTraces.delete(id)
+  else {
+    expandedTraces.add(id)
+    void loadRunEvents(id)
+  }
+  render()
 })
 
 composeForm.addEventListener('submit', event => {
@@ -478,6 +673,10 @@ document.addEventListener('visibilitychange', () => {
 })
 
 pendingBySession = readPending()
+renderProjectPicker()
+void api<{ readonly supported: boolean }>('/projects/picker').then(status => {
+  pickerStatus = status.supported ? 'supported' : 'unsupported'
+}).catch(() => { pickerStatus = 'error' }).finally(renderProjectPicker)
 void Promise.all([
   api<readonly AgentView[]>('/agents'),
   api<readonly ProjectView[]>('/projects'),

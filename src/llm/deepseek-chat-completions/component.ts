@@ -3,7 +3,7 @@ import type { OwnedCall } from '../../contracts.js'
 import { credentialReadServiceKey } from '../../credentials/port.js'
 import type { CredentialReadPort } from '../../credentials/port.js'
 import { LLMFailure, llmServiceKey } from '../port.js'
-import type { LLMPlan, LLMPort } from '../port.js'
+import type { LLMPlan, LLMPort, ModelReply } from '../port.js'
 import {
   buildChatCompletionRequest, chatCompletionsEndpoint, parseChatCompletion, validateDeepSeekConfiguration,
 } from './domain.js'
@@ -32,7 +32,8 @@ export function createDeepSeekChatCompletionsComponent(
     inject: [credentialReadServiceKey],
     async apply(ctx, _config, deps) {
       const plans = new WeakMap<LLMPlan, DeepSeekSelection>()
-      const active = new Set<OwnedCall<string>>()
+      const runKeys = new WeakMap<LLMPlan, Promise<string>>()
+      const active = new Set<OwnedCall<ModelReply>>()
       const failures: unknown[] = []
       let accepting = true
 
@@ -46,6 +47,7 @@ export function createDeepSeekChatCompletionsComponent(
       }, 'abort and join DeepSeek requests')
 
       const service: LLMPort = {
+        supportsTools: true,
         prepare(profileId) {
           if (!accepting) throw new LLMFailure('dependency-unavailable')
           const selection = selections.get(profileId)
@@ -60,7 +62,7 @@ export function createDeepSeekChatCompletionsComponent(
           if (!accepting) throw new LLMFailure('dependency-unavailable')
           const selection = plans.get(input.plan)
           if (!selection) throw new LLMFailure('model-unavailable')
-          const body = JSON.stringify(buildChatCompletionRequest(selection, input.messages))
+          const body = JSON.stringify(buildChatCompletionRequest(selection, input.messages, input.tools))
           const controller = new AbortController()
           let timedOut = false
           let cleanupFailed = false
@@ -72,12 +74,20 @@ export function createDeepSeekChatCompletionsComponent(
             controller.abort('timeout')
             rejectOnTimeout(new LLMFailure('timeout'))
           }, selection.timeoutMs)
-          const operation = (async (): Promise<string> => {
-            let apiKey: string | undefined
-            try { apiKey = await deps[credentialReadServiceKey].read(deepSeekCredentialId, controller.signal) }
-            catch { throw new LLMFailure('credential-unavailable') }
+          const operation = (async (): Promise<ModelReply> => {
+            let key = runKeys.get(input.plan)
+            if (!key) {
+              key = (async () => {
+                let value: string | undefined
+                try { value = await deps[credentialReadServiceKey].read(deepSeekCredentialId, controller.signal) }
+                catch { throw new LLMFailure('credential-unavailable') }
+                if (!value?.trim()) throw new LLMFailure('credential-missing')
+                return value
+              })()
+              runKeys.set(input.plan, key)
+            }
+            const apiKey = await key
             if (controller.signal.aborted) throw new LLMFailure(timedOut ? 'timeout' : 'provider-failure')
-            if (!apiKey?.trim()) throw new LLMFailure('credential-missing')
             let response: Response
             try {
               response = await request(endpoint, {
@@ -93,14 +103,14 @@ export function createDeepSeekChatCompletionsComponent(
             }
             let payload: unknown
             try { payload = await response.json() } catch { throw new LLMFailure(timedOut ? 'timeout' : 'invalid-response') }
-            return parseChatCompletion(payload)
+            return parseChatCompletion(payload, Boolean(input.tools?.length))
           })()
           // The request has exited once fetch and body consumption settled, whatever the business result.
           const done = operation.then(() => {}, () => {}).then(() => {
             clearTimeout(timer)
             if (cleanupFailed) throw new LLMFailure('cleanup-failure')
           })
-          const call: OwnedCall<string> = {
+          const call: OwnedCall<ModelReply> = {
             result: Promise.race([operation, timeout]),
             done: done.finally(() => { active.delete(call) }),
             cancel(reason) { controller.abort(reason); rejectOnTimeout(new LLMFailure('provider-failure')) },

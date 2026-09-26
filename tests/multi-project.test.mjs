@@ -48,7 +48,7 @@ test('projects identify canonical directories and isolate sessions while allowin
       f.harness.createSession(second.id, 'assistant'),
     ])
     assert.equal(a1.projectId, first.id)
-    assert.deepEqual((await f.harness.listSessions(first.id)).map(item => item.id), [a1.id, a2.id])
+    assert.deepEqual((await f.harness.listSessions(first.id)).map(item => item.id).sort(), [a1.id, a2.id].sort())
     assert.deepEqual((await f.harness.listSessions(second.id)).map(item => item.id), [b1.id])
     const [one, two, three] = await Promise.all([
       f.harness.startRun({ sessionId: a1.id, input: 'One', idempotencyKey: 'one' }),
@@ -59,12 +59,18 @@ test('projects identify canonical directories and isolate sessions while allowin
     assert.equal((await f.harness.startRun({ sessionId: a1.id, input: 'One', idempotencyKey: 'one' })).id, one.id)
     await assert.rejects(f.harness.startRun({ sessionId: a1.id, input: 'Next', idempotencyKey: 'two' }), /active run/)
     for (const [index, run] of [one, two, three].entries()) {
-      finish(f.llm.calls[index], `Answer ${index}`)
+      const call = f.llm.calls.find(item => item.input.messages.at(-1)?.content === run.input)
+      assert.ok(call)
+      finish(call, `Answer ${index}`)
       assert.equal((await f.harness.waitRun(run.id))?.status, 'completed')
     }
     assert.deepEqual((await f.harness.listRuns(a1.id)).map(item => item.id), [one.id])
     assert.deepEqual((await f.harness.getSession(a1.id))?.turns, [{ input: 'One', output: 'Answer 0' }])
-  } finally { await f.harness.close(); rmSync(directory, { recursive: true, force: true }) }
+  } finally {
+    for (const call of f.llm.calls) finish(call, 'Test cleanup')
+    await f.harness.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('persistent history survives restart and unavailable directories do not hide it', async () => {

@@ -1,7 +1,6 @@
 import type { Component } from '@nya/core'
 import type { RuntimeInputs } from '../contracts.js'
-import { agentServiceKey } from '../agent/component.js'
-import type { AgentPort } from '../agent/component.js'
+import type { AgentDefinition } from '../agent/domain.js'
 import { agentPromptServiceKey } from '../agent/prompt-binding-component.js'
 import type { AgentPromptPort } from '../agent/prompt-binding-component.js'
 import { llmServiceKey, normalizeLLMFailure } from '../llm/port.js'
@@ -10,6 +9,7 @@ import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 import { validateRunInput } from './domain.js'
 import type { Run, RunInput } from './domain.js'
+import type { RunEvent } from './execution.js'
 import { agentLoopServiceKey } from './agent-loop-component.js'
 import type { AgentLoopPort, LoopCancelReason } from './agent-loop-component.js'
 import { stateServiceKey } from './sqlite-state.js'
@@ -21,13 +21,13 @@ export interface RunPort {
   startRun(input: RunInput): Promise<Run>
   getRun(id: string): Promise<Run | undefined>
   listRuns(sessionId: string): Promise<readonly Run[]>
+  getRunEvents(id: string): Promise<readonly RunEvent[] | undefined>
   cancelRun(id: string): Promise<Run | undefined>
   waitRun(id: string): Promise<Run | undefined>
 }
 
 /** Admits Runs and exposes control; AgentLoop alone owns their in-flight calls. */
-export function createRunComponent(inputs: RuntimeInputs, isHarnessClosing: () => boolean = () => false): Component.Object<void, {
-  [agentServiceKey]: AgentPort
+export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessClosing: () => boolean = () => false): Component.Object<void, {
   [stateServiceKey]: StatePort
   [agentPromptServiceKey]: AgentPromptPort
   [llmServiceKey]: LLMPort
@@ -36,9 +36,8 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessClosing: () =
 }> {
   return {
     name: 'harness-runs',
-    inject: [agentServiceKey, stateServiceKey, agentPromptServiceKey, llmServiceKey, agentLoopServiceKey, projectServiceKey],
+    inject: [stateServiceKey, agentPromptServiceKey, llmServiceKey, agentLoopServiceKey, projectServiceKey],
     apply(ctx, _config, deps) {
-      const agents = deps[agentServiceKey]
       const state = deps[stateServiceKey]
       const prompts = deps[agentPromptServiceKey]
       const llm = deps[llmServiceKey]
@@ -85,7 +84,7 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessClosing: () =
             const session = await state.getSession(input.sessionId)
             if (!session) throw new Error(`unknown session ${input.sessionId}`)
             await projects.requireAvailable(session.projectId)
-            const agent = agents.get(session.agentId)
+            const agent = agents.find(agent => agent.id === session.agentId)
             if (!agent) throw new Error('agent is unavailable')
             const snapshots = prompts.resolveRunPrompts(session.agentId)
             const plan = llm.prepare(agent.modelProfileId)
@@ -106,6 +105,7 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessClosing: () =
         },
         getRun: id => state.getRun(id),
         listRuns: id => state.listRuns(id),
+        getRunEvents: id => state.getRunEvents(id),
         async cancelRun(id) {
           await loop.cancel(id, 'user-requested')
           return state.getRun(id)

@@ -8,8 +8,6 @@ import type { PromptBinding, PromptKind, PromptSnapshot, PromptVersion } from '.
 import { localStorageServiceKey } from '../storage/port.js'
 import type { LocalStoragePort } from '../storage/port.js'
 import { nonEmpty } from '../validation.js'
-import { agentServiceKey } from './component.js'
-import type { AgentPort } from './component.js'
 import type { AgentDefinition } from './domain.js'
 import { openAgentPromptBindings } from './prompt-binding-storage.js'
 
@@ -32,25 +30,23 @@ function defaultInstruction(agent: AgentDefinition): PromptVersion {
 
 /** Agent-owned selection of reusable published Prompt versions. */
 export function createAgentPromptComponent(
-  inputs: RuntimeInputs, canManageAgent: (actorId: string, agentId: string) => boolean,
+  inputs: RuntimeInputs, agents: readonly AgentDefinition[], canManageAgent: (actorId: string, agentId: string) => boolean,
   legacyJsonPath?: string,
 ): Component.Object<void, {
-  [agentServiceKey]: AgentPort
   [promptServiceKey]: PromptPort
   [localStorageServiceKey]: LocalStoragePort
 }> {
   return {
     name: 'harness-agent-prompts',
-    inject: [agentServiceKey, promptServiceKey, localStorageServiceKey],
+    inject: [promptServiceKey, localStorageServiceKey],
     async apply(ctx, _config, deps) {
-      const agents = deps[agentServiceKey]
       const prompts = deps[promptServiceKey]
       const storage = await openAgentPromptBindings(deps[localStorageServiceKey], prompts, legacyJsonPath)
       ctx.effect(() => storage.close, 'join agent prompt binding operations')
-      const defaults = new Map(agents.list().map(agent => [agent.id, defaultInstruction(agent)]))
+      const defaults = new Map(agents.map(agent => [agent.id, defaultInstruction(agent)]))
 
       const requireAgent = (agentId: string): AgentDefinition => {
-        const agent = agents.get(agentId)
+        const agent = agents.find(agent => agent.id === agentId)
         if (!agent) throw new Error(`unknown agent ${agentId}`)
         return agent
       }

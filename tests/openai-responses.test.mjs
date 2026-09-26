@@ -148,7 +148,7 @@ test('sends native non-streaming input with all roles and returns final text aft
     const plan = f.llm.prepare('default')
     assert.deepEqual(plan, { snapshot: { profileId: 'default', configVersion: 'v2' } })
     const call = f.llm.call({ plan, messages })
-    assert.equal(await call.result, 'Final answer')
+    assert.deepEqual(await call.result, { kind: 'final', text: 'Final answer' })
     await call.done
     assert.deepEqual(received, {
       method: 'POST', path: '/v1/responses', authorization: 'Bearer local-key', contentType: 'application/json',

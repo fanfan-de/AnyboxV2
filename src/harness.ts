@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { Context, FiberState } from '@nya/core'
 import type { Fiber } from '@nya/core'
 import type { RuntimeInputs } from './contracts.js'
-import { createAgentComponent } from './agent/component.js'
+import { validateAgents } from './agent/domain.js'
 import type { AgentDefinition } from './agent/domain.js'
 import { agentPromptServiceKey, createAgentPromptComponent } from './agent/prompt-binding-component.js'
 import type { AgentPromptPort } from './agent/prompt-binding-component.js'
@@ -16,6 +16,7 @@ import { createPromptComponent, promptServiceKey } from './prompt/component.js'
 import type { PromptPort } from './prompt/component.js'
 import { createProjectComponent, projectServiceKey } from './project/component.js'
 import type { ProjectPort } from './project/component.js'
+import { createBashComponent } from './tool/bash-component.js'
 
 /** The application root must provide the LLM API and local storage services before the Harness starts. */
 export interface HarnessOptions extends Partial<RuntimeInputs> {
@@ -29,6 +30,7 @@ export interface HarnessOptions extends Partial<RuntimeInputs> {
 export interface Harness extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable'>,
   Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts'> {
+  listAgents(): readonly Readonly<{ id: string }>[]
   close(): Promise<void>
 }
 
@@ -86,16 +88,18 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     if (!service) throw new Error('agent prompt service is unavailable')
     return service
   }
+  let agents: readonly AgentDefinition[]
   try {
+    agents = validateAgents(options.agents)
     for (const component of [
-      createAgentComponent(options.agents),
       createProjectComponent(inputs),
+      createBashComponent(),
       createSqliteStateComponent(inputs),
-      createSessionComponent(inputs),
+      createSessionComponent(inputs, agents),
       createPromptComponent(inputs, options.legacyPromptStorePath),
-      createAgentPromptComponent(inputs, options.canManageAgent ?? (() => true), options.legacyPromptStorePath),
+      createAgentPromptComponent(inputs, agents, options.canManageAgent ?? (() => true), options.legacyPromptStorePath),
       createAgentLoopComponent(inputs),
-      createRunComponent(inputs, () => closing),
+      createRunComponent(inputs, agents, () => closing),
     ]) {
       const child = context.installComponent(component)
       await child
@@ -108,6 +112,10 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     throw error
   }
   return {
+    listAgents: () => {
+      if (closing) throw new Error('harness is closing')
+      return Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
+    },
     openProject: path => currentProjects().openProject(path),
     listProjects: () => currentProjects().listProjects(),
     getProject: id => currentProjects().getProject(id),
@@ -117,6 +125,7 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     startRun: input => current().startRun(input),
     getRun: id => current().getRun(id),
     listRuns: id => current().listRuns(id),
+    getRunEvents: id => current().getRunEvents(id),
     cancelRun: id => current().cancelRun(id),
     waitRun: id => current().waitRun(id),
     createPrompt: (actorId, input) => currentPrompts().createPrompt(actorId, input),

@@ -4,16 +4,19 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import type { Run, Session } from '../run/domain.js'
 import type { RunInput } from '../run/domain.js'
+import type { RunEvent } from '../run/execution.js'
 import { LLMFailure } from '../llm/port.js'
 import { CredentialFailure } from '../credentials/port.js'
 import { UnmanagedCredentialError } from '../credentials/settings.js'
 import type { ManagedCredentialStatus } from '../credentials/settings.js'
 import { isProjectUnavailableError } from '../project/component.js'
 import type { Project } from '../project/component.js'
+import { DirectoryPickerFailure } from './directory-picker.js'
 
 export interface WebCommands {
   listAgents(): readonly { readonly id: string }[]
-  openProject(path: string): Promise<Project>
+  directoryPickerSupported(): boolean
+  pickProject(signal: AbortSignal): Promise<Project | null>
   listProjects(): Promise<readonly Project[]>
   createSession(projectId: string, agentId: string): Promise<Session>
   getSession(id: string): Promise<Session | undefined>
@@ -21,6 +24,7 @@ export interface WebCommands {
   startRun(input: RunInput): Promise<Run>
   getRun(id: string): Promise<Run | undefined>
   listRuns(sessionId: string): Promise<readonly Run[]>
+  getRunEvents(id: string): Promise<readonly RunEvent[] | undefined>
   cancelRun(id: string): Promise<Run | undefined>
   listCredentials(): Promise<readonly ManagedCredentialStatus[]>
   saveCredential(id: string, secret: string): Promise<ManagedCredentialStatus>
@@ -53,6 +57,11 @@ function knownFailure(error: unknown): HttpFailure {
   if (error instanceof CredentialFailure) return failure(503, 'credential-unavailable')
   if (error instanceof UnmanagedCredentialError) return failure(404, 'not-found')
   if (isProjectUnavailableError(error)) return failure(409, 'project-unavailable')
+  if (error instanceof DirectoryPickerFailure) {
+    if (error.code === 'busy') return failure(409, 'picker-busy')
+    if (error.code === 'unsupported') return failure(503, 'picker-unsupported')
+    return failure(503, 'picker-unavailable')
+  }
   if (error instanceof Error) {
     if (/^unknown (agent|session|project) /.test(error.message)) return failure(404, 'not-found')
     if (/idempotency key already used|session already has an active run/.test(error.message)) {
@@ -87,6 +96,42 @@ function runView(run: Run): object {
   }
 }
 
+function outputSummary(value: string): { readonly text: string; readonly truncated: boolean } {
+  const parts: string[] = []
+  let bytes = 0
+  for (const character of value) {
+    const size = Buffer.byteLength(character, 'utf8')
+    if (bytes + size > 2_048) return { text: parts.join(''), truncated: true }
+    parts.push(character)
+    bytes += size
+  }
+  return { text: value, truncated: false }
+}
+
+function runEventView(event: RunEvent): object {
+  const base = { seq: event.seq, at: event.at, kind: event.kind }
+  switch (event.kind) {
+    case 'model-started': return base
+    case 'model-tool-calls':
+      return { ...base, calls: event.calls.map(call => ({
+        id: call.id, name: call.name, command: call.arguments.command,
+      })) }
+    case 'bash-started':
+      return { ...base, requestId: event.call.id, command: event.call.arguments.command }
+    case 'bash-observed': {
+      const stdout = outputSummary(event.result.stdout)
+      const stderr = outputSummary(event.result.stderr)
+      return { ...base, requestId: event.requestId, exitCode: event.result.exitCode,
+        signal: event.result.signal, stdout: stdout.text, stderr: stderr.text,
+        truncated: event.result.truncated || stdout.truncated || stderr.truncated }
+    }
+    case 'bash-failed': return { ...base, requestId: event.requestId, category: event.category }
+    case 'terminal': return { ...base, status: event.status,
+      ...(event.errorCategory ? { errorCategory: event.errorCategory } : {}) }
+    case 'interrupted': return { ...base, previousPhase: event.previousPhase }
+  }
+}
+
 async function requestObject(request: IncomingMessage, fields: readonly string[]): Promise<Record<string, unknown>> {
   if (request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
     throw failure(415, 'json-required')
@@ -116,6 +161,7 @@ const assets = new Map([
 export async function startWebServer(commands: WebCommands, port = 0): Promise<WebServer> {
   let origin = ''
   let closing = false
+  const pickerRequests = new Set<AbortController>()
   const server = createServer((request, response) => {
     response.setHeader('Cache-Control', 'no-store')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -143,9 +189,21 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         json(response, 200, await commands.listProjects())
         return
       }
-      if (method === 'POST' && path === '/api/v1/projects') {
-        const body = await requestObject(request, ['path'])
-        json(response, 200, await commands.openProject(body.path as string))
+      if (method === 'GET' && path === '/api/v1/projects/picker') {
+        json(response, 200, { supported: commands.directoryPickerSupported() })
+        return
+      }
+      if (method === 'POST' && path === '/api/v1/projects/pick') {
+        await requestObject(request, [])
+        const controller = new AbortController()
+        const disconnected = () => { if (!response.writableEnded) controller.abort() }
+        response.once('close', disconnected)
+        pickerRequests.add(controller)
+        try { json(response, 200, await commands.pickProject(controller.signal)) }
+        finally {
+          pickerRequests.delete(controller)
+          response.off('close', disconnected)
+        }
         return
       }
       const projectSessionsMatch = /^\/api\/v1\/projects\/([^/]+)\/sessions$/.exec(path)
@@ -205,6 +263,13 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         json(response, 200, runView(run))
         return
       }
+      const runEventsMatch = /^\/api\/v1\/runs\/([^/]+)\/events$/.exec(path)
+      if (method === 'GET' && runEventsMatch) {
+        const events = await commands.getRunEvents(decodeURIComponent(runEventsMatch[1]))
+        if (!events) throw failure(404, 'not-found')
+        json(response, 200, events.map(runEventView))
+        return
+      }
       const cancelMatch = /^\/api\/v1\/runs\/([^/]+)\/cancel$/.exec(path)
       if (method === 'POST' && cancelMatch) {
         const body = await requestObject(request, [])
@@ -239,6 +304,7 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
     close() {
       if (shutdown) return shutdown
       closing = true
+      for (const controller of pickerRequests) controller.abort()
       shutdown = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
       return shutdown
     },

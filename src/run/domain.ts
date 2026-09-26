@@ -1,5 +1,6 @@
 /** Harness domain values and transitions are independent of Nya and providers. */
-import type { LLMFailureCategory, LLMMessage, LLMPlan, LLMSnapshot } from '../llm/port.js'
+import type { LLMFailureCategory, LLMMessage, LLMPlan, LLMSnapshot, ToolRequest } from '../llm/port.js'
+import type { BashResult } from '../tool/bash-component.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import { nonEmpty } from '../validation.js'
 
@@ -18,6 +19,67 @@ export interface Session {
 
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 
+export type RunFailureCategory = LLMFailureCategory |
+  'invalid-tool-request' | 'limit-exceeded' | 'tool-unavailable' | 'tool-timeout' | 'tool-cancelled' | 'tool-cleanup-failure'
+
+export class RunFailure extends Error {
+  constructor(readonly category: Exclude<RunFailureCategory, LLMFailureCategory>) {
+    super({
+      'invalid-tool-request': 'model tool request is invalid',
+      'limit-exceeded': 'run limit was exceeded',
+      'tool-unavailable': 'bash tool is unavailable',
+      'tool-timeout': 'bash command timed out',
+      'tool-cancelled': 'bash command was cancelled',
+      'tool-cleanup-failure': 'bash command cleanup failed',
+    }[category])
+    this.name = 'RunFailure'
+  }
+}
+
+export const runLimits = Object.freeze({
+  finalBytes: 65_536,
+  totalToolOutputBytes: 131_072,
+})
+
+export interface ValidatedBashRequest extends ToolRequest {
+  readonly name: 'bash'
+  readonly arguments: Readonly<{ command: string }>
+}
+
+/** Validate a whole model batch before acquiring any tool resource. */
+export function validateBashBatch(calls: unknown): readonly ValidatedBashRequest[] {
+  if (!Array.isArray(calls) || calls.length === 0) {
+    throw new RunFailure('invalid-tool-request')
+  }
+  const ids = new Set<string>()
+  return Object.freeze(calls.map((call: unknown) => {
+    if (!call || typeof call !== 'object' || Array.isArray(call) ||
+      !('id' in call) || typeof call.id !== 'string' || !call.id.trim() || call.id.length > 256 ||
+      ids.has(call.id) || !('name' in call) || call.name !== 'bash' ||
+      !('arguments' in call) || !call.arguments || typeof call.arguments !== 'object' ||
+      Array.isArray(call.arguments) || Object.keys(call.arguments).length !== 1 ||
+      !('command' in call.arguments) || typeof call.arguments.command !== 'string' ||
+      !call.arguments.command.trim() || call.arguments.command.includes('\0')) {
+      throw new RunFailure('invalid-tool-request')
+    }
+    ids.add(call.id)
+    return Object.freeze({
+      id: call.id, name: 'bash' as const,
+      arguments: Object.freeze({ command: call.arguments.command }),
+    })
+  }))
+}
+
+export function bashObservationMessage(requestId: string, result: BashResult): LLMMessage {
+  return Object.freeze({
+    role: 'tool', toolCallId: requestId,
+    content: JSON.stringify({
+      exitCode: result.exitCode, signal: result.signal, stdout: result.stdout,
+      stderr: result.stderr, truncated: result.truncated,
+    }),
+  })
+}
+
 export interface Run {
   readonly id: string
   readonly sessionId: string
@@ -28,7 +90,7 @@ export interface Run {
   readonly updatedAt: string
   readonly promptVersionIds: readonly string[]
   readonly llmSnapshot: LLMSnapshot
-  readonly errorCategory?: LLMFailureCategory
+  readonly errorCategory?: RunFailureCategory
   readonly output?: string
   readonly error?: string
 }
@@ -42,8 +104,8 @@ export interface RunInput {
 export type RunOutcome =
   | { readonly kind: 'completed'; readonly output: string }
   | { readonly kind: 'cancelled' }
-  | { readonly kind: 'cleanup-failed'; readonly error: string; readonly category: LLMFailureCategory }
-  | { readonly kind: 'failed'; readonly error: string; readonly category: LLMFailureCategory }
+  | { readonly kind: 'cleanup-failed'; readonly error: string; readonly category: RunFailureCategory }
+  | { readonly kind: 'failed'; readonly error: string; readonly category: RunFailureCategory }
 
 export function validateRunInput(input: RunInput): RunInput {
   if (input && ('modelProfileId' in input || 'model' in input || 'selection' in input || 'llmPlan' in input)) {

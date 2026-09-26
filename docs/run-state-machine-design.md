@@ -1,88 +1,35 @@
 # Run 状态转换设计（H2）
 
-状态：H2 工具循环设计稿，2026-09-23；单步 Run 已改用异步 SQLite StatePort 并具备 `interrupted` 恢复。本文仍约束未来受控多步循环及工具意图记录。
+状态：2026-09-26，受控 Bash 工具循环、DeepSeek 原生工具协议和 Web 过程展示已实现并通过本地验证。
 
-## 主线
+## 执行边界
 
-一次 Run 是一串可解释的事实和转换：接受输入，准备模型调用，观察模型结果，校验工具请求，逐项观察工具结果，继续模型调用，最后结算。领域函数根据当前快照和一个已观察到的事实，计算新快照、应记录的事件和下一项操作意图。Run 服务负责准入与对外控制，状态组件提交转换，AgentLoop 执行操作并持有在途资源直到退出。
+Run 服务负责准入、快照和取消入口；AgentLoop 独占执行期间的模型与 Bash 调用；SQLite 状态组件持有 Run、执行阶段和事件。AgentLoop 从已固定的 Prompt、Session 历史和本次 Run 的工具轨迹组装模型消息。模型返回最终文本或一批工具请求，整批校验通过后才逐项执行。Bash 只接收项目 ID 与命令，工作目录由 Projects 服务决定。
 
-```text
-当前快照 + 已观察事实 + 显式策略
-              │
-              ▼
-      advanceRun（纯函数）
-              │
-              ├─ 新快照与事件 ──> 状态提供方原子提交
-              └─ 操作意图 ──────> 提交成功后由 AgentLoop 执行
-                                      │
-                                      └─ 结果与退出事实回到 advanceRun
-```
+`src/run/execution.ts` 的 `advanceExecution(current, event)` 是纯函数。它根据已提交的事件推进阶段、调用次数、当前批次索引和修订号。状态组件在一个 SQLite 事务中提交新阶段与事件；模型和 Bash 的启动事件必须先提交，外部调用才可开始。调用退出后再提交工具观察或固定类别的失败。终态事件、Run 状态和成功时新增的 Session 轮次也在一个事务中提交。
 
-“操作意图”只是数据，不执行模型、工具或存储操作。协调组件每次只推动一个已提交的意图；不在组件 `apply` 中运行长期循环。
+| 内部阶段 | 含义 |
+| --- | --- |
+| `ready-model` | 可以登记下一次模型调用 |
+| `model-in-flight` | 模型启动意图已提交，等待结果与退出 |
+| `ready-tool` | 整批 Bash 请求已校验，等待当前项启动 |
+| `tool-in-flight` | 当前 Bash 启动意图已提交，等待结果与退出 |
+| `terminal` | Run 已结算，不能再推进 |
 
-## 对外状态与内部阶段
+对外 Run 状态仍为 `running`、`cancelling`、`completed`、`cancelled`、`failed`、`interrupted`。内部阶段记录执行位置；对外状态表达调用者需要的结算结果。模型与 Bash 调用次数用于记录进度，不设固定次数上限；循环持续到模型给出最终回答、用户取消或发生失败。最终回答最多 65536 字节，累计 Bash 输出最多 131072 字节；Bash 组件单次保留的 stdout 与 stderr 合计最多 65536 字节。
 
-现有 `RunStatus` 继续表达调用者需要的状态：`running`、`cancelling`、`completed`、`cancelled`、`failed`。内部增加阶段，避免从事件文本或 Promise 状态猜测下一步：
+## 模型与工具协议
 
-| 内部阶段 | 含义 | 允许的下一项操作 |
-| --- | --- | --- |
-| `ready-model` | 提示词所需的历史和工具观察已齐备 | 发起一次模型调用 |
-| `model-in-flight` | 模型调用已登记，等待业务结果与资源退出 | 等待或取消该调用 |
-| `ready-tool` | 整批工具请求已通过校验，指向待执行项 | 发起当前工具调用 |
-| `tool-in-flight` | 当前工具调用已登记 | 等待或取消该调用 |
-| `terminal` | Run 已结算 | 无 |
+`src/llm/port.ts` 定义项目自有的 `ModelReply`：`{ kind: 'final', text }` 或 `{ kind: 'tool-calls', content, calls }`。工具请求含 ID、名称与待校验参数。LLM 消息允许助手工具请求和按请求 ID 对应的工具观察。API 组件用 `supportsTools` 表示是否接受工具定义；DeepSeek 为 `true`，将 Bash 定义、助手工具请求和观察映射到 Chat Completions 的 `tools`、`tool_calls` 与 `role: tool`，OpenAI Responses 为 `false`，保持纯文本。DeepSeek 的工具请求显式关闭 thinking 模式，避免缺少 `reasoning_content` 回传的跨轮协议错误。
 
-快照还需包含模型调用次数、已执行工具次数、当前批次及索引、用于下一次提示词的本次 Run 轨迹，以及单调递增的修订号。轨迹保存项目自有的模型回答、工具请求与工具观察；`Session.turns` 仍只在 Run 成功完成时追加最终的一轮输入和输出。
+首版只有 `bash`。所有 Agent 可调用，不设置 Agent 工具允许列表。纯函数 `validateBashBatch` 在执行任何命令前校验整个批次的 ID、名称和参数；命令须为非空字符串且不含 NUL，不按命令字节数拒绝合法的长文件写入。一项无效则整批零执行。Bash 非零退出码是普通观察，包含退出码和有界输出，会回传模型；取消、超时或执行器故障按固定类别结束 Run。下一次模型调用只能在当前批次每个已启动 Bash 的 `result` 与 `done` 都观察并记录后开始。
 
-`cancelling` 可以覆盖任一非终态阶段。取消请求首先关闭后续操作的准入，再取消当前调用并等待其 `done`。若当时没有在途调用，直接结算为 `cancelled`。清理失败结算为 `failed`，并保留清理错误；不能把资源未退出的 Run 报为已结束。
+`OwnedCall.result` 表示业务结果，`done` 表示实际退出。用户取消先把 Run 改为 `cancelling`，再取消在途调用并等待 `done`；此后不启动下一项。依赖撤销同样取消并等待，按 `dependency-unavailable` 结算；清理失败优先记为失败。已经启动的 Bash 可能有副作用，取消不回滚它。
 
-## H2 所需的最小领域协议
+## 持久化与恢复
 
-模型端口返回项目自有的判别联合：
+`run-state` 第 2 版迁移给旧 Run 表增加执行快照，并建立事件表。旧终态 Run 标为内部 `terminal`；旧在途 Run 在启动时结算为 `interrupted`。每次启动意图、工具观察与终态有递增序号，`StatePort.getRunExecution` 和 `getRunEvents` 可供受信组件读取。Run 服务与 Harness 门面提供事件读取，Web 通过 `GET /api/v1/runs/:id/events` 返回公开事件及有界输出摘要。
 
-```ts
-type ModelReply =
-  | { readonly kind: 'final'; readonly text: string }
-  | { readonly kind: 'tool-calls'; readonly calls: readonly ToolRequest[] }
+异常退出后，已记录的 `bash-started` 可能对应“命令尚未启动”或“命令已产生副作用但观察未落盘”。重启统一把未终结 Run 标为 `interrupted` 并写入恢复事件，不重放命令。原幂等键仍指向旧 Run；Session 可用新键开始新的 Run。
 
-interface ToolRequest {
-  readonly id: string              // 同一模型回答内唯一
-  readonly name: string
-  readonly arguments: unknown      // 校验前不信任
-}
-
-type ToolObservation =
-  | { readonly kind: 'succeeded'; readonly requestId: string; readonly output: string }
-  | { readonly kind: 'failed'; readonly requestId: string; readonly error: string }
-```
-
-模型输入由纯函数根据 Agent 定义、已完成的 Session 历史和本次 Run 轨迹组装。Agent 定义只增加 H2 实际需要的工具允许列表；工具的参数校验规则与执行函数由工具服务提供。工具结果先归一化为有界的项目自有观察，再进入领域转换。第三方模型和工具类型留在各自适配器内。
-
-`advanceRun(snapshot, fact, policy)` 的 `fact` 只包含已发生的事情，例如接受、模型调用退出、工具调用退出、取消请求。`policy` 显式包含最大模型调用次数、最大工具执行次数、单次与累计输出上限，以及 Agent 的工具授权。返回值形如 `{ next, events, intent? }`；所有字段都是数据。时间和 ID 由调用方生成并传入，函数内不读取时钟、不生成随机数。
-
-## 转换规则
-
-1. **接受**：状态提供方原子检查 Session、同键去重和同一 Session 的活动 Run。新 Run 进入 `ready-model`；重复的相同请求返回原 Run，不产生新意图。
-2. **发起模型**：检查步数预算；先提交 `model-in-flight` 和本次调用标识，再调用模型。一次模型调用计为一步。
-3. **观察模型**：分别观察 `result` 和 `done`，两者都结算后才推进。`done` 失败导致 Run 失败。最终回答通过非空与输出上限校验后结算成功。工具回答先整批校验；任何请求的名称、授权、参数、ID 或批次上限无效，整批零执行并明确失败。
-4. **执行工具批次**：先提交当前工具项 `tool-in-flight`，再发起调用。只有该项的 `result` 和 `done` 均结算且结果被记录后，才能推进到下一项。工具失败或输出超限时记录失败并结束 Run；H2 不继续执行批次后续项。
-5. **回到模型**：整批工具观察齐备后进入 `ready-model`。提示词包含本次请求和对应观察；下一次模型调用仍受总步数与输出预算限制。
-6. **取消**：取消事实将 Run 置为 `cancelling`，不再发起新的模型或工具调用。当前调用的业务结果即使随后成功，也不转成成功终态；等待 `done` 后结算 `cancelled`。清理失败优先报告为 `failed`。
-
-调用返回和取消可能同时到达。状态提供方按修订号提交单一顺序；协调组件在每次发起下一项操作前检查已提交的当前状态。因而取消一旦被提交，就不能再启动下一项。已经启动的外部工具可能产生副作用，取消不承诺回滚。
-
-## 状态提交与资源归属
-
-- 状态提供方原子提交一次转换的快照与事件；成功终态与 `Session.turns` 的追加属于同一次提交。当前单步 Run 已由 SQLite 异步事务提交成功终态与 Session 轮次；H2 工具步骤及事件仍需扩展持久状态契约。
-- 应用安装的唯一大模型 API 组件（提供 `llm` 服务）和后续工具组件提供 `OwnedCall<Result>`；AgentLoop 持有每次调用直到 `result` 与 `done` 都已观察。`result` 表示业务结果，`done` 表示实际工作及清理退出。取消后调用仍须最终结算这两个 Promise。
-- Run 服务通过 `inject` 使用本轮 Agent、Prompt、状态、LLM 和 AgentLoop 服务快照，负责准入、固定配置与对外控制。AgentLoop 注入状态、LLM 和后续工具服务，独占执行期调用。依赖撤销先停止准入，再取消并等待在途调用；Session 服务单独提供创建与查询，其数据仍与 Run 共用状态所有者。组合根处理外部请求时用 `context.get()` 获取当前服务。
-- 记录操作意图先于执行。这能在 H3 区分“确定未启动”和“可能已启动但没有结果”。异常重开时将未终结 Run 结算为 `interrupted`；不自动重放工具副作用。单步 Run 的 `interrupted` 对外状态已实现；工具操作意图与恢复事件仍随 H2 工具循环设计。
-
-## 实施切片与验收
-
-1. 在领域层加入模型回答、工具请求、观察与限额类型；实现整批校验和纯转换函数，并用表驱动用例覆盖状态转换。
-2. 增加一个可控的工具服务组件，将 AgentLoop 改为逐步驱动；先打通“模型请求一个工具 → 工具结果回填 → 模型给出最终回答”。
-3. 加入多工具串行、整批无效零执行、步骤与输出上限、工具失败和取消竞态的行为测试。验证每个调用的 `done` 之前 Run 不进入终态，也不启动下一项。
-4. 验证模型或工具提供方撤销、替换及应用根关闭时，准入关闭、在途调用退出和事件终态一致；运行 `npm run check`。
-
-H2 的完成标准是：仅凭保存的快照和事件，能说明 Run 当前为何处于该阶段、已经执行了哪些工具、下一项是否允许启动，以及最终为何结束。
+行为测试覆盖工作目录与环境、长文件完整写入、串行批次、无效批次零执行、非零退出码、超过原有调用次数限制后的正常完成、输出上限、取消竞态、依赖撤销等待、旧 SQLite 数据迁移，以及记录 Bash 意图后的异常重启不重放。

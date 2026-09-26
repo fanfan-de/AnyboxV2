@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -8,6 +8,7 @@ import { createHarness } from '../dist/harness.js'
 import { LLMFailure } from '../dist/llm/port.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from '../dist/web/component.js'
+import { createDirectoryPickerComponent } from '../dist/web/directory-picker.js'
 import { controlledLLM } from './helpers/controlled-llm.mjs'
 import { createApiKeyServiceComponent } from '../dist/credentials/settings.js'
 import { deepSeekCredentialId } from '../dist/llm/deepseek-chat-completions/component.js'
@@ -19,7 +20,7 @@ const managed = [
 ]
 const credentialPath = id => `/credentials/${encodeURIComponent(id)}`
 
-async function fixture(directory) {
+async function fixture(directory, pickerOptions = {}) {
   const root = new Context()
   const llm = controlledLLM()
   const secrets = new Map()
@@ -39,11 +40,15 @@ async function fixture(directory) {
       agents: [{ id: 'assistant', modelProfileId: 'default', instructions: 'Private instructions.' }],
     })
     const project = await harness.openProject(directory)
-    const webFiber = root.installComponent(createWebFrontendComponent())
+    const pickerFiber = root.installComponent(createDirectoryPickerComponent({
+      platform: 'darwin', runDialog: async () => undefined, ...pickerOptions,
+    }))
+    await pickerFiber
+    const webFiber = root.installComponent(createWebFrontendComponent(harness.listAgents()))
     await webFiber
     const web = root.get(webFrontendServiceKey)
     assert.ok(web)
-    return { root, keyFiber, apiFiber, webFiber, harness, project, llm, web, secrets, close: () => harness.close() }
+    return { root, keyFiber, apiFiber, pickerFiber, webFiber, harness, project, llm, web, secrets, close: () => harness.close() }
   } catch (error) { await root.fiber.dispose(); throw error }
 }
 
@@ -127,6 +132,46 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     assert.equal(final.data.output, 'Hello back')
     const session = await request(f.web, 'GET', `/sessions/${sessionId}`)
     assert.deepEqual(session.data.turns, [{ input: 'Hello', output: 'Hello back' }])
+  } finally {
+    for (const call of f.llm.calls) call.done.resolve()
+    await f.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('Web serves bounded Run events for an active Bash loop and its completed history', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-events-'))
+  const f = await fixture(directory)
+  try {
+    const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
+    const accepted = await request(f.web, 'POST', `/sessions/${created.data.id}/runs`,
+      { input: 'Inspect output', idempotencyKey: 'events' })
+    assert.equal((await request(f.web, 'GET', '/runs/missing/events')).response.status, 404)
+    assert.deepEqual((await request(f.web, 'GET', `/runs/${accepted.data.id}/events`)).data.map(event => event.kind),
+      ['model-started'])
+    f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [{
+      id: 'call-1', name: 'bash', arguments: { command: "printf '%*s' 5000 '' | tr ' ' a" },
+    }] })
+    f.llm.calls[0].done.resolve()
+    for (let attempt = 0; attempt < 100 && f.llm.calls.length < 2; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    assert.equal(f.llm.calls.length, 2)
+    f.llm.calls[1].result.resolve('Done')
+    f.llm.calls[1].done.resolve()
+    assert.equal((await f.harness.waitRun(accepted.data.id)).status, 'completed')
+    const events = await request(f.web, 'GET', `/runs/${accepted.data.id}/events`)
+    assert.equal(events.response.status, 200)
+    assert.deepEqual(events.data.map(event => event.kind), [
+      'model-started', 'model-tool-calls', 'bash-started', 'bash-observed', 'model-started', 'terminal',
+    ])
+    assert.equal(events.data[1].calls[0].command, "printf '%*s' 5000 '' | tr ' ' a")
+    assert.equal(events.data[2].requestId, 'call-1')
+    assert.equal(events.data[3].exitCode, 0)
+    assert.equal(events.data[3].stdout.length, 2048)
+    assert.equal(events.data[3].truncated, true)
+    assert.equal(events.data[5].status, 'completed')
+    assert.doesNotMatch(JSON.stringify(events.data), /Private instructions|llmSnapshot|local-key/)
   } finally {
     for (const call of f.llm.calls) call.done.resolve()
     await f.close()
@@ -243,7 +288,7 @@ test('the Web frontend can be replaced without closing Harness', async () => {
     assert.equal(f.root.get(webFrontendServiceKey), undefined)
     const session = await f.harness.createSession(f.project.id, 'assistant')
     assert.equal(session.agentId, 'assistant')
-    await f.root.installComponent(createWebFrontendComponent(port))
+    await f.root.installComponent(createWebFrontendComponent(f.harness.listAgents(), port))
     const replacement = f.root.get(webFrontendServiceKey)
     assert.equal(replacement?.url, f.web.url)
     const fetched = await request(replacement, 'GET', `/sessions/${session.id}`)
@@ -257,19 +302,26 @@ test('the Web frontend can be replaced without closing Harness', async () => {
 
 test('Web project routes register directories and switching views leaves Runs active', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-projects-'))
-  const secondPath = join(directory, 'second')
+  const secondPath = join(directory, '中文 项目')
   mkdirSync(secondPath)
-  const f = await fixture(directory)
+  const picked = [directory, secondPath, undefined]
+  const f = await fixture(directory, { runDialog: async () => picked.shift() })
   try {
     const listed = await request(f.web, 'GET', '/projects')
     assert.equal(listed.data.length, 1)
     assert.equal(listed.data[0].id, f.project.id)
-    const duplicate = await request(f.web, 'POST', '/projects', { path: directory })
+    assert.deepEqual((await request(f.web, 'GET', '/projects/picker')).data, { supported: true })
+    assert.equal((await request(f.web, 'POST', '/projects/pick', {}, 'https://example.invalid')).response.status, 403)
+    const duplicate = await request(f.web, 'POST', '/projects/pick', {})
     assert.equal(duplicate.data.id, f.project.id)
-    const added = await request(f.web, 'POST', '/projects', { path: secondPath })
+    const added = await request(f.web, 'POST', '/projects/pick', {})
     assert.equal(added.response.status, 200)
-    const invalid = await request(f.web, 'POST', '/projects', { path: 'relative' })
-    assert.equal(invalid.response.status, 400)
+    assert.equal(added.data.path, realpathSync(secondPath))
+    const cancelled = await request(f.web, 'POST', '/projects/pick', {})
+    assert.equal(cancelled.response.status, 200)
+    assert.equal(cancelled.data, null)
+    assert.equal((await request(f.web, 'POST', '/projects/pick', { path: secondPath })).response.status, 400)
+    assert.equal((await request(f.web, 'POST', '/projects', { path: secondPath })).response.status, 404)
     const session = await request(f.web, 'POST', '/sessions', {
       projectId: f.project.id, agentId: 'assistant',
     })
@@ -290,4 +342,97 @@ test('Web project routes register directories and switching views leaves Runs ac
     const unknownHistory = await request(f.web, 'GET', '/sessions/missing/runs')
     assert.equal(unknownHistory.response.status, 404)
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('native project picker maps failures and rejects concurrent selection', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-picker-'))
+  let started
+  let finish
+  const entered = new Promise(resolve => { started = resolve })
+  const selection = new Promise(resolve => { finish = resolve })
+  const f = await fixture(directory, { runDialog: () => { started(); return selection } })
+  try {
+    const pending = request(f.web, 'POST', '/projects/pick', {})
+    await entered
+    const busy = await request(f.web, 'POST', '/projects/pick', {})
+    assert.equal(busy.response.status, 409)
+    assert.deepEqual(busy.data, { error: { code: 'picker-busy' } })
+    finish(undefined)
+    assert.equal((await pending).data, null)
+  } finally { finish(undefined); await f.close(); rmSync(directory, { recursive: true, force: true }) }
+
+  const failedDirectory = mkdtempSync(join(tmpdir(), 'anybox-web-picker-'))
+  const failed = await fixture(failedDirectory, {
+    runDialog: async () => { throw new Error('private native details') },
+  })
+  try {
+    const response = await request(failed.web, 'POST', '/projects/pick', {})
+    assert.equal(response.response.status, 503)
+    assert.deepEqual(response.data, { error: { code: 'picker-unavailable' } })
+  } finally { await failed.close(); rmSync(failedDirectory, { recursive: true, force: true }) }
+})
+
+test('unsupported project picker leaves Web available', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-picker-'))
+  const f = await fixture(directory, { platform: 'linux' })
+  try {
+    assert.deepEqual((await request(f.web, 'GET', '/projects/picker')).data, { supported: false })
+    const selected = await request(f.web, 'POST', '/projects/pick', {})
+    assert.equal(selected.response.status, 503)
+    assert.deepEqual(selected.data, { error: { code: 'picker-unsupported' } })
+    assert.equal((await request(f.web, 'GET', '/projects')).data.length, 1)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('Web shutdown cancels an open picker and waits for it to exit', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-picker-'))
+  let started
+  let aborted
+  let release
+  const entered = new Promise(resolve => { started = resolve })
+  const cancelled = new Promise(resolve => { aborted = resolve })
+  const exit = new Promise(resolve => { release = resolve })
+  const f = await fixture(directory, { runDialog: async signal => {
+    started()
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }))
+    aborted()
+    await exit
+    return undefined
+  } })
+  try {
+    const pending = request(f.web, 'POST', '/projects/pick', {})
+    await entered
+    let closed = false
+    const closing = f.close().then(() => { closed = true })
+    await cancelled
+    assert.equal(closed, false)
+    release()
+    await closing
+    const response = await pending
+    assert.equal(response.response.status, 503)
+  } finally { release(); await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('disconnecting a picker request cancels the host dialog without adding a project', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-picker-'))
+  let started
+  let aborted
+  const entered = new Promise(resolve => { started = resolve })
+  const cancelled = new Promise(resolve => { aborted = resolve })
+  const f = await fixture(directory, { runDialog: signal => new Promise(resolve => {
+    started()
+    signal.addEventListener('abort', () => { aborted(); resolve(directory) }, { once: true })
+  }) })
+  try {
+    const controller = new AbortController()
+    const pending = fetch(`${f.web.url}/api/v1/projects/pick`, {
+      method: 'POST', headers: { Origin: f.web.url, 'Content-Type': 'application/json' },
+      body: '{}', signal: controller.signal,
+    })
+    await entered
+    controller.abort()
+    await assert.rejects(pending, { name: 'AbortError' })
+    await cancelled
+    assert.equal((await request(f.web, 'GET', '/projects')).data.length, 1)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })

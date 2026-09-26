@@ -90,7 +90,10 @@ export function buildResponsesRequest(
   if (!messages.length) throw new LLMFailure('unsupported-request')
   return Object.freeze({
     model: selection.model,
-    input: Object.freeze(messages.map(message => Object.freeze({ role: message.role, content: message.content }))),
+    input: Object.freeze(messages.map(message => {
+      if (message.role === 'tool' || 'toolCalls' in message) throw new LLMFailure('unsupported-request')
+      return Object.freeze({ role: message.role, content: message.content })
+    })),
     max_output_tokens: selection.maxOutputTokens,
     stream: false as const,
     store: false as const,

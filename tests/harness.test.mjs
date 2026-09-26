@@ -5,13 +5,13 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context, FiberState } from '@nya/core'
 import { createHarness } from '../dist/harness.js'
-import { createAgentComponent } from '../dist/agent/component.js'
 import { createAgentPromptComponent } from '../dist/agent/prompt-binding-component.js'
 import { llmServiceKey } from '../dist/llm/port.js'
 import { createRunComponent, runServiceKey } from '../dist/run/component.js'
 import { createAgentLoopComponent, agentLoopServiceKey } from '../dist/run/agent-loop-component.js'
 import { createSqliteStateComponent, stateServiceKey } from '../dist/run/sqlite-state.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
+import { createBashComponent } from '../dist/tool/bash-component.js'
 import { createSessionComponent, sessionServiceKey } from '../dist/run/session-component.js'
 import { createPromptComponent } from '../dist/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
@@ -161,7 +161,7 @@ test('cancelling while AgentLoop loads a persisted Run never starts a model call
     await loading.promise
     const [accepted] = await f.harness.listRuns(session.id)
     assert.equal(accepted.status, 'running')
-    assert.equal((await f.harness.cancelRun(accepted.id))?.status, 'cancelled')
+    assert.equal((await f.harness.cancelRun(accepted.id))?.status, 'cancelling')
     release.resolve()
     assert.equal((await starting).status, 'cancelled')
     assert.equal(f.llm.calls.length, 0)
@@ -240,18 +240,18 @@ test('removing the LLM API component waits for the run consumer and its call', a
   const directory = mkdtempSync(join(tmpdir(), 'anybox-harness-'))
   const llm = controlledLLM()
   const inputs = { newId: ids(), now: () => 'now' }
-  const agent = root.installComponent(createAgentComponent(agents))
   const projects = root.installComponent(createProjectComponent(inputs))
+  root.installComponent(createBashComponent())
   const state = root.installComponent(createSqliteStateComponent(inputs))
-  const sessions = root.installComponent(createSessionComponent(inputs))
+  const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   const prompts = root.installComponent(createPromptComponent(inputs))
-  const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, () => true))
+  const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const api = root.installComponent(llm.component())
   const loop = root.installComponent(createAgentLoopComponent(inputs))
-  const owner = root.installComponent(createRunComponent(inputs))
+  const owner = root.installComponent(createRunComponent(inputs, agents))
   try {
-    await Promise.all([agent, state, database, api])
+    await Promise.all([state, database, api])
     await loop
     await sessions
     await prompts
@@ -328,18 +328,18 @@ test('AgentLoop owns in-flight calls while Session and Run state survive its rep
   const directory = mkdtempSync(join(tmpdir(), 'anybox-harness-'))
   const llm = controlledLLM()
   const inputs = { newId: ids(), now: () => 'now' }
-  const agent = root.installComponent(createAgentComponent(agents))
   const projects = root.installComponent(createProjectComponent(inputs))
+  root.installComponent(createBashComponent())
   const state = root.installComponent(createSqliteStateComponent(inputs))
-  const sessions = root.installComponent(createSessionComponent(inputs))
+  const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   const prompts = root.installComponent(createPromptComponent(inputs))
-  const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, () => true))
+  const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const api = root.installComponent(llm.component())
   const loop = root.installComponent(createAgentLoopComponent(inputs))
-  const runs = root.installComponent(createRunComponent(inputs))
+  const runs = root.installComponent(createRunComponent(inputs, agents))
   try {
-    await Promise.all([agent, state, database, api])
+    await Promise.all([state, database, api])
     await prompts
     await agentPrompts
     await sessions

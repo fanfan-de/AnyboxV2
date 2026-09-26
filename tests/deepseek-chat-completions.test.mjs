@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,13 +12,14 @@ import { credentialReadServiceKey } from '../dist/credentials/port.js'
 import { createDeepSeekChatCompletionsComponent, deepSeekCredentialId } from '../dist/llm/deepseek-chat-completions/component.js'
 import { chatCompletionsEndpoint, validateDeepSeekConfiguration } from '../dist/llm/deepseek-chat-completions/domain.js'
 import { runServiceKey } from '../dist/run/component.js'
+import { bashToolDefinition } from '../dist/tool/bash-component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { deferred } from './helpers/controlled-llm.mjs'
 import { memoryCredentials } from './helpers/memory-credentials.mjs'
 
 const profile = (overrides = {}) => ({
-  id: 'default', model: 'deepseek-chat', maxOutputTokens: 128, temperature: 0.4, timeoutMs: 30000, ...overrides,
+  id: 'default', model: 'deepseek-flash', temperature: 0.4, timeoutMs: 30000, ...overrides,
 })
 const config = (version = 'v1', profiles = [profile()]) => ({ version, profiles })
 const agents = [{ id: 'assistant', instructions: 'Answer briefly.', modelProfileId: 'default' }]
@@ -92,7 +93,7 @@ async function harnessFixture(transport, configuration = config(), key = 'local-
     await database
     const harness = await createHarness(root, { agents })
     return {
-      root, source, api, credentials, harness,
+      root, source, api, credentials, harness, directory,
       async close() {
         try { await harness.close() } finally { rmSync(directory, { recursive: true, force: true }) }
       },
@@ -135,18 +136,125 @@ test('the component sends a native Chat Completions request and returns the fina
     response.writeHead(200, { 'content-type': 'application/json' })
     response.end(completion('Hi'))
   })
-  const f = await apiFixture({ baseUrl: server.baseUrl })
+  const f = await apiFixture({ baseUrl: server.baseUrl }, config('v1', [profile({ maxOutputTokens: 128 })]))
   try {
     const plan = f.llm.prepare('default')
     assert.deepEqual(plan, { snapshot: { profileId: 'default', configVersion: 'v1' } })
     assert.equal(JSON.stringify(plan).includes('local-key'), false)
     const call = f.llm.call({ plan, messages })
-    assert.equal(await call.result, 'Hi')
+    assert.deepEqual(await call.result, { kind: 'final', text: 'Hi' })
     await call.done
     assert.deepEqual(received, {
       method: 'POST', path: '/chat/completions', authorization: 'Bearer local-key', contentType: 'application/json',
-      body: { model: 'deepseek-chat', messages, max_tokens: 128, temperature: 0.4, stream: false },
+      body: { model: 'deepseek-flash', messages, max_tokens: 128, temperature: 0.4, stream: false },
     })
+  } finally { await f.close(); await server.close() }
+})
+
+test('DeepSeek tool calls execute Bash, return a linked tool message, and reuse one Run key', async () => {
+  const received = []
+  const server = await localServer(async (request, response) => {
+    let body = ''
+    for await (const chunk of request) body += chunk
+    received.push({ authorization: request.headers.authorization, body: JSON.parse(body) })
+    const reply = received.length === 1
+      ? { choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', content: null, tool_calls: [{
+          id: 'call-1', type: 'function', function: { name: 'bash', arguments: '{"command":"printf hello"}' },
+        }],
+      } }] }
+      : { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Bash printed hello.' } }] }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify(reply))
+  })
+  const f = await harnessFixture({ baseUrl: server.baseUrl })
+  try {
+    assert.equal(f.root.get(llmServiceKey).supportsTools, true)
+    const project = await f.harness.openProject(f.directory)
+    const session = await f.harness.createSession(project.id, 'assistant')
+    const run = await f.harness.startRun({ sessionId: session.id, input: 'Run Bash', idempotencyKey: 'tools' })
+    const terminal = await f.harness.waitRun(run.id)
+    assert.equal(terminal.status, 'completed')
+    assert.equal(terminal.output, 'Bash printed hello.')
+    assert.equal(received.length, 2)
+    assert.ok(received.every(item => !Object.hasOwn(item.body, 'max_tokens')))
+    assert.deepEqual(received.map(item => item.authorization), ['Bearer local-key', 'Bearer local-key'])
+    assert.equal(f.credentials.reads.length, 1)
+    assert.deepEqual(received.map(item => item.body.thinking),
+      [{ type: 'disabled' }, { type: 'disabled' }])
+    assert.deepEqual(received[0].body.tools, [{ type: 'function', function: bashToolDefinition }])
+    assert.deepEqual(received[1].body.messages[2], {
+      role: 'assistant', content: null, tool_calls: [{
+        id: 'call-1', type: 'function', function: { name: 'bash', arguments: '{"command":"printf hello"}' },
+      }],
+    })
+    assert.equal(received[1].body.messages[3].role, 'tool')
+    assert.equal(received[1].body.messages[3].tool_call_id, 'call-1')
+    assert.equal(JSON.parse(received[1].body.messages[3].content).stdout, 'hello')
+    assert.deepEqual((await f.harness.getRunEvents(run.id)).map(event => event.kind), [
+      'model-started', 'model-tool-calls', 'bash-started', 'bash-observed', 'model-started', 'terminal',
+    ])
+    assert.deepEqual((await f.harness.getSession(session.id)).turns,
+      [{ input: 'Run Bash', output: 'Bash printed hello.' }])
+  } finally { await f.close(); await server.close() }
+})
+
+test('a long DeepSeek Bash heredoc writes the complete file and finishes the Run', async () => {
+  const content = `<!doctype html>\n<html lang="zh-CN"><body>\n${'<!-- 贪吃蛇游戏 -->\n'.repeat(600)}</body></html>\n`
+  const command = `cat > index.html <<'ANYBOX_TEST_HTML'\n${content}ANYBOX_TEST_HTML\n`
+  assert.ok(Buffer.byteLength(command, 'utf8') > 8_192)
+  const received = []
+  const server = await localServer(async (request, response) => {
+    let body = ''
+    for await (const chunk of request) body += chunk
+    received.push(JSON.parse(body))
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(received.length === 1
+      ? JSON.stringify({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', content: null, tool_calls: [{
+          id: 'write-html', type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command }) },
+        }],
+      } }] })
+      : completion('File saved.'))
+  })
+  const f = await harnessFixture({ baseUrl: server.baseUrl })
+  try {
+    const project = await f.harness.openProject(f.directory)
+    const session = await f.harness.createSession(project.id, 'assistant')
+    const run = await f.harness.startRun({ sessionId: session.id, input: 'Write a long HTML file', idempotencyKey: 'long-file' })
+    const terminal = await f.harness.waitRun(run.id)
+    assert.equal(terminal.status, 'completed')
+    assert.equal(terminal.output, 'File saved.')
+    assert.equal(readFileSync(join(f.directory, 'index.html'), 'utf8'), content)
+    assert.equal(received.length, 2)
+    const observation = received[1].messages.find(message => message.role === 'tool')
+    assert.equal(observation.tool_call_id, 'write-html')
+    assert.equal(JSON.parse(observation.content).exitCode, 0)
+    const events = await f.harness.getRunEvents(run.id)
+    assert.equal(events.find(event => event.kind === 'bash-started').call.arguments.command, command)
+  } finally { await f.close(); await server.close() }
+})
+
+test('one malformed DeepSeek function argument rejects the entire batch before Bash', async () => {
+  const server = await localServer(async (_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', content: null, tool_calls: [
+        { id: 'valid', type: 'function', function: { name: 'bash', arguments: '{"command":"printf bad > marker"}' } },
+        { id: 'invalid', type: 'function', function: { name: 'bash', arguments: '{broken' } },
+      ],
+    } }] }))
+  })
+  const f = await harnessFixture({ baseUrl: server.baseUrl })
+  try {
+    const project = await f.harness.openProject(f.directory)
+    const session = await f.harness.createSession(project.id, 'assistant')
+    const run = await f.harness.startRun({ sessionId: session.id, input: 'Invalid', idempotencyKey: 'invalid' })
+    const terminal = await f.harness.waitRun(run.id)
+    assert.equal(terminal.status, 'failed')
+    assert.equal(terminal.errorCategory, 'invalid-tool-request')
+    assert.equal(existsSync(join(f.directory, 'marker')), false)
+    assert.equal(f.credentials.reads.length, 1)
   } finally { await f.close(); await server.close() }
 })
 
@@ -184,6 +292,9 @@ test('Harness starts without a key and settles an unconfigured Run explicitly', 
 test('configuration, endpoint, and credentials are validated before any request', async () => {
   assert.throws(() => validateDeepSeekConfiguration(config(' ')), /version/)
   assert.throws(() => validateDeepSeekConfiguration(config('v1', [])), /non-empty/)
+  for (const maxOutputTokens of [0, -1, 1.5, NaN, Infinity, null, '1024']) {
+    assert.throws(() => validateDeepSeekConfiguration(config('v1', [profile({ maxOutputTokens })])), /maxOutputTokens/)
+  }
   assert.throws(() => validateDeepSeekConfiguration(config('v1', [profile({ timeoutMs: 0 })])), /timeoutMs/)
   assert.throws(() => validateDeepSeekConfiguration(config('v1', [profile({ timeoutMs: 2 ** 31 })])), /timeoutMs/)
   assert.throws(() => validateDeepSeekConfiguration(config('v1', [profile({ temperature: 3 })])), /temperature/)
@@ -209,9 +320,8 @@ test('configuration, endpoint, and credentials are validated before any request'
     await fiber
     assert.equal(fiber.state, FiberState.ACTIVE)
     const llm = root.get(llmServiceKey)
-    const plan = llm.prepare('default')
     const attempt = async () => {
-      const call = llm.call({ plan, messages })
+      const call = llm.call({ plan: llm.prepare('default'), messages })
       const error = await call.result.then(() => assert.fail('expected failure'), error => error)
       await call.done
       return error
@@ -236,8 +346,8 @@ test('HTTP errors, incomplete output, malformed bodies, and unsupported messages
     response.end(next.body)
   })
   const f = await apiFixture({ baseUrl: server.baseUrl })
-  const attempt = async plan => {
-    const call = f.llm.call({ plan, messages })
+  const attempt = async (plan, tools) => {
+    const call = f.llm.call({ plan, messages, ...(tools ? { tools } : {}) })
     const outcome = await call.result.then(value => ({ value }), error => ({ error }))
     await call.done
     return outcome
@@ -252,6 +362,12 @@ test('HTTP errors, incomplete output, malformed bodies, and unsupported messages
     assert.equal((await attempt(plan)).error.category, 'invalid-response')
     responses.push({ status: 200, body: JSON.stringify({ choices: [{ finish_reason: 'tool_calls', message: { content: null, tool_calls: [] } }] }) })
     assert.equal((await attempt(plan)).error.category, 'invalid-response')
+    responses.push({ status: 200, body: JSON.stringify({ choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', content: null, reasoning_content: 'unreplayable', tool_calls: [
+        { id: 'call-1', type: 'function', function: { name: 'bash', arguments: '{"command":"pwd"}' } },
+      ],
+    } }] }) })
+    assert.equal((await attempt(plan, [bashToolDefinition])).error.category, 'invalid-response')
     responses.push({ status: 200, body: '{not json' })
     assert.equal((await attempt(plan)).error.category, 'invalid-response')
     assert.throws(() => f.llm.call({ plan, messages: [{ role: 'developer', content: 'Policy' }] }),

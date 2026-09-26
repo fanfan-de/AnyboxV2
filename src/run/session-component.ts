@@ -1,7 +1,6 @@
 import type { Component } from '@nya/core'
 import type { RuntimeInputs } from '../contracts.js'
-import { agentServiceKey } from '../agent/component.js'
-import type { AgentPort } from '../agent/component.js'
+import type { AgentDefinition } from '../agent/domain.js'
 import { nonEmpty } from '../validation.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
@@ -18,22 +17,20 @@ export interface SessionPort {
 }
 
 /** Session commands have their own dependency boundary; state remains the data owner. */
-export function createSessionComponent(inputs: RuntimeInputs): Component.Object<void, {
-  [agentServiceKey]: AgentPort
+export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[]): Component.Object<void, {
   [stateServiceKey]: StatePort
   [projectServiceKey]: ProjectPort
 }> {
   return {
     name: 'harness-sessions',
-    inject: [agentServiceKey, stateServiceKey, projectServiceKey],
+    inject: [stateServiceKey, projectServiceKey],
     apply(ctx, _config, deps) {
-      const agents = deps[agentServiceKey]
       const state = deps[stateServiceKey]
       const projects = deps[projectServiceKey]
       const service: SessionPort = {
         async createSession(projectId, agentId) {
           const id = nonEmpty(agentId, 'agentId')
-          if (!agents.get(id)) throw new Error(`unknown agent ${id}`)
+          if (!agents.some(agent => agent.id === id)) throw new Error(`unknown agent ${id}`)
           await projects.requireAvailable(nonEmpty(projectId, 'projectId'))
           return state.createSession(inputs.newId(), projectId, id, inputs.now())
         },

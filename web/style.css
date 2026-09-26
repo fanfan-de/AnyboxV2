@@ -20,8 +20,8 @@ button:disabled{cursor:not-allowed;opacity:.52}
 .sidebar p{color:#778379;font-size:13px;line-height:1.7;margin:0 0 32px}
 .sidebar label,.composer label{display:block;font-size:11px;letter-spacing:.1em;font-weight:700;color:#5f7163;text-transform:uppercase;margin-bottom:10px}
 .sidebar select{width:100%;padding:12px 14px;border:1px solid #d4ddd2;border-radius:10px;background:#fff;color:#24362b;outline-color:#7b9f80}
-.project-form{margin-bottom:18px}.project-form input{width:100%;padding:10px;border:1px solid #d4ddd2;border-radius:8px;background:#fff}
-.project-form button{margin-top:8px;padding:9px 12px;border:0;border-radius:8px;background:#295b43;color:#fff}
+.project-picker{margin-bottom:18px}.project-picker button{width:100%;padding:10px 12px;border:0;border-radius:8px;background:#295b43;color:#fff;text-align:left}
+.sidebar .project-picker p{font-size:11px;margin:8px 0 0;line-height:1.5}
 .navigation-list{display:flex;flex-direction:column;gap:6px;margin-bottom:18px;max-height:180px;overflow:auto}
 .navigation-list button{width:100%;border:1px solid transparent;border-radius:8px;background:transparent;color:#304a37;text-align:left;padding:9px 10px;overflow-wrap:anywhere}
 .navigation-list button.selected{border-color:#b7cdb9;background:#dce8da}.navigation-list button:hover{background:#e1e9df}
@@ -52,6 +52,17 @@ button:disabled{cursor:not-allowed;opacity:.52}
 .message.assistant{align-self:flex-start;background:#f6f6f2;color:#28332b;border:1px solid #edf0e9;border-bottom-left-radius:4px}
 .message.pending{opacity:.7}
 .message-label{display:block;margin-bottom:6px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:800;color:#718474}
+.run-trace{align-self:flex-start;width:min(82%,740px);margin:-4px 0 0;padding:0 0 0 8px;border-left:2px solid #d7e2d6}
+.trace-toggle{border:0;background:transparent;color:#4f7858;font-size:12px;font-weight:700;padding:4px 8px;text-align:left}
+.trace-toggle:hover{text-decoration:underline}
+.trace-empty{margin:6px 8px 10px;color:#7f8c80;font-size:12px;line-height:1.5}
+.tool-call{margin:8px 0 12px 8px;padding:12px 14px;border:1px solid #dfe8dd;border-radius:10px;background:#fafbf8;color:#29392e;overflow:hidden}
+.tool-call-heading{display:flex;justify-content:space-between;gap:12px;color:#5e7962;font-size:11px}
+.tool-call-heading strong{letter-spacing:.08em;text-transform:uppercase}
+.tool-command{display:block;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:10px;font-size:12px;line-height:1.5;color:#263b2d}
+.tool-result{margin:10px 0 0;font-size:11px;color:#6a786d}
+.tool-output-label{display:block;margin-top:10px;font-size:10px;letter-spacing:.08em;color:#788a7c;text-transform:uppercase}
+.tool-output{margin:4px 0 0;padding:9px 10px;max-height:170px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:6px;background:#edf2eb;font-size:11px;line-height:1.5}
 .empty-state{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#819083;min-height:230px}
 .empty-icon{font-size:38px;color:#79a282}
 .empty-state h2{font-family:Georgia,serif;font-size:28px;font-weight:400;color:#4b6250;margin:15px 0 6px}
@@ -80,6 +91,7 @@ button:disabled{cursor:not-allowed;opacity:.52}
 .composer-footer>span{display:none}
 .composer-footer{justify-content:flex-end}
 .message{max-width:92%}
+.run-trace{width:92%}
 }
 
 
