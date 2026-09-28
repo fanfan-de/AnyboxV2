@@ -16,7 +16,9 @@ import { promptServiceKey } from '../prompt/component.js'
 import type { PromptPort } from '../prompt/component.js'
 import { agentPromptServiceKey } from '../agent/prompt-binding-component.js'
 import type { AgentPromptPort } from '../agent/prompt-binding-component.js'
-import { runChangedEvent, runModelEvent } from '../run/notifications.js'
+import { runChangedEvent, runViewEvent } from '../run/notifications.js'
+import { decodeProtocolView } from './protocols/view.js'
+import { projectProtocolRecords } from '../protocol-agents/projection.js'
 
 export const webFrontendServiceKey = 'web.frontend'
 /** Stable identity owned by this single-user host, never supplied by the browser. */
@@ -61,8 +63,9 @@ export function createWebFrontendComponent(agents: readonly Readonly<{ id: strin
           return deps[sessionServiceKey].createSession(projectId, agentId, modelId)
         },
         selectSessionModel(sessionId, modelId) {
-          if (!deps[modelsServiceKey].get(modelId)) throw modelsError('not-found')
-          return deps[sessionServiceKey].selectSessionModel(sessionId, modelId)
+          const model = deps[modelsServiceKey].get(modelId)
+          if (!model) throw modelsError('not-found')
+          return deps[sessionServiceKey].selectSessionModel(sessionId, modelId, model.parameters.protocolId)
         },
         getSession: id => deps[sessionServiceKey].getSession(id),
         listSessions: id => deps[sessionServiceKey].listSessions(id),
@@ -73,6 +76,20 @@ export function createWebFrontendComponent(agents: readonly Readonly<{ id: strin
         waitRun: (id, signal) => deps[runServiceKey].waitRun(id, signal),
         startRun: input => deps[runServiceKey].startRun(input),
         getRun: id => deps[sessionServiceKey].getRun(id),
+        async getRunView(id) {
+          const run = await deps[sessionServiceKey].getRun(id)
+          if (!run?.protocolBinding) return undefined
+          const active = run.status === 'running' || run.status === 'cancelling'
+          const live = active ? decodeProtocolView(deps[runServiceKey].getView(id)) : undefined
+          if (live && live.sessionId === run.sessionId && live.runId === id && live.protocolId === run.protocolBinding.protocolId) return live
+          const records = await deps[sessionServiceKey].getRunRecords(id)
+          return {
+            envelopeVersion: 1, protocolId: run.protocolBinding.protocolId, viewSchemaVersion: 1,
+            sessionId: run.sessionId, runId: id, viewRevision: active ? 0 : run.revision,
+            status: active ? 'provisional' : 'committed',
+            exchanges: projectProtocolRecords(run.protocolBinding.protocolId, records),
+          }
+        },
         listRuns: (id, query) => deps[sessionServiceKey].listRuns(id, query),
         getRunEvents: (id, afterSeq) => deps[sessionServiceKey].getRunEvents(id, afterSeq),
         cancelRun: id => deps[runServiceKey].cancelRun(id),
@@ -96,7 +113,12 @@ export function createWebFrontendComponent(agents: readonly Readonly<{ id: strin
       }
       server = await startWebServer(commands, listenPort)
       ctx.on(runChangedEvent, change => server?.notifyRunChange(change))
-      ctx.on(runModelEvent, progress => server?.notifyModelProgress(progress))
+      ctx.on(runViewEvent, progress => {
+        const snapshot = decodeProtocolView(progress.frame.payload)
+        if (snapshot && snapshot.sessionId === progress.sessionId && snapshot.runId === progress.runId) {
+          server?.notifyProtocolView({ sessionId: snapshot.sessionId, runId: snapshot.runId, snapshot })
+        }
+      })
       listenPort = Number(new URL(server.url).port)
       ctx.provide(webFrontendServiceKey, Object.freeze({ url: server.url }) satisfies WebFrontendPort)
     },

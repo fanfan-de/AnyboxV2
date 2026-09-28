@@ -1,12 +1,13 @@
-import type { ModelEvent } from '@anybox/models'
+import type { ProtocolViewSnapshot } from './protocols/types.js'
+import { decodeProtocolWebView } from './protocols/modules.js'
 
 export interface ChangeConnection { close(): void }
-export interface ChangeHandlers { ready(): void; change(data: string): void; progress(data: string): void; error(): void }
+export interface ChangeHandlers { ready(): void; change(data: string): void; view(data: string): void; error(): void }
 export interface ChangeEnvironment {
   open(url: string, handlers: ChangeHandlers): ChangeConnection
   refresh(sessionId: string): void
   connected(value: boolean): void
-  progress?(sessionId: string, runId: string, event: ModelEvent): void
+  view?(snapshot: ProtocolViewSnapshot): void
 }
 
 /** One connection per workspace. Ready always reconciles, including after EventSource reconnects. */
@@ -52,18 +53,15 @@ export function createRunChangeClient(env: ChangeEnvironment) {
                 !Number.isSafeInteger(change.revision) || Number(change.revision) < 0) return
             env.refresh(change.sessionId)
           },
-          progress(data) {
-            if (!current() || !env.progress) return
+          view(data) {
+            if (!current() || !env.view) return
             let value: unknown
             try { value = JSON.parse(data) } catch { return }
             if (!value || typeof value !== 'object') return
             const message = value as Record<string, unknown>
-            if (typeof message.sessionId !== 'string' || !subscribed.has(message.sessionId) ||
-                typeof message.runId !== 'string' || !message.runId || !message.event || typeof message.event !== 'object') return
-            const event = message.event as Record<string, unknown>
-            // Only display text; tool argument increments are never executable instructions.
-            if (event.type !== 'text-delta' || typeof event.delta !== 'string' || event.delta.length > 65_536) return
-            env.progress(message.sessionId, message.runId, { type: 'text-delta', delta: event.delta })
+            const snapshot = decodeProtocolWebView(message.snapshot)
+            if (!snapshot || !subscribed.has(snapshot.sessionId) || message.sessionId !== snapshot.sessionId || message.runId !== snapshot.runId) return
+            env.view(snapshot)
           },
           error() { if (current()) status(false) },
         })

@@ -1,0 +1,47 @@
+# Chat Completions 原生协议
+
+[返回 Models 模块](README.md)
+
+## 定位与装配
+
+源码：[protocols/chat-completions.ts](../../../packages/models/src/protocols/chat-completions.ts)，共用 [shared.ts](../../../packages/models/src/protocols/shared.ts) 与 [transport.ts](../../../packages/models/src/protocols/transport.ts)。工厂 `createChatCompletionsProtocolComponent(options?)`，组件名 `models-protocol-chat-completions`，注入 `models.protocols` 并注册 `chat-completions`（版本 `2.0.0`），无独立服务键。
+
+驱动负责原生协议与恢复；[Chat Completions Agent](../execution/chat-completions-agent.md)负责解释 finish reason、执行工具与决定结论。独立工厂 `createChatCompletionsProtocol(options?, policy?)` 可复用实现显式扩展，工厂选项只接受可替换 `fetch`。
+
+## 配置与扩展策略
+
+连接字段为 API 根 `baseUrl`、`auth` 和 `timeoutMs`，API Key 使用 Bearer；生成端点是 POST `/chat/completions`。标准参数封套为 `{ protocolId: 'chat-completions', formatVersion: 1, value }`：
+
+- `temperature`：0–2。
+- `max_completion_tokens`：正安全整数。
+- `reasoning_effort`：`none/minimal/low/medium/high/xhigh`，必须属于声明的推理 efforts；`none` 关闭有效推理。
+
+不补默认值，不允许模型、消息、认证、`n` 或任意扩展字段透传。工具与流式能力由配置显式声明，图片及服务端 webSearch 不支持。连接/参数被 execution 固定后，后续设置改动仅影响新 execution。
+
+`ChatCompletionsRequestPolicy` 可选定 `protocolId/name`、`maxTokensField`（`max_completion_tokens` 或 `max_tokens`）、`disableThinking`、`allowDeveloper` 和显式 `sourceMappings`。这是受信驱动构造策略，不是用户每轮的任意请求覆盖。当前 [DeepSeek](deepseek.md) 使用它复用解析、transport 和恢复，而不会在包中引用宿主代码。
+
+## 输入与请求
+
+intent 包含本轮 `messages` 和可选初始 `tools`。消息角色接受 system/developer/user/tool，内容为字符串，tool 消息必须含 `tool_call_id`。函数声明格式为 `{ type: 'function', function: { name, parameters } }`，且必须具有有效本地工具能力。
+
+`prepare()` 将私有 messages 历史与新增输入拼接；工具声明在有历史后保持固定，也不能追加 system/developer。请求固定模型 ID 和有效流式开关，流式时加入 `stream_options: { include_usage: true }`。`allowDeveloper: false` 在发请求前拒绝 developer，`disableThinking` 则固定 `thinking: { type: 'disabled' }`。
+
+## 原生结果与流式行为
+
+非流式直接校验原生对象：必须只有一个 choice，message 为 assistant，允许 `stop/tool_calls/length/content_filter`。message 的 content 可空或字符串，refusal 保留；tool calls 必须为函数、ID 唯一、名字和 arguments 非空/字符串，正常 stop/tool_calls 下 arguments 必须可解析成对象。`tool_calls` 终态必须确实带调用，已停用的 `message.function_call` 被拒绝。
+
+流式按 choice 0 重组 content、refusal、工具 ID/函数名/arguments 分片，按工具 index 排序。保留 envelope 与未知消息字段，允许终态后单独的 usage chunk；必须收到 finish reason 及 `[DONE]`。多 choice、重复终结、不完整 SSE 或缺少 `[DONE]` 都失败。返回的是完整原生 Chat 对象，不把长度截断或过滤结果自动变成 Run 成功。
+
+`commit()` 将新消息与原生 assistant message 加入私有上下文；`restore()` 从成对增量记录重建同一状态，保留多工具调用、unknown fields 和原生 ID。公开结果与受信恢复数据由宿主解释，浏览器只接收安全投影。
+
+## 资源与生命周期
+
+每次请求使用共用 transport，独占 fetch、reader、信号与取消清理；严格 UTF-8、响应 32 MiB 与 SSE 缓冲 8 MiB 上限，无隐藏重试。`cancel()` 请求结束但不等价于资源退出，驱动 done 等待 reader 取消和锁释放；Models 对外 result 再等待实际退出和上下文提交。取消或清理失败不会提交候选历史。
+
+组件注册即完成启动，通过 Effect 等待协议代注销；该代初始化、发现、检查和 execution 都被取消并等待。HTTP/响应错误采用固定 ModelsError，密钥和原生后端异常不进入公共错误。
+
+## 发现、测试与关联
+
+`discover()`、`check()` 使用认证 GET `/models`；前者返回唯一模型 ID 候选，后者验证目录结构，均不创建配置、不发送生成参数。当前实现不支持任意多模态消息、多 choice 或旧 function_call 接口。
+
+[protocols.test.mjs](../../../packages/models/tests/protocols.test.mjs) 覆盖文本、并行函数调用、unknown fields、原生恢复、SSE 与策略差异；[runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 覆盖取消、关闭及配置捕获；宿主扩展测试见 [deepseek-protocol.test.mjs](../../../tests/deepseek-protocol.test.mjs)。参见 [Models 协调服务](models.md) 与 [DeepSeek 驱动](deepseek.md)。

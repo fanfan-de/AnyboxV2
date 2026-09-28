@@ -1,32 +1,32 @@
 import { immutable, keys } from './domain.js';
 import { modelsError } from './errors.js';
-import type { ModelEvent } from './types.js';
+import type { NativeObject } from './native-types.js';
 
-export interface ModelEventQueue {
-  readonly events: AsyncIterableIterator<ModelEvent>;
+export interface NativeEventQueue {
+  readonly events: AsyncIterableIterator<NativeObject>;
   readonly status: 'open' | 'closed' | 'overflow';
   readonly buffered: number;
   /** Pass directly to generate({ onEvent }). This never waits for a consumer. */
-  onEvent(event: ModelEvent): void;
+  onEvent(event: NativeObject): void;
   close(): void;
 }
 /** Host-side streaming bridge: overflow ends only this display subscription. */
-export function createModelEventQueue(options: { capacity?: number; maxBufferedBytes?: number } = {}): ModelEventQueue {
+export function createNativeEventQueue(options: { capacity?: number; maxBufferedBytes?: number } = {}): NativeEventQueue {
   keys(options, ['capacity', 'maxBufferedBytes']);
   const capacity = options.capacity ?? 128;
   const maxBytes = options.maxBufferedBytes ?? 256 * 1024;
   if (!Number.isSafeInteger(capacity) || capacity < 1 || !Number.isSafeInteger(maxBytes) || maxBytes < 1) throw modelsError('invalid-config');
-  let status: ModelEventQueue['status'] = 'open';
+  let status: NativeEventQueue['status'] = 'open';
   let bytes = 0;
-  const buffered: { event: ModelEvent; bytes: number }[] = [];
+  const buffered: { event: NativeObject; bytes: number }[] = [];
   // One outstanding read per subscription keeps the consumer side bounded as well.
-  let waiting: ((value: IteratorResult<ModelEvent>) => void) | undefined;
+  let waiting: ((value: IteratorResult<NativeObject>) => void) | undefined;
   const finish = (state: 'closed' | 'overflow') => {
     if (status !== 'open') return;
     status = state; buffered.length = 0; bytes = 0;
     waiting?.({ done: true, value: undefined }); waiting = undefined;
   };
-  const events: AsyncIterableIterator<ModelEvent> = {
+  const events: AsyncIterableIterator<NativeObject> = {
     [Symbol.asyncIterator]() { return this; },
     next() {
       if (buffered.length) {

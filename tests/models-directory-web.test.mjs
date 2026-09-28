@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { runModelEvent } from '../dist/run/notifications.js'
+import { runViewEvent } from '../dist/run/notifications.js'
 import { catalogModelsData, startCatalogModelsHost } from './helpers/catalog-models-host.mjs'
 import { deferred } from './helpers/controlled-models.mjs'
 
@@ -35,7 +35,7 @@ async function saveNative(host, providerId, protocolId, remoteModelId, { streami
   assert.ok(baseline, 'connection save automatically initializes its compatible baseline models')
   const model = await accepted(host, 'POST', `/models/configurations/${baseline.id}`, {
     expectedRevision: baseline.revision,
-    patch: { capabilities: { ...candidate.capabilities, streaming: { support: streaming ? 'supported' : 'unsupported' } }, defaults: { maxOutputTokens: 4096 } },
+    patch: { capabilities: { ...candidate.capabilities, streaming: { support: streaming ? 'supported' : 'unsupported' } }, parameters: { protocolId, formatVersion: 1, value: protocolId === 'anthropic-messages' ? { max_tokens: 4096 } : { generation_config: { max_output_tokens: 4096 } } } },
   })
   return { provider: local, model, candidate, definition: provider }
 }
@@ -111,7 +111,7 @@ test('Provider selection and one saved Key automatically expose compatible model
   assert.equal(inventory.find(model => model.remoteModelId === 'gemini-qa').configurationId, firstModels[0].id)
   const baseline = firstModels[0]
   const preset = await accepted(host, 'POST', '/models/configurations', { name: 'Google long answers', enabled: true,
-    connectionId: first.id, modelDefinitionId: baseline.modelDefinitionId, capabilities: baseline.capabilities, defaults: { maxOutputTokens: 8192 }, baseline: false })
+    connectionId: first.id, modelDefinitionId: baseline.modelDefinitionId, capabilities: baseline.capabilities, parameters: { protocolId: 'gemini-interactions', formatVersion: 1, value: { generation_config: { max_output_tokens: 8192 } } }, baseline: false })
   assert.notEqual(preset.id, baseline.id)
   const retried = await accepted(host, 'POST', `/models/connections/${first.id}/retry`, {})
   assert.equal(retried.sync.state, 'ready')
@@ -120,7 +120,7 @@ test('Provider selection and one saved Key automatically expose compatible model
   assert.equal(configurations.length, 2)
   const session = await selectSession(host, baseline.id)
   const result = await run(host, session, 'Hello', 'automatic-model')
-  assert.equal(result.run.modelSnapshot.schemaVersion, 2)
+  assert.equal(result.run.modelSnapshot.schemaVersion, 3)
   assert.equal(result.run.modelSnapshot.providerDefinitionId, definition.id)
   assert.equal(result.run.modelSnapshot.modelDefinitionId, baseline.modelDefinitionId)
   assert.ok(!JSON.stringify([all, inventory, result.run]).includes('private-key'))
@@ -129,12 +129,12 @@ test('Provider selection and one saved Key automatically expose compatible model
 test('Web saves an Anthropic proxy and 4096-token model, selects it, streams text, runs Bash and preserves final output', async t => {
   const host = await startCatalogModelsHost(), progress = []
   t.after(() => host.close())
-  await host.root.installComponent({ name: 'catalog-native-progress-observer', apply(ctx) { ctx.on(runModelEvent, value => progress.push(value)) } })
+  await host.root.installComponent({ name: 'catalog-native-progress-observer', apply(ctx) { ctx.on(runViewEvent, value => progress.push(value)) } })
   const saved = await saveNative(host, 'anthropic', 'anthropic-messages', 'claude-qa')
   assert.equal(saved.provider.baseUrl, 'https://proxy.qa.invalid/custom/v1')
   assert.equal(saved.provider.providerDefinitionId, saved.definition.id)
   assert.equal(saved.definition.source.kind, 'external')
-  assert.deepEqual(saved.model.defaults, { maxOutputTokens: 4096 })
+  assert.deepEqual(saved.model.parameters.value, { max_tokens: 4096 })
   assert.equal(host.network.generations.length, 0)
   assert.deepEqual(await accepted(host, 'POST', `/models/connections/${saved.provider.id}/check`, {}), { ok: true })
   assert.equal(host.network.checks.length, 1)
@@ -145,11 +145,11 @@ test('Web saves an Anthropic proxy and 4096-token model, selects it, streams tex
   const second = await run(host, session, 'Use Bash tool', 'bash-tool', first.node.id)
   assert.equal(second.node.output, 'Mock native final answer: catalog-tool-observed')
   assert.equal(second.run.modelId, saved.model.id)
-  assert.equal(second.run.modelSnapshot.options.maxOutputTokens, 4096)
+  assert.equal(second.run.modelSnapshot.parameters.value.max_tokens, 4096)
   const events = await accepted(host, 'GET', `/runs/${second.run.id}/events`)
   assert.ok(events.some(event => event.kind === 'tool-started' && event.name === 'bash'))
   assert.ok(events.some(event => event.kind === 'tool-observed' && event.name === 'bash' && event.stdout === 'catalog-tool-observed'))
-  assert.ok(progress.some(value => value.runId === second.run.id && value.event.type === 'text-delta' && value.event.delta === 'I will run Bash.'))
+  assert.ok(progress.some(value => value.runId === second.run.id && JSON.stringify(value.frame.payload).includes('I will run Bash.')))
   const generated = host.network.generations
   assert.equal(generated.length, 3)
   assert.ok(generated.every(record => record.url === 'https://proxy.qa.invalid/custom/v1/messages' && record.body.max_tokens === 4096 && record.body.stream === true))
@@ -201,6 +201,25 @@ test('Web native JSON responses run through the same saved-model and session bou
   assert.equal(host.network.generations[0].body.stream, false)
 });
 
+test('Web binds the first accepted native protocol and rejects both cross-protocol selection and Run override', async t => {
+  const host = await startCatalogModelsHost({ seedModels: true })
+  t.after(() => host.close())
+  const [anthropic, gemini] = host.seededModels
+  const session = await selectSession(host, anthropic.id)
+  const first = await run(host, session, 'Hello protocol binding', 'bound')
+  const bound = await accepted(host, 'GET', `/sessions/${session.id}`)
+  assert.equal(bound.historyMode, 'native-local-v1')
+  assert.equal(bound.protocolId, 'anthropic-messages')
+  const changed = await request(host, 'POST', `/sessions/${session.id}/model`, { modelId: gemini.id })
+  assert.equal(changed.status, 409)
+  assert.equal(changed.data.error.code, 'protocol-mismatch')
+  const overridden = await request(host, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: first.node.id,
+    input: 'Do not translate history', idempotencyKey: 'other-protocol', modelId: gemini.id })
+  assert.equal(overridden.status, 409)
+  assert.equal((await accepted(host, 'GET', `/sessions/${session.id}`)).modelId, anthropic.id)
+  assert.equal(host.network.generations.length, 1)
+});
+
 test('Web source removal preserves saved configurations, proxy address, Key and session selection', async t => {
   const host = await startCatalogModelsHost()
   t.after(() => host.close())
@@ -226,7 +245,7 @@ test('Web source removal preserves saved configurations, proxy address, Key and 
   assert.equal(host.network.generations.length, 0)
   const result = await run(host, session, 'Still available', 'after-removal')
   assert.equal(result.node.output, 'Mock native answer: Still available')
-  assert.equal(result.run.modelSnapshot.schemaVersion, 2)
+  assert.equal(result.run.modelSnapshot.schemaVersion, 3)
   assert.equal(result.run.modelSnapshot.modelDefinitionId, saved.candidate.id)
 });
 

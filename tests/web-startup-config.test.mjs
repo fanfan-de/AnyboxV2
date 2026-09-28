@@ -16,7 +16,7 @@ test('Web startup separates persistent Models storage from the one-time legacy i
   assert.equal(config.credentialNamespace, 'anybox.models')
   assert.equal(config.legacy.provider.protocolId, 'deepseek-chat-completions')
   assert.equal(config.legacy.remoteModelId, 'deepseek-flash')
-  assert.deepEqual(config.legacy.defaults, { temperature: 0.7 })
+  assert.deepEqual(config.legacy.parameters.value, { temperature: 0.7 })
   assert.equal(config.legacy.credentialId, 'llm/deepseek-chat-completions/default')
 })
 
@@ -24,7 +24,7 @@ test('Responses initial import requires a model and preserves unspecified API de
   const config = parseWebStartupConfig({ ANYBOX_LLM_API: 'openai-responses', ANYBOX_LLM_MODEL: 'responses-model' })
   assert.equal(config.legacy.provider.protocolId, 'responses')
   assert.equal(config.legacy.remoteModelId, 'responses-model')
-  assert.deepEqual(config.legacy.defaults, {})
+  assert.deepEqual(config.legacy.parameters.value, {})
   assert.throws(() => parseWebStartupConfig({ ANYBOX_LLM_API: 'openai-responses' }), /ANYBOX_LLM_MODEL/)
 })
 
@@ -37,7 +37,7 @@ test('Web startup accepts explicit import parameters, data locations and vault n
     assert.equal(config.port, 8080)
     assert.equal(config.legacy.provider.baseUrl, 'https://models.example/v1/')
     assert.equal(config.legacy.provider.timeoutMs, 60000)
-    assert.deepEqual(config.legacy.defaults, { maxOutputTokens: 8192, temperature: 0 })
+    assert.deepEqual(config.legacy.parameters.value, { [api === 'openai-responses' ? 'max_output_tokens' : 'max_tokens']: 8192, temperature: 0 })
     assert.equal(config.legacy.remoteModelId, 'compatible-model')
     assert.equal(config.credentialNamespace, 'test.models')
     assert.equal(env.ANYBOX_LLM_MODEL, ' compatible-model ')
@@ -74,7 +74,7 @@ test('Models bootstrap imports the old key once and never overwrites user config
     assert.equal(settings.protocols().length, 5)
     assert.equal(settings.connections()[0].credentialConfigured, true)
     const original = settings.configurations()[0]
-    await settings.updateConfiguration(original.id, { name: 'My model', defaults: { temperature: 0.3 } }, original.revision)
+    await settings.updateConfiguration(original.id, { name: 'My model', parameters: { protocolId: original.parameters.protocolId, formatVersion: 1, value: { temperature: 0.3 } } }, original.revision)
     const provider = settings.connections()[0]
     await settings.setApiKey(provider.id, 'new-private-key', provider.revision)
     await root.fiber.dispose(); root = new Context()
@@ -82,7 +82,7 @@ test('Models bootstrap imports the old key once and never overwrites user config
     assert.equal(reads, 1)
     assert.equal(root.get('models.settings').configurations()[0].name, 'My model')
     assert.equal(root.get('models.settings').configurations()[0].remoteModelId, original.remoteModelId)
-    assert.deepEqual(root.get('models.settings').configurations()[0].defaults, { temperature: 0.3 })
+    assert.deepEqual(root.get('models.settings').configurations()[0].parameters.value, { temperature: 0.3 })
     assert.deepEqual([...secrets.values()], ['new-private-key'])
     assert.doesNotMatch(readFileSync(config.modelsDatabasePath).toString('utf8'), /legacy-private-key|new-private-key/)
   } finally { await root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) }

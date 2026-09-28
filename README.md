@@ -1,10 +1,12 @@
 # AnyboxV2
 
+文档入口：[项目文档](docs/README.md) · [模块与组件手册](docs/modules/README.md)。组件按内聚职责分目录，每个组件有独立的接口、功能、数据归属、生命周期与测试说明。
+
 基于相邻的 NyaCore 构建 Agent Harness。[通用 Models 模块](packages/models/README.md) 已接入 Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Harness、业务 Session 或前端框架；[架构图](docs/architecture/models-module.md)说明其资源与扩展边界。
 
-应用只使用一个 Nya 根 Context。Models 配置存储、系统凭据、模型服务、协议和目录组件，与 Harness 的 SQLite、Prompt、Projects、Session、Run、AgentLoop、Bash、Apply Patch 直接安装在同一根。Nya 管理依赖、重启和清理顺序；Provider、Model、项目和会话都是数据记录。
+应用只使用一个 Nya 根 Context。Models 配置存储、系统凭据、模型服务、协议和目录组件，与 Harness 的 SQLite、Prompt、Projects、Session、Run、RunRuntime、协议应用绑定、Bash、Apply Patch 直接安装在同一根。Nya 管理依赖、重启和清理顺序；Provider、Model、项目和会话都是数据记录。
 
-当前项目框架见[三页架构说明与预览](docs/architecture/current-framework.md)，或用 draw.io 打开[可编辑架构图](docs/architecture/anybox-current.drawio)，查看整体组件、Models 模块与一次 Run 的执行和资源结算。
+当前原生协议框架见[组件说明](docs/harness-components.md)与[原生协议迁移设计](docs/native-protocol-agent-framework-design.md)。`docs/architecture/` 中的图保留迁移前架构记录，不作为当前执行契约。
 
 Session 持有完整轮次对话树，允许同一父节点启动多个 Run。新请求必须提供 `parentNodeId`（空会话用 `null`）；成功节点只继承祖先路径，并在资源退出后原子提交。Web 支持节点查看、分支选择、多 Run 状态及最多四个跨项目拖拽分屏，布局与查看位置在当前标签页内恢复。详见[对话树设计](docs/session-conversation-tree.md)。
 
@@ -35,19 +37,21 @@ try {
 }
 ```
 
-模型选择顺序为本次 `RunInput.modelId`、会话的 `modelId`、Agent 的可选默认 `modelId`。`selectSessionModel(sessionId, modelId)` 只影响后续 Run；同一幂等键始终返回原 Run，修改输入、父节点或显式模型 ID 会冲突。旧会话没有选择时可在 Web 补选模型。具备有效工具能力的模型收到 Bash 与 Apply Patch 定义，其余可用模型执行纯文本调用。
+模型选择顺序为本次 `RunInput.modelId`、会话的 `modelId`、Agent 的可选默认 `modelId`。`selectSessionModel(sessionId, modelId)` 只影响后续 Run；同一幂等键始终返回原 Run，修改输入、父节点或显式模型 ID 会冲突。新会话在首次接受 Run 时固定协议；已有 dialogue-v1 会话只读，需新建空会话开始原生历史。具备有效工具能力的模型收到 Bash 与 Apply Patch 定义，其余可用模型执行纯文本调用。
 
-Run 在准入时通过 `models.open()` 固定配置、能力、协议版本和凭据，将无秘密的 `execution.snapshot` 交给 Session，再把 execution 直接交给 AgentLoop。每轮 `generate()` 只追加新消息，模型模块保管原生续轮上下文；AgentLoop 校验并执行工具。模型 `result` 在实际退出与上下文提交后才返回；工具的 `result` 与 `done` 仍分别观察。AgentLoop 关闭 execution 后才能提交成功节点，取消或清理失败不会伪造完成。
+Run 先检查幂等键，再由协议应用绑定通过 `models.openNative()` 固定配置、驱动代与凭据，生成 PreparedRunProgram 交给 RunRuntime。协议 Loop 直接解释原生响应；每次调用先 `prepareExchange()`，经 Runtime 持久化意图后启动，等待结果与真实退出再提交观察。Session 保存增量原生记录及不可变父链，跨 Run、重启和分支恢复保留签名、reasoning、原生工具 ID 与顺序。Runtime 关闭 program 后才提交成功节点，取消或清理失败不会伪造完成。浏览器只接收安全展示投影。
 
-Prompt 支持草稿、不可变发布版本及 Agent 绑定，用途为 `agent-instruction`、`task-template`、`context`；`task-template` 必须恰含一个 `{{input}}`。编辑、发布后还需绑定，新 Run 才使用新版本。身份与授权由受信宿主提供，不能信任客户端自报 `actorId`。详见 [Prompt 管理](docs/prompt-management-design.md)。
+Prompt 支持草稿、不可变发布版本及 Agent 绑定，用途为 `agent-instruction`、`task-template`、`context`；`task-template` 必须恰含一个 `{{input}}`。编辑、发布后还需绑定；Session 首次接受固定初始 instruction/context，所有根分支与后代沿用原记录。当前 task-template 仅处理每个新 Run 的原始输入一次；应用新初始指令需新会话。身份与授权由受信宿主提供，不能信任客户端自报 `actorId`。详见 [Prompt 管理](docs/prompt-management-design.md)。
+
+配置库从 v2 升至 v3，业务 run-state 从 v4 升至 v5，各自使用独占事务。升级真实数据前先关闭旧 Harness 并备份两库；迁移任一失败阻止运行，回退代码须恢复升级前备份。模型参数改为版本化原生结构；成功修改 Key、地址或认证范围后不能继续旧父链，改名不影响续接。
 
 ## 模型配置与凭据
 
 Provider/Model 管统一服务商与模型定义，标记 user 或 external 来源。ProviderConnection 管账号连接、协议、地址、认证和超时；ModelConfiguration 关联定义和连接，固定远端标识/模型定义版本、能力和参数。保存连接与 Key 后自动准备适用模型，每个连接/模型定义只有一个基础配置，额外参数预设使用 baseline:false。每次保存生成不可变版本，`expectedRevision` 检查并发编辑；配置、停用或密钥变更只影响新 execution。模型能力区分支持、不支持和未知，前端分别显示声明与当前有效能力。未知能力不会被自动判定为支持。
 
-本机宿主同时安装 Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions 及 DeepSeek 非推理扩展。协议提供参数表单、范围、枚举和新建表单默认值；未设置的可选参数保持省略，模型发现只返回候选项，不覆盖本地配置。Anthropic 的 `maxOutputTokens` 必填，新建表单预填 `4096`；Gemini Interactions 固定 `store: false`，当前参数不接受 temperature 或旧推理预算。保存不需要网络检查。当前调用契约接受文本、工具与流式事件，其他模态只作为目录参考信息。
+本机宿主同时安装 Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions 及 DeepSeek 非推理扩展。协议提供参数表单、范围、枚举和新建表单默认值；未设置的可选参数保持省略，模型发现只返回候选项，不覆盖本地配置。Anthropic 的 `max_tokens` 必填，新建表单预填 `4096`；Gemini Interactions 固定 `store: false`，当前参数不接受 temperature 或旧推理预算。保存不需要网络检查。当前调用契约接受文本、工具与流式事件，其他模态只作为目录参考信息。
 
-DeepSeek 扩展复用通用 Chat Completions 传输与解析，只负责 `thinking: { type: 'disabled' }`、`max_tokens` 等原生差异；不支持推理参数或 `developer` 消息。接口依据见 [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)。Responses 使用 `store: false`，在私有 execution 中保留 reasoning、phase 与函数续轮数据，不进入 Session 数据库。
+DeepSeek 扩展复用通用 Chat Completions 传输与解析，只负责 `thinking: { type: 'disabled' }`、`max_tokens` 等原生差异；不支持推理参数或 `developer` 消息。接口依据见 [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)。Responses 使用 `store: false`，原生 reasoning、phase 与函数续轮记录由 Session 受信持久化，执行时由私有 execution 恢复。Responses web_search 和 Anthropic web_search_20250305 默认关闭，显式声明能力后可在参数表单启用；Anthropic pause_turn 自动续轮。
 
 Models 默认独占 `./data/models.sqlite`，与 Harness 数据库分开；数据库只保存配置、历史、凭据引用与清理日志。密钥保存在 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，系统存储不可用时返回固定 `credential-unavailable`，仍可查看非秘密配置，不回退到明文或 SQLite。管理读取、Run 快照和错误均不返回密钥。服务名不是权限边界，`models.settings` 只交给受信宿主。
 
@@ -59,7 +63,7 @@ Harness 在应用根安装 `tools.apply-patch`，向模型提供 `apply_patch({ 
 
 相对路径基于项目目录，绝对路径和 `..` 按应用用户的文件权限访问，不构成沙箱。仅处理普通 UTF-8 文本文件，拒绝目标符号链接、多硬链接、NUL、无效编码和混合换行；更新保留 BOM、LF/CRLF 与末尾换行习惯。上下文必须精确、唯一并按原文件顺序匹配。全部文件先预检，再逐项提交并检查源文件是否变化；创建和移动目标不能覆盖已有文件。预检不建立跨文件事务，也不能与 Bash 或外部写入者形成文件锁。
 
-工具返回 `applied`、`rejected`、`partial` 或 `cancelled`，包含已经完成的 `changes`、尚未完成的 `pending` 和可选诊断。语法或文件冲突作为观察回填给模型；取消不回滚已完成变更，`done` 等当前文件提交和临时资源清理完成。清理失败使 Run 失败并保留已知变更事实。Web 可展示补丁预览与这些结果；新工具事件使用 `tool-*`，执行计数使用 `toolCalls`，旧 Bash 记录在读取时兼容。本轮 Apply Patch 验证使用本地文件、受控模型及模拟 HTTP，未做真实模型联网验收；详细限制见 [组件说明](docs/harness-components.md#apply-patch-工具)。
+工具返回 `applied`、`rejected`、`partial` 或 `cancelled`，包含已经完成的 `changes`、尚未完成的 `pending` 和可选诊断。语法或文件冲突作为观察回填给模型；取消不回滚已完成变更，`done` 等当前文件提交和临时资源清理完成。清理失败使 Run 失败并保留已知变更事实。Web 可展示补丁预览与这些结果；新工具事件使用 `tool-*`，执行计数使用 `toolCalls`，旧 Bash 记录在读取时兼容。本轮 Apply Patch 验证使用本地文件、受控模型及模拟 HTTP，未做真实模型联网验收；详细限制见 [组件说明](docs/harness-components.md#工具目录与恢复的独立边界)。
 
 ## 本机 Web 界面
 
@@ -108,12 +112,14 @@ npm run check
 
 真实凭据验证需另行运行 `ANYBOX_KEYRING_TESTS=1 node --test tests/system-keyring.test.mjs`；Linux 无 Secret Service 时加 `ANYBOX_KEYRING_EXPECT_NO_STORE=1` 验证固定拒绝且无明文回退。2026-09-25 的 macOS 验收属于旧 API Key 组件，不能代替新 Models Vault 的平台验收；本次 macOS、Windows、Linux 原生凭据测试均未执行。`packages/api-key-manager` 保留独立通用包与旧凭据读取用途，旧应用 `llm` 和凭据 Nya 包装已删除。
 
+真实模型文本与重启续接冒烟测试位于 `tests/native-live-api.test.mjs`，默认跳过。它要求独立设置 `ANYBOX_NATIVE_API_TESTS=1`、显式选择协议并提供端点、模型、Key 和原生参数，使用临时库与内存 Vault；完整命令及范围见[联网验证入口](docs/native-protocol-agent-framework-design.md#11-独立联网验证入口)。普通检查不会发送真实模型请求，本次也未启用该门控。
+
 | 路径 | 用途 |
 | --- | --- |
 | `packages/models/` | 通用 Models 服务、配置与凭据存储、协议实现及测试 |
 | `src/agent/`、`src/prompt/` | Agent 定义、Prompt 草稿、版本与绑定 |
 | `src/project/`、`src/session/` | 项目身份、会话树、Run 记录与恢复 |
-| `src/run/` | Run 准入、Models execution 交接、AgentLoop 与状态转换 |
+| `src/run/` | Run 准入、PreparedRunProgram 交接、RunRuntime 与操作事实 |
 | `src/tool/` | Bash 与 Apply Patch 资源组件 |
 | `src/storage/` | Harness SQLite 事务、领域迁移与排他所有权 |
 | `src/harness.ts` | 受信组合根与服务转发 |

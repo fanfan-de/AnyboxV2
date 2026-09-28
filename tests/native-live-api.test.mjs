@@ -1,0 +1,151 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { Context, FiberState } from '@nya/core'
+import {
+  createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
+  createResponsesProtocol, createChatCompletionsProtocol, createAnthropicMessagesProtocol, createGeminiInteractionsProtocol,
+} from '@anybox/models'
+import { createDeepSeekProtocol } from '../dist/web/deepseek-protocol.js'
+import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
+import { createHarness } from '../dist/harness.js'
+import { projectProtocolRecords } from '../dist/protocol-agents/projection.js'
+
+// Live text/restart smoke only; this is not live tool, search, streaming or OS Keyring acceptance.
+// Nothing runs unless BOTH gates are explicit:
+//   ANYBOX_NATIVE_API_TESTS=1
+//   ANYBOX_NATIVE_API_PROTOCOLS=responses,chat-completions,anthropic-messages,gemini-interactions,deepseek-chat-completions
+// Select only the protocols to exercise. For EACH selected ID, uppercase it and replace '-' with '_':
+//   ANYBOX_NATIVE_API_<ID>_ENDPOINT    Exact API base URL (no inferred provider/hostname/default).
+//   ANYBOX_NATIVE_API_<ID>_MODEL       Exact remote model ID.
+//   ANYBOX_NATIVE_API_<ID>_KEY         API key, kept only in the test's in-memory Vault.
+//   ANYBOX_NATIVE_API_<ID>_PARAMETERS  Native JSON object, with an explicit positive output-token limit.
+// Limit paths: Responses max_output_tokens; Chat max_completion_tokens; Anthropic/DeepSeek max_tokens;
+// Gemini generation_config.max_output_tokens. No tools or reasoning controls are enabled by this smoke.
+// After npm run build: node --test tests/native-live-api.test.mjs
+const factories = {
+  responses: createResponsesProtocol,
+  'chat-completions': createChatCompletionsProtocol,
+  'anthropic-messages': createAnthropicMessagesProtocol,
+  'gemini-interactions': createGeminiInteractionsProtocol,
+  'deepseek-chat-completions': createDeepSeekProtocol,
+}
+const enabled = process.env.ANYBOX_NATIVE_API_TESTS === '1'
+const selected = enabled ? new Set((process.env.ANYBOX_NATIVE_API_PROTOCOLS ?? '').split(',').map(value => value.trim()).filter(Boolean)) : new Set()
+if (enabled && (!selected.size || [...selected].some(id => !Object.hasOwn(factories, id)))) {
+  throw new Error('ANYBOX_NATIVE_API_PROTOCOLS must explicitly select supported protocol IDs; no live request was started.')
+}
+
+function configuration(protocolId) {
+  const prefix = `ANYBOX_NATIVE_API_${protocolId.toUpperCase().replaceAll('-', '_')}`
+  const required = suffix => {
+    const value = process.env[`${prefix}_${suffix}`]
+    if (!value?.trim()) throw new Error(`${prefix}_${suffix} is required.`)
+    return value
+  }
+  const endpoint = required('ENDPOINT'), model = required('MODEL'), key = required('KEY')
+  let url, parameters
+  try { url = new URL(endpoint) } catch { throw new Error(`${prefix}_ENDPOINT must be an API base URL.`) }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+    throw new Error(`${prefix}_ENDPOINT must not include credentials, query parameters or fragments.`)
+  }
+  const raw = required('PARAMETERS')
+  try { parameters = JSON.parse(raw) } catch { throw new Error(`${prefix}_PARAMETERS must be a native JSON object.`) }
+  if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) throw new Error(`${prefix}_PARAMETERS must be a native JSON object.`)
+  const tokenLimit = protocolId === 'responses' ? parameters.max_output_tokens
+    : protocolId === 'chat-completions' ? parameters.max_completion_tokens
+      : protocolId === 'gemini-interactions' ? parameters.generation_config?.max_output_tokens : parameters.max_tokens
+  if (!Number.isSafeInteger(tokenLimit) || tokenLimit < 1) throw new Error(`${prefix}_PARAMETERS requires an explicit positive native output-token limit.`)
+  if ('tools' in parameters) throw new Error(`${prefix}_PARAMETERS cannot enable tools in this text smoke.`)
+  const capabilities = { ...unknownCapabilities(), tools: { support: 'unsupported' }, streaming: { support: 'unsupported' }, webSearch: { support: 'unsupported' } }
+  factories[protocolId]().validateParameters(parameters, capabilities)
+  return { endpoint, model, key, parameters, capabilities }
+}
+
+async function host(directory, protocolId, config, secrets) {
+  const root = new Context()
+  const install = async component => {
+    const fiber = root.installComponent(component)
+    await fiber
+    if (fiber.state !== FiberState.ACTIVE) throw new Error('Live smoke component initialization failed.')
+  }
+  try {
+    await install(createModelsStoreComponent({ path: join(directory, 'models.sqlite') }))
+    await install(createModelsVaultComponent({ namespace: 'anybox-native-live-smoke', openEntry(_namespace, id) {
+      return {
+        async getPassword() { return secrets.get(id) },
+        async setPassword(value) { secrets.set(id, value) },
+        async deleteCredential() { return secrets.delete(id) },
+      }
+    } }))
+    await install(createModelsComponent())
+    await install({ name: 'live-native-protocol', inject: ['models.protocols'], apply(ctx, _config, deps) {
+      const registration = deps['models.protocols'].register(factories[protocolId]())
+      ctx.effect(() => () => registration.unregister(), 'release live native protocol')
+    } })
+    const settings = root.get('models.settings')
+    if (!settings.connections().length) {
+      const provider = await settings.createProvider({ name: 'Live smoke provider', connectionHints: { protocolIds: [protocolId] } })
+      const connection = await settings.createConnection({ id: 'live-connection', providerDefinitionId: provider.id, name: 'Live smoke connection', enabled: true,
+        protocolId, baseUrl: config.endpoint, auth: 'api-key', apiKey: config.key, timeoutMs: 60_000 })
+      const definition = await settings.createModel({ name: 'Live smoke model', providerId: provider.id, remoteModelId: config.model,
+        capabilities: config.capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [protocolId] } })
+      await settings.createConfiguration({ id: 'live-model', name: 'Live smoke configuration', enabled: true, connectionId: connection.id,
+        modelDefinitionId: definition.id, capabilities: config.capabilities, baseline: true,
+        parameters: { protocolId, formatVersion: 1, value: config.parameters } })
+    }
+    await install(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
+    const harness = await createHarness(root, { agents: [{ id: 'live-assistant', modelId: 'live-model', instructions: 'Follow the user exactly. Reply with the single requested word only, without punctuation or explanations.' }] })
+    const project = await harness.openProject(directory)
+    return { harness, project }
+  } catch {
+    await root.fiber.dispose()
+    throw new Error('Live smoke host initialization failed; verify the explicit native configuration.')
+  }
+}
+
+async function completedRun(current, protocolId, config, sessionId, parentNodeId, input, expected, idempotencyKey) {
+  const accepted = await current.harness.startRun({ sessionId, parentNodeId, input, idempotencyKey })
+  const settled = await current.harness.waitRun(accepted.id)
+  assert.ok(settled.status === 'completed' && typeof settled.resultNodeId === 'string', 'Live text Run must complete and create a resumable node.')
+  const records = await current.harness.getRunRecords(accepted.id)
+  assert.ok(records.some(record => record.kind === 'response'), 'Live text Run must persist a native response.')
+  assert.ok(!JSON.stringify(records).includes(config.key), 'Native records must exclude the API credential.')
+  const text = projectProtocolRecords(protocolId, records).flatMap(exchange => exchange.blocks).filter(block => block.kind === 'text').map(block => block.text).join('')
+  // Do not include actual provider output or raw errors in test assertions/logs.
+  assert.ok(text.trim() === expected, 'Live response must match the requested one-word answer.')
+  assert.ok(!(await current.harness.getRunEvents(accepted.id)).some(event => event.kind === 'tool-started'), 'This smoke must not execute local tools.')
+  return settled
+}
+
+for (const protocolId of Object.keys(factories)) test(`${protocolId}: opt-in live text and restart continuation smoke`, {
+  skip: !selected.has(protocolId), timeout: 150_000,
+}, async t => {
+  const config = configuration(protocolId)
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-native-live-'))
+  const secrets = new Map()
+  let current, stage = 'initialization'
+  const stop = () => { void current?.harness.close().catch(() => {}) }
+  t.signal.addEventListener('abort', stop, { once: true })
+  try {
+    current = await host(directory, protocolId, config, secrets)
+    const session = await current.harness.createSession(current.project.id, 'live-assistant', 'live-model')
+    stage = 'first text Run'
+    const first = await completedRun(current, protocolId, config, session.id, null, 'Remember this reference word: ORCHID. Reply with READY only.', 'READY', 'live-first')
+    const originalRecords = JSON.stringify(await current.harness.getRunRecords(first.id))
+    stage = 'close and reopen'
+    await current.harness.close()
+    current = undefined
+    current = await host(directory, protocolId, config, secrets)
+    assert.ok(JSON.stringify(await current.harness.getRunRecords(first.id)) === originalRecords, 'Reopening must preserve the first Run native records.')
+    stage = 'explicit parent continuation'
+    await completedRun(current, protocolId, config, session.id, first.resultNodeId, 'Reply with the reference word from the first user message only.', 'ORCHID', 'live-after-restart')
+  } catch {
+    throw new Error(`Live native text/restart smoke failed during ${stage}; provider details and credentials are intentionally omitted.`)
+  } finally {
+    t.signal.removeEventListener('abort', stop)
+    try { await current?.harness.close() } finally { secrets.clear(); rmSync(directory, { recursive: true, force: true }) }
+  }
+})

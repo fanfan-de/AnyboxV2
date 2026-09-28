@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createDeepSeekProtocol } from '../dist/web/deepseek-protocol.js'
+import { createDeepSeekProtocol, convertLegacyDeepSeekParameters } from '../dist/web/deepseek-protocol.js'
 import { fixture, capabilities } from '../packages/models/tests/helpers.mjs'
 
 const json = value => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } })
@@ -16,7 +16,8 @@ async function configured(t, fetch, declaration = capabilities(), defaults = {})
   const protocol = createDeepSeekProtocol({ fetch })
   const f = await fixture({ protocols: [protocol] })
   t.after(() => f.root.fiber.dispose())
-  await f.add({ capabilityDeclarations: declaration, defaults })
+  await f.addConnection({ id: 'provider', name: 'Provider', enabled: true, protocolId: 'deepseek-chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'none', timeoutMs: 10000 })
+  await f.addConfiguration({ id: 'model', name: 'Model', enabled: true, providerId: 'provider', remoteModelId: 'same-remote-model', capabilities: declaration, parameters: { protocolId: 'deepseek-chat-completions', formatVersion: 1, value: convertLegacyDeepSeekParameters(defaults) } })
   return f
 }
 
@@ -31,15 +32,15 @@ test('DeepSeek extension maps native non-thinking parameters while retaining sha
       chunk({}, 'tool_calls'), { choices: [], usage: { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 } }, '[DONE]',
     ]) : stream([chunk({ content: '答案' }, 'stop'), '[DONE]'])
   }, capabilities(), { temperature: 0.4, maxOutputTokens: 789 })
-  const execution = await f.models.open({ modelId: 'model', tools: [{ name: 'lookup', parameters: { type: 'object', properties: { query: { type: 'string' } } } }] })
-  const first = await execution.generate({ messages: [{ role: 'user', content: 'start' }], onEvent: event => events.push(event) }).result
-  assert.deepEqual(first.toolCalls, [{ id: 'lookup-1', name: 'lookup', arguments: { query: '已完成' } }])
-  assert.equal(first.text, '准备查询🙂')
-  assert.equal(first.usage.totalTokens, 8)
-  assert.equal(events[0].type, 'text-delta')
-  assert.equal(events.filter(event => event.type === 'tool-call-delta').length, 2)
-  const second = await execution.generate({ messages: [{ role: 'tool', callId: 'lookup-1', content: 'found' }] }).result
-  assert.equal(second.text, '答案')
+  const execution = await f.open({ modelId: 'model' })
+  const first = await execution.prepareExchange({ messages: [{ role: 'user', content: 'start' }], tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object', properties: { query: { type: 'string' } } } } }] }).start(event => events.push(event)).result
+  assert.deepEqual(first.response.choices[0].message.tool_calls.map(call => ({ id: call.id, name: call.function.name, arguments: JSON.parse(call.function.arguments) })), [{ id: 'lookup-1', name: 'lookup', arguments: { query: '已完成' } }])
+  assert.equal(first.response.choices[0].message.content, '准备查询🙂')
+  assert.equal(first.response.usage.total_tokens, 8)
+  assert.ok(events[0].choices[0].delta.content)
+  assert.equal(events.filter(event => event.choices[0]?.delta.tool_calls).length, 2)
+  const second = await execution.prepareExchange({ messages: [{ role: 'tool', tool_call_id: 'lookup-1', content: 'found' }] }).start().result
+  assert.equal(second.response.choices[0].message.content, '答案')
   await execution.close()
   const body = requests[0].body
   assert.deepEqual(body.thinking, { type: 'disabled' })
@@ -62,7 +63,7 @@ test('DeepSeek discovery and connection checks use authenticated GET and do not 
   } })
   const f = await fixture({ protocols: [protocol] })
   t.after(() => f.root.fiber.dispose())
-  await f.add({ key: 'private-deepseek-key' })
+  await f.addConnection({ id: 'provider', name: 'Provider', enabled: true, protocolId: 'deepseek-chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', apiKey: 'private-deepseek-key', timeoutMs: 10000 })
   assert.deepEqual(await f.settings.discoverModels('provider'), [
     { remoteModelId: 'remote-a', name: 'remote-a' }, { remoteModelId: 'remote-b', name: 'remote-b' },
   ])
@@ -74,7 +75,7 @@ test('DeepSeek discovery and connection checks use authenticated GET and do not 
     assert.equal(request.body, undefined)
     assert.equal(request.headers.Authorization, 'Bearer private-deepseek-key')
   }
-  assert.equal(f.settings.configurations().length, 1)
+  assert.equal(f.settings.configurations().length, 0)
 })
 
 test('DeepSeek rejects unsupported reasoning options and required reasoning before any network call', async t => {
@@ -84,9 +85,9 @@ test('DeepSeek rejects unsupported reasoning options and required reasoning befo
   const descriptor = f.settings.protocols()[0]
   assert.ok(descriptor.modelFields.every(field => !field.key.startsWith('protocol.')))
   assert.equal(f.models.get('model').effectiveCapabilities.reasoning.support, 'unsupported')
-  await assert.rejects(f.models.open({ modelId: 'model', requirements: { reasoning: true } }), { code: 'capability-unsupported' })
-  await assert.rejects(f.settings.updateConfiguration('model', { defaults: { protocol: { reasoningEffort: 'high' } } }, 1), { code: 'capability-unsupported' })
-  await assert.rejects(f.settings.updateConfiguration('model', { defaults: { protocol: { unknown: 1 } } }, 1), { code: 'capability-unsupported' })
+  await assert.rejects(f.open({ modelId: 'model', requirements: { reasoning: true } }), { code: 'capability-unsupported' })
+  await assert.rejects(f.settings.updateConfiguration('model', { parameters: { protocolId: 'deepseek-chat-completions', formatVersion: 1, value: { reasoning_effort: 'high' } } }, 1), { code: 'invalid-config' })
+  await assert.rejects(f.settings.updateConfiguration('model', { parameters: { protocolId: 'deepseek-chat-completions', formatVersion: 1, value: { unknown: 1 } } }, 1), { code: 'invalid-config' })
   assert.equal(calls, 0)
 })
 
@@ -94,12 +95,12 @@ test('DeepSeek rejects developer messages without sending them and supports non-
   const requests = []
   const f = await configured(t, async (_url, init) => {
     requests.push(JSON.parse(init.body))
-    return json({ choices: [{ index: 0, message: { content: 'ready' }, finish_reason: 'stop' }] })
+    return json({ choices: [{ index: 0, message: { role: 'assistant', content: 'ready' }, finish_reason: 'stop' }] })
   }, capabilities({ streaming: { support: 'unsupported' } }))
-  const execution = await f.models.open({ modelId: 'model' })
-  await assert.rejects(execution.generate({ messages: [{ role: 'developer', content: 'do something' }] }).result, { code: 'invalid-config' })
+  const execution = await f.open({ modelId: 'model' })
+  assert.throws(() => execution.prepareExchange({ messages: [{ role: 'developer', content: 'do something' }] }), { code: 'invalid-config' })
   assert.equal(requests.length, 0)
-  assert.equal((await execution.generate({ messages: [{ role: 'system', content: 'instructions' }, { role: 'user', content: 'hello' }] }).result).text, 'ready')
+  assert.equal((await execution.prepareExchange({ messages: [{ role: 'system', content: 'instructions' }, { role: 'user', content: 'hello' }] }).start().result).response.choices[0].message.content, 'ready')
   await execution.close()
   assert.equal(requests[0].stream, false)
   assert.deepEqual(requests[0].thinking, { type: 'disabled' })

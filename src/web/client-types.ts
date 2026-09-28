@@ -1,4 +1,5 @@
-import type { Model, Provider, ExecutionSnapshot, ProviderTemplate } from '@anybox/models'
+import type { Model, Provider, NativeModelSnapshot, ProviderTemplate } from '@anybox/models'
+import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 
 export interface AgentView { readonly id: string }
@@ -7,6 +8,8 @@ export interface SessionView {
   readonly projectId: string
   readonly agentId: string
   readonly modelId: string | null
+  readonly protocolId: string | null
+  readonly historyMode: 'dialogue-v1' | 'native-local-v1'
   readonly createdAt: string
 }
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
@@ -19,7 +22,8 @@ export interface ProjectView {
 export interface RunView {
   readonly modelId: string | null
   readonly requestedModelId: string | null
-  readonly modelSnapshot: ExecutionSnapshot | null
+  readonly modelSnapshot: LegacyExecutionSnapshot | NativeModelSnapshot | null
+  readonly protocolBinding?: { readonly protocolId: string; readonly viewSchemaVersion: number }
   readonly id: string
   readonly sessionId: string
   readonly input: string
@@ -36,6 +40,9 @@ export type ToolCallView =
   | { readonly id: string; readonly name: 'bash'; readonly command: string }
   | { readonly id: string; readonly name: 'apply_patch'; readonly patch: string; readonly patchTruncated: boolean }
 export type RunEventView = { readonly seq: number; readonly at: string } & (
+  | { readonly kind: 'operation-started'; readonly operationId: string; readonly operationKind: 'model' | 'operation' }
+  | { readonly kind: 'operation-observed'; readonly operationId: string }
+  | { readonly kind: 'operation-failed'; readonly operationId: string; readonly category: string }
   | { readonly kind: 'model-started' | 'terminal' | 'interrupted' }
   | { readonly kind: 'model-tool-calls'; readonly calls: readonly ToolCallView[] }
   | ({ readonly kind: 'tool-started'; readonly requestId: string } & ToolCallView)
@@ -67,6 +74,8 @@ export interface ApplyPatchTrace extends ToolTraceBase {
 }
 export type ToolTrace = BashTrace | ApplyPatchTrace
 export interface PendingSubmission {
+  /** Missing on old pending inputs, which must be confirmed again. */
+  readonly schemaVersion?: 1
   readonly modelId?: string
   readonly sessionId: string
   readonly input: string

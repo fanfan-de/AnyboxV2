@@ -1,3 +1,4 @@
+import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -11,7 +12,7 @@ import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createPromptComponent } from '../dist/prompt/component.js'
 import { createAgentPromptComponent } from '../dist/agent/prompt-binding-component.js'
-import { createAgentLoopComponent } from '../dist/run/agent-loop-component.js'
+import { createRunRuntimeComponent } from '../dist/run/runtime-component.js'
 import { createRunComponent, runServiceKey } from '../dist/run/component.js'
 import { createBashComponent } from '../dist/tool/bash-component.js'
 import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
@@ -36,7 +37,8 @@ async function fixture(execution = false) {
       await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
       await root.installComponent(createBashComponent())
       await root.installComponent(createApplyPatchComponent())
-      await root.installComponent(createAgentLoopComponent(inputs))
+      await root.installComponent(createRunRuntimeComponent(inputs))
+      await installTestProtocolAgents(root)
       await root.installComponent(createRunComponent(inputs, agents))
     }
     const project = await root.get(projectServiceKey).openProject(directory)
@@ -113,7 +115,7 @@ test('Session revocation joins executing consumers and a new owner preserves con
     const waiting = runs.waitRun(second.id)
     let stopped = false
     const stopping = f.sessionFiber.dispose().then(() => { stopped = true })
-    assert.equal(await f.llm.calls[1].cancelled.promise, 'dependency-unavailable')
+    await f.llm.calls[1].cancelled.promise
     assert.equal(stopped, false)
     assert.equal(f.root.get(runServiceKey), undefined)
     // The old dependency snapshot remains usable until its execution consumers finish cleanup.
@@ -135,7 +137,7 @@ test('Session revocation joins executing consumers and a new owner preserves con
     await ready(f.root, runServiceKey)
     const current = f.root.get(sessionServiceKey)
     assert.notEqual(current, sessions)
-    assert.deepEqual(await current.getSession(session.id), session)
+    assert.deepEqual(await current.getSession(session.id), { ...session, protocolId: 'chat-completions' })
     assert.deepEqual(await current.getRun(second.id), interrupted)
     assert.equal((await current.getRunEvents(second.id)).at(-1).status, 'failed')
     assert.deepEqual((await current.getNodePath(session.id, completed.resultNodeId)).map(node => node.output), ['Saved answer'])

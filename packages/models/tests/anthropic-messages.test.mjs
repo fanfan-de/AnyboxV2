@@ -1,427 +1,103 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { createAnthropicMessagesProtocol, createAnthropicMessagesProtocolComponent } from '../dist/protocols/anthropic-messages.js';
-import { createExecution } from '../dist/execution.js';
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createAnthropicMessagesProtocol, createAnthropicMessagesProtocolComponent } from '../dist/protocols/anthropic-messages.js'
+import { declared, jsonResponse, sse, nativeSession, run } from './native-protocol-helpers.mjs'
+import { deferred, tick } from './helpers.mjs'
+const text = value => ({ type: 'text', text: value })
+const thinking = { type: 'thinking', thinking: 'summary', signature: 'private-signature', future: 'kept' }
+const redacted = { type: 'redacted_thinking', data: 'private-redacted' }
+const tool = (id = 'native-tool') => ({ type: 'tool_use', id, name: 'lookup', input: { q: 'x' } })
+const reply = (content = [text('done')], stop_reason = 'end_turn', usage = { input_tokens: 3, output_tokens: 5 }) => ({ type: 'message', id: 'native-message', role: 'assistant', model: 'remote', content, stop_reason, usage })
+const initial = { messages: [{ role: 'user', content: [text('你好')] }], system: [text('instruction')], tools: [{ name: 'lookup', input_schema: { type: 'object' } }] }
+const events = content => [{ type: 'message_start', message: reply([], null, { input_tokens: 3, output_tokens: 0 }) }, ...content.flatMap((block, index) => [{ type: 'content_block_start', index, content_block: block }, { type: 'content_block_stop', index }]), { type: 'message_delta', delta: { stop_reason: content.some(block => block.type === 'tool_use') ? 'tool_use' : 'end_turn' }, usage: { output_tokens: 5 } }, { type: 'message_stop' }]
 
-const declared = {
-  tools: { support: 'supported' }, streaming: { support: 'supported' }, imageInput: { support: 'supported' },
-  reasoning: { support: 'supported', modes: ['disabled', 'adaptive', 'enabled'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'], budget: { min: 1024, max: 8192 } },
-};
-const effective = { tools: true, streaming: true, imageInput: false, reasoning: declared.reasoning };
-const tools = [{ name: 'lookup', description: 'Look up a record', parameters: { type: 'object', properties: { query: { type: 'string' } } } }];
-function input(overrides = {}) {
-  const messages = [{ role: 'user', content: '你好' }];
-  return {
-    provider: { name: 'Anthropic', enabled: true, protocolId: 'anthropic-messages', baseUrl: 'https://unit.invalid/v1/', auth: 'api-key', timeoutMs: 10_000 },
-    credential: 'private-key-never-in-error', signal: new AbortController().signal,
-    remoteModelId: 'unit-model', options: { maxOutputTokens: 4096 }, capabilities: effective,
-    messages, newMessages: messages, tools, onEvent() {}, ...overrides,
-  };
-}
-const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
-const text = value => ({ type: 'text', text: value });
-const thinking = (value = 'thinking summary', signature = 'private-native-signature') => ({ type: 'thinking', thinking: value, signature });
-const tool = (id, query) => ({ type: 'tool_use', id, name: 'lookup', input: { query } });
-const reply = (content = [text('finished')], stop_reason = 'end_turn', usage = { input_tokens: 3, output_tokens: 5 }) => ({
-  id: 'private-native-message-id', type: 'message', role: 'assistant', model: 'unit-model', content, stop_reason, stop_sequence: null, usage,
-});
-const start = (usage = { input_tokens: 3, output_tokens: 1 }) => ({ type: 'message_start', message: reply([], null, usage) });
-const blockStart = (index, content_block) => ({ type: 'content_block_start', index, content_block });
-const blockDelta = (index, delta) => ({ type: 'content_block_delta', index, delta });
-const blockStop = index => ({ type: 'content_block_stop', index });
-const finish = (stop_reason = 'end_turn', output_tokens = 5) => ({ type: 'message_delta', delta: { stop_reason, stop_sequence: null }, usage: { output_tokens } });
-const stop = { type: 'message_stop' };
-function stream(values, { newline = '\n', fragment = 1, close = true, cancel } = {}) {
-  const bytes = new TextEncoder().encode(values.map(value => `event: ${value.type}\ndata: ${JSON.stringify(value)}${newline}${newline}`).join(''));
-  return new Response(new ReadableStream({
-    start(controller) {
-      for (let offset = 0; offset < bytes.length; offset += fragment) controller.enqueue(bytes.slice(offset, offset + fragment));
-      if (close) controller.close();
-    },
-    ...(cancel ? { cancel } : {}),
-  }), { headers: { 'content-type': 'text/event-stream' } });
-}
-async function settle(operation) {
-  try { return await operation.result; } finally { await operation.done; }
-}
-const uuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
-function execution(protocol, overrides = {}) {
-  const base = input(overrides);
-  return createExecution({
-    protocol, provider: base.provider, credential: base.credential, capabilities: base.capabilities, tools: base.tools,
-    history: [], controller: new AbortController(), onRelease() {},
-    snapshot: {
-      modelId: 'local-model', modelRevision: 1, modelVersionId: 'model-version',
-      providerId: 'local-provider', providerRevision: 1, providerVersionId: 'provider-version',
-      remoteModelId: base.remoteModelId, protocolId: base.provider.protocolId, protocolVersion: protocol.descriptor.version, options: base.options,
-    },
-  });
-}
+for (const streaming of [false, true]) test(`Anthropic preserves ordered native thinking, redaction and tool blocks through restore (${streaming ? 'SSE' : 'JSON'})`, async () => {
+  const sent = [], blocks = [thinking, text('before'), redacted, tool(), text('after')]
+  const protocol = createAnthropicMessagesProtocol({ fetch: async (_url, init) => { sent.push({ ...init, body: JSON.parse(init.body) }); return streaming ? sse(events(blocks), { newline: '\r\n' }) : jsonResponse(reply(blocks, 'tool_use')) } })
+  const execution = nativeSession(protocol, { streaming, parameters: { max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 1024, display: 'summarized' }, output_config: { effort: 'high' } } }), observed = []
+  const response = await run(execution, initial, observed); assert.deepEqual(response.content, blocks); assert.equal(response.stop_reason, 'tool_use'); assert.equal(sent[0].headers['x-api-key'], 'private-native-test-key'); assert.equal(sent[0].headers['anthropic-version'], '2023-06-01'); assert.equal(sent[0].headers.Authorization, undefined)
+  const report = await execution.close(), restored = nativeSession(protocol, { streaming, parameters: execution.snapshot.parameters.value, restore: { ...report.restoreState, records: report.records } }); await run(restored, { messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'native-tool', content: 'result' }] }] })
+  assert.deepEqual(sent[1].body.messages[1].content, blocks); assert.equal(sent[1].body.messages.at(-1).content[0].tool_use_id, 'native-tool'); assert.deepEqual(sent[1].body.system, initial.system); await restored.close(); if (streaming) assert.ok(observed.some(event => event.type === 'content_block_start'))
+})
 
-test('Anthropic JSON encodes instruction roles, history tool identity, scoped-key headers and native controls', async () => {
-  let sent;
-  const protocol = createAnthropicMessagesProtocol({ fetch: async (url, init) => {
-    sent = { url, ...init, body: JSON.parse(init.body) };
-    return json(reply([text('I will look up both.'), tool('private-native-a', '甲'), tool('private-native-b', '乙')], 'tool_use', {
-      input_tokens: 7, cache_creation_input_tokens: 2, cache_read_input_tokens: 3, output_tokens: 9,
-    }));
-  } });
-  const history = [
-    { role: 'system', content: 'System instruction' }, { role: 'developer', content: 'Developer instruction' },
-    { role: 'user', content: 'First' }, { role: 'user', content: 'Second' },
-    { role: 'assistant', content: 'Earlier', toolCalls: [{ id: 'public-old', name: 'lookup', arguments: { query: 'old' } }] },
-    { role: 'tool', callId: 'public-old', content: 'found' }, { role: 'user', content: 'Continue' },
-  ];
-  const outcome = await settle(protocol.call(input({
-    capabilities: { ...effective, streaming: false }, messages: history,
-    options: { maxOutputTokens: 12345, temperature: 1, protocol: { reasoningMode: 'enabled', reasoningBudgetTokens: 2048, reasoningEffort: 'max', reasoningDisplay: 'summarized' } },
-  })));
-  assert.equal(sent.url, 'https://unit.invalid/v1/messages');
-  assert.equal(sent.method, 'POST');
-  assert.equal(sent.headers['x-api-key'], 'private-key-never-in-error');
-  assert.equal(sent.headers.Authorization, undefined);
-  assert.equal(sent.headers['anthropic-version'], '2023-06-01');
-  assert.equal(sent.headers['anthropic-beta'], undefined);
-  assert.equal(sent.body.max_tokens, 12345);
-  assert.equal(sent.body.temperature, 1);
-  assert.deepEqual(sent.body.thinking, { type: 'enabled', budget_tokens: 2048, display: 'summarized' });
-  assert.deepEqual(sent.body.output_config, { effort: 'max' });
-  assert.deepEqual(sent.body.system, [text('System instruction'), text('Developer instruction')]);
-  assert.deepEqual(sent.body.tools, [{ name: 'lookup', description: 'Look up a record', input_schema: tools[0].parameters }]);
-  assert.deepEqual(sent.body.messages[0], { role: 'user', content: [text('First'), text('Second')] });
-  const oldNative = sent.body.messages[1].content[1].id;
-  assert.ok(oldNative.startsWith('toolu_'));
-  assert.notEqual(oldNative, 'public-old');
-  assert.deepEqual(sent.body.messages[2], { role: 'user', content: [{ type: 'tool_result', tool_use_id: oldNative, content: 'found' }, text('Continue')] });
-  assert.equal(outcome.result.text, 'I will look up both.');
-  assert.deepEqual(outcome.result.toolCalls.map(call => call.arguments), [{ query: '甲' }, { query: '乙' }]);
-  assert.ok(outcome.result.toolCalls.every(call => uuid(call.id)));
-  assert.equal(JSON.stringify(outcome.result).includes('private-native'), false);
-  assert.deepEqual(outcome.result.usage, { inputTokens: 12, outputTokens: 9, totalTokens: 21 });
-});
+test('Anthropic pause_turn retains server-search blocks and repeats the same native tool configuration', async () => {
+  const sent = [], search = [{ type: 'server_tool_use', id: 'server-1', name: 'web_search', input: { query: 'topic' } }, { type: 'web_search_tool_result', tool_use_id: 'server-1', content: [{ type: 'web_search_result', title: 'Source', url: 'https://example.test', encrypted_content: 'opaque-source' }] }]
+  const protocol = createAnthropicMessagesProtocol({ fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return jsonResponse(reply(sent.length === 1 ? search : [text('done')], sent.length === 1 ? 'pause_turn' : 'end_turn')) } })
+  const execution = nativeSession(protocol, { parameters: { max_tokens: 4096, tools: [{ type: 'web_search_20250305', name: 'web_search' }] } }); const first = await run(execution, initial); assert.equal(first.stop_reason, 'pause_turn')
+  await run(execution, { messages: [] }); assert.deepEqual(sent[1].messages.at(-1).content, search); assert.deepEqual(sent[1].tools, sent[0].tools); assert.equal(sent[1].tools.length, 2); const report = await execution.close(); assert.equal(report.records.length, 4)
+})
 
-test('Anthropic private continuation preserves thinking signatures, redaction, content order and parallel results', async () => {
-  const requests = [];
-  const original = [thinking(), { type: 'redacted_thinking', data: 'private-redacted-data' }, text('Checking'), tool('private-native-a', '甲'), tool('private-native-b', '乙')];
-  const protocol = createAnthropicMessagesProtocol({ fetch: async (_url, init) => {
-    requests.push(JSON.parse(init.body));
-    return json(requests.length === 1 ? reply(original, 'tool_use') : reply());
-  } });
-  const events = [];
-  const base = input({ capabilities: { ...effective, streaming: false }, onEvent: event => events.push(event) });
-  const first = await settle(protocol.call(base));
-  const results = first.result.toolCalls.map(call => ({ role: 'tool', callId: call.id, content: `result ${call.arguments.query}` }));
-  await settle(protocol.call({ ...base, messages: [...base.messages, { role: 'assistant', content: first.result.text, toolCalls: first.result.toolCalls }, ...results], newMessages: results, continuation: first.continuation }));
-  assert.deepEqual(requests[1].messages[1], { role: 'assistant', content: original });
-  assert.deepEqual(requests[1].messages[2], { role: 'user', content: [
-    { type: 'tool_result', tool_use_id: 'private-native-a', content: 'result 甲' },
-    { type: 'tool_result', tool_use_id: 'private-native-b', content: 'result 乙' },
-  ] });
-  assert.equal(requests[1].messages.length, 3);
-  assert.deepEqual(events, [{ type: 'reasoning-summary-delta', delta: 'thinking summary' }]);
-  assert.equal(JSON.stringify(first.result).includes('private'), false);
-  assert.equal(JSON.stringify(events).includes('private'), false);
-});
+test('Anthropic fragmented deltas assemble native signatures, tool JSON, text and citation annotations', async () => {
+  const stream = [
+    { type: 'message_start', message: reply([], null) },
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '思考' } }, { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } }, { type: 'content_block_stop', index: 0 },
+    { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tool', name: 'lookup', input: {} } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"q":' } }, { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '"汉字"}' } }, { type: 'content_block_stop', index: 1 },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 9 } }, { type: 'message_stop' },
+  ]
+  const execution = nativeSession(createAnthropicMessagesProtocol({ fetch: async () => sse(stream) }), { streaming: true }); const response = await run(execution, initial)
+  assert.equal(response.content[0].signature, 'sig'); assert.equal(response.content[0].thinking, '思考'); assert.deepEqual(response.content[1].input, { q: '汉字' }); assert.equal(response.usage.output_tokens, 9); await execution.close()
+})
 
-test('Anthropic streaming maps fragmented UTF-8, multiple tools and summary events while keeping signatures private', async () => {
-  const requests = [];
-  const values = [
-    start({ input_tokens: 3, cache_creation_input_tokens: 2, cache_read_input_tokens: 4, output_tokens: 1 }),
-    { type: 'ping' }, { type: 'future-observability-event', private: 'ignored' },
-    blockStart(0, thinking('', '')),
-    blockDelta(0, { type: 'thinking_delta', thinking: '思考' }),
-    blockDelta(0, { type: 'signature_delta', signature: 'private-' }),
-    blockDelta(0, { type: 'signature_delta', signature: 'signature' }), blockStop(0),
-    blockStart(1, { type: 'redacted_thinking', data: 'private-redacted' }), blockStop(1),
-    blockStart(2, text('')), blockDelta(2, { type: 'text_delta', text: '查询两个。' }), blockStop(2),
-    blockStart(3, { type: 'tool_use', id: 'private-native-a', name: 'lookup', input: {} }),
-    blockStart(4, { type: 'tool_use', id: 'private-native-b', name: 'lookup', input: {} }),
-    blockDelta(3, { type: 'input_json_delta', partial_json: '{"query":' }),
-    blockDelta(4, { type: 'input_json_delta', partial_json: '{"query":"乙"}' }), blockStop(4),
-    blockDelta(3, { type: 'input_json_delta', partial_json: '"甲"}' }), blockStop(3),
-    { type: 'message_delta', delta: {}, usage: { output_tokens: 7 } }, finish('tool_use', 9), stop,
-  ];
-  const protocol = createAnthropicMessagesProtocol({ fetch: async (_url, init) => {
-    requests.push(JSON.parse(init.body));
-    return requests.length === 1 ? stream(values, { newline: '\r\n' }) : json(reply());
-  } });
-  const events = [];
-  const base = input({ onEvent: event => events.push(event) });
-  const first = await settle(protocol.call(base));
-  assert.deepEqual(first.result.usage, { inputTokens: 9, outputTokens: 9, totalTokens: 18 });
-  assert.equal(first.result.text, '查询两个。');
-  assert.deepEqual(first.result.toolCalls.map(call => call.arguments), [{ query: '甲' }, { query: '乙' }]);
-  assert.ok(first.result.toolCalls.every(call => uuid(call.id)));
-  assert.deepEqual(events.filter(event => event.type === 'reasoning-summary-delta'), [{ type: 'reasoning-summary-delta', delta: '思考' }]);
-  const announced = events.filter(event => event.type === 'tool-call-delta' && event.id);
-  assert.deepEqual(announced.map(event => event.id), first.result.toolCalls.map(call => call.id));
-  assert.equal(JSON.stringify(events).includes('private'), false);
-  const added = first.result.toolCalls.map(call => ({ role: 'tool', callId: call.id, content: 'found' }));
-  await settle(protocol.call({ ...base, capabilities: { ...effective, streaming: false }, continuation: first.continuation, newMessages: added }));
-  assert.deepEqual(requests[1].messages[1].content.slice(0, 2), [thinking('思考', 'private-signature'), { type: 'redacted_thinking', data: 'private-redacted' }]);
-  assert.deepEqual(requests[1].messages[2].content.map(block => block.tool_use_id), ['private-native-a', 'private-native-b']);
-});
+for (const reason of ['max_tokens', 'model_context_window_exceeded', 'refusal']) test(`Anthropic returns native ${reason} without fabricating a completed result`, async () => {
+  const execution = nativeSession(createAnthropicMessagesProtocol({ fetch: async () => jsonResponse(reply([text('partial')], reason)) })); const response = await run(execution, initial); assert.equal(response.stop_reason, reason); assert.equal(response.status, undefined); await execution.close()
+})
 
-test('Omitted thinking preserves an empty summary and signature without publishing a reasoning event', async () => {
-  const events = [];
-  const protocol = createAnthropicMessagesProtocol({ fetch: async () => stream([
-    start(), blockStart(0, thinking('', '')), blockDelta(0, { type: 'thinking_delta', thinking: '' }),
-    blockDelta(0, { type: 'signature_delta', signature: 'private-signature' }), blockStop(0),
-    blockStart(1, text('')), blockDelta(1, { type: 'text_delta', text: 'done' }), blockStop(1), finish(), stop,
-  ]) });
-  const result = await settle(protocol.call(input({ onEvent: event => events.push(event) })));
-  assert.equal(result.result.text, 'done');
-  assert.equal(events.some(event => event.type === 'reasoning-summary-delta'), false);
-  assert.equal(result.continuation.messages[1].content[0].signature, 'private-signature');
-});
+test('Anthropic validates explicit modes, budget, effort, search declaration and default max_tokens', () => {
+  const protocol = createAnthropicMessagesProtocol(); assert.deepEqual(protocol.initialParameters(1000), { max_tokens: 1000 }); assert.throws(() => protocol.validateParameters({}, declared))
+  for (const value of [{ max_tokens: 4096, thinking: { type: 'enabled' } }, { max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 4096 } }, { max_tokens: 4096, thinking: { type: 'adaptive', budget_tokens: 1024 } }, { max_tokens: 4096, thinking: { display: 'omitted' } }, { max_tokens: 4096, output_config: { effort: 'minimal' } }]) assert.throws(() => protocol.validateParameters(value, declared))
+  protocol.validateParameters({ max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 1024 }, temperature: 1 }, declared)
+  assert.throws(() => protocol.validateParameters({ max_tokens: 4096, tools: [{ type: 'web_search_20250305', name: 'web_search' }] }, { ...declared, webSearch: undefined }), { code: 'capability-unsupported' })
+})
 
-test('Anthropic incomplete and refused results discard partial executable tool arguments and continuation', async () => {
-  for (const [reason, status] of [['max_tokens', 'incomplete'], ['model_context_window_exceeded', 'incomplete'], ['pause_turn', 'incomplete'], ['refusal', 'refused']]) {
-    const protocol = createAnthropicMessagesProtocol({ fetch: async () => stream([
-      start(), blockStart(0, text('')), blockDelta(0, { type: 'text_delta', text: 'partial' }), blockStop(0),
-      blockStart(1, { type: 'tool_use', id: 'private-native-a', name: 'lookup', input: {} }),
-      blockDelta(1, { type: 'input_json_delta', partial_json: '{' }), blockStop(1), finish(reason), stop,
-    ]) });
-    const output = await settle(protocol.call(input()));
-    assert.deepEqual(output.result, { status, text: 'partial', toolCalls: [], usage: { inputTokens: 3, outputTokens: 5, totalTokens: 8 } });
-    assert.equal(output.continuation, undefined);
+test('Anthropic changing initial system or tool declarations after history is rejected before a request', async () => {
+  let count = 0; const execution = nativeSession(createAnthropicMessagesProtocol({ fetch: async () => { count++; return jsonResponse(reply()) } })); await run(execution, initial)
+  assert.throws(() => execution.prepareExchange({ messages: [], system: [text('new instruction')] }), { code: 'invalid-config' }); assert.equal(count, 1); await execution.close()
+})
+
+test('Anthropic malformed terminals and incomplete block structure never commit native context', async () => {
+  for (const data of [sse([{ type: 'message_start', message: reply([], null) }, { type: 'message_stop' }]), jsonResponse(reply([], 'unknown')), jsonResponse(reply([{ type: 'thinking', thinking: 'missing signature' }]))]) {
+    const execution = nativeSession(createAnthropicMessagesProtocol({ fetch: async () => data }), { streaming: data.headers.get('content-type') !== 'application/json' }); await assert.rejects(run(execution, initial)); assert.equal((await execution.close()).restoreState, undefined)
   }
-});
+})
 
-test('Anthropic JSON maps normal endings and refuses policy stop details', async () => {
-  for (const reason of ['end_turn', 'stop_sequence']) {
-    const protocol = createAnthropicMessagesProtocol({ fetch: async () => json(reply([text('done')], reason)) });
-    assert.equal((await settle(protocol.call(input({ capabilities: { ...effective, streaming: false } })))).result.status, 'completed');
+test('Anthropic cancellation between terminal output and cleanup preserves diagnostic signatures without success', async () => {
+  const release = deferred(), entered = deferred(); const execution = nativeSession(createAnthropicMessagesProtocol({ fetch: async () => sse(events([thinking, text('done')]), { close: false, cancel: async () => { entered.resolve(); await release.promise } }) }), { streaming: true })
+  const operation = execution.prepareExchange(initial).start(); await entered.promise; operation.cancel(); let settled = false; void operation.result.catch(() => { settled = true }); await tick(); assert.equal(settled, false); release.resolve(); await assert.rejects(operation.result, { code: 'cancelled' }); const report = await execution.close(); assert.equal(report.restoreState, undefined); assert.equal(report.records.at(-1).payload.content[0].signature, 'private-signature')
+})
+
+test('Anthropic discovery follows cursor pages without inventing model capabilities', async () => {
+  const urls = [], protocol = createAnthropicMessagesProtocol({ fetch: async url => { urls.push(url); return jsonResponse(urls.length === 1 ? { data: [{ id: 'first', display_name: 'First', capabilities: { thinking: { supported: true, types: { adaptive: { supported: true } } } } }], has_more: true, last_id: 'first' } : { data: [{ id: 'second' }], has_more: false }) } })
+  const operation = protocol.discover({ provider: { protocolId: 'anthropic-messages', baseUrl: 'https://unit.invalid/v1', auth: 'none' }, signal: new AbortController().signal }); const models = await operation.result; await operation.done; assert.equal(models.length, 2); assert.ok(urls[1].endsWith('after_id=first')); assert.equal(models[1].suggestedCapabilities, undefined)
+})
+
+test('Anthropic component registers and awaits generation cleanup through Effect', async () => {
+  const { Context } = await import('@nya/core'); const root = new Context(), release = deferred(); let registered
+  await root.installComponent({ name: 'registry', apply(ctx) { ctx.provide('models.protocols', { register(protocol) { registered = protocol; return { unregister: () => release.promise } } }) } }); const component = root.installComponent(createAnthropicMessagesProtocolComponent()); await component
+  assert.equal(registered.descriptor.id, 'anthropic-messages'); let done = false; const closing = component.dispose().then(() => { done = true }); await tick(); assert.equal(done, false); release.resolve(); await closing; await root.fiber.dispose()
+})
+
+for (const streaming of [false, true]) test(`Anthropic archives sanitized provider errors (${streaming ? 'SSE' : 'JSON'})`, async () => {
+  const secret = 'private-native-test-key', failure = { type: 'error', error: { type: 'overloaded_error', code: 'busy', message: `provider failure ${secret}`, headers: { 'x-api-key': secret } } }
+  const response = streaming ? sse([
+    { type: 'message_start', message: reply([], null) },
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: 'partial', signature: 'signature-so-far' } },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: `visible ${secret}` } }, failure,
+  ]) : jsonResponse(failure)
+  const execution = nativeSession(createAnthropicMessagesProtocol({ fetch: async () => response }), { streaming })
+  await assert.rejects(run(execution, initial), error => error.code === 'provider-failure' && !String(error).includes(secret))
+  const report = await execution.close(), diagnostic = report.records.at(-1)
+  assert.equal(report.restoreState, undefined); assert.equal(diagnostic.kind, 'diagnostic'); assert.deepEqual(diagnostic.payload.error, { type: 'overloaded_error', code: 'busy' }); assert.equal(JSON.stringify(report).includes(secret), false); assert.equal(JSON.stringify(report).includes('provider failure'), false)
+  if (streaming) { assert.equal(diagnostic.payload.id, 'native-message'); assert.equal(diagnostic.payload.content[0].signature, 'signature-so-far'); assert.equal(diagnostic.payload.content[1].text, 'visible [redacted]') }
+})
+
+test('Anthropic rejects deltas that do not match their native content block', async () => {
+  for (const delta of [{ type: 'signature_delta', signature: 'not-text' }, { type: 'thinking_delta', thinking: 'not-text' }, { type: 'input_json_delta', partial_json: '{}' }]) {
+    const execution = nativeSession(createAnthropicMessagesProtocol({ fetch: async () => sse([
+      { type: 'message_start', message: reply([], null) }, { type: 'content_block_start', index: 0, content_block: text('') },
+      { type: 'content_block_delta', index: 0, delta }, { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'end_turn' } }, { type: 'message_stop' },
+    ]) }), { streaming: true })
+    await assert.rejects(run(execution, initial), { code: 'invalid-response' }); assert.equal((await execution.close()).restoreState, undefined)
   }
-  const protocol = createAnthropicMessagesProtocol({ fetch: async () => json({ ...reply(), stop_details: { type: 'refusal', explanation: 'declined' } }) });
-  assert.equal((await settle(protocol.call(input({ capabilities: { ...effective, streaming: false } })))).result.status, 'refused');
-});
-
-test('Anthropic rejects malformed JSON responses, unknown terminals and incomplete stream structure', async () => {
-  const badJson = [
-    reply([], null), reply([], 'unknown-stop'), reply([tool('same', 'x'), tool('same', 'y')], 'tool_use'),
-    reply([{ type: 'tool_use', id: 'a', name: 'lookup', input: [] }], 'tool_use'), reply([], 'tool_use'),
-    reply([tool('a', 'x')], 'end_turn'), reply([thinking('summary', '')]),
-    reply([{ type: 'server_tool_use', id: 'srv-a', name: 'search', input: {} }], 'tool_use'),
-    reply([text('a')], 'end_turn', { input_tokens: -1, output_tokens: 2 }),
-  ];
-  for (const value of badJson) {
-    const protocol = createAnthropicMessagesProtocol({ fetch: async () => json(value) });
-    await assert.rejects(settle(protocol.call(input({ capabilities: { ...effective, streaming: false } }))), { code: 'invalid-response' });
-  }
-  const badStreams = [
-    [start(), finish()], [finish(), stop], [start(), start(), finish(), stop],
-    [start(), blockStart(0, text('')), finish(), stop],
-    [start(), blockDelta(0, { type: 'text_delta', text: 'x' }), finish(), stop],
-    [start(), blockStart(1, text('')), blockStop(1), finish(), stop],
-    [start(), blockStart(0, text('')), blockStop(0), blockStop(0), finish(), stop],
-    [start(), blockStart(0, text('')), blockDelta(0, { type: 'signature_delta', signature: 'secret' }), blockStop(0), finish(), stop],
-    [start(), blockStart(0, { type: 'tool_use', id: 'a', name: 'lookup', input: {} }), blockDelta(0, { type: 'input_json_delta', partial_json: '{' }), blockStop(0), finish('tool_use'), stop],
-  ];
-  for (const value of badStreams) {
-    const protocol = createAnthropicMessagesProtocol({ fetch: async () => stream(value) });
-    await assert.rejects(settle(protocol.call(input())), { code: 'invalid-response' });
-  }
-  const error = createAnthropicMessagesProtocol({ fetch: async () => stream([{ type: 'error', error: { type: 'overloaded_error', message: 'private-key-never-in-error' } }]) });
-  await assert.rejects(settle(error.call(input())), failure => failure.code === 'provider-failure' && !String(failure).includes('private-key'));
-});
-
-test('Anthropic validates declared modes, budgets and native effort without inventing model restrictions', () => {
-  const protocol = createAnthropicMessagesProtocol();
-  assert.equal(protocol.descriptor.modelFields.find(field => field.key === 'maxOutputTokens').defaultValue, 4096);
-  protocol.validateOptions({ maxOutputTokens: 4096 }, declared);
-  protocol.validateOptions({ maxOutputTokens: 4096, protocol: { reasoningMode: 'adaptive', reasoningEffort: 'xhigh', reasoningDisplay: 'summarized' } }, declared);
-  protocol.validateOptions({ maxOutputTokens: 4096, protocol: { reasoningMode: 'enabled', reasoningBudgetTokens: 2048 } }, declared);
-  for (const options of [
-    {}, { maxOutputTokens: 0 }, { maxOutputTokens: 1.5 }, { maxOutputTokens: 4096, temperature: 2 },
-    { maxOutputTokens: 4096, protocol: { unknown: true } },
-    { maxOutputTokens: 4096, protocol: { reasoningMode: 'enabled' } },
-    { maxOutputTokens: 4096, protocol: { reasoningMode: 'enabled', reasoningBudgetTokens: 1023 } },
-    { maxOutputTokens: 4096, protocol: { reasoningMode: 'enabled', reasoningBudgetTokens: 4096 } },
-    { maxOutputTokens: 4096, protocol: { reasoningMode: 'adaptive', reasoningBudgetTokens: 2048 } },
-    { maxOutputTokens: 4096, temperature: 0.2, protocol: { reasoningMode: 'adaptive' } },
-    { maxOutputTokens: 4096, protocol: { reasoningEffort: 'none' } },
-    { maxOutputTokens: 4096, protocol: { reasoningDisplay: 'summarized' } },
-    { maxOutputTokens: 4096, protocol: { reasoningMode: 'disabled', reasoningDisplay: 'omitted' } },
-  ]) assert.throws(() => protocol.validateOptions(options, declared), { code: 'invalid-config' });
-  assert.throws(() => protocol.validateOptions({ maxOutputTokens: 4096, protocol: { reasoningMode: 'adaptive' } }, { ...declared, reasoning: { support: 'supported' } }), { code: 'capability-unsupported' });
-  assert.throws(() => protocol.validateOptions({ maxOutputTokens: 4096, protocol: { reasoningEffort: 'max' } }, { ...declared, reasoning: { support: 'unknown' } }), { code: 'capability-unsupported' });
-  assert.throws(() => protocol.validateOptions({ maxOutputTokens: 4096, protocol: { reasoningMode: 'enabled', reasoningBudgetTokens: 3000 } }, {
-    ...declared, reasoning: { ...declared.reasoning, budget: { min: 1024, max: 2048 } },
-  }), { code: 'capability-unsupported' });
-  assert.equal(protocol.effectiveCapabilities(declared, { maxOutputTokens: 4096, protocol: { reasoningMode: 'disabled' } }).reasoning.support, 'unsupported');
-  assert.equal(protocol.effectiveCapabilities(declared, { maxOutputTokens: 4096 }).imageInput, false);
-});
-
-test('Anthropic refuses mid-conversation instructions instead of moving their authority into the initial system prompt', () => {
-  let requests = 0;
-  const protocol = createAnthropicMessagesProtocol({ fetch: async () => { requests++; return json(reply()); } });
-  assert.throws(() => protocol.call(input({ messages: [{ role: 'user', content: 'a' }, { role: 'system', content: 'later' }] })), { code: 'invalid-config' });
-  assert.throws(() => protocol.call(input({ messages: [{ role: 'user', content: 'a' }, { role: 'developer', content: 'later' }] })), { code: 'invalid-config' });
-  assert.equal(requests, 0);
-});
-
-test('Anthropic discovery follows read-only cursor pages and maps only native capability evidence', async () => {
-  const requests = [];
-  const protocol = createAnthropicMessagesProtocol({ fetch: async (url, init) => {
-    requests.push({ url, ...init });
-    if (url.endsWith('models?limit=1')) return json({ data: [{ id: 'a', display_name: 'Alpha' }], has_more: true, last_id: 'a' });
-    return json(requests.length === 1 ? {
-      data: [{ id: 'a', display_name: 'Alpha', capabilities: {
-        thinking: { supported: true, types: { adaptive: { supported: true }, enabled: { supported: false } } },
-        effort: { supported: true, low: { supported: true }, max: { supported: true } }, image_input: { supported: true },
-      } }], has_more: true, last_id: 'a',
-    } : { data: [{ id: 'b', display_name: 'Beta', capabilities: null }], has_more: false, last_id: 'b' });
-  } });
-  assert.deepEqual(await settle(protocol.discover(input())), [
-    { remoteModelId: 'a', name: 'Alpha', suggestedCapabilities: { reasoning: { support: 'supported', modes: ['adaptive'], efforts: ['low', 'max'] }, imageInput: { support: 'supported' } } },
-    { remoteModelId: 'b', name: 'Beta' },
-  ]);
-  await settle(protocol.check(input()));
-  assert.deepEqual(requests.map(item => item.url), ['https://unit.invalid/v1/models?limit=1000', 'https://unit.invalid/v1/models?limit=1000&after_id=a', 'https://unit.invalid/v1/models?limit=1']);
-  assert.ok(requests.every(item => item.method === 'GET' && item.body === undefined && item.headers['anthropic-version'] === '2023-06-01' && item.headers['x-api-key'] === 'private-key-never-in-error' && item.headers.Authorization === undefined));
-});
-
-test('Anthropic discovery rejects invalid pagination, repeated IDs and native capability types', async () => {
-  for (const pages of [
-    [{ data: [{ id: 'a' }], has_more: true }], [{ data: [], has_more: true, last_id: 'a' }],
-    [{ data: [{ id: 'a' }], has_more: true, last_id: 'wrong' }],
-    [{ data: [{ id: 'a' }], has_more: true, last_id: 'a' }, { data: [{ id: 'a' }], has_more: false }],
-    [{ data: [{ id: 'a' }], has_more: true, last_id: 'a' }, { data: [{ id: 'a' }], has_more: true, last_id: 'a' }],
-    [{ data: [{ id: 'a', capabilities: { thinking: { supported: 'yes' } } }], has_more: false }],
-  ]) {
-    let index = 0;
-    const protocol = createAnthropicMessagesProtocol({ fetch: async () => json(pages[Math.min(index++, pages.length - 1)]) });
-    await assert.rejects(settle(protocol.discover(input())), { code: 'invalid-response' });
-  }
-});
-
-test('Anthropic cancellation during discovery joins the current page reader before done', async () => {
-  let releaseCancel;
-  const gate = new Promise(resolve => { releaseCancel = resolve; });
-  let ready;
-  const prepared = new Promise(resolve => { ready = resolve; });
-  let count = 0;
-  const protocol = createAnthropicMessagesProtocol({ fetch: async () => {
-    count++;
-    if (count === 1) return json({ data: [{ id: 'a' }], has_more: true, last_id: 'a' });
-    ready();
-    return new Response(new ReadableStream({ cancel() { return gate; } }));
-  } });
-  const operation = protocol.discover(input());
-  await prepared; await Promise.resolve();
-  operation.cancel();
-  let done = false; void operation.done.then(() => { done = true; });
-  await Promise.resolve(); await Promise.resolve();
-  assert.equal(done, false);
-  releaseCancel();
-  await assert.rejects(operation.result, { code: 'cancelled' });
-  await operation.done;
-  assert.equal(count, 2);
-});
-
-test('Anthropic terminal protocol output does not publish an execution result before actual stream cleanup', async () => {
-  let releaseCancel;
-  const gate = new Promise(resolve => { releaseCancel = resolve; });
-  let cancelled;
-  const cancelling = new Promise(resolve => { cancelled = resolve; });
-  const protocol = createAnthropicMessagesProtocol({ fetch: async () => stream([
-    start(), blockStart(0, text('')), blockDelta(0, { type: 'text_delta', text: 'done' }), blockStop(0), finish(), stop,
-  ], { close: false, cancel() { cancelled(); return gate; } }) });
-  const model = execution(protocol);
-  const call = model.generate({ messages: [{ role: 'user', content: 'go' }] });
-  let resultSettled = false; void call.result.then(() => { resultSettled = true; });
-  await cancelling; await Promise.resolve();
-  assert.equal(resultSettled, false);
-  releaseCancel();
-  assert.equal((await call.result).text, 'done');
-  await call.done; await model.close();
-});
-
-test('Anthropic failed terminal cleanup cannot commit a successful execution or native continuation', async () => {
-  const protocol = createAnthropicMessagesProtocol({ fetch: async () => stream([
-    start(), blockStart(0, text('')), blockDelta(0, { type: 'text_delta', text: 'done' }), blockStop(0), finish(), stop,
-  ], { close: false, cancel() { throw new Error('private-key-never-in-error'); } }) });
-  const model = execution(protocol);
-  const call = model.generate({ messages: [{ role: 'user', content: 'go' }] });
-  await assert.rejects(call.result, failure => failure.code === 'cleanup-failure' && !String(failure).includes('private-key'));
-  await assert.rejects(call.done, { code: 'cleanup-failure' });
-  assert.throws(() => model.generate({ messages: [{ role: 'user', content: 'retry' }] }), { code: 'closed' });
-  await assert.rejects(model.close(), { code: 'cleanup-failure' });
-});
-
-test('Anthropic cancellation between terminal output and cleanup discards candidate thinking and tool identities', async () => {
-  let releaseCancel;
-  const gate = new Promise(resolve => { releaseCancel = resolve; });
-  let cancelled;
-  const cancelling = new Promise(resolve => { cancelled = resolve; });
-  const requests = [];
-  const protocol = createAnthropicMessagesProtocol({ fetch: async (_url, init) => {
-    requests.push(JSON.parse(init.body));
-    if (requests.length === 1) return stream([
-      start(), blockStart(0, thinking('', '')), blockDelta(0, { type: 'thinking_delta', thinking: 'candidate summary' }),
-      blockDelta(0, { type: 'signature_delta', signature: 'private-candidate-signature' }), blockStop(0),
-      blockStart(1, { type: 'tool_use', id: 'private-candidate-tool', name: 'lookup', input: {} }),
-      blockDelta(1, { type: 'input_json_delta', partial_json: '{"query":"candidate"}' }), blockStop(1), finish('tool_use'), stop,
-    ], { close: false, cancel() { cancelled(); return gate; } });
-    return stream([start(), blockStart(0, text('')), blockDelta(0, { type: 'text_delta', text: 'retry completed' }), blockStop(0), finish(), stop]);
-  } });
-  const model = execution(protocol);
-  const first = model.generate({ messages: [{ role: 'user', content: 'first' }] });
-  await cancelling;
-  first.cancel();
-  releaseCancel();
-  await assert.rejects(first.result, { code: 'cancelled' });
-  await first.done;
-  assert.equal((await model.generate({ messages: [{ role: 'user', content: 'retry' }] }).result).text, 'retry completed');
-  assert.deepEqual(requests[1].messages, [{ role: 'user', content: [text('retry')] }]);
-  assert.equal(JSON.stringify(requests[1]).includes('private-candidate'), false);
-  await model.close();
-});
-
-test('Anthropic cancellation waits for actual reader cancellation and suppresses later events', async () => {
-  let releaseCancel;
-  const gate = new Promise(resolve => { releaseCancel = resolve; });
-  let ready;
-  const prepared = new Promise(resolve => { ready = resolve; });
-  const events = [];
-  const protocol = createAnthropicMessagesProtocol({ fetch: async () => {
-    ready();
-    return new Response(new ReadableStream({ cancel() { return gate; } }));
-  } });
-  const model = execution(protocol);
-  const call = model.generate({ messages: [{ role: 'user', content: 'go' }], onEvent: event => events.push(event) });
-  await prepared; await Promise.resolve();
-  call.cancel();
-  let done = false; void call.done.then(() => { done = true; });
-  await Promise.resolve(); await Promise.resolve();
-  assert.equal(done, false);
-  releaseCancel();
-  await assert.rejects(call.result, { code: 'cancelled' });
-  await call.done;
-  assert.deepEqual(events, []);
-  await model.close();
-});
-
-test('Anthropic provider failures are sanitized and unconsumed bodies are cancelled', async () => {
-  let cancelled = false;
-  const protocol = createAnthropicMessagesProtocol({ fetch: async () => new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 401 }) });
-  await assert.rejects(settle(protocol.call(input())), { code: 'provider-failure' });
-  assert.equal(cancelled, true);
-  const broken = createAnthropicMessagesProtocol({ fetch: async () => { throw new Error('private-key-never-in-error'); } });
-  await assert.rejects(settle(broken.call(input())), failure => failure.code === 'provider-failure' && !String(failure).includes('private-key'));
-});
-
-test('Anthropic Nya component registers from its dependency snapshot and joins unregistration', async () => {
-  const effects = [];
-  let registered;
-  let unregistered = false;
-  const component = createAnthropicMessagesProtocolComponent();
-  component.apply({ effect: effect => effects.push(effect()) }, undefined, { 'models.protocols': {
-    register(protocol) { registered = protocol; return { unregister: async () => { unregistered = true; } }; },
-  } });
-  assert.equal(registered.descriptor.id, 'anthropic-messages');
-  assert.deepEqual(component.inject, ['models.protocols']);
-  await effects[0]();
-  assert.equal(unregistered, true);
-});
+})

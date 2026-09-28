@@ -191,7 +191,7 @@ test('Web dependency restart closes streams and installs exactly one new Nya lis
 test('Web Models settings manage provider keys, revisions and histories without exposing secrets', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-key-')), f = await fixture(directory)
   try {
-    const added = await request(f.web, 'POST', '/models/connections', { providerDefinitionId: 'default-provider-definition', id: 'managed', name: 'Work connection', enabled: true, protocolId: 'controlled', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 1000, apiKey: 'first-private-value' })
+    const added = await request(f.web, 'POST', '/models/connections', { providerDefinitionId: 'default-provider-definition', id: 'managed', name: 'Work connection', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 1000, apiKey: 'first-private-value' })
     assert.equal(added.response.status, 200)
     assert.equal(added.data.credentialConfigured, true)
     assert.ok([...f.secrets.values()].includes('first-private-value'))
@@ -218,10 +218,10 @@ test('Web deletes only the selected connection with CAS and origin checks while 
   try {
     const settings = f.root.get('models.settings')
     const connection = (await request(f.web, 'POST', '/models/connections', { providerDefinitionId: 'default-provider-definition', id: 'remove-account',
-      name: 'Remove account', enabled: true, protocolId: 'controlled', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 30000, apiKey: 'removed-private-key' })).data
+      name: 'Remove account', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 30000, apiKey: 'removed-private-key' })).data
     const baseline = settings.configurations(connection.id)[0]
     const preset = await settings.createConfiguration({ connectionId: connection.id, modelDefinitionId: baseline.modelDefinitionId,
-      name: 'Preset', enabled: true, baseline: false, capabilities: baseline.capabilities, defaults: { temperature: 0.2 } })
+      name: 'Preset', enabled: true, baseline: false, capabilities: baseline.capabilities, parameters: { protocolId: baseline.parameters.protocolId, formatVersion: 1, value: { temperature: 0.2 } } })
     const session = await f.harness.createSession(f.project.id, 'assistant', baseline.id)
     const started = await f.harness.startRun({ sessionId: session.id, modelId: baseline.id, parentNodeId: null, input: 'Keep running', idempotencyKey: 'before-delete' })
     const before = await f.harness.getRun(started.id)
@@ -300,7 +300,7 @@ test('Web Responses startup registers its key and exposes the existing Bash Run 
     assert.equal(terminal.output, 'Bash printed web-response.')
     const events = (await request(f.web, 'GET', `/runs/${run.id}/events?afterSeq=0`)).data
     assert.deepEqual(events.map(event => event.kind), [
-      'model-started', 'model-tool-calls', 'tool-started', 'tool-observed', 'model-started', 'terminal',
+      'operation-started', 'operation-observed', 'tool-started', 'tool-observed', 'operation-started', 'operation-observed', 'terminal',
     ])
     assert.equal(events.find(event => event.kind === 'tool-observed').stdout, 'web-response')
     assert.equal(events.find(event => event.kind === 'tool-started').requestId, 'call-web')
@@ -323,7 +323,7 @@ test('Web Responses startup registers its key and exposes the existing Bash Run 
   }
 })
 
-test('Web edits, publishes and binds Prompt versions while accepted Runs keep their snapshots', async () => {
+test('Web Prompt bindings apply to new Sessions while existing Sessions retain their first accepted instructions', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-prompts-'))
   let f = await fixture(directory)
   try {
@@ -357,10 +357,18 @@ test('Web edits, publishes and binds Prompt versions while accepted Runs keep th
     f.llm.calls[0].done.resolve()
     await f.harness.waitRun(first.data.id)
     const second = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Second', idempotencyKey: 'two' })
-    assert.equal(f.llm.calls[1].input.messages[0].content, 'Second instruction.')
+    assert.equal(second.response.status, 200)
+    assert.equal(f.llm.calls[1].input.messages[0].content, 'First instruction.', 'a sibling root Run retains the Session initialization')
     f.llm.calls[1].result.resolve('Second answer')
     f.llm.calls[1].done.resolve()
     await f.harness.waitRun(second.data.id)
+    const newSession = await f.harness.createSession(f.project.id, 'assistant')
+    const third = await request(f.web, 'POST', `/sessions/${newSession.id}/runs`, { parentNodeId: null, input: 'New session', idempotencyKey: 'three' })
+    assert.equal(third.response.status, 200)
+    assert.equal(f.llm.calls[2].input.messages[0].content, 'Second instruction.', 'a new Session captures the currently bound instruction')
+    f.llm.calls[2].result.resolve('New session answer')
+    f.llm.calls[2].done.resolve()
+    await f.harness.waitRun(third.data.id)
     assert.deepEqual((await request(f.web, 'GET', `/prompts/${id}/versions`)).data.map(item => item.content),
       ['First instruction.', 'Second instruction.'])
     await f.close()
@@ -452,7 +460,7 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     const clientSource = await client.text()
     assert.match(clientSource, /\/api\/v1/)
     assert.doesNotMatch(clientSource, /@nya\/core|deepseek-chat-completions/)
-    for (const asset of ['workspace-client', 'workspace-layout', 'session-client', 'session-view', 'tool-trace', 'prompt-client']) {
+    for (const asset of ['workspace-client', 'workspace-layout', 'session-client', 'session-view', 'tool-trace', 'prompt-client', 'protocols/modules', 'protocols/view']) {
       const response = await fetch(`${f.web.url}/${asset}.js`)
       assert.equal(response.status, 200)
       assert.match(response.headers.get('content-type'), /javascript/)
@@ -473,7 +481,7 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     assert.equal(first.response.status, 200)
     assert.equal(replay.data.id, first.data.id)
     assert.equal(f.llm.calls.length, 1)
-    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'history', 'id', 'input', 'modelId', 'modelSnapshot', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
+    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'history', 'id', 'input', 'modelId', 'modelSnapshot', 'protocolBinding', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
     assert.doesNotMatch(JSON.stringify(first.data), /Private instructions|llmSnapshot|promptVersionIds|idempotencyKey/)
     const inFlight = await request(f.web, 'GET', `/runs/${first.data.id}`)
     assert.equal(inFlight.data.status, 'running')
@@ -503,7 +511,7 @@ test('Web serves bounded Run events for an active Bash loop and its completed hi
       { parentNodeId: null, input: 'Inspect output', idempotencyKey: 'events' })
     assert.equal((await request(f.web, 'GET', '/runs/missing/events')).response.status, 404)
     assert.deepEqual((await request(f.web, 'GET', `/runs/${accepted.data.id}/events`)).data.map(event => event.kind),
-      ['model-started'])
+      ['operation-started'])
     f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [{
       id: 'call-1', name: 'bash', arguments: { command: "printf '%*s' 5000 '' | tr ' ' a" },
     }] })
@@ -518,14 +526,14 @@ test('Web serves bounded Run events for an active Bash loop and its completed hi
     const events = await request(f.web, 'GET', `/runs/${accepted.data.id}/events`)
     assert.equal(events.response.status, 200)
     assert.deepEqual(events.data.map(event => event.kind), [
-      'model-started', 'model-tool-calls', 'tool-started', 'tool-observed', 'model-started', 'terminal',
+      'operation-started', 'operation-observed', 'tool-started', 'tool-observed', 'operation-started', 'operation-observed', 'terminal',
     ])
-    assert.equal(events.data[1].calls[0].command, "printf '%*s' 5000 '' | tr ' ' a")
+    assert.equal(events.data[2].command, "printf '%*s' 5000 '' | tr ' ' a")
     assert.equal(events.data[2].requestId, 'call-1')
     assert.equal(events.data[3].exitCode, 0)
     assert.equal(events.data[3].stdout.length, 2048)
     assert.equal(events.data[3].truncated, true)
-    assert.equal(events.data[5].status, 'completed')
+    assert.equal(events.data.at(-1).status, 'completed')
     assert.doesNotMatch(JSON.stringify(events.data), /Private instructions|llmSnapshot|local-key/)
   } finally {
     for (const call of f.llm.calls) call.done.resolve()
@@ -713,6 +721,37 @@ test('the Web frontend can be replaced without closing Harness', async () => {
   }
 })
 
+test('active native views survive Web replacement and committed views survive application restart', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-native-view-'))
+  let f = await fixture(directory)
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Show progress', idempotencyKey: 'view' })
+    f.llm.calls[0].input.onEvent({ type: 'text-delta', delta: 'Already streamed before replacement' })
+    const before = await request(f.web, 'GET', `/runs/${run.id}/view`)
+    assert.equal(before.response.status, 200)
+    assert.match(JSON.stringify(before.data), /Already streamed/)
+    const port = Number(new URL(f.web.url).port)
+    await f.webFiber.dispose()
+    assert.equal((await f.harness.getRun(run.id)).status, 'running')
+    await f.root.installComponent(createWebFrontendComponent(f.harness.listAgents(), port))
+    const replacement = f.root.get(webFrontendServiceKey)
+    assert.deepEqual((await request(replacement, 'GET', `/runs/${run.id}/view`)).data, before.data)
+    f.llm.calls[0].result.resolve('Persisted native answer'); f.llm.calls[0].done.resolve()
+    await f.harness.waitRun(run.id)
+    const committed = (await request(replacement, 'GET', `/runs/${run.id}/view`)).data
+    assert.equal(committed.status, 'committed')
+    assert.match(JSON.stringify(committed), /Persisted native answer/)
+    assert.doesNotMatch(JSON.stringify(committed), /Already streamed|Private instructions/)
+    await f.close()
+    f = await fixture(directory)
+    assert.deepEqual((await request(f.web, 'GET', `/runs/${run.id}/view`)).data, committed)
+  } finally {
+    for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
+})
+
 test('Web project routes register directories and switching views leaves Runs active', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-projects-'))
   const secondPath = join(directory, '中文 项目')
@@ -891,11 +930,11 @@ test('tree HTTP contract requires ancestry, supports sibling attempts and restor
     assert.equal(continued.response.status, 200)
     assert.equal((await request(f.web, 'GET', `${path}/runs?status=active&parentNodeId=${node.id}`)).data.length, 1)
     const events = (await request(f.web, 'GET', `/runs/${continued.data.id}/events?afterSeq=0`)).data
-    assert.deepEqual(events.map(e => e.kind), ['model-started'])
+    assert.deepEqual(events.map(e => e.kind), ['operation-started'])
     f.llm.calls[2].result.resolve('Child answer')
     f.llm.calls[2].done.resolve()
     const done = await f.harness.waitRun(continued.data.id)
-    assert.deepEqual((await request(f.web, 'GET', `/runs/${done.id}/events?afterSeq=${events[0].seq}`)).data.map(e => e.kind), ['terminal'])
+    assert.deepEqual((await request(f.web, 'GET', `/runs/${done.id}/events?afterSeq=${events[0].seq}`)).data.map(e => e.kind), ['operation-observed', 'terminal'])
     assert.equal((await request(f.web, 'GET', `${path}/nodes/${done.resultNodeId}/path`)).data.length, 2)
     const publicRun = (await request(f.web, 'GET', `/runs/${done.id}`)).data
     assert.equal(publicRun.resultNodeId, done.resultNodeId)
@@ -985,19 +1024,19 @@ test('HTTP Models configuration and session selection use persisted model IDs wi
     const catalog = await request(f.web, 'GET', '/models')
     assert.equal(catalog.data[0].id, 'default')
     assert.equal(catalog.data[0].effectiveCapabilities.tools, true)
-    assert.equal((await request(f.web, 'GET', '/models/protocols')).data[0].id, 'controlled')
-    const definition = await request(f.web, 'POST', '/models/providers', { id: 'second-definition', name: 'Second service', connectionHints: { protocolIds: ['controlled'], baseUrl: 'https://second.example.invalid/v1' } })
+    assert.equal((await request(f.web, 'GET', '/models/protocols')).data[0].id, 'chat-completions')
+    const definition = await request(f.web, 'POST', '/models/providers', { id: 'second-definition', name: 'Second service', connectionHints: { protocolIds: ['chat-completions'], baseUrl: 'https://second.example.invalid/v1' } })
     assert.equal(definition.response.status, 200)
-    const provider = await request(f.web, 'POST', '/models/connections', { providerDefinitionId: definition.data.id, id: 'second', name: 'Second connection', protocolId: 'controlled', baseUrl: 'https://second.example.invalid/v1', enabled: true, auth: 'none', timeoutMs: 1000 })
+    const provider = await request(f.web, 'POST', '/models/connections', { providerDefinitionId: definition.data.id, id: 'second', name: 'Second connection', protocolId: 'chat-completions', baseUrl: 'https://second.example.invalid/v1', enabled: true, auth: 'none', timeoutMs: 1000 })
     assert.equal(provider.response.status, 200)
-    const modelDefinition = await request(f.web, 'POST', '/models/definitions', { id: 'second-model-definition', name: 'Second model', providerId: definition.data.id, remoteModelId: 'remote-test', capabilities: catalog.data[0].capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['controlled'] } })
+    const modelDefinition = await request(f.web, 'POST', '/models/definitions', { id: 'second-model-definition', name: 'Second model', providerId: definition.data.id, remoteModelId: 'remote-test', capabilities: catalog.data[0].capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } })
     assert.equal(modelDefinition.response.status, 200)
     const added = await request(f.web, 'POST', '/models/configurations', {
       id: 'alternate', name: 'Alternate defaults', enabled: true, connectionId: 'second', modelDefinitionId: modelDefinition.data.id, baseline: true,
-      capabilities: catalog.data[0].capabilities, defaults: { temperature: 0.4 },
+      capabilities: catalog.data[0].capabilities, parameters: { protocolId: 'chat-completions', formatVersion: 1, value: { temperature: 0.4 } },
     })
     assert.equal(added.response.status, 200)
-    const updated = await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: added.data.revision, patch: { defaults: { temperature: 0.8 } } })
+    const updated = await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: added.data.revision, patch: { parameters: { protocolId: 'chat-completions', formatVersion: 1, value: { temperature: 0.8 } } } })
     assert.equal(updated.response.status, 200)
     assert.equal((await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: added.data.revision, patch: { name: 'Stale' } })).response.status, 409)
     assert.equal((await request(f.web, 'GET', '/models/configurations/alternate/history')).data.length, 2)
@@ -1010,7 +1049,7 @@ test('HTTP Models configuration and session selection use persisted model IDs wi
     const second = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Selection', idempotencyKey: 'selection' })
     assert.equal(first.data.modelId, 'default'); assert.equal(second.data.modelId, 'alternate')
     assert.equal(f.llm.calls.length, 2)
-    assert.deepEqual(f.llm.calls[1].input.options, { temperature: 0.8 })
+    assert.equal(f.llm.calls[1].input.request.temperature, 0.8)
     assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/model`, { modelId: 'default' })).data.modelId, 'default')
     assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Selection', idempotencyKey: 'selection' })).data.id, second.data.id)
     const disabled = await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: updated.data.revision, patch: { enabled: false } })
@@ -1024,7 +1063,7 @@ test('HTTP Models configuration and session selection use persisted model IDs wi
   }
 })
 
-test('SSE model-progress is provisional and the Run result remains authoritative', async () => {
+test('SSE protocol-view is provisional and the Run result remains authoritative', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-model-progress-')), f = await fixture(directory)
   let stream
   try {
@@ -1033,13 +1072,22 @@ test('SSE model-progress is provisional and the Run result remains authoritative
     const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Stream', idempotencyKey: 'stream' })
     f.llm.calls[0].input.onEvent({ type: 'text-delta', delta: 'Provisional text' })
     let progress
-    for (let count = 0; count < 10; count++) { const event = await stream.next(); if (event.event === 'model-progress') { progress = event.data; break } }
-    assert.deepEqual(progress, { sessionId: session.id, runId: run.id, event: { type: 'text-delta', delta: 'Provisional text' } })
+    for (let count = 0; count < 10; count++) { const event = await stream.next(); if (event.event === 'protocol-view') { progress = event.data; break } }
+    assert.equal(progress.sessionId, session.id)
+    assert.equal(progress.runId, run.id)
+    assert.equal(progress.snapshot.status, 'provisional')
+    assert.match(JSON.stringify(progress.snapshot), /Provisional text/)
+    const liveView = (await request(f.web, 'GET', `/runs/${run.id}/view`)).data
+    assert.equal(liveView.viewRevision, progress.snapshot.viewRevision)
+    assert.match(JSON.stringify(liveView), /Provisional text/)
     assert.equal((await f.harness.getRun(run.id)).output, undefined)
     f.llm.calls[0].result.resolve('Authoritative final text'); f.llm.calls[0].done.resolve()
     assert.equal((await f.harness.waitRun(run.id)).output, 'Authoritative final text')
     const history = (await request(f.web, 'GET', `/runs/${run.id}/events`)).data
     assert.doesNotMatch(JSON.stringify(history), /Provisional text/)
+    const finalView = (await request(f.web, 'GET', `/runs/${run.id}/view`)).data
+    assert.equal(finalView.status, 'committed')
+    assert.match(JSON.stringify(finalView), /Authoritative final text/)
   } finally {
     await stream?.close()
     for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }

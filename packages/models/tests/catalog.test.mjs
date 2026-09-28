@@ -179,7 +179,7 @@ test('failed source cleanup never publishes and remains visible to component dis
   const request = f.catalog.refresh(), rejected = assert.rejects(request, code('cleanup-failure'));
   await tick(); const operation = upstream.operations[0];
   operation.done.reject(new Error('native cleanup secret detail'));
-  await tick(); assert.equal(f.catalog.status().refreshing, true);
+  await tick(); assert.equal(f.catalog.status().refreshing, false);
   operation.result.resolve({ status: 'modified', snapshot: snapshot('Discard') }); await rejected;
   assert.equal(f.getModel('p', 'm').name, 'Model');
   await assert.rejects(f.component.dispose(), code('cleanup-failure'));

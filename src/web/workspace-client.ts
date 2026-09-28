@@ -51,12 +51,12 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       const source = new EventSource(url)
       source.addEventListener('ready', () => handlers.ready())
       source.addEventListener('run-changed', event => handlers.change((event as MessageEvent<string>).data))
-      source.addEventListener('model-progress', event => handlers.progress((event as MessageEvent<string>).data))
+      source.addEventListener('protocol-view', event => handlers.view((event as MessageEvent<string>).data))
       source.addEventListener('error', () => handlers.error())
       return { close: () => source.close() }
     },
     refresh(id) { bundles.get(id)?.controller.notifyChange() },
-    progress(id, runId, event) { bundles.get(id)?.controller.modelProgress(runId, event) },
+    view(snapshot) { bundles.get(snapshot.sessionId)?.controller.protocolView(snapshot) },
     connected(value) { for (const bundle of bundles.values()) bundle.controller.setLive(value) },
   })
   const splitElements = new Map<string, { node: Split; element: HTMLElement; separator: HTMLElement }>()

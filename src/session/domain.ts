@@ -4,6 +4,8 @@ export interface Session {
   readonly projectId: string
   readonly agentId: string
   readonly modelId: string | null
+  readonly historyMode: 'dialogue-v1' | 'native-local-v1'
+  readonly protocolId: string | null
   readonly createdAt: string
 }
 
@@ -23,7 +25,7 @@ export interface NodePage {
 
 export interface NodeQuery { readonly cursor?: string; readonly limit?: number }
 
-export function treeError(code: 'node-not-found' | 'invalid-history' | 'idempotency-conflict'): Error & { readonly code: string } {
+export function treeError(code: 'node-not-found' | 'invalid-history' | 'idempotency-conflict' | 'legacy-session-readonly' | 'protocol-mismatch' | 'history-incompatible'): Error & { readonly code: string } {
   return Object.assign(new Error(code === 'idempotency-conflict' ? 'idempotency key already used with different input or history' : code), { code })
 }
 
@@ -41,5 +43,5 @@ export function assemblePath(sessionId: string, parentId: string | null, ancesto
 }
 
 export function createSession(id: string, projectId: string, agentId: string, now: string, modelId: string | null = null): Session {
-  return Object.freeze({ id, projectId, agentId, modelId, createdAt: now })
+  return Object.freeze({ id, projectId, agentId, modelId, createdAt: now, historyMode: 'native-local-v1' as const, protocolId: null })
 }

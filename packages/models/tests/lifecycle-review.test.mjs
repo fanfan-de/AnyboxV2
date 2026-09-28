@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { code, complete, deferred, fakeProtocol, fixture, tick } from './helpers.mjs';
+import { code, complete, deferred, exchange, fakeProtocol, fixture, tick } from './helpers.mjs';
 
 const input = content => ({ messages: [{ role: 'user', content }] });
 const observe = promise => {
@@ -10,7 +10,7 @@ const observe = promise => {
 };
 
 for (const method of ['discoverModels', 'checkConnection']) {
-  test(`unregister reports ${method} cleanup failure after waiting for its actual exit`, async () => {
+  test(`unregister reports ${method} cleanup failure once done confirms the resource exit`, async () => {
     const f = await fixture(), protocol = f.protocols[0];
     try {
       await f.add();
@@ -23,7 +23,7 @@ for (const method of ['discoverModels', 'checkConnection']) {
       const state = observe(closing);
       protocol.operations[0].done.reject(new Error('private-native-cleanup-details'));
       await tick();
-      assert.equal(state.settled, false);
+      assert.equal(state.settled, true);
       protocol.operations[0].result.resolve(method === 'discoverModels' ? [] : undefined);
       await Promise.all([rejectedOperation, rejectedClose]);
     } finally { await f.close().catch(error => assert.equal(error.code, 'cleanup-failure')); }
@@ -34,17 +34,17 @@ test('an already-settled call cleanup failure remains visible to execution close
   const f = await fixture(), protocol = f.protocols[0];
   try {
     await f.add();
-    const execution = await f.models.open({ modelId: 'model' });
+    const execution = await f.open({ modelId: 'model' });
     protocol.next();
-    const call = execution.generate(input('cleanup fails'));
+    const call = exchange(execution, input('cleanup fails'));
     const rejectedResult = assert.rejects(call.result, code('cleanup-failure'));
     const rejectedDone = assert.rejects(call.done, code('cleanup-failure'));
     await tick();
-    protocol.calls[0].result.resolve({ result: complete('uncommitted') });
+    protocol.calls[0].result.resolve(complete('uncommitted'));
     protocol.calls[0].done.reject(new Error('native cleanup failed'));
     await Promise.all([rejectedResult, rejectedDone]);
-    await assert.rejects(execution.close(), code('cleanup-failure'));
-    await assert.rejects(execution.close(), code('cleanup-failure'));
+    assert.equal((await execution.close()).cleanup, 'failed');
+    assert.equal((await execution.close()).cleanup, 'failed');
     await assert.rejects(f.registrations[0].unregister(), code('cleanup-failure'));
   } finally { await f.close().catch(error => assert.equal(error.code, 'cleanup-failure')); }
 });
@@ -69,7 +69,7 @@ test('replacement generation waits for old pending credential initialization to 
   try {
     await f.add({ key: 'fixed-secret' });
     f.vault.holdReads = true;
-    const oldOpening = f.models.open({ modelId: 'model' });
+    const oldOpening = f.open({ modelId: 'model' });
     const oldRejected = assert.rejects(oldOpening, code('cancelled'));
     await tick();
     const oldClosing = f.registrations[0].unregister(), closed = observe(oldClosing);
@@ -77,7 +77,7 @@ test('replacement generation waits for old pending credential initialization to 
     const replacement = fakeProtocol('test', 'replacement');
     f.protocols.push(replacement);
     const registration = f.registry.register(replacement);
-    const newOpening = f.models.open({ modelId: 'model' }), opened = observe(newOpening);
+    const newOpening = f.open({ modelId: 'model' }), opened = observe(newOpening);
     await tick();
     assert.equal(closed.settled, false);
     assert.equal(opened.settled, false);
@@ -86,7 +86,7 @@ test('replacement generation waits for old pending credential initialization to 
     await Promise.all([oldRejected, oldClosing]);
     const execution = await newOpening;
     assert.equal(execution.snapshot.protocolVersion, 'replacement');
-    await execution.generate(input('new implementation')).result;
+    await exchange(execution, input('new implementation')).result;
     assert.equal(old.calls.length, 0);
     assert.equal(replacement.calls.length, 1);
     await f.registrations[0].unregister();
@@ -100,22 +100,22 @@ test('cancellation between protocol result and exit retains only the last commit
   const f = await fixture(), protocol = f.protocols[0];
   try {
     await f.add();
-    const execution = await f.models.open({ modelId: 'model' });
-    protocol.next(call => call.succeed({ result: complete('committed answer'), continuation: { turn: 'committed' } }));
-    await execution.generate(input('committed input')).result;
+    const execution = await f.open({ modelId: 'model' });
+    protocol.next(call => call.succeed({ ...complete('committed answer'), opaque: { turn: 'committed' } }));
+    await exchange(execution, input('committed input')).result;
     protocol.next();
-    const interrupted = execution.generate(input('discarded input'));
+    const interrupted = exchange(execution, input('discarded input'));
     await tick();
     const active = protocol.calls[1];
-    active.result.resolve({ result: complete('discarded answer'), continuation: { turn: 'discarded' } });
+    active.result.resolve({ ...complete('discarded answer'), opaque: { turn: 'discarded' } });
     await tick();
     interrupted.cancel();
     const rejecting = assert.rejects(interrupted.result, code('cancelled'));
     active.done.resolve();
     await rejecting;
-    await execution.generate(input('explicit retry')).result;
-    assert.deepEqual(protocol.calls[2].input.continuation, { turn: 'committed' });
-    assert.deepEqual(protocol.calls[2].input.messages.map(message => message.content), [
+    await exchange(execution, input('explicit retry')).result;
+    assert.deepEqual(protocol.calls[2].input.request.previousResponse.opaque, { turn: 'committed' });
+    assert.deepEqual(protocol.calls[2].input.request.messages.map(message => message.content), [
       'committed input', 'committed answer', 'explicit retry',
     ]);
     await execution.close();
@@ -149,4 +149,16 @@ test('component close joins accepted key mutation and queued config writes befor
     await disposal;
     await f.close();
   }
+});
+
+test('done failure terminates a broken pending result and late output cannot mutate the frozen exit report', async () => {
+  const f = await fixture();
+  try {
+    await f.add(); const execution = await f.open({ modelId: 'model' }); f.protocols[0].next();
+    const operation = execution.prepareExchange(input('broken')).start(); await tick(); const owned = f.protocols[0].calls[0];
+    owned.done.reject(new Error('cleanup has exited'));
+    await assert.rejects(operation.result, code('cleanup-failure')); await assert.rejects(operation.done, code('cleanup-failure'));
+    const report = await execution.close(), saved = JSON.stringify(report); assert.equal(report.cleanup, 'failed'); assert.equal(report.restoreState, undefined);
+    owned.result.resolve({ text: 'late forbidden candidate' }); await tick(); assert.equal(JSON.stringify(report), saved); assert.equal(owned.cancellations.length, 1);
+  } finally { await f.close().catch(error => assert.equal(error.code, 'cleanup-failure')); }
 });

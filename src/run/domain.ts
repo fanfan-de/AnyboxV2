@@ -1,11 +1,11 @@
 /** Harness domain values and transitions are independent of Nya and providers. */
-import type { ExecutionSnapshot, ModelMessage, ToolCall } from '@anybox/models'
+import type { NativeModelSnapshot } from '@anybox/models'
+import type { LegacyExecutionSnapshot } from './legacy-snapshot.js'
+import type { ProtocolBindingSnapshot, NativeRunInput, NativeInitialization, ProtocolRecord } from './program.js'
 import type { ModelFailureCategory } from './model.js'
 import type { BashResult } from '../tool/bash-component.js'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
-import type { PromptSnapshot } from '../prompt/domain.js'
 import { nonEmpty } from '../validation.js'
-import type { ConversationNode } from '../session/domain.js'
 
 export type RunHistory =
   | { readonly kind: 'tree'; readonly parentNodeId: string | null }
@@ -39,8 +39,8 @@ export const runLimits = Object.freeze({
 })
 
 export type ValidatedToolRequest =
-  | (ToolCall & { readonly name: 'bash'; readonly arguments: Readonly<{ command: string }> })
-  | (ToolCall & { readonly name: 'apply_patch'; readonly arguments: Readonly<{ patch: string }> })
+  | (Readonly<{ id: string }> & { readonly name: 'bash'; readonly arguments: Readonly<{ command: string }> })
+  | (Readonly<{ id: string }> & { readonly name: 'apply_patch'; readonly arguments: Readonly<{ patch: string }> })
 
 export type ToolObservation =
   | { readonly name: 'bash'; readonly result: BashResult }
@@ -69,10 +69,6 @@ export function validateToolBatch(calls: unknown): readonly ValidatedToolRequest
   }))
 }
 
-export function toolObservationMessage(requestId: string, observation: ToolObservation): ModelMessage {
-  return Object.freeze({ role: 'tool', callId: requestId, content: JSON.stringify(observation.result) })
-}
-
 export function toolOutputBytes(observation: ToolObservation): number {
   return observation.name === 'bash'
     ? Buffer.byteLength(observation.result.stdout, 'utf8') + Buffer.byteLength(observation.result.stderr, 'utf8')
@@ -86,7 +82,7 @@ export interface Run {
   readonly idempotencyKey: string
   readonly status: RunStatus
   readonly history: RunHistory
-  readonly contextVersion: 'dialogue-v1' | null
+  readonly contextVersion: 'dialogue-v1' | 'native-local-v1' | null
   readonly resultNodeId?: string
   readonly revision: number
   readonly createdAt: string
@@ -95,7 +91,10 @@ export interface Run {
   readonly modelId: string | null
   /** The caller's explicit selection; null means Session/Agent defaults were resolved. */
   readonly requestedModelId: string | null
-  readonly modelSnapshot: ExecutionSnapshot | null
+  readonly modelSnapshot: LegacyExecutionSnapshot | NativeModelSnapshot | null
+  readonly protocolBinding?: ProtocolBindingSnapshot
+  readonly nativeInput?: NativeRunInput
+  readonly initialization?: NativeInitialization
   /** Historical metadata only; no retired profile can be executed. */
   readonly legacyModelSnapshot?: Readonly<{ profileId: string; configVersion: string }>
   readonly errorCategory?: RunFailureCategory
@@ -111,11 +110,12 @@ export interface RunInput {
   readonly idempotencyKey: string
 }
 
-export type RunOutcome =
-  | { readonly kind: 'completed'; readonly output: string }
+export type RunOutcome = (
+  | { readonly kind: 'completed'; readonly output: string; readonly resultRecordIds?: readonly string[]; readonly records?: readonly ProtocolRecord[]; readonly checkpoint?: import('@anybox/models').JsonValue }
   | { readonly kind: 'cancelled' }
   | { readonly kind: 'cleanup-failed'; readonly error: string; readonly category: RunFailureCategory }
   | { readonly kind: 'failed'; readonly error: string; readonly category: RunFailureCategory }
+) & { readonly records?: readonly ProtocolRecord[]; readonly checkpoint?: import('@anybox/models').JsonValue }
 
 export function validateRunInput(input: RunInput): RunInput {
   if (input && ('modelProfileId' in input || 'model' in input || 'selection' in input || 'llmPlan' in input)) {
@@ -127,16 +127,6 @@ export function validateRunInput(input: RunInput): RunInput {
     parentNodeId: input?.parentNodeId === null ? null : nonEmpty(input?.parentNodeId, 'parentNodeId'),
     input: nonEmpty(input?.input, 'input'),
     idempotencyKey: nonEmpty(input?.idempotencyKey, 'idempotencyKey'),
-  })
-}
-
-export function createRun(id: string, input: RunInput, prompts: readonly PromptSnapshot[], model: ExecutionSnapshot, now: string): Run {
-  return Object.freeze({
-    id, sessionId: input.sessionId, input: input.input, idempotencyKey: input.idempotencyKey,
-    history: Object.freeze({ kind: 'tree', parentNodeId: input.parentNodeId }), contextVersion: 'dialogue-v1', revision: 0,
-    modelId: model.modelId, requestedModelId: input.modelId ?? null, modelSnapshot: model,
-    promptVersionIds: Object.freeze(prompts.map(prompt => prompt.versionId)),
-    status: 'running', createdAt: now, updatedAt: now,
   })
 }
 
@@ -158,19 +148,4 @@ export function settleRun(run: Run, outcome: RunOutcome, now: string): Run {
     return Object.freeze({ ...run, status: 'failed', error: outcome.error, errorCategory: outcome.category, updatedAt: now })
   }
   return Object.freeze({ ...run, status: 'cancelled', updatedAt: now })
-}
-
-export function buildModelMessages(prompts: readonly PromptSnapshot[], history: readonly ConversationNode[], input: string): readonly ModelMessage[] {
-  const messages: ModelMessage[] = []
-  for (const kind of ['agent-instruction', 'context'] as const) {
-    const prompt = prompts.find(item => item.kind === kind)
-    if (prompt) messages.push(Object.freeze({ role: prompt.role, content: prompt.content }))
-  }
-  for (const turn of history) {
-    messages.push(Object.freeze({ role: 'user', content: turn.input }))
-    messages.push(Object.freeze({ role: 'assistant', content: turn.output }))
-  }
-  const template = prompts.find(item => item.kind === 'task-template')
-  messages.push(Object.freeze({ role: 'user', content: template ? template.content.replace('{{input}}', input) : input }))
-  return Object.freeze(messages)
 }

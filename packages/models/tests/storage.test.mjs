@@ -1,3 +1,4 @@
+import { params } from './helpers.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -15,9 +16,9 @@ const model = (overrides = {}) => ({ ...version('m'), providerId: 'p', remoteMod
   capabilities: { tools: capability, streaming: capability, imageInput: capability, reasoning: capability }, controls: { temperature: 'unknown' },
   modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [] }, ...overrides });
 const connection = (overrides = {}) => ({ ...version('c'), providerDefinitionId: 'p', name: 'Account', enabled: true,
-  protocolId: 'not-installed', baseUrl: 'http://localhost:1234/v1', auth: 'api-key', timeoutMs: 1000, credentialRef: 'slot-1', ...overrides });
+  protocolId: 'not-installed', baseUrl: 'http://localhost:1234/v1', auth: 'api-key', timeoutMs: 1000, credentialRef: 'slot-1', historyScopeEpoch: 'scope-1', ...overrides });
 const configuration = (overrides = {}) => ({ ...version('s'), modelDefinitionId: 'm', modelDefinitionVersionId: 'm-v1', connectionId: 'c',
-  name: 'Local model', enabled: true, remoteModelId: 'remote', baseline: true, defaults: {}, capabilities: model().capabilities, ...overrides });
+  name: 'Local model', enabled: true, remoteModelId: 'remote', baseline: true, parameters: params('not-installed', {}), capabilities: model().capabilities, ...overrides });
 async function open(path) {
   const root = new Context();
   const fiber = root.installComponent(createModelsStoreComponent({ path }));
@@ -36,17 +37,17 @@ test('definitions, connections, immutable configurations, and orphan intents sur
   const path = await temporary(t), first = await open(path);
   await first.store.commit(initial());
   await first.store.commit({ connection: { record: connection({ revision: 2, versionId: 'c-v2', name: 'Edited', apiKey: 'must-never-be-persisted' }), expectedRevision: 1 },
-    configurations: [{ record: configuration({ revision: 2, versionId: 's-v2', defaults: { temperature: 0.3 } }), expectedRevision: 1 }] });
+    configurations: [{ record: configuration({ revision: 2, versionId: 's-v2', parameters: params('not-installed', { temperature: 0.3 }) }), expectedRevision: 1 }] });
   await first.store.commit({ addIntents: [{ id: 'cleanup', providerId: 'new-uncommitted-connection', slotId: 'orphan', createdAt: '2026-01-02' }] });
   await first.root.fiber.dispose();
   const second = await open(path); t.after(() => second.root.fiber.dispose());
   assert.equal(second.store.connection('c').name, 'Edited');
   assert.deepEqual(second.store.connectionHistory('c').map(item => item.name), ['Account', 'Edited']);
-  assert.deepEqual(second.store.configurationHistory('s').map(item => item.defaults), [{}, { temperature: 0.3 }]);
+  assert.deepEqual(second.store.configurationHistory('s').map(item => item.parameters.value), [{}, { temperature: 0.3 }]);
   assert.equal(second.store.intents()[0].slotId, 'orphan');
   assert.equal((await readFile(path)).includes(Buffer.from('must-never-be-persisted')), false);
-  second.store.configuration('s').defaults.temperature = 123;
-  assert.equal(second.store.configuration('s').defaults.temperature, 0.3);
+  second.store.configuration('s').parameters.value.temperature = 123;
+  assert.equal(second.store.configuration('s').parameters.value.temperature, 0.3);
 });
 
 test('CAS conflicts roll back the entire batch, source ledger, synchronization and credential journal', async t => {
@@ -99,7 +100,7 @@ test('storage enforces immutable identities, fixed protocols, baseline uniquenes
   await assert.rejects(store.commit({ configurations: [{ record: configuration({ id: 'second', versionId: 'second-v1' }), expectedRevision: null }] }), { code: 'conflict' });
   await store.commit({ configurations: [{ record: configuration({ id: 'variant', versionId: 'variant-v1', baseline: false }), expectedRevision: null }] });
   await store.commit({ models: [{ record: model({ revision: 2, versionId: 'm-v2', remoteModelId: 'new-remote' }), expectedRevision: 1 }] });
-  await store.commit({ configurations: [{ record: configuration({ revision: 2, versionId: 's-v2', defaults: { temperature: 0.4 } }), expectedRevision: 1 }] });
+  await store.commit({ configurations: [{ record: configuration({ revision: 2, versionId: 's-v2', parameters: params('not-installed', { temperature: 0.4 }) }), expectedRevision: 1 }] });
   assert.equal(store.configuration('s').remoteModelId, 'remote');
   await assert.rejects(store.commit({ configurations: [{ record: configuration({ id: 'bad-pin', versionId: 'bad-pin-v1', baseline: false, modelDefinitionVersionId: 'm-v2' }), expectedRevision: null }] }), { code: 'invalid-config' });
   await assert.rejects(store.commit({ models: [{ record: model({ id: 'missing-owner', versionId: 'missing-v1', providerId: 'other' }), expectedRevision: null }] }), { code: 'not-found' });

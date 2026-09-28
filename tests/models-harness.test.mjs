@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createHarness } from '../dist/harness.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { runModelEvent } from '../dist/run/notifications.js'
+import { runViewEvent } from '../dist/run/notifications.js'
 import { installManagedModels } from './helpers/managed-models.mjs'
 import { controlledModels, deferred } from './helpers/controlled-models.mjs'
 
@@ -36,7 +36,7 @@ test('explicit Session selection persists and omitted-id idempotency keeps the o
   try {
     const settings = f.root.get('models.settings'), original = settings.configurations()[0]
     const { id, revision, versionId, createdAt, updatedAt, modelDefinitionVersionId, remoteModelId, ...data } = original
-    await settings.createConfiguration({ ...data, baseline: false, id: 'alternate', name: 'Alternate', defaults: { temperature: 0.8 } })
+    await settings.createConfiguration({ ...data, baseline: false, id: 'alternate', name: 'Alternate', parameters: { protocolId: 'chat-completions', formatVersion: 1, value: { temperature: 0.8 } } })
     const session = await f.harness.createSession(f.project.id, 'assistant')
     assert.equal(session.modelId, null)
     const input = { sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'first' }
@@ -56,14 +56,14 @@ test('explicit Session selection persists and omitted-id idempotency keeps the o
     await finish(f, explicit)
     const alternate = await f.harness.startRun({ ...input, idempotencyKey: 'next' })
     assert.equal(alternate.modelId, 'alternate')
-    assert.deepEqual(alternate.modelSnapshot.options, { temperature: 0.8 })
+    assert.deepEqual(alternate.modelSnapshot.parameters.value, { temperature: 0.8 })
     await finish(f, alternate)
     await f.close(); f = await host(directory)
     assert.equal((await f.harness.getSession(session.id)).modelId, 'alternate')
     const restored = await f.harness.getRun(run.id)
     assert.equal(restored.modelId, 'default')
     assert.deepEqual(restored.modelSnapshot, run.modelSnapshot)
-    assert.equal(restored.modelSnapshot.schemaVersion, 2)
+    assert.equal(restored.modelSnapshot.schemaVersion, 3)
     assert.equal(restored.modelSnapshot.modelDefinitionId, original.modelDefinitionId)
     assert.equal(f.transport.calls.length, 0)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
@@ -72,7 +72,7 @@ test('explicit Session selection persists and omitted-id idempotency keeps the o
 test('actual Models preserves text plus tools and streams progress while Agent sends only new tool observations', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-model-toolflow-')), f = await host(directory), events = []
   try {
-    await f.root.installComponent({ name: 'progress-observer', apply(ctx) { ctx.on(runModelEvent, value => events.push(value)) } })
+    await f.root.installComponent({ name: 'progress-observer', apply(ctx) { ctx.on(runViewEvent, value => events.push(value)) } })
     const session = await f.harness.createSession(f.project.id, 'assistant', 'default')
     const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Use a tool', idempotencyKey: 'tool' })
     f.transport.calls[0].input.onEvent({ type: 'text-delta', delta: 'Checking.' })
@@ -84,7 +84,8 @@ test('actual Models preserves text plus tools and streams progress while Agent s
     assert.equal(f.transport.calls[1].input.newMessages[0].callId, 'tool-1')
     assert.equal(f.transport.calls[1].input.messages.find(message => message.role === 'assistant').content, 'Checking.')
     assert.equal(JSON.parse(f.transport.calls[1].input.newMessages[0].content).stdout, 'observed')
-    assert.deepEqual(events, [{ sessionId: session.id, runId: run.id, event: { type: 'text-delta', delta: 'Checking.' } }])
+    assert.ok(events.some(value => value.sessionId === session.id && value.runId === run.id && JSON.stringify(value.frame.payload).includes('Checking.')))
+    assert.ok(events.every(value => value.frame.protocolId === 'chat-completions'))
     const terminal = await finish(f, run, 'Finished')
     assert.equal(terminal.status, 'completed')
     assert.equal((await f.harness.getNode(session.id, terminal.resultNodeId)).output, 'Finished')
@@ -125,10 +126,10 @@ test('Harness shutdown aborts and joins an execution still opening before durabl
 for (const fail of [false, true]) test(`Run settlement waits for execution.close and preserves cleanup failure (${fail})`, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-model-execution-close-')), f = await host(directory, controlledModels())
   const entered = deferred(), release = deferred()
-  const models = f.root.get('models'), originalOpen = models.open.bind(models)
-  models.open = async input => {
+  const models = f.root.get('models'), originalOpen = models.openNative.bind(models)
+  models.openNative = async input => {
     const execution = await originalOpen(input)
-    return { ...execution, async close() { entered.resolve(); await release.promise; await execution.close(); if (fail) throw new Error('private native cleanup detail') } }
+    return { ...execution, async close() { entered.resolve(); await release.promise; const report = await execution.close(); if (fail) throw new Error('private native cleanup detail'); return report } }
   }
   try {
     const session = await f.harness.createSession(f.project.id, 'assistant', 'default')

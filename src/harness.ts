@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { Context, FiberState } from '@nya/core'
 import type { Fiber } from '@nya/core'
-import { modelsServiceKey, modelsError } from '@anybox/models'
-import type { ModelsService } from '@anybox/models'
+import { modelsServiceKey, modelsSettingsServiceKey, modelsError } from '@anybox/models'
+import type { ModelsService, ModelsSettingsService } from '@anybox/models'
 import type { RuntimeInputs } from './contracts.js'
 import { validateAgents } from './agent/domain.js'
 import type { AgentDefinition } from './agent/domain.js'
@@ -10,7 +10,9 @@ import { agentPromptServiceKey, createAgentPromptComponent } from './agent/promp
 import type { AgentPromptPort } from './agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from './run/component.js'
 import type { RunPort } from './run/component.js'
-import { createAgentLoopComponent } from './run/agent-loop-component.js'
+import { createRunRuntimeComponent } from './run/runtime-component.js'
+import { protocolAgentServiceKey } from './run/program.js'
+import { createProtocolAgentsComponent, createProtocolAgentBindingComponent, supportedProtocolIds } from './protocol-agents/registry.js'
 import { createSessionComponent } from './session/component.js'
 import { sessionServiceKey } from './session/port.js'
 import type { SessionPort } from './session/port.js'
@@ -32,7 +34,7 @@ export interface HarnessOptions extends Partial<RuntimeInputs> {
 
 export interface Harness extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable'>,
   Omit<PromptPort, 'getPublishedVersion'>,
-  Omit<AgentPromptPort, 'resolveRunPrompts'> {
+  Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly Readonly<{ id: string }>[]
   close(): Promise<void>
 }
@@ -61,11 +63,13 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     shutdown = context.fiber.dispose()
     return shutdown
   }
-  const validateSelectedModel = (modelId: string): void => {
+  const validateSelectedModel = (modelId: string): string => {
     if (closing) throw new Error('harness is closing')
     const models = context.get<ModelsService>(modelsServiceKey)
     if (!models) throw modelsError('unavailable')
-    if (!models.get(modelId)) throw modelsError('not-found')
+    const model = models.get(modelId)
+    if (!model) throw modelsError('not-found')
+    return model.parameters.protocolId
   }
   const current = (): RunPort => {
     if (closing) throw new Error('harness is closing')
@@ -100,14 +104,18 @@ export async function createHarness(context: Context, options: HarnessOptions): 
   let agents: readonly AgentDefinition[]
   try {
     agents = validateAgents(options.agents)
+    const configuredProtocols = context.get<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
+    const protocolComponents = context.get(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
+      ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
     for (const component of [
+      ...protocolComponents,
       createProjectComponent(inputs),
       createBashComponent(),
       createApplyPatchComponent(),
       createSessionComponent(inputs, agents),
       createPromptComponent(inputs, options.legacyPromptStorePath),
       createAgentPromptComponent(inputs, agents, options.canManageAgent ?? (() => true), options.legacyPromptStorePath),
-      createAgentLoopComponent(inputs),
+      createRunRuntimeComponent(inputs),
       createRunComponent(inputs, agents, () => closing),
     ]) {
       const child = context.installComponent(component)
@@ -133,8 +141,8 @@ export async function createHarness(context: Context, options: HarnessOptions): 
       return currentSessions().createSession(projectId, agentId, modelId)
     },
     selectSessionModel: (sessionId, modelId) => {
-      validateSelectedModel(modelId)
-      return currentSessions().selectSessionModel(sessionId, modelId)
+      const protocolId = validateSelectedModel(modelId)
+      return currentSessions().selectSessionModel(sessionId, modelId, protocolId)
     },
     getSession: id => currentSessions().getSession(id),
     getNode: (sessionId, id) => currentSessions().getNode(sessionId, id),
@@ -146,6 +154,8 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     getRunByKey: (id, key) => currentSessions().getRunByKey(id, key),
     listRuns: (id, query) => currentSessions().listRuns(id, query),
     getRunEvents: (id, afterSeq) => currentSessions().getRunEvents(id, afterSeq),
+    getRunRecords: id => currentSessions().getRunRecords(id),
+    getView: id => current().getView(id),
     cancelRun: id => current().cancelRun(id),
     waitRun: (id, signal) => current().waitRun(id, signal),
     createPrompt: (actorId, input) => currentPrompts().createPrompt(actorId, input),

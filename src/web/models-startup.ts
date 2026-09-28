@@ -8,7 +8,7 @@ import {
 } from '@anybox/models'
 import type { ModelsSettingsService, ModelsVaultOptions, ProviderTemplate, ProtocolOptions } from '@anybox/models'
 import type { WebStartupConfig } from './startup-config.js'
-import { createDeepSeekProtocolComponent } from './deepseek-protocol.js'
+import { createDeepSeekProtocolComponent, convertLegacyDeepSeekParameters } from './deepseek-protocol.js'
 
 export const webProviderTemplates: readonly ProviderTemplate[] = Object.freeze([
   Object.freeze({ id: 'deepseek', name: 'DeepSeek 非推理', values: Object.freeze({ enabled: true, sourceRef: Object.freeze({ sourceId: 'models.dev', providerId: 'deepseek' }),
@@ -32,7 +32,8 @@ export async function installWebModels(root: Context, config: WebStartupConfig, 
     }
   }
   await install([
-    createModelsStoreComponent({ path: config.modelsDatabasePath }),
+    createModelsStoreComponent({ path: config.modelsDatabasePath,
+      legacyParameterConverters: { 'deepseek-chat-completions': convertLegacyDeepSeekParameters } }),
     createModelsVaultComponent({ namespace: config.credentialNamespace, openEntry: options.openEntry }),
     createModelsComponent(),
   ])
@@ -84,7 +85,7 @@ export async function installWebModels(root: Context, config: WebStartupConfig, 
     }
     if (!settings.configurations().some(model => model.id === 'default')) {
       await settings.createConfiguration({ id: 'default', name: '默认模型（迁入）', connectionId: connection.id,
-        modelDefinitionId: definition.id, enabled: true, baseline: true, defaults: config.legacy.defaults, capabilities: definition.capabilities })
+        modelDefinitionId: definition.id, enabled: true, baseline: true, parameters: config.legacy.parameters, capabilities: definition.capabilities })
     }
   }
   // Bootstrap persists the stable default ID before protocol registration can

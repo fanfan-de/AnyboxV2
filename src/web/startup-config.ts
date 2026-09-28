@@ -1,10 +1,10 @@
 import { dirname, join, resolve } from 'node:path'
-import type { GenerationOptions, ProviderConnectionInput } from '@anybox/models'
+import type { NativeParameters, ProviderConnectionInput } from '@anybox/models'
 
 export interface LegacyModelImport {
   readonly provider: Omit<ProviderConnectionInput, 'providerDefinitionId'>
   readonly remoteModelId: string
-  readonly defaults: GenerationOptions
+  readonly parameters: NativeParameters
   readonly credentialId: string
 }
 export interface WebStartupConfig {
@@ -64,7 +64,7 @@ export function parseWebStartupConfig(env: Environment): WebStartupConfig {
       provider: Object.freeze({ name: api === 'openai-responses' ? 'OpenAI（迁入）' : 'DeepSeek（迁入）', enabled: true,
         protocolId: api === 'openai-responses' ? 'responses' : 'deepseek-chat-completions', baseUrl, auth: 'api-key' as const, timeoutMs }),
       remoteModelId: configuredModel ?? 'deepseek-flash',
-      defaults: Object.freeze({ ...(temperature === undefined ? {} : { temperature }), ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }) }),
+      parameters: Object.freeze({ protocolId: api === 'openai-responses' ? 'responses' : 'deepseek-chat-completions', formatVersion: 1 as const, value: Object.freeze({ ...(temperature === undefined ? {} : { temperature }), ...(maxOutputTokens === undefined ? {} : { [api === 'openai-responses' ? 'max_output_tokens' : 'max_tokens']: maxOutputTokens }) }) }),
       credentialId: api === 'openai-responses' ? 'llm/openai-responses/default' : 'llm/deepseek-chat-completions/default',
     }),
   })

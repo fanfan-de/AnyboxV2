@@ -1,4 +1,4 @@
-import type { ConnectionModel, DeclaredCapabilities, DiscoveredModel, FormField, GenerationOptions, JsonValue, Model, ModelInput, ModelConfiguration, ModelConfigurationInput, RunnableModelSummary, ProtocolDescriptor, ProviderConnectionInput, ProviderTemplate, ProviderConnection, Support } from '@anybox/models'
+import type { ConnectionModel, DeclaredCapabilities, DiscoveredModel, FormField, NativeObject, JsonValue, Model, ModelInput, ModelConfiguration, ModelConfigurationInput, RunnableModelSummary, ProtocolDescriptor, ProviderConnectionInput, ProviderTemplate, ProviderConnection, Support } from '@anybox/models'
 import type { Api } from './client-types.js'
 import type { DirectoryModel, DirectoryProvider } from './client-types.js'
 import { setupModelsDirectory, sourceLabel, connectionModelAvailability } from './models-directory-client.js'
@@ -34,8 +34,8 @@ export function createModelsCatalog(api: Api, messageFor: (error: unknown) => st
 }
 
 /** Blank optional values remain omitted, including protocol-specific settings. */
-export function generationOptions(fields: readonly FormField[], values: Readonly<Record<string, string>>): GenerationOptions {
-  const common: Record<string, JsonValue> = {}, protocol: Record<string, JsonValue> = {}
+export function nativeParameterValues(fields: readonly FormField[], values: Readonly<Record<string, string>>): NativeObject {
+  const parameters: Record<string, JsonValue> = {}
   for (const field of fields) {
     const raw = values[field.key] ?? ''
     if (raw === '') { if (field.required) throw new Error(`${field.label} 必须填写。`); continue }
@@ -49,10 +49,17 @@ export function generationOptions(fields: readonly FormField[], values: Readonly
       if (!Number.isFinite(value) || (field.integer && !Number.isSafeInteger(value)) ||
           (field.min !== undefined && value < field.min) || (field.max !== undefined && value > field.max)) throw new Error(`${field.label} 超出允许范围。`)
     }
-    if (field.key.startsWith('protocol.')) protocol[field.key.slice(9)] = value
-    else common[field.key] = value
+    const parts = field.key.split('.')
+    if (parts.some(part => !part || ['__proto__', 'prototype', 'constructor'].includes(part))) throw new Error('无效的参数路径。')
+    let target = parameters
+    for (const part of parts.slice(0, -1)) {
+      const existing = target[part]
+      if (existing !== undefined && (!existing || typeof existing !== 'object' || Array.isArray(existing))) throw new Error('参数路径冲突。')
+      target = (target[part] ??= {}) as Record<string, JsonValue>
+    }
+    target[parts.at(-1)!] = value
   }
-  return { ...common, ...(Object.keys(protocol).length ? { protocol } : {}) } as GenerationOptions
+  return parameters
 }
 
 export function modelAvailability(model: RunnableModelSummary): string {
@@ -91,21 +98,26 @@ const unknownCapabilities = (): DeclaredCapabilities => ({ tools: { support: 'un
 function option(value: string, text: string): HTMLOptionElement {
   const item = document.createElement('option'); item.value = value; item.textContent = text; return item
 }
-function fieldValue(defaults: GenerationOptions, key: string): JsonValue | undefined {
-  return key.startsWith('protocol.') ? defaults.protocol?.[key.slice(9)] : (defaults as Readonly<Record<string, JsonValue>>)[key]
+function fieldValue(defaults: NativeObject, key: string): JsonValue | undefined {
+  let value: JsonValue | undefined = defaults
+  for (const part of key.split('.')) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+    value = (value as NativeObject)[part]
+  }
+  return value
 }
 
 /** Only a new configuration receives descriptor defaults; saved omissions stay omitted. */
-export function initialModelDefaults(fields: readonly FormField[], candidate?: Pick<DirectoryModel, 'limits'>): GenerationOptions {
+export function initialNativeParameters(fields: readonly FormField[], candidate?: Pick<DirectoryModel, 'limits'>): NativeObject {
   const values: Record<string, string> = {}
   for (const field of fields) {
     if (field.defaultValue === undefined) continue
     let value = field.defaultValue
-    if (field.key === 'maxOutputTokens' && typeof value === 'number' && candidate?.limits.output !== undefined) value = Math.min(value, candidate.limits.output)
+    if (['max_output_tokens', 'max_completion_tokens', 'max_tokens', 'generation_config.max_output_tokens'].includes(field.key) && typeof value === 'number' && candidate?.limits.output !== undefined) value = Math.min(value, candidate.limits.output)
     values[field.key] = field.type === 'enum' || field.type === 'boolean' ? JSON.stringify(value) : String(value)
   }
   // Required fields with no prefill are left for the user to enter in the form.
-  return generationOptions(fields.map(field => ({ ...field, required: false })), values)
+  return nativeParameterValues(fields.map(field => ({ ...field, required: false })), values)
 }
 
 export function setupModelsSettings(api: Api, messageFor: (error: unknown) => string, catalog: ModelsCatalog) {
@@ -118,7 +130,7 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
         <aside class="settings-card models-connections" aria-label="已配置连接"><div class="models-card-heading"><h4>我的连接</h4><p data-connections-count></p></div><div class="models-connection-list" data-connections></div></aside>
         <div class="models-main">
           <header class="models-detail-heading"><div><h4 data-connection-title></h4><p data-connection-subtitle class="settings-hint"></p></div><div class="settings-actions"><span data-connection-status class="models-status-badge"></span><button type="button" data-delete-connection class="secondary-button models-danger-button" hidden>删除连接</button></div></header>
-          <section class="settings-card models-delete-confirm" data-delete-connection-confirm aria-labelledby="models-delete-connection-title" hidden><h4 id="models-delete-connection-title">删除此连接？</h4><p data-delete-connection-description></p><p class="settings-hint">历史对话和已开始的运行会保留。使用此连接的会话需要重新选择模型，才能继续发送消息。</p><div class="settings-actions"><button type="button" data-confirm-delete-connection class="models-danger-button">确认删除连接</button><button type="button" data-cancel-delete-connection class="secondary-button">取消</button></div></section>
+          <section class="settings-card models-delete-confirm" data-delete-connection-confirm aria-labelledby="models-delete-connection-title" hidden><h4 id="models-delete-connection-title">删除此连接？</h4><p data-delete-connection-description></p><p class="settings-hint">历史对话和已开始的运行会保留。依赖此连接的原生历史可能无法继续；其他协议需新建会话。</p><div class="settings-actions"><button type="button" data-confirm-delete-connection class="models-danger-button">确认删除连接</button><button type="button" data-cancel-delete-connection class="secondary-button">取消</button></div></section>
           <details class="settings-card models-connection-editor" data-connection-editor><summary><span>连接设置</span><span data-connection-summary class="settings-hint"></span></summary><div data-manage-form-slot></div></details>
           <section class="settings-card models-model-section" aria-labelledby="models-config-title">
             <div class="models-card-heading"><div><h4 id="models-config-title">模型列表</h4><p data-model-count class="models-model-count" role="status"></p></div><button type="button" data-new-model class="secondary-button">添加自定义模型</button></div>
@@ -129,7 +141,7 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
               <form data-model-form>
                 <div class="models-grid"><label>显示名称<input data-model-name required maxlength="200" placeholder="例如：深入分析"></label><label>远端模型标识<input data-remote-id required placeholder="提供方要求的 model ID"></label></div>
                 <label class="models-check"><input data-model-enabled type="checkbox" checked>启用此模型</label>
-                <fieldset class="models-parameters"><legend>生成参数</legend><p class="settings-hint">留空使用服务端默认值。</p><div class="models-grid" data-parameters></div></fieldset>
+                <fieldset class="models-parameters"><legend>生成参数</legend><p class="settings-hint">留空使用服务端默认值。</p><div class="models-grid" data-parameters></div><label data-server-search-label class="models-check" hidden><input type="checkbox" data-server-search>启用服务端网络搜索</label><p data-server-search-hint class="settings-hint" hidden>先在模型能力中明确声明支持网络搜索，再启用此功能。</p></fieldset>
                 <details class="models-capabilities"><summary>模型能力与推理声明</summary><p class="settings-hint">未知能力不会被认定为支持。工具能力未知时仅进行文本调用。</p><div class="models-grid" data-capabilities></div><label>推理档位（可选，逗号分隔）<input data-efforts placeholder="例如：low, medium, high"></label><label>推理模式（可选，逗号分隔）<input data-modes></label><div class="models-grid"><label>最小推理预算<input data-budget-min type="number" min="0" step="1"></label><label>最大推理预算<input data-budget-max type="number" min="0" step="1"></label></div></details>
                 <div class="settings-actions"><button type="submit" data-save-model>保存参数</button><button type="button" data-reset-model class="secondary-button">放弃修改</button><button type="button" data-close-model class="secondary-button">收起</button></div>
               </form>
@@ -170,7 +182,7 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
   let inventoryRead = 0, reloadRead = 0, selectionRead = 0, secretRevision = 0, inventoryLoading = false, inventoryError = ''
   let provider: ProviderConnection | undefined, model: ModelConfiguration | undefined, busy = false, loaded = false
   let mode: 'manage' | 'add' = 'manage', returnConnectionId: string | undefined, customConnection = false
-  let providerDefinitionId = '', configurationDefinitionId = '', variantDefaults: GenerationOptions | undefined, variantCapabilities: DeclaredCapabilities | undefined
+  let providerDefinitionId = '', configurationDefinitionId = '', variantDefaults: NativeObject | undefined, variantCapabilities: DeclaredCapabilities | undefined
   let directory: ReturnType<typeof setupModelsDirectory> | undefined
   let preferredConnectionId: string | undefined
   try { preferredConnectionId = localStorage.getItem('anybox.models.connection') ?? undefined } catch { /* Browser storage may be unavailable. */ }
@@ -178,7 +190,7 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
   type Fields = Readonly<Record<string, string | boolean>>
   type Draft = { fields: Fields; baseFields: Fields; baseRevision?: number }
   const connectionDrafts = new Map<string, Draft>(), modelEditors = new Map<string, SettingsModelEditorState>()
-  const modelDrafts = new Map<string, Draft & { definitionId: string; defaults?: GenerationOptions; capabilities?: DeclaredCapabilities }>()
+  const modelDrafts = new Map<string, Draft & { definitionId: string; defaults?: NativeObject; capabilities?: DeclaredCapabilities }>()
   let connectionBaseFields: Fields = {}, modelBaseFields: Fields = {}, connectionBaseRevision: number | undefined, modelBaseRevision: number | undefined
   const show = (text = '', failed = false) => { notice.textContent = text; notice.hidden = !text; notice.classList.toggle('error', failed) }
   const errorText = (error: unknown) => {
@@ -190,7 +202,7 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
   const modelPath = () => `/models/configurations/${encodeURIComponent(model!.id)}`
   const definition = () => definitions.find(value => value.id === providerDefinitionId)
   const connectionFields = ['provider-name', 'base-url', 'timeout', 'provider-enabled'] as const
-  const modelFields = ['model-name', 'remote-id', 'model-enabled', 'efforts', 'modes', 'budget-min', 'budget-max'] as const
+  const modelFields = ['model-name', 'remote-id', 'model-enabled', 'efforts', 'modes', 'budget-min', 'budget-max', 'server-search'] as const
   function readFields(names: readonly string[]): Record<string, string | boolean> {
     return Object.fromEntries(names.map(name => [name, input(name).type === 'checkbox' ? input(name).checked : input(name).value]))
   }
@@ -234,13 +246,14 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
     get('[data-provider-draft]').textContent = changed ? provider?.revision !== connectionBaseRevision ? '有未保存的修改；已保存配置有更新，保存时将检查版本。' : '有未保存的修改' : ''
     get('[data-provider-draft]').hidden = !changed
   }
-  for (const [name, label] of [['tools', '工具调用'], ['streaming', '流式输出'], ['imageInput', '图片输入（仅记录）'], ['reasoning', '推理']] as const) {
+  for (const [name, label] of [['tools', '工具调用'], ['streaming', '流式输出'], ['imageInput', '图片输入（仅记录）'], ['reasoning', '推理'], ['webSearch', '服务端网络搜索']] as const) {
     const wrapper = document.createElement('label'), field = document.createElement('select')
     wrapper.textContent = label; field.dataset.capability = name
     field.append(...supportChoices.map(([value, text]) => option(value, text))); wrapper.append(field); get('[data-capabilities]').append(wrapper)
   }
-  function renderParameters(defaults: GenerationOptions = {}): void {
+  function renderParameters(defaults: NativeObject = {}): void {
     parameterFields = currentProtocol()?.modelFields ?? []
+    input('server-search').checked = Array.isArray(defaults.tools) && defaults.tools.some(tool => Boolean(tool && typeof tool === 'object' && !Array.isArray(tool) && typeof tool.type === 'string' && tool.type.startsWith('web_search')))
     get('[data-parameters]').replaceChildren(...parameterFields.map(field => {
       const wrapper = document.createElement('label'); wrapper.textContent = field.label
       let control: HTMLInputElement | HTMLSelectElement
@@ -270,10 +283,10 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
     input('remote-id').readOnly = Boolean(value || configurationDefinitionId)
     input('model-enabled').checked = value?.enabled ?? true
     const capabilities = value?.capabilities ?? variantCapabilities ?? { ...unknownCapabilities(), ...candidate?.suggestedCapabilities }
-    for (const name of ['tools', 'streaming', 'imageInput', 'reasoning'] as const) get<HTMLSelectElement>(`[data-capability="${name}"]`).value = capabilities[name].support
+    for (const name of ['tools', 'streaming', 'imageInput', 'reasoning', 'webSearch'] as const) get<HTMLSelectElement>(`[data-capability="${name}"]`).value = capabilities[name]?.support ?? 'unknown'
     input('efforts').value = capabilities.reasoning.efforts?.join(', ') ?? ''; input('modes').value = capabilities.reasoning.modes?.join(', ') ?? ''
     input('budget-min').value = capabilities.reasoning.budget ? String(capabilities.reasoning.budget.min) : ''; input('budget-max').value = capabilities.reasoning.budget ? String(capabilities.reasoning.budget.max) : ''
-    renderParameters(value?.defaults ?? variantDefaults ?? initialModelDefaults(currentProtocol()?.modelFields ?? []))
+    renderParameters(value?.parameters.value ?? variantDefaults ?? initialNativeParameters(currentProtocol()?.modelFields ?? []))
     modelBaseFields = readModelFields(); modelBaseRevision = value?.revision
     const draft = restore ? modelDrafts.get(modelDraftKey) : undefined
     if (draft) { configurationDefinitionId = draft.definitionId; variantDefaults = draft.defaults; variantCapabilities = draft.capabilities; modelBaseFields = draft.baseFields; modelBaseRevision = draft.baseRevision; writeFields(draft.fields); input('remote-id').readOnly = Boolean(value || configurationDefinitionId) }
@@ -378,6 +391,11 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
     get<HTMLButtonElement>('[data-new-variant]').disabled = !provider || !model || !currentProtocol()
     get<HTMLButtonElement>('[data-save-model]').disabled = !provider || !currentProtocol()
     get<HTMLButtonElement>('[data-model-history]').disabled = !model
+    const searchable = ['responses', 'anthropic-messages'].includes(currentProtocol()?.id ?? '')
+    const searchSupported = get<HTMLSelectElement>('[data-capability="webSearch"]').value === 'supported'
+    get('[data-server-search-label]').hidden = !searchable
+    get('[data-server-search-hint]').hidden = !searchable || searchSupported
+    input('server-search').disabled = !searchable || !searchSupported
     // Existing connections can still edit neutral fields when their protocol is temporarily absent.
     get<HTMLButtonElement>('[data-save-provider]').disabled = waitingForProvider || !provider && !currentProtocol()
     get('[data-save-provider]').textContent = busy ? '正在保存…' : provider ? '保存连接' : '保存并添加模型'
@@ -539,7 +557,7 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
     if (found) { prepareDirectoryConnection(found, value, false); directory?.select(found.id) }
     else { protocolSelect.value = value.values.protocolId; input('base-url').value = value.values.baseUrl; select('auth').value = value.values.auth; input('timeout').value = String(value.values.timeoutMs); renderState() }
   })
-  protocolSelect.addEventListener('change', () => { captureModel(); select('template').value = ''; renderParameters(initialModelDefaults(currentProtocol()?.modelFields ?? [])); renderState() })
+  protocolSelect.addEventListener('change', () => { captureModel(); select('template').value = ''; renderParameters(initialNativeParameters(currentProtocol()?.modelFields ?? [])); renderState() })
   select('auth').addEventListener('change', () => { secretRevision++; key.value = ''; renderState() })
   get('[data-add-provider]').addEventListener('click', beginAdd)
   get('[data-custom-provider]').addEventListener('click', () => { captureConnection(); show(); loadProvider(); customConnection = true; directory?.select(''); renderState(); input('provider-name').focus() })
@@ -566,7 +584,7 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
     if (!model) return
     captureModel(); if (resumeModelDraft()) return
     try {
-      const defaults = generationOptions(parameterFields, Object.fromEntries([...root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-parameter]')].map(field => [field.dataset.parameter!, field.value])))
+      const defaults = readNativeParameters()
       const capabilities = readCapabilities(), name = input('model-name').value.trim() || model.name
       const original = model; configurationDefinitionId = original.modelDefinitionId; variantDefaults = defaults; variantCapabilities = capabilities
       loadModel(undefined, { remoteModelId: original.remoteModelId, name: `${name} · 预设` }, false); modelEditor.hidden = false; modelEditor.open = true; renderState(); input('model-name').focus()
@@ -641,20 +659,29 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
     const strings = (name: string) => input(name).value.split(',').map(value => value.trim()).filter(Boolean)
     const efforts = strings('efforts'), modes = strings('modes'), budgetMin = input('budget-min').value, budgetMax = input('budget-max').value
     if (Boolean(budgetMin) !== Boolean(budgetMax)) throw new Error('请同时填写推理预算的最小值和最大值。')
-    return { tools: { support: support('tools') }, streaming: { support: support('streaming') }, imageInput: { support: support('imageInput') }, reasoning: { support: support('reasoning'), ...(efforts.length ? { efforts } : {}), ...(modes.length ? { modes } : {}), ...(budgetMin && budgetMax ? { budget: { min: Number(budgetMin), max: Number(budgetMax) } } : {}) } }
+    return { webSearch: { support: support('webSearch') }, tools: { support: support('tools') }, streaming: { support: support('streaming') }, imageInput: { support: support('imageInput') }, reasoning: { support: support('reasoning'), ...(efforts.length ? { efforts } : {}), ...(modes.length ? { modes } : {}), ...(budgetMin && budgetMax ? { budget: { min: Number(budgetMin), max: Number(budgetMax) } } : {}) } }
   }
+  function readNativeParameters(): NativeObject {
+    const values = Object.fromEntries([...root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-parameter]')].map(field => [field.dataset.parameter!, field.value]))
+    const value = nativeParameterValues(parameterFields, values)
+    if (!input('server-search').checked) return value
+    if (readCapabilities().webSearch?.support !== 'supported') throw new Error('请先明确声明此模型支持网络搜索。')
+    if (provider?.protocolId === 'responses') return { ...value, tools: [{ type: 'web_search' }] }
+    if (provider?.protocolId === 'anthropic-messages') return { ...value, tools: [{ type: 'web_search_20250305', name: 'web_search' }] }
+    throw new Error('此协议尚未支持服务端网络搜索。')
+  }
+  get<HTMLSelectElement>('[data-capability="webSearch"]').addEventListener('change', renderState)
   get<HTMLFormElement>('[data-model-form]').addEventListener('submit', event => {
     event.preventDefault(); if (!provider) return
     void perform(async () => {
       const capabilities = readCapabilities()
-      const values = Object.fromEntries([...root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-parameter]')].map(field => [field.dataset.parameter!, field.value]))
-      const defaults = generationOptions(parameterFields, values), name = input('model-name').value.trim(), remoteModelId = input('remote-id').value.trim()
+      const defaults = readNativeParameters(), name = input('model-name').value.trim(), remoteModelId = input('remote-id').value.trim()
       if (!name || !remoteModelId) throw new Error('请填写模型名称和远端模型标识。')
       if (!model && !configurationDefinitionId) {
         const definition: ModelInput = { providerId: provider!.providerDefinitionId, name, remoteModelId, capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { baseUrl: provider!.baseUrl, protocolIds: [provider!.protocolId] } }
         const savedDefinition = await api<Model>('/models/definitions', definition); configurationDefinitionId = savedDefinition.id; input('remote-id').readOnly = true
       }
-      const config: ModelConfigurationInput = { name, connectionId: provider!.id, modelDefinitionId: model?.modelDefinitionId ?? configurationDefinitionId, baseline: !variantDefaults, enabled: input('model-enabled').checked, capabilities, defaults }
+      const config: ModelConfigurationInput = { name, connectionId: provider!.id, modelDefinitionId: model?.modelDefinitionId ?? configurationDefinitionId, baseline: !variantDefaults, enabled: input('model-enabled').checked, capabilities, parameters: { protocolId: provider!.protocolId, formatVersion: 1, value: defaults } }
       const { connectionId: _connection, modelDefinitionId: _definition, baseline: _baseline, ...patch } = config
       const saved = model ? await api<ModelConfiguration>(modelPath(), { patch, expectedRevision: modelBaseRevision ?? model.revision }) : await api<ModelConfiguration>('/models/configurations', config)
       modelDrafts.delete(modelDraftKey)

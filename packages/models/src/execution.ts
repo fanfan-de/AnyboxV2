@@ -1,119 +1,133 @@
-import { assert, immutable, keys, validateMessages, validateResult } from './domain.js';
+import { randomUUID } from 'node:crypto';
+import { assert, equalJson, immutable, json, keys } from './domain.js';
 import { modelsError, normalizeError } from './errors.js';
+import { nativeDiagnostic, sanitizeDiagnostic } from './diagnostics.js';
 import { abortLink, deferred, joinOperation } from './lifecycle.js';
-import type { EffectiveCapabilities, ExecutionSnapshot, ModelCall, ModelEvent, ModelExecution, ModelMessage, ModelProtocol, ProtocolOutcome, ProviderConnectionInput, ToolDefinition } from './types.js';
+import type { EffectiveCapabilities, ProtocolOperation, ProviderConnectionInput } from './types.js';
+import type { NativeExecution, NativeExitReport, NativeModelSnapshot, NativeObject, NativeProtocol, NativeRecordDraft, NativeReply, NativeRestoreState } from './native-types.js';
 
 export interface ExecutionResources {
-  readonly protocol: ModelProtocol;
+  readonly protocol: NativeProtocol;
   readonly provider: ProviderConnectionInput;
   readonly credential?: string;
-  readonly snapshot: ExecutionSnapshot;
+  readonly snapshot: NativeModelSnapshot;
   readonly capabilities: EffectiveCapabilities;
-  readonly tools: readonly ToolDefinition[];
-  readonly history: readonly ModelMessage[];
+  readonly restore?: NativeRestoreState;
   readonly controller: AbortController;
   readonly onRelease: (cleanupFailed?: boolean) => void;
 }
-
-export function createExecution(input: ExecutionResources): ModelExecution {
+export function createExecution(input: ExecutionResources): NativeExecution {
   let credential = input.credential;
-  const resources = {
-    protocol: input.protocol, provider: input.provider, snapshot: input.snapshot, capabilities: input.capabilities,
-    tools: input.tools, controller: input.controller, onRelease: input.onRelease,
-  };
-  let history = input.history;
-  let continuation: unknown;
+  input = { ...input, credential: undefined };
+  const snapshot = immutable(input.snapshot), capabilities = immutable(input.capabilities);
+  let context = immutable(input.protocol.restore(input.restore?.records ?? []));
+  const restoredPreviousId = input.restore?.records.at(-1)?.id ?? null;
+  input = { ...input, restore: undefined };
   let state: 'open' | 'closing' | 'closed' = 'open';
-  let active: ModelCall | undefined;
-  let closePromise: Promise<void> | undefined;
-  let cleanupFailed = false;
-  let released = false;
-  const snapshot = immutable(resources.snapshot);
-  const capabilities = immutable(resources.capabilities);
-  const release = (failed = false) => {
-    cleanupFailed ||= failed;
+  let active: ProtocolOperation<NativeReply> | undefined;
+  let prepared = false, cleanupFailed = false, released = false, restorable = true;
+  let closePromise: Promise<NativeExitReport> | undefined;
+  let previousId = restoredPreviousId;
+  const records: NativeRecordDraft[] = [];
+  const release = () => {
     if (released) return;
-    released = true; state = 'closed'; credential = undefined; history = []; continuation = undefined;
-    resources.controller.signal.removeEventListener('abort', onAbort);
-    resources.onRelease(cleanupFailed);
+    released = true; state = 'closed'; credential = undefined; context = {};
+    input.controller.signal.removeEventListener('abort', onAbort);
+    input.onRelease(cleanupFailed);
   };
-  const close = (): Promise<void> => {
+  const close = (): Promise<NativeExitReport> => {
     if (closePromise) return closePromise;
-    state = 'closing';
+    state = 'closing'; prepared = false;
     const owned = active;
     closePromise = Promise.resolve().then(async () => {
-      try { if (owned) await owned.done; if (cleanupFailed) throw modelsError('cleanup-failure'); } finally { release(); }
+      if (owned) { try { await owned.done; } catch { cleanupFailed = true; } }
+      const report: NativeExitReport = immutable({ records,
+        ...(!cleanupFailed && restorable && records.at(-1)?.kind === 'response' ? { restoreState: { protocolId: snapshot.protocolId, recordFormatVersion: 1 as const, modelSnapshot: snapshot } } : {}),
+        cleanup: cleanupFailed ? 'failed' : 'succeeded' });
+      release(); return report;
     });
-    void closePromise.catch(() => {});
-    resources.controller.abort();
+    input.controller.abort();
     return closePromise;
   };
-  const onAbort = () => { void close().catch(() => {}); };
-  resources.controller.signal.addEventListener('abort', onAbort, { once: true });
-
-  return Object.freeze({
-    snapshot, capabilities, close,
-    generate(input): ModelCall {
-      if (state !== 'open' || resources.controller.signal.aborted) throw modelsError('closed');
-      if (active) throw modelsError('busy');
-      keys(input, ['messages', 'onEvent']); assert(input.onEvent === undefined || typeof input.onEvent === 'function');
-      let added: readonly ModelMessage[];
-      try { added = immutable(input.messages); } catch { throw modelsError('invalid-config'); }
-      const messages = immutable([...history, ...added]);
-      validateMessages(messages, false);
-      const result = deferred<import('./types.js').ModelResult>();
-      const done = deferred<void>();
-      const controller = new AbortController();
-      const unlink = abortLink(resources.controller.signal, controller);
-      let observer = input.onEvent;
-      let timedOut = false;
-      const timer = setTimeout(() => { timedOut = true; controller.abort(); }, resources.provider.timeoutMs);
-      const onEvent = (event: ModelEvent): void => {
-        if (!observer || controller.signal.aborted) return;
-        try {
-          // Also isolate an accidentally async listener's rejected promise.
-          const returned: unknown = observer(immutable(event));
-          if (returned && typeof (returned as PromiseLike<unknown>).then === 'function') {
-            void Promise.resolve(returned).catch(() => { observer = undefined; });
-          }
-        } catch { observer = undefined; }
-      };
-      const handle: ModelCall = Object.freeze({ result: result.promise, done: done.promise, cancel: () => controller.abort() });
-      active = handle;
-      void Promise.resolve().then(async () => {
-        let candidate: ProtocolOutcome | undefined;
-        let error: ReturnType<typeof modelsError> | undefined;
-        try {
-          if (controller.signal.aborted) throw modelsError('cancelled');
-          const operation = resources.protocol.call({
-            provider: resources.provider, credential, signal: controller.signal,
-            remoteModelId: snapshot.remoteModelId, options: snapshot.options, capabilities,
-            messages, newMessages: added, tools: resources.tools, continuation, onEvent,
+  const onAbort = () => { void close(); };
+  input.controller.signal.addEventListener('abort', onAbort, { once: true });
+  return Object.freeze({ snapshot, capabilities, signal: input.controller.signal, close,
+    prepareExchange(intent) {
+      if (state !== 'open' || input.controller.signal.aborted) throw modelsError('closed');
+      if (active || prepared) throw modelsError('busy');
+      assert(json(intent)); const captured = immutable(intent);
+      const requestBody = immutable(input.protocol.prepare({ state: context, intent: captured, remoteModelId: snapshot.remoteModelId, parameters: snapshot.parameters.value, capabilities }));
+      assert(json(requestBody));
+      const exchangeId = randomUUID();
+      const request = immutable({ protocolId: snapshot.protocolId, exchangeId, intent: captured, precedingRecordId: previousId });
+      const record: NativeRecordDraft = immutable({ id: randomUUID(), exchangeId, protocolId: snapshot.protocolId, recordFormatVersion: 1, kind: 'request', payload: captured });
+      prepared = true; let started = false;
+      return Object.freeze({ exchangeId, request, record,
+        start(onEvent?: (event: NativeObject) => void): ProtocolOperation<NativeReply> {
+          if (state !== 'open' || input.controller.signal.aborted) throw modelsError('closed');
+          if (started || !prepared || active) throw modelsError('busy');
+          assert(onEvent === undefined || typeof onEvent === 'function');
+          started = true; prepared = false; records.push(record);
+          const result = deferred<NativeReply>(), done = deferred<void>();
+          const controller = new AbortController(), unlink = abortLink(input.controller.signal, controller);
+          let observer = onEvent, timedOut = false;
+          const timer = setTimeout(() => { timedOut = true; controller.abort(); }, input.provider.timeoutMs);
+          const event = (value: NativeObject) => {
+            if (!observer || controller.signal.aborted) return;
+            try { const returned: unknown = observer(immutable(value)); if (returned && typeof (returned as PromiseLike<unknown>).then === 'function') void Promise.resolve(returned).catch(() => { observer = undefined; }); }
+            catch { observer = undefined; }
+          };
+          const handle = Object.freeze({ result: result.promise, done: done.promise, cancel: () => controller.abort() });
+          active = handle;
+          void Promise.resolve().then(async () => {
+            let candidate: NativeObject | undefined, next: NativeObject | undefined, diagnostic: NativeObject | undefined;
+            let failure: ReturnType<typeof modelsError> | undefined;
+            try {
+              if (controller.signal.aborted) throw modelsError('cancelled');
+              const operation = input.protocol.exchange({ provider: input.provider, credential, signal: controller.signal, request: requestBody, onEvent: event });
+              // Capture a diagnostic candidate even if transport cleanup subsequently fails.
+              void operation.result.then(value => { candidate = immutable(value); }, error => { diagnostic = nativeDiagnostic(error); }).catch(() => {});
+              candidate = immutable(await joinOperation(operation, controller.signal));
+              assert(json(candidate));
+              next = immutable(input.protocol.commit({ state: context, intent: captured, request: requestBody, response: candidate }));
+              assert(json(next));
+            } catch (error) { diagnostic ??= nativeDiagnostic(error); failure = normalizeError(error); }
+            clearTimeout(timer); unlink(); observer = undefined;
+            if (failure?.code !== 'cleanup-failure' && controller.signal.aborted) failure = modelsError(timedOut ? 'timeout' : 'cancelled');
+            let responseRecord: NativeRecordDraft | undefined;
+            if (failure) restorable = false;
+            if (!failure && candidate && next) {
+              context = next;
+              responseRecord = immutable({ id: randomUUID(), exchangeId, protocolId: snapshot.protocolId, recordFormatVersion: 1, kind: 'response', payload: candidate });
+              records.push(responseRecord); previousId = responseRecord.id;
+            } else if (diagnostic ?? candidate) records.push(immutable({ id: randomUUID(), exchangeId, protocolId: snapshot.protocolId, recordFormatVersion: 1, kind: 'diagnostic', payload: sanitizeDiagnostic((diagnostic ?? candidate)!, credential) }));
+            active = undefined;
+            if (failure?.code === 'cleanup-failure') { cleanupFailed = true; state = 'closing'; done.reject(failure); void close(); }
+            else done.resolve();
+            if (failure) result.reject(failure);
+            else result.resolve(immutable({ exchangeId, response: candidate!, records: [record, responseRecord!] }));
+          }).catch(() => {
+            clearTimeout(timer); unlink(); observer = undefined; active = undefined; cleanupFailed = true;
+            const error = modelsError('cleanup-failure'); done.reject(error); result.reject(error); void close();
           });
-          candidate = await joinOperation(operation, controller.signal);
-          validateResult(candidate.result, resources.tools, messages);
-          // Copy before final commit, so protocol-owned objects cannot mutate public results.
-          candidate = { result: immutable(candidate.result), continuation: candidate.continuation };
-        } catch (failure) { error = normalizeError(failure); }
-        clearTimeout(timer); unlink(); observer = undefined;
-        // No await between this cancellation check, commit, unlocking, and publication.
-        if (error?.code !== 'cleanup-failure' && controller.signal.aborted) error = modelsError(timedOut ? 'timeout' : 'cancelled');
-        if (!error && candidate) {
-          if (candidate.result.status === 'completed') {
-            history = immutable([...messages, { role: 'assistant', content: candidate.result.text, toolCalls: candidate.result.toolCalls }]);
-            continuation = candidate.continuation;
-          } else { release(); }
-        }
-        if (error?.code === 'cleanup-failure') release(true);
-        active = undefined;
-        if (error?.code === 'cleanup-failure') done.reject(error); else done.resolve();
-        if (error) result.reject(error); else result.resolve(candidate!.result);
-      }).catch(() => {
-        // Defensive ownership barrier even for a broken trusted protocol implementation.
-        clearTimeout(timer); unlink(); observer = undefined; active = undefined; release(true);
-        const error = modelsError('cleanup-failure'); done.reject(error); result.reject(error);
+          return handle;
+        },
       });
-      return handle;
     },
-  } satisfies ModelExecution);
+  } satisfies NativeExecution);
+}
+/** Scope changes never rewrite native history or use a credential reference as identity. */
+export function validateRestore(restore: NativeRestoreState, snapshot: NativeModelSnapshot): void {
+  keys(restore, ['protocolId', 'recordFormatVersion', 'modelSnapshot', 'records']);
+  assert(restore.protocolId === snapshot.protocolId && restore.recordFormatVersion === 1 && Array.isArray(restore.records));
+  const old = restore.modelSnapshot; assert(old?.schemaVersion === 3);
+  for (const key of ['modelId', 'modelDefinitionId', 'modelDefinitionVersionId', 'remoteModelId', 'providerId', 'protocolId', 'historyScopeEpoch'] as const) assert(old[key] === snapshot[key]);
+  assert(equalJson(old.parameters, snapshot.parameters) && equalJson(old.capabilities, snapshot.capabilities));
+  const ids = new Set<string>(); let request: NativeRecordDraft | undefined;
+  for (const item of restore.records) {
+    assert(item.protocolId === snapshot.protocolId && item.recordFormatVersion === 1 && typeof item.id === 'string' && !ids.has(item.id) && json(item.payload)); ids.add(item.id);
+    if (item.kind === 'request') { assert(!request); request = item; }
+    else { assert(item.kind === 'response' && request?.exchangeId === item.exchangeId); request = undefined; }
+  }
+  assert(!request && restore.records.length > 0);
 }

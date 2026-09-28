@@ -1,8 +1,10 @@
 # @anybox/models
 
-Reusable Nya module owning unified sourced Provider/Model definitions, account connections, runnable configurations, credentials and protocol execution. Requires Node.js 22.13+ and `@nya/core`. It has no dependency on Anybox Run, Session, tools or frontend code.
+逐组件中文说明见 [Models 模块手册](../../docs/modules/models/README.md)，包含配置、Vault、目录和各原生驱动；本文保留独立包安装示例与公共契约。
 
-独立框架图（含来源接纳、四种原生协议与自动基础配置）：[高清 PNG](docs/architecture.png) · [SVG](docs/architecture.svg)。统一定义、连接与执行配置的数据关系：[PNG](docs/architecture-data-flow.png) · [SVG](docs/architecture-data-flow.svg)。两页均保存在同一 [可编辑 draw.io](docs/architecture.drawio) 中；组件依赖与宿主接入见 [Models 模块架构](../../docs/architecture/models-module.md)。
+Reusable Nya module owning unified sourced Provider/Model definitions, account connections, runnable native configurations, credentials and protocol execution. Version 0.2 removes the unified message/result execution API. Requires Node.js 22.13+ and `@nya/core`. It has no dependency on Anybox Run, Session, tools or frontend code.
+
+迁移前组件布局参考图（包含来源接纳和配置关系；图中的旧执行接口不适用于 0.2，以本文原生契约为准）：[高清 PNG](docs/architecture.png) · [SVG](docs/architecture.svg)。统一定义、连接与执行配置的数据关系：[PNG](docs/architecture-data-flow.png) · [SVG](docs/architecture-data-flow.svg)。两页均保存在同一 [可编辑 draw.io](docs/architecture.drawio) 中；组件依赖与宿主接入见 [Models 模块架构](../../docs/architecture/models-module.md)。
 
 ## Install in an application
 
@@ -14,7 +16,7 @@ import {
   createAnthropicMessagesProtocolComponent, createGeminiInteractionsProtocolComponent,
   createModelsDevCatalogSourceComponent, createModelsCatalogCacheComponent,
   createModelsCatalogComponent,
-  type ModelsService, type ModelsSettingsService, type ModelsCatalogService,
+  type ModelsService, type ModelsSettingsService, type ModelsCatalogService, type ModelsProtocolsService,
 } from '@anybox/models'
 
 const root = new Context()
@@ -68,7 +70,7 @@ The store, vault, catalog source and catalog cache ports are replaceable Nya dep
 | `Provider` | Definition, documentation, connection hints, source and immutable versions |
 | `Model` | Provider definition, remote ID, capabilities, modalities, limits, costs, controls, source and versions |
 | `ProviderConnection` | Account name, actual endpoint, one fixed protocol, auth and enabled state; private store owns credential reference |
-| `ModelConfiguration` | Stable selection ID, connection/definition IDs, pinned definition version, capabilities, defaults and enabled state |
+| `ModelConfiguration` | Stable selection ID, connection/definition IDs, pinned definition version, capabilities, versioned native parameters and enabled state |
 | `RunnableModelSummary` | Configuration plus definition identity, source and derived local availability |
 
 `SourceRef` is `{ kind: 'user' }` or an `external` identity containing `sourceId`, external `providerId`, optional external `modelId` and `sourceVersion`. External identities are scoped by source, never merged by name or hostname. Network/cache/bundled describes acquisition, not origin. A user Model can belong to an external Provider. Adding an account or Key does not change the definition source.
@@ -87,7 +89,7 @@ const choices = models.list({ connectionId: connection.id, available: true })
 // No per-model save or network authorization probe is required.
 ```
 
-Each connection uses one protocol. Reconciliation runs after connection saves, Key changes, source ingestion, protocol registration and startup. It atomically adds missing baseline configurations, unique by `(connectionId, modelDefinitionId)`, and never overwrites saved names, enabled state, capability declarations or defaults. Descriptor defaults become explicit saved values, including Anthropic's bounded `4096` output default. Unknown capabilities remain unknown; missing reasoning modes are not inferred. `connectionModels(id)` includes unavailable definitions and their reasons. A saved connection whose initialization failed returns `sync.state === 'failed'`; `retryConnection(id)` is idempotent and retains the Key. Synchronization states and source targets do not increment connection revisions.
+Each connection uses one protocol. Reconciliation runs after connection saves, Key changes, source ingestion, protocol registration and startup. It atomically adds missing baseline configurations, unique by `(connectionId, modelDefinitionId)`, and never overwrites saved names, enabled state, capability declarations or parameters. Protocol initial parameters become explicit saved values, including Anthropic's bounded `4096` output default. Unknown capabilities remain unknown; missing reasoning modes are not inferred. `connectionModels(id)` includes unavailable definitions and their reasons. A saved connection whose initialization failed returns `sync.state === 'failed'`; `retryConnection(id)` is idempotent and retains the Key. Synchronization states and source targets do not increment connection revisions.
 
 `settings.deleteConnection(id, expectedRevision)` uses the connection's configuration queue and CAS revision. It atomically removes the current connection, its baseline/variant configurations and synchronization state, while preserving definition data and immutable histories. Previously opened executions retain their captured configuration and credential; new opens fail with `not-found`. The transaction journals retired credential slots, then awaits vault cleanup; unavailable vault cleanup remains journaled for recovery. Deleted connection/configuration IDs cannot be reused, and source refresh cannot recreate deleted accounts.
 
@@ -112,7 +114,7 @@ const customConnection = await settings.createConnection({
 const variant = await settings.createConfiguration({
   modelDefinitionId: customModel.id, connectionId: customConnection.id,
   name: 'My preset', enabled: true, baseline: false,
-  capabilities: customModel.capabilities, defaults: { temperature: 0.2 },
+  capabilities: customModel.capabilities, parameters: { protocolId: 'responses', formatVersion: 1, value: { temperature: 0.2 } },
 })
 ```
 
@@ -133,22 +135,24 @@ User definition writes always produce `user` source records; source definitions 
 
 User saves create immutable revisions; stale edits return `conflict`. Neutral configuration can be saved before a protocol is installed; synchronization stays pending and execution stays unavailable until registration validates the saved parameters. Discovery returns candidates without writing definitions/configurations. `available` means local configuration readiness and does not establish remote account authorization. Effective image input is always false. Native options remain explicit; omitted optional parameters use server defaults, while unsupported options are rejected. Configurations and Keys affect new executions only.
 
-| Protocol | Native endpoint and supported controls |
+| Protocol | Native endpoint and saved parameter fields |
 |---|---|
-| `responses` | `/responses`, `store: false`; `temperature`, `maxOutputTokens`, `protocol.reasoningEffort`, `protocol.reasoningSummary` |
-| `chat-completions` | `/chat/completions`; `temperature`, `maxOutputTokens`, `protocol.reasoningEffort` |
-| `anthropic-messages` | `/messages`; required `maxOutputTokens` → `max_tokens` (form default `4096`), `temperature` in `0..1`, `protocol.reasoningMode`, `reasoningBudgetTokens`, `reasoningEffort`, `reasoningDisplay` |
-| `gemini-interactions` | `/interactions`, `store: false`; optional `maxOutputTokens`, `protocol.thinkingLevel`, `protocol.thinkingSummaries`; `temperature` is not accepted |
+| `responses` | `/responses`, fixed `store: false`; `temperature`, `max_output_tokens`, `reasoning.effort`, `reasoning.summary`, optional `tools: [{ type: 'web_search' }]` |
+| `chat-completions` | `/chat/completions`; `temperature`, `max_completion_tokens`, `reasoning_effort` |
+| `anthropic-messages` | `/messages`; required `max_tokens` (new-configuration default `4096`), `temperature`, `thinking.type/budget_tokens/display`, `output_config.effort`, optional `tools: [{ type: 'web_search_20250305', name: 'web_search' }]` |
+| `gemini-interactions` | `/interactions`, fixed `store: false`; `generation_config.max_output_tokens/thinking_level/thinking_summaries` |
 
-Responses and Chat Completions support `reasoningEffort: 'none'`, which makes effective reasoning unavailable. Anthropic accepts declared `disabled`, `adaptive` or `enabled` modes; enabled requires an integer budget of at least `1024`, below `maxOutputTokens` and inside any declared model budget. Adaptive and enabled modes require omitted or default (`1`) temperature. Native effort values are `low/medium/high/xhigh/max`; display is `summarized/omitted` and requires an explicit enabled or adaptive mode. This release sends workspace-scoped API keys in `x-api-key`, with the fixed `anthropic-version: 2023-06-01` and no beta headers. Unscoped multi-workspace keys require an additional workspace header and are outside this connection contract.
+Parameters use `{ protocolId, formatVersion: 1, value }`; fields in `value` are native API fields. Protocol schemas allow only implemented parameters. Authentication, address, model identity, messages/history and transport controls cannot be overridden by parameter JSON. Native function declarations belong to the initial execution intent; configured server-search tools are validated separately and merged by the driver. `webSearch` is an explicit capability declaration: absence is unknown, and directory/provider names never establish support.
 
-Gemini uses an API key in `x-goog-api-key`, a `v1beta` base URL, declared `thinkingLevel` values `minimal/low/medium/high`, and `thinkingSummaries: 'auto' | 'none'`. It uses private stateless input history rather than `previous_interaction_id`, background agents or server tools. All builtins expose text and user-defined function tools through the same public contract; media, structured output schemas and provider-managed tools are not execution features of this release.
+Responses and Chat accept only declared reasoning efforts, including `none`. Anthropic validates declared modes, budgets and efforts: enabled thinking requires a budget of at least 1024 below `max_tokens`; adaptive/enabled thinking requires omitted or default (`1`) temperature. Omitted parameters remain omitted. Anthropic sends `x-api-key` and `anthropic-version: 2023-06-01`, using workspace-scoped keys. Gemini sends `x-goog-api-key`; no server conversation, background agent or media input is enabled. Effective image input remains false.
 
-`models.list()`/`get()` expose declared and effective capabilities plus availability. Missing protocols do not prevent configuration loading; affected models report `protocol-unavailable`. Image declarations may be saved, but effective image input is always false in this release and the message contract accepts only text.
+Native results retain their protocol status, ordered content and unknown JSON fields. Responses preserves reasoning/encrypted content, phase, search activity and citations. Anthropic preserves thinking/signatures/redaction, client and server tool blocks, and `pause_turn`. Gemini preserves chronological native steps and signatures. A host protocol Loop decides how to handle tool requests, pauses, incomplete output and refusal; Models does not translate these into a shared result status or execute tools.
+
+`models.list()`/`get()` report local readiness and effective capabilities. Configurations without an installed protocol remain queryable. Discovery and checks are explicit read-only requests and do not create settings. Configured native parameters and credentials are fixed for one execution.
 
 ## Source ingestion and public catalog
 
-`models.catalog` supplies source status and refresh. Definition queries use `models.settings`; separate catalog Provider/Model DTOs and queries have been removed. The anonymous source requests [models.dev JSON](https://models.dev/api.json?type=all), normalizing every known modality into the module's Provider/Model types. `settings.models({ textOnly: true })` filters for the current text/function-tool contract; price and control metadata remain reference information.
+`models.catalog` supplies source status and refresh. Definition queries use `models.settings`; separate catalog Provider/Model DTOs and queries have been removed. The anonymous source requests [models.dev JSON](https://models.dev/api.json?type=all), normalizing every known modality into the module's Provider/Model types. `settings.models({ textOnly: true })` filters for the current text and native function-tool support; price and control metadata remain reference information.
 
 ```ts
 const providerChoices = settings.providers({ sourceId: 'models.dev', search: 'Anthropic' })
@@ -169,71 +173,55 @@ Raw bundled JSON, provenance, SHA-256 validation and upstream MIT attribution re
 
 ## Persistent upgrade
 
-Configuration SQLite migrates v1 to v2 in an exclusive transaction. Old Providers become connections, and old Models become configurations, preserving IDs, revisions/version IDs, timestamps, endpoints, defaults, disabled states and Key references. Every old Model receives its own user definition, including same-remote parameter duplicates. An explicit old `catalogRef` retains the complete external Provider identity as an unresolved definition until that source is ingested; other old Providers become user definitions. No origin is guessed from remote IDs or hostname.
+SQLite schema 3 migrates v1 through v2 and converts current v2 configuration parameters in an exclusive transaction. IDs, immutable version identities, pinned model definitions, enabled states, baseline identity and credential references are retained. Historical configuration/connection JSON is not rewritten; readers understand older records. No migration reads or copies a credential.
 
-Original historical records are preserved for read-boundary conversion; successful migration is idempotent and failure rolls back. Credential intents retain their IDs/slot IDs/times and are recovered against current connection references; migration never reads or copies Keys. Old histories do not keep retired secrets alive.
+The four built-in legacy converters map `maxOutputTokens` and old `protocol.*` fields to native field names without inserting defaults. An extension supplies its own pure converter through `createModelsStoreComponent({ path, legacyParameterConverters: { [protocolId]: converter } })`. Unknown or unsupported old settings remain readable as `formatVersion: 0` and unavailable for native execution; providing a converter at a later startup converts them transactionally. There is no old execution fallback or old-format configuration writer.
 
-Execution snapshots written now carry schema version 2 and definition identity, while `modelId` remains the configuration selection ID and `providerId` remains the connection ID. Hosts read historical snapshots at their boundary without rewriting Session selections or historical Run JSON.
+Every connection has a non-secret `historyScopeEpoch`. Successful Key replacement/deletion and endpoint/auth changes rotate it in the same connection transaction. Failed writes, names, timeout changes and synchronization do not rotate it. The epoch is not a Key hash or Vault reference. Native restore requires matching configuration/definition and remote model identities, scope epoch, parameter JSON and effective capabilities. Object key order and cosmetic renames do not change compatibility. No account identity is inferred from a connection ID or hostname.
 
-## Agent execution
+Native snapshots use `schemaVersion: 3`, carrying native parameters, effective capabilities, registration generation and history scope. The host keeps old Session snapshots read-only; Models never rewrites application history.
+
+## Native execution
 
 ```ts
-const execution = await models.open({
-  modelId: choices[0].id, history, tools,
-  requirements: { tools: true }, signal,
-})
+const protocols = root.get<ModelsProtocolsService>('models.protocols')!
+const lease = protocols.acquire('responses')
+const execution = await models.openNative({ modelId: selectedId, lease })
 try {
-  let reply = await execution.generate({
-    messages: [{ role: 'user', content: userText }], onEvent: displayProgress,
-  }).result
-  while (reply.status === 'completed' && reply.toolCalls.length) {
-    // Agent validates business arguments, obtains authorization and executes tools.
-    const messages = await executeTools(reply.toolCalls)
-    // Each result: { role: 'tool', callId: call.id, content: serializedResult }
-    reply = await execution.generate({ messages, onEvent: displayProgress }).result
-  }
-  return reply
+  const prepared = execution.prepareExchange({
+    input: [{ role: 'user', content: 'Find the relevant facts' }],
+    tools: [{ type: 'function', name: 'lookup', parameters: { type: 'object' } }],
+  })
+  // The host persists an operation intent and prepared.record before starting.
+  const reply = await prepared.start(event => projectSafeDisplay(event)).result
+  // reply.response is the native Responses object, not a shared ModelResult.
+  // The protocol-specific host interprets it and supplies native tool outputs.
+  const exit = await execution.close()
+  // Commit a successful node only after checking exit.cleanup and host outcome.
+  // exit.records contains only this execution's incremental request/response records.
 } finally {
   await execution.close()
+  lease.release()
 }
 ```
 
-The module parses argument JSON and checks tool names, unique call IDs and corresponding results. It does not execute tools or validate business schemas. Text and multiple tool calls can coexist. Only `completed` results contain executable calls; `incomplete` and `refused` end the execution. Requirements whose capabilities are unknown or unsupported fail before a request.
+`prepareExchange()` performs no external request. It fixes an immutable intent recipe, a request record ID and the preceding record ID. Its single-use `start()` returns `{ result, done, cancel }`. Same-execution overlap is rejected. Public `result` waits for actual operation exit, candidate validation and context commit; different executions run independently. The request record stores only the newly appended native intent, never a copy of all prior history.
 
-Only new messages are submitted each turn. The execution privately holds normalized history and protocol continuation. Responses preserves native reasoning items, encrypted content and message phase; Anthropic preserves complete ordered content blocks, thinking signatures and redacted thinking; Gemini preserves thought summaries/signatures and native execution steps. Native tool identities are mapped privately for the two new protocols, while public tool IDs remain stable across an announced call and its final result. Anthropic maps leading system/developer instructions to its top-level system field and rejects mid-conversation instructions. All native context stays inside the execution. Business sessions persist normalized history and selected model IDs in the host. Reopening from history starts fresh; native in-flight context is not restored across process restarts.
+`close()` is idempotent, synchronously stops new operations, cancels active work and waits for exit. It returns `{ records, restoreState?, cleanup }` even on cleanup failure, then releases private credential/context references. Diagnostics cannot create a successful history node. Responses failed/cancelled terminals and Anthropic error events retain terminal identity, error type/code and received native blocks; provider error messages, authentication fields and captured credential values are excluded. Any failed exchange makes that execution’s record chain ineligible for restore, including after an explicit successful retry. A late result after failed `done` cannot alter the frozen report. JavaScript strings cannot be securely zeroed; references are released.
 
-`open()` fixes configuration revisions, effective options, registered protocol implementation and one credential read. Its public snapshot contains configuration identities/options, never a credential or its storage reference. Per-connection edits and opening local configuration/credentials run in admission order; subsequent HTTP requests run concurrently.
+For the next Run, the host resolves the selected immutable parent chain and supplies `restore: { ...parentMetadata, records: orderedRecords }` to `openNative`. Each protocol codec validates and reconstructs native state in memory. The host stores each Run's incremental records and small `restoreState` metadata, not the expanded historical array on every node. Native tool IDs, signatures, encrypted reasoning, root instructions and fixed tool declarations survive serialization and reopening. No text projection or browser stream cache is used for recovery.
 
-`generate()` returns `{ result, done, cancel }`. Public `result` settles only after native exit, context commit and unlocking. Awaiting it is sufficient before the next turn. `done` reports actual exit; cancellation and ordinary provider failures can leave `done` successful, whereas true cleanup failure rejects both. Both rejections are observed internally immediately. Same-execution overlap throws `busy`; different executions run concurrently.
+## Events and protocol registration
 
-Cancellation/timeout requests abort then waits for actual exit. No hidden retries occur. Ordinary call failures preserve the previous committed context for an explicit retry. A cancelled candidate is discarded. Cleanup failure closes the execution and remains visible through execution close, protocol unregister and component cleanup. `close()` is idempotent, stops admission, aborts and joins owned work, then releases private context/credential references. JavaScript strings cannot be securely zeroed; the module releases its references.
+Callbacks receive protocol-native events for a trusted host projector. Do not forward these raw events or recovery records to a browser: signatures, encrypted continuation and other private protocol fields may be present. The host generates a versioned safe display projection. `createNativeEventQueue({ capacity, maxBufferedBytes })` bounds a subscriber; overflow releases only that subscriber and never blocks model completion. Observer exceptions and rejected async callbacks detach the observer without affecting the operation.
 
-## Stream forwarding to a frontend
+A Nya component injects `models.protocols`, registers `NativeProtocol<I, R, E>`, and records `registration.unregister()` in an Effect. `registration.acquire()` returns a typed lease fixed to that generation, including `protocolVersion`, `generationId` and revocation `signal`. Acquire before opening and bind the host Loop/codec to the same generation. Releasing a lease prevents further admission with it. A stale or foreign lease is rejected.
 
-Without `onEvent`, no progress events are buffered. A throwing callback or accidentally rejected async callback unsubscribes itself without affecting model output. Callbacks must return promptly; CPU-bound user code cannot be preempted on the JS event loop.
+Drivers provide parameter validation, effective capability calculation, native `prepare/exchange/commit`, record `restore`, and optional discovery/check. Driver types and state remain protocol-specific; Models has no dependency on the host's Run, Session, tools, UI or context tree. `createChatCompletionsProtocol(options, policy)` supports explicit extension differences (`protocolId`, `maxTokensField`, `disableThinking`, `allowDeveloper`, source mappings), so a host can register DeepSeek separately while reusing the native transport and parser.
 
-Use `createModelEventQueue()` at the host boundary when an HTTP/SSE subscriber may be slow:
+A raw driver's `result` may precede `done`. `done` is the actual resource-exit boundary, including a completed cleanup attempt that failed. Models observes both promises immediately; failed `done` terminates a broken still-pending result, preserves available diagnostics and requests cancellation only once. Ordinary result failure still waits for `done`. Cancellation does not substitute for exit. No hidden network retries occur.
 
-```ts
-const subscription = createModelEventQueue({ capacity: 128, maxBufferedBytes: 256 * 1024 })
-const call = execution.generate({ messages, onEvent: subscription.onEvent })
-const forwarding = (async () => {
-  for await (const event of subscription.events) await sendEventToBrowser(event)
-})()
-void forwarding.catch(() => subscription.close())
-try { return await call.result }
-finally { subscription.close() }
-```
-
-Overflow clears and ends only that subscription (`status === 'overflow'`); it does not block or cancel the model. Ending a subscription discards queued progress. Host transport cancellation must also release its own blocked writes. Final authoritative output is the result, not a concatenation of temporary events or tool argument deltas.
-
-## Add a protocol
-
-A trusted Nya component injects `models.protocols`, calls `register(ModelProtocol)`, and registers `registration.unregister()` with an Effect. The contract in `types.ts` includes descriptors, provider/options validation, effective capability calculation, optional discovery/check, and `call()`.
-
-Each raw operation returns `{ result, done, cancel }`. Its candidate result/continuation may arrive before `done`; only the model service commits it after successful exit and a final cancellation check. Implementations must observe their own rejected promises, settle both on every path, cancel idempotently, and settle `done` only after fetch/readers/resources have actually exited. A successful `done` is distinct from a successful model response. Protocol functions are trusted code; frontend users cannot upload implementations.
-
-Unregister immediately removes admission for that registration generation and closes its executions, including idle ones; it aborts and joins initialization, discovery and checks. A new registration with the same ID can be installed after old admission has been removed. Old cleanup cannot remove it. Other protocol generations continue working. Nya manages component dependencies; configuration loading never depends on protocols being registered.
+Unregister stops admission and signals revocation synchronously, then closes executions and joins owned initialization/discovery/check resources. The old generation cannot remove a replacement or stop another protocol. A host application registry must additionally stop and wait for its Run tools, program and settlement; Models unregister only guarantees resources Models owns. Nya still manages service dependency cleanup.
 
 ## Credential consistency and tests
 

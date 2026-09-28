@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import type { Component } from '@nya/core'
 import type { OwnedCall } from '../contracts.js'
-import type { ToolDefinition } from '@anybox/models'
+import type { ToolDefinition } from './definition.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 

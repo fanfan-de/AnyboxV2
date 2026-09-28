@@ -1,3 +1,4 @@
+import { registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import assert from 'node:assert/strict'
@@ -24,7 +25,7 @@ async function fixture() {
     const session = await sessions.createSession(project.id, 'assistant')
     const plan = modelSnapshot('default', 'test')
     return { root, records: state, sessions, sessionId: session.id, stateFiber, db: root.get(localStorageServiceKey),
-      accept: id => state.registerRun(id, { sessionId: session.id, parentNodeId: null, input: 'hello', idempotencyKey: id }, inputs.now(), [], plan),
+      accept: id => registerNativeRun(state, id, { sessionId: session.id, parentNodeId: null, input: 'hello', idempotencyKey: id }, inputs.now(), [], plan),
       async close() { await root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) } }
   } catch (error) { await root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }); throw error }
 }
@@ -41,17 +42,17 @@ test('Run hints follow committed revisions; retries, no-ops and rollbacks publis
     } })
     await f.accept('run')
     await f.accept('run')
-    await assert.rejects(f.records.recordRunEvent('run', { kind: 'model-tool-calls', calls: [] }, 'time'))
+    await assert.rejects(f.records.startOperation('run', { id: '', kind: 'model', intent: {} }, 'time'))
     assert.equal(changes.length, 1)
-    await f.records.recordRunEvent('run', { kind: 'model-started' }, 'time')
+    await f.records.startOperation('run', { id: 'op', kind: 'model', intent: {} }, 'time')
     await f.records.requestCancellation('run', 'time')
     await f.records.requestCancellation('run', 'time')
-    assert.equal(await f.records.recordRunEvent('run', { kind: 'model-started' }, 'time'), undefined)
+    assert.equal(await f.records.startOperation('run', { id: 'op', kind: 'model', intent: {} }, 'time'), false)
     await f.records.settleRun('run', { kind: 'cancelled' }, 'time')
     await f.records.settleRun('run', { kind: 'cancelled' }, 'time')
     assert.deepEqual(changes.map(item => item.revision), [0, 1, 2, 3])
     await f.accept('success')
-    await f.records.settleRun('success', { kind: 'completed', output: 'answer' }, 'time')
+    await completeNativeRun(f.records, 'success', 'answer', 'time')
     const observed = await Promise.all(reads)
     for (const { change, run } of observed) {
       assert.equal(change.sessionId, f.sessionId)

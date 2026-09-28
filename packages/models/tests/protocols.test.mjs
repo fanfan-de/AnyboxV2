@@ -1,321 +1,86 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import { createChatCompletionsProtocol, createChatCompletionsProtocolComponent } from '../dist/protocols/chat-completions.js';
-import { createResponsesProtocol, createResponsesProtocolComponent } from '../dist/protocols/responses.js';
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { createChatCompletionsProtocol } from '../dist/protocols/chat-completions.js'
+import { createResponsesProtocol } from '../dist/protocols/responses.js'
+import { declared, jsonResponse, sse, nativeSession, run, responseText, responseReply, chatReply, chatChunk } from './native-protocol-helpers.mjs'
+import { deferred, tick } from './helpers.mjs'
 
-const declared = {
-  tools: { support: 'supported' }, streaming: { support: 'supported' }, imageInput: { support: 'supported' },
-  reasoning: { support: 'supported', efforts: ['none', 'low', 'high'] },
-};
-const effective = { tools: true, streaming: true, imageInput: false, reasoning: { support: 'supported', efforts: ['none', 'low', 'high'] } };
-const tools = [{ name: 'lookup', description: 'Look up a record', parameters: { type: 'object', properties: { query: { type: 'string' } } } }];
-function input(protocolId, overrides = {}) {
-  const messages = [{ role: 'user', content: '你好' }];
-  return {
-    provider: { name: 'test', enabled: true, protocolId, baseUrl: 'https://unit.invalid/v1/', auth: 'api-key', timeoutMs: 10_000 },
-    credential: 'private-key-never-in-error', signal: new AbortController().signal,
-    remoteModelId: 'unit-model', options: {}, capabilities: effective, messages, newMessages: messages,
-    tools, onEvent() {}, ...overrides,
-  };
-}
-const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } });
-function stream(values, { newline = '\n', fragment = 1 } = {}) {
-  const data = values.map(value => `data: ${typeof value === 'string' ? value : JSON.stringify(value)}${newline}${newline}`).join('');
-  const bytes = new TextEncoder().encode(data);
-  return new Response(new ReadableStream({
-    start(controller) {
-      for (let offset = 0; offset < bytes.length; offset += fragment) controller.enqueue(bytes.slice(offset, offset + fragment));
-      controller.close();
-    },
-  }), { headers: { 'content-type': 'text/event-stream' } });
-}
-async function settle(operation) {
-  try { return await operation.result; } finally { await operation.done; }
-}
-const chatReply = (message, finish_reason = 'stop', usage) => ({ choices: [{ message, finish_reason, index: 0 }], usage });
-const chunk = (delta, finish_reason = null) => ({ choices: [{ delta, finish_reason, index: 0 }] });
-const outputText = text => ({ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] });
-const responseReply = (output, status = 'completed') => ({ object: 'response', id: 'resp-test', status, output, usage: { input_tokens: 3, output_tokens: 5, total_tokens: 8 } });
+for (const streaming of [false, true]) test(`Responses preserves complete native reasoning, phases, search annotations and tool IDs (${streaming ? 'SSE' : 'JSON'})`, async () => {
+  const sent = [], reasoning = { type: 'reasoning', id: 'reason-id', encrypted_content: 'encrypted', summary: [], future: { kept: true } }, search = { type: 'web_search_call', id: 'search-id', status: 'completed', action: { type: 'search', query: 'topic' } }, text = responseText('answer'); text.content[0].annotations = [{ type: 'url_citation', start_index: 0, end_index: 6, url: 'https://example.test', title: 'Citation' }]
+  const output = [reasoning, search, text, { type: 'function_call', id: 'item-id', call_id: 'tool-id', name: 'lookup', arguments: '{"query":"x"}', status: 'completed' }]
+  const protocol = createResponsesProtocol({ fetch: async (_url, init) => { sent.push({ ...init, body: JSON.parse(init.body) }); const reply = responseReply(sent.length === 1 ? output : [responseText('done')]); return streaming ? sse([{ type: 'response.output_text.delta', item_id: 'text-id', output_index: 2, delta: 'answer' }, { type: 'response.completed', response: reply }], { newline: '\r\n' }) : jsonResponse(reply) } })
+  const execution = nativeSession(protocol, { streaming, parameters: { max_output_tokens: 123, reasoning: { effort: 'high', summary: 'auto' }, tools: [{ type: 'web_search' }] } }), events = []
+  const reply = await run(execution, { input: [{ role: 'user', content: 'first' }], tools: [{ type: 'function', name: 'lookup', parameters: { type: 'object' } }] }, events)
+  assert.deepEqual(reply.output, output); await run(execution, { input: [{ type: 'function_call_output', call_id: 'tool-id', output: 'result' }] })
+  assert.deepEqual(sent[1].body.input.slice(1, 5), output); assert.equal(sent[1].body.input.at(-1).call_id, 'tool-id'); assert.equal(sent[0].body.tools.length, 2); assert.equal(sent[0].body.store, false); assert.equal(sent[0].headers.Authorization, 'Bearer private-native-test-key')
+  const archive = await execution.close(), restored = nativeSession(protocol, { streaming, parameters: execution.snapshot.parameters.value, restore: { ...archive.restoreState, records: archive.records } }); await run(restored, { input: [{ role: 'user', content: 'new Run' }] }); assert.equal(sent[2].body.input.length, sent[1].body.input.length + 2); await restored.close()
+  if (streaming) assert.equal(events[0].item_id, 'text-id')
+})
 
-test('Chat Completions maps full history, options and text plus multiple parsed tool calls', async () => {
-  let sent;
-  const protocol = createChatCompletionsProtocol({ fetch: async (url, init) => {
-    sent = { url, ...init, body: JSON.parse(init.body) };
-    return json(chatReply({ content: 'I will look up both.', tool_calls: [
-      { id: 'a', type: 'function', function: { name: 'lookup', arguments: '{"query":"甲"}' } },
-      { id: 'b', type: 'function', function: { name: 'lookup', arguments: '{"query":"乙"}' } },
-    ] }, 'tool_calls', { prompt_tokens: 7, completion_tokens: 9, total_tokens: 16 }));
-  } });
-  const history = [{ role: 'assistant', content: 'Earlier', toolCalls: [{ id: 'old', name: 'lookup', arguments: { query: 'x' } }] }, { role: 'tool', callId: 'old', content: 'found' }];
-  const output = await settle(protocol.call(input('chat-completions', {
-    capabilities: { ...effective, streaming: false }, messages: history,
-    options: { maxOutputTokens: 123, temperature: 0.25, protocol: { reasoningEffort: 'low' } },
-  })));
-  assert.equal(sent.url, 'https://unit.invalid/v1/chat/completions');
-  assert.equal(sent.headers.Authorization, 'Bearer private-key-never-in-error');
-  assert.equal(sent.body.max_completion_tokens, 123);
-  assert.equal(sent.body.reasoning_effort, 'low');
-  assert.equal(sent.body.temperature, 0.25);
-  assert.equal(sent.body.messages[0].tool_calls[0].function.arguments, '{"query":"x"}');
-  assert.equal(sent.body.messages[1].tool_call_id, 'old');
-  assert.deepEqual(output.result, { status: 'completed', text: 'I will look up both.', toolCalls: [
-    { id: 'a', name: 'lookup', arguments: { query: '甲' } }, { id: 'b', name: 'lookup', arguments: { query: '乙' } },
-  ], usage: { inputTokens: 7, outputTokens: 9, totalTokens: 16 } });
-});
+for (const streaming of [false, true]) test(`Chat keeps native multiple calls, finish reason, unknown fields and tools across restore (${streaming ? 'SSE' : 'JSON'})`, async () => {
+  const sent = [], calls = [{ id: 'a', type: 'function', function: { name: 'lookup', arguments: '{"q":"甲"}' } }, { id: 'b', type: 'function', function: { name: 'lookup', arguments: '{"q":"乙"}' } }]
+  const protocol = createChatCompletionsProtocol({ fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); if (!streaming) return jsonResponse(chatReply({ role: 'assistant', content: 'thinking', tool_calls: calls, future_field: { kept: true } }, 'tool_calls')); return sse([chatChunk({ role: 'assistant', content: 'thinking', future_field: { kept: true } }), chatChunk({ tool_calls: calls.map((call, index) => ({ ...call, index })) }, 'tool_calls'), { choices: [], usage: { total_tokens: 42 } }, '[DONE]']) } })
+  const execution = nativeSession(protocol, { streaming, parameters: { temperature: 0, max_completion_tokens: 55, reasoning_effort: 'low' } }); const reply = await run(execution, { messages: [{ role: 'system', content: 'instruction' }, { role: 'user', content: 'ask' }] })
+  assert.equal(reply.choices[0].finish_reason, 'tool_calls'); assert.deepEqual(reply.choices[0].message.tool_calls, calls); assert.deepEqual(reply.choices[0].message.future_field, { kept: true })
+  await run(execution, { messages: calls.map(call => ({ role: 'tool', tool_call_id: call.id, content: 'done' })) }); assert.equal(sent[1].messages.length, 5); assert.equal(sent[1].messages[2].tool_calls[0].id, 'a'); await execution.close()
+})
 
-test('Chat streaming handles fragmented UTF-8, CRLF, interleaved tools and usage', async () => {
-  const events = [];
-  const protocol = createChatCompletionsProtocol({ fetch: async () => stream([
-    chunk({ role: 'assistant', content: '你好🙂' }),
-    chunk({ tool_calls: [
-      { index: 1, id: 'b', type: 'function', function: { name: 'lookup', arguments: '{"query":' } },
-      { index: 0, id: 'a', type: 'function', function: { name: 'lookup', arguments: '{' } },
-    ] }),
-    chunk({ tool_calls: [{ index: 0, function: { arguments: '"query":"甲"}' } }] }),
-    chunk({ tool_calls: [{ index: 1, function: { arguments: '"乙"}' } }] }),
-    chunk({}, 'tool_calls'), { choices: [], usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } }, '[DONE]',
-  ], { newline: '\r\n' }) });
-  const output = await settle(protocol.call(input('chat-completions', { onEvent: event => events.push(event) })));
-  assert.equal(output.result.text, '你好🙂');
-  assert.deepEqual(output.result.toolCalls.map(call => call.arguments), [{ query: '甲' }, { query: '乙' }]);
-  assert.equal(output.result.usage.totalTokens, 3);
-  assert.deepEqual(events[0], { type: 'text-delta', delta: '你好🙂' });
-  assert.equal(events.filter(event => event.type === 'tool-call-delta').length, 4);
-});
+test('Chat extension policy makes DeepSeek differences explicit without wrapping transport', async () => {
+  let sent; const protocol = createChatCompletionsProtocol({ fetch: async (_url, init) => { sent = JSON.parse(init.body); return jsonResponse(chatReply()) } }, { protocolId: 'deepseek-chat-completions', name: 'DeepSeek', maxTokensField: 'max_tokens', disableThinking: true, allowDeveloper: false })
+  const execution = nativeSession(protocol, { parameters: { max_tokens: 75 } }); assert.throws(() => execution.prepareExchange({ messages: [{ role: 'developer', content: 'forbidden' }] }), { code: 'invalid-config' })
+  await run(execution, { messages: [{ role: 'user', content: 'hello' }] }); assert.equal(sent.max_tokens, 75); assert.deepEqual(sent.thinking, { type: 'disabled' }); assert.equal(sent.max_completion_tokens, undefined); await execution.close()
+})
 
-test('Chat truncation and refusal never expose partial executable tool arguments', async () => {
-  for (const [finish, refusal, expected] of [['length', null, 'incomplete'], ['content_filter', null, 'refused'], ['stop', 'No', 'refused']]) {
-    const protocol = createChatCompletionsProtocol({ fetch: async () => stream([
-      chunk({ content: 'partial', refusal, tool_calls: [{ index: 0, id: 'a', type: 'function', function: { name: 'lookup', arguments: '{' } }] }),
-      chunk({}, finish), '[DONE]',
-    ]) });
-    const output = await settle(protocol.call(input('chat-completions')));
-    assert.equal(output.result.status, expected);
-    assert.deepEqual(output.result.toolCalls, []);
-  }
-});
+test('parameter validation rejects unimplemented fields and requires explicit server-search support', () => {
+  const responses = createResponsesProtocol(), chat = createChatCompletionsProtocol()
+  for (const value of [{ maxOutputTokens: 1 }, { model: 'other' }, { tools: [{ type: 'function', name: 'bad' }] }]) assert.throws(() => responses.validateParameters(value, declared))
+  assert.throws(() => responses.validateParameters({ tools: [{ type: 'web_search' }] }, { ...declared, webSearch: { support: 'unknown' } }), { code: 'capability-unsupported' })
+  assert.throws(() => chat.validateParameters({ reasoning_effort: 'unknown' }, declared)); responses.validateParameters({}, declared); chat.validateParameters({ temperature: 0 }, declared)
+})
 
-test('Chat rejects malformed completed arguments and unterminated/error streams', async () => {
-  for (const payload of [
-    [chunk({ tool_calls: [{ index: 0, id: 'a', type: 'function', function: { name: 'lookup', arguments: '{' } }] }, 'tool_calls'), '[DONE]'],
-    [chunk({ content: 'partial' })],
-    [{ error: { message: 'contains private-key-never-in-error' } }],
-  ]) {
-    const protocol = createChatCompletionsProtocol({ fetch: async () => stream(payload) });
-    await assert.rejects(settle(protocol.call(input('chat-completions'))), error => {
-      assert.ok(['invalid-response', 'provider-failure'].includes(error.code));
-      assert.ok(!error.message.includes('private-key'));
-      return true;
-    });
-  }
-});
+for (const kind of ['responses', 'chat']) test(`${kind} malformed terminal, unterminated stream and errors stay failures`, async () => {
+  const create = kind === 'responses' ? createResponsesProtocol : createChatCompletionsProtocol, intent = kind === 'responses' ? { input: [{ role: 'user', content: 'x' }] } : { messages: [{ role: 'user', content: 'x' }] }
+  for (const response of [sse(['[DONE]']), jsonResponse({ error: { message: 'private-native-test-key' } }), new Response('not JSON')]) { const execution = nativeSession(create({ fetch: async () => response }), { streaming: response.headers.get('content-type') !== 'application/json' }); await assert.rejects(run(execution, intent)); await execution.close() }
+})
 
-test('Responses preserves native reasoning, phase and tool identity in private candidate continuation', async () => {
-  const requests = [];
-  const rawOutput = [
-    { type: 'reasoning', id: 'rs-one', encrypted_content: 'opaque-signature', summary: [] },
-    { ...outputText('Checking now.'), phase: 'commentary' },
-    { type: 'function_call', id: 'fc-one', call_id: 'call-one', name: 'lookup', arguments: '{"query":"first"}', status: 'completed' },
-  ];
-  const protocol = createResponsesProtocol({ fetch: async (_url, init) => {
-    requests.push(JSON.parse(init.body));
-    return json(responseReply(requests.length === 1 ? rawOutput : [{ ...outputText('Done.'), phase: 'final_answer' }]));
-  } });
-  const base = input('responses', { capabilities: { ...effective, streaming: false }, options: { protocol: { reasoningEffort: 'high', reasoningSummary: 'auto' } } });
-  const first = await settle(protocol.call(base));
-  assert.equal(first.result.text, 'Checking now.');
-  assert.equal(first.result.toolCalls[0].id, 'call-one');
-  assert.ok(!JSON.stringify(first.result).includes('opaque-signature'));
-  const next = { role: 'tool', callId: 'call-one', content: 'a result' };
-  await settle(protocol.call({ ...base, messages: [...base.messages, { role: 'assistant', content: first.result.text, toolCalls: first.result.toolCalls }, next], newMessages: [next], continuation: first.continuation }));
-  assert.equal(requests[0].store, false);
-  assert.equal(requests[0].previous_response_id, undefined);
-  assert.deepEqual(requests[0].reasoning, { effort: 'high', summary: 'auto' });
-  assert.deepEqual(requests[1].input, [...base.messages, ...rawOutput, { type: 'function_call_output', call_id: 'call-one', output: 'a result' }]);
-  // Producing a candidate does not mutate the prior continuation.
-  assert.equal(first.continuation.input.length, 4);
-});
+for (const failCleanup of [false, true]) test(`terminal provider result waits for actual stream cleanup (failure=${failCleanup})`, async () => {
+  const release = deferred(), entered = deferred(); const execution = nativeSession(createResponsesProtocol({ fetch: async () => sse([{ type: 'response.completed', response: responseReply([responseText('done')]) }], { close: false, cancel: async () => { entered.resolve(); await release.promise; if (failCleanup) throw new Error('private cleanup'); } }) }), { streaming: true })
+  const operation = execution.prepareExchange({ input: [{ role: 'user', content: 'x' }] }).start(); await entered.promise; let settled = false; void operation.result.then(() => { settled = true }, () => { settled = true }); await tick(); assert.equal(settled, false); release.resolve()
+  if (failCleanup) { await assert.rejects(operation.result, { code: 'cleanup-failure' }); await assert.rejects(operation.done, { code: 'cleanup-failure' }); assert.equal((await execution.close()).cleanup, 'failed') } else { await operation.result; assert.equal((await execution.close()).cleanup, 'succeeded') }
+})
 
-test('Responses streaming uses terminal response as authority and emits progress', async () => {
-  const events = [];
-  const terminal = responseReply([outputText('hello🙂'), { type: 'function_call', call_id: 'one', name: 'lookup', arguments: '{"query":"ok"}' }]);
-  const protocol = createResponsesProtocol({ fetch: async () => stream([
-    { type: 'response.created', response: { id: 'x' } },
-    { type: 'response.reasoning_summary_text.delta', delta: 'thinking summary' },
-    { type: 'response.output_text.delta', delta: 'hello🙂' },
-    { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', call_id: 'one', name: 'lookup', arguments: '' } },
-    { type: 'response.function_call_arguments.delta', output_index: 1, delta: '{"query":' },
-    { type: 'response.function_call_arguments.delta', output_index: 1, delta: '"ok"}' },
-    { type: 'response.completed', response: terminal },
-  ], { newline: '\r' }) });
-  const output = await settle(protocol.call(input('responses', { onEvent: event => events.push(event) })));
-  assert.equal(output.result.status, 'completed');
-  assert.equal(output.result.text, 'hello🙂');
-  assert.deepEqual(output.result.toolCalls[0].arguments, { query: 'ok' });
-  assert.equal(events[0].type, 'reasoning-summary-delta');
-  assert.equal(events.length, 5);
-});
+test('HTTP errors and fetch exceptions are sanitized and unconsumed bodies cancel', async () => {
+  let cancelled = false; const protocol = createResponsesProtocol({ fetch: async () => new Response(new ReadableStream({ cancel() { cancelled = true } }), { status: 500 }) }), execution = nativeSession(protocol)
+  await assert.rejects(run(execution, { input: [{ role: 'user', content: 'x' }] }), error => error.code === 'provider-failure' && !String(error).includes('private')); assert.equal(cancelled, true); await execution.close()
+})
 
-test('Responses incomplete and refusal terminate without a candidate continuation', async () => {
-  for (const [raw, expected] of [
-    [responseReply([{ type: 'function_call', call_id: 'one', name: 'lookup', arguments: '{', status: 'incomplete' }], 'incomplete'), 'incomplete'],
-    [responseReply([{ type: 'message', role: 'assistant', content: [{ type: 'refusal', refusal: 'No.' }] }]), 'refused'],
-  ]) {
-    const protocol = createResponsesProtocol({ fetch: async () => stream([{ type: `response.${raw.status}`, response: raw }]) });
-    const output = await settle(protocol.call(input('responses')));
-    assert.equal(output.result.status, expected);
-    assert.deepEqual(output.result.toolCalls, []);
-    assert.equal(output.continuation, undefined);
-  }
-});
+for (const streaming of [false, true]) for (const status of ['failed', 'cancelled']) test(`Responses archives sanitized ${status} diagnostics (${streaming ? 'SSE' : 'JSON'})`, async () => {
+  const secret = 'private-native-test-key', output = [responseText(`partial ${secret}`)], response = { ...responseReply(output, status), error: { type: 'server_error', code: 'upstream_failure', message: `provider message echoes ${secret}` }, authorization: secret }
+  const terminal = streaming ? sse([{ type: `response.${status}`, response }]) : jsonResponse(response)
+  const execution = nativeSession(createResponsesProtocol({ fetch: async () => terminal }), { streaming })
+  await assert.rejects(run(execution, { input: [{ role: 'user', content: 'hello' }] }), error => error.code === 'provider-failure' && Object.keys(error).join(',') === 'name,code')
+  const report = await execution.close(), diagnostic = report.records.at(-1)
+  assert.equal(report.restoreState, undefined); assert.equal(report.cleanup, 'succeeded'); assert.equal(diagnostic.kind, 'diagnostic'); assert.equal(diagnostic.payload.status, status); assert.equal(diagnostic.payload.id, 'response-id'); assert.deepEqual(diagnostic.payload.error, { type: 'server_error', code: 'upstream_failure' }); assert.equal(diagnostic.payload.output[0].content[0].text, 'partial [redacted]')
+  assert.equal(JSON.stringify(report).includes(secret), false); assert.equal(JSON.stringify(report).includes('provider message'), false)
+})
 
-test('Responses rejects uncompleted streams, malformed JSON tools and unsupported output kinds', async () => {
-  for (const events of [
-    [{ type: 'response.output_text.delta', delta: 'partial' }],
-    [{ type: 'response.failed', response: { error: { message: 'private-key-never-in-error' } } }],
-    [{ type: 'response.completed', response: responseReply([{ type: 'function_call', call_id: 'one', name: 'lookup', arguments: '[]' }]) }],
-    [{ type: 'response.completed', response: responseReply([{ type: 'web_search_call' }]) }],
-  ]) {
-    const protocol = createResponsesProtocol({ fetch: async () => stream(events) });
-    await assert.rejects(settle(protocol.call(input('responses'))), error => {
-      assert.ok(['invalid-response', 'provider-failure'].includes(error.code));
-      assert.ok(!error.message.includes('private-key'));
-      return true;
-    });
-  }
-});
+test('Responses stream failure preserves already-received blocks and waits for reader cancellation', async () => {
+  const entered = deferred(), release = deferred()
+  const execution = nativeSession(createResponsesProtocol({ fetch: async () => sse([
+    { type: 'response.output_item.added', output_index: 0, item: { id: 'partial-message', type: 'message', role: 'assistant', content: [] } },
+    { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text', text: '' } },
+    { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '部分内容' },
+    { type: 'response.failed', response: { id: 'failed-response', status: 'failed', error: { type: 'server_error', message: 'never archive this' } } },
+  ], { close: false, cancel: async () => { entered.resolve(); await release.promise } }) }), { streaming: true })
+  const operation = execution.prepareExchange({ input: [{ role: 'user', content: 'hello' }] }).start()
+  await entered.promise; let settled = false; void operation.result.catch(() => { settled = true }); await tick(); assert.equal(settled, false)
+  release.resolve(); await assert.rejects(operation.result, { code: 'provider-failure' }); await operation.done
+  const report = await execution.close(); assert.equal(report.records.at(-1).payload.output[0].content[0].text, '部分内容'); assert.equal(report.restoreState, undefined)
+})
 
-test('Transport cancellation waits for reader cancellation before done', async () => {
-  let releaseCancel;
-  const gate = new Promise(resolve => { releaseCancel = resolve; });
-  let fetched;
-  const ready = new Promise(resolve => { fetched = resolve; });
-  let cancelCount = 0;
-  const protocol = createChatCompletionsProtocol({ fetch: async () => {
-    fetched();
-    return new Response(new ReadableStream({ cancel() { cancelCount++; return gate; } }));
-  } });
-  const operation = protocol.call(input('chat-completions'));
-  await ready;
-  await Promise.resolve();
-  operation.cancel();
-  let done = false;
-  void operation.done.then(() => { done = true; });
-  await assert.rejects(operation.result, { code: 'cancelled' });
-  assert.equal(done, false);
-  assert.equal(cancelCount, 1);
-  releaseCancel();
-  await operation.done;
-  assert.equal(done, true);
-});
-
-test('Transport observes and reports real cleanup failure separately from result', async () => {
-  let cancelCount = 0;
-  const protocol = createResponsesProtocol({ fetch: async () => new Response(new ReadableStream({
-    start(controller) { controller.enqueue(new TextEncoder().encode('data: not-json\n\n')); },
-    cancel() { cancelCount++; throw new Error('private-key-never-in-error'); },
-  })) });
-  const operation = protocol.call(input('responses'));
-  await assert.rejects(operation.result, { code: 'invalid-response' });
-  await assert.rejects(operation.done, error => error.code === 'cleanup-failure' && !error.message.includes('private-key'));
-  assert.equal(cancelCount, 1);
-});
-
-test('Provider HTTP errors and fetch exceptions are sanitized; unconsumed bodies are cancelled', async () => {
-  let cancelled = false;
-  const badHttp = createChatCompletionsProtocol({ fetch: async () => new Response(new ReadableStream({ cancel() { cancelled = true; } }), { status: 401 }) });
-  await assert.rejects(settle(badHttp.call(input('chat-completions'))), { code: 'provider-failure' });
-  assert.equal(cancelled, true);
-  const failure = createResponsesProtocol({ fetch: async () => { throw new Error('private-key-never-in-error'); } });
-  await assert.rejects(settle(failure.call(input('responses'))), error => error.code === 'provider-failure' && !error.message.includes('private-key'));
-});
-
-test('Discovery returns candidates without inventing capabilities; check performs explicit read-only request', async () => {
-  for (const factory of [createChatCompletionsProtocol, createResponsesProtocol]) {
-    const requests = [];
-    const protocol = factory({ fetch: async (url, init) => { requests.push({ url, ...init }); return json({ data: [{ id: 'alpha' }, { id: 'beta' }] }); } });
-    const candidates = await settle(protocol.discover(input(protocol.descriptor.id)));
-    assert.deepEqual(candidates, [{ remoteModelId: 'alpha', name: 'alpha' }, { remoteModelId: 'beta', name: 'beta' }]);
-    await settle(protocol.check(input(protocol.descriptor.id)));
-    assert.equal(requests.length, 2);
-    assert.ok(requests.every(request => request.method === 'GET' && request.url === 'https://unit.invalid/v1/models'));
-  }
-});
-
-test('Native parameter validation rejects unsupported options and unknown reasoning; omission preserves server defaults', async () => {
-  for (const factory of [createChatCompletionsProtocol, createResponsesProtocol]) {
-    const requests = [];
-    const protocol = factory({ fetch: async (_url, init) => {
-      requests.push(JSON.parse(init.body));
-      return protocol.descriptor.id === 'responses' ? json(responseReply([outputText('ok')])) : json(chatReply({ content: 'ok' }));
-    } });
-    protocol.validateOptions({}, declared);
-    for (const options of [{ temperature: 3 }, { maxOutputTokens: 0 }, { protocol: { foo: true } }, { protocol: { reasoningEffort: 'medium' } }]) {
-      assert.throws(() => protocol.validateOptions(options, declared));
-    }
-    assert.throws(() => protocol.validateOptions({ protocol: { reasoningEffort: 'low' } }, { ...declared, reasoning: { support: 'unknown' } }), { code: 'capability-unsupported' });
-    const available = protocol.effectiveCapabilities(declared, { protocol: { reasoningEffort: 'none' } });
-    assert.equal(available.reasoning.support, 'unsupported');
-    assert.equal(available.imageInput, false);
-    await settle(protocol.call(input(protocol.descriptor.id, { capabilities: { ...effective, streaming: false }, tools: [] })));
-    for (const key of ['temperature', 'max_output_tokens', 'max_completion_tokens', 'reasoning', 'reasoning_effort', 'tools']) assert.equal(requests[0][key], undefined);
-  }
-});
-
-test('Protocol components register through Nya dependencies and unregister in effects', async () => {
-  for (const factory of [createChatCompletionsProtocolComponent, createResponsesProtocolComponent]) {
-    const effects = [];
-    let registered;
-    let unregistered = false;
-    const component = factory();
-    component.apply({ effect: effect => effects.push(effect()) }, undefined, { 'models.protocols': { register(protocol) { registered = protocol; return { unregister: async () => { unregistered = true; } }; } } });
-    assert.ok(registered.descriptor.version);
-    assert.deepEqual(component.inject, ['models.protocols']);
-    await effects[0]();
-    assert.equal(unregistered, true);
-  }
-});
-
-test('A terminal stream result is available before body cleanup, while done joins actual cancellation', async () => {
-  let release;
-  const gate = new Promise(resolve => { release = resolve; });
-  let cancelled = false;
-  const terminal = { type: 'response.completed', response: responseReply([outputText('finished')]) };
-  const protocol = createResponsesProtocol({ fetch: async () => new Response(new ReadableStream({
-    start(controller) { controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(terminal)}\n\n`)); },
-    cancel() { cancelled = true; return gate; },
-  })) });
-  const operation = protocol.call(input('responses'));
-  assert.equal((await operation.result).result.text, 'finished');
-  let done = false;
-  void operation.done.then(() => { done = true; });
-  await Promise.resolve();
-  assert.equal(cancelled, true);
-  assert.equal(done, false);
-  release();
-  await operation.done;
-});
-
-test('Successful provider output cannot hide a terminal stream cleanup failure', async () => {
-  const protocol = createChatCompletionsProtocol({ fetch: async () => new Response(new ReadableStream({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk({ content: 'ok' }, 'stop'))}\n\ndata: [DONE]\n\n`));
-    },
-    cancel() { throw new Error('private-key-never-in-error'); },
-  })) });
-  const operation = protocol.call(input('chat-completions'));
-  assert.equal((await operation.result).result.text, 'ok');
-  await assert.rejects(operation.done, { code: 'cleanup-failure' });
-});
-
-test('An already errored response stream reports provider failure without a false cleanup failure', async () => {
-  let cancelCalled = false;
-  const protocol = createResponsesProtocol({ fetch: async () => new Response(new ReadableStream({
-    start(controller) { controller.error(new Error('network failure contains private-key-never-in-error')); },
-    cancel() { cancelCalled = true; },
-  })) });
-  const operation = protocol.call(input('responses'));
-  await assert.rejects(operation.result, { code: 'provider-failure' });
-  await operation.done;
-  assert.equal(cancelCalled, false);
-});
+test('a later successful exchange cannot make an earlier failed record chain restorable', async () => {
+  let count = 0; const execution = nativeSession(createResponsesProtocol({ fetch: async () => jsonResponse(++count === 1 ? responseReply([], 'failed') : responseReply([responseText('success')])) }))
+  await assert.rejects(run(execution, { input: [{ role: 'user', content: 'failed question' }] }), { code: 'provider-failure' })
+  await run(execution, { input: [{ role: 'user', content: 'new question' }] }); const report = await execution.close()
+  assert.equal(report.records.at(-1).kind, 'response'); assert.equal(report.restoreState, undefined)
+})

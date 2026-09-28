@@ -9,7 +9,7 @@ import { createModelsStoreComponent } from '../dist/store.js';
 import { createModelsComponent } from '../dist/component.js';
 import { normalizeModelsDevCatalog } from '../dist/catalog-domain.js';
 import { externalProviderId } from '../dist/identity.js';
-import { fakeProtocol, memoryVault } from './helpers.mjs';
+import { fakeProtocol, memoryVault, exchange } from './helpers.mjs';
 
 const capability = { support: 'unknown' }, capabilities = { tools: capability, streaming: capability, imageInput: capability, reasoning: capability };
 const provider = (id, extras = {}) => ({ id, revision: 1, versionId: `${id}-v1`, createdAt: '2026-01-01', updatedAt: '2026-01-01',
@@ -64,7 +64,7 @@ test('v1 missing/null/valid/unknown references migrate without collapsing identi
   assert.deepEqual(opened.store.connectionHistory('known').map(item => [item.revision, item.versionId, item.credentialRef]), [[1, 'known-v1', 'slot-known'], [2, 'known-v2', 'latest-slot']]);
   assert.equal(opened.store.connection('second-account').enabled, false);
   assert.equal(opened.store.configuration('default').versionId, 'default-v2'); assert.equal(opened.store.configuration('default').enabled, false);
-  assert.deepEqual(opened.store.configurationHistory('default').map(item => [item.versionId, item.remoteModelId, item.defaults]),
+  assert.deepEqual(opened.store.configurationHistory('default').map(item => [item.versionId, item.remoteModelId, item.parameters.value]),
     [['default-v1', 'same-remote', { temperature: 0.2 }], ['default-v2', 'changed-remote', { temperature: 0.7, maxOutputTokens: 2000 }]]);
   assert.notEqual(opened.store.configuration('variant').modelDefinitionId, opened.store.configuration('default').modelDefinitionId);
   for (const item of opened.store.models()) assert.equal(item.source.kind, 'user');
@@ -73,7 +73,7 @@ test('v1 missing/null/valid/unknown references migrate without collapsing identi
   assert.deepEqual(opened.store.intents(), [{ id: 'orphan', providerId: 'not-committed', slotId: 'uncommitted-secret', createdAt: '2026-01-02' }]);
   const ids = opened.store.models().map(item => item.id); await opened.root.fiber.dispose();
   const raw = new DatabaseSync(database);
-  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 2);
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
   assert.deepEqual(JSON.parse(raw.prepare('SELECT record FROM legacy_provider_versions WHERE version_id=?').get('known-v1').record), known);
   assert.deepEqual(JSON.parse(raw.prepare('SELECT record FROM legacy_model_versions WHERE version_id=?').get('default-v1').record), oldModel);
   raw.close();
@@ -124,20 +124,20 @@ test('a migrated legacy selection opens through Models before and after source i
     await activeRoot.installComponent(createModelsComponent());
     activeRoot.get('models.protocols').register(protocol);
     await activeRoot.get('models.settings').retryConnection(connectionId);
-    return { ...opened, models: activeRoot.get('models'), settings: activeRoot.get('models.settings'), source: activeRoot.get('models.source-data') };
+    return { ...opened, models: activeRoot.get('models'), open: input => activeRoot.get('models').openNative({ ...input, lease: activeRoot.get('models.protocols').acquire('chat-completions') }), settings: activeRoot.get('models.settings'), source: activeRoot.get('models.source-data') };
   };
   let runtime = await launch();
-  const saved = runtime.store.configuration('default'), before = await runtime.models.open({ modelId: 'default' });
+  const saved = runtime.store.configuration('default'), before = await runtime.open({ modelId: 'default' });
   assert.equal(before.snapshot.modelId, 'default'); assert.equal(before.snapshot.providerId, connectionId);
   assert.equal(before.snapshot.modelVersionId, 'legacy-model-v2'); assert.equal(before.snapshot.providerVersionId, 'legacy-connection-v2');
   assert.equal(before.snapshot.modelDefinitionVersionId, saved.modelDefinitionVersionId);
-  assert.deepEqual(before.snapshot.options, currentModel.defaults);
+  assert.deepEqual(before.snapshot.parameters.value, { temperature: 0.7, max_completion_tokens: 1234 });
   assert.equal(runtime.models.get('default').source.kind, 'user');
   const snapshot = normalizeModelsDevCatalog({ upstream: { id: 'upstream', name: 'Upstream', npm: '@ai-sdk/openai-compatible', api: priorConnection.baseUrl,
     models: { 'same-remote': { id: 'same-remote', name: 'Public default', streaming: true, tool_call: true,
       modalities: { input: ['text'], output: ['text'] } } } } }, 'models.dev', 20);
   await runtime.source.accept(snapshot);
-  const after = await runtime.models.open({ modelId: 'default' });
+  const after = await runtime.open({ modelId: 'default' });
   assert.deepEqual(after.snapshot, before.snapshot); assert.deepEqual(runtime.store.configuration('default'), saved);
   assert.equal(runtime.store.connection(connectionId).credentialRef, 'retained-slot');
   assert.equal(runtime.store.connection(connectionId).versionId, 'legacy-connection-v2');
@@ -145,10 +145,10 @@ test('a migrated legacy selection opens through Models before and after source i
   assert.ok(external); assert.notEqual(external.id, 'default'); assert.notEqual(external.modelDefinitionId, saved.modelDefinitionId);
   assert.equal(external.connectionId, connectionId); assert.equal(external.providerDefinitionId, before.snapshot.providerDefinitionId);
   assert.equal(external.remoteModelId, before.snapshot.remoteModelId); assert.equal(runtime.models.list({ available: true }).length, 2);
-  const externalExecution = await runtime.models.open({ modelId: external.id });
-  assert.deepEqual(externalExecution.snapshot.options, {});
+  const externalExecution = await runtime.open({ modelId: external.id });
+  assert.deepEqual(externalExecution.snapshot.parameters.value, {});
   for (const execution of [before, after, externalExecution]) {
-    await execution.generate({ messages: [{ role: 'user', content: 'Use the retained Key' }] }).result;
+    await exchange(execution, { messages: [{ role: 'user', content: 'Use the retained Key' }] }).result;
     await execution.close();
   }
   assert.deepEqual(protocol.calls.map(call => call.input.credential), ['existing-key', 'existing-key', 'existing-key']);
@@ -158,8 +158,8 @@ test('a migrated legacy selection opens through Models before and after source i
   await runtime.root.fiber.dispose(); activeRoot = undefined;
   runtime = await launch();
   assert.deepEqual(runtime.models.list().map(item => item.id).sort(), stableIds);
-  const restarted = await runtime.models.open({ modelId: 'default' });
-  assert.deepEqual(restarted.snapshot, before.snapshot); await restarted.close();
+  const restarted = await runtime.open({ modelId: 'default' });
+  assert.notEqual(restarted.snapshot.registrationGenerationId, before.snapshot.registrationGenerationId); assert.deepEqual({ ...restarted.snapshot, registrationGenerationId: before.snapshot.registrationGenerationId }, before.snapshot); await restarted.close();
   assert.equal(runtime.store.connection(connectionId).credentialRef, 'retained-slot');
   assert.deepEqual(runtime.store.configuration('default'), saved);
 });

@@ -20,7 +20,7 @@ H1 起点只从 `AgentDefinition.instructions` 读取固定指令，并将它与
 
 **用途类型 `kind`** 与**消息角色 `role`** 是两个独立维度。类型决定内容用途、可绑定位置、内容校验和组装规则；例如 Agent 指令、任务模板、上下文片段。角色决定它作为 `system`、`developer` 或 `user` 消息发送时的身份与优先级。`assistant` 回复和工具观察由 Run 轨迹产生，不作为用户可编辑的静态 prompt 角色。类型与角色的合法组合由显式策略验证；用户不能靠改一个字段绕过绑定或角色权限。首批具体类型和每种类型可用的角色仍需结合产品场景确定。
 
-当前 `llm` 服务的 `call(input)` 接收项目自有的结构化消息输入，由提供该服务的 API 组件（本机 Web 宿主选择 DeepSeek Chat Completions）映射到原生协议。纯组装函数按固定顺序生成已绑定 prompt、Run 固定起点的祖先轮次和当前用户输入；AgentLoop 在后续模型轮次追加助手工具请求与 Bash 观察。Run 的内部快照保存所用版本和内容，对外 Run 只给出版本 ID。
+当前由协议应用绑定编码原生消息，Run 只固定 Prompt 记录。根 Run 固定已绑定 instruction/context 与工具声明，后代继承父链初始化；每个新 Run 单独固定当前 task-template，使用函数式替换将原始输入处理一次。模板字面值不会再次展开；编辑/重新生成使用原始输入与原父引用。Session 保存这些不可变快照，协议 Loop 只处理本次增量和原生续轮。
 
 原有 `AgentDefinition.instructions` 可作为该 Agent 的初始已发布默认版本，用于兼容 H1。版本 ID 永不重新指向不同内容。首版不硬删除已发布版本；旧 Run 必须保留完整内容快照，不能依赖目录中的旧版本永远存在。
 
@@ -49,8 +49,8 @@ H1 起点只从 `AgentDefinition.instructions` 读取固定指令，并将它与
 | Prompt 与 Agent Prompt 存储函数 | 各自登记本领域的表迁移，分别加载文档版本与绑定的已提交读投影，写入时使用 SQLite 事务；不单独提供 Nya 服务。 |
 | SQLite 数据库组件 | 安装在应用根上，排他持有数据库连接，按领域执行迁移并记录版本，负责事务与关闭清理；不承载 Prompt 领域规则。 |
 | 状态提供方 | 持有 Session、Run、幂等键与 Run prompt 快照；检查准入并原子提交已准备的快照，不调用 Prompt 或模型服务。 |
-| Run 服务 | 接收只读 Agent 定义，注入 Agent Prompt、状态、LLM 和 AgentLoop 服务；先检查同键请求，仅为新 Run 解析绑定并准备模型选择。 |
-| AgentLoop | 注入状态和 LLM 服务；从已接受的快照组装模型输入，独占在途调用与清理。 |
+| Run 服务 | 接收只读 Agent 定义；先查询已接受键，再解析本次模板与根初始化或继承父链，准备原生 program。 |
+| 协议应用绑定 / RunRuntime | 绑定将固定 Prompt 编码为原生增量；Runtime 独占 program、操作和清理，不解释 Prompt 或协议状态。 |
 | 领域纯函数 | 校验内容、类型与角色组合，从草稿生成版本，根据固定快照与历史组装结构化消息。 |
 
 当前 Prompt 文档所有权由 Prompt 组件校验，Agent 管理权限与绑定版本所有权由 Agent Prompt 组件校验；未来需要访问外部身份或权限系统时，再增加拥有该连接的适配器组件。结构化消息组装保持纯函数，不因名为“Prompt 模块”就包成 Nya 服务。受信组合根每次通过 `context.get()` 获取当前服务，不缓存跨组件重启的引用。组件 `apply` 完成存储初始化后返回；Prompt 与 Agent Prompt 组件用 Effect 等待各自已接受的写入，SQLite 组件用 Effect 持有并清理数据库文件锁。
@@ -61,7 +61,7 @@ H1 起点只从 `AgentDefinition.instructions` 读取固定指令，并将它与
 
 1. 状态提供方先检查 Session 和同键去重。重复的同键、同规范化输入、同父节点请求直接返回原 Run 及原 prompt 快照，不重新读当前绑定；同键不同输入或父节点仍拒绝。
 2. 对新 Run，在接受路径中由 Agent Prompt 组件读取该 Agent 各用途的绑定，从 Prompt 组件获取不可变版本并验证类型和可用性；将内容快照与 Run、幂等键一并提交。绑定时已检查版本所有权和 Agent 管理权限。初始默认指令由 Agent Prompt 组件生成。
-3. AgentLoop 从已接受的快照组装结构化模型输入。用户此后编辑、发布或切换，只影响后续 Run；H2 的同一 Run 多次模型调用也应保持原选择。
+3. 协议应用绑定将已固定快照编码为原生输入。初始指令与 context 沿原父链继承；新发布初始指令只作用于新会话的根 Run。当前 task-template 只影响本次新输入，不改写历史。
 
 Prompt 创建、编辑、发布与 Agent Prompt 绑定现在是异步操作；成功返回表示 SQLite 事务已提交并更新各自读投影。Run 接受是异步 SQLite 事务，从已提交投影中选择版本并固定内容，事务内再次检查幂等键、父节点及完整祖先路径。调用者必须等待绑定完成，后续 Run 才保证采用新版本；进行中的绑定与 Run 接受按实际完成顺序观察。不能先创建 Run 再异步补写 prompt，也不能在发现同键重复前先要求当前版本可解析。当前绑定写入和 Run 接受各自在自己的事务中完成；Run 使用解析时已提交的绑定版本。若已绑定版本不可用，新 Run 明确失败，不静默改用默认版本；旧 Run 仍由自身快照解释。
 
@@ -69,7 +69,7 @@ Prompt 创建、编辑、发布与 Agent Prompt 绑定现在是异步操作；�
 
 ## 生命周期与验收
 
-当前所有组件都安装在同一个应用根，Nya 依赖关系是 `SQLite → Prompt`、`Prompt + SQLite → Agent Prompt → Run`，以及 `LLM API 组件 + State → AgentLoop → Run`。Session 服务接收只读 Agent 定义，依赖 Projects 和 State。用户普通编辑、发布和绑定不触发组件重启，也不取消在途 Run。Agent Prompt 被撤销时，Run 先清理，Prompt 文档与 Session 服务仍可用。Prompt 或 SQLite 被撤销时，Nya 先让 Run 服务停止准入，并通过 AgentLoop 取消、等待在途调用的 `done`，再等待 Agent Prompt 与 Prompt 组件已接受的写入，最后关闭数据库。`harness.close()` 卸载应用根上的全部组件，包括 LLM API 组件和 SQLite；重新装配后可恢复 Prompt 文档、版本和绑定。存储无效时启动失败，异常退出遗留的锁必须在确认原进程停止后手动清理。Session、Run、幂等键和 Run 快照可在重启后恢复；异常退出的在途 Run 结算为 `interrupted`。
+当前组件都安装在同一 Nya 根；依赖为 SQLite → Prompt → Agent Prompt → Run，Models → 协议应用绑定 → Run，以及 Session/工具 → RunRuntime → Run。普通发布和绑定不触发组件重启或取消在途 Run。依赖撤销时 Nya 先停止 Run 准入并通过 Runtime 取消、等待操作与 program 退出，再让 Prompt/Session/存储完成已接受写入。`harness.close()` 关闭根的全部组件；重启恢复文档、版本、绑定、原生会话记录与幂等键，遗留活动 Run 标为 interrupted，不重放副作用。
 
 行为测试已覆盖：用户创建草稿、编辑内容并发布新版本；草稿修订冲突与越权操作无副作用；不同类型与角色组合校验；结构化模型输入保留消息角色与顺序；发布但未激活不改变新 Run；激活后新 Run 用新版本，旧 Run 保持原快照；同键重试不重新选择；提供方撤销等待模型调用实际退出；存储关闭重开恢复和单实例排他。修改取消、生命周期或资源归属时同步更新行为测试，并运行 `npm run check`。
 

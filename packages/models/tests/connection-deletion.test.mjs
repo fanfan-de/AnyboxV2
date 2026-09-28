@@ -1,3 +1,4 @@
+import { params, exchange } from './helpers.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { modelsError } from '../dist/errors.js';
@@ -11,12 +12,12 @@ test('deleting a connection removes its configurations and Key while preserving 
     name: 'Second account', enabled: true, protocolId: provider.protocolId, baseUrl: provider.baseUrl, auth: 'api-key', timeoutMs: 1000, apiKey: 'private-second' });
   const secondModels = f.models.list({ connectionId: second.id });
   const variant = await f.settings.createConfiguration({ connectionId: provider.id, modelDefinitionId: model.modelDefinitionId,
-    name: 'Variant', enabled: true, capabilities: model.capabilities, defaults: { temperature: 0.2 }, baseline: false });
+    name: 'Variant', enabled: true, capabilities: model.capabilities, parameters: params('test', { temperature: 0.2 }), baseline: false });
   const definitions = [f.settings.providers(), f.settings.models()];
-  const execution = await f.models.open({ modelId: model.id });
+  const execution = await f.open({ modelId: model.id });
   const snapshot = execution.snapshot;
   f.protocols[0].next();
-  const call = execution.generate({ messages: [{ role: 'user', content: 'first turn' }] });
+  const call = exchange(execution, { messages: [{ role: 'user', content: 'first turn' }] });
   await tick();
   await assert.rejects(f.settings.deleteConnection(provider.id, provider.revision + 1), { code: 'conflict' });
   await assert.rejects(f.settings.deleteConnection(provider.id, 0), { code: 'invalid-config' });
@@ -33,13 +34,13 @@ test('deleting a connection removes its configurations and Key while preserving 
   assert.equal(f.settings.configurationHistory(model.id).length, 1);
   assert.equal(f.settings.configurationHistory(variant.id).length, 1);
   assert.deepEqual(execution.snapshot, snapshot); assert.equal(f.protocols[0].calls[0].input.signal.aborted, false);
-  f.protocols[0].calls[0].succeed({ result: complete('first answer'), continuation: { retained: true } });
+  f.protocols[0].calls[0].succeed({ ...complete('first answer'), retained: true });
   assert.equal((await call.result).text, 'first answer');
-  const next = execution.generate({ messages: [{ role: 'user', content: 'second turn' }] });
+  const next = exchange(execution, { messages: [{ role: 'user', content: 'second turn' }] });
   assert.equal((await next.result).status, 'completed');
   assert.deepEqual(f.protocols[0].calls.map(value => value.input.credential), ['private-first', 'private-first']);
   await execution.close();
-  await assert.rejects(f.models.open({ modelId: model.id }), { code: 'not-found' });
+  await assert.rejects(f.open({ modelId: model.id }), { code: 'not-found' });
   await assert.rejects(f.settings.deleteConnection(provider.id, provider.revision), { code: 'not-found' });
   await assert.rejects(f.settings.createConnection({ ...provider, id: provider.id }), { code: 'invalid-config' });
   const { id: _id, revision: _revision, versionId: _version, createdAt: _created, updatedAt: _updated, credentialConfigured: _key, sync: _sync, ...input } = provider;
@@ -68,14 +69,14 @@ test('deletion waits for admitted credential acquisition and rejects later initi
   const f = await fixture(); t.after(() => f.close());
   const { provider, model } = await f.add({ key: 'captured-key' });
   f.vault.holdReads = true;
-  const opened = f.models.open({ modelId: model.id }); await tick();
+  const opened = f.open({ modelId: model.id }); await tick();
   let deleted = false;
   const deleting = f.settings.deleteConnection(provider.id, provider.revision).then(() => { deleted = true; });
-  const later = assert.rejects(f.models.open({ modelId: model.id }), { code: 'not-found' });
+  const later = assert.rejects(f.open({ modelId: model.id }), { code: 'not-found' });
   await tick(); assert.equal(deleted, false);
   f.vault.release();
   const execution = await opened; await deleting; await later;
-  const call = execution.generate({ messages: [{ role: 'user', content: 'after deletion' }] });
+  const call = exchange(execution, { messages: [{ role: 'user', content: 'after deletion' }] });
   await call.result; assert.equal(f.protocols[0].calls[0].input.credential, 'captured-key');
   await execution.close();
 });

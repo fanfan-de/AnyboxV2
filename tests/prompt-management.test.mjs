@@ -1,3 +1,4 @@
+import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
@@ -10,7 +11,7 @@ import { Context } from '@nya/core'
 import { createHarness } from '../dist/harness.js'
 import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from '../dist/run/component.js'
-import { createAgentLoopComponent } from '../dist/run/agent-loop-component.js'
+import { createRunRuntimeComponent } from '../dist/run/runtime-component.js'
 import { createBashComponent } from '../dist/tool/bash-component.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
 import { createPromptComponent, promptServiceKey } from '../dist/prompt/component.js'
@@ -321,7 +322,8 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   const promptFiber = root.installComponent(createPromptComponent(inputs))
   const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const llmFiber = root.installComponent(llm.component())
-  const loopFiber = root.installComponent(createAgentLoopComponent(inputs))
+  const loopFiber = root.installComponent(createRunRuntimeComponent(inputs))
+  await installTestProtocolAgents(root)
   const runsFiber = root.installComponent(createRunComponent(inputs, agents))
   try {
     await Promise.all([sessionFiber, databaseFiber, llmFiber])
@@ -342,7 +344,7 @@ test('removing the prompt component cancels and joins dependent runs', async () 
     const waiting = runs.waitRun(run.id)
     let disposed = false
     const stopping = promptFiber.dispose().then(() => { disposed = true })
-    assert.equal(await llm.calls[0].cancelled.promise, 'dependency-unavailable')
+    await llm.calls[0].cancelled.promise
     assert.equal(disposed, false)
     llm.calls[0].result.reject(new Error('aborted'))
     llm.calls[0].done.resolve()

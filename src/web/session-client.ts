@@ -1,7 +1,9 @@
-import type { ModelEvent, RunnableModelSummary } from '@anybox/models'
+import type { RunnableModelSummary } from '@anybox/models'
 import { canUseModel } from './models-client.js'
 import type { Api, ApiError, PendingSubmission, RunEventView, RunView, SessionView, NodeView, NodePage, SessionPosition } from './client-types.js'
 import type { SessionRef } from './workspace-layout.js'
+import type { ProtocolViewSnapshot } from './protocols/types.js'
+import { getProtocolWebModule } from './protocols/modules.js'
 
 export interface BrowserStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export const pendingKey = 'anybox.web.v2.pending'
@@ -18,6 +20,7 @@ export function createPendingStore(storage: BrowserStorage): PendingStore {
         if (!raw || typeof raw !== 'object') continue
         const value = raw as Record<string, unknown>
         if (value.sessionId !== id || typeof value.input !== 'string' || typeof value.idempotencyKey !== 'string' ||
+            (value.schemaVersion !== undefined && value.schemaVersion !== 1) ||
             (value.runId !== undefined && typeof value.runId !== 'string') ||
             (value.modelId !== undefined && typeof value.modelId !== 'string') ||
             (value.parentNodeId !== undefined && value.parentNodeId !== null && typeof value.parentNodeId !== 'string')) continue
@@ -56,7 +59,7 @@ export interface SessionSnapshot {
   readonly draft: string
   readonly events: ReadonlyMap<string, readonly RunEventView[]>
   readonly expanded: ReadonlySet<string>
-  readonly progress: ReadonlyMap<string, string>
+  readonly views: ReadonlyMap<string, ProtocolViewSnapshot>
 }
 export interface SessionController {
   snapshot(): SessionSnapshot
@@ -66,7 +69,7 @@ export interface SessionController {
   notifyChange(): void
   setLive(connected: boolean): void
   setModel(modelId: string): Promise<void>
-  modelProgress(runId: string, event: ModelEvent): void
+  protocolView(snapshot: ProtocolViewSnapshot): void
   setDraft(value: string): void
   submit(): Promise<void>
   cancel(id: string): Promise<void>
@@ -100,7 +103,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   let refreshAgain = false, locationAgain = false, live = false, locationJob: Promise<void> | undefined
   const drafts = new Map<string | null, string>()
   const reads = new Set<AbortController>()
-  const progress = new Map<string, string>()
+  const views = new Map<string, ProtocolViewSnapshot>()
   const events = new Map<string, readonly RunEventView[]>(), expanded = new Set<string>(), eventJobs = new Map<string, Promise<void>>()
   const path = `/sessions/${encodeURIComponent(ref.sessionId)}`
   const pending = () => env.pending.get(ref.sessionId)
@@ -137,11 +140,27 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try { env.pending.set(ref.sessionId, value); return true }
     catch { notice = '浏览器无法保存待提交信息，请启用此页面的会话存储后重试。'; emit(); return false }
   }
+  const encodeInput = (text: string, modelId = session?.modelId): string | undefined => {
+    const model = env.models?.().find(value => value.id === modelId)
+    const protocolId = model?.parameters.protocolId ?? session?.protocolId
+    if (session?.protocolId && protocolId !== session.protocolId) {
+      notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return undefined
+    }
+    const module = getProtocolWebModule(protocolId)
+    if (!module) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return undefined }
+    try { return module.encodeInput(text) }
+    catch (error) { notice = env.messageFor(error); emit(); return undefined }
+  }
+  const decodeView = (run: RunView, value: unknown): ProtocolViewSnapshot | undefined => {
+    const module = getProtocolWebModule(run.protocolBinding?.protocolId)
+    if (!module) { notice = '此协议的展示组件尚不可用。'; return undefined }
+    return module.decode(value)
+  }
   const adopt = (value: RunView) => {
     if (value.sessionId !== ref.sessionId) return
-    if (!isActive(value)) progress.delete(value.id)
     const previous = runs.find(item => item.id === value.id)
     if (previous && previous.revision > value.revision) return
+    if (!isActive(value) && views.get(value.id)?.status === 'provisional') views.delete(value.id)
     runs = [...runs.filter(item => item.id !== value.id), value]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
   }
@@ -167,6 +186,14 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       pathNodes = nodes
       children = append ? [...children, ...page.nodes] : page.nodes
       childCursor = page.nextCursor
+      for (const node of nodes) {
+        const run = runs.find(value => value.id === node.sourceRunId)
+        if (run?.protocolBinding && views.get(run.id)?.status !== 'committed') {
+          const view = decodeView(run, await read<unknown>(`/runs/${encodeURIComponent(run.id)}/view`, version))
+          if (view) controller.protocolView(view)
+        }
+      }
+      if (location !== locationVersion) return
       loading = false
     } catch (error) {
       if (version !== generation || location !== locationVersion || !attached()) return
@@ -198,13 +225,15 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   }
   const submitStored = async (submission: PendingSubmission, followVersion?: number) => {
     if (busy) return
+    const input = encodeInput(submission.input, submission.modelId)
+    if (input === undefined) return
     busy = true
     invalidate()
     notice = ''
     emit()
     try {
       const accepted = await env.api<RunView>(`${path}/runs`, {
-        input: submission.input, idempotencyKey: submission.idempotencyKey, parentNodeId: submission.parentNodeId,
+        input, idempotencyKey: submission.idempotencyKey, parentNodeId: submission.parentNodeId,
         ...(submission.modelId !== undefined ? { modelId: submission.modelId } : {}),
       })
       if (accepted.sessionId !== ref.sessionId) throw new Error('session mismatch')
@@ -232,8 +261,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try { existing = await read<RunView>(`${path}/runs/by-key/${encodeURIComponent(submission.idempotencyKey)}`, version) }
     catch (error) { if (!isApiError(error) || error.status !== 404) throw error }
     if (existing) { adopt(existing); save(undefined) }
-    else if (submission.parentNodeId === undefined || (env.models && submission.modelId === undefined)) {
-      notice = '旧版待提交消息尚未被接受，已保留输入。请选定对话位置与模型后确认发送。'
+    else if (session?.historyMode === 'dialogue-v1' || submission.schemaVersion !== 1 || submission.parentNodeId === undefined || (env.models && submission.modelId === undefined)) {
+      notice = session?.historyMode === 'dialogue-v1' ? '旧版会话仅供查看。待提交消息已恢复为草稿；请新建原生会话。' : '旧版待提交消息尚未被接受，已保留输入。请选定对话位置与模型后确认发送。'
       if (!drafts.get(position.viewNodeId)) drafts.set(position.viewNodeId, submission.input)
       save(undefined)
     } else await submitStored(submission)
@@ -241,13 +270,13 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   const controller: SessionController = {
     snapshot: () => ({ session, runs, run: runs.find(item => item.id === position.focusedRunId), position,
       path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice,
-      draft: drafts.get(position.viewNodeId) ?? '', events, expanded, progress }),
+      draft: drafts.get(position.viewNodeId) ?? '', events, expanded, views }),
     attach(value) { listener = value; session = undefined; loading = true; invalidate(); void controller.refresh() },
     detach() {
       listener = undefined
       invalidate()
       locationVersion++
-      progress.clear()
+      views.clear()
       position = { ...position, follow: undefined }
       remember()
       refreshAgain = false
@@ -259,27 +288,42 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (!env.hidden()) void controller.refresh()
     },
     setLive(connected) {
-      if (!connected && progress.size) { progress.clear(); emit() }
+      if (!connected) { emit() }
       live = connected
       if (!refreshJob) schedule()
     },
     async setModel(modelId) {
       if (!session || busy || pending() || !modelId) return
+      if (session.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       if (env.models && !canUseModel(env.models().find(value => value.id === modelId))) {
         notice = '此模型暂不可用，请检查提供方与模型配置。'; emit(); return
       }
+      const candidate = env.models?.().find(value => value.id === modelId)
+      if (session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId) { notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return }
+      if (!getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId)) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return }
       busy = true; invalidate(); notice = ''; emit()
       try { session = await env.api<SessionView>(`${path}/model`, { modelId }); refreshAgain = true }
       catch (error) { notice = env.messageFor(error) }
       finally { finishWrite() }
     },
-    modelProgress(runId, event) {
-      if (!attached() || event.type !== 'text-delta' || !event.delta) return
-      const run = runs.find(value => value.id === runId)
-      if (run && !isActive(run)) return
-      // Display-only buffers stay bounded even if a run produces very long output.
-      if (!progress.has(runId) && progress.size >= 8) progress.delete(progress.keys().next().value!)
-      progress.set(runId, ((progress.get(runId) ?? '') + event.delta).slice(-65_536))
+    protocolView(snapshot) {
+      if (!attached() || snapshot.sessionId !== ref.sessionId) return
+      const run = runs.find(value => value.id === snapshot.runId)
+      if (run && !isActive(run) && snapshot.status === 'provisional') return
+      if (run?.protocolBinding && run.protocolBinding.protocolId !== snapshot.protocolId) return
+      const module = getProtocolWebModule(snapshot.protocolId)
+      if (!module) { notice = '此协议的展示组件尚不可用。'; emit(); return }
+      const decoded = module.decode(snapshot)
+      if (!decoded) return
+      const previous = views.get(snapshot.runId)
+      const next = module.reduce(previous, decoded)
+      if (!next || next === previous) return
+      views.set(snapshot.runId, next)
+      // Cached views outside the visible path can be queried again when needed.
+      if (views.size > 64) {
+        const visible = new Set(pathNodes.map(node => node.sourceRunId))
+        for (const id of views.keys()) if (!visible.has(id) && !isActive(runs.find(value => value.id === id))) { views.delete(id); break }
+      }
       emit()
     },
     setDraft(value) {
@@ -335,6 +379,13 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
             }
             if (locationJob) locationAgain = true
             else await readLocation()
+            for (const run of runs) {
+              if (!run.protocolBinding) continue
+              const visible = isActive(run) || pathNodes.some(node => node.sourceRunId === run.id) || expanded.has(run.id)
+              if (!visible) continue
+              const loadedView = decodeView(run, await read<unknown>(`/runs/${encodeURIComponent(run.id)}/view`, version))
+              if (loadedView) controller.protocolView(loadedView)
+            }
             await recover(version)
             await followResult()
           } catch (error) {
@@ -349,14 +400,15 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     },
     async submit() {
       if (!session || busy || loading) return
+      if (session.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       let submission = pending()
       if (!submission) {
         if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
           notice = '请先选择一个可用模型；没有可用模型时，请打开设置配置提供方和模型。'; emit(); return
         }
-        const input = (drafts.get(position.viewNodeId) ?? '').trim()
-        if (!input) { notice = '请输入消息。'; emit(); return }
-        submission = { sessionId: ref.sessionId, input, idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
+        const input = encodeInput((drafts.get(position.viewNodeId) ?? '').trim())
+        if (input === undefined) return
+        submission = { schemaVersion: 1, sessionId: ref.sessionId, input, idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
         if (!save(submission)) return
         drafts.set(position.viewNodeId, '')
       }
@@ -364,10 +416,13 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     },
     async regenerate(node) {
       if (busy || pending() || node.sessionId !== ref.sessionId) return
+      if (session?.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
         notice = '请先选择一个可用模型。'; emit(); return
       }
-      const submission: PendingSubmission = { sessionId: ref.sessionId, input: node.input, parentNodeId: node.parentId, idempotencyKey: env.newId(), ...(session?.modelId ? { modelId: session.modelId } : {}) }
+      const input = encodeInput(node.input)
+      if (input === undefined) return
+      const submission: PendingSubmission = { schemaVersion: 1, sessionId: ref.sessionId, input, parentNodeId: node.parentId, idempotencyKey: env.newId(), ...(session?.modelId ? { modelId: session.modelId } : {}) }
       if (!save(submission)) return
       await controller.navigate(node.parentId)
       await submitStored(submission, locationVersion)

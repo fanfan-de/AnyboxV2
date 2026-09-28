@@ -11,7 +11,7 @@ import { sessionServiceKey, sessionRunServiceKey } from './port.js'
 import type { SessionPort, SessionRunPort } from './port.js'
 import { openSqliteSessionRecords } from './sqlite-records.js'
 
-/** One owner for every Session's conversation and execution records; execution resources stay in AgentLoop. */
+/** One owner for every Session's conversation and execution records; execution resources stay in RunRuntime. */
 export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[]): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
   [projectServiceKey]: ProjectPort
@@ -51,10 +51,10 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
             return records.createSession(inputs.newId(), projectId, id, inputs.now(), modelId)
           })
         },
-        selectSessionModel(sessionId, rawModelId) {
+        selectSessionModel(sessionId, rawModelId, protocolId) {
           return track(async () => {
             const modelId = nonEmpty(rawModelId, 'modelId')
-            return records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId)
+            return records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId, protocolId)
           })
         },
         getSession: id => track(() => records.getSession(id)),
@@ -69,14 +69,18 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         getRunByKey: (sessionId, key) => track(() => records.getRunByKey(sessionId, key)),
         listRuns: (sessionId, query) => track(() => records.listRuns(sessionId, query)),
         getRunEvents: (id, afterSeq) => track(() => records.getRunEvents(id, afterSeq)),
+        getRunRecords: id => track(() => records.getRunRecords(id)),
       }
       const runs: SessionRunPort = {
         findAcceptedRun: input => track(() => records.findAcceptedRun(input)),
-        registerRun: (id, input, now, prompts, model) => track(() => records.registerRun(id, input, now, prompts, model)),
+        registerRun: (id, input, now, prompts, model, native) => track(() => records.registerRun(id, input, now, prompts, model, native)),
+        loadNativeInitialization: sessionId => track(() => records.loadNativeInitialization(sessionId)),
+        loadNativeHistory: (sessionId, parentNodeId) => track(() => records.loadNativeHistory(sessionId, parentNodeId)),
+        startOperation: (id, operation, at) => track(() => records.startOperation(id, operation, at)),
+        observeOperation: (id, operationId, observation, at) => track(() => records.observeOperation(id, operationId, observation, at)),
         loadRunContext: id => track(() => records.loadRunContext(id)),
         getRun: id => track(() => records.getRun(id)),
         getRunExecution: id => track(() => records.getRunExecution(id)),
-        recordRunEvent: (id, event, at) => track(() => records.recordRunEvent(id, event, at)),
         requestCancellation: (id, now) => track(() => records.requestCancellation(id, now)),
         settleRun: (id, outcome, now) => track(() => records.settleRun(id, outcome, now)),
       }

@@ -14,7 +14,7 @@ function fixture() {
     const parts = url.split('?')[0].split('/').map(decodeURIComponent)
     const sessionId = parts[2]
     if (parts[1] === 'sessions') {
-      if (parts.length === 3) return { id: sessionId, projectId: `p-${sessionId}`, agentId: 'assistant', createdAt: '0' }
+      if (parts.length === 3) return { id: sessionId, projectId: `p-${sessionId}`, agentId: 'assistant', createdAt: '0', modelId: null, historyMode: 'native-local-v1', protocolId: 'chat-completions' }
       if (parts[3] === 'nodes') {
         if (parts[5] === 'path') {
           const path = []; let node = nodes.get(parts[4])
@@ -285,7 +285,7 @@ test('a failed durable pending write prevents a POST and preserves the draft', a
   const a = createSessionController({ sessionId: 'a', projectId: 'p' }, {
     pending, api: async (url, body) => {
       calls.push({ url, body })
-      if (url === '/sessions/a') return { id: 'a', projectId: 'p' }
+      if (url === '/sessions/a') return { id: 'a', projectId: 'p', historyMode: 'native-local-v1', protocolId: 'chat-completions' }
       if (url.includes('/nodes?')) return { nodes: [] }
       return []
     }, messageFor: String, newId: () => 'key', hidden: () => false,

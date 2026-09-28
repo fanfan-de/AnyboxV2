@@ -11,6 +11,9 @@ export function toolTrace(run: Pick<RunView, 'status'>, events: readonly RunEven
     } else if (event.kind === 'tool-started') {
       const call = latest(event.requestId, event.name)
       if (call?.state === 'queued') call.state = 'running'
+      else if (call?.state !== 'running') calls.push(event.name === 'bash'
+        ? { id: event.requestId, name: 'bash', command: event.command, state: 'running' }
+        : { id: event.requestId, name: 'apply_patch', patch: event.patch, patchTruncated: event.patchTruncated, state: 'running' })
     } else if (event.kind === 'tool-observed') {
       const call = latest(event.requestId, event.name)
       if (!call || call.state !== 'running') continue

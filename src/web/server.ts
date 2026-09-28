@@ -16,7 +16,8 @@ import type { Project } from '../project/component.js'
 import { DirectoryPickerFailure } from './directory-picker.js'
 import { openRunChangeStream } from './run-change-stream.js'
 import type { RunChangeStream } from './run-change-stream.js'
-import type { RunChange, RunModelEvent } from '../run/notifications.js'
+import type { RunChange } from '../run/notifications.js'
+import type { ProtocolViewFrame, ProtocolViewSnapshot } from './protocols/types.js'
 import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
   PromptSnapshot, PromptVersion } from '../prompt/domain.js'
 
@@ -36,6 +37,7 @@ export interface WebCommands {
   waitRun(id: string, signal?: AbortSignal): Promise<Run | undefined>
   startRun(input: RunInput): Promise<Run>
   getRun(id: string): Promise<Run | undefined>
+  getRunView(id: string): Promise<ProtocolViewSnapshot | undefined>
   listRuns(sessionId: string, query?: RunQuery): Promise<readonly Run[]>
   getRunEvents(id: string, afterSeq?: number): Promise<readonly RunEvent[] | undefined>
   cancelRun(id: string): Promise<Run | undefined>
@@ -56,7 +58,7 @@ export interface WebCommands {
 export interface WebServer {
   readonly url: string
   notifyRunChange(change: RunChange): void
-  notifyModelProgress(progress: RunModelEvent): void
+  notifyProtocolView(progress: ProtocolViewFrame): void
   close(): Promise<void>
 }
 
@@ -101,6 +103,7 @@ function knownFailure(error: unknown): HttpFailure {
     }
     if ('code' in error && error.code === 'node-not-found') return failure(404, 'node-not-found')
     if ('code' in error && error.code === 'invalid-history') return failure(409, 'invalid-history')
+    if ('code' in error && ['legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable'].includes(String(error.code))) return failure(409, String(error.code))
     if (/idempotency key already used/.test(error.message)) {
       return failure(409, 'conflict')
     }
@@ -120,6 +123,7 @@ function sessionView(session: Session): object {
   return {
     id: session.id, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
     modelId: session.modelId,
+    protocolId: session.protocolId, historyMode: session.historyMode,
   }
 }
 
@@ -128,6 +132,7 @@ function runView(run: Run): object {
     id: run.id, sessionId: run.sessionId, input: run.input, status: run.status,
     createdAt: run.createdAt, updatedAt: run.updatedAt, revision: run.revision, history: run.history,
     modelId: run.modelId, requestedModelId: run.requestedModelId, modelSnapshot: run.modelSnapshot,
+    ...(run.protocolBinding ? { protocolBinding: run.protocolBinding } : {}),
     ...(run.legacyModelSnapshot ? { legacyModelSnapshot: run.legacyModelSnapshot } : {}),
     ...(run.resultNodeId ? { resultNodeId: run.resultNodeId } : {}),
     ...(run.output === undefined ? {} : { output: run.output }),
@@ -174,6 +179,9 @@ function toolCallView(call: ValidatedToolRequest): object {
 function runEventView(event: RunEvent): object {
   const base = { seq: event.seq, at: event.at, kind: event.kind }
   switch (event.kind) {
+    case 'operation-started': return { ...base, operationId: event.operationId, operationKind: event.operationKind }
+    case 'operation-observed': return { ...base, operationId: event.operationId }
+    case 'operation-failed': return { ...base, operationId: event.operationId, category: event.category }
     case 'model-started': return base
     case 'model-tool-calls': return { ...base, calls: event.calls.map(toolCallView) }
     case 'tool-started': return { ...base, ...toolCallView(event.call), requestId: event.call.id }
@@ -228,6 +236,8 @@ const assets = new Map([
   ['/models-directory-client.js', { file: fileURLToPath(new URL('./models-directory-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-client.js', { file: fileURLToPath(new URL('./workspace-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-layout.js', { file: fileURLToPath(new URL('./workspace-layout.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/protocols/view.js', { file: fileURLToPath(new URL('./protocols/view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/protocols/modules.js', { file: fileURLToPath(new URL('./protocols/modules.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/session-client.js', { file: fileURLToPath(new URL('./session-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/run-change-client.js', { file: fileURLToPath(new URL('./run-change-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/tool-trace.js', { file: fileURLToPath(new URL('./tool-trace.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
@@ -473,7 +483,7 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       if (path === '/api/v1/models/configurations') {
         if (method === 'GET') { json(response, 200, commands.modelsSettings.configurations(url.searchParams.get('connectionId') ?? undefined)); return }
         if (method === 'POST') {
-          const body = await requestObject(request, ['id', 'modelDefinitionId', 'connectionId', 'name', 'enabled', 'capabilities', 'defaults', 'baseline'])
+          const body = await requestObject(request, ['id', 'modelDefinitionId', 'connectionId', 'name', 'enabled', 'capabilities', 'parameters', 'baseline'])
           json(response, 200, await commands.modelsSettings.createConfiguration(body as unknown as ModelConfigurationInput)); return
         }
       }
@@ -555,6 +565,13 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         json(response, 200, runView(run))
         return
       }
+      const runViewMatch = /^\/api\/v1\/runs\/([^/]+)\/view$/.exec(path)
+      if (method === 'GET' && runViewMatch) {
+        const view = await commands.getRunView(decodeURIComponent(runViewMatch[1]))
+        if (!view) throw failure(404, 'view-unavailable')
+        json(response, 200, view)
+        return
+      }
       const runMatch = /^\/api\/v1\/runs\/([^/]+)$/.exec(path)
       if (method === 'GET' && runMatch) {
         const run = await commands.getRun(decodeURIComponent(runMatch[1]))
@@ -633,8 +650,8 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
     notifyRunChange(change) {
       if (!closing) for (const stream of changeStreams) stream.publish(change)
     },
-    notifyModelProgress(progress) {
-      if (!closing) for (const stream of changeStreams) stream.publishModelProgress(progress)
+    notifyProtocolView(progress) {
+      if (!closing) for (const stream of changeStreams) stream.publishProtocolView(progress)
     },
     close() {
       if (shutdown) return shutdown

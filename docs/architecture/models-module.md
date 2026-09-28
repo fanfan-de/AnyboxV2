@@ -1,5 +1,7 @@
 # Models 模块架构
 
+> 本文图示保留原生协议迁移前的架构记录。当前调用接口、资源归属与持久化以 [Harness组件说明](../harness-components.md) 和 [原生协议设计](../native-protocol-agent-framework-design.md) 为准。
+
 对应 `packages/models` 与当前 Harness/Web 接入的实际实现。实线表示调用或资源访问，虚线表示协议注册。图中的协议组件组包含可同时安装的多个 Nya 组件。
 
 完整模块框架图保存在模块自己的文档目录：[高清 PNG](../../packages/models/docs/architecture.png) · [SVG](../../packages/models/docs/architecture.svg) · [可编辑 draw.io（两页）](../../packages/models/docs/architecture.drawio)。主图包含 10 个内置 Nya 组件：Models、Store、Vault、四种原生协议，以及可选目录的来源、缓存和目录服务。Models 核心提供四个服务端口，其中 `models.source-data` 是受信接纳端口，不是额外组件；目录通过它接纳统一定义并等待连接初始化。配置者选择 Provider 定义、保存连接与 Key，调用者选择稳定的执行配置 ID。主图标注实际 Nya 依赖、自动基础配置规则及执行资源边界；第二页展开定义、连接与执行配置的数据关系。

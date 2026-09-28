@@ -1,116 +1,99 @@
 import { modelsError } from '../errors.js';
-import type { ModelMessage, ModelProtocol, ModelResult, ProtocolCallInput, ProtocolOutcome } from '../types.js';
-import { array, captureOptions, commonFields, connectionFields, effectiveCapabilities, effortField, object, parseJson, parseTool, protocolComponent, string, usage, validateOptions, validateProvider, type NativeObject, type ProtocolOptions } from './shared.js';
+import type { NativeObject, NativeProtocol } from '../native-types.js';
+import type { JsonValue } from '../types.js';
+import { array, captureOptions, connectionFields, conversation, effectiveCapabilities, effortOption, index, native, nonempty, numberOption, object, optionKeys, parseJson, protocolComponent, reasoningEfforts, requireLocalTools, restoreRecords, string, validateProvider, type ProtocolOptions } from './shared.js';
 import { check, discover, request } from './transport.js';
-
-function message(input: ModelMessage): NativeObject {
-  if (input.role === 'tool') return { role: 'tool', tool_call_id: input.callId, content: input.content };
-  if (input.role !== 'assistant') return { role: input.role, content: input.content };
-  return {
-    role: 'assistant', content: input.content,
-    ...(input.toolCalls?.length ? { tool_calls: input.toolCalls.map(call => ({ id: call.id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } })) } : {}),
-  };
+export interface ChatCompletionsRequestPolicy {
+  readonly protocolId: string;
+  readonly name: string;
+  readonly maxTokensField?: 'max_completion_tokens' | 'max_tokens';
+  readonly disableThinking?: boolean;
+  readonly allowDeveloper?: boolean;
+  readonly sourceMappings?: import('../types.js').ProtocolDescriptor['sourceMappings'];
 }
-function result(rawMessage: NativeObject, finish: unknown, rawUsage: unknown): ModelResult {
-  if (typeof finish !== 'string' || !['stop', 'tool_calls', 'length', 'content_filter'].includes(finish)) throw modelsError('invalid-response');
-  const content = rawMessage.content;
-  if (content !== null && content !== undefined && typeof content !== 'string') throw modelsError('invalid-response');
-  const refusal = rawMessage.refusal;
-  if (refusal !== undefined && refusal !== null && typeof refusal !== 'string') throw modelsError('invalid-response');
-  const status = finish === 'length' ? 'incomplete' : finish === 'content_filter' || Boolean(refusal) ? 'refused' : 'completed';
-  const calls = status === 'completed' && rawMessage.tool_calls !== undefined ? array(rawMessage.tool_calls).map(value => {
-    const call = object(value);
-    if (call.type !== 'function') throw modelsError('invalid-response');
-    const fn = object(call.function);
-    return parseTool(call.id, fn.name, fn.arguments);
-  }) : [];
-  if (status === 'completed' && finish === 'tool_calls' && !calls.length) throw modelsError('invalid-response');
-  if (new Set(calls.map(call => call.id)).size !== calls.length) throw modelsError('invalid-response');
-  if (rawMessage.function_call !== undefined) throw modelsError('invalid-response');
-  return { status, text: content ?? '', toolCalls: calls, ...(rawUsage === undefined ? {} : { usage: usage(rawUsage, false) }) } as ModelResult;
+function validateIntent(intent: NativeObject): void {
+  for (const value of array(intent.messages)) { const item = object(value); if (!['system', 'developer', 'user', 'tool'].includes(string(item.role))) throw modelsError('capability-unsupported'); string(item.content); if (item.role === 'tool') nonempty(item.tool_call_id); }
 }
-function body(input: ProtocolCallInput): NativeObject {
-  return {
-    model: input.remoteModelId, messages: input.messages.map(message), stream: input.capabilities.streaming,
-    ...(input.capabilities.streaming ? { stream_options: { include_usage: true } } : {}),
-    ...(input.options.temperature === undefined ? {} : { temperature: input.options.temperature }),
-    ...(input.options.maxOutputTokens === undefined ? {} : { max_completion_tokens: input.options.maxOutputTokens }),
-    ...(input.options.protocol?.reasoningEffort === undefined ? {} : { reasoning_effort: input.options.protocol.reasoningEffort }),
-    ...(input.tools.length ? { tools: input.tools.map(tool => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters, strict: false } })) } : {}),
-  };
+function validateResponse(raw: unknown): NativeObject {
+  const response = native(raw);
+  if (response.error !== undefined) throw modelsError('provider-failure');
+  const choices = array(response.choices); if (choices.length !== 1) throw modelsError('invalid-response');
+  const choice = object(choices[0]), message = object(choice.message);
+  if (!['stop', 'tool_calls', 'length', 'content_filter'].includes(string(choice.finish_reason)) || message.role !== 'assistant') throw modelsError('invalid-response');
+  if (message.content != null && typeof message.content !== 'string') throw modelsError('invalid-response');
+  if (message.refusal != null) string(message.refusal);
+  const ids = new Set<string>();
+  const calls = message.tool_calls === undefined ? [] : array(message.tool_calls);
+  for (const value of calls) {
+    const call = object(value), fn = object(call.function); if (call.type !== 'function') throw modelsError('invalid-response');
+    const id = nonempty(call.id); if (ids.has(id)) throw modelsError('invalid-response'); ids.add(id); nonempty(fn.name); string(fn.arguments);
+    if (choice.finish_reason === 'tool_calls' || choice.finish_reason === 'stop') object(parseJson(string(fn.arguments)));
+  }
+  if (choice.finish_reason === 'tool_calls' && !calls.length || message.function_call !== undefined) throw modelsError('invalid-response');
+  return response;
 }
-export function createChatCompletionsProtocol(options: ProtocolOptions = {}): ModelProtocol {
-  options = captureOptions(options);
+function commit(state: NativeObject, intent: NativeObject, response: NativeObject): NativeObject {
+  validateIntent(intent);
+  const value = validateResponse(response), next = conversation(state, intent, 'messages', ['tools']);
+  return native({ ...next, messages: [...array(next.messages), object(array(value.choices)[0]).message] });
+}
+/** Extensions select explicit wire differences; transport, SSE and native history remain shared. */
+export function createChatCompletionsProtocol(options: ProtocolOptions = {}, policy: ChatCompletionsRequestPolicy = { protocolId: 'chat-completions', name: 'Chat Completions' }): NativeProtocol {
+  options = captureOptions(options); policy = Object.freeze({ ...policy });
+  const protocolId = policy.protocolId, tokenField = policy.maxTokensField ?? 'max_completion_tokens';
   return {
-    descriptor: { id: 'chat-completions', version: '1.0.0', name: 'Chat Completions', connectionFields, modelFields: [...commonFields, effortField], supportsDiscovery: true, supportsCheck: true },
-    validateProvider: provider => validateProvider(provider, 'chat-completions'),
-    validateOptions: (generation, capabilities) => validateOptions(generation, capabilities, false),
-    effectiveCapabilities,
-    discover: input => discover(options, input), check: input => check(options, input),
-    call(input) {
-      return request(options, input, 'chat/completions', body(input), async reader => {
-        if (!input.capabilities.streaming) {
-          const raw = object(await reader.json());
-          const choices = array(raw.choices);
-          if (choices.length !== 1) throw modelsError('invalid-response');
-          const choice = object(choices[0]);
-          return { result: result(object(choice.message), choice.finish_reason, raw.usage) };
-        }
-        let text = '';
-        let refusal = '';
-        let finish: unknown;
-        let completed = false;
-        let rawUsage: unknown;
-        const calls = new Map<number, { id: string; name: string; arguments: string }>();
+    descriptor: { id: protocolId, version: '2.0.0', name: policy.name, connectionFields,
+      modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 }, { key: tokenField, label: 'Maximum output tokens', type: 'number', min: 1, integer: true },
+        ...(!policy.disableThinking ? [{ key: 'reasoning_effort', label: 'Reasoning effort', type: 'enum' as const, values: reasoningEfforts }] : [])],
+      supportsDiscovery: true, supportsCheck: true, ...(policy.sourceMappings ? { sourceMappings: policy.sourceMappings } : {}) },
+    validateProvider: provider => validateProvider(provider, protocolId),
+    validateParameters(options, declared) { optionKeys(options, ['temperature', tokenField, ...(!policy.disableThinking ? ['reasoning_effort'] : [])]); numberOption(options.temperature, 0, 2); numberOption(options[tokenField], 1, Number.MAX_SAFE_INTEGER, true); effortOption(options.reasoning_effort, declared, reasoningEfforts); },
+    effectiveCapabilities: (declared, options) => effectiveCapabilities(declared, policy.disableThinking || options.reasoning_effort === 'none'),
+    restore: records => restoreRecords(protocolId, records, commit),
+    prepare(input) {
+      validateIntent(input.intent); requireLocalTools(input.intent.tools, input.capabilities.tools);
+      const next = conversation(input.state, input.intent, 'messages', ['tools']);
+      if (policy.allowDeveloper === false && array(next.messages).some(item => object(item).role === 'developer')) throw modelsError('invalid-config');
+      for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(object(tool.function).parameters); }
+      return native({ ...input.parameters, ...next, model: input.remoteModelId, stream: input.capabilities.streaming,
+        ...(input.capabilities.streaming ? { stream_options: { include_usage: true } } : {}), ...(policy.disableThinking ? { thinking: { type: 'disabled' } } : {}) });
+    },
+    exchange(input) {
+      return request(options, input, 'chat/completions', input.request, async reader => {
+        if (!input.request.stream) return validateResponse(await reader.json());
+        let message: Record<string, JsonValue> = { role: 'assistant', content: '' }, finish: JsonValue | undefined, usage: JsonValue | undefined, completed = false;
+        const calls = new Map<number, Record<string, JsonValue>>(); let envelope: Record<string, JsonValue> = {};
         await reader.sse(data => {
-          if (data === '[DONE]') {
-            if (completed || finish === undefined) throw modelsError('invalid-response');
-            completed = true;
-            return true;
-          }
+          if (data === '[DONE]') { if (completed || finish === undefined) throw modelsError('invalid-response'); completed = true; return true; }
           if (completed) throw modelsError('invalid-response');
-          const chunk = object(parseJson(data));
-          if (chunk.error !== undefined) throw modelsError('provider-failure');
-          if (chunk.usage !== undefined && chunk.usage !== null) rawUsage = chunk.usage;
-          const choices = array(chunk.choices);
-          if (choices.length > 1) throw modelsError('invalid-response');
-          if (!choices.length) return;
-          const choice = object(choices[0]);
-          if (choice.index !== 0 || finish !== undefined) throw modelsError('invalid-response');
+          const chunk = native(parseJson(data)); if (chunk.error !== undefined) throw modelsError('provider-failure'); input.onEvent(chunk);
+          const { choices: _choices, usage: rawUsage, ...metadata } = chunk; envelope = { ...envelope, ...metadata };
+          if (rawUsage != null) usage = rawUsage;
+          const choices = array(chunk.choices); if (choices.length > 1) throw modelsError('invalid-response'); if (!choices.length) return;
+          const choice = object(choices[0]); if (choice.index !== 0 || finish !== undefined) throw modelsError('invalid-response');
           const delta = object(choice.delta);
-          if (delta.content !== undefined && delta.content !== null) {
-            const part = string(delta.content); text += part;
-            if (part) input.onEvent({ type: 'text-delta', delta: part });
+          for (const [key, value] of Object.entries(delta)) {
+            if (key === 'tool_calls') continue;
+            if (key === 'content' || key === 'refusal') { if (value != null) message[key] = string(message[key] ?? '') + string(value); }
+            else message[key] = value;
           }
-          if (delta.refusal !== undefined && delta.refusal !== null) refusal += string(delta.refusal);
-          if (delta.function_call !== undefined) throw modelsError('invalid-response');
-          if (delta.tool_calls !== undefined) for (const value of array(delta.tool_calls)) {
-            const tool = object(value);
-            if (typeof tool.index !== 'number' || !Number.isSafeInteger(tool.index) || tool.index < 0) throw modelsError('invalid-response');
-            if (tool.type !== undefined && tool.type !== 'function') throw modelsError('invalid-response');
-            const stored = calls.get(tool.index) ?? { id: '', name: '', arguments: '' };
-            if (tool.id !== undefined) stored.id += string(tool.id);
-            const fn = tool.function === undefined ? {} : object(tool.function);
-            if (fn.name !== undefined) stored.name += string(fn.name);
-            if (fn.arguments !== undefined) stored.arguments += string(fn.arguments);
-            calls.set(tool.index, stored);
-            input.onEvent({ type: 'tool-call-delta', index: tool.index,
-              ...(tool.id === undefined ? {} : { id: string(tool.id) }),
-              ...(fn.name === undefined ? {} : { name: string(fn.name) }),
-              ...(fn.arguments === undefined ? {} : { argumentsDelta: string(fn.arguments) }),
-            });
+          for (const value of delta.tool_calls === undefined ? [] : array(delta.tool_calls)) {
+            const tool = object(value), at = index(tool.index); const previous: Record<string, JsonValue> = calls.get(at) ?? { id: '', type: 'function', function: { name: '', arguments: '' } };
+            if (tool.id !== undefined) previous.id = string(previous.id) + string(tool.id);
+            const fn = tool.function === undefined ? {} : object(tool.function), old = object(previous.function);
+            previous.function = { ...old, ...fn, name: string(old.name) + string(fn.name ?? ''), arguments: string(old.arguments) + string(fn.arguments ?? '') };
+            for (const [key, item] of Object.entries(tool)) if (!['id', 'function', 'index'].includes(key)) previous[key] = item;
+            calls.set(at, previous);
           }
-          if (choice.finish_reason !== null && choice.finish_reason !== undefined) finish = choice.finish_reason;
+          if (choice.finish_reason != null) finish = choice.finish_reason;
         });
         if (!completed) throw modelsError('invalid-response');
-        const native: NativeObject = { content: text, refusal: refusal || null,
-          tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, call]) => ({ type: 'function', id: call.id, function: { name: call.name, arguments: call.arguments } })),
-        };
-        return { result: result(native, finish, rawUsage) } satisfies ProtocolOutcome;
+        if (calls.size) message = { ...message, tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, value]) => value) };
+        return validateResponse({ ...envelope, choices: [{ index: 0, message, finish_reason: finish }], ...(usage === undefined ? {} : { usage }) });
       });
     },
+    commit: input => commit(input.state, input.intent, input.response),
+    discover: input => discover(options, input), check: input => check(options, input),
   };
 }
-export function createChatCompletionsProtocolComponent(options: ProtocolOptions = {}) {
-  return protocolComponent(createChatCompletionsProtocol(options));
-}
+export function createChatCompletionsProtocolComponent(options: ProtocolOptions = {}) { return protocolComponent(createChatCompletionsProtocol(options)); }

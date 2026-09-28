@@ -31,6 +31,19 @@ test('mixed tools retain result details and associate reused request IDs with th
   assert.equal(events[0].calls[0].state, undefined)
 })
 
+test('native operation ledgers render tools without a legacy model-tool-calls event', () => {
+  const b = bash('reused'), p = patch('patch')
+  const calls = toolTrace({ status: 'completed' }, [
+    { kind: 'operation-started', operationId: 'exchange-1', operationKind: 'model' },
+    { kind: 'operation-observed', operationId: 'exchange-1' },
+    start(b), observed(b), start(p), observed(p, 'partial'), start(b), { ...observed(b), stdout: 'second observation' },
+  ])
+  assert.deepEqual(calls.map(call => [call.name, call.state]), [['bash', 'completed'], ['apply_patch', 'partial'], ['bash', 'completed']])
+  assert.equal(calls[0].stdout, 'hello')
+  assert.equal(calls[1].result.changes.length, 1)
+  assert.equal(calls[2].stdout, 'second observation')
+})
+
 test('cancellation and interruption preserve completed file changes and finish unresolved cards', () => {
   const p = patch(), b = bash()
   for (const status of ['cancelled', 'interrupted']) {

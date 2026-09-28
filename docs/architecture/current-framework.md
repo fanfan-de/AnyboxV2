@@ -1,5 +1,7 @@
 # 当前项目框架
 
+> 本文图示保留原生协议迁移前的架构记录。当前调用接口、资源归属与持久化以 [Harness组件说明](../harness-components.md) 和 [原生协议设计](../native-protocol-agent-framework-design.md) 为准。
+
 依据 2026-09-28 当前工作区源码绘制，包含当时未提交的改动。使用 draw.io 原生节点与连线，可独立编辑各组件、文本和连接；PNG 由本机 draw.io 导出。
 
 [可编辑 draw.io（三页）](./anybox-current.drawio)

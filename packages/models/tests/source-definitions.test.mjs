@@ -1,3 +1,4 @@
+import { params, exchange } from './helpers.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -78,7 +79,7 @@ test('source refresh adds compatible models and preserves user parameters, disab
   const provider = f.settings.providers()[0];
   await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'key' }));
   const initial = f.models.list()[0];
-  const edited = await f.settings.updateConfiguration(initial.id, { name: 'My configuration', defaults: { temperature: 0.3, maxOutputTokens: 42 }, enabled: false }, initial.revision);
+  const edited = await f.settings.updateConfiguration(initial.id, { name: 'My configuration', parameters: params('chat-completions', { temperature: 0.3, maxOutputTokens: 42 }), enabled: false }, initial.revision);
   const candidate = imported({ first: { id: 'first', name: 'Renamed by source', tool_call: false }, second: { id: 'second', name: 'New model' },
     images: { id: 'images', name: 'Images', modalities: { input: ['text'], output: ['image'] } } }, 2);
   await f.sourceData.accept(candidate); await f.sourceData.accept(candidate);
@@ -95,17 +96,17 @@ test('source removals retain historical definitions and existing configurations 
   const f = await sourceFixture(); t.after(() => f.close());
   const provider = f.settings.providers()[0];
   await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'original-key' }));
-  const configuration = f.models.list()[0], existing = await f.models.open({ modelId: configuration.id });
+  const configuration = f.models.list()[0], existing = await f.open({ modelId: configuration.id });
   const before = f.settings.configurations()[0];
   await f.sourceData.accept(normalizeModelsDevCatalog({}, 'models.dev', 2));
   assert.deepEqual(f.settings.providers(), []); assert.deepEqual(f.settings.models(), []);
   assert.equal(f.settings.models({ includeMissing: true })[0].state, 'missing');
   assert.deepEqual(f.settings.configurations()[0], before); assert.equal(f.models.get(configuration.id).available, true);
-  const next = await f.models.open({ modelId: configuration.id });
+  const next = await f.open({ modelId: configuration.id });
   for (const execution of [existing, next]) {
-    assert.equal(execution.snapshot.schemaVersion, 2); assert.equal(execution.snapshot.modelId, configuration.id);
+    assert.equal(execution.snapshot.schemaVersion, 3); assert.equal(execution.snapshot.modelId, configuration.id);
     assert.equal(execution.snapshot.providerId, 'account'); assert.equal(execution.snapshot.providerDefinitionId, provider.id);
-    assert.equal((await execution.generate({ messages: [{ role: 'user', content: 'Still available' }] }).result).status, 'completed');
+    assert.equal((await exchange(execution, { messages: [{ role: 'user', content: 'Still available' }] }).result).status, 'completed');
     await execution.close();
   }
 });
@@ -202,10 +203,10 @@ test('a concurrent Key rotation and source update serialize one additive model b
   const changingKey = f.settings.setApiKey(connection.id, 'rotated-key', connection.revision); await started.promise;
   const updatingSource = f.sourceData.accept(imported({ first: { id: 'first', name: 'First' }, later: { id: 'later', name: 'Later' } }, 2));
   await tick(); assert.equal(f.settings.models().length, 2); assert.equal(f.models.list().length, 1);
-  const changingParams = f.settings.updateConfiguration(first.id, { defaults: { temperature: 0.4 } }, first.revision);
+  const changingParams = f.settings.updateConfiguration(first.id, { parameters: params('chat-completions', { temperature: 0.4 }) }, first.revision);
   gate.resolve(); await Promise.all([changingKey, updatingSource, changingParams]);
   assert.equal(f.models.list({ available: true }).length, 2);
-  assert.equal(f.models.get(first.id).defaults.temperature, 0.4);
+  assert.equal(f.models.get(first.id).parameters.value.temperature, 0.4);
   assert.equal(f.models.list().filter(value => value.remoteModelId === 'later').length, 1);
   assert.equal(vault.secrets.get(f.store.connection(connection.id).credentialRef), 'rotated-key');
   assert.equal(vault.reads.length, 0);

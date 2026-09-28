@@ -1,3 +1,4 @@
+import { registerNativeRun, completeNativeRun, completedOutcome } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import assert from 'node:assert/strict'
@@ -10,7 +11,7 @@ import { createHarness } from '../dist/harness.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
-import { agentLoopServiceKey } from '../dist/run/agent-loop-component.js'
+import { runRuntimeServiceKey } from '../dist/run/runtime-component.js'
 import { assemblePath } from '../dist/session/domain.js'
 import { controlledModels, modelSnapshot, deferred, ids } from './helpers/controlled-models.mjs'
 
@@ -24,8 +25,8 @@ async function host(directory) {
   await root.installComponent(llm.component())
   const harness = await createHarness(root, { agents, now })
   const project = await harness.openProject(directory)
-  const plans = new Map(), loop = root.get(agentLoopServiceKey), start = loop.start.bind(loop)
-  loop.start = request => { plans.set(request.runId, request.execution); return start(request) }
+  const plans = new Map(), loop = root.get(runRuntimeServiceKey), start = loop.start.bind(loop)
+  loop.start = request => { plans.set(request.runId, request.program); return start(request) }
   return { root, llm, harness, project, plans, records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey), db: root.get(localStorageServiceKey) }
 }
 async function fixture(t, { expectedCleanupFailure = false } = {}) {
@@ -40,7 +41,7 @@ async function fixture(t, { expectedCleanupFailure = false } = {}) {
     } finally { rmSync(directory, { recursive: true, force: true }) }
   })
   const plans = f.plans
-  const calls = run => f.llm.calls.filter(call => call.input.execution === plans.get(run.id))
+  const calls = run => f.llm.calls.filter(call => call.input.execution.snapshot === plans.get(run.id).modelSnapshot)
   return { ...f, directory, session,
     call: (run, step = 0) => calls(run)[step],
     async start(input, parentNodeId = null, idempotencyKey = input) {
@@ -56,7 +57,7 @@ async function fixture(t, { expectedCleanupFailure = false } = {}) {
   }
 }
 async function accepted(f, id, parentNodeId = null) {
-  return (await f.records.registerRun(id, { sessionId: f.session.id, parentNodeId, input: id, idempotencyKey: id }, now(), [],
+  return (await registerNativeRun(f.records, id, { sessionId: f.session.id, parentNodeId, input: id, idempotencyKey: id }, now(), [],
     modelSnapshot())).run
 }
 
@@ -128,7 +129,7 @@ test('invalid, missing and cross-Session parents are rejected before any Run or 
   await assert.rejects(f.db.transaction(tx => tx.execute('DELETE FROM harness_nodes WHERE id = ?', [seed.resultNodeId])), /operation-failed/)
 })
 
-test('regeneration and edited input produce immutable siblings with current snapshots and raw historical input', async t => {
+test('regeneration and edited input produce immutable siblings with fixed instructions and raw historical input', async t => {
   const f = await fixture(t)
   const task = await f.harness.createPrompt('alice', { name: 'Task', kind: 'task-template', role: 'user', content: 'Task: {{input}}' })
   await f.harness.bindPrompt('alice', 'assistant', (await f.harness.publishPrompt('alice', task.id)).id)
@@ -141,13 +142,16 @@ test('regeneration and edited input produce immutable siblings with current snap
     f.start(n.input, n.parentId, 'regenerate'), f.start('Edited input', n.parentId, 'edit'),
   ])
   assert.deepEqual(f.llm.calls[1].input.messages, [
-    { role: 'system', content: 'Original instructions.' }, { role: 'user', content: 'Original input' },
+    { role: 'system', content: 'Original instructions.' }, { role: 'user', content: 'Task: Original input' },
     { role: 'assistant', content: 'Answer Original input' }, { role: 'user', content: 'Task: Descendant' },
   ])
   assert.deepEqual(f.call(regenerated).input.messages, [
-    { role: 'system', content: 'New instructions.' }, { role: 'user', content: 'Task: Original input' },
+    { role: 'system', content: 'Original instructions.' }, { role: 'user', content: 'Task: Original input' },
   ])
-  assert.notDeepEqual(regenerated.promptVersionIds, original.promptVersionIds)
+  assert.deepEqual(regenerated.promptVersionIds, original.promptVersionIds)
+  assert.deepEqual(f.call(edited).input.messages, [
+    { role: 'system', content: 'Original instructions.' }, { role: 'user', content: 'Task: Edited input' },
+  ])
   assert.deepEqual((await f.harness.getRun(continuation.id)).promptVersionIds, continuation.promptVersionIds)
   const child = await f.finish(continuation)
   await f.finish(edited)
@@ -169,8 +173,8 @@ for (const cancel of [false, true]) test(`startup ownership deduplicates start a
   t.after(() => release.resolve())
   const starting = f.start('Startup')
   const id = await entered.promise
-  const loop = f.root.get(agentLoopServiceKey)
-  const duplicate = loop.start({ runId: id, execution: f.plans.get(id) })
+  const loop = f.root.get(runRuntimeServiceKey)
+  const duplicate = loop.start({ runId: id, program: f.plans.get(id) })
   let finished = false
   const waiting = f.harness.waitRun(id).then(run => { finished = true; return run })
   if (cancel) assert.equal((await f.harness.cancelRun(id)).status, 'cancelling')
@@ -187,7 +191,7 @@ for (const cancel of [false, true]) test(`startup ownership deduplicates start a
     assert.equal(f.llm.calls.length, 1)
     await f.finish(first)
     assert.equal((await waiting).status, 'completed')
-    await loop.start({ runId: id, execution: f.plans.get(id) })
+    await loop.start({ runId: id, program: f.plans.get(id) })
     assert.equal(f.llm.calls.length, 1)
   }
 })
@@ -217,11 +221,11 @@ test('cancellation and failure affect only the selected branch; success waits fo
 test('cancel versus success uses transaction order; duplicate settlement creates exactly one node and event', async t => {
   const f = await fixture(t)
   const a = await accepted(f, 'cancel-first'), b = await accepted(f, 'success-first')
-  await Promise.all([f.records.requestCancellation(a.id, now()), f.records.settleRun(a.id, { kind: 'completed', output: 'A' }, now())])
-  const [success] = await Promise.all([f.records.settleRun(b.id, { kind: 'completed', output: 'B' }, now()), f.records.requestCancellation(b.id, now())])
+  await Promise.all([f.records.requestCancellation(a.id, now()), completeNativeRun(f.records, a.id, 'A', now())])
+  const [success] = await Promise.all([completeNativeRun(f.records, b.id, 'B', now()), f.records.requestCancellation(b.id, now())])
   assert.equal((await f.records.getRun(a.id)).status, 'cancelled')
   assert.equal(success.status, 'completed')
-  const duplicates = await Promise.all(Array.from({ length: 5 }, () => f.records.settleRun(b.id, { kind: 'completed', output: 'Changed' }, now())))
+  const duplicates = await Promise.all(Array.from({ length: 5 }, () => completeNativeRun(f.records, b.id, 'Changed', now())))
   assert.ok(duplicates.every(run => run.resultNodeId === success.resultNodeId && run.output === 'B'))
   assert.equal((await f.harness.listNodes(f.session.id, null)).nodes.length, 1)
   assert.equal((await f.sessions.getRunEvents(b.id)).length, 1)
@@ -233,13 +237,13 @@ test('success settlement rolls back Run, node, execution and event when the fina
   const before = await f.records.getRunExecution(run.id)
   await f.db.transaction(tx => tx.execute(`CREATE TRIGGER test_fail_result BEFORE UPDATE OF result_node_id ON harness_runs
     BEGIN SELECT RAISE(ABORT, 'injected link failure'); END`))
-  await assert.rejects(f.records.settleRun(run.id, { kind: 'completed', output: 'Final' }, now()), /operation-failed/)
+  await assert.rejects(completeNativeRun(f.records, run.id, 'Final', now()), /operation-failed/)
   assert.deepEqual(await f.records.getRun(run.id), run)
   assert.deepEqual(await f.records.getRunExecution(run.id), before)
   assert.deepEqual(await f.sessions.getRunEvents(run.id), [])
   assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes, [])
   await f.db.transaction(tx => tx.execute('DROP TRIGGER test_fail_result'))
-  const done = await f.records.settleRun(run.id, { kind: 'completed', output: 'Final' }, now())
+  const done = await completeNativeRun(f.records, run.id, 'Final', now())
   assert.equal(done.status, 'completed')
   assert.equal((await f.sessions.getRunEvents(run.id)).length, 1)
   assert.equal((await f.records.getRunExecution(run.id)).phase, 'terminal')
@@ -255,7 +259,7 @@ test('a failed success commit is classified as state-write-failure without repla
   assert.equal(terminal.errorCategory, 'state-write-failure')
   assert.equal(terminal.output, undefined)
   assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes, [])
-  assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(e => e.kind), ['model-started', 'terminal'])
+  assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(e => e.kind), ['operation-started', 'operation-observed', 'terminal'])
   assert.equal(f.llm.calls.length, 1)
 })
 
@@ -275,9 +279,9 @@ test('tool observation commit failure stops the batch without repeating the side
   assert.equal(readFileSync(join(f.directory, 'marker'), 'utf8'), 'once')
   assert.equal(existsSync(join(f.directory, 'second')), false)
   assert.equal(f.llm.calls.length, 1)
-  await f.root.get(agentLoopServiceKey).start({ runId: run.id, execution: f.plans.get(run.id) })
+  await f.root.get(runRuntimeServiceKey).start({ runId: run.id, program: f.plans.get(run.id) })
   assert.equal(readFileSync(join(f.directory, 'marker'), 'utf8'), 'once')
-  assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(e => e.kind), ['model-started', 'model-tool-calls', 'tool-started', 'terminal'])
+  assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(e => e.kind), ['operation-started', 'operation-observed', 'tool-started', 'terminal'])
 })
 
 test('ancestor validation rejects broken, cyclic and cross-Session paths', () => {
@@ -348,7 +352,7 @@ test('persistent settlement failure rejects wait and repeated start; restart int
     f.llm.calls[0].done.resolve()
     await assert.rejects(waiting, /operation-failed/)
     assert.equal((await f.harness.getRun(run.id)).status, 'running')
-    await assert.rejects(f.root.get(agentLoopServiceKey).start({ runId: run.id, execution: f.plans.get(run.id) }), /operation-failed/)
+    await assert.rejects(f.root.get(runRuntimeServiceKey).start({ runId: run.id, program: f.plans.get(run.id) }), /operation-failed/)
     assert.equal(f.llm.calls.length, 1)
     await f.db.transaction(tx => tx.execute('DROP TRIGGER test_fail_settle'))
     await assert.rejects(f.harness.close())
@@ -375,12 +379,10 @@ test('restart interrupts multiple active Runs independently while retaining thei
     const session = await sessions.createSession(project.id, 'assistant')
     const f = { records: state, session, sessions }
     await accepted(f, 'seed')
-    const seed = await state.settleRun('seed', { kind: 'completed', output: 'Saved answer' }, now())
+    const seed = await completeNativeRun(state, 'seed', 'Saved answer', now())
     const a = await accepted(f, 'a', seed.resultNodeId), b = await accepted(f, 'b', seed.resultNodeId)
-    await state.recordRunEvent(a.id, { kind: 'model-started' }, now())
     const call = { id: 'bash', name: 'bash', arguments: { command: 'printf uncertain >> marker' } }
-    await state.recordRunEvent(a.id, { kind: 'model-tool-calls', calls: [call] }, now())
-    await state.recordRunEvent(a.id, { kind: 'tool-started', call }, now())
+    await state.startOperation(a.id, { id: 'tool-operation', kind: 'tool', tool: call, intent: call }, now())
     await state.requestCancellation(b.id, now())
     await root.fiber.dispose()
     restarted = await host(directory)
@@ -395,7 +397,7 @@ test('restart interrupts multiple active Runs independently while retaining thei
     assert.equal(existsSync(join(directory, 'marker')), false)
     assert.deepEqual((await restarted.harness.listNodes(session.id, seed.resultNodeId)).nodes, [])
     const next = await restarted.harness.startRun({ sessionId: session.id, parentNodeId: seed.resultNodeId, input: 'New attempt', idempotencyKey: 'new' })
-    assert.deepEqual(restarted.llm.calls[0].input.messages.slice(1), [
+    assert.deepEqual(restarted.llm.calls[0].input.messages, [
       { role: 'user', content: 'seed' }, { role: 'assistant', content: 'Saved answer' }, { role: 'user', content: 'New attempt' },
     ])
     restarted.llm.calls[0].result.resolve('Done')
@@ -408,7 +410,7 @@ test('restart interrupts multiple active Runs independently while retaining thei
   }
 })
 
-test('tool trajectories stay inside their Run and never become ancestor messages', async t => {
+test('native tool trajectories continue along their own branch and exclude siblings', async t => {
   const f = await fixture(t)
   const [a, b] = await Promise.all([f.start('Use tool'), f.start('Sibling')])
   f.call(a).result.resolve({ status: 'completed', text: 'Checking', toolCalls: [
@@ -424,9 +426,11 @@ test('tool trajectories stay inside their Run and never become ancestor messages
   assert.doesNotMatch(JSON.stringify(own), /Sibling/)
   const done = await f.finish(a, 'Tool answer')
   const child = await f.start('Continue', done.resultNodeId)
-  assert.deepEqual(f.llm.calls[3].input.messages.slice(1), [
-    { role: 'user', content: 'Use tool' }, { role: 'assistant', content: 'Tool answer' }, { role: 'user', content: 'Continue' },
-  ])
+  const inherited = f.llm.calls[3].input.messages
+  assert.deepEqual(inherited.map(message => message.role), ['system', 'user', 'assistant', 'tool', 'assistant', 'user'])
+  assert.match(inherited.find(message => message.role === 'tool').content, /private-tool-observation/)
+  assert.equal(inherited.at(-1).content, 'Continue')
+  assert.doesNotMatch(JSON.stringify(inherited), /Sibling/)
   await f.finish(child)
 })
 
@@ -520,11 +524,11 @@ test('a state failure after cancellation is not hidden as an ordinary cancelled 
   const f = await fixture(t)
   const run = await f.start('Cancel with storage failure')
   await f.harness.cancelRun(run.id)
-  const original = f.records.getRun.bind(f.records)
+  const original = f.records.observeOperation.bind(f.records)
   let injected = false
-  f.records.getRun = async id => {
-    if (!injected) { injected = true; throw new Error('injected state read failure') }
-    return original(id)
+  f.records.observeOperation = async (...args) => {
+    if (!injected) { injected = true; throw new Error('injected observation write failure') }
+    return original(...args)
   }
   f.llm.calls[0].result.resolve('Never an answer')
   f.llm.calls[0].done.resolve()
@@ -532,4 +536,23 @@ test('a state failure after cancellation is not hidden as an ordinary cancelled 
   assert.equal(terminal.status, 'failed')
   assert.equal(terminal.errorCategory, 'state-write-failure')
   assert.equal(terminal.resultNodeId, undefined)
+})
+
+
+test('a transient terminal write failure remains visible after user cancellation', async t => {
+  const f = await fixture(t)
+  const run = await f.start('Cancel and terminal write failure')
+  await f.harness.cancelRun(run.id)
+  const original = f.records.settleRun.bind(f.records)
+  let injected = false
+  f.records.settleRun = async (...args) => {
+    if (!injected) { injected = true; throw new Error('injected terminal commit failure') }
+    return original(...args)
+  }
+  f.llm.calls[0].result.resolve('Not successful')
+  f.llm.calls[0].done.resolve()
+  const terminal = await f.harness.waitRun(run.id)
+  assert.equal(terminal.status, 'failed')
+  assert.equal(terminal.errorCategory, 'state-write-failure')
+  assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes, [])
 })

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createModelEventQueue } from '../dist/event-queue.js'
-import { capabilities, code, complete, fixture } from './helpers.mjs'
+import { createNativeEventQueue } from '../dist/event-queue.js'
+import { capabilities, code, complete, exchange, fixture } from './helpers.mjs'
 
 test('malformed model queries fail with a public category instead of native errors or empty results', async () => {
   const f = await fixture()
@@ -20,9 +20,9 @@ test('malformed cancellation signals fail before execution admission using a pub
   try {
     await f.add()
     for (const signal of [{}, { aborted: false }, 'not-a-signal', 1]) {
-      await assert.rejects(f.models.open({ modelId: 'model', signal }), code('invalid-config'))
+      await assert.rejects(f.open({ modelId: 'model', signal }), code('invalid-config'))
     }
-    const execution = await f.models.open({ modelId: 'model', signal: new AbortController().signal })
+    const execution = await f.open({ modelId: 'model', signal: new AbortController().signal })
     await execution.close()
   } finally { await f.close() }
 })
@@ -48,9 +48,9 @@ test('legal JSON property names survive tool schema and arguments without protot
     await f.add()
     const parameters = JSON.parse('{"type":"object","properties":{"constructor":{"type":"string"},"prototype":{"type":"string"},"__proto__":{"type":"object"}}}')
     const argumentsValue = JSON.parse('{"constructor":"button","prototype":"template","__proto__":{"polluted":true}}')
-    const execution = await f.models.open({ modelId: 'model', tools: [{ name: 'make', parameters }] })
-    f.protocols[0].next(call => call.succeed({ result: complete('', [{ id: 'call', name: 'make', arguments: argumentsValue }]) }))
-    const reply = await execution.generate({ messages: [{ role: 'user', content: 'make the button' }] }).result
+    const execution = await f.open({ modelId: 'model' })
+    f.protocols[0].next(call => call.succeed(complete('', [{ id: 'call', name: 'make', arguments: argumentsValue }])))
+    const reply = await exchange(execution, { messages: [{ role: 'user', content: 'make the button' }] }).result
     assert.deepEqual(reply.toolCalls[0].arguments, argumentsValue)
     assert.equal(Object.hasOwn(reply.toolCalls[0].arguments, '__proto__'), true)
     assert.equal(Object.getPrototypeOf(reply.toolCalls[0].arguments), Object.prototype)
@@ -63,20 +63,20 @@ test('unknown per-call parameters are rejected before starting a provider reques
   const f = await fixture()
   try {
     await f.add()
-    const execution = await f.models.open({ modelId: 'model' })
-    assert.throws(() => execution.generate({ messages: [{ role: 'user', content: 'request' }], temperature: 0.5 }), code('invalid-config'))
+    const execution = await f.open({ modelId: 'model' })
+    assert.throws(() => exchange(execution, { messages: [{ role: 'user', content: 'request' }], temperature: 0.5 }), code('invalid-config'))
     assert.equal(f.protocols[0].calls.length, 0)
-    await execution.generate({ messages: [{ role: 'user', content: 'valid request' }] }).result
+    await exchange(execution, { messages: [{ role: 'user', content: 'valid request' }] }).result
     await execution.close()
   } finally { await f.close() }
 })
 
 test('event queue rejects malformed bounds with fixed errors and counts UTF-8 bytes', () => {
   for (const options of [null, false, [], { capacity: 0 }, { capacity: Infinity }, { maxBufferedBytes: '100' }, { capacity: 1.1 }]) {
-    assert.throws(() => createModelEventQueue(options), code('invalid-config'))
+    assert.throws(() => createNativeEventQueue(options), code('invalid-config'))
   }
   const event = { type: 'text-delta', delta: '汉字' }
-  const queue = createModelEventQueue({ maxBufferedBytes: Buffer.byteLength(JSON.stringify(event), 'utf8') - 1 })
+  const queue = createNativeEventQueue({ maxBufferedBytes: Buffer.byteLength(JSON.stringify(event), 'utf8') - 1 })
   queue.onEvent(event)
   assert.equal(queue.status, 'overflow')
   assert.equal(queue.buffered, 0)

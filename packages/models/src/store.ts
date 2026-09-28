@@ -1,4 +1,7 @@
-import { createHash } from 'node:crypto';
+import { migrateLegacyParameters } from './legacy-parameters.js';
+import { validateParameters } from './domain.js';
+import type { LegacyParameterConverter, NativeObject } from './native-types.js';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -7,12 +10,12 @@ import { modelsError, normalizeError } from './errors.js';
 import { externalProviderId } from './identity.js';
 import { modelsStoreServiceKey } from './types.js';
 import type {
-  ConnectionHints, ConnectionSyncState, CredentialIntent, DeclaredCapabilities, GenerationOptions,
+  ConnectionHints, ConnectionSyncState, CredentialIntent, DeclaredCapabilities,
   Model, ModelConfiguration, ModelsStore, Provider, ProviderConnectionRecord, SourceRef, SourceState,
   StoreChange, Versioned,
 } from './types.js';
 
-export interface ModelsStoreOptions { readonly path: string }
+export interface ModelsStoreOptions { readonly path: string; readonly legacyParameterConverters?: Readonly<Record<string, LegacyParameterConverter>> }
 
 function canonicalPath(input: string): string {
   if (typeof input !== 'string' || !input.trim() || input === ':memory:') throw modelsError('invalid-config');
@@ -61,6 +64,7 @@ function finiteNonnegative(value: unknown): void {
   if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) throw modelsError('invalid-config');
 }
 function capabilities(input: DeclaredCapabilities): DeclaredCapabilities {
+  if (input.webSearch && !['supported', 'unsupported', 'unknown'].includes(input.webSearch.support)) throw modelsError('invalid-config');
   for (const cap of [input.tools, input.streaming, input.imageInput, input.reasoning]) {
     if (!['supported', 'unsupported', 'unknown'].includes(cap.support)) throw modelsError('invalid-config');
   }
@@ -73,6 +77,7 @@ function capabilities(input: DeclaredCapabilities): DeclaredCapabilities {
     if (budget.min === undefined || budget.max === undefined || budget.min > budget.max) throw modelsError('invalid-config');
   }
   return {
+    ...(input.webSearch ? { webSearch: pick(input.webSearch, ['support']) } : {}),
     tools: pick(input.tools, ['support']), streaming: pick(input.streaming, ['support']), imageInput: pick(input.imageInput, ['support']),
     reasoning: { ...pick(input.reasoning, ['support', 'efforts', 'modes']), ...(budget ? { budget: pick(budget, ['min', 'max']) } : {}) },
   };
@@ -126,14 +131,14 @@ function connectionRecord(record: ProviderConnectionRecord): ProviderConnectionR
   for (const value of [record.providerDefinitionId, record.name, record.protocolId, record.baseUrl]) requiredString(value);
   if (typeof record.enabled !== 'boolean' || !['none', 'api-key'].includes(record.auth) ||
       !Number.isSafeInteger(record.timeoutMs) || record.timeoutMs <= 0) throw modelsError('invalid-config');
-  if (record.credentialRef !== null) requiredString(record.credentialRef);
-  return { ...versionFields(record), ...pick(record, ['providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'credentialRef']) };
+  if (record.credentialRef !== null) requiredString(record.credentialRef); requiredString(record.historyScopeEpoch);
+  return { ...versionFields(record), ...pick(record, ['providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'credentialRef', 'historyScopeEpoch']) };
 }
 function configurationRecord(record: ModelConfiguration): ModelConfiguration {
   for (const value of [record.modelDefinitionId, record.modelDefinitionVersionId, record.connectionId, record.name, record.remoteModelId]) requiredString(value);
   if (typeof record.enabled !== 'boolean' || typeof record.baseline !== 'boolean') throw modelsError('invalid-config');
   return { ...versionFields(record), ...pick(record, ['modelDefinitionId', 'modelDefinitionVersionId', 'connectionId', 'name', 'enabled', 'baseline', 'remoteModelId']),
-    capabilities: capabilities(record.capabilities), defaults: pick(record.defaults, ['temperature', 'maxOutputTokens', 'protocol']) };
+    capabilities: capabilities(record.capabilities), parameters: (validateParameters(record.parameters), structuredClone(record.parameters)) };
 }
 function sourceState(record: SourceState): SourceState {
   requiredString(record.sourceId); requiredString(record.snapshotVersion);
@@ -183,12 +188,12 @@ interface LegacyProvider extends Versioned {
 }
 interface LegacyModel extends Versioned {
   readonly providerId: string; readonly remoteModelId: string; readonly name: string; readonly enabled: boolean;
-  readonly capabilities: DeclaredCapabilities; readonly defaults: GenerationOptions;
+  readonly capabilities: DeclaredCapabilities; readonly defaults: NativeObject;
 }
 function migratedId(kind: 'provider' | 'model', id: string): string {
   return `${kind}-user-migrated-${createHash('sha256').update(JSON.stringify([id])).digest('hex')}`;
 }
-function migrateV1(db: DatabaseSync): void {
+function migrateV1(db: DatabaseSync, converters: Readonly<Record<string, LegacyParameterConverter>>): void {
   // Exact historical records remain archived. Future writes only target v2 structures.
   db.exec(`ALTER TABLE providers RENAME TO legacy_providers; ALTER TABLE provider_versions RENAME TO legacy_provider_versions;
     ALTER TABLE models RENAME TO legacy_models; ALTER TABLE model_versions RENAME TO legacy_model_versions;`);
@@ -211,7 +216,7 @@ function migrateV1(db: DatabaseSync): void {
       state: ref ? 'unresolved' : 'present',
       connectionHints: ref ? { protocolIds: [] } : { baseUrl: legacy.baseUrl, protocolIds: [legacy.protocolId] },
     }));
-    return connectionRecord({ ...legacy, providerDefinitionId: id });
+    return connectionRecord({ ...legacy, providerDefinitionId: id, historyScopeEpoch: randomUUID() });
   };
   for (const legacy of legacyProviders) connections.set(legacy.id, toConnection(legacy));
   const histories = providerVersions.map(toConnection);
@@ -241,7 +246,7 @@ function migrateV1(db: DatabaseSync): void {
       modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [connection.protocolId] } });
   };
   const toConfiguration = (legacy: LegacyModel, definition = toDefinition(legacy)): ModelConfiguration => configurationRecord({
-    ...legacy, connectionId: legacy.providerId, modelDefinitionId: definition.id, modelDefinitionVersionId: definition.versionId, baseline: true });
+    ...legacy, connectionId: legacy.providerId, modelDefinitionId: definition.id, modelDefinitionVersionId: definition.versionId, baseline: true, parameters: migrateLegacyParameters(connections.get(legacy.providerId)!.protocolId, legacy.defaults, converters) });
   const modelHistory = [...modelVersions];
   for (const legacy of legacyModels) {
     if (!modelHistory.some(record => record.id === legacy.id && record.revision === legacy.revision)) modelHistory.push(legacy);
@@ -262,7 +267,7 @@ function migrateV1(db: DatabaseSync): void {
       .run(record.id, record.connectionId, record.modelDefinitionId, 1, record.revision, JSON.stringify(record));
   }
 }
-function initialize(db: DatabaseSync): void {
+function initialize(db: DatabaseSync, converters: Readonly<Record<string, LegacyParameterConverter>>): void {
   // EXCLUSIVE mode retains the OS lock between commits; process death releases it.
   db.exec('PRAGMA busy_timeout=0; PRAGMA foreign_keys=ON; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE');
   try {
@@ -270,9 +275,24 @@ function initialize(db: DatabaseSync): void {
     if (version === 0) {
       if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' LIMIT 1").get()) throw modelsError('storage-unavailable');
       createSchema(db); db.exec('CREATE TABLE credential_intents(id TEXT PRIMARY KEY, record TEXT NOT NULL)');
-    } else if (version === 1) migrateV1(db);
-    else if (version !== 2) throw modelsError('storage-unavailable');
-    db.exec('PRAGMA user_version=2; COMMIT');
+    } else if (version === 1) migrateV1(db, converters);
+    else if (version !== 2 && version !== 3) throw modelsError('storage-unavailable');
+    const connections = new Map<string, ProviderConnectionRecord>();
+    for (const row of db.prepare('SELECT id,record FROM connections').all()) {
+      const record = JSON.parse(String(row.record)) as ProviderConnectionRecord;
+      if (version === 3 && !record.historyScopeEpoch) throw modelsError('storage-unavailable');
+      const next = { ...record, historyScopeEpoch: record.historyScopeEpoch ?? randomUUID() }; connections.set(next.id, next);
+      if (version !== 3) db.prepare('UPDATE connections SET record=? WHERE id=?').run(JSON.stringify(next), next.id);
+    }
+    for (const row of db.prepare('SELECT id,record FROM configurations').all()) {
+      const record = JSON.parse(String(row.record)) as ModelConfiguration & { defaults?: NativeObject };
+      const { defaults, ...rest } = record;
+      const connection = connections.get(record.connectionId); if (!connection) throw modelsError('storage-unavailable');
+      const parameters = record.parameters?.formatVersion === 1 ? record.parameters : migrateLegacyParameters(connection.protocolId, record.parameters?.value ?? defaults ?? {}, converters);
+      validateParameters(parameters);
+      if (!record.parameters || record.parameters.formatVersion !== parameters.formatVersion) db.prepare('UPDATE configurations SET record=? WHERE id=?').run(JSON.stringify({ ...rest, parameters }), record.id);
+    }
+    db.exec('PRAGMA user_version=3; COMMIT');
   } catch (error) { try { db.exec('ROLLBACK'); } catch { throw modelsError('storage-unavailable'); } throw error; }
 }
 
@@ -282,7 +302,7 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
   return { name: 'models-store', apply(ctx) {
     let db: DatabaseSync;
     try { db = new DatabaseSync(canonicalPath(options.path)); } catch { throw modelsError('storage-unavailable'); }
-    try { initialize(db); } catch {
+    try { initialize(db, options.legacyParameterConverters ?? {}); } catch {
       try { db.close(); } catch { /* Already failed initialization. */ } throw modelsError('storage-unavailable');
     }
     let accepting = true, tail: Promise<void> = Promise.resolve();
@@ -405,7 +425,12 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
       connectionHistory(id) { assertOpen(); return many('SELECT record FROM connection_versions WHERE connection_id=? ORDER BY revision', [id]); },
       configurations() { assertOpen(); return many('SELECT record FROM configurations ORDER BY id'); },
       configuration(id) { assertOpen(); return configuration(id); },
-      configurationHistory(id) { assertOpen(); return many('SELECT record FROM configuration_versions WHERE configuration_id=? ORDER BY revision', [id]); },
+      configurationHistory(id) { assertOpen(); return many<ModelConfiguration & { defaults?: NativeObject }>('SELECT record FROM configuration_versions WHERE configuration_id=? ORDER BY revision', [id]).map(value => {
+        if (value.parameters) return value;
+        const parent = connection(value.connectionId) ?? one<ProviderConnectionRecord>('SELECT record FROM connection_versions WHERE connection_id=? ORDER BY revision DESC LIMIT 1', value.connectionId);
+        const { defaults, ...rest } = value;
+        return { ...rest, parameters: migrateLegacyParameters(parent?.protocolId ?? 'unknown', defaults ?? {}, options.legacyParameterConverters) };
+      }); },
       sources() { assertOpen(); return many('SELECT record FROM sources ORDER BY source_id'); },
       syncState(id) { assertOpen(); return synced(id); },
       intents() { assertOpen(); return many('SELECT record FROM credential_intents ORDER BY id'); },

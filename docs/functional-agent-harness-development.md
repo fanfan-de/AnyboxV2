@@ -1,5 +1,7 @@
 # 用函数式思想建模 Agent Harness 的开发
 
+> 本文保留早期建模推导；原文 AgentLoop 的资源职责现由 RunRuntime 承担，协议决策由独立Loop承担。当前操作账本不规定模型/工具阶段，具体契约见 [组件说明](./harness-components.md)。
+
 状态：架构方法文档，2026-09-23。基于已完成的 H1，指导后续阶段如何拆解需求和验证行为；不提前冻结 H2 之后的公共类型、存储接口或组件目录。具体阶段与验收见 [Agent Harness 重建计划](./agent-harness-plan.md)，H2 的转换规则见 [Run 状态转换设计](./run-state-machine-design.md)。
 
 ## 核心问题

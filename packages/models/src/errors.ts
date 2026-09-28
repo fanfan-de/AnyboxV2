@@ -1,3 +1,4 @@
+import { nativeDiagnostic, withNativeDiagnostic } from './diagnostics.js';
 export type ModelsErrorCode = 'invalid-config' | 'conflict' | 'not-found' | 'unavailable' | 'protocol-unavailable' | 'capability-unsupported' | 'credential-missing' | 'credential-unavailable' | 'cancelled' | 'timeout' | 'provider-failure' | 'invalid-response' | 'cleanup-failure' | 'closed' | 'busy' | 'storage-unavailable';
 export interface ModelsError extends Error { readonly code: ModelsErrorCode }
 const messages: Record<ModelsErrorCode, string> = {
@@ -16,5 +17,5 @@ export function isModelsError(error: unknown): error is ModelsError {
   return error instanceof Error && error.name === 'ModelsError' && 'code' in error && Object.hasOwn(messages, String(error.code));
 }
 export function normalizeError(error: unknown, fallback: ModelsErrorCode = 'provider-failure'): ModelsError {
-  return modelsError(isModelsError(error) ? error.code : fallback);
+  return withNativeDiagnostic(modelsError(isModelsError(error) ? error.code : fallback), nativeDiagnostic(error));
 }

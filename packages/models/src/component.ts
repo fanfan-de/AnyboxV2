@@ -1,19 +1,22 @@
+import type { NativeExecution, NativeObject, NativeParameters, NativeProtocol, NativeProtocolLease, OpenNativeModelInput } from './native-types.js';
 import { randomUUID } from 'node:crypto';
 import type { Component } from '@nya/core';
-import { assert, identifier, immutable, keys, nonempty, connectionInput, configurationInput, modelInput, providerInput, validateMessages, validateConfiguration, validateConnection, validateModel, validateOptions, validateProvider, validateSignal, validateTools } from './domain.js';
+import { assert, identifier, immutable, keys, nonempty, connectionInput, configurationInput, modelInput, providerInput, validateConfiguration, validateConnection, validateModel, validateParameters, validateProvider, validateSignal } from './domain.js';
 import { modelsError, normalizeError } from './errors.js';
-import { createExecution } from './execution.js';
+import { createExecution, validateRestore } from './execution.js';
 import { abortLink, deferred, joinOperation, throwAborted } from './lifecycle.js';
 import { modelsProtocolsServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsStoreServiceKey, modelsVaultServiceKey, modelsSourceDataServiceKey } from './types.js';
-import type { ConnectionModel, ConnectionSyncState, CredentialIntent, EffectiveCapabilities, GenerationOptions, Model, ModelConfiguration, ModelConfigurationInput, ModelExecution, ModelInput, ModelProtocol, ModelsProtocolsService, ModelsService, ModelsSettingsService, ModelsSourceDataService, ModelsStore, ModelsVault, RunnableModelSummary, OpenModelInput, ProtocolConnection, ProtocolOperation, Provider, ProviderConnectionInput, ProviderConnectionRecord, ProviderConnection, ProviderInput, SourceSnapshot, Versioned } from './types.js';
+import type { ConnectionModel, ConnectionSyncState, CredentialIntent, EffectiveCapabilities, Model, ModelConfiguration, ModelConfigurationInput, ModelInput, ModelsProtocolsService, ModelsService, ModelsSettingsService, ModelsSourceDataService, ModelsStore, ModelsVault, RunnableModelSummary, ProtocolConnection, ProtocolOperation, Provider, ProviderConnectionInput, ProviderConnectionRecord, ProviderConnection, ProviderInput, SourceSnapshot, Versioned } from './types.js';
 import { validateCatalogSnapshot } from './catalog-domain.js';
 
 interface Owned { cancel(): void; readonly done: Promise<void> }
 interface Generation {
-  readonly protocol: ModelProtocol;
+  readonly protocol: NativeProtocol;
+  readonly id: string;
+  readonly controller: AbortController;
   accepting: boolean;
   readonly pending: Set<Owned>;
-  readonly executions: Set<ModelExecution>;
+  readonly executions: Set<NativeExecution>;
   cleanupFailed: boolean;
   closing?: Promise<void>;
 }
@@ -35,12 +38,18 @@ export function createModelsComponent(): Component.Object<void, Dependencies> {
   };
 }
 
+function nativeParameters(model: Pick<ModelConfigurationInput, 'parameters'>, protocolId: string): NativeParameters {
+  validateParameters(model.parameters); if (model.parameters.protocolId !== protocolId || model.parameters.formatVersion !== 1) throw modelsError('invalid-config');
+  return immutable(model.parameters);
+}
+
 function createRuntime(store: ModelsStore, vault: ModelsVault) {
   let accepting = true;
   let closing: Promise<void> | undefined;
   let cleanupFailed = false;
   const generations = new Map<string, Generation>();
   const ownedGenerations = new Set<Generation>();
+  const leases = new WeakMap<object, { generation: Generation; released: boolean }>();
   const operations = new Set<Owned>();
   const jobs = new Set<Promise<unknown>>();
   const queues = new Map<string, Promise<unknown>>();
@@ -89,7 +98,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     if (pending) await store.commit({ addIntents: [pending] });
     try {
       if (slotId && secret !== null) await vault.write(slotId, secret);
-      const record = immutable({ ...next, credentialRef: slotId });
+      const record = immutable({ ...next, credentialRef: slotId, historyScopeEpoch: randomUUID() });
       await store.commit({
         connection: { record, expectedRevision: previous?.revision ?? null },
         removeIntentIds: pending ? [pending.id] : [], addIntents: retired ? [retired] : [],
@@ -100,14 +109,14 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       return connectionView(record);
     } catch (error) { if (pending) await cleanupIntent(pending); throw normalizeError(error, 'credential-unavailable'); }
   };
-  const effective = (generation: Generation, model: ModelConfiguration, options: GenerationOptions): EffectiveCapabilities => {
-    generation.protocol.validateOptions(options, model.capabilities);
+  const effective = (generation: Generation, model: ModelConfiguration, parameters: NativeParameters): EffectiveCapabilities => {
+    generation.protocol.validateParameters(parameters.value, model.capabilities);
     const declared = model.capabilities;
-    const value = generation.protocol.effectiveCapabilities(declared, options);
+    const value = generation.protocol.effectiveCapabilities(declared, parameters.value);
     return immutable({
       tools: declared.tools.support === 'supported' && value.tools === true,
       streaming: declared.streaming.support === 'supported' && value.streaming === true,
-      imageInput: false,
+      imageInput: false, webSearch: declared.webSearch?.support === 'supported' && value.webSearch === true,
       reasoning: declared.reasoning.support === 'supported' ? value.reasoning : { support: declared.reasoning.support },
     });
   };
@@ -123,7 +132,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       try {
         const generation = getGeneration(provider.protocolId);
         generation.protocol.validateProvider(connectionInput(provider));
-        effectiveCapabilities = effective(generation, model, model.defaults);
+        effectiveCapabilities = effective(generation, model, nativeParameters(model, provider.protocolId));
       } catch { unavailableReason ??= 'invalid-configuration'; }
     }
     return immutable({ ...model, providerDefinitionId: provider.providerDefinitionId, source: store.model(model.modelDefinitionId)!.source, available: !unavailableReason, ...(unavailableReason ? { unavailableReason } : {}), ...(effectiveCapabilities ? { effectiveCapabilities } : {}) });
@@ -165,41 +174,32 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       return immutable(store.configurations().map(summary).filter(item => (!query.connectionId || item.connectionId === query.connectionId) && (query.available === undefined || item.available === query.available)));
     },
     get(id) { requireOpen(); identifier(id); const model = store.configuration(id); return model ? summary(model) : undefined; },
-    async open(input: OpenModelInput) {
-      requireOpen();
-      keys(input, ['modelId', 'history', 'tools', 'requirements', 'options', 'signal']); identifier(input.modelId);
-      validateSignal(input.signal);
-      let captured: Omit<OpenModelInput, 'signal'>;
-      try { const { signal: _signal, ...rest } = input; captured = immutable(rest); } catch { throw modelsError('invalid-config'); }
-      const history = captured.history ?? []; const tools = captured.tools ?? [];
-      validateMessages(history, true); validateTools(tools);
-      if (captured.options) { keys(captured.options, ['temperature', 'maxOutputTokens']); validateOptions(captured.options); }
-      const requirements = captured.requirements ?? {};
-      keys(requirements, ['tools', 'streaming', 'reasoning']); assert(Object.values(requirements).every(value => typeof value === 'boolean'));
-      const providerId = getConfiguration(input.modelId).connectionId;
-      const owned = lease(input.signal);
+    async openNative<I extends NativeObject, R extends NativeObject, E extends NativeObject>(input: OpenNativeModelInput<I, R, E>): Promise<NativeExecution<I, R, E>> {
+      requireOpen(); keys(input, ['modelId', 'lease', 'restore', 'requirements', 'signal']); identifier(input.modelId); validateSignal(input.signal);
+      const held = input.lease && leases.get(input.lease); if (!held || held.released || !held.generation.accepting) throw modelsError('protocol-unavailable');
+      const generation = held.generation;
+      const captured = immutable({ modelId: input.modelId, ...(input.restore ? { restore: input.restore } : {}), requirements: input.requirements ?? {} });
+      keys(captured.requirements, ['tools', 'streaming', 'reasoning']); assert(Object.values(captured.requirements).every(value => typeof value === 'boolean'));
+      const providerId = getConfiguration(input.modelId).connectionId, owned = lease(input.signal); owned.attach(generation);
       let transferred = false;
       try {
         return await enqueue(providerId, async () => {
           throwAborted(owned.controller.signal);
-          const model = immutable(getConfiguration(captured.modelId)); const provider = immutable(getConnection(providerId));
+          if (held.released || !generation.accepting) throw modelsError('protocol-unavailable');
+          const model = immutable(getConfiguration(captured.modelId)), provider = immutable(getConnection(providerId));
           if (!model.enabled || !provider.enabled) throw modelsError('unavailable');
-          const generation = getGeneration(provider.protocolId); owned.attach(generation);
+          if (provider.protocolId !== input.lease.protocolId) throw modelsError('conflict');
           generation.protocol.validateProvider(connectionInput(provider));
-          const options = immutable({ ...model.defaults, ...Object.fromEntries(Object.entries(captured.options ?? {}).filter(([, value]) => value !== undefined)) });
-          const capabilities = effective(generation, model, options);
-          if ((tools.length > 0 || requirements.tools) && !capabilities.tools || requirements.streaming && !capabilities.streaming || requirements.reasoning && capabilities.reasoning.support !== 'supported') throw modelsError('capability-unsupported');
+          const parameters = nativeParameters(model, provider.protocolId), capabilities = effective(generation, model, parameters), requirements = captured.requirements;
+          if (requirements.tools && !capabilities.tools || requirements.streaming && !capabilities.streaming || requirements.reasoning && capabilities.reasoning.support !== 'supported') throw modelsError('capability-unsupported');
+          const snapshot = immutable({ schemaVersion: 3 as const, modelDefinitionId: model.modelDefinitionId, providerDefinitionId: provider.providerDefinitionId, modelDefinitionVersionId: model.modelDefinitionVersionId, modelId: model.id, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.id, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, registrationGenerationId: generation.id, historyScopeEpoch: provider.historyScopeEpoch, parameters, capabilities });
+          if (captured.restore) validateRestore(captured.restore, snapshot);
           const credential = await readCredential(provider, owned.controller.signal);
           throwAborted(owned.controller.signal);
-          if (!accepting || !generation.accepting) throw modelsError('closed');
-          const execution = createExecution({
-            protocol: generation.protocol, provider: immutable(connectionInput(provider)), credential,
-            snapshot: { schemaVersion: 2, modelDefinitionId: model.modelDefinitionId, providerDefinitionId: provider.providerDefinitionId, modelDefinitionVersionId: model.modelDefinitionVersionId, modelId: model.id, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.id, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, options },
-            capabilities, tools, history, controller: owned.controller,
-            onRelease: failed => { generation.executions.delete(execution); owned.unlink(); if (failed) { generation.cleanupFailed = true; cleanupFailed = true; } },
-          });
-          generation.executions.add(execution); transferred = true;
-          return execution;
+          if (!accepting || !generation.accepting || held.released) throw modelsError('closed');
+          const execution = createExecution({ protocol: generation.protocol, provider: immutable(connectionInput(provider)), credential, snapshot, capabilities, restore: captured.restore, controller: owned.controller,
+            onRelease: failed => { generation.executions.delete(execution); owned.unlink(); if (failed) { generation.cleanupFailed = true; cleanupFailed = true; } } });
+          generation.executions.add(execution); transferred = true; return execution as NativeExecution<I, R, E>;
         });
       } finally { owned.finish(); if (!transferred) owned.unlink(); }
     },
@@ -254,18 +254,10 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     if (model.connectionHints.baseUrl && model.connectionHints.baseUrl !== provider.connectionHints.baseUrl && model.connectionHints.baseUrl !== connection.baseUrl) return 'connection-mismatch';
     return undefined;
   };
-  const initialDefaults = (model: Model, protocol: ModelProtocol): GenerationOptions => {
-    const defaults: Record<string, unknown> = {}, native: Record<string, unknown> = {};
-    for (const field of protocol.descriptor.modelFields) {
-      if (field.defaultValue === undefined) continue;
-      if (field.key === 'temperature' || field.key === 'maxOutputTokens') defaults[field.key] = field.defaultValue;
-      else if (field.key.startsWith('protocol.')) native[field.key.slice('protocol.'.length)] = field.defaultValue;
-      else throw modelsError('invalid-config');
-    }
-    if (typeof defaults.maxOutputTokens === 'number' && model.limits.output !== undefined) defaults.maxOutputTokens = Math.min(defaults.maxOutputTokens, model.limits.output);
-    if (Object.keys(native).length) defaults.protocol = native;
-    validateOptions(defaults as GenerationOptions);
-    return defaults as GenerationOptions;
+  const initialParameters = (model: Model, protocol: NativeProtocol): NativeParameters => {
+    const value = protocol.initialParameters?.(model.limits.output) ?? {};
+    const parameters: NativeParameters = immutable({ protocolId: protocol.descriptor.id, formatVersion: 1, value });
+    validateParameters(parameters); return parameters;
   };
   async function reconcile(id: string): Promise<ProviderConnection> {
     const connection = getConnection(id), version = sourceVersion(connection);
@@ -281,10 +273,10 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       const configurations: { record: ModelConfiguration; expectedRevision: null }[] = [];
       for (const model of store.models().filter(value => value.providerId === connection.providerDefinitionId)) {
         if (existing.has(model.id) || compatibility(model, connection)) continue;
-        const defaults = initialDefaults(model, generation.protocol);
+        const parameters = initialParameters(model, generation.protocol);
         // Unsupported source options stay visible as unavailable definitions.
-        try { generation.protocol.validateOptions(defaults, model.capabilities); } catch { continue; }
-        configurations.push({ expectedRevision: null, record: immutable({ id: randomUUID(), ...revision(), modelDefinitionId: model.id, connectionId: id, modelDefinitionVersionId: model.versionId, remoteModelId: model.remoteModelId, name: model.name, enabled: true, capabilities: model.capabilities, defaults, baseline: true }) });
+        try { generation.protocol.validateParameters(parameters.value, model.capabilities); } catch { continue; }
+        configurations.push({ expectedRevision: null, record: immutable({ id: randomUUID(), ...revision(), modelDefinitionId: model.id, connectionId: id, modelDefinitionVersionId: model.versionId, remoteModelId: model.remoteModelId, name: model.name, enabled: true, capabilities: model.capabilities, parameters, baseline: true }) });
       }
       const ready: ConnectionSyncState = { ...pending, state: 'ready', syncedSourceVersion: version };
       await store.commit({ configurations, syncStates: [ready], syncGuards: [{ connectionId: id, targetSourceVersion: store.syncState(id)?.targetSourceVersion ?? null }] });
@@ -348,11 +340,11 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     async createConnection(input) {
       keys(input, ['id', 'providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'apiKey']);
       const { id = randomUUID(), apiKey, ...data } = input; identifier(id); validateConnection(data); if (apiKey !== undefined) assert(nonempty(apiKey) && data.auth === 'api-key'); const captured = immutable(data);
-      return enqueue(id, async () => { if (store.connection(id) || store.connectionHistory(id).length) throw modelsError('conflict'); definitionProvider(captured.providerDefinitionId); generations.get(captured.protocolId)?.protocol.validateProvider(captured); const record: ProviderConnectionRecord = immutable({ ...captured, id, ...revision(), credentialRef: null }); if (apiKey !== undefined) await changeCredential(undefined, record, apiKey); else await store.commit({ connection: { record, expectedRevision: null } }); return reconcile(id); });
+      return enqueue(id, async () => { if (store.connection(id) || store.connectionHistory(id).length) throw modelsError('conflict'); definitionProvider(captured.providerDefinitionId); generations.get(captured.protocolId)?.protocol.validateProvider(captured); const record: ProviderConnectionRecord = immutable({ ...captured, id, ...revision(), credentialRef: null, historyScopeEpoch: randomUUID() }); if (apiKey !== undefined) await changeCredential(undefined, record, apiKey); else await store.commit({ connection: { record, expectedRevision: null } }); return reconcile(id); });
     },
     async updateConnection(id, input, expectedRevision) {
       keys(input, ['name', 'enabled', 'baseUrl', 'auth', 'timeoutMs']); const captured = immutable(input);
-      return enqueue(id, async () => { const previous = getConnection(id); compare(previous.revision, expectedRevision); const data = { ...connectionInput(previous), ...captured }; validateConnection(data); generations.get(data.protocolId)?.protocol.validateProvider(data); const record = immutable({ ...previous, ...data, ...revision(previous) }); await store.commit({ connection: { record, expectedRevision } }); return reconcile(id); });
+      return enqueue(id, async () => { const previous = getConnection(id); compare(previous.revision, expectedRevision); const data = { ...connectionInput(previous), ...captured }; validateConnection(data); generations.get(data.protocolId)?.protocol.validateProvider(data); const record = immutable({ ...previous, ...data, ...revision(previous), historyScopeEpoch: data.baseUrl !== previous.baseUrl || data.auth !== previous.auth ? randomUUID() : previous.historyScopeEpoch }); await store.commit({ connection: { record, expectedRevision } }); return reconcile(id); });
     },
     async deleteConnection(id, expectedRevision) {
       return enqueue(id, async () => {
@@ -370,11 +362,11 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     retryConnection: id => enqueue(id, () => reconcile(id)),
     async createConfiguration(input) {
       const { id = randomUUID(), ...data } = input; identifier(id); validateConfiguration(data); const captured = immutable(data);
-      return enqueue(data.connectionId, async () => { const connection = getConnection(data.connectionId), model = definitionModel(data.modelDefinitionId); assert(model.providerId === connection.providerDefinitionId); generations.get(connection.protocolId)?.protocol.validateOptions(captured.defaults, captured.capabilities); const record: ModelConfiguration = immutable({ ...captured, id, ...revision(), modelDefinitionVersionId: model.versionId, remoteModelId: model.remoteModelId }); await store.commit({ configurations: [{ record, expectedRevision: null }] }); return record; });
+      return enqueue(data.connectionId, async () => { const connection = getConnection(data.connectionId), model = definitionModel(data.modelDefinitionId); assert(model.providerId === connection.providerDefinitionId && captured.parameters.protocolId === connection.protocolId); generations.get(connection.protocolId)?.protocol.validateParameters(nativeParameters(captured, connection.protocolId).value, captured.capabilities); const record: ModelConfiguration = immutable({ ...captured, id, ...revision(), modelDefinitionVersionId: model.versionId, remoteModelId: model.remoteModelId }); await store.commit({ configurations: [{ record, expectedRevision: null }] }); return record; });
     },
     async updateConfiguration(id, input, expectedRevision) {
-      keys(input, ['name', 'enabled', 'capabilities', 'defaults']); const captured = immutable(input); const connectionId = getConfiguration(id).connectionId;
-      return enqueue(connectionId, async () => { const previous = getConfiguration(id); compare(previous.revision, expectedRevision); const data: ModelConfigurationInput = { ...configurationInput(previous), ...captured }; validateConfiguration(data); const connection = getConnection(connectionId), generation = generations.get(connection.protocolId); if (generation) generation.protocol.validateOptions(data.defaults, data.capabilities); const record = immutable({ ...previous, ...data, ...revision(previous) }); await store.commit({ configurations: [{ record, expectedRevision }] }); return record; });
+      keys(input, ['name', 'enabled', 'capabilities', 'parameters']); const captured = immutable(input); const connectionId = getConfiguration(id).connectionId;
+      return enqueue(connectionId, async () => { const previous = getConfiguration(id); compare(previous.revision, expectedRevision); const data: ModelConfigurationInput = { ...configurationInput(previous), ...captured }; validateConfiguration(data); const connection = getConnection(connectionId), generation = generations.get(connection.protocolId); assert(data.parameters.protocolId === connection.protocolId); if (generation) generation.protocol.validateParameters(nativeParameters(data, connection.protocolId).value, data.capabilities); const record = immutable({ ...previous, ...data, ...revision(previous) }); await store.commit({ configurations: [{ record, expectedRevision }] }); return record; });
     },
     discoverModels: (id, signal) => network(id, 'discover', signal),
     checkConnection: (id, signal) => network(id, 'check', signal),
@@ -413,14 +405,14 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
 
   const unregister = (generation: Generation): Promise<void> => {
     if (generation.closing) return generation.closing;
-    generation.accepting = false;
+    generation.accepting = false; generation.controller.abort();
     const id = generation.protocol.descriptor.id;
     if (generations.get(id) === generation) generations.delete(id);
     for (const operation of generation.pending) operation.cancel();
     generation.closing = Promise.resolve().then(async () => {
       const outcomes = await Promise.allSettled([
         ...[...generation.pending].map(operation => operation.done),
-        ...[...generation.executions].map(execution => execution.close()),
+        ...[...generation.executions].map(async execution => { const report = await execution.close(); if (report.cleanup === 'failed') throw modelsError('cleanup-failure'); }),
       ]);
       ownedGenerations.delete(generation);
       if (generation.cleanupFailed || outcomes.some(outcome => outcome.status === 'rejected')) { cleanupFailed = true; throw modelsError('cleanup-failure'); }
@@ -430,20 +422,28 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     void generation.closing.catch(() => {});
     return generation.closing;
   };
+  const acquire = (generation: Generation): NativeProtocolLease => {
+    requireOpen(); if (!generation.accepting) throw modelsError('protocol-unavailable');
+    const state = { generation, released: false };
+    const value = Object.freeze({ protocolId: generation.protocol.descriptor.id, generationId: generation.id, protocolVersion: generation.protocol.descriptor.version,
+      signal: generation.controller.signal, release() { state.released = true; } });
+    leases.set(value, state); return value;
+  };
   const protocols: ModelsProtocolsService = {
-    register(protocol) {
+    acquire(id) { identifier(id); return acquire(getGeneration(id)); },
+    register<I extends NativeObject, R extends NativeObject, E extends NativeObject>(protocol: NativeProtocol<I, R, E>) {
       requireOpen(); identifier(protocol.descriptor.id); assert(nonempty(protocol.descriptor.version));
       if (generations.has(protocol.descriptor.id)) throw modelsError('conflict');
-      // Capture methods and metadata: mutating a registration object cannot change an open execution.
-      const stable: ModelProtocol = Object.freeze({
+      const stable: NativeProtocol = Object.freeze({
         descriptor: immutable(protocol.descriptor), validateProvider: protocol.validateProvider.bind(protocol),
-        validateOptions: protocol.validateOptions.bind(protocol), effectiveCapabilities: protocol.effectiveCapabilities.bind(protocol),
-        call: protocol.call.bind(protocol), discover: protocol.discover?.bind(protocol), check: protocol.check?.bind(protocol),
+        validateParameters: protocol.validateParameters.bind(protocol), effectiveCapabilities: protocol.effectiveCapabilities.bind(protocol),
+        initialParameters: protocol.initialParameters?.bind(protocol), restore: protocol.restore.bind(protocol), prepare: protocol.prepare.bind(protocol),
+        exchange: protocol.exchange.bind(protocol), commit: protocol.commit.bind(protocol), discover: protocol.discover?.bind(protocol), check: protocol.check?.bind(protocol),
       });
-      const generation: Generation = { protocol: stable, accepting: true, pending: new Set(), executions: new Set(), cleanupFailed: false };
+      const generation: Generation = { protocol: stable, id: randomUUID(), controller: new AbortController(), accepting: true, pending: new Set(), executions: new Set(), cleanupFailed: false };
       generations.set(stable.descriptor.id, generation); ownedGenerations.add(generation);
       for (const connection of store.connections().filter(value => value.protocolId === stable.descriptor.id)) void enqueue(connection.id, () => reconcile(connection.id)).catch(() => {});
-      return Object.freeze({ unregister: () => unregister(generation) });
+      return Object.freeze({ generationId: generation.id, protocolVersion: stable.descriptor.version, signal: generation.controller.signal, acquire: () => acquire(generation) as NativeProtocolLease<I, R, E>, unregister: () => unregister(generation) });
     },
   };
   const close = () => {

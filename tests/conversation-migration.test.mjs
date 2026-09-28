@@ -92,13 +92,14 @@ test('legacy turns migrate in array order; ambiguous Run associations remain exp
     assert.deepEqual(events.map(e => e.seq), active ? [1, 2] : [1])
   }
   await assert.rejects(state.findAcceptedRun({ sessionId: 'legacy', parentNodeId: null, input: 'Duplicate', idempotencyKey: 'z-completed' }), /idempotency key/)
-  const accepted = await state.registerRun('new-run', { sessionId: 'legacy', parentNodeId: third.id, input: 'Continue', idempotencyKey: 'new-key' }, 'now', [],
-    modelSnapshot('default', 'new'))
-  const done = await state.settleRun(accepted.run.id, { kind: 'completed', output: 'New answer' }, 'now')
-  assert.equal((await sessions.getNodePath('legacy', done.resultNodeId)).length, 4)
+  assert.equal((await sessions.getSession('legacy')).historyMode, 'dialogue-v1')
+  assert.equal((await sessions.getSession('empty')).historyMode, 'dialogue-v1')
+  await assert.rejects(state.registerRun('new-run', { sessionId: 'legacy', parentNodeId: third.id, input: 'Continue', idempotencyKey: 'new-key' }, 'now', [], modelSnapshot()), /legacy-session-readonly/)
+  await assert.rejects(sessions.selectSessionModel('legacy', 'default', 'chat-completions'), /legacy-session-readonly/)
+  assert.equal((await sessions.getNodePath('legacy', third.id)).length, 3)
   const schema = await f.db.read(reader => reader.all('PRAGMA table_info(harness_sessions)'))
   assert.equal(schema.some(column => column.name === 'turns_json'), false)
-  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 4)
+  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 5)
 })
 
 test('invalid legacy data rolls back the entire tree migration and its version record', async t => {
@@ -115,15 +116,21 @@ test('invalid legacy data rolls back the entire tree migration and its version r
 })
 
 
-test('Session reads historical and version 2 execution snapshots without rewriting stored JSON', async t => {
+test('Session reads historical and version 2 snapshots without rewriting stored JSON', async t => {
   const f = await legacyFixture(t)
+  const current = { schemaVersion: 2, modelDefinitionId: 'definition-default', providerDefinitionId: 'test-provider-definition', modelDefinitionVersionId: 'definition-v1',
+    modelId: 'default', modelRevision: 1, modelVersionId: 'model-v2', providerId: 'test-provider', providerRevision: 1,
+    providerVersionId: 'provider-v1', remoteModelId: 'test-remote', protocolId: 'chat-completions', protocolVersion: 'v2', options: {} }
+  const { schemaVersion, modelDefinitionId, providerDefinitionId, modelDefinitionVersionId, ...historical } = current
+  const samples = [['historical-model', historical], ['current-model', current]]
+  await f.db.transaction(tx => {
+    for (const [id, snapshot] of samples) tx.execute('INSERT INTO harness_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [id, 'empty', id, id, 'completed', 'now', 'now', '[]', JSON.stringify(snapshot), 'Answer', null, null,
+        JSON.stringify({ ...initialRunExecution, phase: 'terminal' })])
+  })
   await f.root.installComponent(createSessionComponent(f.inputs, agents))
   const records = f.root.get(sessionRunServiceKey), sessions = f.root.get(sessionServiceKey)
-  const current = modelSnapshot('default', 'v2')
-  const { schemaVersion, modelDefinitionId, providerDefinitionId, modelDefinitionVersionId, ...historical } = current
-  for (const [id, snapshot] of [['historical-model', historical], ['current-model', current]]) {
-    const accepted = await records.registerRun(id, { sessionId: 'empty', parentNodeId: null, input: id, idempotencyKey: id }, 'now', [], snapshot)
-    await records.settleRun(accepted.run.id, { kind: 'completed', output: 'Answer' }, 'now')
+  for (const [id, snapshot] of samples) {
     const before = await f.db.read(reader => reader.get('SELECT model_snapshot_json FROM harness_runs WHERE id = ?', [id]))
     assert.deepEqual((await records.getRun(id)).modelSnapshot, snapshot)
     assert.deepEqual((await sessions.getRunByKey('empty', id)).modelSnapshot, snapshot)

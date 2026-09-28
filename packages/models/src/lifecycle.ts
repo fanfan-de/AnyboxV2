@@ -19,8 +19,8 @@ export function cancelOperation(operation: Pick<ProtocolOperation<unknown>, 'can
 }
 /** Consume both promises immediately; never substitute abort for actual transport exit. */
 export async function joinOperation<T>(operation: ProtocolOperation<T>, signal: AbortSignal): Promise<T> {
-  let cancelFailed = false;
-  const abort = () => { if (!cancelOperation(operation)) cancelFailed = true; };
+  let cancelFailed = false, cancellationRequested = false;
+  const abort = () => { if (cancellationRequested) return; cancellationRequested = true; if (!cancelOperation(operation)) cancelFailed = true; };
   if (signal.aborted) abort(); else signal.addEventListener('abort', abort, { once: true });
   let value!: T;
   let resultError: unknown;
@@ -29,8 +29,8 @@ export async function joinOperation<T>(operation: ProtocolOperation<T>, signal: 
   try {
     await Promise.all([
       operation.result.then(result => { value = result; }, error => { resultFailed = true; resultError = error; abort(); }),
-      operation.done.catch(() => { cleanupFailed = true; abort(); }),
-    ]);
+      operation.done.catch(() => { cleanupFailed = true; abort(); throw modelsError('cleanup-failure'); }),
+    ]).catch(error => { if (!cleanupFailed) throw error; });
   } finally { signal.removeEventListener('abort', abort); }
   if (cleanupFailed || cancelFailed) throw modelsError('cleanup-failure');
   throwAborted(signal);

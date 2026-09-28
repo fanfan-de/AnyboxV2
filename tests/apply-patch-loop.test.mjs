@@ -1,3 +1,4 @@
+import { registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import assert from 'node:assert/strict'
@@ -11,7 +12,7 @@ import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
 import { applyPatchServiceKey } from '../dist/tool/apply-patch-component.js'
-import { controlledModels, modelSnapshot, deferred } from './helpers/controlled-models.mjs'
+import { controlledModels, modelSnapshot, deferred, ids } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', instructions: 'Use the available tools.', modelId: 'default' }]
 const patch = (id, text) => ({ id, name: 'apply_patch', arguments: { patch: text } })
@@ -130,7 +131,7 @@ for (const cleanupFailure of [false, true]) {
 }
 
 async function stateHost(directory) {
-  const root = new Context(), inputs = { now: () => 'now', newId: () => 'project' }
+  const root = new Context(), inputs = { now: () => 'now', newId: ids() }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createProjectComponent(inputs))
   await root.installComponent(createSessionComponent(inputs, agents))
@@ -146,9 +147,9 @@ test('old Bash JSON reads as tool events without rewriting completed history or 
   const session = await first.sessions.createSession(project.id, 'assistant')
   const plan = modelSnapshot()
   for (const id of ['completed', 'in-flight', 'failed']) {
-    await first.records.registerRun(id, { sessionId: session.id, parentNodeId: null, input: id, idempotencyKey: id }, 'old', [], plan)
+    await registerNativeRun(first.records, id, { sessionId: session.id, parentNodeId: null, input: id, idempotencyKey: id }, 'old', [], plan)
   }
-  await first.records.settleRun('completed', { kind: 'completed', output: 'saved' }, 'old')
+  await completeNativeRun(first.records, 'completed', 'saved', 'old')
   await first.records.settleRun('failed', { kind: 'failed', error: 'old failure', category: 'tool-timeout' }, 'old')
   const call = bash('legacy-call', 'printf old')
   const legacyResult = { exitCode: 0, signal: null, stdout: 'old', stderr: '', truncated: false }
@@ -194,16 +195,14 @@ test('an in-flight Apply Patch intent is interrupted on restart without replayin
   t.after(async () => { await second?.root.fiber.dispose(); await first.root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) })
   const project = await first.projects.openProject(directory)
   const session = await first.sessions.createSession(project.id, 'assistant')
-  await first.records.registerRun('r', { sessionId: session.id, parentNodeId: null, input: 'edit', idempotencyKey: 'one' }, 'old', [],
+  await registerNativeRun(first.records, 'r', { sessionId: session.id, parentNodeId: null, input: 'edit', idempotencyKey: 'one' }, 'old', [],
     modelSnapshot())
   const call = patch('patch', add('marker', 'would overwrite'))
-  await first.records.recordRunEvent('r', { kind: 'model-started' }, 'old')
-  await first.records.recordRunEvent('r', { kind: 'model-tool-calls', calls: [call] }, 'old')
-  await first.records.recordRunEvent('r', { kind: 'tool-started', call }, 'old')
+  await first.records.startOperation('r', { id: 'patch-operation', kind: 'tool', tool: call, intent: call }, 'old')
   writeFileSync(join(directory, 'marker'), 'already written')
   await first.root.fiber.dispose()
   second = await stateHost(directory)
   assert.equal((await second.records.getRun('r')).status, 'interrupted')
   assert.equal(readFileSync(join(directory, 'marker'), 'utf8'), 'already written')
-  assert.deepEqual((await second.sessions.getRunEvents('r')).map(event => event.kind), ['model-started', 'model-tool-calls', 'tool-started', 'interrupted'])
+  assert.deepEqual((await second.sessions.getRunEvents('r')).map(event => event.kind), ['tool-started', 'interrupted'])
 })

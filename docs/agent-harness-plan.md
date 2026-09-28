@@ -1,18 +1,18 @@
 # Agent Harness 重建计划
 
-状态：2026-09-28。本分支直接使用相邻 NyaCore，已完成 H0 资源边界、H1 闭环、持久会话树、Prompt 管理、Bash/Apply Patch 工具循环，以及通用 Models 和本机 Web 接入。下方日期验收记录描述各次交付，当前行为以本节与[组件说明](./harness-components.md)为准。
+状态：2026-09-28。本分支直接使用相邻 NyaCore，已完成原生协议执行迁移以及 H0 资源边界、H1 闭环、持久会话树、Prompt 管理、Bash/Apply Patch 工具循环，以及通用 Models 和本机 Web 接入。下方日期验收记录描述各次交付，当前行为以本节与[组件说明](./harness-components.md)为准。
 
 ## 当前基线
 
-[通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderConnection 管连接和密钥引用，ModelConfiguration 管执行版本、能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、标准 Chat Completions 和宿主的 DeepSeek 非推理扩展可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
+[通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderConnection 管连接和密钥引用，ModelConfiguration 管执行版本、能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、Anthropic Messages、标准 Chat Completions、Gemini Interactions 和宿主的 DeepSeek 非推理扩展可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
 
-所有组件直接安装在一个 Nya 根 Context。Session 统一拥有会话、不可变完整轮次节点、Run 记录、快照和恢复，Projects 管目录身份。Run 负责准入、幂等、Prompt 固定与 `models.open()`；AgentLoop 接收 execution 并独占模型及工具调用。每轮只提交新增消息，原生续轮数据由协议持有；AgentLoop 校验并执行工具，关闭 execution、等待资源退出后才结算。模型 `result` 成功表示本轮已完成清理和上下文提交；工具仍需要分别观察结果与退出。异常退出的 Run 重启后记为 `interrupted`，不重放外部副作用。
+所有组件直接安装在一个 Nya 根 Context。Session 独占会话、Run、不可变节点、原生记录和恢复引用；Projects 管项目身份。Run 检查幂等、选模、指定父链和 Prompt，协议绑定准备固定驱动代的 PreparedRunProgram。RunRuntime 同步接管资源，管理意图/观察持久屏障、取消、退出与结算；协议独立 Loop 决定工具回填和续轮。旧 AgentLoop、统一消息和 `models.open()` 已删除。
 
-会话持久保存可空 `modelId`。Run 按显式模型、会话模型、Agent 默认依次选择；同键请求在查询当前模型配置之前返回原 Run。Run 快照 schemaVersion 2 包含配置/连接版本、Provider/Model 定义身份、模型定义版本、协议实现版本和有效参数，不含密钥或凭据引用；旧 profile/configVersion 只作为 legacy 快照读取。有效工具能力不足时可执行纯文本请求，未知能力不会隐式升级为支持。
+会话持久保存可空 modelId；新 native-local-v1 Session 首次接受 Run 原子固定协议，旧 dialogue-v1 只读。schemaVersion 3 快照包含定义身份、驱动代、原生参数与非秘密 historyScopeEpoch，不含凭据。根初始化与工具契约沿指定父链继承，每个新 Run 的当前 task-template 仅处理本次原始输入一次。恢复记录增量保存，跨 Run/重启重建本地原生上下文；失败、取消、清理失败没有可继续节点，异常中断只结算 interrupted，不自动重放。
 
 本机 [Web 客户端](./web-client-design.md)通过统一 Provider/Model 目录选提供方、配置 Key 后自动准备适用模型，`models.settings` 提供连接与模型参数编辑、启停、Key 设置/替换/删除、能力和协议参数、发现、检查与历史。每个会话可以独立选模，提交和重试固定显式模型 ID。配置变更只影响新 execution，无需重启。启动环境变量继续校验，但旧 `ANYBOX_LLM_*` 只在空 Models 库初始化时导入，已有设置不会被覆盖。旧密钥复制到新命名空间，原条目保留；系统凭据不可用不会退回明文，也不阻止浏览非秘密配置。
 
-Web 支持显式节点查看、同父节点并发、跨项目四面板和标签页内布局恢复；关闭视图不取消 Run。Session 提交后发送变更提示，AgentLoop 发送临时模型事件，共用有界 SSE 展示通道。最终节点和 Run 查询是事实来源，流式片段不落为成功历史。Prompt 草稿编辑、版本发布、历史预览与 Agent 绑定仍由独立服务提供。
+Web 支持显式节点查看、同父节点并发、跨项目四面板和标签页内布局恢复；关闭视图不取消 Run。Session 提交后发送变更提示，RunRuntime 发布协议安全展示快照，共用有界 SSE 展示通道。最终节点和 Run 查询是事实来源，流式片段不落为成功历史。Prompt 草稿编辑、版本发布、历史预览与 Agent 绑定仍由独立服务提供。
 
 本次验证使用临时 SQLite、内存凭据、模拟 HTTP 与真实浏览器，覆盖配置、发现、选模、流式回答、取消、版本历史和窄屏布局；没有访问真实业务数据库或远端模型。Models Vault 的原生跨平台验收仍由 `ANYBOX_KEYRING_TESTS=1` 门控，不能继承旧凭据组件的验收结论。
 
@@ -41,6 +41,12 @@ Web 支持显式节点查看、同父节点并发、跨项目四面板和标签�
 ## 验收与后续
 
 当前检查覆盖 Models 与 Harness 共享契约、配置版本与密钥日志、模型选择和旧数据迁移、工具续轮、取消/卸载等待、临时进展与最终业务结果分离。组件或资源归属变化须同步行为测试，并运行 `npm run check`。后续真实模型 API、各平台系统凭据、远程产品宿主与账号体系分别验收。
+
+### 原生协议迁移（2026-09-28）
+
+P0–P7 的正式代码已切换：Models 0.2.0 原生接口及配置 v3；Session v5 与只读旧会话；五协议独立 Loop、共享 RunRuntime、版本化参数、绑定/历史兼容和协议 Web 展示。Responses 搜索引用与 Anthropic 服务器搜索/pause_turn 均有本地端到端测试。五协议工具往返、跨 Run、重启、分支隔离、签名/加密续轮与增量存储验证见 `tests/native-protocol-agents.test.mjs`。新版 API 和真实 Vault 平台验证仍单独门控。
+
+配置和业务迁移各自事务提交，未使用实际业务数据。发布前必须关闭旧进程并备份两库；半升级启动失败时不运行 Run，代码回退配合备份恢复。最终检查结果记录在原生协议设计的实现验收附录。
 
 ### Models 集成验收（2026-09-28）
 

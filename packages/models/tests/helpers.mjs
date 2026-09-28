@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { Context, FiberState } from '@nya/core'
+import { migrateLegacyParameters } from '../dist/legacy-parameters.js'
 import { createModelsComponent } from '../dist/component.js'
 import { modelsError } from '../dist/errors.js'
 
@@ -69,11 +70,11 @@ export async function addConnection(settings, input) {
   return settings.createConnection({ ...input, providerDefinitionId: definition.id })
 }
 export async function addConfiguration(settings, input) {
-  const { id, providerId, remoteModelId, defaults, enabled, ...metadata } = input
+  const { id, providerId, remoteModelId, defaults = {}, parameters, enabled, ...metadata } = input
   const connection = settings.connections().find(value => value.id === providerId)
   const definition = await settings.createModel({ ...metadata, providerId: connection.providerDefinitionId, remoteModelId,
     controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [connection.protocolId] } })
-  return settings.createConfiguration({ id, name: input.name, connectionId: providerId, modelDefinitionId: definition.id, enabled, defaults, capabilities: input.capabilities, baseline: true })
+  return settings.createConfiguration({ id, name: input.name, connectionId: providerId, modelDefinitionId: definition.id, enabled, parameters: parameters ?? (!['responses', 'chat-completions', 'anthropic-messages', 'gemini-interactions'].includes(connection.protocolId) ? params(connection.protocolId, defaults) : migrateLegacyParameters(connection.protocolId, defaults)), capabilities: input.capabilities, baseline: true })
 }
 
 export function memoryVault() {
@@ -105,40 +106,32 @@ export function memoryVault() {
   }
 }
 
+export const params = (protocolId = 'test', value = {}) => ({ protocolId, formatVersion: 1, value })
+export function exchange(execution, intent, onEvent) {
+  const operation = execution.prepareExchange(intent).start(onEvent)
+  return { ...operation, result: operation.result.then(reply => reply.response) }
+}
 export function fakeProtocol(id = 'test', version = '1') {
   const calls = [], operations = [], queued = []
-  function operation(input, kind = 'call') {
+  function operation(input, kind = 'exchange') {
     const result = deferred(), done = deferred(), aborted = deferred()
-    const record = {
-      input, kind, result, done, aborted, cancellations: [],
-      succeed(value = kind === 'call' ? { result: complete(), continuation: { turn: calls.length } } : kind === 'discover' ? [] : undefined) {
-        result.resolve(value); done.resolve()
-      },
-    }
+    const record = { input, kind, result, done, aborted, cancellations: [],
+      succeed(value = kind === 'exchange' ? complete() : kind === 'discover' ? [] : undefined) { result.resolve(value); done.resolve() } }
     if (input.signal.aborted) aborted.resolve()
     else input.signal.addEventListener('abort', () => aborted.resolve(), { once: true })
-    operations.push(record)
-    if (kind === 'call') calls.push(record)
-    const action = queued.shift()
-    if (action) action(record)
-    else queueMicrotask(() => record.succeed())
+    operations.push(record); if (kind === 'exchange') calls.push(record)
+    const action = queued.shift(); if (action) action(record); else queueMicrotask(() => record.succeed())
     return { result: result.promise, done: done.promise, cancel(reason) { record.cancellations.push(reason); aborted.resolve() } }
   }
-  return {
-    calls, operations,
-    next(action = () => {}) { queued.push(action) },
-    release() { for (const item of operations) item.succeed() },
+  const commit = ({ state, intent, response }) => ({ messages: [...(state.messages ?? []), ...(intent.messages ?? []), { role: 'assistant', content: response.text ?? '' }], response })
+  return { calls, operations, next(action = () => {}) { queued.push(action) }, release() { for (const item of operations) item.succeed() },
     descriptor: { id, version, name: `Protocol ${id}`, connectionFields: [], modelFields: [], supportsDiscovery: true, supportsCheck: true },
-    validateProvider() {},
-    validateOptions(options) {
-      if (options.protocol && Object.keys(options.protocol).length) throw modelsError('invalid-config')
-    },
-    effectiveCapabilities(declared) {
-      return { tools: declared.tools.support === 'supported', streaming: declared.streaming.support === 'supported', imageInput: false, reasoning: declared.reasoning }
-    },
-    call: input => operation(input),
-    discover: input => operation(input, 'discover'),
-    check: input => operation(input, 'check'),
+    validateProvider() {}, validateParameters(options) { if (options.protocol && Object.keys(options.protocol).length) throw modelsError('invalid-config') },
+    effectiveCapabilities(declared) { return { tools: declared.tools.support === 'supported', streaming: declared.streaming.support === 'supported', imageInput: false, webSearch: false, reasoning: declared.reasoning } },
+    restore(records) { let state = {}; for (let at = 0; at < records.length; at += 2) state = commit({state, intent: records[at].payload, response: records[at + 1].payload}); return state },
+    prepare({ state, intent, parameters, remoteModelId }) { if (Object.keys(intent).some(key => key !== 'messages' && key !== 'tools')) throw modelsError('invalid-config'); return { model: remoteModelId, parameters, messages: [...(state.messages ?? []), ...intent.messages], newMessages: intent.messages, ...(state.response ? { previousResponse: state.response } : {}), ...(intent.tools ? { tools: intent.tools } : {}) } },
+    exchange: input => operation(input), commit,
+    discover: input => operation(input, 'discover'), check: input => operation(input, 'check'),
   }
 }
 
@@ -152,7 +145,9 @@ export async function fixture({ store = memoryStore(), vault = memoryVault(), pr
   const models = root.get('models'), settings = root.get('models.settings'), registry = root.get('models.protocols')
   const registrations = protocols.map(protocol => registry.register(protocol))
   return {
-    root, component, models, settings, registry, store, vault, protocols, registrations, sourceData: root.get('models.source-data'),
+    root, component, models, settings, registry, store, vault, protocols, registrations,
+    open(input) { const config = settings.configurations().find(value => value.id === input.modelId); if (!config) return Promise.reject(modelsError('not-found')); const connection = settings.connections().find(value => value.id === config.connectionId); return models.openNative({ ...input, lease: registry.acquire(connection.protocolId) }); },
+    sourceData: root.get('models.source-data'),
     addConnection: input => addConnection(settings, input), addConfiguration: input => addConfiguration(settings, input),
     async add({ providerId = 'provider', modelId = 'model', protocolId = protocols[0]?.descriptor.id ?? 'absent', key, timeoutMs = 10000, defaults = {}, capabilityDeclarations = capabilities() } = {}) {
       const provider = await addConnection(settings, {

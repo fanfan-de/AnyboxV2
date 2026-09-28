@@ -1,5 +1,6 @@
+import type { StoredParameters } from './native-types.js';
 import { modelsError } from './errors.js';
-import type { DeclaredCapabilities, GenerationOptions, ModelConfigurationInput, ModelInput, ModelMessage, ModelResult, ProviderConnectionInput, ProviderInput, ToolDefinition } from './types.js';
+import type { DeclaredCapabilities, ModelConfigurationInput, ModelInput, ProviderConnectionInput, ProviderInput } from './types.js';
 
 export function immutable<T>(value: T): T {
   try {
@@ -60,7 +61,8 @@ export function validateHints(value: ProviderInput['connectionHints']): void {
   if (value.baseUrl !== undefined) validateHttpUrl(value.baseUrl, true);
 }
 export function validateCapabilities(value: DeclaredCapabilities): void {
-  keys(value, ['tools', 'streaming', 'imageInput', 'reasoning']);
+  keys(value, ['tools', 'streaming', 'imageInput', 'reasoning', 'webSearch']);
+  if (value.webSearch !== undefined) { keys(value.webSearch, ['support']); assert(['supported', 'unsupported', 'unknown'].includes(value.webSearch.support)); }
   for (const key of ['tools', 'streaming', 'imageInput', 'reasoning'] as const) {
     const cap = value[key];
     keys(cap, key === 'reasoning' ? ['support', 'efforts', 'modes', 'budget'] : ['support']);
@@ -75,11 +77,9 @@ export function validateCapabilities(value: DeclaredCapabilities): void {
     assert(Number.isSafeInteger(reasoning.budget.min) && Number.isSafeInteger(reasoning.budget.max) && reasoning.budget.min >= 0 && reasoning.budget.max >= reasoning.budget.min);
   }
 }
-export function validateOptions(value: GenerationOptions): void {
-  keys(value, ['temperature', 'maxOutputTokens', 'protocol']);
-  if (value.temperature !== undefined) assert(typeof value.temperature === 'number' && Number.isFinite(value.temperature) && value.temperature >= 0);
-  if (value.maxOutputTokens !== undefined) assert(typeof value.maxOutputTokens === 'number' && Number.isSafeInteger(value.maxOutputTokens) && value.maxOutputTokens > 0);
-  if (value.protocol !== undefined) assert(record(value.protocol) && json(value.protocol));
+export function validateParameters(value: StoredParameters): void {
+  keys(value, ['protocolId', 'formatVersion', 'value']); identifier(value.protocolId);
+  assert(value.formatVersion === 0 || value.formatVersion === 1); assert(record(value.value) && json(value.value));
 }
 const supports = (value: unknown) => typeof value === 'string' && ['supported', 'unsupported', 'unknown'].includes(value);
 const finiteNonnegative = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
@@ -126,13 +126,13 @@ export function validateModel(value: ModelInput): void {
   validateControls(value.controls); validateCost(value.cost); assert(json(value));
 }
 export function validateConfiguration(value: ModelConfigurationInput): void {
-  keys(value, ['modelDefinitionId', 'connectionId', 'name', 'enabled', 'capabilities', 'defaults', 'baseline']);
+  keys(value, ['modelDefinitionId', 'connectionId', 'name', 'enabled', 'capabilities', 'parameters', 'baseline']);
   identifier(value.modelDefinitionId); identifier(value.connectionId);
   assert(nonempty(value.name) && typeof value.enabled === 'boolean' && typeof value.baseline === 'boolean');
-  validateCapabilities(value.capabilities); validateOptions(value.defaults);
+  validateCapabilities(value.capabilities); validateParameters(value.parameters); assert(value.parameters.formatVersion === 1);
 }
 export function configurationInput(value: ModelConfigurationInput): ModelConfigurationInput {
-  return { name: value.name, enabled: value.enabled, connectionId: value.connectionId, modelDefinitionId: value.modelDefinitionId, capabilities: value.capabilities, defaults: value.defaults, baseline: value.baseline };
+  return { name: value.name, enabled: value.enabled, connectionId: value.connectionId, modelDefinitionId: value.modelDefinitionId, capabilities: value.capabilities, parameters: value.parameters, baseline: value.baseline };
 }
 export function providerInput(value: ProviderInput): ProviderInput {
   return { name: value.name, connectionHints: value.connectionHints, ...(value.documentationUrl === undefined ? {} : { documentationUrl: value.documentationUrl }) };
@@ -141,52 +141,15 @@ export function modelInput(value: ModelInput): ModelInput {
   const { providerId, remoteModelId, name, capabilities, controls, modalities, limits, connectionHints, cost, description, family, releaseDate, lastUpdated, status, openWeights, modelType } = value;
   return Object.fromEntries(Object.entries({ providerId, remoteModelId, name, capabilities, controls, modalities, limits, connectionHints, cost, description, family, releaseDate, lastUpdated, status, openWeights, modelType }).filter(([, entry]) => entry !== undefined)) as unknown as ModelInput;
 }
-export function validateTools(tools: readonly ToolDefinition[]): void {
-  assert(Array.isArray(tools)); const names = new Set<string>();
-  for (const tool of tools) {
-    keys(tool, ['name', 'description', 'parameters']);
-    assert(typeof tool.name === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(tool.name) && !names.has(tool.name)); names.add(tool.name);
-    assert(tool.description === undefined || typeof tool.description === 'string');
-    assert(record(tool.parameters) && json(tool.parameters));
-  }
-}
-/** Validate tool-call/result correspondence without interpreting tool business schemas. */
-export function validateMessages(messages: readonly ModelMessage[], allowPending: boolean): void {
-  assert(Array.isArray(messages)); const pending = new Set<string>(); const seen = new Set<string>();
-  for (const message of messages) {
-    assert(record(message) && typeof message.content === 'string');
-    if (message.role === 'tool') {
-      keys(message, ['role', 'callId', 'content']);
-      assert(typeof message.callId === 'string' && pending.delete(message.callId));
-    } else {
-      assert(pending.size === 0);
-      assert(typeof message.role === 'string' && ['system', 'developer', 'user', 'assistant'].includes(message.role));
-      keys(message, message.role === 'assistant' ? ['role', 'content', 'toolCalls'] : ['role', 'content']);
-      if (message.role === 'assistant' && message.toolCalls !== undefined) {
-        assert(Array.isArray(message.toolCalls));
-        for (const call of message.toolCalls) {
-          keys(call, ['id', 'name', 'arguments']);
-          assert(nonempty(call.id) && nonempty(call.name) && !seen.has(call.id) && json(call.arguments));
-          seen.add(call.id); pending.add(call.id);
-        }
-      }
-    }
-  }
-  assert(allowPending || pending.size === 0);
-}
-export function validateResult(result: ModelResult, tools: readonly ToolDefinition[], history: readonly ModelMessage[]): void {
-  try {
-    keys(result, ['status', 'text', 'toolCalls', 'usage']);
-    assert(['completed', 'incomplete', 'refused'].includes(result.status) && typeof result.text === 'string' && Array.isArray(result.toolCalls));
-    assert(result.status === 'completed' || result.toolCalls.length === 0);
-    assert(result.toolCalls.every(call => tools.some(tool => tool.name === call.name)));
-    validateMessages([...history, { role: 'assistant', content: result.text, toolCalls: result.toolCalls }], true);
-    if (result.usage !== undefined) {
-      keys(result.usage, ['inputTokens', 'outputTokens', 'totalTokens']);
-      assert(Object.values(result.usage).every(value => value === undefined || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0)));
-    }
-  } catch { throw modelsError('invalid-response'); }
-}
 export function unknownCapabilities(): DeclaredCapabilities {
   return { tools: { support: 'unknown' }, streaming: { support: 'unknown' }, imageInput: { support: 'unknown' }, reasoning: { support: 'unknown' } };
+}
+
+/** Compare JSON semantics without treating object insertion order as a history change. */
+export function equalJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) return Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => equalJson(value, right[index]));
+  if (!record(left) || !record(right)) return false;
+  const a = Object.keys(left), b = Object.keys(right);
+  return a.length === b.length && a.every(key => Object.hasOwn(right, key) && equalJson(left[key], right[key]));
 }

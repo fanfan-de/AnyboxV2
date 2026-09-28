@@ -1,32 +1,43 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { canUseModel, createModelsCatalog, generationOptions, initialModelDefaults, settingsConnectionSelection, settingsModelEditorSelection } from '../dist/web/models-client.js'
+import { canUseModel, createModelsCatalog, nativeParameterValues, initialNativeParameters, settingsConnectionSelection, settingsModelEditorSelection } from '../dist/web/models-client.js'
 import { catalogSupportsText, catalogMatchesConnection, createModelsDirectory } from '../dist/web/models-directory-client.js'
 
 const fields = [
   { key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 },
-  { key: 'maxOutputTokens', label: 'Tokens', type: 'number', min: 1, integer: true },
-  { key: 'protocol.reasoningEffort', label: 'Effort', type: 'enum', values: ['none', 'low', 'high'] },
-  { key: 'protocol.flag', label: 'Flag', type: 'boolean' },
+  { key: 'max_tokens', label: 'Tokens', type: 'number', min: 1, integer: true },
+  { key: 'reasoning.effort', label: 'Effort', type: 'enum', values: ['none', 'low', 'high'] },
+  { key: 'thinking.enabled', label: 'Flag', type: 'boolean' },
 ]
 
 test('descriptor forms omit blank options and preserve explicitly selected zero, false and reasoning mode', () => {
-  assert.deepEqual(generationOptions(fields, {}), {})
-  assert.deepEqual(generationOptions(fields, { temperature: '0', 'protocol.flag': 'false', 'protocol.reasoningEffort': '"none"' }), {
-    temperature: 0, protocol: { flag: false, reasoningEffort: 'none' },
+  assert.deepEqual(nativeParameterValues(fields, {}), {})
+  assert.deepEqual(nativeParameterValues(fields, { temperature: '0', 'thinking.enabled': 'false', 'reasoning.effort': '"none"' }), {
+    temperature: 0, thinking: { enabled: false }, reasoning: { effort: 'none' },
   })
-  assert.throws(() => generationOptions(fields, { maxOutputTokens: '1.5' }), /范围/)
-  assert.throws(() => generationOptions(fields, { temperature: 'NaN' }), /范围/)
-  assert.throws(() => generationOptions(fields, { 'protocol.reasoningEffort': '"invented"' }), /无效/)
+  assert.throws(() => nativeParameterValues(fields, { max_tokens: '1.5' }), /范围/)
+  assert.throws(() => nativeParameterValues(fields, { temperature: 'NaN' }), /范围/)
+  assert.throws(() => nativeParameterValues(fields, { 'reasoning.effort': '"invented"' }), /无效/)
 })
 
 test('new forms initialize required defaults and cap output tokens using the selected directory model', () => {
-  const fields = [{ key: 'maxOutputTokens', label: 'Tokens', type: 'number', min: 1, integer: true, required: true, defaultValue: 4096 },
-    { key: 'protocol.flag', label: 'Flag', type: 'boolean', defaultValue: false }, { key: 'temperature', label: 'Temperature', type: 'number' }]
-  assert.deepEqual(initialModelDefaults(fields), { maxOutputTokens: 4096, protocol: { flag: false } })
-  assert.deepEqual(initialModelDefaults(fields, { limits: { output: 2048 } }), { maxOutputTokens: 2048, protocol: { flag: false } })
-  assert.throws(() => generationOptions(fields, {}), /必须填写/)
-  assert.deepEqual(generationOptions(fields, { maxOutputTokens: '4096' }), { maxOutputTokens: 4096 })
+  const fields = [{ key: 'max_tokens', label: 'Tokens', type: 'number', min: 1, integer: true, required: true, defaultValue: 4096 },
+    { key: 'thinking.enabled', label: 'Flag', type: 'boolean', defaultValue: false }, { key: 'temperature', label: 'Temperature', type: 'number' }]
+  assert.deepEqual(initialNativeParameters(fields), { max_tokens: 4096, thinking: { enabled: false } })
+  assert.deepEqual(initialNativeParameters(fields, { limits: { output: 2048 } }), { max_tokens: 2048, thinking: { enabled: false } })
+  assert.throws(() => nativeParameterValues(fields, {}), /必须填写/)
+  assert.deepEqual(nativeParameterValues(fields, { max_tokens: '4096' }), { max_tokens: 4096 })
+})
+
+test('native parameter paths retain nesting and reject conflicting or prototype paths', () => {
+  assert.deepEqual(nativeParameterValues([
+    { key: 'thinking.type', label: 'Thinking', type: 'enum', values: ['enabled'] },
+    { key: 'thinking.budget_tokens', label: 'Budget', type: 'number', integer: true, min: 1 },
+  ], { 'thinking.type': '"enabled"', 'thinking.budget_tokens': '1024' }), { thinking: { type: 'enabled', budget_tokens: 1024 } })
+  assert.throws(() => nativeParameterValues([{ key: '__proto__.value', label: 'Bad', type: 'string' }], { '__proto__.value': 'bad' }), /参数路径/)
+  assert.throws(() => nativeParameterValues([
+    { key: 'thinking', label: 'Scalar', type: 'string' }, { key: 'thinking.type', label: 'Nested', type: 'string' },
+  ], { thinking: 'scalar', 'thinking.type': 'enabled' }), /参数路径冲突/)
 })
 
 test('directory models require a compatible explicitly associated connection for automatic setup', () => {

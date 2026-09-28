@@ -9,6 +9,16 @@ import { createDeepSeekProtocolComponent } from '../dist/web/deepseek-protocol.j
 import { installWebModels as installModels } from '../dist/web/models-startup.js'
 import { parseWebStartupConfig } from '../dist/web/startup-config.js'
 
+
+async function openNative(root, modelId = 'default') {
+  const model = root.get('models').get(modelId)
+  const lease = root.get('models.protocols').acquire(model.parameters.protocolId)
+  try {
+    const execution = await root.get('models').openNative({ modelId, lease })
+    return { snapshot: execution.snapshot, async close() { try { return await execution.close() } finally { lease.release() } } }
+  } catch (error) { lease.release(); throw error }
+}
+
 const entryKey = (namespace, id) => `${namespace}\0${id}`
 const installWebModels = (root, config, options = {}) => installModels(root, config, { catalogAutoRefresh: false, ...options })
 function memoryKeyring() {
@@ -83,7 +93,7 @@ test('A failed new-vault write keeps editable provider/model metadata and saniti
   assert.equal(settings.connections()[0].credentialConfigured, false)
   assert.equal(settings.configurations().length, 1)
   assert.ok(!JSON.stringify(settings.connections()).includes('private-import-value'))
-  await assert.rejects(root.get('models').open({ modelId: 'default' }), { code: 'credential-missing' })
+  await assert.rejects(openNative(root), { code: 'credential-missing' })
 })
 
 test('Interrupted bootstrap creates only its missing model and preserves the committed provider/key', async t => {
@@ -98,7 +108,7 @@ test('Interrupted bootstrap creates only its missing model and preserves the com
   assert.equal(reads, 0)
   const settings = second.get('models.settings')
   assert.deepEqual(settings.protocols().map(protocol => protocol.id).sort(), ['anthropic-messages', 'chat-completions', 'deepseek-chat-completions', 'gemini-interactions', 'responses'])
-  const execution = await second.get('models').open({ modelId: 'default' })
+  const execution = await openNative(second)
   const visible = JSON.stringify([settings.connections(), settings.configurations(), settings.connectionHistory(provider.id), execution.snapshot])
   assert.ok(!visible.includes('already-copied-private-value'))
   assert.ok(!visible.includes('credentialRef'))
@@ -169,7 +179,7 @@ test('Interrupted bootstrap after its model definition preserves the stable defa
   assert.equal(configurations[0].modelDefinitionId, definition.id)
   assert.equal(configurations[0].connectionId, connection.id)
   assert.equal(configurations[0].baseline, true)
-  const execution = await second.get('models').open({ modelId: 'default' })
+  const execution = await openNative(second)
   await execution.close()
   assert.deepEqual([...keyring.values.values()], ['committed-import-key'])
 })

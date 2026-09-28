@@ -1,9 +1,10 @@
 import type { ServerResponse } from 'node:http'
-import type { RunChange, RunModelEvent } from '../run/notifications.js'
+import type { RunChange } from '../run/notifications.js'
+import type { ProtocolViewFrame } from './protocols/types.js'
 
 export interface RunChangeStream {
   publish(change: RunChange): void
-  publishModelProgress(progress: RunModelEvent): void
+  publishProtocolView(progress: ProtocolViewFrame): void
   close(): void
   readonly done: Promise<void>
 }
@@ -11,7 +12,7 @@ export interface RunChangeStream {
 /** One SSE response owns its timers/listeners. At most one pending hint per subscribed Session. */
 export function openRunChangeStream(response: ServerResponse, sessionIds: ReadonlySet<string>): RunChangeStream {
   const pending = new Map<string, RunChange>()
-  const progressFrames: string[] = []
+  const progressFrames = new Map<string, string>()
   let progressBytes = 0
   let closed = false, blocked = false
   let flushTask: ReturnType<typeof setImmediate> | undefined
@@ -22,7 +23,7 @@ export function openRunChangeStream(response: ServerResponse, sessionIds: Readon
   const cleanup = () => {
     closed = true
     pending.clear()
-    progressFrames.length = 0
+    progressFrames.clear()
     progressBytes = 0
     if (flushTask) clearImmediate(flushTask)
     if (heartbeat) clearInterval(heartbeat)
@@ -52,8 +53,9 @@ export function openRunChangeStream(response: ServerResponse, sessionIds: Readon
       write(`event: run-changed\ndata: ${JSON.stringify(change)}\n\n`)
       if (closed || blocked) break
     }
-    while (!closed && !blocked && progressFrames.length) {
-      const frame = progressFrames.shift()!
+    for (const [id, frame] of progressFrames) {
+      if (closed || blocked) break
+      progressFrames.delete(id)
       progressBytes -= Buffer.byteLength(frame, 'utf8')
       write(frame)
     }
@@ -87,14 +89,18 @@ export function openRunChangeStream(response: ServerResponse, sessionIds: Readon
       pending.set(change.sessionId, change)
       schedule()
     },
-    publishModelProgress(progress) {
+    publishProtocolView(progress) {
       if (closed || !sessionIds.has(progress.sessionId)) return
-      const frame = `event: model-progress\ndata: ${JSON.stringify(progress)}\n\n`
+      const frame = `event: protocol-view\ndata: ${JSON.stringify(progress)}\n\n`
       const bytes = Buffer.byteLength(frame, 'utf8')
+      const key = JSON.stringify([progress.sessionId, progress.runId])
+      const previous = progressFrames.get(key)
+      const queuedBytes = progressBytes - (previous ? Buffer.byteLength(previous, 'utf8') : 0) + bytes
       // A slow browser only loses its subscription. It never delays a model callback.
-      if (progressFrames.length >= 128 || progressBytes + bytes > 262_144) { close(); return }
-      progressFrames.push(frame)
-      progressBytes += bytes
+      // Replacement snapshots supersede unsent frames from the same Run.
+      if ((!previous && progressFrames.size >= 128) || queuedBytes > 262_144) { close(); return }
+      progressFrames.set(key, frame)
+      progressBytes = queuedBytes
       schedule()
     },
   }

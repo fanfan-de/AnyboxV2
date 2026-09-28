@@ -1,4 +1,6 @@
-/** All public values are protocol-neutral and contain no credentials. */
+import type { StoredParameters } from './native-types.js';
+export type { ModelsService, ModelsProtocolsService, ProtocolRegistration } from './native-types.js';
+/** Settings and record values are serializable; trusted protocol connection ports are kept out of browser DTOs. */
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type Support = 'supported' | 'unsupported' | 'unknown';
 export interface Capability { readonly support: Support }
@@ -8,41 +10,18 @@ export interface ReasoningCapability extends Capability {
   readonly budget?: { readonly min: number; readonly max: number };
 }
 export interface DeclaredCapabilities {
+  readonly webSearch?: Capability;
   readonly tools: Capability;
   readonly streaming: Capability;
   readonly imageInput: Capability;
   readonly reasoning: ReasoningCapability;
 }
 export interface EffectiveCapabilities {
+  readonly webSearch: boolean;
   readonly tools: boolean;
   readonly streaming: boolean;
   readonly imageInput: false;
   readonly reasoning: ReasoningCapability;
-}
-export interface CommonGenerationOptions { readonly temperature?: number; readonly maxOutputTokens?: number }
-export interface GenerationOptions extends CommonGenerationOptions { readonly protocol?: Readonly<Record<string, JsonValue>> }
-export interface ModelRequirements { readonly tools?: boolean; readonly streaming?: boolean; readonly reasoning?: boolean }
-export interface ToolDefinition { readonly name: string; readonly description?: string; readonly parameters: Readonly<Record<string, JsonValue>> }
-export interface ToolCall { readonly id: string; readonly name: string; readonly arguments: JsonValue }
-export type ModelMessage =
-  | { readonly role: 'system' | 'developer' | 'user'; readonly content: string }
-  | { readonly role: 'assistant'; readonly content: string; readonly toolCalls?: readonly ToolCall[] }
-  | { readonly role: 'tool'; readonly callId: string; readonly content: string };
-export interface ModelUsage { readonly inputTokens?: number; readonly outputTokens?: number; readonly totalTokens?: number }
-export interface ModelResult {
-  readonly status: 'completed' | 'incomplete' | 'refused';
-  readonly text: string;
-  readonly toolCalls: readonly ToolCall[];
-  readonly usage?: ModelUsage;
-}
-export type ModelEvent =
-  | { readonly type: 'text-delta'; readonly delta: string }
-  | { readonly type: 'reasoning-summary-delta'; readonly delta: string }
-  | { readonly type: 'tool-call-delta'; readonly index: number; readonly id?: string; readonly name?: string; readonly argumentsDelta?: string };
-export interface ModelCall {
-  readonly result: Promise<ModelResult>;
-  readonly done: Promise<void>;
-  cancel(reason?: string): void;
 }
 export interface Versioned { readonly id: string; readonly revision: number; readonly versionId: string; readonly createdAt: string; readonly updatedAt: string }
 export type SourceRef =
@@ -93,14 +72,14 @@ export interface ConnectionSyncState {
 }
 export interface ProviderConnection extends Versioned, ProviderConnectionInput { readonly credentialConfigured: boolean; readonly sync?: ConnectionSyncState }
 /** Credential references belong only to the trusted store and private execution boundary. */
-export interface ProviderConnectionRecord extends Versioned, ProviderConnectionInput { readonly credentialRef: string | null }
+export interface ProviderConnectionRecord extends Versioned, ProviderConnectionInput { readonly credentialRef: string | null; readonly historyScopeEpoch: string }
 export interface ModelConfigurationInput {
   readonly modelDefinitionId: string;
   readonly connectionId: string;
   readonly name: string;
   readonly enabled: boolean;
   readonly capabilities: DeclaredCapabilities;
-  readonly defaults: GenerationOptions;
+  readonly parameters: StoredParameters;
   readonly baseline: boolean;
 }
 export interface ModelConfiguration extends Versioned, ModelConfigurationInput { readonly modelDefinitionVersionId: string; readonly remoteModelId: string }
@@ -120,42 +99,6 @@ export interface SourceCommitResult { readonly accepted: boolean; readonly sourc
 export interface ModelsSourceDataService {
   accepted(sourceId: string): SourceSnapshot | undefined;
   accept(snapshot: SourceSnapshot, options?: { readonly confirmed?: boolean }): Promise<SourceCommitResult>;
-}
-export interface ExecutionSnapshot {
-  /** Optional only when reading historical snapshots. New executions always write 2. */
-  readonly schemaVersion?: 2;
-  readonly modelDefinitionId?: string;
-  readonly providerDefinitionId?: string;
-  readonly modelDefinitionVersionId?: string;
-  readonly modelId: string;
-  readonly modelRevision: number;
-  readonly modelVersionId: string;
-  readonly providerId: string;
-  readonly providerRevision: number;
-  readonly providerVersionId: string;
-  readonly remoteModelId: string;
-  readonly protocolId: string;
-  readonly protocolVersion: string;
-  readonly options: GenerationOptions;
-}
-export interface ModelExecution {
-  readonly snapshot: ExecutionSnapshot;
-  readonly capabilities: EffectiveCapabilities;
-  generate(input: { readonly messages: readonly ModelMessage[]; readonly onEvent?: (event: ModelEvent) => void }): ModelCall;
-  close(): Promise<void>;
-}
-export interface OpenModelInput {
-  readonly modelId: string;
-  readonly history?: readonly ModelMessage[];
-  readonly tools?: readonly ToolDefinition[];
-  readonly requirements?: ModelRequirements;
-  readonly options?: CommonGenerationOptions;
-  readonly signal?: AbortSignal;
-}
-export interface ModelsService {
-  list(query?: ModelQuery): readonly RunnableModelSummary[];
-  get(modelId: string): RunnableModelSummary | undefined;
-  open(input: OpenModelInput): Promise<ModelExecution>;
 }
 export interface FormField {
   readonly key: string;
@@ -256,28 +199,6 @@ export interface ProtocolOperation<T> {
   cancel(reason?: string): void;
 }
 export interface ProtocolConnection { readonly provider: ProviderConnectionInput; readonly credential?: string; readonly signal: AbortSignal }
-export interface ProtocolCallInput extends ProtocolConnection {
-  readonly remoteModelId: string;
-  readonly options: GenerationOptions;
-  readonly capabilities: EffectiveCapabilities;
-  readonly messages: readonly ModelMessage[];
-  readonly newMessages: readonly ModelMessage[];
-  readonly tools: readonly ToolDefinition[];
-  readonly continuation?: unknown;
-  readonly onEvent: (event: ModelEvent) => void;
-}
-export interface ProtocolOutcome { readonly result: ModelResult; readonly continuation?: unknown }
-export interface ModelProtocol {
-  readonly descriptor: ProtocolDescriptor;
-  validateProvider(provider: ProviderConnectionInput): void;
-  validateOptions(options: GenerationOptions, capabilities: DeclaredCapabilities): void;
-  effectiveCapabilities(declared: DeclaredCapabilities, options: GenerationOptions): EffectiveCapabilities;
-  call(input: ProtocolCallInput): ProtocolOperation<ProtocolOutcome>;
-  discover?(input: ProtocolConnection): ProtocolOperation<readonly DiscoveredModel[]>;
-  check?(input: ProtocolConnection): ProtocolOperation<void>;
-}
-export interface ProtocolRegistration { unregister(): Promise<void> }
-export interface ModelsProtocolsService { register(protocol: ModelProtocol): ProtocolRegistration }
 export const modelsServiceKey = 'models';
 export const modelsSettingsServiceKey = 'models.settings';
 export const modelsProtocolsServiceKey = 'models.protocols';

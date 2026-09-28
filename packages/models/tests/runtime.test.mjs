@@ -1,465 +1,189 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { capabilities, code, complete, fakeProtocol, fixture, memoryStore, memoryVault, tick } from './helpers.mjs'
-
+import { capabilities, code, complete, deferred, exchange, fakeProtocol, fixture, params, tick } from './helpers.mjs'
 const input = content => ({ messages: [{ role: 'user', content }] })
-const tracked = promise => {
-  const state = { settled: false }
-  promise.then(() => { state.settled = true }, () => { state.settled = true })
-  return state
-}
+const tracked = promise => { const state = { settled: false }; promise.then(() => { state.settled = true }, () => { state.settled = true }); return state }
 
-test('two providers execute concurrently by model ID with independent frozen defaults', async () => {
-  const protocol = fakeProtocol(), f = await fixture({ protocols: [protocol] })
+test('independent native executions retain their own configuration, credential and protocol generation', async () => {
+  const f = await fixture(), protocol = f.protocols[0]
   try {
     await f.add({ providerId: 'one', modelId: 'quick', key: 'first-secret', defaults: { temperature: 0.1 } })
     await f.add({ providerId: 'two', modelId: 'deep', key: 'second-secret', defaults: { temperature: 0.8 } })
-    const [quick, deep] = await Promise.all([f.models.open({ modelId: 'quick' }), f.models.open({ modelId: 'deep' })])
-    protocol.next(); protocol.next()
-    const a = quick.generate(input('first')), b = deep.generate(input('second'))
-    await tick()
-    assert.equal(protocol.calls.length, 2)
-    assert.deepEqual(protocol.calls.map(call => [call.input.remoteModelId, call.input.options.temperature, call.input.credential]), [
-      ['same-remote-model', 0.1, 'first-secret'], ['same-remote-model', 0.8, 'second-secret'],
-    ])
-    protocol.calls[1].succeed({ result: complete('second finishes first') })
-    assert.equal((await b.result).text, 'second finishes first')
+    const [quick, deep] = await Promise.all([f.open({ modelId: 'quick' }), f.open({ modelId: 'deep' })]); protocol.next(); protocol.next()
+    const a = exchange(quick, input('first')), b = exchange(deep, input('second')); await tick()
+    assert.deepEqual(protocol.calls.map(call => [call.input.request.parameters.temperature, call.input.credential]), [[0.1, 'first-secret'], [0.8, 'second-secret']])
+    protocol.calls[1].succeed(complete('second finishes first')); assert.equal((await b.result).text, 'second finishes first')
     const first = tracked(a.result); await tick(); assert.equal(first.settled, false)
-    protocol.calls[0].succeed({ result: complete('first') }); await a.result
-    await Promise.all([quick.close(), deep.close()])
+    protocol.calls[0].succeed(complete('first')); await a.result; await Promise.all([quick.close(), deep.close()])
   } finally { await f.close() }
 })
 
-test('multiple local models of the same remote model apply their own defaults and call overrides', async () => {
-  const f = await fixture()
-  try {
-    const { model } = await f.add({ defaults: { temperature: 0.2, maxOutputTokens: 100 } })
-    await f.addConfiguration({ id: 'long', name: 'Long', providerId: model.connectionId, remoteModelId: model.remoteModelId, capabilities: model.capabilities, enabled: true, defaults: { temperature: 0.9, maxOutputTokens: 500 } })
-    const first = await f.models.open({ modelId: model.id, options: { maxOutputTokens: 50 } })
-    const second = await f.models.open({ modelId: 'long' })
-    await Promise.all([first.generate(input('short')).result, second.generate(input('long')).result])
-    assert.deepEqual(f.protocols[0].calls.map(call => call.input.options), [{ temperature: 0.2, maxOutputTokens: 50 }, { temperature: 0.9, maxOutputTokens: 500 }])
-    await Promise.all([first.close(), second.close()])
+test('prepare fixes an immutable incremental recipe without starting a request', async () => {
+  const f = await fixture(); try {
+    await f.add(); const execution = await f.open({ modelId: 'model' }); const intent = input('first'); const prepared = execution.prepareExchange(intent); intent.messages[0].content = 'mutated'
+    assert.equal(f.protocols[0].calls.length, 0); assert.equal(prepared.record.payload.messages[0].content, 'first'); assert.equal(prepared.request.precedingRecordId, null)
+    assert.throws(() => execution.prepareExchange(input('another')), code('busy'))
+    const reply = await prepared.start().result; assert.equal(reply.records[0].id, prepared.record.id); assert.throws(() => prepared.start(), code('busy'))
+    const second = execution.prepareExchange(input('second')); assert.equal(second.request.precedingRecordId, reply.records[1].id); assert.deepEqual(second.request.intent, input('second'))
+    await second.start().result; const report = await execution.close(); assert.equal(report.records.length, 4); assert.ok(report.restoreState)
   } finally { await f.close() }
 })
 
-test('undefined call overrides preserve configured defaults instead of silently erasing them', async () => {
-  const f = await fixture()
-  try {
-    await f.add({ defaults: { temperature: 0.2, maxOutputTokens: 100 } })
-    const execution = await f.models.open({ modelId: 'model', options: { temperature: undefined, maxOutputTokens: undefined } })
-    await execution.generate(input('use configured defaults')).result
-    assert.deepEqual(execution.snapshot.options, { temperature: 0.2, maxOutputTokens: 100 })
-    assert.deepEqual(f.protocols[0].calls[0].input.options, execution.snapshot.options)
-    await execution.close()
+test('result waits for actual exit and atomically commits native state before the next exchange', async () => {
+  const f = await fixture(), protocol = f.protocols[0]; try {
+    await f.add(); const execution = await f.open({ modelId: 'model' }); protocol.next(); const call = exchange(execution, input('first')); await tick()
+    protocol.calls[0].result.resolve({ text: 'reply', signature: 'native-signature' }); const result = tracked(call.result), done = tracked(call.done); await tick()
+    assert.equal(result.settled, false); assert.equal(done.settled, false); assert.throws(() => execution.prepareExchange(input('overlap')), code('busy'))
+    protocol.calls[0].done.resolve(); await call.result; await exchange(execution, input('second')).result
+    assert.deepEqual(protocol.calls[1].input.request.previousResponse, { text: 'reply', signature: 'native-signature' }); assert.deepEqual(protocol.calls[1].input.request.newMessages, input('second').messages)
+    assert.doesNotMatch(JSON.stringify(execution.snapshot), /native-signature/); await execution.close()
   } finally { await f.close() }
 })
 
-test('result waits for actual exit and commits continuation and releases ownership before resolving', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add()
-    const execution = await f.models.open({ modelId: 'model', history: [{ role: 'system', content: 'instruction' }] })
-    protocol.next()
-    const call = execution.generate(input('first'))
-    await tick()
-    const active = protocol.calls[0], final = tracked(call.result), exited = tracked(call.done)
-    active.result.resolve({ result: complete('reply'), continuation: { opaque: 'private-context' } })
-    await tick()
-    assert.equal(final.settled, false); assert.equal(exited.settled, false)
-    assert.throws(() => execution.generate(input('overlap')), code('busy'))
-    active.done.resolve()
-    await call.result
-    await execution.generate(input('second')).result
-    assert.deepEqual(protocol.calls[1].input.continuation, { opaque: 'private-context' })
-    assert.deepEqual(protocol.calls[1].input.newMessages, [{ role: 'user', content: 'second' }])
-    assert.deepEqual(protocol.calls[1].input.messages.map(message => [message.role, message.content]), [
-      ['system', 'instruction'], ['user', 'first'], ['assistant', 'reply'], ['user', 'second'],
-    ])
-    assert.doesNotMatch(JSON.stringify(execution.snapshot), /private-context/)
-    await execution.close()
+test('native refusals, incomplete responses and pauses remain protocol decisions rather than unified statuses', async () => {
+  const f = await fixture(); try {
+    await f.add(); const execution = await f.open({ modelId: 'model' })
+    for (const reason of ['pause_turn', 'refusal', 'max_tokens']) { f.protocols[0].next(call => call.succeed({ stop_reason: reason, text: reason })); assert.equal((await exchange(execution, input(reason)).result).stop_reason, reason) }
+    assert.equal((await execution.close()).records.filter(record => record.kind === 'response').length, 3)
   } finally { await f.close() }
 })
 
-test('text and tools coexist, and tool results must match outstanding calls before another turn', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add()
-    const execution = await f.models.open({ modelId: 'model', requirements: { tools: true }, tools: [
-      { name: 'lookup', parameters: { type: 'object' } },
-    ] })
-    const toolCalls = [{ id: 'call-1', name: 'lookup', arguments: { city: 'Shanghai' } }, { id: 'call-2', name: 'lookup', arguments: { city: 'Beijing' } }]
-    protocol.next(call => call.succeed({ result: complete('Looking up both cities.', toolCalls), continuation: { turn: 1 } }))
-    const result = await execution.generate(input('weather')).result
-    assert.equal(result.text, 'Looking up both cities.'); assert.deepEqual(result.toolCalls, toolCalls)
-    assert.throws(() => execution.generate({ messages: [{ role: 'tool', callId: 'unrequested', content: 'fake' }] }), code('invalid-config'))
-    assert.throws(() => execution.generate({ messages: [{ role: 'tool', callId: 'call-1', content: 'partial' }] }), code('invalid-config'))
-    assert.throws(() => execution.generate({ messages: [{ role: 'tool', callId: 'call-1', content: 'one' }, { role: 'tool', callId: 'call-1', content: 'duplicate' }] }), code('invalid-config'))
-    await execution.generate({ messages: toolCalls.map(call => ({ role: 'tool', callId: call.id, content: 'sunny' })) }).result
-    assert.equal(protocol.calls.length, 2)
-    await execution.close()
+test('cancel waits for actual exit, suppresses late events and never commits the candidate', async () => {
+  const f = await fixture(); try {
+    await f.add(); const execution = await f.open({ modelId: 'model' }); f.protocols[0].next(); const events = []; const call = exchange(execution, input('cancel'), event => events.push(event)); await tick()
+    const active = f.protocols[0].calls[0]; active.result.resolve({ text: 'late' }); call.cancel(); await active.aborted.promise; active.input.onEvent({ type: 'late' })
+    const result = tracked(call.result); await tick(); assert.equal(result.settled, false); active.done.resolve(); await assert.rejects(call.result, code('cancelled')); await call.done
+    const report = await execution.close(); assert.equal(report.restoreState, undefined); assert.deepEqual(events, []); assert.ok(report.records.some(record => record.kind === 'diagnostic'))
   } finally { await f.close() }
 })
 
-test('cancellation requests exit, withholds late output and does not commit a candidate', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add(); const execution = await f.models.open({ modelId: 'model' })
-    protocol.next(); const call = execution.generate(input('cancel me')); await tick()
-    const active = protocol.calls[0], final = tracked(call.result), exited = tracked(call.done)
-    active.result.resolve({ result: complete('too late'), continuation: { forbidden: true } })
-    call.cancel('caller wants to stop'); await active.aborted.promise; await tick()
-    assert.equal(final.settled, false); assert.equal(exited.settled, false)
-    active.done.resolve()
-    await assert.rejects(call.result, code('cancelled')); await call.done
-    await execution.close()
+test('timeout requests cancellation and still waits for transport cleanup', { timeout: 3000 }, async () => {
+  const f = await fixture(); try {
+    await f.add({ timeoutMs: 10 }); const execution = await f.open({ modelId: 'model' }); f.protocols[0].next(); const call = exchange(execution, input('timeout')); await tick()
+    await f.protocols[0].calls[0].aborted.promise; const result = tracked(call.result); await tick(); assert.equal(result.settled, false)
+    f.protocols[0].calls[0].succeed(); await assert.rejects(call.result, code('timeout')); await execution.close()
   } finally { await f.close() }
 })
 
-test('timeout cancels transport but waits for transport cleanup before rejecting result', { timeout: 3000 }, async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add({ timeoutMs: 20 }); const execution = await f.models.open({ modelId: 'model' })
-    protocol.next(); const call = execution.generate(input('slow')); const final = tracked(call.result); await tick()
-    await protocol.calls[0].aborted.promise
-    assert.equal(final.settled, false)
-    protocol.calls[0].succeed()
-    await assert.rejects(call.result, code('timeout')); await call.done; await execution.close()
-  } finally { await f.close() }
-})
-
-test('cleanup failure rejects both handles and permanently closes the execution', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add(); const execution = await f.models.open({ modelId: 'model' })
-    protocol.next(); const call = execution.generate(input('cleanup failure')); await tick()
-    const resultCheck = assert.rejects(call.result, code('cleanup-failure')), doneCheck = assert.rejects(call.done, code('cleanup-failure'))
-    protocol.calls[0].done.reject(new Error('native secret must not be reported'))
-    await tick()
-    protocol.calls[0].result.resolve({ result: complete('must not return') })
-    await Promise.all([resultCheck, doneCheck])
-    assert.throws(() => execution.generate(input('again')), code('closed'))
-    await assert.rejects(execution.close(), code('cleanup-failure'))
-    await assert.rejects(execution.close(), code('cleanup-failure'))
+test('cleanup failure preserves immutable diagnostics and is visible to every resource owner', async () => {
+  const f = await fixture(); try {
+    await f.add(); const execution = await f.open({ modelId: 'model' }); f.protocols[0].next(); const call = exchange(execution, input('fail')); await tick()
+    const candidate = { text: 'candidate', signature: 'opaque' }; f.protocols[0].calls[0].result.resolve(candidate); f.protocols[0].calls[0].done.reject(new Error('private failure'))
+    await assert.rejects(call.result, code('cleanup-failure')); await assert.rejects(call.done, code('cleanup-failure'))
+    const first = execution.close(), second = execution.close(); assert.equal(first, second); const report = await first; candidate.signature = 'changed'
+    assert.equal(report.cleanup, 'failed'); assert.equal(report.restoreState, undefined); assert.equal(report.records.at(-1).payload.signature, 'opaque')
     await assert.rejects(f.registrations[0].unregister(), code('cleanup-failure'))
-    await assert.rejects(f.registrations[0].unregister(), code('cleanup-failure'))
-  } finally { await assert.rejects(f.close(), code('cleanup-failure')) }
+  } finally { await f.close().catch(error => assert.equal(error.code, 'cleanup-failure')) }
 })
 
-test('provider errors preserve previous context and allow an explicit retry after exit', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add(); const execution = await f.models.open({ modelId: 'model' })
-    protocol.next(); const call = execution.generate(input('failed turn')); await tick()
-    const rejection = assert.rejects(call.result, error => error.code === 'provider-failure' && !String(error).includes('private-token'))
-    protocol.calls[0].result.reject(new Error('private-token failed')); protocol.calls[0].done.resolve()
-    await rejection; await call.done
-    await execution.generate(input('retry')).result
-    assert.deepEqual(protocol.calls[1].input.messages, [{ role: 'user', content: 'retry' }])
-    await execution.close()
-  } finally { await f.close() }
-})
-
-for (const status of ['incomplete', 'refused']) {
-  test(`${status} output resolves without executable tools and ends the execution chain`, async () => {
-    const f = await fixture(), protocol = f.protocols[0]
-    try {
-      await f.add(); const execution = await f.models.open({ modelId: 'model' })
-      protocol.next(call => call.succeed({ result: { status, text: 'partial', toolCalls: [] } }))
-      const result = await execution.generate(input('request')).result
-      assert.equal(result.status, status); assert.deepEqual(result.toolCalls, [])
-      assert.throws(() => execution.generate(input('continue')), code('closed'))
-      await execution.close()
-    } finally { await f.close() }
-  })
-}
-
-test('missing subscribers and synchronous or asynchronous observer exceptions do not affect results', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add()
-    for (const onEvent of [undefined, () => { throw new Error('observer error') }, async () => { throw new Error('async observer error') }]) {
-      const execution = await f.models.open({ modelId: 'model' })
-      protocol.next(call => { call.input.onEvent({ type: 'text-delta', delta: 'hello' }); call.input.onEvent({ type: 'text-delta', delta: ' world' }); call.succeed({ result: complete('hello world') }) })
-      assert.equal((await execution.generate({ ...input('request'), onEvent }).result).text, 'hello world')
-      await tick(); await execution.close()
+test('observer exceptions, including rejected async listeners, cannot affect native execution', async () => {
+  const f = await fixture(); try {
+    await f.add(); const execution = await f.open({ modelId: 'model' })
+    for (const onEvent of [undefined, () => { throw new Error('bad observer') }, async () => { throw new Error('bad observer') }]) {
+      f.protocols[0].next(call => { call.input.onEvent({ type: 'text', text: 'hello' }); call.succeed() }); await exchange(execution, input('hello'), onEvent).result
     }
-  } finally { await f.close() }
-})
-
-test('unknown and unsupported required capabilities fail before the provider call', async () => {
-  const f = await fixture()
-  try {
-    await f.add({ capabilityDeclarations: capabilities({ tools: { support: 'unknown' }, streaming: { support: 'unsupported' }, reasoning: { support: 'unknown' } }) })
-    for (const requirements of [{ tools: true }, { streaming: true }, { reasoning: true }]) {
-      await assert.rejects(f.models.open({ modelId: 'model', requirements }), code('capability-unsupported'))
-    }
-    assert.equal(f.protocols[0].calls.length, 0)
-    const model = f.models.get('model')
-    assert.equal(model.capabilities.tools.support, 'unknown'); assert.equal(model.effectiveCapabilities.tools, false)
-  } finally { await f.close() }
-})
-
-test('configuration and submitted messages are copied so caller mutation cannot alter an execution', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add({ defaults: { temperature: 0.2 } })
-    const history = [{ role: 'system', content: 'original system instruction' }]
-    const execution = await f.models.open({ modelId: 'model', history })
-    history[0].content = 'changed after open'
-    const request = input('original prompt')
-    const call = execution.generate(request)
-    request.messages[0].content = 'changed after generate'
-    await call.result
-    assert.deepEqual(protocol.calls[0].input.messages.map(message => message.content), ['original system instruction', 'original prompt'])
-    assert.throws(() => { execution.snapshot.options.temperature = 9 }, TypeError)
-    assert.throws(() => { execution.capabilities.tools = false }, TypeError)
     await execution.close()
   } finally { await f.close() }
 })
 
-test('protocol results cannot introduce unregistered tools or incomplete tool arguments into execution', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add()
-    const execution = await f.models.open({ modelId: 'model', tools: [{ name: 'known_tool', parameters: { type: 'object' } }] })
-    for (const result of [
-      complete('', [{ id: 'unknown', name: 'unregistered_tool', arguments: {} }]),
-      { status: 'incomplete', text: '', toolCalls: [{ id: 'partial', name: 'known_tool', arguments: {} }] },
-    ]) {
-      protocol.next(call => call.succeed({ result }))
-      const call = execution.generate(input('request'))
-      await assert.rejects(call.result, code('invalid-response')); await call.done
-    }
-    await execution.generate(input('explicit retry')).result
-    assert.deepEqual(protocol.calls[2].input.messages, [{ role: 'user', content: 'explicit retry' }])
-    await execution.close()
+test('unknown required capabilities and per-open overrides fail before credentials or network', async () => {
+  const f = await fixture(); try {
+    await f.add({ capabilityDeclarations: capabilities({ reasoning: { support: 'unknown' } }) })
+    await assert.rejects(f.open({ modelId: 'model', requirements: { reasoning: true } }), code('capability-unsupported'))
+    await assert.rejects(f.open({ modelId: 'model', options: { temperature: 0.2 } }), code('invalid-config')); assert.equal(f.protocols[0].calls.length, 0)
   } finally { await f.close() }
 })
 
-test('protocol and provider ownership are immutable and unknown parameters are rejected', async () => {
-  const f = await fixture()
-  try {
-    const { provider, model } = await f.add()
-    await assert.rejects(f.settings.updateConnection(provider.id, { protocolId: 'other' }, provider.revision), code('invalid-config'))
-    await assert.rejects(f.settings.updateConfiguration(model.id, { connectionId: 'other' }, model.revision), code('invalid-config'))
-    await assert.rejects(f.settings.updateConfiguration(model.id, { defaults: { protocol: { unsupported: true } } }, model.revision), code('invalid-config'))
-    assert.equal(f.settings.connectionHistory(provider.id).length, 1); assert.equal(f.settings.configurationHistory(model.id).length, 1)
+test('restoring serializable native records retains full context while each execution archives only its increment', async () => {
+  const f = await fixture(); try {
+    await f.add(); const first = await f.open({ modelId: 'model' }); f.protocols[0].next(call => call.succeed({ text: 'first answer', signature: 'first signature' })); await exchange(first, input('first')).result
+    const report = await first.close(), restore = JSON.parse(JSON.stringify({ ...report.restoreState, records: report.records })); const second = await f.open({ modelId: 'model', restore }); await exchange(second, input('second')).result
+    assert.deepEqual(f.protocols[0].calls[1].input.request.messages.map(message => message.content), ['first', 'first answer', 'second']); assert.equal(f.protocols[0].calls[1].input.request.previousResponse.signature, 'first signature')
+    const next = await second.close(); assert.equal(next.records.length, 2); assert.equal(next.records[0].payload.messages[0].content, 'second')
   } finally { await f.close() }
 })
 
-test('discovery only returns candidates and never edits existing local models', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    const { model } = await f.add()
-    protocol.next(operation => operation.succeed([{ remoteModelId: 'new-remote', name: 'Suggested model', suggestedCapabilities: { tools: { support: 'unknown' } } }]))
-    const discovered = await f.settings.discoverModels('provider')
-    assert.equal(discovered[0].remoteModelId, 'new-remote')
-    assert.deepEqual(f.settings.configurations(), [model]); assert.deepEqual(f.settings.configurationHistory(model.id), [model])
+test('restore rejects changed model, native parameters, malformed records and unknown formats without fallback', async () => {
+  const f = await fixture(); try {
+    const { model } = await f.add(); const execution = await f.open({ modelId: 'model' }); await exchange(execution, input('one')).result; const report = await execution.close(); const restore = { ...report.restoreState, records: report.records }
+    for (const changed of [{ ...restore, recordFormatVersion: 99 }, { ...restore, records: restore.records.slice(1) }, { ...restore, modelSnapshot: { ...restore.modelSnapshot, remoteModelId: 'other' } }]) await assert.rejects(f.open({ modelId: 'model', restore: changed }), code('invalid-config'))
+    await f.settings.updateConfiguration(model.id, { parameters: params('test', { temperature: 0.7 }) }, model.revision); await assert.rejects(f.open({ modelId: 'model', restore }), code('invalid-config'))
   } finally { await f.close() }
 })
 
-test('editing model/provider and replacing keys only changes newly opened executions', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    const { provider, model } = await f.add({ key: 'old-private-key', defaults: { temperature: 0.1 } })
-    const old = await f.models.open({ modelId: 'model' })
-    const updatedModel = await f.settings.updateConfiguration(model.id, { defaults: { temperature: 0.9 } }, model.revision)
-    const rotated = await f.settings.setApiKey(provider.id, 'new-private-key', provider.revision)
-    const updatedProvider = await f.settings.updateConnection(provider.id, { baseUrl: 'https://new.example.invalid/v1' }, rotated.revision)
-    const current = await f.models.open({ modelId: 'model' })
-    await old.generate(input('old execution')).result; await current.generate(input('new execution')).result
-    assert.deepEqual(protocol.calls.map(call => [call.input.credential, call.input.options.temperature, call.input.provider.baseUrl]), [
-      ['old-private-key', 0.1, 'https://example.invalid/v1'], ['new-private-key', 0.9, 'https://new.example.invalid/v1'],
-    ])
-    assert.equal(old.snapshot.providerRevision, provider.revision); assert.equal(current.snapshot.providerRevision, updatedProvider.revision)
-    assert.equal(old.snapshot.modelRevision, model.revision); assert.equal(current.snapshot.modelRevision, updatedModel.revision)
-    const publicData = JSON.stringify([f.settings.connections(), f.settings.connectionHistory(provider.id), f.settings.configurations(), f.settings.configurationHistory(model.id), f.models.list(), old.snapshot, current.snapshot])
-    assert.doesNotMatch(publicData, /old-private-key|new-private-key|credentialRef/)
-    await Promise.all([old.close(), current.close()])
+test('key rotation and endpoint changes rotate history scope only after durable success', async () => {
+  const f = await fixture(); try {
+    let { provider } = await f.add({ key: 'first' }); const initial = f.store.connection(provider.id).historyScopeEpoch
+    provider = await f.settings.updateConnection(provider.id, { name: 'renamed', timeoutMs: 999 }, provider.revision); assert.equal(f.store.connection(provider.id).historyScopeEpoch, initial)
+    f.vault.failWrite = new Error('failure'); await assert.rejects(f.settings.setApiKey(provider.id, 'failed-key', provider.revision), code('credential-unavailable')); assert.equal(f.store.connection(provider.id).historyScopeEpoch, initial); f.vault.failWrite = undefined
+    provider = await f.settings.setApiKey(provider.id, 'second', provider.revision); const keyEpoch = f.store.connection(provider.id).historyScopeEpoch; assert.notEqual(keyEpoch, initial)
+    provider = await f.settings.updateConnection(provider.id, { baseUrl: 'https://second.invalid/v1' }, provider.revision); assert.notEqual(f.store.connection(provider.id).historyScopeEpoch, keyEpoch)
+    const last = f.store.connection(provider.id).historyScopeEpoch; await f.settings.deleteApiKey(provider.id, provider.revision); assert.notEqual(f.store.connection(provider.id).historyScopeEpoch, last)
   } finally { await f.close() }
 })
 
-test('provider serialization holds edits behind local credential acquisition but releases before network calls', async () => {
-  const f = await fixture()
-  try {
-    const { provider } = await f.add({ key: 'old-value' })
-    f.vault.holdReads = true
-    const opening = f.models.open({ modelId: 'model' }); await tick()
-    assert.equal(f.vault.reads.length, 1)
-    const editing = f.settings.setApiKey(provider.id, 'new-value', provider.revision), edited = tracked(editing)
-    await tick(); assert.equal(edited.settled, false)
-    f.vault.reads[0].release.resolve(); const execution = await opening; await editing
-    f.protocols[0].next(); const call = execution.generate(input('held network')); await tick()
-    const latest = f.settings.connections()[0]
-    await f.settings.updateConnection(provider.id, { name: 'still editable' }, latest.revision)
-    f.protocols[0].calls[0].succeed(); await call.result
-    assert.equal(f.protocols[0].calls[0].input.credential, 'old-value')
-    await execution.close()
+test('configuration/key changes affect new executions and reject old native account-bound restore', async () => {
+  const f = await fixture(); try {
+    const { provider, model } = await f.add({ key: 'old', defaults: { temperature: 0.1 } }); const execution = await f.open({ modelId: 'model' })
+    await f.settings.setApiKey(provider.id, 'new', provider.revision); await f.settings.updateConfiguration(model.id, { parameters: params('test', { temperature: 0.9 }) }, model.revision)
+    await exchange(execution, input('old')).result; const report = await execution.close(); assert.equal(f.protocols[0].calls[0].input.credential, 'old'); assert.equal(execution.snapshot.parameters.value.temperature, 0.1)
+    await assert.rejects(f.open({ modelId: 'model', restore: { ...report.restoreState, records: report.records } }), code('invalid-config'))
+    const next = await f.open({ modelId: 'model' }); await exchange(next, input('new')).result; assert.equal(f.protocols[0].calls[1].input.credential, 'new'); await next.close()
   } finally { await f.close() }
 })
 
-test('disabled configuration does not interrupt existing executions and rejects new execution admission', async () => {
-  const f = await fixture()
-  try {
-    const { model } = await f.add(); const active = await f.models.open({ modelId: model.id })
-    await f.settings.updateConfiguration(model.id, { enabled: false }, model.revision)
-    assert.equal(f.models.get(model.id).available, false)
-    await assert.rejects(f.models.open({ modelId: model.id }), code('unavailable'))
-    await active.generate(input('already opened')).result; await active.close()
+test('credential acquisition serializes edits but network does not hold the configuration queue', async () => {
+  const f = await fixture(); try {
+    const { provider } = await f.add({ key: 'old' }); f.vault.holdReads = true; const opening = f.open({ modelId: 'model' }); await tick()
+    const changing = f.settings.setApiKey(provider.id, 'new', provider.revision), state = tracked(changing); await tick(); assert.equal(state.settled, false)
+    f.vault.holdReads = false; f.vault.reads[0].release.resolve(); const execution = await opening; await changing
+    f.protocols[0].next(); const call = exchange(execution, input('slow')); await tick(); await f.settings.updateConnection(provider.id, { name: 'while network runs' }, 2)
+    assert.equal(f.protocols[0].calls[0].input.credential, 'old'); f.protocols[0].calls[0].succeed(); await call.result; await execution.close()
   } finally { await f.close() }
 })
 
-test('unregistering a protocol joins its generation and cannot unregister a replacement or other protocol', async () => {
-  const oldProtocol = fakeProtocol('one', '1'), other = fakeProtocol('two', '1'), f = await fixture({ protocols: [oldProtocol, other] })
-  try {
-    await f.add({ providerId: 'one', modelId: 'one', protocolId: 'one' })
-    await f.add({ providerId: 'two', modelId: 'two', protocolId: 'two' })
-    const old = await f.models.open({ modelId: 'one' }), untouched = await f.models.open({ modelId: 'two' })
-    oldProtocol.next(); const call = old.generate(input('old generation')); await tick()
-    const stopped = f.registrations[0].unregister(), stopping = tracked(stopped)
-    await oldProtocol.calls[0].aborted.promise; await tick(); assert.equal(stopping.settled, false)
-    assert.equal(f.models.get('one').available, false)
-    const replacement = fakeProtocol('one', '2'); f.protocols.push(replacement)
-    const registration = f.registry.register(replacement)
-    const newExecution = await f.models.open({ modelId: 'one' })
-    assert.equal(newExecution.snapshot.protocolVersion, '2')
-    await untouched.generate(input('other protocol works')).result
-    oldProtocol.calls[0].succeed(); await assert.rejects(call.result, code('cancelled')); await stopped
-    await f.registrations[0].unregister()
-    assert.equal(f.models.get('one').available, true)
-    await newExecution.generate(input('replacement works')).result
-    assert.throws(() => old.generate(input('old again')), code('closed'))
-    await Promise.all([newExecution.close(), untouched.close(), old.close()]); await registration.unregister()
+test('lease release and revocation prevent admission; old unregister cannot erase a replacement', async () => {
+  const f = await fixture(); try {
+    await f.add(); const lease = f.registry.acquire('test'); lease.release(); await assert.rejects(f.models.openNative({ modelId: 'model', lease }), code('protocol-unavailable'))
+    const held = f.registry.acquire('test'), execution = await f.open({ modelId: 'model' }); const closing = f.registrations[0].unregister(); assert.equal(held.signal.aborted, true); assert.throws(() => execution.prepareExchange(input('late')), code('closed'))
+    const replacement = fakeProtocol('test', '2'); f.protocols.push(replacement); const registration = f.registry.register(replacement); await closing
+    await f.registrations[0].unregister(); const next = await f.open({ modelId: 'model' }); assert.equal(next.snapshot.protocolVersion, '2'); await next.close(); await registration.unregister()
   } finally { await f.close() }
 })
 
-test('unregistering joins discovery and connection checks without blocking another protocol', async () => {
-  const protocol = fakeProtocol(), other = fakeProtocol('other'), f = await fixture({ protocols: [protocol, other] })
-  try {
-    await f.add(); await f.add({ providerId: 'other', modelId: 'other', protocolId: 'other' })
-    protocol.next(); protocol.next()
-    const discovery = f.settings.discoverModels('provider'), check = f.settings.checkConnection('provider')
-    const discoveryCheck = assert.rejects(discovery, code('cancelled')), connectionCheck = assert.rejects(check, code('cancelled'))
-    await tick(); assert.equal(protocol.operations.length, 2)
-    const unregistering = f.registrations[0].unregister(), pending = tracked(unregistering)
-    await Promise.all(protocol.operations.map(operation => operation.aborted.promise)); await tick(); assert.equal(pending.settled, false)
-    assert.deepEqual(await f.settings.discoverModels('other'), [])
-    protocol.release(); await Promise.all([discoveryCheck, connectionCheck, unregistering])
+for (const method of ['discoverModels', 'checkConnection']) test(`protocol unregister joins ${method} while another protocol stays available`, async () => {
+  const f = await fixture({ protocols: [fakeProtocol('a'), fakeProtocol('b')] }); try {
+    await f.add({ protocolId: 'a' }); await f.add({ protocolId: 'b', providerId: 'other', modelId: 'other-model' }); f.protocols[0].next(); const operation = f.settings[method]('provider'); await tick()
+    const closing = f.registrations[0].unregister(), state = tracked(closing); await f.protocols[0].operations[0].aborted.promise; assert.equal(state.settled, false)
+    const next = await f.open({ modelId: 'other-model' }); await exchange(next, input('unaffected')).result; await next.close(); f.protocols[0].operations[0].succeed(); await assert.rejects(operation, code('cancelled')); await closing
   } finally { await f.close() }
 })
 
-for (const method of ['discoverModels', 'checkConnection']) {
-  test(`${method} cleanup failure remains visible to protocol and service resource owners`, async () => {
-    const f = await fixture(), protocol = f.protocols[0]
-    try {
-      await f.add(); protocol.next()
-      const request = f.settings[method]('provider')
-      const rejectedRequest = assert.rejects(request, code('cleanup-failure'))
-      await tick()
-      const operation = protocol.operations[0]
-      const unregistering = f.registrations[0].unregister()
-      const rejectedUnregister = assert.rejects(unregistering, code('cleanup-failure'))
-      await operation.aborted.promise
-      operation.done.reject(new Error('cleanup failed in platform resource'))
-      await tick()
-      operation.result.resolve(method === 'discoverModels' ? [] : undefined)
-      await Promise.all([rejectedRequest, rejectedUnregister])
-      await assert.rejects(f.registrations[0].unregister(), code('cleanup-failure'))
-    } finally { await assert.rejects(f.close(), code('cleanup-failure')) }
-  })
-}
-
-test('configuration remains queryable across restart when its protocol is absent', async () => {
-  const store = memoryStore(), vault = memoryVault(), original = await fixture({ store, vault })
-  await original.add(); await original.close()
-  const restarted = await fixture({ store, vault, protocols: [] })
-  try {
-    assert.equal(restarted.settings.connections().length, 1); assert.equal(restarted.settings.configurations().length, 1)
-    assert.equal(restarted.models.get('model').unavailableReason, 'protocol-unavailable')
-    await assert.rejects(restarted.models.open({ modelId: 'model' }), code('protocol-unavailable'))
-  } finally { await restarted.close() }
+test('disabled configuration blocks new opens while captured execution stays usable', async () => {
+  const f = await fixture(); try { const { model } = await f.add(); const execution = await f.open({ modelId: 'model' }); await f.settings.updateConfiguration(model.id, { enabled: false }, model.revision); await assert.rejects(f.open({ modelId: 'model' }), code('unavailable')); await exchange(execution, input('existing')).result; await execution.close() } finally { await f.close() }
 })
 
-test('optimistic revisions reject stale edits and preserve immutable provider and model history', async () => {
-  const f = await fixture()
-  try {
-    const { provider, model } = await f.add()
-    const edits = await Promise.allSettled([
-      f.settings.updateConnection(provider.id, { name: 'first' }, provider.revision),
-      f.settings.updateConnection(provider.id, { name: 'second' }, provider.revision),
-    ])
-    assert.equal(edits.filter(item => item.status === 'fulfilled').length, 1)
-    assert.equal(edits.find(item => item.status === 'rejected').reason.code, 'conflict')
-    await f.settings.updateConfiguration(model.id, { name: 'new name' }, model.revision)
-    await assert.rejects(f.settings.updateConfiguration(model.id, { name: 'stale' }, model.revision), code('conflict'))
-    assert.deepEqual(f.settings.connectionHistory(provider.id).map(item => item.name), ['provider', 'first'])
-    assert.deepEqual(f.settings.configurationHistory(model.id).map(item => item.name), ['model', 'new name'])
-    assert.equal(f.settings.connectionHistory(provider.id)[0].versionId, provider.versionId)
+test('optimistic writes preserve immutable histories and orphan Key intents recover', async () => {
+  const f = await fixture(); try {
+    const { provider, model } = await f.add({ key: 'old' }); await f.settings.updateConfiguration(model.id, { name: 'new' }, model.revision); await assert.rejects(f.settings.updateConfiguration(model.id, { name: 'stale' }, model.revision), code('conflict'))
+    assert.deepEqual(f.settings.configurationHistory(model.id).map(value => value.name), ['model', 'new'])
+    f.vault.failWrite = new Error('failure'); await assert.rejects(f.settings.setApiKey(provider.id, 'bad', provider.revision), code('credential-unavailable')); assert.deepEqual([...f.vault.secrets.values()], ['old']); assert.equal(f.store.intents().length, 0)
   } finally { await f.close() }
 })
 
-test('failed key writes preserve the active reference and orphan journals recover after restart', async () => {
-  const store = memoryStore(), vault = memoryVault(), f = await fixture({ store, vault })
-  try {
-    const { provider } = await f.add({ key: 'working-secret' })
-    const oldReference = store.connection(provider.id).credentialRef
-    vault.failWrite = new Error('new-secret written but backend failed')
-    vault.failDelete = new Error('native secret deletion failed')
-    await assert.rejects(f.settings.setApiKey(provider.id, 'uncommitted-secret', provider.revision), error => error.code === 'credential-unavailable' && !String(error).includes('secret'))
-    assert.equal(store.connection(provider.id).credentialRef, oldReference)
-    assert.equal(store.connection(provider.id).revision, provider.revision)
-    assert.equal(vault.secrets.get(oldReference), 'working-secret')
-    assert.ok(store.intents().length > 0)
-    vault.failWrite = undefined; vault.failDelete = undefined
-  } finally { await f.close() }
-  const restarted = await fixture({ store, vault })
-  try {
-    assert.equal(store.intents().length, 0)
-    assert.deepEqual([...vault.secrets.values()], ['working-secret'])
-    const execution = await restarted.models.open({ modelId: 'model' }); await execution.generate(input('usable')).result
-    assert.equal(restarted.protocols[0].calls[0].input.credential, 'working-secret'); await execution.close()
-  } finally { await restarted.close() }
-})
-
-test('recovery retains a referenced slot and deletes only unreferenced journal entries', async () => {
-  const store = memoryStore(), vault = memoryVault(), f = await fixture({ store, vault })
-  const { provider } = await f.add({ key: 'current-secret' }), current = store.connection(provider.id).credentialRef
-  await f.close()
-  vault.secrets.set('orphan-slot', 'old-secret')
-  await store.commit({ addIntents: [
-    { id: 'referenced', providerId: provider.id, slotId: current, createdAt: new Date().toISOString() },
-    { id: 'orphan', providerId: provider.id, slotId: 'orphan-slot', createdAt: new Date().toISOString() },
-  ] })
-  const restarted = await fixture({ store, vault })
-  try {
-    assert.equal(vault.secrets.get(current), 'current-secret'); assert.equal(vault.secrets.has('orphan-slot'), false)
-    assert.deepEqual(store.intents(), [])
-  } finally { await restarted.close() }
-})
-
-test('close is idempotent, cancels the active call, and waits until resources really exit', async () => {
-  const f = await fixture(), protocol = f.protocols[0]
-  try {
-    await f.add(); const execution = await f.models.open({ modelId: 'model' })
-    protocol.next(); const call = execution.generate(input('working')); await tick()
-    const closing = execution.close(), closed = tracked(closing), closingAgain = execution.close()
-    await protocol.calls[0].aborted.promise; await tick(); assert.equal(closed.settled, false)
-    assert.throws(() => execution.generate(input('after close')), code('closed'))
-    protocol.calls[0].succeed(); await assert.rejects(call.result, code('cancelled'))
-    await Promise.all([closing, closingAgain, call.done]); await execution.close()
+test('component teardown joins held credential initialization and close is idempotent', async () => {
+  const f = await fixture(); try {
+    await f.add({ key: 'key' }); f.vault.holdReads = true; const opening = f.open({ modelId: 'model' }); const rejection = assert.rejects(opening, code('cancelled')); await tick()
+    const closing = f.component.dispose(), state = tracked(closing); await f.vault.reads[0].aborted.promise; assert.equal(state.settled, false); f.vault.reads[0].release.resolve(); await Promise.all([rejection, closing])
   } finally { await f.close() }
 })
 
-test('component teardown joins an execution being opened during a held credential read', async () => {
-  const f = await fixture()
-  try {
-    await f.add({ key: 'private' }); f.vault.holdReads = true
-    const opening = f.models.open({ modelId: 'model' }), rejection = assert.rejects(opening, error => ['closed', 'cancelled'].includes(error.code))
-    await tick(); assert.equal(f.vault.reads.length, 1)
-    const disposing = f.component.dispose(), disposed = tracked(disposing)
-    await f.vault.reads[0].aborted.promise; await tick(); assert.equal(disposed.settled, false)
-    f.vault.reads[0].release.resolve(); await Promise.all([rejection, disposing])
-    await assert.rejects(f.models.open({ modelId: 'model' }), code('closed'))
+test('restore ignores object key order and cosmetic names but rejects changed effective capabilities', async () => {
+  const f = await fixture(); try {
+    const { model } = await f.add({ defaults: { temperature: 0.1, max_tokens: 100 } }); const execution = await f.open({ modelId: 'model' }); await exchange(execution, input('one')).result; const report = await execution.close(), restore = { ...report.restoreState, records: report.records };
+    const renamed = await f.settings.updateConfiguration(model.id, { name: 'cosmetic', parameters: params('test', { max_tokens: 100, temperature: 0.1 }) }, model.revision);
+    const next = await f.open({ modelId: 'model', restore }); await next.close();
+    await f.settings.updateConfiguration(model.id, { capabilities: { ...model.capabilities, tools: { support: 'unsupported' } } }, renamed.revision);
+    await assert.rejects(f.open({ modelId: 'model', restore }), code('invalid-config'));
   } finally { await f.close() }
-})
+});

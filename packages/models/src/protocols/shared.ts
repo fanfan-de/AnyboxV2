@@ -1,99 +1,99 @@
 import type { Component } from '@nya/core';
+import { assert, equalJson, immutable, json, record } from '../domain.js';
 import { modelsError } from '../errors.js';
-import { modelsProtocolsServiceKey, type DeclaredCapabilities, type EffectiveCapabilities, type FormField, type GenerationOptions, type JsonValue, type ModelProtocol, type ModelsProtocolsService, type ModelUsage, type ProviderConnectionInput, type ToolCall } from '../types.js';
-
+import { modelsProtocolsServiceKey } from '../types.js';
+import type { DeclaredCapabilities, EffectiveCapabilities, FormField, JsonValue, ProviderConnectionInput } from '../types.js';
+import type { ModelsProtocolsService, NativeObject, NativeProtocol, NativeRecordDraft } from '../native-types.js';
+export type { NativeObject } from '../native-types.js';
 export interface ProtocolOptions { readonly fetch?: typeof globalThis.fetch }
 export function captureOptions(options: ProtocolOptions): ProtocolOptions {
-  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'fetch') ||
-      (options.fetch !== undefined && typeof options.fetch !== 'function')) throw modelsError('invalid-config');
+  if (!options || typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'fetch') || (options.fetch !== undefined && typeof options.fetch !== 'function')) throw modelsError('invalid-config');
   return Object.freeze({ fetch: options.fetch ?? globalThis.fetch });
 }
-export type NativeObject = Record<string, unknown>;
-export const commonFields: readonly FormField[] = [
-  { key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 },
-  { key: 'maxOutputTokens', label: 'Maximum output tokens', type: 'number', min: 1, integer: true },
-];
 export const connectionFields: readonly FormField[] = [
   { key: 'baseUrl', label: 'API base URL', type: 'string', required: true },
   { key: 'auth', label: 'Authentication', type: 'enum', values: ['none', 'api-key'], required: true },
   { key: 'timeoutMs', label: 'Request timeout (ms)', type: 'number', min: 1, integer: true, required: true },
 ];
 export const reasoningEfforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
-export const effortField: FormField = { key: 'protocol.reasoningEffort', label: 'Reasoning effort', type: 'enum', values: reasoningEfforts, description: 'Only use values declared for this model. Omit to use the server default.' };
-export function object(value: unknown): NativeObject {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw modelsError('invalid-response');
-  return value as NativeObject;
-}
-export function string(value: unknown): string {
-  if (typeof value !== 'string') throw modelsError('invalid-response');
-  return value;
-}
-export function array(value: unknown): unknown[] {
-  if (!Array.isArray(value)) throw modelsError('invalid-response');
-  return value;
-}
-export function parseJson(value: string): unknown {
-  try { return JSON.parse(value) as unknown; } catch { throw modelsError('invalid-response'); }
-}
-export function parseTool(id: unknown, name: unknown, args: unknown): ToolCall {
-  if (!string(id) || !string(name)) throw modelsError('invalid-response');
-  const parsed = parseJson(string(args));
-  // Function tools accept an object, never partial JSON or primitives.
-  object(parsed);
-  return { id: id as string, name: name as string, arguments: parsed as JsonValue };
-}
-export function usage(value: unknown, responses: boolean): ModelUsage | undefined {
-  if (value === undefined || value === null) return undefined;
-  const raw = object(value);
-  const result: { inputTokens?: number; outputTokens?: number; totalTokens?: number } = {};
-  for (const [key, nativeKey] of [
-    ['inputTokens', responses ? 'input_tokens' : 'prompt_tokens'],
-    ['outputTokens', responses ? 'output_tokens' : 'completion_tokens'], ['totalTokens', 'total_tokens'],
-  ] as const) {
-    const count = raw[nativeKey];
-    if (count !== undefined && count !== null) {
-      if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) throw modelsError('invalid-response');
-      result[key] = count;
-    }
-  }
-  return result;
-}
+export function object(value: unknown): Record<string, JsonValue> { if (!record(value)) throw modelsError('invalid-response'); return value as Record<string, JsonValue>; }
+export function native(value: unknown): NativeObject { if (!record(value) || !json(value)) throw modelsError('invalid-response'); return immutable(value as NativeObject); }
+export function string(value: unknown): string { if (typeof value !== 'string') throw modelsError('invalid-response'); return value; }
+export function nonempty(value: unknown): string { const result = string(value); if (!result.trim()) throw modelsError('invalid-response'); return result; }
+export function array(value: unknown): JsonValue[] { if (!Array.isArray(value)) throw modelsError('invalid-response'); return value; }
+export function parseJson(value: string): unknown { try { return JSON.parse(value) as unknown; } catch { throw modelsError('invalid-response'); } }
+export function index(value: unknown): number { if (!Number.isSafeInteger(value) || Number(value) < 0) throw modelsError('invalid-response'); return Number(value); }
 export function validateProvider(provider: ProviderConnectionInput, protocolId: string): void {
-  try {
-    const url = new URL(provider.baseUrl);
-    if (provider.protocolId !== protocolId || !['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !['none', 'api-key'].includes(provider.auth) || !Number.isSafeInteger(provider.timeoutMs) || provider.timeoutMs < 1) throw new Error();
-  } catch { throw modelsError('invalid-config'); }
+  try { const url = new URL(provider.baseUrl); if (provider.protocolId !== protocolId || !['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !['none', 'api-key'].includes(provider.auth) || !Number.isSafeInteger(provider.timeoutMs) || provider.timeoutMs < 1) throw new Error(); }
+  catch { throw modelsError('invalid-config'); }
 }
-export function validateOptions(options: GenerationOptions, declared: DeclaredCapabilities, responses: boolean): void {
-  if (Object.keys(options).some(key => !['temperature', 'maxOutputTokens', 'protocol'].includes(key))) throw modelsError('invalid-config');
-  if (options.temperature !== undefined && (typeof options.temperature !== 'number' || !Number.isFinite(options.temperature) || options.temperature < 0 || options.temperature > 2)) throw modelsError('invalid-config');
-  if (options.maxOutputTokens !== undefined && (!Number.isSafeInteger(options.maxOutputTokens) || options.maxOutputTokens < 1)) throw modelsError('invalid-config');
-  const specific = options.protocol ?? {};
-  if (specific === null || Array.isArray(specific) || typeof specific !== 'object') throw modelsError('invalid-config');
-  if (Object.keys(specific).some(key => !['reasoningEffort', ...(responses ? ['reasoningSummary'] : [])].includes(key))) throw modelsError('invalid-config');
-  const effort = specific.reasoningEffort;
-  if (effort !== undefined) {
-    if (typeof effort !== 'string' || !reasoningEfforts.includes(effort as typeof reasoningEfforts[number])) throw modelsError('invalid-config');
-    if (declared.reasoning.support !== 'supported' || !declared.reasoning.efforts?.includes(effort)) throw modelsError('capability-unsupported');
+export function optionKeys(options: NativeObject, allowed: readonly string[]): void { assert(record(options) && json(options) && Object.keys(options).every(key => allowed.includes(key))); }
+export function numberOption(value: unknown, min: number, max = Number.MAX_SAFE_INTEGER, integer = false, required = false): void {
+  if (value === undefined && !required) return;
+  assert(typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max && (!integer || Number.isSafeInteger(value)));
+}
+export function effortOption(value: unknown, declared: DeclaredCapabilities, allowed: readonly string[]): void {
+  if (value === undefined) return;
+  assert(typeof value === 'string' && allowed.includes(value));
+  if (declared.reasoning.support !== 'supported' || !declared.reasoning.efforts?.includes(value)) throw modelsError('capability-unsupported');
+}
+export function effectiveCapabilities(declared: DeclaredCapabilities, disabled = false, search = false): EffectiveCapabilities {
+  return { tools: declared.tools.support === 'supported', streaming: declared.streaming.support === 'supported', imageInput: false,
+    webSearch: search && declared.webSearch?.support === 'supported', reasoning: disabled ? { support: 'unsupported' } : declared.reasoning };
+}
+export function validateServerTools(value: JsonValue | undefined, declared: DeclaredCapabilities, protocolId: string): void {
+  if (value === undefined) return;
+  assert(Array.isArray(value) && value.length <= 1);
+  if (value.length && declared.webSearch?.support !== 'supported') throw modelsError('capability-unsupported');
+  for (const entry of value) {
+    assert(record(entry));
+    if (protocolId === 'responses') assert(Object.keys(entry).length === 1 && entry.type === 'web_search');
+    else assert(Object.keys(entry).length === 2 && entry.type === 'web_search_20250305' && entry.name === 'web_search');
   }
-  const summary = specific.reasoningSummary;
-  if (summary !== undefined && (typeof summary !== 'string' || !['auto', 'concise', 'detailed'].includes(summary))) throw modelsError('invalid-config');
-  if (summary !== undefined && (declared.reasoning.support !== 'supported' || effort === 'none')) throw modelsError('capability-unsupported');
 }
-export function effectiveCapabilities(declared: DeclaredCapabilities, options: GenerationOptions): EffectiveCapabilities {
-  const efforts = declared.reasoning.efforts?.filter(value => reasoningEfforts.includes(value as typeof reasoningEfforts[number]));
-  return {
-    tools: declared.tools.support === 'supported', streaming: declared.streaming.support === 'supported', imageInput: false,
-    reasoning: { support: options.protocol?.reasoningEffort === 'none' ? 'unsupported' : declared.reasoning.support, ...(efforts ? { efforts } : {}) },
-  };
+/** Keep root-owned declarations fixed; each request appends only its own protocol input. */
+export function conversation(state: NativeObject, intent: NativeObject, field: 'input' | 'messages', metadata: readonly string[]): NativeObject {
+  optionKeys(intent, [field, ...metadata]);
+  const added = array(intent[field]); added.forEach(object);
+  const old = state[field] === undefined ? [] : array(state[field]);
+  if (old.length && added.some(value => ['system', 'developer'].includes(String(object(value).role)))) throw modelsError('invalid-config');
+  const next: Record<string, JsonValue> = { ...state, [field]: [...old, ...added] };
+  for (const key of metadata) {
+    if (intent[key] === undefined) continue;
+    if (old.length && !equalJson(state[key], intent[key])) throw modelsError('invalid-config');
+    next[key] = intent[key];
+  }
+  return native(next);
 }
-export function protocolComponent(protocol: ModelProtocol): Component.Object<void, { [modelsProtocolsServiceKey]: ModelsProtocolsService }> {
-  return {
-    name: `models-protocol-${protocol.descriptor.id}`,
-    inject: [modelsProtocolsServiceKey],
-    apply(ctx, _config, deps) {
-      const registration = deps[modelsProtocolsServiceKey].register(protocol);
-      ctx.effect(() => () => registration.unregister(), `unregister ${protocol.descriptor.id} protocol`);
-    },
-  };
+export function mergeTools(local: JsonValue | undefined, server: JsonValue | undefined): readonly JsonValue[] {
+  const tools = local === undefined ? [] : array(local);
+  const names = new Set<string>();
+  for (const tool of tools) { const item = object(tool); const fn = item.function === undefined ? item : object(item.function); const name = nonempty(fn.name); if (names.has(name)) throw modelsError('invalid-config'); names.add(name); }
+  return [...tools, ...(server === undefined ? [] : array(server))];
+}
+export function restoreRecords(protocolId: string, records: readonly NativeRecordDraft[], commit: (state: NativeObject, intent: NativeObject, response: NativeObject) => NativeObject): NativeObject {
+  let state: NativeObject = {}, pending: NativeRecordDraft | undefined; const ids = new Set<string>();
+  for (const record of records) {
+    if (record.protocolId !== protocolId || record.recordFormatVersion !== 1 || ids.has(record.id)) throw modelsError('invalid-response'); ids.add(record.id);
+    if (record.kind === 'request') { if (pending) throw modelsError('invalid-response'); pending = record; }
+    else if (record.kind === 'response' && pending?.exchangeId === record.exchangeId) { state = commit(state, native(pending.payload), native(record.payload)); pending = undefined; }
+    else throw modelsError('invalid-response');
+  }
+  if (pending) throw modelsError('invalid-response');
+  return state;
+}
+export function protocolComponent(protocol: NativeProtocol): Component.Object<void, { [modelsProtocolsServiceKey]: ModelsProtocolsService }> {
+  return { name: `models-protocol-${protocol.descriptor.id}`, inject: [modelsProtocolsServiceKey], apply(ctx, _config, deps) {
+    const registration = deps[modelsProtocolsServiceKey].register(protocol);
+    ctx.effect(() => () => registration.unregister(), `unregister ${protocol.descriptor.id} protocol`);
+  } };
+}
+
+/** The currently declared input contract is text and local function results; media stays unavailable. */
+export function textBlocks(value: unknown, type: 'text' | 'input_text' = 'text'): void {
+  if (typeof value === 'string') return;
+  for (const item of array(value)) { const block = object(item); if (block.type !== type) throw modelsError('capability-unsupported'); string(block.text); }
+}
+export function requireLocalTools(value: JsonValue | undefined, enabled: boolean): void {
+  if (value !== undefined && array(value).length && !enabled) throw modelsError('capability-unsupported');
 }

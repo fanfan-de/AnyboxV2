@@ -17,6 +17,8 @@ export interface AgentPromptPort {
   bindPrompt(actorId: string, agentId: string, versionId: string): Promise<PromptBinding>
   getAgentPrompts(actorId: string, agentId: string): readonly PromptSnapshot[]
   resolveRunPrompts(agentId: string): readonly PromptSnapshot[]
+  resolveInitialPrompts(agentId: string): readonly PromptSnapshot[]
+  resolveTaskTemplate(agentId: string): PromptSnapshot | undefined
 }
 
 function defaultInstruction(agent: AgentDefinition): PromptVersion {
@@ -54,17 +56,18 @@ export function createAgentPromptComponent(
         requireAgent(agentId)
         if (!canManageAgent(actorId, agentId)) throw new Error('agent configuration access denied')
       }
-      const resolve = (agentId: string): readonly PromptSnapshot[] => {
+      const resolve = (agentId: string, kinds: readonly PromptKind[] = ['agent-instruction', 'context', 'task-template']): readonly PromptSnapshot[] => {
         requireAgent(agentId)
         const selected = new Map<PromptKind, PromptVersion>()
         for (const binding of storage.get(agentId)) {
+          if (!kinds.includes(binding.kind)) continue
           const version = prompts.getPublishedVersion(binding.versionId)
           if (!version || version.kind !== binding.kind) {
             throw new Error(`bound prompt ${binding.versionId} is unavailable`)
           }
           selected.set(binding.kind, version)
         }
-        if (!selected.has('agent-instruction')) {
+        if (kinds.includes('agent-instruction') && !selected.has('agent-instruction')) {
           const fallback = defaults.get(agentId)
           if (!fallback) throw new Error(`default prompt for ${agentId} is unavailable`)
           selected.set('agent-instruction', fallback)
@@ -94,6 +97,8 @@ export function createAgentPromptComponent(
           return resolve(target)
         },
         resolveRunPrompts: resolve,
+        resolveInitialPrompts: agentId => resolve(agentId, ['agent-instruction', 'context']),
+        resolveTaskTemplate: agentId => resolve(agentId, ['task-template'])[0],
       }
       ctx.provide(agentPromptServiceKey, service)
     },

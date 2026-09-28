@@ -4,6 +4,7 @@ import type { SessionController } from './session-client.js'
 import { isActive } from './session-client.js'
 import type { Pane } from './workspace-layout.js'
 import { toolTrace } from './tool-trace.js'
+import { getProtocolWebModule, type MountedProtocolTurn } from './protocols/modules.js'
 
 export interface SessionPanel {
   readonly element: HTMLElement
@@ -67,6 +68,8 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   const emptyBranches = get<HTMLElement>('.empty-branches')
   let eventCache: ReadonlyMap<string, readonly RunEventView[]> = new Map(), expandedTraces: ReadonlySet<string> = new Set()
   let contentKey = '', rendered = false, savedScroll = initialScroll
+  const turns = new Map<string, MountedProtocolTurn>()
+  let renderNodes: Node[] = []
   let conversationTitle: string | undefined
   const active = isActive
   const listeners = new AbortController(), options = { signal: listeners.signal }
@@ -74,7 +77,11 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   get<HTMLElement>('.composer-model-row').hidden = !models
   modelSelect.addEventListener('change', () => { if (modelSelect.value) void controller.setModel(modelSelect.value) }, options)
   get('.configure-models').addEventListener('click', () => configureModels?.(), options)
-  const modelReady = () => !models || canUseModel(models.snapshot().models.find(value => value.id === controller.snapshot().session?.modelId))
+  const modelReady = () => {
+    const session = controller.snapshot().session
+    const model = models?.snapshot().models.find(value => value.id === session?.modelId)
+    return Boolean(getProtocolWebModule(model?.parameters.protocolId ?? session?.protocolId)) && (!models || canUseModel(model))
+  }
   const branchSelect = get<HTMLSelectElement>('.branch-navigation select')
   get('[data-go-root]').addEventListener('click', () => { void controller.navigate(null) }, options)
   get('[data-go-parent]').addEventListener('click', () => { void controller.navigate(controller.snapshot().path.at(-1)?.parentId ?? null) }, options)
@@ -90,7 +97,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   }
   const updateSend = (): void => {
     const state = controller.snapshot()
-    send.disabled = !state.session || state.busy || state.loading || (!state.pending && (!modelReady() || !messageInput.value.trim()))
+    send.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || (!state.pending && (!modelReady() || !messageInput.value.trim()))
   }
   messageInput.addEventListener('input', () => { controller.setDraft(messageInput.value); resizeInput(); updateSend() }, options)
   messageInput.addEventListener('keydown', event => {
@@ -111,7 +118,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     if (data.cancelRun) void controller.cancel(data.cancelRun)
     if (data.viewNode) void controller.navigate(data.viewNode)
     const node = controller.snapshot().path.find(item => item.id === (data.editNode ?? data.regenerateNode))
-    if (node && data.editNode) void controller.navigate(node.parentId, node.input).then(() => messageInput.focus())
+    if (node && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input).then(() => messageInput.focus())
     if (node && data.regenerateNode) void controller.regenerate(node)
   }, options)
 function addMessage(role: 'user' | 'assistant', content: string, isPending = false): void {
@@ -124,7 +131,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   text.className = 'message-content'
   text.textContent = content
   item.append(label, text)
-  transcript.append(item)
+  renderNodes.push(item)
 }
 
 function addRunTrace(runValue: RunView, container: HTMLElement = transcript): void {
@@ -170,6 +177,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
     restoreScroll(top) { savedScroll = top; if (!element.hidden) transcript.scrollTop = top },
     render() {
       const state = controller.snapshot()
+      const readOnly = state.session?.historyMode === 'dialogue-v1'
       eventCache = state.events
       expandedTraces = state.expanded
       const activeCount = state.runs.filter(active).length
@@ -181,7 +189,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       status.textContent = state.loading ? '正在加载' : state.busy ? '正在处理' : activeCount ? `${activeCount} 个运行中` : '准备就绪'
       notice.hidden = !state.notice
       notice.textContent = state.notice
-      messageInput.disabled = !state.session || state.busy || state.loading
+      messageInput.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading
       send.setAttribute('aria-label', state.pending ? '重试提交' : '发送消息')
       send.title = state.pending ? '重试提交 · Enter' : '发送消息 · Enter'
       cancel.hidden = !active(state.run)
@@ -190,7 +198,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       get('.composer-agent > span').textContent = state.session?.agentId ?? 'Agent'
       if (models) {
         const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
-        const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.connectionId, value.available, value.effectiveCapabilities?.tools]), catalog.providers.map(value => [value.id, value.name]), selected])
+        const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.connectionId, value.available, value.effectiveCapabilities?.tools, value.parameters.protocolId]), catalog.providers.map(value => [value.id, value.name]), selected, state.session?.protocolId])
         if (modelSelect.dataset.choices !== key) {
           modelSelect.dataset.choices = key
           const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = '选择模型'
@@ -203,21 +211,24 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
               groups.set(value.connectionId, group); modelSelect.append(group)
             }
             const choice = document.createElement('option'); choice.value = value.id
-            choice.textContent = canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`
-            choice.disabled = !canUseModel(value); group.append(choice)
+            const incompatible = Boolean(state.session?.protocolId && value.parameters.protocolId !== state.session.protocolId)
+            const unsupported = !getProtocolWebModule(value.parameters.protocolId)
+            choice.textContent = incompatible ? `${value.name} · 需新建其他协议会话` : unsupported ? `${value.name} · 网页输入组件不可用` : canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`
+            choice.disabled = !canUseModel(value) || incompatible || unsupported; group.append(choice)
           }
           if (selected && !catalog.models.some(value => value.id === selected)) {
             const unavailable = document.createElement('option'); unavailable.value = selected; unavailable.textContent = '原模型已不可用'; unavailable.disabled = true; modelSelect.append(unavailable)
           }
         }
         modelSelect.value = selected
-        modelSelect.disabled = state.busy || state.loading || Boolean(state.pending) || catalog.loading
+        modelSelect.disabled = state.session?.historyMode === 'dialogue-v1' || state.busy || state.loading || Boolean(state.pending) || catalog.loading
         const hint = get<HTMLElement>('.composer-model-hint')
-        hint.textContent = catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请打开“配置模型”，选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
+        hint.textContent = state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请打开“配置模型”，选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
         hint.hidden = !hint.textContent
       }
-      get('.compose-position').textContent = state.position.viewNodeId ? '继续此分支' : '新分支'
-      get('.compose-position').title = state.position.viewNodeId ? `从节点 ${state.position.viewNodeId} 继续` : '从会话起点发送'
+      get('.compose-position').textContent = readOnly ? '只读历史' : state.position.viewNodeId ? '继续此分支' : '新分支'
+      get('.compose-position').title = readOnly ? '旧版文本会话仅供查看' : state.position.viewNodeId ? `从节点 ${state.position.viewNodeId} 继续` : '从会话起点发送'
+      get('.composer-hint').hidden = readOnly
       get('.branch-position').textContent = state.position.viewNodeId ? `第 ${state.path.length} 轮` : '会话起点'
       get<HTMLButtonElement>('[data-go-root]').disabled = state.loading || !state.position.viewNodeId
       get<HTMLButtonElement>('[data-go-parent]').disabled = state.loading || !state.position.viewNodeId
@@ -239,7 +250,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
           button.type = 'button'
           button.dataset.viewNode = node.id
           button.textContent = node.input
-          button.title = `继续对话：${node.input}`
+          button.title = `${readOnly ? '查看历史' : '继续对话'}：${node.input}`
           return button
         }))
       }
@@ -248,7 +259,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       if (messageInput.value !== state.draft) messageInput.value = state.draft
       resizeInput()
       updateSend()
-      const progressRuns = state.runs.filter(run => active(run) && run.history.kind === 'tree' && run.history.parentNodeId === state.position.viewNodeId && state.progress?.has(run.id))
+      const progressRuns = state.runs.filter(run => active(run) && run.history.kind === 'tree' && run.history.parentNodeId === state.position.viewNodeId && state.views.has(run.id))
       const hasVisibleMessages = Boolean(state.path.length || progressRuns.length || (state.pending && !state.runs.some(item => item.id === state.pending?.runId)))
       empty.hidden = hasVisibleMessages
       transcript.hidden = !hasVisibleMessages
@@ -256,16 +267,30 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       emptyBranches.hidden = state.loading || !state.children.length
       for (const button of emptyBranches.querySelectorAll('button')) button.disabled = state.loading || state.busy
       empty.classList.toggle('has-branches', !emptyBranches.hidden)
-      get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : state.children.length ? '从这里，继续你的想法' : activeCount ? 'Agent 正在思考…' : state.runs.length ? '你正在会话起点' : '有什么想法？'
-      get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Anybox 一起完成。'
-      const key = JSON.stringify([state.path, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.busy, [...(state.progress ?? [])]])
+      get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : readOnly ? '旧版会话历史' : state.children.length ? '从这里，继续你的想法' : activeCount ? 'Agent 正在思考…' : state.runs.length ? '你正在会话起点' : '有什么想法？'
+      get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : readOnly ? state.children.length ? '选择已有分支，查看保存的对话。' : '此会话仅供查看；请新建会话继续使用。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Anybox 一起完成。'
+      const key = JSON.stringify([state.path, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.busy, readOnly, [...state.views]])
       if (key === contentKey) return
       contentKey = key
       const top = rendered ? panel.captureScroll() : initialScroll
       const atBottom = !element.hidden && (rendered ? transcript.scrollHeight - transcript.clientHeight - top < 72 : initialScroll === 0)
       const focused = transcript.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : undefined
       const focusedData = focused ? JSON.stringify(focused.dataset) : undefined
-      transcript.replaceChildren()
+      renderNodes = []
+      const retainedTurns = new Set<string>()
+      const appendTurn = (runId: string | null): boolean => {
+        if (!runId) return false
+        const view = state.views.get(runId)
+        if (!view) return false
+        const module = getProtocolWebModule(view.protocolId)
+        if (!module) return false
+        let turn = turns.get(runId)
+        if (!turn) { turn = module.mount(view); turns.set(runId, turn) }
+        else turn.update(view)
+        retainedTurns.add(runId)
+        renderNodes.push(turn.element)
+        return true
+      }
       const action = (text: string, key: string, id: string): HTMLButtonElement => {
         const button = document.createElement('button')
         button.type = 'button'
@@ -275,24 +300,21 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       }
       for (const node of state.path) {
         addMessage('user', node.input)
-        addMessage('assistant', node.output)
+        if (!appendTurn(node.sourceRunId)) addMessage('assistant', node.output)
         const actions = document.createElement('div')
         actions.className = 'node-actions'
-        actions.append(action('从这里继续', 'viewNode', node.id), action('编辑重发', 'editNode', node.id), action('重新生成', 'regenerateNode', node.id))
-        for (const button of actions.querySelectorAll('button')) button.disabled = state.busy || Boolean(state.pending)
-        transcript.append(actions)
+        actions.append(action(readOnly ? '查看此处' : '从这里继续', 'viewNode', node.id), action('编辑重发', 'editNode', node.id), action('重新生成', 'regenerateNode', node.id))
+        for (const button of actions.querySelectorAll('button')) button.disabled = Boolean(readOnly && !button.dataset.viewNode) || state.busy || Boolean(state.pending)
+        renderNodes.push(actions)
       }
       if (state.runs.length) {
         const heading = document.createElement('h3')
-        // Temporarily hide run history while keeping its data and controls intact.
-        heading.hidden = true
         heading.className = 'run-list-heading'
         heading.textContent = '运行记录'
-        transcript.append(heading)
+        renderNodes.push(heading)
       }
       for (const item of state.runs) {
         const card = document.createElement('section')
-        card.hidden = true
         card.className = 'run-card'
         card.classList.toggle('focused-run', item.id === state.position.focusedRunId)
         const label = document.createElement('p')
@@ -317,20 +339,28 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
           summary.textContent = '查看旧版结果'; output.textContent = item.output; details.append(summary, output); card.append(details)
         }
         addRunTrace(item, card)
-        transcript.append(card)
+        renderNodes.push(card)
       }
       for (const run of progressRuns) {
         addMessage('user', run.input)
-        addMessage('assistant', state.progress.get(run.id)!, true)
+        appendTurn(run.id)
         const label = document.createElement('p'); label.className = 'streaming-label'; label.textContent = '正在生成 · 临时输出'
-        transcript.append(label)
+        renderNodes.push(label)
       }
       if (state.pending && !state.runs.some(item => item.id === state.pending?.runId)) addMessage('user', state.pending.input, true)
+      // Move only changed siblings; protocol components retain their DOM and local state.
+      let cursor: ChildNode | null = transcript.firstChild
+      for (const node of renderNodes) {
+        if (node === cursor) cursor = cursor.nextSibling
+        else transcript.insertBefore(node, cursor)
+      }
+      while (cursor) { const next: ChildNode | null = cursor.nextSibling; cursor.remove(); cursor = next }
+      for (const [id, turn] of turns) if (!retainedTurns.has(id)) { turn.dispose(); turns.delete(id) }
       panel.restoreScroll(atBottom ? transcript.scrollHeight : top)
       if (focusedData) [...transcript.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
       if (state.path.length || state.runs.length) rendered = true
     },
-    dispose() { listeners.abort(); return panel.captureScroll() },
+    dispose() { listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return panel.captureScroll() },
   }
   panel.render()
   return panel

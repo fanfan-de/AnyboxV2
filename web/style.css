@@ -435,6 +435,16 @@ button { touch-action: manipulation; }
 .composer .configure-models:hover { color: var(--text); }
 .composer-model-hint { font-size: 11px; line-height: 1.5; margin: 0 0 8px; color: var(--secondary); }
 .streaming-label { font-size: 11px; color: var(--secondary); margin: -12px 0 20px 44px; }
+.protocol-turn { min-width: 0; margin: 12px 0 24px; }
+.protocol-turn > .streaming-label { margin: 0 0 10px; }
+.protocol-block { overflow-wrap: anywhere; margin: 10px 0; }
+.protocol-block p { margin: 0; line-height: 1.65; }
+.protocol-reasoning { color: var(--secondary); padding-left: 12px; border-left: 2px solid var(--line); font-size: 13px; }
+.protocol-tool { padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; }
+.protocol-tool pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 240px; overflow: auto; }
+.protocol-status { color: var(--secondary); font-size: 12px; }
+.protocol-block ol { margin: 8px 0; padding-left: 22px; font-size: 12px; }
+.protocol-block a { color: inherit; text-decoration: underline; }
 @media (max-width: 1050px) {
   .models-layout { grid-template-columns: 160px minmax(0, 1fr); gap: 16px; }
   .models-connections { padding: 12px; }

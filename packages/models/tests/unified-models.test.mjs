@@ -1,3 +1,4 @@
+import { params, exchange } from './helpers.mjs';
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { normalizeModelsDevCatalog } from '../dist/catalog-domain.js'
@@ -23,10 +24,10 @@ test('one connection unlocks all compatible definitions; accounts and variants k
     assert.equal(f.settings.connectionModels(connection.id).find(model => model.remoteModelId === 'image').unavailableReason, 'text-unsupported')
     assert.equal(f.settings.connectionModels(connection.id).find(model => model.remoteModelId === 'old').unavailableReason, 'deprecated')
     const saved = f.settings.configurations()[0]
-    await f.settings.createConfiguration({ ...Object.fromEntries(['name','enabled','modelDefinitionId','connectionId','capabilities'].map(key => [key, saved[key]])), id: 'variant', baseline: false, defaults: { temperature: 0.9 } })
+    await f.settings.createConfiguration({ ...Object.fromEntries(['name','enabled','modelDefinitionId','connectionId','capabilities'].map(key => [key, saved[key]])), id: 'variant', baseline: false, parameters: params('chat-completions', { temperature: 0.9 }) })
     await f.settings.createConnection(account(provider, 'second'))
     assert.equal(f.models.list().length, 5)
-    const changed = await f.settings.updateConfiguration(saved.id, { name: 'My name', enabled: false, defaults: { temperature: 0.4 } }, saved.revision)
+    const changed = await f.settings.updateConfiguration(saved.id, { name: 'My name', enabled: false, parameters: params('chat-completions', { temperature: 0.4 }) }, saved.revision)
     const source = snapshot([rawModel('a'), rawModel('b'), rawModel('new')], 2)
     await f.sourceData.accept(source); await f.settings.retryConnection(connection.id)
     assert.equal(f.models.list().length, 7)
@@ -63,15 +64,15 @@ test('missing source entries preserve configured versions and in-flight executio
   try {
     const connection = await f.settings.createConnection(account(provider))
     const config = f.settings.configurations().find(model => model.remoteModelId === 'a')
-    const execution = await f.models.open({ modelId: config.id })
-    assert.equal(execution.snapshot.schemaVersion, 2)
+    const execution = await f.open({ modelId: config.id })
+    assert.equal(execution.snapshot.schemaVersion, 3)
     assert.equal(execution.snapshot.modelDefinitionVersionId, config.modelDefinitionVersionId)
     await f.sourceData.accept(snapshot([rawModel('b')], 2))
     assert.equal(f.settings.models({ includeMissing: true }).find(model => model.id === config.modelDefinitionId).state, 'missing')
     assert.equal(f.models.get(config.id).available, true)
-    const removed = await f.models.open({ modelId: config.id }); await removed.close()
+    const removed = await f.open({ modelId: config.id }); await removed.close()
     await f.settings.setApiKey(connection.id, 'new-private-key', connection.revision)
-    await execution.generate({ messages: [{ role: 'user', content: 'still old' }] }).result
+    await exchange(execution, { messages: [{ role: 'user', content: 'still old' }] }).result
     assert.equal(f.protocols[0].calls[0].input.credential, 'private-key')
     assert.equal(execution.snapshot.modelVersionId, config.versionId)
     await execution.close()
@@ -113,7 +114,7 @@ test('Anthropic required defaults are saved explicitly and bounded by output lim
   const { f, provider } = await setup(data, [protocol])
   try {
     await f.settings.createConnection(account(provider, 'anthropic', { protocolId: 'anthropic-messages' }))
-    assert.equal(f.settings.configurations()[0].defaults.maxOutputTokens, 1000)
+    assert.equal(f.settings.configurations()[0].parameters.value.max_tokens, 1000)
     assert.equal(f.models.list()[0].effectiveCapabilities.imageInput, false)
   } finally { await f.root.fiber.dispose() }
 })
@@ -177,11 +178,11 @@ test('offline connection/configuration persistence allows stable bootstrap IDs b
     const connection = await f.settings.createConnection({ id: 'imported-connection', providerDefinitionId: provider.id, name: 'Imported account', protocolId: 'test', baseUrl: 'https://example.invalid/v1', enabled: true, auth: 'none', timeoutMs: 1000 })
     assert.equal(connection.sync.state, 'pending')
     const definition = await f.settings.createModel({ id: 'imported-definition', name: 'Imported model', providerId: provider.id, remoteModelId: 'remote', capabilities: capabilities(), controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['test'] } })
-    const config = await f.settings.createConfiguration({ id: 'default', connectionId: connection.id, modelDefinitionId: definition.id, baseline: true, name: 'Imported', enabled: true, defaults: { temperature: 0.2 }, capabilities: definition.capabilities })
+    const config = await f.settings.createConfiguration({ id: 'default', connectionId: connection.id, modelDefinitionId: definition.id, baseline: true, name: 'Imported', enabled: true, parameters: params('test', { temperature: 0.2 }), capabilities: definition.capabilities })
     assert.equal(f.models.get(config.id).unavailableReason, 'protocol-unavailable')
     const protocol = fakeProtocol(); f.protocols.push(protocol); f.registry.register(protocol)
     await f.settings.retryConnection(connection.id)
     assert.deepEqual(f.models.list().map(value => value.id), ['default'])
-    const execution = await f.models.open({ modelId: 'default' }); await execution.close()
+    const execution = await f.open({ modelId: 'default' }); await execution.close()
   } finally { await f.close() }
 })
