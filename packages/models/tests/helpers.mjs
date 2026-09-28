@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { Context, FiberState } from '@nya/core'
 import { createModelsComponent } from '../dist/component.js'
 import { modelsError } from '../dist/errors.js'
@@ -18,33 +19,61 @@ export const capabilities = overrides => ({
 
 /** Transactions are atomic; this fake is independent of SQLite and runtime queues. */
 export function memoryStore() {
-  const providers = new Map(), models = new Map(), providerHistory = new Map(), modelHistory = new Map(), intents = new Map()
-  return {
-    failCommit: undefined,
-    providers: () => structuredClone([...providers.values()]),
-    provider: id => structuredClone(providers.get(id)),
-    providerHistory: id => structuredClone(providerHistory.get(id) ?? []),
-    models: () => structuredClone([...models.values()]),
-    model: id => structuredClone(models.get(id)),
-    modelHistory: id => structuredClone(modelHistory.get(id) ?? []),
+  const maps = { providers: new Map(), models: new Map(), connections: new Map(), configurations: new Map() }
+  const histories = Object.fromEntries(Object.keys(maps).map(key => [key, new Map()]))
+  const intents = new Map(), sources = new Map(), syncStates = new Map()
+  const port = { failCommit: undefined,
     intents: () => structuredClone([...intents.values()]),
+    sources: () => structuredClone([...sources.values()]),
+    syncState: id => structuredClone(syncStates.get(id)),
     async commit(change) {
       if (this.failCommit) throw this.failCommit
-      for (const [item, records] of [[change.provider, providers], [change.model, models]]) {
-        if (!item) continue
-        const current = records.get(item.record.id)
+      if (change.deleteConnection) {
+        const current = maps.connections.get(change.deleteConnection.id)
+        if (!current) throw modelsError('not-found')
+        if (current.revision !== change.deleteConnection.expectedRevision) throw modelsError('conflict')
+      }
+      for (const guard of change.syncGuards ?? []) if ((syncStates.get(guard.connectionId)?.targetSourceVersion ?? null) !== guard.targetSourceVersion) throw modelsError('conflict')
+      const groups = [['providers', change.providers ?? []], ['models', change.models ?? []], ['connections', change.connection ? [change.connection] : []], ['configurations', change.configurations ?? []]]
+      for (const [kind, changes] of groups) for (const item of changes) {
+        const current = maps[kind].get(item.record.id)
         if ((current?.revision ?? null) !== item.expectedRevision) throw modelsError('conflict')
+        if (!current && histories[kind].has(item.record.id)) throw modelsError('conflict')
+        if (kind === 'configurations' && item.record.baseline && [...maps.configurations.values(), ...changes.filter(x => x !== item).map(x => x.record)].some(x => x.id !== item.record.id && x.baseline && x.connectionId === item.record.connectionId && x.modelDefinitionId === item.record.modelDefinitionId)) throw modelsError('conflict')
       }
-      for (const [item, records, versions] of [[change.provider, providers, providerHistory], [change.model, models, modelHistory]]) {
-        if (!item) continue
-        const copy = structuredClone(item.record)
-        records.set(copy.id, copy)
-        versions.set(copy.id, [...(versions.get(copy.id) ?? []), copy])
+      for (const [kind, changes] of groups) for (const item of changes) {
+        const copy = structuredClone(item.record); maps[kind].set(copy.id, copy)
+        histories[kind].set(copy.id, [...(histories[kind].get(copy.id) ?? []), copy])
       }
+      for (const state of change.sources ?? []) sources.set(state.sourceId, structuredClone(state))
+      for (const state of change.syncStates ?? []) syncStates.set(state.connectionId, structuredClone(state))
       for (const intent of change.addIntents ?? []) intents.set(intent.id, structuredClone(intent))
       for (const id of change.removeIntentIds ?? []) intents.delete(id)
+      if (change.deleteConnection) {
+        const { id } = change.deleteConnection
+        for (const [configurationId, value] of maps.configurations) if (value.connectionId === id) maps.configurations.delete(configurationId)
+        syncStates.delete(id); maps.connections.delete(id)
+      }
     },
   }
+  for (const [kind, one] of [['providers', 'provider'], ['models', 'model'], ['connections', 'connection'], ['configurations', 'configuration']]) {
+    port[kind] = () => structuredClone([...maps[kind].values()])
+    port[one] = id => structuredClone(maps[kind].get(id))
+    port[`${one}History`] = id => structuredClone(histories[kind].get(id) ?? [])
+  }
+  return port
+}
+
+export async function addConnection(settings, input) {
+  const definition = await settings.createProvider({ id: `${input.id ?? randomUUID()}-definition`, name: input.name, connectionHints: { protocolIds: [input.protocolId], baseUrl: input.baseUrl } })
+  return settings.createConnection({ ...input, providerDefinitionId: definition.id })
+}
+export async function addConfiguration(settings, input) {
+  const { id, providerId, remoteModelId, defaults, enabled, ...metadata } = input
+  const connection = settings.connections().find(value => value.id === providerId)
+  const definition = await settings.createModel({ ...metadata, providerId: connection.providerDefinitionId, remoteModelId,
+    controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [connection.protocolId] } })
+  return settings.createConfiguration({ id, name: input.name, connectionId: providerId, modelDefinitionId: definition.id, enabled, defaults, capabilities: input.capabilities, baseline: true })
 }
 
 export function memoryVault() {
@@ -123,13 +152,14 @@ export async function fixture({ store = memoryStore(), vault = memoryVault(), pr
   const models = root.get('models'), settings = root.get('models.settings'), registry = root.get('models.protocols')
   const registrations = protocols.map(protocol => registry.register(protocol))
   return {
-    root, component, models, settings, registry, store, vault, protocols, registrations,
+    root, component, models, settings, registry, store, vault, protocols, registrations, sourceData: root.get('models.source-data'),
+    addConnection: input => addConnection(settings, input), addConfiguration: input => addConfiguration(settings, input),
     async add({ providerId = 'provider', modelId = 'model', protocolId = protocols[0]?.descriptor.id ?? 'absent', key, timeoutMs = 10000, defaults = {}, capabilityDeclarations = capabilities() } = {}) {
-      const provider = await settings.createProvider({
+      const provider = await addConnection(settings, {
         id: providerId, name: providerId, enabled: true, protocolId, baseUrl: 'https://example.invalid/v1',
         auth: key === undefined ? 'none' : 'api-key', timeoutMs, ...(key === undefined ? {} : { apiKey: key }),
       })
-      const model = await settings.createModel({ id: modelId, name: modelId, enabled: true, providerId, remoteModelId: 'same-remote-model', capabilities: capabilityDeclarations, defaults })
+      const model = await addConfiguration(settings, { id: modelId, name: modelId, enabled: true, providerId, remoteModelId: 'same-remote-model', capabilities: capabilityDeclarations, defaults })
       return { provider, model }
     },
     async close() { vault.release?.(); for (const protocol of protocols) protocol.release(); await root.fiber.dispose() },

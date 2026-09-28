@@ -15,7 +15,8 @@ export { createChatCompletionsProtocol, createChatCompletionsProtocolComponent }
 export { createResponsesProtocol, createResponsesProtocolComponent } from './protocols/responses.js';
 export type { ProtocolOptions } from './protocols/shared.js';
 export * from './catalog-types.js';
-export { normalizeModelsDevCatalog, resolveCatalogConnections, validateCatalogSnapshot } from './catalog-domain.js';
+export { normalizeModelsDevCatalog, resolveCatalogConnections, validateCatalogSnapshot, catalogSnapshotVersion as sourceSnapshotVersion, sourceDefinitionVersion } from './catalog-domain.js';
+export { externalProviderId, externalModelId } from './identity.js';
 export { modelsDevCatalogUrl, createModelsDevCatalogSource, createModelsDevCatalogSourceComponent } from './catalog-source.js';
 export type { ModelsDevCatalogSourceOptions } from './catalog-source.js';
 export { createMemoryModelsCatalogCache, createModelsCatalogCacheComponent } from './catalog-cache.js';

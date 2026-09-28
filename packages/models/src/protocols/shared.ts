@@ -1,6 +1,6 @@
 import type { Component } from '@nya/core';
 import { modelsError } from '../errors.js';
-import { modelsProtocolsServiceKey, type DeclaredCapabilities, type EffectiveCapabilities, type FormField, type GenerationOptions, type JsonValue, type ModelProtocol, type ModelsProtocolsService, type ModelUsage, type ProviderInput, type ToolCall } from '../types.js';
+import { modelsProtocolsServiceKey, type DeclaredCapabilities, type EffectiveCapabilities, type FormField, type GenerationOptions, type JsonValue, type ModelProtocol, type ModelsProtocolsService, type ModelUsage, type ProviderConnectionInput, type ToolCall } from '../types.js';
 
 export interface ProtocolOptions { readonly fetch?: typeof globalThis.fetch }
 export function captureOptions(options: ProtocolOptions): ProtocolOptions {
@@ -58,7 +58,7 @@ export function usage(value: unknown, responses: boolean): ModelUsage | undefine
   }
   return result;
 }
-export function validateProvider(provider: ProviderInput, protocolId: string): void {
+export function validateProvider(provider: ProviderConnectionInput, protocolId: string): void {
   try {
     const url = new URL(provider.baseUrl);
     if (provider.protocolId !== protocolId || !['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !['none', 'api-key'].includes(provider.auth) || !Number.isSafeInteger(provider.timeoutMs) || provider.timeoutMs < 1) throw new Error();

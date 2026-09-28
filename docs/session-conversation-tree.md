@@ -4,7 +4,7 @@
 
 ## 语义与归属
 
-Session 保存项目、Agent、可空 `modelId` 与创建信息，不含 `turns` 或全局 head。`modelId` 是后续 Run 的默认选择，不是模型 execution；修改它不会改写历史节点或影响已接受的 Run。只有完整助手回答之后可以继续/分叉；空 Session 的虚拟根是特例，使用 `null`，无需根记录。
+Session 保存项目、Agent、可空 `modelId` 与创建信息，不含 `turns` 或全局 head。`modelId` 是实际 ModelConfiguration 的稳定 ID，作为后续 Run 的默认选择；执行快照 schemaVersion 2 另保存 Provider/Model 定义身份与模型定义版本，旧快照按原 JSON 读取；修改它不会改写历史节点或影响已接受的 Run。只有完整助手回答之后可以继续/分叉；空 Session 的虚拟根是特例，使用 `null`，无需根记录。
 
 ```ts
 interface ConversationNode {

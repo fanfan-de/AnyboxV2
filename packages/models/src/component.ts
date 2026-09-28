@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { Component } from '@nya/core';
-import { assert, identifier, immutable, keys, modelInput, nonempty, providerInput, validateMessages, validateModel, validateOptions, validateProvider, validateSignal, validateTools } from './domain.js';
+import { assert, identifier, immutable, keys, nonempty, connectionInput, configurationInput, modelInput, providerInput, validateMessages, validateConfiguration, validateConnection, validateModel, validateOptions, validateProvider, validateSignal, validateTools } from './domain.js';
 import { modelsError, normalizeError } from './errors.js';
 import { createExecution } from './execution.js';
 import { abortLink, deferred, joinOperation, throwAborted } from './lifecycle.js';
-import { modelsProtocolsServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsStoreServiceKey, modelsVaultServiceKey } from './types.js';
-import type { CredentialIntent, EffectiveCapabilities, GenerationOptions, ModelExecution, ModelInput, ModelProtocol, ModelRecord, ModelsProtocolsService, ModelsService, ModelsSettingsService, ModelsStore, ModelsVault, ModelSummary, OpenModelInput, ProtocolConnection, ProtocolOperation, ProviderInput, ProviderRecord, ProviderView } from './types.js';
+import { modelsProtocolsServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsStoreServiceKey, modelsVaultServiceKey, modelsSourceDataServiceKey } from './types.js';
+import type { ConnectionModel, ConnectionSyncState, CredentialIntent, EffectiveCapabilities, GenerationOptions, Model, ModelConfiguration, ModelConfigurationInput, ModelExecution, ModelInput, ModelProtocol, ModelsProtocolsService, ModelsService, ModelsSettingsService, ModelsSourceDataService, ModelsStore, ModelsVault, RunnableModelSummary, OpenModelInput, ProtocolConnection, ProtocolOperation, Provider, ProviderConnectionInput, ProviderConnectionRecord, ProviderConnection, ProviderInput, SourceSnapshot, Versioned } from './types.js';
+import { validateCatalogSnapshot } from './catalog-domain.js';
 
 interface Owned { cancel(): void; readonly done: Promise<void> }
 interface Generation {
@@ -29,6 +30,7 @@ export function createModelsComponent(): Component.Object<void, Dependencies> {
       ctx.provide(modelsServiceKey, runtime.models);
       ctx.provide(modelsSettingsServiceKey, runtime.settings);
       ctx.provide(modelsProtocolsServiceKey, runtime.protocols);
+      ctx.provide(modelsSourceDataServiceKey, runtime.sourceData);
     },
   };
 }
@@ -43,18 +45,18 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
   const jobs = new Set<Promise<unknown>>();
   const queues = new Map<string, Promise<unknown>>();
   const requireOpen = () => { if (!accepting) throw modelsError('closed'); };
-  const getProvider = (id: string) => { identifier(id); const value = store.provider(id); if (!value) throw modelsError('not-found'); return value; };
-  const getModel = (id: string) => { identifier(id); const value = store.model(id); if (!value) throw modelsError('not-found'); return value; };
+  const getConnection = (id: string) => { identifier(id); const value = store.connection(id); if (!value) throw modelsError('not-found'); return value; };
+  const getConfiguration = (id: string) => { identifier(id); const value = store.configuration(id); if (!value) throw modelsError('not-found'); return value; };
   const getGeneration = (id: string) => {
     const generation = generations.get(id);
     if (!generation?.accepting) throw modelsError('protocol-unavailable');
     return generation;
   };
-  const providerView = (value: ProviderRecord): ProviderView => immutable({
-    ...providerInput(value), id: value.id, revision: value.revision, versionId: value.versionId,
-    createdAt: value.createdAt, updatedAt: value.updatedAt, credentialConfigured: value.credentialRef !== null,
+  const connectionView = (value: ProviderConnectionRecord): ProviderConnection => immutable({
+    ...connectionInput(value), id: value.id, revision: value.revision, versionId: value.versionId,
+    createdAt: value.createdAt, updatedAt: value.updatedAt, credentialConfigured: value.credentialRef !== null, sync: syncOverrides.get(value.id) ?? store.syncState(value.id),
   });
-  const revision = (previous?: ProviderRecord | ModelRecord) => ({
+  const revision = (previous?: Versioned) => ({
     revision: previous ? previous.revision + 1 : 1, versionId: randomUUID(),
     createdAt: previous?.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString(),
   });
@@ -62,8 +64,9 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     assert(Number.isSafeInteger(expected) && expected > 0);
     if (actual !== expected) throw modelsError('conflict');
   };
-  const enqueue = <T>(providerId: string, work: () => Promise<T>): Promise<T> => {
-    try { requireOpen(); } catch (error) { return Promise.reject(error); }
+  const trackJob = <T>(task: Promise<T>): Promise<T> => { jobs.add(task); void task.finally(() => jobs.delete(task)).catch(() => {}); return task; };
+  const enqueue = <T>(providerId: string, work: () => Promise<T>, admitted = false): Promise<T> => {
+    try { if (!admitted) requireOpen(); } catch (error) { return Promise.reject(error); }
     const previous = queues.get(providerId) ?? Promise.resolve();
     const task = previous.catch(() => {}).then(work).catch(error => { throw normalizeError(error, 'invalid-config'); });
     queues.set(providerId, task); jobs.add(task);
@@ -74,12 +77,12 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
   const cleanupIntent = async (intent: CredentialIntent): Promise<void> => {
     try {
       // Historical references do not keep old secret values alive.
-      if (!store.providers().some(provider => provider.credentialRef === intent.slotId)) await vault.delete(intent.slotId);
+      if (!store.connections().some(provider => provider.credentialRef === intent.slotId)) await vault.delete(intent.slotId);
       await store.commit({ removeIntentIds: [intent.id] });
     } catch { /* The durable intent is retried at startup or the next key mutation. */ }
   };
-  const recover = async () => { for (const intent of store.intents()) await cleanupIntent(intent); };
-  const changeCredential = async (previous: ProviderRecord | undefined, next: ProviderRecord, secret: string | null): Promise<ProviderView> => {
+  const recover = async () => { for (const intent of store.intents()) await cleanupIntent(intent); for (const connection of store.connections()) await reconcile(connection.id); };
+  const changeCredential = async (previous: ProviderConnectionRecord | undefined, next: ProviderConnectionRecord, secret: string | null): Promise<ProviderConnection> => {
     const slotId = secret === null ? null : randomUUID();
     const pending = slotId ? intentFor(next.id, slotId) : undefined;
     const retired = previous?.credentialRef ? intentFor(next.id, previous.credentialRef) : undefined;
@@ -88,16 +91,16 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       if (slotId && secret !== null) await vault.write(slotId, secret);
       const record = immutable({ ...next, credentialRef: slotId });
       await store.commit({
-        provider: { record, expectedRevision: previous?.revision ?? null },
+        connection: { record, expectedRevision: previous?.revision ?? null },
         removeIntentIds: pending ? [pending.id] : [], addIntents: retired ? [retired] : [],
       });
       if (retired) await cleanupIntent(retired);
       // Retry only this provider's abandoned writes while its configuration queue is held.
       for (const intent of store.intents().filter(item => item.providerId === next.id)) await cleanupIntent(intent);
-      return providerView(record);
+      return connectionView(record);
     } catch (error) { if (pending) await cleanupIntent(pending); throw normalizeError(error, 'credential-unavailable'); }
   };
-  const effective = (generation: Generation, model: ModelRecord, options: GenerationOptions): EffectiveCapabilities => {
+  const effective = (generation: Generation, model: ModelConfiguration, options: GenerationOptions): EffectiveCapabilities => {
     generation.protocol.validateOptions(options, model.capabilities);
     const declared = model.capabilities;
     const value = generation.protocol.effectiveCapabilities(declared, options);
@@ -108,9 +111,9 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       reasoning: declared.reasoning.support === 'supported' ? value.reasoning : { support: declared.reasoning.support },
     });
   };
-  const summary = (model: ModelRecord): ModelSummary => {
-    const provider = getProvider(model.providerId);
-    let unavailableReason: ModelSummary['unavailableReason'];
+  const summary = (model: ModelConfiguration): RunnableModelSummary => {
+    const provider = getConnection(model.connectionId);
+    let unavailableReason: RunnableModelSummary['unavailableReason'];
     let effectiveCapabilities: EffectiveCapabilities | undefined;
     if (!model.enabled) unavailableReason = 'disabled';
     else if (!provider.enabled) unavailableReason = 'provider-disabled';
@@ -119,13 +122,13 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     if (generations.get(provider.protocolId)?.accepting) {
       try {
         const generation = getGeneration(provider.protocolId);
-        generation.protocol.validateProvider(providerInput(provider));
+        generation.protocol.validateProvider(connectionInput(provider));
         effectiveCapabilities = effective(generation, model, model.defaults);
       } catch { unavailableReason ??= 'invalid-configuration'; }
     }
-    return immutable({ ...model, available: !unavailableReason, ...(unavailableReason ? { unavailableReason } : {}), ...(effectiveCapabilities ? { effectiveCapabilities } : {}) });
+    return immutable({ ...model, providerDefinitionId: provider.providerDefinitionId, source: store.model(model.modelDefinitionId)!.source, available: !unavailableReason, ...(unavailableReason ? { unavailableReason } : {}), ...(effectiveCapabilities ? { effectiveCapabilities } : {}) });
   };
-  const readCredential = async (provider: ProviderRecord, signal: AbortSignal) => {
+  const readCredential = async (provider: ProviderConnectionRecord, signal: AbortSignal) => {
     throwAborted(signal);
     if (provider.auth === 'none') return undefined;
     if (!provider.credentialRef) throw modelsError('credential-missing');
@@ -156,12 +159,12 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
 
   const models: ModelsService = {
     list(query = {}) {
-      requireOpen(); keys(query, ['providerId', 'available']);
-      if (query.providerId !== undefined) identifier(query.providerId);
+      requireOpen(); keys(query, ['connectionId', 'available']);
+      if (query.connectionId !== undefined) identifier(query.connectionId);
       assert(query.available === undefined || typeof query.available === 'boolean');
-      return immutable(store.models().map(summary).filter(item => (!query.providerId || item.providerId === query.providerId) && (query.available === undefined || item.available === query.available)));
+      return immutable(store.configurations().map(summary).filter(item => (!query.connectionId || item.connectionId === query.connectionId) && (query.available === undefined || item.available === query.available)));
     },
-    get(id) { requireOpen(); identifier(id); const model = store.model(id); return model ? summary(model) : undefined; },
+    get(id) { requireOpen(); identifier(id); const model = store.configuration(id); return model ? summary(model) : undefined; },
     async open(input: OpenModelInput) {
       requireOpen();
       keys(input, ['modelId', 'history', 'tools', 'requirements', 'options', 'signal']); identifier(input.modelId);
@@ -173,16 +176,16 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       if (captured.options) { keys(captured.options, ['temperature', 'maxOutputTokens']); validateOptions(captured.options); }
       const requirements = captured.requirements ?? {};
       keys(requirements, ['tools', 'streaming', 'reasoning']); assert(Object.values(requirements).every(value => typeof value === 'boolean'));
-      const providerId = getModel(input.modelId).providerId;
+      const providerId = getConfiguration(input.modelId).connectionId;
       const owned = lease(input.signal);
       let transferred = false;
       try {
         return await enqueue(providerId, async () => {
           throwAborted(owned.controller.signal);
-          const model = immutable(getModel(captured.modelId)); const provider = immutable(getProvider(providerId));
+          const model = immutable(getConfiguration(captured.modelId)); const provider = immutable(getConnection(providerId));
           if (!model.enabled || !provider.enabled) throw modelsError('unavailable');
           const generation = getGeneration(provider.protocolId); owned.attach(generation);
-          generation.protocol.validateProvider(providerInput(provider));
+          generation.protocol.validateProvider(connectionInput(provider));
           const options = immutable({ ...model.defaults, ...Object.fromEntries(Object.entries(captured.options ?? {}).filter(([, value]) => value !== undefined)) });
           const capabilities = effective(generation, model, options);
           if ((tools.length > 0 || requirements.tools) && !capabilities.tools || requirements.streaming && !capabilities.streaming || requirements.reasoning && capabilities.reasoning.support !== 'supported') throw modelsError('capability-unsupported');
@@ -190,8 +193,8 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
           throwAborted(owned.controller.signal);
           if (!accepting || !generation.accepting) throw modelsError('closed');
           const execution = createExecution({
-            protocol: generation.protocol, provider: immutable(providerInput(provider)), credential,
-            snapshot: { modelId: model.id, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.id, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, options },
+            protocol: generation.protocol, provider: immutable(connectionInput(provider)), credential,
+            snapshot: { schemaVersion: 2, modelDefinitionId: model.modelDefinitionId, providerDefinitionId: provider.providerDefinitionId, modelDefinitionVersionId: model.modelDefinitionVersionId, modelId: model.id, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.id, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, options },
             capabilities, tools, history, controller: owned.controller,
             onRelease: failed => { generation.executions.delete(execution); owned.unlink(); if (failed) { generation.cleanupFailed = true; cleanupFailed = true; } },
           });
@@ -207,11 +210,11 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     try {
       const prepared = await enqueue(providerId, async () => {
         throwAborted(owned.controller.signal);
-        const provider = immutable(getProvider(providerId));
+        const provider = immutable(getConnection(providerId));
         if (!provider.enabled) throw modelsError('unavailable');
         const generation = getGeneration(provider.protocolId); owned.attach(generation);
         const invoke = generation.protocol[method]; if (!invoke) throw modelsError('capability-unsupported');
-        generation.protocol.validateProvider(providerInput(provider));
+        generation.protocol.validateProvider(connectionInput(provider));
         const credential = await readCredential(provider, owned.controller.signal);
         throwAborted(owned.controller.signal);
         if (!generation.accepting || !accepting) throw modelsError('closed');
@@ -219,7 +222,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       });
       timer = setTimeout(() => { timedOut = true; owned.controller.abort(); }, prepared.provider.timeoutMs);
       throwAborted(owned.controller.signal);
-      const connection: ProtocolConnection = { provider: providerInput(prepared.provider), credential: prepared.credential, signal: owned.controller.signal };
+      const connection: ProtocolConnection = { provider: connectionInput(prepared.provider), credential: prepared.credential, signal: owned.controller.signal };
       const operation = prepared.invoke(connection) as ProtocolOperation<T>;
       return immutable(await joinOperation(operation, owned.controller.signal));
     } catch (error) {
@@ -230,77 +233,182 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     } finally { if (timer) clearTimeout(timer); owned.unlink(); owned.finish(failedCleanup); }
   };
 
+  const syncOverrides = new Map<string, ConnectionSyncState>();
+  const definitionProvider = (id: string) => { identifier(id); const value = store.provider(id); if (!value) throw modelsError('not-found'); return value; };
+  const definitionModel = (id: string) => { identifier(id); const value = store.model(id); if (!value) throw modelsError('not-found'); return value; };
+  const sourceVersion = (connection: ProviderConnectionRecord): string | null => {
+    const source = definitionProvider(connection.providerDefinitionId).source;
+    return source.kind === 'external' ? store.sources().find(item => item.sourceId === source.sourceId)?.snapshotVersion ?? null : null;
+  };
+  const compatibility = (model: Model, connection: ProviderConnectionRecord): string | undefined => {
+    if (model.state !== 'present') return 'definition-missing';
+    if (model.status === 'deprecated') return 'deprecated';
+    if (!model.modalities.input.includes('text') || !model.modalities.output.includes('text') || ['embedding', 'rerank', 'reranker', 'decision', 'image', 'audio', 'video'].includes(model.modelType ?? '')) return 'text-unsupported';
+    const generation = generations.get(connection.protocolId);
+    if (!generation?.accepting) return 'protocol-unavailable';
+    const provider = definitionProvider(model.providerId);
+    const mapped = model.connectionHints.protocolIds.includes(connection.protocolId) ||
+      model.source.kind === 'user' && model.connectionHints.protocolIds.length === 0 ||
+      model.source.kind === 'external' && generation.protocol.descriptor.sourceMappings?.some(mapping => model.source.kind === 'external' && mapping.sourceId === model.source.sourceId && mapping.providerId === model.source.providerId && mapping.protocolIds.some(id => model.connectionHints.protocolIds.includes(id)));
+    if (!mapped) return 'protocol-unmapped';
+    if (model.connectionHints.baseUrl && model.connectionHints.baseUrl !== provider.connectionHints.baseUrl && model.connectionHints.baseUrl !== connection.baseUrl) return 'connection-mismatch';
+    return undefined;
+  };
+  const initialDefaults = (model: Model, protocol: ModelProtocol): GenerationOptions => {
+    const defaults: Record<string, unknown> = {}, native: Record<string, unknown> = {};
+    for (const field of protocol.descriptor.modelFields) {
+      if (field.defaultValue === undefined) continue;
+      if (field.key === 'temperature' || field.key === 'maxOutputTokens') defaults[field.key] = field.defaultValue;
+      else if (field.key.startsWith('protocol.')) native[field.key.slice('protocol.'.length)] = field.defaultValue;
+      else throw modelsError('invalid-config');
+    }
+    if (typeof defaults.maxOutputTokens === 'number' && model.limits.output !== undefined) defaults.maxOutputTokens = Math.min(defaults.maxOutputTokens, model.limits.output);
+    if (Object.keys(native).length) defaults.protocol = native;
+    validateOptions(defaults as GenerationOptions);
+    return defaults as GenerationOptions;
+  };
+  async function reconcile(id: string): Promise<ProviderConnection> {
+    const connection = getConnection(id), version = sourceVersion(connection);
+    const previous = syncOverrides.get(id) ?? store.syncState(id);
+    const pending: ConnectionSyncState = { connectionId: id, state: 'pending', targetSourceVersion: version, syncedSourceVersion: previous?.syncedSourceVersion ?? null };
+    try {
+      const generation = generations.get(connection.protocolId);
+      if (!connection.enabled || connection.auth === 'api-key' && !connection.credentialRef || !generation?.accepting) {
+        await store.commit({ syncStates: [pending] }); syncOverrides.delete(id); return connectionView(connection);
+      }
+      generation.protocol.validateProvider(connectionInput(connection));
+      const existing = new Set(store.configurations().filter(value => value.connectionId === id && value.baseline).map(value => value.modelDefinitionId));
+      const configurations: { record: ModelConfiguration; expectedRevision: null }[] = [];
+      for (const model of store.models().filter(value => value.providerId === connection.providerDefinitionId)) {
+        if (existing.has(model.id) || compatibility(model, connection)) continue;
+        const defaults = initialDefaults(model, generation.protocol);
+        // Unsupported source options stay visible as unavailable definitions.
+        try { generation.protocol.validateOptions(defaults, model.capabilities); } catch { continue; }
+        configurations.push({ expectedRevision: null, record: immutable({ id: randomUUID(), ...revision(), modelDefinitionId: model.id, connectionId: id, modelDefinitionVersionId: model.versionId, remoteModelId: model.remoteModelId, name: model.name, enabled: true, capabilities: model.capabilities, defaults, baseline: true }) });
+      }
+      const ready: ConnectionSyncState = { ...pending, state: 'ready', syncedSourceVersion: version };
+      await store.commit({ configurations, syncStates: [ready], syncGuards: [{ connectionId: id, targetSourceVersion: store.syncState(id)?.targetSourceVersion ?? null }] });
+      syncOverrides.delete(id);
+    } catch (error) {
+      if (normalizeError(error).code === 'conflict' || sourceVersion(getConnection(id)) !== version) return reconcile(id);
+      const failed: ConnectionSyncState = { ...pending, state: 'failed', error: normalizeError(error, 'invalid-config').code };
+      syncOverrides.set(id, failed);
+      try { await store.commit({ syncStates: [failed] }); } catch { /* Saved connection and Key remain valid; retry repairs synchronization. */ }
+    }
+    return connectionView(getConnection(id));
+  }
+  const queryDefinitions = <T extends Provider | Model>(values: readonly T[], query: import('./types.js').DefinitionQuery = {}): readonly T[] => {
+    keys(query, ['sourceId', 'providerId', 'search', 'includeMissing', 'includeDeprecated', 'textOnly']);
+    assert(query.search === undefined || typeof query.search === 'string');
+    for (const key of ['sourceId', 'providerId']) assert(query[key as keyof typeof query] === undefined || typeof query[key as keyof typeof query] === 'string');
+    for (const key of ['includeMissing', 'includeDeprecated', 'textOnly']) assert(query[key as keyof typeof query] === undefined || typeof query[key as keyof typeof query] === 'boolean');
+    const search = typeof query.search === 'string' ? query.search.trim().toLocaleLowerCase() : '';
+    return immutable(values.filter(value => (!query.sourceId || value.source.kind === 'external' && value.source.sourceId === query.sourceId) &&
+      (!query.providerId || 'providerId' in value && value.providerId === query.providerId) && (query.includeMissing || value.state === 'present') &&
+      (!search || `${value.id} ${value.name} ${'remoteModelId' in value ? value.remoteModelId : value.source.kind === 'external' ? value.source.providerId : ''}`.toLocaleLowerCase().includes(search)) &&
+      (!('remoteModelId' in value) || (query.includeDeprecated || value.status !== 'deprecated') && (!query.textOnly || value.modalities.input.includes('text') && value.modalities.output.includes('text') && !['embedding', 'rerank', 'reranker', 'decision', 'image', 'audio', 'video'].includes(value.modelType ?? '')))));
+  };
   const settings: ModelsSettingsService = {
     protocols() { requireOpen(); return immutable([...generations.values()].filter(value => value.accepting).map(value => value.protocol.descriptor)); },
-    providers() { requireOpen(); return immutable(store.providers().map(providerView)); },
-    providerHistory(id) { requireOpen(); identifier(id); return immutable(store.providerHistory(id).map(providerView)); },
-    models(providerId) { requireOpen(); if (providerId !== undefined) identifier(providerId); return immutable(store.models().filter(value => providerId === undefined || value.providerId === providerId)); },
+    providers(query) { requireOpen(); return queryDefinitions(store.providers(), query); },
+    providerHistory(id) { requireOpen(); identifier(id); return immutable(store.providerHistory(id)); },
+    models(query) { requireOpen(); return queryDefinitions(store.models(), query); },
     modelHistory(id) { requireOpen(); identifier(id); return immutable(store.modelHistory(id)); },
     async createProvider(input) {
-      keys(input, ['id', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'apiKey', 'catalogRef']);
-      const { id = randomUUID(), apiKey, ...data } = input; identifier(id); validateProvider(data);
-      if (apiKey !== undefined) assert(nonempty(apiKey) && data.auth === 'api-key');
-      const captured = immutable(data);
-      return enqueue(id, async () => {
-        if (store.provider(id)) throw modelsError('conflict');
-        getGeneration(captured.protocolId).protocol.validateProvider(captured);
-        const record: ProviderRecord = immutable({ ...captured, id, ...revision(), credentialRef: null });
-        if (apiKey !== undefined) return changeCredential(undefined, record, apiKey);
-        await store.commit({ provider: { record, expectedRevision: null } }); return providerView(record);
-      });
+      keys(input, ['id', 'name', 'documentationUrl', 'connectionHints']); const { id = randomUUID(), ...data } = input; identifier(id); validateProvider(data); const captured = immutable(data);
+      return enqueue('@definitions', async () => { const record: Provider = immutable({ ...captured, id, ...revision(), source: { kind: 'user' }, state: 'present' }); await store.commit({ providers: [{ record, expectedRevision: null }] }); return record; });
     },
     async updateProvider(id, input, expectedRevision) {
-      keys(input, ['name', 'enabled', 'baseUrl', 'auth', 'timeoutMs', 'catalogRef']); const captured = immutable(input);
-      return enqueue(id, async () => {
-        const previous = getProvider(id); compare(previous.revision, expectedRevision);
-        const data = { ...providerInput(previous), ...captured }; validateProvider(data);
-        const generation = generations.get(data.protocolId);
-        generation?.protocol.validateProvider(data);
-        const record = immutable({ ...previous, ...data, ...revision(previous) });
-        await store.commit({ provider: { record, expectedRevision } }); return providerView(record);
-      });
-    },
-    async setApiKey(id, apiKey, expectedRevision) {
-      assert(nonempty(apiKey));
-      return enqueue(id, async () => {
-        const previous = getProvider(id); compare(previous.revision, expectedRevision);
-        assert(previous.auth === 'api-key');
-        return changeCredential(previous, { ...previous, ...revision(previous) }, apiKey);
-      });
-    },
-    async deleteApiKey(id, expectedRevision) {
-      return enqueue(id, async () => {
-        const previous = getProvider(id); compare(previous.revision, expectedRevision);
-        return changeCredential(previous, { ...previous, ...revision(previous) }, null);
-      });
+      keys(input, ['name', 'documentationUrl', 'connectionHints']); const captured = immutable(input);
+      return enqueue('@definitions', async () => { const previous = definitionProvider(id); compare(previous.revision, expectedRevision); assert(previous.source.kind === 'user'); const data = { ...providerInput(previous), ...captured }; validateProvider(data); const record: Provider = immutable({ ...previous, ...data, ...revision(previous) }); await store.commit({ providers: [{ record, expectedRevision }] }); return record; });
     },
     async createModel(input) {
-      keys(input, ['id', 'name', 'enabled', 'providerId', 'remoteModelId', 'capabilities', 'defaults']);
       const { id = randomUUID(), ...data } = input; identifier(id); validateModel(data); const captured = immutable(data);
-      return enqueue(data.providerId, async () => {
-        if (store.model(id)) throw modelsError('conflict');
-        const provider = getProvider(captured.providerId);
-        const generation = getGeneration(provider.protocolId);
-        generation.protocol.validateOptions(captured.defaults, captured.capabilities);
-        const record = immutable({ ...captured, id, ...revision() });
-        await store.commit({ model: { record, expectedRevision: null } }); return record;
-      });
+      const record = await enqueue('@definitions', async () => { definitionProvider(captured.providerId); const record: Model = immutable({ ...captured, id, ...revision(), source: { kind: 'user' }, state: 'present' }); await store.commit({ models: [{ record, expectedRevision: null }] }); return record; });
+      return record;
     },
     async updateModel(id, input, expectedRevision) {
-      keys(input, ['name', 'enabled', 'remoteModelId', 'capabilities', 'defaults']); const captured = immutable(input);
-      const providerId = getModel(id).providerId;
-      return enqueue(providerId, async () => {
-        const previous = getModel(id); compare(previous.revision, expectedRevision);
-        const data: ModelInput = { ...modelInput(previous), ...captured }; validateModel(data);
-        const provider = getProvider(providerId); const generation = generations.get(provider.protocolId);
-        if (generation) generation.protocol.validateOptions(data.defaults, data.capabilities);
-        else if (captured.defaults !== undefined || captured.capabilities !== undefined) throw modelsError('protocol-unavailable');
-        const record = immutable({ ...previous, ...data, ...revision(previous) });
-        await store.commit({ model: { record, expectedRevision } }); return record;
+      keys(input, ['remoteModelId', 'name', 'description', 'family', 'releaseDate', 'lastUpdated', 'status', 'openWeights', 'modelType', 'capabilities', 'controls', 'modalities', 'limits', 'cost', 'connectionHints']);
+      const captured = immutable(input);
+      return enqueue('@definitions', async () => { const previous = definitionModel(id); compare(previous.revision, expectedRevision); assert(previous.source.kind === 'user'); const data = { ...modelInput(previous), ...captured }; validateModel(data); const record: Model = immutable({ ...previous, ...data, ...revision(previous) }); await store.commit({ models: [{ record, expectedRevision }] }); return record; });
+    },
+    connections() { requireOpen(); return immutable(store.connections().map(connectionView)); },
+    connectionHistory(id) { requireOpen(); identifier(id); return immutable(store.connectionHistory(id).map(value => { const { sync: _sync, ...view } = connectionView(value); return view; })); },
+    configurations(connectionId) { requireOpen(); if (connectionId !== undefined) identifier(connectionId); return immutable(store.configurations().filter(value => connectionId === undefined || value.connectionId === connectionId)); },
+    configurationHistory(id) { requireOpen(); identifier(id); return immutable(store.configurationHistory(id)); },
+    connectionModels(id) {
+      requireOpen(); const connection = getConnection(id);
+      return immutable(store.models().filter(value => value.providerId === connection.providerDefinitionId && (value.state === 'present' || store.configurations().some(configuration => configuration.connectionId === id && configuration.modelDefinitionId === value.id))).map(model => {
+        const config = store.configurations().find(value => value.connectionId === id && value.modelDefinitionId === model.id && value.baseline);
+        if (config) { const view = summary(config); return { ...model, configurationId: config.id, available: view.available, ...(view.unavailableReason ? { unavailableReason: view.unavailableReason } : {}) }; }
+        const reason = compatibility(model, connection) ?? (!connection.enabled ? 'provider-disabled' : connection.auth === 'api-key' && !connection.credentialRef ? 'credential-missing' : 'invalid-configuration');
+        return { ...model, available: false, unavailableReason: reason } as ConnectionModel;
+      }));
+    },
+    async createConnection(input) {
+      keys(input, ['id', 'providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'apiKey']);
+      const { id = randomUUID(), apiKey, ...data } = input; identifier(id); validateConnection(data); if (apiKey !== undefined) assert(nonempty(apiKey) && data.auth === 'api-key'); const captured = immutable(data);
+      return enqueue(id, async () => { if (store.connection(id) || store.connectionHistory(id).length) throw modelsError('conflict'); definitionProvider(captured.providerDefinitionId); generations.get(captured.protocolId)?.protocol.validateProvider(captured); const record: ProviderConnectionRecord = immutable({ ...captured, id, ...revision(), credentialRef: null }); if (apiKey !== undefined) await changeCredential(undefined, record, apiKey); else await store.commit({ connection: { record, expectedRevision: null } }); return reconcile(id); });
+    },
+    async updateConnection(id, input, expectedRevision) {
+      keys(input, ['name', 'enabled', 'baseUrl', 'auth', 'timeoutMs']); const captured = immutable(input);
+      return enqueue(id, async () => { const previous = getConnection(id); compare(previous.revision, expectedRevision); const data = { ...connectionInput(previous), ...captured }; validateConnection(data); generations.get(data.protocolId)?.protocol.validateProvider(data); const record = immutable({ ...previous, ...data, ...revision(previous) }); await store.commit({ connection: { record, expectedRevision } }); return reconcile(id); });
+    },
+    async deleteConnection(id, expectedRevision) {
+      return enqueue(id, async () => {
+        const previous = getConnection(id); compare(previous.revision, expectedRevision);
+        const retired = previous.credentialRef ? intentFor(id, previous.credentialRef) : undefined;
+        // Source ingestion reads current accounts before committing sync state; serialize that read/write with deletion.
+        await enqueue('@definitions', () => store.commit({ deleteConnection: { id, expectedRevision }, addIntents: retired ? [retired] : [] }), true);
+        syncOverrides.delete(id);
+        // Executions already hold their own credential and configuration snapshot.
+        for (const intent of store.intents().filter(item => item.providerId === id)) await cleanupIntent(intent);
       });
+    },
+    async setApiKey(id, apiKey, expectedRevision) { assert(nonempty(apiKey)); return enqueue(id, async () => { const previous = getConnection(id); compare(previous.revision, expectedRevision); assert(previous.auth === 'api-key'); await changeCredential(previous, { ...previous, ...revision(previous) }, apiKey); return reconcile(id); }); },
+    async deleteApiKey(id, expectedRevision) { return enqueue(id, async () => { const previous = getConnection(id); compare(previous.revision, expectedRevision); await changeCredential(previous, { ...previous, ...revision(previous) }, null); return reconcile(id); }); },
+    retryConnection: id => enqueue(id, () => reconcile(id)),
+    async createConfiguration(input) {
+      const { id = randomUUID(), ...data } = input; identifier(id); validateConfiguration(data); const captured = immutable(data);
+      return enqueue(data.connectionId, async () => { const connection = getConnection(data.connectionId), model = definitionModel(data.modelDefinitionId); assert(model.providerId === connection.providerDefinitionId); generations.get(connection.protocolId)?.protocol.validateOptions(captured.defaults, captured.capabilities); const record: ModelConfiguration = immutable({ ...captured, id, ...revision(), modelDefinitionVersionId: model.versionId, remoteModelId: model.remoteModelId }); await store.commit({ configurations: [{ record, expectedRevision: null }] }); return record; });
+    },
+    async updateConfiguration(id, input, expectedRevision) {
+      keys(input, ['name', 'enabled', 'capabilities', 'defaults']); const captured = immutable(input); const connectionId = getConfiguration(id).connectionId;
+      return enqueue(connectionId, async () => { const previous = getConfiguration(id); compare(previous.revision, expectedRevision); const data: ModelConfigurationInput = { ...configurationInput(previous), ...captured }; validateConfiguration(data); const connection = getConnection(connectionId), generation = generations.get(connection.protocolId); if (generation) generation.protocol.validateOptions(data.defaults, data.capabilities); const record = immutable({ ...previous, ...data, ...revision(previous) }); await store.commit({ configurations: [{ record, expectedRevision }] }); return record; });
     },
     discoverModels: (id, signal) => network(id, 'discover', signal),
     checkConnection: (id, signal) => network(id, 'check', signal),
+  };
+  const sourceData: ModelsSourceDataService = {
+    accepted(sourceId) {
+      requireOpen(); const state = store.sources().find(value => value.sourceId === sourceId); if (!state) return undefined;
+      return immutable({ ...state, schemaVersion: 2, providers: store.providers().filter(value => value.source.kind === 'external' && value.source.sourceId === sourceId && value.state === 'present'), models: store.models().filter(value => value.source.kind === 'external' && value.source.sourceId === sourceId && value.state === 'present') });
+    },
+    async accept(snapshot: SourceSnapshot, options = {}) {
+      requireOpen(); keys(options, ['confirmed']); assert(options.confirmed === undefined || typeof options.confirmed === 'boolean'); validateCatalogSnapshot(snapshot); const captured = immutable(snapshot); const confirmed = options.confirmed === true;
+      return trackJob((async () => {
+      const accepted = await enqueue('@definitions', async () => {
+        const previous = store.sources().find(value => value.sourceId === captured.sourceId);
+        if (previous && captured.snapshotVersion !== previous.snapshotVersion && (captured.fetchedAt < previous.fetchedAt || captured.fetchedAt === previous.fetchedAt && !confirmed)) return false;
+        if (previous?.snapshotVersion === captured.snapshotVersion) { if (captured.fetchedAt > previous.fetchedAt) await store.commit({ sources: [{ ...previous, fetchedAt: captured.fetchedAt }] }); return true; }
+        const merge = <T extends Provider | Model>(values: readonly T[], existing: readonly T[]) => {
+          const incoming = new Map(values.map(value => [value.id, value])); const currentById = new Map(existing.map(value => [value.id, value]));
+          const changes: { record: T; expectedRevision: number | null }[] = [];
+          for (const candidate of values) { const current = currentById.get(candidate.id); if (current?.source.kind === 'user') throw modelsError('conflict'); const record = immutable({ ...candidate, ...revision(current), id: candidate.id }); changes.push({ record, expectedRevision: current?.revision ?? null }); }
+          for (const current of existing) if (current.source.kind === 'external' && current.source.sourceId === captured.sourceId && !incoming.has(current.id) && current.state !== 'missing') changes.push({ record: immutable({ ...current, ...revision(current), state: 'missing' }) as T, expectedRevision: current.revision });
+          return changes;
+        };
+        const providerChanges = merge(captured.providers, store.providers()), modelChanges = merge(captured.models, store.models());
+        const providerIds = new Set(providerChanges.map(value => value.record.id));
+        await store.commit({ providers: providerChanges, models: modelChanges, sources: [{ sourceId: captured.sourceId, fetchedAt: captured.fetchedAt, snapshotVersion: captured.snapshotVersion }], syncStates: store.connections().filter(value => providerIds.has(value.providerDefinitionId)).map(value => ({ connectionId: value.id, state: 'pending', targetSourceVersion: captured.snapshotVersion, syncedSourceVersion: store.syncState(value.id)?.syncedSourceVersion ?? null })) });
+        return true;
+      }, true);
+      const providers = new Set(store.providers().filter(value => value.source.kind === 'external' && value.source.sourceId === captured.sourceId).map(value => value.id));
+      const reconciled = await Promise.all(store.connections().filter(value => providers.has(value.providerDefinitionId)).map(value => enqueue(value.id, async () => { if (!store.connection(value.id)) return undefined; const connection = await reconcile(value.id); return connection.sync!; }, true)));
+      const connections = reconciled.filter((value): value is ConnectionSyncState => value !== undefined);
+      return immutable({ accepted, source: store.sources().find(value => value.sourceId === captured.sourceId)!, connections });
+      })());
+    },
   };
 
   const unregister = (generation: Generation): Promise<void> => {
@@ -334,6 +442,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       });
       const generation: Generation = { protocol: stable, accepting: true, pending: new Set(), executions: new Set(), cleanupFailed: false };
       generations.set(stable.descriptor.id, generation); ownedGenerations.add(generation);
+      for (const connection of store.connections().filter(value => value.protocolId === stable.descriptor.id)) void enqueue(connection.id, () => reconcile(connection.id)).catch(() => {});
       return Object.freeze({ unregister: () => unregister(generation) });
     },
   };
@@ -349,5 +458,5 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     void closing.catch(() => {});
     return closing;
   };
-  return { models, settings, protocols, recover, close };
+  return { models, settings, protocols, sourceData, recover, close };
 }

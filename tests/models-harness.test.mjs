@@ -34,9 +34,9 @@ test('explicit Session selection persists and omitted-id idempotency keeps the o
   const directory = mkdtempSync(join(tmpdir(), 'anybox-model-selection-'))
   let f = await host(directory)
   try {
-    const settings = f.root.get('models.settings'), original = settings.models()[0]
-    const { id, revision, versionId, createdAt, updatedAt, ...data } = original
-    await settings.createModel({ ...data, id: 'alternate', name: 'Alternate', defaults: { temperature: 0.8 } })
+    const settings = f.root.get('models.settings'), original = settings.configurations()[0]
+    const { id, revision, versionId, createdAt, updatedAt, modelDefinitionVersionId, remoteModelId, ...data } = original
+    await settings.createConfiguration({ ...data, baseline: false, id: 'alternate', name: 'Alternate', defaults: { temperature: 0.8 } })
     const session = await f.harness.createSession(f.project.id, 'assistant')
     assert.equal(session.modelId, null)
     const input = { sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'first' }
@@ -60,7 +60,11 @@ test('explicit Session selection persists and omitted-id idempotency keeps the o
     await finish(f, alternate)
     await f.close(); f = await host(directory)
     assert.equal((await f.harness.getSession(session.id)).modelId, 'alternate')
-    assert.equal((await f.harness.getRun(run.id)).modelId, 'default')
+    const restored = await f.harness.getRun(run.id)
+    assert.equal(restored.modelId, 'default')
+    assert.deepEqual(restored.modelSnapshot, run.modelSnapshot)
+    assert.equal(restored.modelSnapshot.schemaVersion, 2)
+    assert.equal(restored.modelSnapshot.modelDefinitionId, original.modelDefinitionId)
     assert.equal(f.transport.calls.length, 0)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })

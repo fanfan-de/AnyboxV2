@@ -1,5 +1,5 @@
 import { modelsError } from './errors.js';
-import type { DeclaredCapabilities, GenerationOptions, ModelInput, ModelMessage, ModelResult, ProviderInput, ToolDefinition } from './types.js';
+import type { DeclaredCapabilities, GenerationOptions, ModelConfigurationInput, ModelInput, ModelMessage, ModelResult, ProviderConnectionInput, ProviderInput, ToolDefinition } from './types.js';
 
 export function immutable<T>(value: T): T {
   try {
@@ -30,22 +30,34 @@ export function json(value: unknown, depth = 0): boolean {
 export function validateSignal(signal: unknown): asserts signal is AbortSignal | undefined {
   assert(signal === undefined || signal instanceof AbortSignal);
 }
-export function validateProvider(value: ProviderInput): void {
-  keys(value, ['name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'catalogRef']);
+export function validateConnection(value: ProviderConnectionInput): void {
+  keys(value, ['providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs']);
   assert(nonempty(value.name) && typeof value.enabled === 'boolean'); identifier(value.protocolId);
   assert(typeof value.baseUrl === 'string');
   let url: URL; try { url = new URL(value.baseUrl); } catch { throw modelsError('invalid-config'); }
   assert(['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash);
   assert(value.auth === 'none' || value.auth === 'api-key');
   assert(Number.isSafeInteger(value.timeoutMs) && value.timeoutMs > 0 && value.timeoutMs <= 2_147_483_647);
-  if (value.catalogRef !== undefined && value.catalogRef !== null) {
-    keys(value.catalogRef, ['sourceId', 'providerId']);
-    identifier(value.catalogRef.sourceId); identifier(value.catalogRef.providerId);
-  }
+  identifier(value.providerDefinitionId);
 }
-export function providerInput(value: ProviderInput): ProviderInput {
-  return { name: value.name, enabled: value.enabled, protocolId: value.protocolId, baseUrl: value.baseUrl, auth: value.auth, timeoutMs: value.timeoutMs,
-    catalogRef: value.catalogRef ?? null };
+export function connectionInput(value: ProviderConnectionInput): ProviderConnectionInput {
+  return { providerDefinitionId: value.providerDefinitionId, name: value.name, enabled: value.enabled, protocolId: value.protocolId, baseUrl: value.baseUrl, auth: value.auth, timeoutMs: value.timeoutMs };
+}
+function validateHttpUrl(value: unknown, base = false): void {
+  assert(nonempty(value));
+  let url: URL;
+  try { url = new URL(value); } catch { throw modelsError('invalid-config'); }
+  assert(['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && (!base || !url.search && !url.hash));
+}
+export function validateProvider(value: ProviderInput): void {
+  keys(value, ['name', 'documentationUrl', 'connectionHints']); assert(nonempty(value.name));
+  validateHints(value.connectionHints);
+  if (value.documentationUrl !== undefined) validateHttpUrl(value.documentationUrl);
+}
+export function validateHints(value: ProviderInput['connectionHints']): void {
+  keys(value, ['baseUrl', 'protocolIds']); assert(Array.isArray(value.protocolIds)); value.protocolIds.forEach(identifier);
+  assert(new Set(value.protocolIds).size === value.protocolIds.length);
+  if (value.baseUrl !== undefined) validateHttpUrl(value.baseUrl, true);
 }
 export function validateCapabilities(value: DeclaredCapabilities): void {
   keys(value, ['tools', 'streaming', 'imageInput', 'reasoning']);
@@ -69,13 +81,65 @@ export function validateOptions(value: GenerationOptions): void {
   if (value.maxOutputTokens !== undefined) assert(typeof value.maxOutputTokens === 'number' && Number.isSafeInteger(value.maxOutputTokens) && value.maxOutputTokens > 0);
   if (value.protocol !== undefined) assert(record(value.protocol) && json(value.protocol));
 }
+const supports = (value: unknown) => typeof value === 'string' && ['supported', 'unsupported', 'unknown'].includes(value);
+const finiteNonnegative = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+function validateControls(value: ModelInput['controls']): void {
+  keys(value, ['temperature', 'structuredOutput', 'reasoning']); assert(supports(value.temperature));
+  assert(value.structuredOutput === undefined || supports(value.structuredOutput));
+  if (value.reasoning === undefined) return;
+  assert(Array.isArray(value.reasoning));
+  for (const control of value.reasoning) {
+    keys(control, ['kind', 'values', 'min', 'max']); assert(typeof control.kind === 'string' && ['toggle', 'effort', 'budget'].includes(control.kind));
+    if (control.kind === 'toggle') { keys(control, ['kind']); continue; }
+    if (control.kind === 'effort') {
+      keys(control, ['kind', 'values']); assert(Array.isArray(control.values) && control.values.length > 0 && control.values.every(nonempty) && new Set(control.values).size === control.values.length);
+      continue;
+    }
+    keys(control, ['kind', 'min', 'max']);
+    for (const bound of [control.min, control.max]) assert(bound === undefined || finiteNonnegative(bound) && Number.isSafeInteger(bound));
+    assert(control.min === undefined || control.max === undefined || Number(control.max) >= Number(control.min));
+  }
+}
+function validateCost(value: ModelInput['cost']): void {
+  if (value === undefined) return;
+  const amounts = ['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning'] as const;
+  keys(value, ['currency', 'unit', ...amounts, 'tiers']); assert(value.currency === 'USD' && value.unit === 'million-tokens');
+  for (const key of amounts) assert(value[key] === undefined || finiteNonnegative(value[key]));
+  if (value.tiers !== undefined) {
+    assert(Array.isArray(value.tiers));
+    for (const tier of value.tiers) {
+      keys(tier, ['contextMin', 'contextMax', ...amounts]);
+      for (const amount of Object.values(tier)) assert(finiteNonnegative(amount));
+      assert(tier.contextMin === undefined || tier.contextMax === undefined || Number(tier.contextMax) >= Number(tier.contextMin));
+    }
+  }
+}
 export function validateModel(value: ModelInput): void {
-  keys(value, ['name', 'enabled', 'providerId', 'remoteModelId', 'capabilities', 'defaults']);
-  assert(nonempty(value.name) && typeof value.enabled === 'boolean' && nonempty(value.remoteModelId)); identifier(value.providerId);
+  keys(value, ['name', 'providerId', 'remoteModelId', 'capabilities', 'controls', 'modalities', 'limits', 'connectionHints', 'cost', 'description', 'family', 'releaseDate', 'lastUpdated', 'status', 'openWeights', 'modelType']);
+  assert(nonempty(value.name) && nonempty(value.remoteModelId)); identifier(value.providerId);
+  for (const key of ['description', 'family', 'releaseDate', 'lastUpdated', 'status', 'modelType'] as const) assert(value[key] === undefined || nonempty(value[key]));
+  assert(value.openWeights === undefined || typeof value.openWeights === 'boolean');
+  validateCapabilities(value.capabilities); validateHints(value.connectionHints);
+  keys(value.modalities, ['input', 'output']); assert(Array.isArray(value.modalities.input) && Array.isArray(value.modalities.output) && [...value.modalities.input, ...value.modalities.output].every(nonempty));
+  assert(new Set(value.modalities.input).size === value.modalities.input.length && new Set(value.modalities.output).size === value.modalities.output.length);
+  keys(value.limits, ['context', 'input', 'output']); assert(Object.values(value.limits).every(finiteNonnegative));
+  validateControls(value.controls); validateCost(value.cost); assert(json(value));
+}
+export function validateConfiguration(value: ModelConfigurationInput): void {
+  keys(value, ['modelDefinitionId', 'connectionId', 'name', 'enabled', 'capabilities', 'defaults', 'baseline']);
+  identifier(value.modelDefinitionId); identifier(value.connectionId);
+  assert(nonempty(value.name) && typeof value.enabled === 'boolean' && typeof value.baseline === 'boolean');
   validateCapabilities(value.capabilities); validateOptions(value.defaults);
 }
+export function configurationInput(value: ModelConfigurationInput): ModelConfigurationInput {
+  return { name: value.name, enabled: value.enabled, connectionId: value.connectionId, modelDefinitionId: value.modelDefinitionId, capabilities: value.capabilities, defaults: value.defaults, baseline: value.baseline };
+}
+export function providerInput(value: ProviderInput): ProviderInput {
+  return { name: value.name, connectionHints: value.connectionHints, ...(value.documentationUrl === undefined ? {} : { documentationUrl: value.documentationUrl }) };
+}
 export function modelInput(value: ModelInput): ModelInput {
-  return { name: value.name, enabled: value.enabled, providerId: value.providerId, remoteModelId: value.remoteModelId, capabilities: value.capabilities, defaults: value.defaults };
+  const { providerId, remoteModelId, name, capabilities, controls, modalities, limits, connectionHints, cost, description, family, releaseDate, lastUpdated, status, openWeights, modelType } = value;
+  return Object.fromEntries(Object.entries({ providerId, remoteModelId, name, capabilities, controls, modalities, limits, connectionHints, cost, description, family, releaseDate, lastUpdated, status, openWeights, modelType }).filter(([, entry]) => entry !== undefined)) as unknown as ModelInput;
 }
 export function validateTools(tools: readonly ToolDefinition[]): void {
   assert(Array.isArray(tools)); const names = new Set<string>();

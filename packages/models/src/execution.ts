@@ -1,11 +1,11 @@
 import { assert, immutable, keys, validateMessages, validateResult } from './domain.js';
 import { modelsError, normalizeError } from './errors.js';
 import { abortLink, deferred, joinOperation } from './lifecycle.js';
-import type { EffectiveCapabilities, ExecutionSnapshot, ModelCall, ModelEvent, ModelExecution, ModelMessage, ModelProtocol, ProtocolOutcome, ProviderInput, ToolDefinition } from './types.js';
+import type { EffectiveCapabilities, ExecutionSnapshot, ModelCall, ModelEvent, ModelExecution, ModelMessage, ModelProtocol, ProtocolOutcome, ProviderConnectionInput, ToolDefinition } from './types.js';
 
 export interface ExecutionResources {
   readonly protocol: ModelProtocol;
-  readonly provider: ProviderInput;
+  readonly provider: ProviderConnectionInput;
   readonly credential?: string;
   readonly snapshot: ExecutionSnapshot;
   readonly capabilities: EffectiveCapabilities;

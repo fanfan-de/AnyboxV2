@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Component } from '@nya/core';
 import { immutable } from './domain.js';
 import { modelsError } from './errors.js';
-import { validateCatalogSnapshot } from './catalog-domain.js';
+import { readCatalogSnapshot, validateCatalogSnapshot } from './catalog-domain.js';
 import { modelsCatalogCacheServiceKey } from './catalog-types.js';
 import type { CatalogCacheRecord, CatalogCacheStatus, ModelsCatalogCache } from './catalog-types.js';
 
@@ -85,7 +85,8 @@ function sqliteRuntime(db: DatabaseSync) {
       try {
         const row = db.prepare('SELECT record FROM catalog_cache WHERE cache_key = ?').get(key);
         if (!row) return undefined;
-        const value: unknown = JSON.parse(String(row.record));
+        const stored = JSON.parse(String(row.record)) as Record<string, unknown>;
+        const value: unknown = { ...stored, snapshot: readCatalogSnapshot(stored.snapshot) };
         validateRecord(value);
         if (value.cacheKey !== key) throw modelsError('invalid-response');
         return immutable(value);

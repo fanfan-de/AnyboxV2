@@ -19,21 +19,25 @@ async function accepted(host, method, path, body) {
   return result.data
 }
 async function saveNative(host, providerId, protocolId, remoteModelId, { streaming = true } = {}) {
-  const providers = await accepted(host, 'GET', '/models/catalog/providers')
-  const provider = providers.find(item => item.id === providerId)
-  const connection = provider.connections.find(item => item.values.protocolId === protocolId)
-  assert.ok(connection)
-  const models = await accepted(host, 'GET', `/models/catalog/models?providerId=${providerId}`)
+  const providers = await accepted(host, 'GET', '/models/providers')
+  const provider = providers.find(item => item.source.kind === 'external' && item.source.providerId === providerId)
+  const recipe = provider.connections.find(item => item.values.protocolId === protocolId)
+  assert.ok(recipe)
+  const models = await accepted(host, 'GET', `/models/definitions?providerId=${encodeURIComponent(provider.id)}`)
   const candidate = models.find(item => item.remoteModelId === remoteModelId)
-  const local = await accepted(host, 'POST', '/models/providers', {
-    ...connection.values, id: `${providerId}-qa-account`, name: `${provider.name} proxy`,
+  const { sourceRef, ...values } = recipe.values
+  const local = await accepted(host, 'POST', '/models/connections', {
+    ...values, id: `${providerId}-qa-account`, providerDefinitionId: provider.id, name: `${provider.name} proxy`,
     baseUrl: protocolId === 'anthropic-messages' ? 'https://proxy.qa.invalid/custom/v1' : 'https://proxy.qa.invalid/custom/v1beta', apiKey: `${providerId}-qa-private-key`,
   })
-  const model = await accepted(host, 'POST', '/models/configurations', {
-    id: `${providerId}-qa-model`, name: candidate.name, enabled: true, providerId: local.id, remoteModelId,
-    capabilities: { ...candidate.suggestedCapabilities, streaming: { support: streaming ? 'supported' : 'unsupported' } }, defaults: { maxOutputTokens: 4096 },
+  const configurations = await accepted(host, 'GET', `/models/configurations?connectionId=${encodeURIComponent(local.id)}`)
+  const baseline = configurations.find(item => item.modelDefinitionId === candidate.id && item.baseline)
+  assert.ok(baseline, 'connection save automatically initializes its compatible baseline models')
+  const model = await accepted(host, 'POST', `/models/configurations/${baseline.id}`, {
+    expectedRevision: baseline.revision,
+    patch: { capabilities: { ...candidate.capabilities, streaming: { support: streaming ? 'supported' : 'unsupported' } }, defaults: { maxOutputTokens: 4096 } },
   })
-  return { provider: local, model, candidate }
+  return { provider: local, model, candidate, definition: provider }
 }
 async function selectSession(host, modelId) {
   const session = await accepted(host, 'POST', '/sessions', { projectId: host.project.id, agentId: 'assistant' })
@@ -59,30 +63,67 @@ test('Web directory status, filtering and native connection suggestions are advi
   assert.equal(status.origin, 'network')
   assert.equal(status.refreshing, false)
   assert.equal(status.cache.persistence, 'sqlite')
-  const providers = await accepted(host, 'GET', '/models/catalog/providers?search=anthropic')
-  assert.deepEqual(providers.map(item => item.id), ['anthropic'])
+  const providers = await accepted(host, 'GET', '/models/providers?search=anthropic')
+  assert.deepEqual(providers.map(item => item.source.providerId), ['anthropic'])
   assert.deepEqual(providers[0].connections.map(item => item.values.protocolId), ['anthropic-messages'])
-  assert.deepEqual(providers[0].connections[0].values.catalogRef, { sourceId: 'models.dev', providerId: 'anthropic' })
-  const active = await accepted(host, 'GET', '/models/catalog/models?providerId=anthropic&search=claude')
+  assert.deepEqual(providers[0].connections[0].values.sourceRef, { sourceId: 'models.dev', providerId: 'anthropic' })
+  const active = await accepted(host, 'GET', `/models/definitions?providerId=${encodeURIComponent(providers[0].id)}&search=claude`)
   assert.deepEqual(active.map(item => item.remoteModelId), ['claude-qa'])
   assert.equal(active[0].limits.output, 8192)
   assert.equal(active[0].cost.unit, 'million-tokens')
   assert.deepEqual(active[0].connections.map(item => item.values.protocolId), ['anthropic-messages'])
-  const all = await accepted(host, 'GET', '/models/catalog/models?providerId=anthropic&includeDeprecated=true')
+  const all = await accepted(host, 'GET', `/models/definitions?providerId=${encodeURIComponent(providers[0].id)}&includeDeprecated=true`)
   assert.equal(all.length, 2)
-  const unsupported = await accepted(host, 'GET', '/models/catalog/providers?search=unsupported')
+  const unsupported = await accepted(host, 'GET', '/models/providers?search=unsupported')
   assert.deepEqual(unsupported[0].connections, [])
-  const google = await accepted(host, 'GET', '/models/catalog/providers?search=google')
+  const google = await accepted(host, 'GET', '/models/providers?search=google')
   assert.deepEqual(google[0].connections.map(item => item.values.protocolId), ['gemini-interactions'])
   assert.equal(google[0].connections[0].values.baseUrl, 'https://generativelanguage.googleapis.com/v1beta')
   assert.equal(host.network.protocol.length, 0)
-  assert.equal(host.root.get('models.settings').models().length, 1)
-  for (const path of ['/models/catalog/models', '/models/catalog/models?providerId=', '/models/catalog/models?providerId=anthropic&includeDeprecated=1']) {
+  assert.equal(host.root.get('models.settings').configurations().length, 1)
+  for (const path of ['/models/definitions?includeDeprecated=1', '/models/providers?includeMissing=1']) {
     const rejected = await request(host, 'GET', path)
     assert.equal(rejected.status, 400)
     assert.equal(rejected.data.error.code, 'invalid-input')
   }
   assert.equal((await request(host, 'POST', '/models/catalog/refresh', { unsupported: true })).status, 400)
+});
+
+test('Provider selection and one saved Key automatically expose compatible models for each account', async t => {
+  const host = await startCatalogModelsHost()
+  t.after(() => host.close())
+  const definition = (await accepted(host, 'GET', '/models/providers?search=google')).find(item => item.source.kind === 'external')
+  const { sourceRef, ...recipe } = definition.connections[0].values
+  const connect = name => accepted(host, 'POST', '/models/connections', { ...recipe, providerDefinitionId: definition.id, name, apiKey: `${name}-private-key` })
+  const first = await connect('Personal Google'), second = await connect('Work Google')
+  assert.equal(first.sync.state, 'ready')
+  const all = await accepted(host, 'GET', '/models')
+  const firstModels = all.filter(model => model.connectionId === first.id)
+  const secondModels = all.filter(model => model.connectionId === second.id)
+  assert.equal(firstModels.length, 1)
+  assert.equal(secondModels.length, 1)
+  assert.equal(firstModels[0].available, true)
+  assert.equal(firstModels[0].modelDefinitionId, secondModels[0].modelDefinitionId)
+  assert.notEqual(firstModels[0].id, secondModels[0].id)
+  const inventory = await accepted(host, 'GET', `/models/connections/${first.id}/models`)
+  assert.equal(inventory.filter(model => model.state === 'present').length, 2)
+  assert.equal(inventory.find(model => model.remoteModelId === 'gemini-image').unavailableReason, 'text-unsupported')
+  assert.equal(inventory.find(model => model.remoteModelId === 'gemini-qa').configurationId, firstModels[0].id)
+  const baseline = firstModels[0]
+  const preset = await accepted(host, 'POST', '/models/configurations', { name: 'Google long answers', enabled: true,
+    connectionId: first.id, modelDefinitionId: baseline.modelDefinitionId, capabilities: baseline.capabilities, defaults: { maxOutputTokens: 8192 }, baseline: false })
+  assert.notEqual(preset.id, baseline.id)
+  const retried = await accepted(host, 'POST', `/models/connections/${first.id}/retry`, {})
+  assert.equal(retried.sync.state, 'ready')
+  const configurations = await accepted(host, 'GET', `/models/configurations?connectionId=${first.id}`)
+  assert.equal(configurations.filter(model => model.baseline).length, 1)
+  assert.equal(configurations.length, 2)
+  const session = await selectSession(host, baseline.id)
+  const result = await run(host, session, 'Hello', 'automatic-model')
+  assert.equal(result.run.modelSnapshot.schemaVersion, 2)
+  assert.equal(result.run.modelSnapshot.providerDefinitionId, definition.id)
+  assert.equal(result.run.modelSnapshot.modelDefinitionId, baseline.modelDefinitionId)
+  assert.ok(!JSON.stringify([all, inventory, result.run]).includes('private-key'))
 });
 
 test('Web saves an Anthropic proxy and 4096-token model, selects it, streams text, runs Bash and preserves final output', async t => {
@@ -91,10 +132,11 @@ test('Web saves an Anthropic proxy and 4096-token model, selects it, streams tex
   await host.root.installComponent({ name: 'catalog-native-progress-observer', apply(ctx) { ctx.on(runModelEvent, value => progress.push(value)) } })
   const saved = await saveNative(host, 'anthropic', 'anthropic-messages', 'claude-qa')
   assert.equal(saved.provider.baseUrl, 'https://proxy.qa.invalid/custom/v1')
-  assert.deepEqual(saved.provider.catalogRef, { sourceId: 'models.dev', providerId: 'anthropic' })
+  assert.equal(saved.provider.providerDefinitionId, saved.definition.id)
+  assert.equal(saved.definition.source.kind, 'external')
   assert.deepEqual(saved.model.defaults, { maxOutputTokens: 4096 })
   assert.equal(host.network.generations.length, 0)
-  assert.deepEqual(await accepted(host, 'POST', `/models/providers/${saved.provider.id}/check`, {}), { ok: true })
+  assert.deepEqual(await accepted(host, 'POST', `/models/connections/${saved.provider.id}/check`, {}), { ok: true })
   assert.equal(host.network.checks.length, 1)
   assert.equal(host.network.generations.length, 0)
   const session = await selectSession(host, saved.model.id)
@@ -159,39 +201,40 @@ test('Web native JSON responses run through the same saved-model and session bou
   assert.equal(host.network.generations[0].body.stream, false)
 });
 
-test('Web unbinding and directory removal preserve saved model revisions, manual URL and session selection', async t => {
+test('Web source removal preserves saved configurations, proxy address, Key and session selection', async t => {
   const host = await startCatalogModelsHost()
   t.after(() => host.close())
   const saved = await saveNative(host, 'anthropic', 'anthropic-messages', 'claude-qa')
   const session = await selectSession(host, saved.model.id)
-  const unbound = await accepted(host, 'POST', `/models/providers/${saved.provider.id}`, { patch: { catalogRef: null }, expectedRevision: saved.provider.revision })
-  assert.equal(unbound.revision, saved.provider.revision + 1)
-  assert.equal(unbound.catalogRef, null)
-  const conflict = await request(host, 'POST', `/models/providers/${saved.provider.id}`, { patch: { catalogRef: saved.provider.catalogRef }, expectedRevision: saved.provider.revision })
-  assert.equal(conflict.status, 409)
-  const providersBefore = await accepted(host, 'GET', '/models/providers')
-  const modelsBefore = await accepted(host, 'GET', '/models/configurations')
+  const configurationsBefore = await accepted(host, 'GET', '/models/configurations')
   const vaultReads = host.vaultOperations.filter(item => item.kind === 'read').length
   const data = structuredClone(catalogModelsData)
   delete data.anthropic
   host.setCatalogData(data)
   const refreshed = await accepted(host, 'POST', '/models/catalog/refresh', {})
   assert.equal(refreshed.origin, 'network')
-  assert.deepEqual(await accepted(host, 'GET', '/models/catalog/models?providerId=anthropic'), [])
-  assert.deepEqual(await accepted(host, 'GET', '/models/providers'), providersBefore)
-  assert.deepEqual(await accepted(host, 'GET', '/models/configurations'), modelsBefore)
+  assert.deepEqual(await accepted(host, 'GET', `/models/definitions?providerId=${encodeURIComponent(saved.definition.id)}`), [])
+  const missing = await accepted(host, 'GET', `/models/definitions?providerId=${encodeURIComponent(saved.definition.id)}&includeMissing=true`)
+  assert.ok(missing.every(model => model.state === 'missing'))
+  assert.deepEqual(await accepted(host, 'GET', '/models/configurations'), configurationsBefore)
+  const connection = (await accepted(host, 'GET', '/models/connections')).find(value => value.id === saved.provider.id)
+  assert.equal(connection.baseUrl, saved.provider.baseUrl)
+  assert.equal(connection.revision, saved.provider.revision)
+  assert.equal(connection.credentialConfigured, true)
   assert.equal((await accepted(host, 'GET', `/sessions/${session.id}`)).modelId, saved.model.id)
   assert.equal(host.vaultOperations.filter(item => item.kind === 'read').length, vaultReads)
   assert.equal(host.network.generations.length, 0)
   const result = await run(host, session, 'Still available', 'after-removal')
   assert.equal(result.node.output, 'Mock native answer: Still available')
+  assert.equal(result.run.modelSnapshot.schemaVersion, 2)
+  assert.equal(result.run.modelSnapshot.modelDefinitionId, saved.candidate.id)
 });
 
 test('Web refresh failures retain the prior directory and local settings with sanitized errors', async t => {
   const host = await startCatalogModelsHost({ seedModels: true, seedSession: true })
   t.after(() => host.close())
   const before = await accepted(host, 'GET', '/models/catalog')
-  const providers = await accepted(host, 'GET', '/models/providers')
+  const providers = await accepted(host, 'GET', '/models/connections')
   const models = await accepted(host, 'GET', '/models/configurations')
   host.queueCatalogResponse(new Response('private remote diagnostics', { status: 503 }))
   const failure = await request(host, 'POST', '/models/catalog/refresh', {})
@@ -200,7 +243,7 @@ test('Web refresh failures retain the prior directory and local settings with sa
   const after = await accepted(host, 'GET', '/models/catalog')
   assert.equal(after.snapshotVersion, before.snapshotVersion)
   assert.equal(after.error, 'unavailable')
-  assert.deepEqual(await accepted(host, 'GET', '/models/providers'), providers)
+  assert.deepEqual(await accepted(host, 'GET', '/models/connections'), providers)
   assert.deepEqual(await accepted(host, 'GET', '/models/configurations'), models)
   assert.equal((await accepted(host, 'GET', `/sessions/${host.session.id}`)).modelId, host.session.modelId)
   assert.equal(host.network.generations.length, 0)

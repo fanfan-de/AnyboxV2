@@ -4,13 +4,13 @@
 
 ## 当前基线
 
-[通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider 管连接和密钥引用，Model 管能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、标准 Chat Completions 和宿主的 DeepSeek 非推理扩展可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
+[通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderConnection 管连接和密钥引用，ModelConfiguration 管执行版本、能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、标准 Chat Completions 和宿主的 DeepSeek 非推理扩展可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
 
 所有组件直接安装在一个 Nya 根 Context。Session 统一拥有会话、不可变完整轮次节点、Run 记录、快照和恢复，Projects 管目录身份。Run 负责准入、幂等、Prompt 固定与 `models.open()`；AgentLoop 接收 execution 并独占模型及工具调用。每轮只提交新增消息，原生续轮数据由协议持有；AgentLoop 校验并执行工具，关闭 execution、等待资源退出后才结算。模型 `result` 成功表示本轮已完成清理和上下文提交；工具仍需要分别观察结果与退出。异常退出的 Run 重启后记为 `interrupted`，不重放外部副作用。
 
-会话持久保存可空 `modelId`。Run 按显式模型、会话模型、Agent 默认依次选择；同键请求在查询当前模型配置之前返回原 Run。Run 快照包含模型与 Provider 版本、协议实现版本和有效参数，不含密钥或凭据引用；旧 profile/configVersion 只作为 legacy 快照读取。有效工具能力不足时可执行纯文本请求，未知能力不会隐式升级为支持。
+会话持久保存可空 `modelId`。Run 按显式模型、会话模型、Agent 默认依次选择；同键请求在查询当前模型配置之前返回原 Run。Run 快照 schemaVersion 2 包含配置/连接版本、Provider/Model 定义身份、模型定义版本、协议实现版本和有效参数，不含密钥或凭据引用；旧 profile/configVersion 只作为 legacy 快照读取。有效工具能力不足时可执行纯文本请求，未知能力不会隐式升级为支持。
 
-本机 [Web 客户端](./web-client-design.md)通过 `models.settings` 提供连接与模型编辑、启停、Key 设置/替换/删除、能力和协议参数、发现、检查与历史。每个会话可以独立选模，提交和重试固定显式模型 ID。配置变更只影响新 execution，无需重启。启动环境变量继续校验，但旧 `ANYBOX_LLM_*` 只在空 Models 库初始化时导入，已有设置不会被覆盖。旧密钥复制到新命名空间，原条目保留；系统凭据不可用不会退回明文，也不阻止浏览非秘密配置。
+本机 [Web 客户端](./web-client-design.md)通过统一 Provider/Model 目录选提供方、配置 Key 后自动准备适用模型，`models.settings` 提供连接与模型参数编辑、启停、Key 设置/替换/删除、能力和协议参数、发现、检查与历史。每个会话可以独立选模，提交和重试固定显式模型 ID。配置变更只影响新 execution，无需重启。启动环境变量继续校验，但旧 `ANYBOX_LLM_*` 只在空 Models 库初始化时导入，已有设置不会被覆盖。旧密钥复制到新命名空间，原条目保留；系统凭据不可用不会退回明文，也不阻止浏览非秘密配置。
 
 Web 支持显式节点查看、同父节点并发、跨项目四面板和标签页内布局恢复；关闭视图不取消 Run。Session 提交后发送变更提示，AgentLoop 发送临时模型事件，共用有界 SSE 展示通道。最终节点和 Run 查询是事实来源，流式片段不落为成功历史。Prompt 草稿编辑、版本发布、历史预览与 Agent 绑定仍由独立服务提供。
 

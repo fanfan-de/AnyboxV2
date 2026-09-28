@@ -15,6 +15,7 @@ export function createDeepSeekProtocol(options: ProtocolOptions = {}): ModelProt
   return Object.freeze({
     ...chat,
     descriptor: Object.freeze({ ...chat.descriptor, id: 'deepseek-chat-completions', name: 'DeepSeek 非推理',
+      sourceMappings: [{ sourceId: 'models.dev', providerId: 'deepseek', protocolIds: ['chat-completions'] }],
       modelFields: Object.freeze(chat.descriptor.modelFields.filter(field => !field.key.startsWith('protocol.'))) }),
     validateProvider(provider) {
       if (provider.protocolId !== 'deepseek-chat-completions') throw modelsError('invalid-config')

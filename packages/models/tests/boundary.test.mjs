@@ -7,11 +7,11 @@ test('malformed model queries fail with a public category instead of native erro
   const f = await fixture()
   try {
     await f.add()
-    for (const query of [null, false, [], { available: 'false' }, { providerId: 42 }, { misspelled: true }]) {
+    for (const query of [null, false, [], { available: 'false' }, { connectionId: 42 }, { misspelled: true }]) {
       assert.throws(() => f.models.list(query), code('invalid-config'))
     }
     assert.equal(f.models.list({ available: true }).length, 1)
-    assert.deepEqual(f.models.list({ providerId: 'unknown-provider' }), [])
+    assert.deepEqual(f.models.list({ connectionId: 'unknown-provider' }), [])
   } finally { await f.close() }
 })
 
@@ -32,13 +32,13 @@ test('missing and malformed capability fields fail without storing partial model
   try {
     await f.add()
     for (const value of [undefined, null, {}, { tools: { support: 'supported' } }, capabilities({ reasoning: null }), capabilities({ tools: { support: 'private-sensitive-value' } })]) {
-      await assert.rejects(f.settings.createModel({
+      await assert.rejects(f.addConfiguration({
         id: 'malformed', name: 'Malformed', providerId: 'provider', remoteModelId: 'remote', enabled: true,
         capabilities: value, defaults: {},
       }), error => error.code === 'invalid-config' && !String(error).includes('private-sensitive-value'))
     }
-    assert.equal(f.settings.models().length, 1)
-    assert.deepEqual(f.settings.modelHistory('malformed'), [])
+    assert.equal(f.settings.configurations().length, 1)
+    assert.deepEqual(f.settings.configurationHistory('malformed'), [])
   } finally { await f.close() }
 })
 

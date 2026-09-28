@@ -189,7 +189,11 @@ function runFromRow(row: StorageRow): Run {
     }
     if (!Number.isSafeInteger(value.modelRevision) || !Number.isSafeInteger(value.providerRevision) ||
       !value.options || typeof value.options !== 'object' || Array.isArray(value.options)) throw new Error('invalid stored Run model snapshot')
-    modelSnapshot = Object.freeze({ modelId: value.modelId as string, modelRevision: value.modelRevision as number,
+    if (value.schemaVersion !== undefined && value.schemaVersion !== 2) throw new Error('invalid stored Run model snapshot')
+    if (value.schemaVersion === 2 && ['modelDefinitionId', 'providerDefinitionId', 'modelDefinitionVersionId'].some(key => typeof value[key] !== 'string')) throw new Error('invalid stored Run model snapshot')
+    modelSnapshot = Object.freeze({ ...(value.schemaVersion === 2 ? { schemaVersion: 2 as const,
+      modelDefinitionId: value.modelDefinitionId as string, providerDefinitionId: value.providerDefinitionId as string,
+      modelDefinitionVersionId: value.modelDefinitionVersionId as string } : {}), modelId: value.modelId as string, modelRevision: value.modelRevision as number,
       modelVersionId: value.modelVersionId as string, providerId: value.providerId as string,
       providerRevision: value.providerRevision as number, providerVersionId: value.providerVersionId as string,
       remoteModelId: value.remoteModelId as string, protocolId: value.protocolId as string,

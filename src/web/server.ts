@@ -10,7 +10,7 @@ import type { RunEvent } from '../run/execution.js'
 import type { ValidatedToolRequest } from '../run/domain.js'
 import { isModelsError, resolveCatalogConnections } from '@anybox/models'
 import { isModelFailure } from '../run/model.js'
-import type { ModelsSettingsService, ModelsCatalogService, ModelSummary, ProviderTemplate, ProviderInput, ModelInput } from '@anybox/models'
+import type { ModelsSettingsService, ModelsCatalogService, RunnableModelSummary, ProviderTemplate, ProviderInput, ModelInput, ProviderConnectionInput, ModelConfigurationInput } from '@anybox/models'
 import { isProjectUnavailableError } from '../project/component.js'
 import type { Project } from '../project/component.js'
 import { DirectoryPickerFailure } from './directory-picker.js'
@@ -41,7 +41,7 @@ export interface WebCommands {
   cancelRun(id: string): Promise<Run | undefined>
   readonly modelsSettings: ModelsSettingsService
   readonly modelsCatalog: ModelsCatalogService
-  listModels(): readonly ModelSummary[]
+  listModels(): readonly RunnableModelSummary[]
   modelTemplates(): readonly ProviderTemplate[]
   listPrompts(): readonly PromptDocument[]
   getPrompt(id: string): PromptDocument | undefined
@@ -372,42 +372,78 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       if (method === 'GET' && path === '/api/v1/models/templates') { json(response, 200, commands.modelTemplates()); return }
       if (method === 'GET' && path === '/api/v1/models/protocols') { json(response, 200, commands.modelsSettings.protocols()); return }
       if (method === 'GET' && path === '/api/v1/models/catalog') { json(response, 200, commands.modelsCatalog.status()); return }
-      if (method === 'GET' && path === '/api/v1/models/catalog/providers') {
-        const protocols = commands.modelsSettings.protocols(), templates = commands.modelTemplates()
-        json(response, 200, commands.modelsCatalog.providers({ search: url.searchParams.get('search') ?? undefined }).map(provider => ({
-          ...provider, connections: resolveCatalogConnections(provider, protocols, templates),
-        }))); return
-      }
-      if (method === 'GET' && path === '/api/v1/models/catalog/models') {
-        const providerId = url.searchParams.get('providerId')
-        const includeDeprecated = url.searchParams.get('includeDeprecated')
-        if (!providerId || (includeDeprecated !== null && !['true', 'false'].includes(includeDeprecated))) throw failure(400, 'invalid-input')
-        const protocols = commands.modelsSettings.protocols(), templates = commands.modelTemplates()
-        json(response, 200, commands.modelsCatalog.models({ providerId, search: url.searchParams.get('search') ?? undefined,
-          includeDeprecated: includeDeprecated === 'true' }).map(model => {
-            const provider = commands.modelsCatalog.provider({ sourceId: model.sourceId, providerId })
-            return { ...model, connections: provider ? resolveCatalogConnections(provider, protocols, templates, model) : [] }
-          })); return
-      }
       if (method === 'POST' && path === '/api/v1/models/catalog/refresh') {
         await requestObject(request, [])
         json(response, 200, await modelRequest(response, signal => commands.modelsCatalog.refresh(signal))); return
       }
+      const definitionQuery = () => {
+        const boolean = (name: string) => {
+          const value = url.searchParams.get(name)
+          if (value !== null && !['true', 'false'].includes(value)) throw failure(400, 'invalid-input')
+          return value === null ? undefined : value === 'true'
+        }
+        return { sourceId: url.searchParams.get('sourceId') ?? undefined, providerId: url.searchParams.get('providerId') ?? undefined,
+          search: url.searchParams.get('search') ?? undefined, includeDeprecated: boolean('includeDeprecated'), includeMissing: boolean('includeMissing'), textOnly: boolean('textOnly') }
+      }
       if (path === '/api/v1/models/providers') {
-        if (method === 'GET') { json(response, 200, commands.modelsSettings.providers()); return }
+        if (method === 'GET') {
+          const protocols = commands.modelsSettings.protocols(), templates = commands.modelTemplates()
+          json(response, 200, commands.modelsSettings.providers(definitionQuery()).map(provider => ({
+            ...provider, connections: resolveCatalogConnections(provider, protocols, templates),
+          }))); return
+        }
         if (method === 'POST') {
-          const body = await requestObject(request, ['id', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'apiKey', 'catalogRef'])
+          const body = await requestObject(request, ['id', 'name', 'documentationUrl', 'connectionHints'])
           json(response, 200, await commands.modelsSettings.createProvider(body as unknown as ProviderInput)); return
         }
       }
-      const providerMatch = /^\/api\/v1\/models\/providers\/([^/]+)(?:\/(history|key|key\/delete|discover|check))?$/.exec(path)
-      if (providerMatch) {
-        const id = decodeURIComponent(providerMatch[1]), action = providerMatch[2]
-        if (method === 'GET' && action === 'history') { json(response, 200, commands.modelsSettings.providerHistory(id)); return }
+      const definitionProviderMatch = /^\/api\/v1\/models\/providers\/([^/]+)(?:\/(history))?$/.exec(path)
+      if (definitionProviderMatch) {
+        const id = decodeURIComponent(definitionProviderMatch[1])
+        if (method === 'GET' && definitionProviderMatch[2] === 'history') { json(response, 200, commands.modelsSettings.providerHistory(id)); return }
+        if (method === 'POST' && !definitionProviderMatch[2]) {
+          const body = await requestObject(request, ['patch', 'expectedRevision'])
+          json(response, 200, await commands.modelsSettings.updateProvider(id, body.patch as Partial<ProviderInput>, promptRevision(body.expectedRevision))); return
+        }
+      }
+      if (path === '/api/v1/models/definitions') {
+        if (method === 'GET') {
+          const providers = commands.modelsSettings.providers({ includeMissing: true }), protocols = commands.modelsSettings.protocols(), templates = commands.modelTemplates()
+          json(response, 200, commands.modelsSettings.models(definitionQuery()).map(model => {
+            const provider = providers.find(provider => provider.id === model.providerId)
+            return { ...model, connections: provider ? resolveCatalogConnections(provider, protocols, templates, model) : [] }
+          })); return
+        }
+        if (method === 'POST') {
+          const body = await requestObject(request, ['id', 'providerId', 'remoteModelId', 'name', 'description', 'family', 'releaseDate', 'lastUpdated', 'status', 'openWeights', 'modelType', 'capabilities', 'controls', 'modalities', 'limits', 'cost', 'connectionHints'])
+          json(response, 200, await commands.modelsSettings.createModel(body as unknown as ModelInput)); return
+        }
+      }
+      const definitionModelMatch = /^\/api\/v1\/models\/definitions\/([^/]+)(?:\/(history))?$/.exec(path)
+      if (definitionModelMatch) {
+        const id = decodeURIComponent(definitionModelMatch[1])
+        if (method === 'GET' && definitionModelMatch[2] === 'history') { json(response, 200, commands.modelsSettings.modelHistory(id)); return }
+        if (method === 'POST' && !definitionModelMatch[2]) {
+          const body = await requestObject(request, ['patch', 'expectedRevision'])
+          json(response, 200, await commands.modelsSettings.updateModel(id, body.patch as Partial<ModelInput>, promptRevision(body.expectedRevision))); return
+        }
+      }
+      if (path === '/api/v1/models/connections') {
+        if (method === 'GET') { json(response, 200, commands.modelsSettings.connections()); return }
+        if (method === 'POST') {
+          const body = await requestObject(request, ['id', 'providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'apiKey'])
+          json(response, 200, await commands.modelsSettings.createConnection(body as unknown as ProviderConnectionInput)); return
+        }
+      }
+      const connectionMatch = /^\/api\/v1\/models\/connections\/([^/]+)(?:\/(history|models|retry|key|key\/delete|delete|discover|check))?$/.exec(path)
+      if (connectionMatch) {
+        const id = decodeURIComponent(connectionMatch[1]), action = connectionMatch[2]
+        if (method === 'GET' && action === 'history') { json(response, 200, commands.modelsSettings.connectionHistory(id)); return }
+        if (method === 'GET' && action === 'models') { json(response, 200, commands.modelsSettings.connectionModels(id)); return }
         if (method === 'POST') {
           if (!action) {
             const body = await requestObject(request, ['patch', 'expectedRevision'])
-            json(response, 200, await commands.modelsSettings.updateProvider(id, body.patch as Partial<ProviderInput>, promptRevision(body.expectedRevision))); return
+            json(response, 200, await commands.modelsSettings.updateConnection(id, body.patch as Partial<ProviderConnectionInput>, promptRevision(body.expectedRevision))); return
           }
           if (action === 'key') {
             const body = await requestObject(request, ['apiKey', 'expectedRevision'])
@@ -417,29 +453,37 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
             const body = await requestObject(request, ['expectedRevision'])
             json(response, 200, await commands.modelsSettings.deleteApiKey(id, promptRevision(body.expectedRevision))); return
           }
+          if (action === 'delete') {
+            const body = await requestObject(request, ['expectedRevision'])
+            await commands.modelsSettings.deleteConnection(id, promptRevision(body.expectedRevision))
+            json(response, 200, { ok: true }); return
+          }
+          if (action === 'retry') {
+            await requestObject(request, [])
+            json(response, 200, await commands.modelsSettings.retryConnection(id)); return
+          }
           if (action === 'discover' || action === 'check') {
             await requestObject(request, [])
             json(response, 200, await modelRequest<unknown>(response, signal => action === 'discover'
               ? commands.modelsSettings.discoverModels(id, signal)
-              : commands.modelsSettings.checkConnection(id, signal).then(() => ({ ok: true }))));
-            return
+              : commands.modelsSettings.checkConnection(id, signal).then(() => ({ ok: true })))); return
           }
         }
       }
       if (path === '/api/v1/models/configurations') {
-        if (method === 'GET') { json(response, 200, commands.modelsSettings.models()); return }
+        if (method === 'GET') { json(response, 200, commands.modelsSettings.configurations(url.searchParams.get('connectionId') ?? undefined)); return }
         if (method === 'POST') {
-          const body = await requestObject(request, ['id', 'name', 'enabled', 'providerId', 'remoteModelId', 'capabilities', 'defaults'])
-          json(response, 200, await commands.modelsSettings.createModel(body as unknown as ModelInput)); return
+          const body = await requestObject(request, ['id', 'modelDefinitionId', 'connectionId', 'name', 'enabled', 'capabilities', 'defaults', 'baseline'])
+          json(response, 200, await commands.modelsSettings.createConfiguration(body as unknown as ModelConfigurationInput)); return
         }
       }
-      const modelMatch = /^\/api\/v1\/models\/configurations\/([^/]+)(?:\/(history))?$/.exec(path)
-      if (modelMatch) {
-        const id = decodeURIComponent(modelMatch[1])
-        if (method === 'GET' && modelMatch[2] === 'history') { json(response, 200, commands.modelsSettings.modelHistory(id)); return }
-        if (method === 'POST' && !modelMatch[2]) {
+      const configurationMatch = /^\/api\/v1\/models\/configurations\/([^/]+)(?:\/(history))?$/.exec(path)
+      if (configurationMatch) {
+        const id = decodeURIComponent(configurationMatch[1])
+        if (method === 'GET' && configurationMatch[2] === 'history') { json(response, 200, commands.modelsSettings.configurationHistory(id)); return }
+        if (method === 'POST' && !configurationMatch[2]) {
           const body = await requestObject(request, ['patch', 'expectedRevision'])
-          json(response, 200, await commands.modelsSettings.updateModel(id, body.patch as Partial<ModelInput>, promptRevision(body.expectedRevision))); return
+          json(response, 200, await commands.modelsSettings.updateConfiguration(id, body.patch as Partial<ModelConfigurationInput>, promptRevision(body.expectedRevision))); return
         }
       }
       if (method === 'POST' && path === '/api/v1/sessions') {

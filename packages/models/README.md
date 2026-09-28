@@ -1,8 +1,8 @@
 # @anybox/models
 
-Reusable Nya module for a public provider/model catalog, local model configurations, credentials and protocol execution. Requires Node.js 22.13+ and `@nya/core`. It has no dependency on Anybox Run, Session, tools or frontend code.
+Reusable Nya module owning unified sourced Provider/Model definitions, account connections, runnable configurations, credentials and protocol execution. Requires Node.js 22.13+ and `@nya/core`. It has no dependency on Anybox Run, Session, tools or frontend code.
 
-独立框架图：[高清 PNG](docs/architecture.png) · [SVG](docs/architecture.svg) · [可编辑 draw.io](docs/architecture.drawio)。组件依赖与宿主接入见 [Models 模块架构](../../docs/architecture/models-module.md)。
+独立框架图（含来源接纳、四种原生协议与自动基础配置）：[高清 PNG](docs/architecture.png) · [SVG](docs/architecture.svg)。统一定义、连接与执行配置的数据关系：[PNG](docs/architecture-data-flow.png) · [SVG](docs/architecture-data-flow.svg)。两页均保存在同一 [可编辑 draw.io](docs/architecture.drawio) 中；组件依赖与宿主接入见 [Models 模块架构](../../docs/architecture/models-module.md)。
 
 ## Install in an application
 
@@ -53,57 +53,85 @@ The components register these services:
 |---|---|---|---|
 | `createModelsStoreComponent` | `models.store` | — | SQLite connection, transactions, immutable versions, credential journal |
 | `createModelsVaultComponent` | `models.vault` | — | OS vault operations and per-slot queues |
-| `createModelsComponent` | `models`, `models.settings`, `models.protocols` | `models.store`, `models.vault` | Provider coordination, registrations, executions and network work |
+| `createModelsComponent` | `models`, `models.settings`, `models.protocols`, `models.source-data` | `models.store`, `models.vault` | Unified data, per-connection reconciliation, registrations, executions and network work |
 | `createModelsDevCatalogSourceComponent` | `models.catalog-source` | — | Anonymous catalog HTTP requests, response readers and cancellation |
 | `createModelsCatalogCacheComponent` | `models.catalog-cache` | — | Separate catalog SQLite connection and atomic cache writes; visible memory fallback |
-| `createModelsCatalogComponent` | `models.catalog` | `models.catalog-source`, `models.catalog-cache` | Current immutable directory, refresh timers, in-flight refresh and publication |
+| `createModelsCatalogComponent` | `models.catalog` | `models.catalog-source`, `models.catalog-cache`, `models.source-data` | Refresh timers, source exit, cache commit and shared-definition ingestion |
 | Each protocol component | Registers a protocol | `models.protocols` | Native HTTP bodies, streams and protocol continuation |
 
 The store, vault, catalog source and catalog cache ports are replaceable Nya dependencies. These are trusted internal services, not frontend APIs. Nya service names are not access-control boundaries. All components live on the same application root. Model execution depends on local settings and installed protocols; it does not depend on catalog availability.
 
-## Configure connections and models
+## Unified definitions, connections and configurations
+
+| Record | Responsibility |
+|---|---|
+| `Provider` | Definition, documentation, connection hints, source and immutable versions |
+| `Model` | Provider definition, remote ID, capabilities, modalities, limits, costs, controls, source and versions |
+| `ProviderConnection` | Account name, actual endpoint, one fixed protocol, auth and enabled state; private store owns credential reference |
+| `ModelConfiguration` | Stable selection ID, connection/definition IDs, pinned definition version, capabilities, defaults and enabled state |
+| `RunnableModelSummary` | Configuration plus definition identity, source and derived local availability |
+
+`SourceRef` is `{ kind: 'user' }` or an `external` identity containing `sourceId`, external `providerId`, optional external `modelId` and `sourceVersion`. External identities are scoped by source, never merged by name or hostname. Network/cache/bundled describes acquisition, not origin. A user Model can belong to an external Provider. Adding an account or Key does not change the definition source.
+
+The primary setup path uses an existing definition:
 
 ```ts
-const provider = await settings.createProvider({
-  id: 'work', name: 'Work account', enabled: true,
+const provider = settings.providers({ sourceId: 'models.dev', search: 'OpenAI' })[0]
+const connection = await settings.createConnection({
+  id: 'work', providerDefinitionId: provider.id, name: 'Work account', enabled: true,
   protocolId: 'responses', baseUrl: 'https://api.openai.com/v1',
-  auth: 'api-key', timeoutMs: 120_000,
-  apiKey: secretEnteredByUser, // optional; never present in the returned DTO
+  auth: 'api-key', timeoutMs: 120_000, apiKey: secretEnteredByUser,
 })
-const candidates = await settings.discoverModels(provider.id) // explicit network request
-// The user may instead enter remoteModelId manually; saving never requires network access.
-const model = await settings.createModel({
-  id: 'assistant', name: 'My assistant', enabled: true, providerId: provider.id,
-  remoteModelId: modelIdConfirmedByUser,
-  capabilities: {
-    tools: { support: 'supported' },
-    streaming: { support: 'supported' },
-    imageInput: { support: 'unknown' },
-    reasoning: { support: 'unknown' },
-  },
-  defaults: {}, // omitted parameters use server defaults
+const choices = models.list({ connectionId: connection.id, available: true })
+// All compatible text models have persistent baseline configurations.
+// No per-model save or network authorization probe is required.
+```
+
+Each connection uses one protocol. Reconciliation runs after connection saves, Key changes, source ingestion, protocol registration and startup. It atomically adds missing baseline configurations, unique by `(connectionId, modelDefinitionId)`, and never overwrites saved names, enabled state, capability declarations or defaults. Descriptor defaults become explicit saved values, including Anthropic's bounded `4096` output default. Unknown capabilities remain unknown; missing reasoning modes are not inferred. `connectionModels(id)` includes unavailable definitions and their reasons. A saved connection whose initialization failed returns `sync.state === 'failed'`; `retryConnection(id)` is idempotent and retains the Key. Synchronization states and source targets do not increment connection revisions.
+
+`settings.deleteConnection(id, expectedRevision)` uses the connection's configuration queue and CAS revision. It atomically removes the current connection, its baseline/variant configurations and synchronization state, while preserving definition data and immutable histories. Previously opened executions retain their captured configuration and credential; new opens fail with `not-found`. The transaction journals retired credential slots, then awaits vault cleanup; unavailable vault cleanup remains journaled for recovery. Deleted connection/configuration IDs cannot be reused, and source refresh cannot recreate deleted accounts.
+
+Custom definitions use the same data pool:
+
+```ts
+const customProvider = await settings.createProvider({
+  name: 'Private endpoint', connectionHints: { protocolIds: ['responses'] },
+})
+const customModel = await settings.createModel({
+  providerId: customProvider.id, remoteModelId: modelIdConfirmedByUser, name: 'My model',
+  capabilities: unknownCapabilities(), controls: { temperature: 'unknown' },
+  modalities: { input: ['text'], output: ['text'] }, limits: {},
+  connectionHints: { protocolIds: ['responses'] },
+})
+const customConnection = await settings.createConnection({
+  providerDefinitionId: customProvider.id, name: 'Private account', enabled: true,
+  protocolId: 'responses', baseUrl: addressEnteredByUser,
+  auth: 'api-key', timeoutMs: 120_000, apiKey: secretEnteredByUser,
+})
+// Advanced variants use independent selection IDs.
+const variant = await settings.createConfiguration({
+  modelDefinitionId: customModel.id, connectionId: customConnection.id,
+  name: 'My preset', enabled: true, baseline: false,
+  capabilities: customModel.capabilities, defaults: { temperature: 0.2 },
 })
 ```
 
-Capabilities above are **user declarations**, not inferred promises about any named model. Use `unknownCapabilities()` when metadata is absent. A second local Model may reference the same remote model with different defaults. API addresses and credentials belong only to Provider. `protocolId` and a Model's `providerId` are immutable.
+User definition writes always produce `user` source records; source definitions are replaced through the trusted ingestion port. Configuration identity, connection, and fixed definition version stay stable across edits. Extra parameter variants have independent selection IDs and `baseline: false`.
 
-`builtinProviderTemplates` supplies optional address/protocol defaults for the UI. It is not a runtime brand registry. Hosts may supply their own templates or let users choose an installed protocol and arbitrary HTTP(S) API base URL. The base URL excludes the endpoint suffix, query strings and URL credentials. The builtins append their own Messages, Interactions, Responses, Chat Completions or model-list endpoint.
+`builtinProviderTemplates` supplies optional endpoint/protocol defaults and an explicit `sourceRef`. It is not a runtime brand registry. `resolveCatalogConnections` uses installed protocols and definition hints; SDK labels never dynamically import implementations. A registered extension may declare `descriptor.sourceMappings` for a known source/protocol mapping. Addresses exclude endpoint suffixes, query strings and URL credentials.
 
-Settings methods:
-
-| Operation | API |
+| Operation | Settings API |
 |---|---|
-| Read connections and their non-secret history | `providers()`, `providerHistory(id)` |
-| Create/edit/enable/disable connection | `createProvider(input)`, `updateProvider(id, patch, expectedRevision)` |
-| Replace/delete API key | `setApiKey(id, key, expectedRevision)`, `deleteApiKey(id, expectedRevision)` |
-| Read/create/edit/enable/disable model | `models(providerId?)`, `createModel(input)`, `updateModel(id, patch, expectedRevision)` |
-| Inspect immutable model versions | `modelHistory(id)` |
-| Installed protocol form descriptions | `protocols()` |
-| Explicit remote discovery and check | `discoverModels(providerId, signal?)`, `checkConnection(providerId, signal?)` |
+| Definition queries/history | `providers(query?)`, `models(query?)`, `providerHistory(id)`, `modelHistory(id)` |
+| User definitions | `createProvider`, `updateProvider`, `createModel`, `updateModel` |
+| Account connections/history | `connections()`, `connectionHistory(id)`, `createConnection`, `updateConnection` |
+| Replace/delete Key | `setApiKey(id, key, expectedRevision)`, `deleteApiKey(id, expectedRevision)` |
+| Executable configurations/history | `configurations(connectionId?)`, `configurationHistory(id)`, `createConfiguration`, `updateConfiguration` |
+| Initialization and reasons | `retryConnection(id)`, `connectionModels(id)` |
+| Installed protocol forms | `protocols()` |
+| Explicit remote requests | `discoverModels(connectionId, signal?)`, `checkConnection(connectionId, signal?)` |
 
-Every save creates a revision and immutable version. Stale edits return `conflict`; refresh before editing again. Disable via `{ enabled: false }`; records are retained for history. Existing executions survive edits, disabling, and key replacement. Authenticated model discovery returns candidates and never updates local models. Responses, Chat Completions and Gemini discovery provide IDs/names without guessing capabilities; Anthropic additionally maps capability evidence returned by its Models API. Connection checks validate authenticated access to a model-list endpoint, not the ability to generate with every model.
-
-Protocol descriptors supply connection fields, parameter fields, ranges, enums and optional `defaultValue`. A form default initializes an editable value; the submitted value is saved in Model defaults and the execution snapshot. Descriptors do not silently insert missing execution parameters. Field paths such as `protocol.reasoningEffort` refer to Model defaults. Unsupported parameters are rejected, never silently removed; omitted optional parameters keep server defaults. A mode or effort must be implemented by the protocol and explicitly declared in the local model. The module does not guess undocumented model-specific restrictions; provider rejection remains a fixed `provider-failure`.
+User saves create immutable revisions; stale edits return `conflict`. Neutral configuration can be saved before a protocol is installed; synchronization stays pending and execution stays unavailable until registration validates the saved parameters. Discovery returns candidates without writing definitions/configurations. `available` means local configuration readiness and does not establish remote account authorization. Effective image input is always false. Native options remain explicit; omitted optional parameters use server defaults, while unsupported options are rejected. Configurations and Keys affect new executions only.
 
 | Protocol | Native endpoint and supported controls |
 |---|---|
@@ -118,33 +146,40 @@ Gemini uses an API key in `x-goog-api-key`, a `v1beta` base URL, declared `think
 
 `models.list()`/`get()` expose declared and effective capabilities plus availability. Missing protocols do not prevent configuration loading; affected models report `protocol-unavailable`. Image declarations may be saved, but effective image input is always false in this release and the message contract accepts only text.
 
-## Public provider and model catalog
+## Source ingestion and public catalog
 
-`models.catalog` is an optional read service backed by the anonymous [models.dev JSON](https://models.dev/api.json?type=all). Its source always requests `type=all`, so the directory can retain text, image, audio and other model metadata. `models({ textOnly: true })` selects text-capable entries for this module's current execution contract; deprecated entries are hidden unless `includeDeprecated: true`. Public metadata includes names, release/status information, modalities, context/input/output limits, price estimates in USD per million tokens, capability suggestions and separate `controls` hints. A catalog entry is not an account configuration or evidence that the current key can use the model.
+`models.catalog` supplies source status and refresh. Definition queries use `models.settings`; separate catalog Provider/Model DTOs and queries have been removed. The anonymous source requests [models.dev JSON](https://models.dev/api.json?type=all), normalizing every known modality into the module's Provider/Model types. `settings.models({ textOnly: true })` filters for the current text/function-tool contract; price and control metadata remain reference information.
 
 ```ts
-const providerChoices = catalog.providers({ search: 'Anthropic' })
-const modelChoices = catalog.models({ providerId: 'anthropic', textOnly: true })
+const providerChoices = settings.providers({ sourceId: 'models.dev', search: 'Anthropic' })
+const modelChoices = settings.models({ providerId: providerChoices[0].id, textOnly: true })
 const directoryStatus = catalog.status()
-// Explicit request; resolves after source exit and the admitted cache commit.
 await catalog.refresh(signal)
 ```
 
-`resolveCatalogConnections(provider, settings.protocols(), hostTemplates, model?)` converts known connection hints into optional templates using installed protocols. Unknown SDK/connection shapes produce no automatic template. Catalog `npm` labels are data, never dynamically imported SDKs. Model-level address/protocol overrides are considered when selecting an entry. Hosts can still create a manual connection and remote model ID when no mapping exists.
+Catalog injects `models.source-data`, which is provided by the execution core alongside settings. The core itself injects only store/Vault, so existing execution remains independent of source/cache availability. `models.source-data.accept` accepts validated module `SourceSnapshot` schema 2, never raw upstream JSON; it commits all definitions, the source ledger and connection targets atomically, then waits per-connection reconciliation. Removed definitions are marked missing and retained with their versions; existing configurations continue executing pinned values.
 
-Provider's optional `catalogRef: { sourceId, providerId }` links a local account to a directory namespace; `null` clears the link. Local Provider IDs and Model IDs remain independent. A Model uses its local `providerId` and `remoteModelId`; selection copies reviewed values into settings. Refreshing the directory never changes saved addresses, keys, capability declarations, parameters, model selection or open executions. `controls` can inform a form, but does not prove model-specific reasoning modes or efforts that the source does not provide.
+Refresh waits for actual HTTP/reader exit, commits the independent cache, accepts shared definitions, then waits all admitted initialization jobs. A connection failure is reported separately from accepted source data. Cancellation stops fetch admission; after local commits are admitted, closure waits their completion through Nya dependency cleanup. Synchronization target guards prevent an earlier batch from marking a newer source version ready.
 
-Catalog startup immediately uses the latest valid local cache, or the bundled upstream snapshot. It schedules an asynchronous refresh when the cache has never been checked or is at least 24 hours old; a fresh cache waits until its next 24-hour boundary. Refresh uses ETag/`If-None-Match`; `304` retains the snapshot and updates the successful-check time. Failures keep the previous directory and retry after one hour, with a 30-second fetch timeout. `status()` reports origin (`bundled/cache/network`), staleness, refresh activity, version/times, errors and persistence. `autoRefresh: false` disables scheduled refreshes, leaving explicit `refresh()` available. Concurrent refresh attempts return `busy`.
+The shared database's accepted ledger is authoritative at startup. Only newer cache/bundle data or matching content is admitted. Older data cannot downgrade it; differing content with equal timestamps preserves accepted data and clears ETag so a full response can confirm it. Validated schema 1 cache data has a read-only converter; all current writes use schema 2. Cache and source failures retain accepted data, with an observable memory fallback only for the public cache. The cache key includes the source endpoint and `reservedPaths` prevents aliasing other database files.
 
-The cache lives in a separate SQLite file and contains no credentials or local account settings. `reservedPaths` protects the host's other database files, including canonical path aliases. Its key includes the normalized source endpoint, so caches cannot cross endpoints. Cache initialization failure defaults to an observable memory fallback (`cache.persistence === 'memory'`, `cache.error === 'storage-unavailable'`); set `fallbackToMemory: false` to require persistence. Failed writes retain the previous published snapshot. A refresh waits for actual HTTP/reader exit before admitting an atomic cache commit; once that commit has started, late cancellation cannot undo it. Component cleanup stops timers/admission, aborts fetches and waits for source exit and accepted writes. Catalog dependencies and cleanup are managed by Nya, independently of the execution service.
+Default scheduling remains 24 hours, retry after one hour, and a 30-second fetch timeout. ETag `304` updates check time without changing source data. `status()` reports origin (`bundled/cache/network/store`), version/time, staleness, persistence and connection synchronization outcomes. `autoRefresh: false` leaves explicit refresh available; concurrent requests return `busy`.
 
-The package ships `assets/models.dev.api.json`, provenance (source URL, capture time, SHA-256 and normalized version) and the upstream MIT license. Startup verifies provenance before normalizing the bundled data. `npm --prefix packages/models run catalog:update` is an explicit developer operation that fetches and updates these reviewable assets; normal builds and tests do not download them. The source/cache interfaces can be replaced by another root component without importing Anybox business code.
+Raw bundled JSON, provenance, SHA-256 validation and upstream MIT attribution remain. Only explicit `npm --prefix packages/models run catalog:update` downloads replacement assets; ordinary build/test does not fetch the source.
+
+## Persistent upgrade
+
+Configuration SQLite migrates v1 to v2 in an exclusive transaction. Old Providers become connections, and old Models become configurations, preserving IDs, revisions/version IDs, timestamps, endpoints, defaults, disabled states and Key references. Every old Model receives its own user definition, including same-remote parameter duplicates. An explicit old `catalogRef` retains the complete external Provider identity as an unresolved definition until that source is ingested; other old Providers become user definitions. No origin is guessed from remote IDs or hostname.
+
+Original historical records are preserved for read-boundary conversion; successful migration is idempotent and failure rolls back. Credential intents retain their IDs/slot IDs/times and are recovered against current connection references; migration never reads or copies Keys. Old histories do not keep retired secrets alive.
+
+Execution snapshots written now carry schema version 2 and definition identity, while `modelId` remains the configuration selection ID and `providerId` remains the connection ID. Hosts read historical snapshots at their boundary without rewriting Session selections or historical Run JSON.
 
 ## Agent execution
 
 ```ts
 const execution = await models.open({
-  modelId: 'assistant', history, tools,
+  modelId: choices[0].id, history, tools,
   requirements: { tools: true }, signal,
 })
 try {
@@ -167,7 +202,7 @@ The module parses argument JSON and checks tool names, unique call IDs and corre
 
 Only new messages are submitted each turn. The execution privately holds normalized history and protocol continuation. Responses preserves native reasoning items, encrypted content and message phase; Anthropic preserves complete ordered content blocks, thinking signatures and redacted thinking; Gemini preserves thought summaries/signatures and native execution steps. Native tool identities are mapped privately for the two new protocols, while public tool IDs remain stable across an announced call and its final result. Anthropic maps leading system/developer instructions to its top-level system field and rejects mid-conversation instructions. All native context stays inside the execution. Business sessions persist normalized history and selected model IDs in the host. Reopening from history starts fresh; native in-flight context is not restored across process restarts.
 
-`open()` fixes configuration revisions, effective options, registered protocol implementation and one credential read. Its public snapshot contains configuration identities/options, never a credential or its storage reference. Per-provider edits and opening local configuration/credentials run in admission order; subsequent HTTP requests run concurrently.
+`open()` fixes configuration revisions, effective options, registered protocol implementation and one credential read. Its public snapshot contains configuration identities/options, never a credential or its storage reference. Per-connection edits and opening local configuration/credentials run in admission order; subsequent HTTP requests run concurrently.
 
 `generate()` returns `{ result, done, cancel }`. Public `result` settles only after native exit, context commit and unlocking. Awaiting it is sufficient before the next turn. `done` reports actual exit; cancellation and ordinary provider failures can leave `done` successful, whereas true cleanup failure rejects both. Both rejections are observed internally immediately. Same-execution overlap throws `busy`; different executions run concurrently.
 
@@ -202,7 +237,7 @@ Unregister immediately removes admission for that registration generation and cl
 
 ## Credential consistency and tests
 
-Before writing a fresh vault slot, the configuration database commits a cleanup intent. One transaction then commits the new Provider revision/reference, removes the new-slot intent and records cleanup of the retired slot. Failure/crash leaves durable intents. Startup and subsequent credential mutations reclaim unreferenced slots; referenced slots are kept. Failed cleanup retains its intent for retry, so unavailable keyrings do not block non-secret configuration access. Histories contain references internally but no old key values. Public provider views expose only `credentialConfigured`.
+Before writing a fresh vault slot, the configuration database commits a cleanup intent. One transaction then commits the new connection revision/reference, removes the new-slot intent and records cleanup of the retired slot. Failure/crash leaves durable intents. Startup and subsequent credential mutations reclaim unreferenced slots; referenced slots are kept. Failed cleanup retains its intent for retry, so unavailable keyrings do not block non-secret configuration access. Histories contain references internally but no old key values. Public connection views expose only `credentialConfigured`, never the private reference.
 
 `npm --prefix packages/models test` builds and runs protocol, catalog source/cache/refresh, runtime, storage, vault and host event-queue tests. Root `npm run check` includes this package. Tests use injected vaults, mocked streams, bundled catalog data and a loopback HTTP server; they do not contact paid APIs or certify native credential stores on every platform. Real OS vault behavior requires platform-specific acceptance.
 

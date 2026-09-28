@@ -1,20 +1,22 @@
 # AnyboxV2
 
-基于相邻的 NyaCore 构建 Agent Harness。[通用 Models 模块](packages/models/README.md) 已接入 Harness 与本机 Web：用户可以浏览公共目录，配置多个 Provider、模型及 API Key，在每个会话中选择模型，并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols` 和可选 `models.catalog`，不依赖 Harness、业务 Session 或前端框架；[架构图](docs/architecture/models-module.md)说明其资源与扩展边界。
+基于相邻的 NyaCore 构建 Agent Harness。[通用 Models 模块](packages/models/README.md) 已接入 Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Harness、业务 Session 或前端框架；[架构图](docs/architecture/models-module.md)说明其资源与扩展边界。
 
 应用只使用一个 Nya 根 Context。Models 配置存储、系统凭据、模型服务、协议和目录组件，与 Harness 的 SQLite、Prompt、Projects、Session、Run、AgentLoop、Bash、Apply Patch 直接安装在同一根。Nya 管理依赖、重启和清理顺序；Provider、Model、项目和会话都是数据记录。
+
+当前项目框架见[三页架构说明与预览](docs/architecture/current-framework.md)，或用 draw.io 打开[可编辑架构图](docs/architecture/anybox-current.drawio)，查看整体组件、Models 模块与一次 Run 的执行和资源结算。
 
 Session 持有完整轮次对话树，允许同一父节点启动多个 Run。新请求必须提供 `parentNodeId`（空会话用 `null`）；成功节点只继承祖先路径，并在资源退出后原子提交。Web 支持节点查看、分支选择、多 Run 状态及最多四个跨项目拖拽分屏，布局与查看位置在当前标签页内恢复。详见[对话树设计](docs/session-conversation-tree.md)。
 
 ## 最小调用
 
-先按 [Models 安装示例](packages/models/README.md#install-in-an-application)在根上安装配置存储、凭据、模型服务和需要的协议，通过 `models.settings` 创建 Provider 和 Model。随后装配 Harness：
+先按 [Models 安装示例](packages/models/README.md#install-in-an-application)在根上安装配置存储、凭据、模型服务和需要的协议，通过 `models.settings` 选择 Provider 定义并创建连接；有 Key 的适用模型自动形成执行配置。自定义模型另建用户定义和配置。随后装配 Harness：
 
 ```js
 import { createHarness } from './dist/harness.js'
 import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
 
-// root 已提供 models；assistant 是保存过的本地 Model ID。
+// root 已提供 models；assistant 是保存过的 ModelConfiguration ID。
 await root.installComponent(createLocalSqliteComponent('./data/harness.sqlite'))
 const harness = await createHarness(root, {
   agents: [{ id: 'demo', instructions: 'Answer briefly.', modelId: 'assistant' }],
@@ -41,7 +43,7 @@ Prompt 支持草稿、不可变发布版本及 Agent 绑定，用途为 `agent-i
 
 ## 模型配置与凭据
 
-Provider 管协议、地址、认证和超时；Model 管远端模型标识、能力和默认参数。同一个远端模型可以保存多个本地 Model。每次保存生成不可变版本，`expectedRevision` 检查并发编辑；配置、停用或密钥变更只影响新 execution。模型能力区分支持、不支持和未知，前端分别显示声明与当前有效能力。未知能力不会被自动判定为支持。
+Provider/Model 管统一服务商与模型定义，标记 user 或 external 来源。ProviderConnection 管账号连接、协议、地址、认证和超时；ModelConfiguration 关联定义和连接，固定远端标识/模型定义版本、能力和参数。保存连接与 Key 后自动准备适用模型，每个连接/模型定义只有一个基础配置，额外参数预设使用 baseline:false。每次保存生成不可变版本，`expectedRevision` 检查并发编辑；配置、停用或密钥变更只影响新 execution。模型能力区分支持、不支持和未知，前端分别显示声明与当前有效能力。未知能力不会被自动判定为支持。
 
 本机宿主同时安装 Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions 及 DeepSeek 非推理扩展。协议提供参数表单、范围、枚举和新建表单默认值；未设置的可选参数保持省略，模型发现只返回候选项，不覆盖本地配置。Anthropic 的 `maxOutputTokens` 必填，新建表单预填 `4096`；Gemini Interactions 固定 `store: false`，当前参数不接受 temperature 或旧推理预算。保存不需要网络检查。当前调用契约接受文本、工具与流式事件，其他模态只作为目录参考信息。
 
@@ -49,7 +51,7 @@ DeepSeek 扩展复用通用 Chat Completions 传输与解析，只负责 `thinki
 
 Models 默认独占 `./data/models.sqlite`，与 Harness 数据库分开；数据库只保存配置、历史、凭据引用与清理日志。密钥保存在 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，系统存储不可用时返回固定 `credential-unavailable`，仍可查看非秘密配置，不回退到明文或 SQLite。管理读取、Run 快照和错误均不返回密钥。服务名不是权限边界，`models.settings` 只交给受信宿主。
 
-公开目录匿名读取 [models.dev](https://models.dev) 的完整 JSON，使用独立 `models-catalog.sqlite` 缓存。启动优先使用有效缓存或随包离线快照，就绪后后台检查；成功检查（含 304）24 小时后过期，失败一小时后重试，手动刷新可立即检查。目录更新不会改变保存的连接、模型或在途 execution。目录中的能力、价格与限制供用户确认，未知字段保持未知；Provider 的可空 `catalogRef` 显式关联来源，同一目录提供方可对应多个本地账号。
+公开来源匿名读取 [models.dev](https://models.dev) 的完整 JSON，使用独立 `models-catalog.sqlite` 缓存。启动优先采用 Models 配置库已接纳的来源，再使用有效缓存或随包离线快照；成功检查（含 304）24 小时后过期，失败一小时后重试，手动刷新可立即检查。来源接纳到统一 Provider/Model 定义后，新增适用模型补齐缺少的基础配置；已有连接、配置与在途 execution 保持固定，来源移除保留已配置模型。能力、价格与限制带显式来源，未知字段保持未知；同一 Provider 定义可对应多个独立账号连接。
 
 ## Apply Patch 工具
 
@@ -68,6 +70,8 @@ Harness 在应用根安装 `tools.apply-patch`，向模型提供 `apply_patch({ 
 3. 回到会话的模型选择器，选择本地 Model 后发送消息。
 
 可以编辑、启停提供方与模型，替换或删除 Key，查询历史版本并显式检查连接。修改保存后立即作用于新 Run，已接受 Run 保留原配置。Key 只显示配置状态；无需认证的提供方也可使用。提供方的协议创建后不可更改，要切换协议需创建新提供方。
+
+在“我的连接”选择账号后，详情顶部的“删除连接”会先展示确认信息。确认后删除该连接、Key 及其基础模型和参数预设，保留 Provider/Model 定义、配置历史、历史对话和已开始的 Run；使用已删除配置的会话须重新选择模型。删除最后一个连接后，重启不会重新迁入旧默认连接。
 
 首次使用空 Models 数据库时，宿主将旧 `ANYBOX_LLM_*` 配置导入固定的默认连接/模型，并尝试从旧 `anybox` 凭据命名空间复制对应密钥，保留原条目。之后重启不会重复读取旧密钥或覆盖用户配置；旧环境变量不再负责运行时切换。若启动中断后环境协议改变，已提交连接会保留，由设置页完成模型配置。
 

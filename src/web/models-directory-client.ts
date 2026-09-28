@@ -1,4 +1,4 @@
-import type { CatalogProviderRef, CatalogStatus, ProviderTemplate, ProviderView } from '@anybox/models'
+import type { CatalogStatus, ConnectionModel, ProviderTemplate, ProviderConnection, SourceRef } from '@anybox/models'
 import type { Api, DirectoryModel, DirectoryProvider } from './client-types.js'
 
 export interface DirectoryState {
@@ -7,52 +7,64 @@ export interface DirectoryState {
   readonly models: readonly DirectoryModel[]
   readonly providerId?: string
   readonly checking: boolean
+  readonly errors: Readonly<Partial<Record<'status' | 'providers' | 'models' | 'refresh', string>>>
   readonly error?: string
 }
 
 /** Public reference data has its own reads and never writes a local model selection. */
 export function createModelsDirectory(api: Api, messageFor: (error: unknown) => string) {
-  let state: DirectoryState = { providers: [], models: [], checking: false }
+  let state: DirectoryState = { providers: [], models: [], checking: false, errors: {} }
   let statusRead = 0, providerRead = 0, modelRead = 0, refreshRead = 0
   const listeners = new Set<() => void>()
   const publish = (patch: Partial<DirectoryState>) => { state = { ...state, ...patch }; for (const listener of listeners) listener() }
-  const failed = (error: unknown, signal?: AbortSignal) => { if (!signal?.aborted) publish({ error: messageFor(error) }) }
+  const result = (kind: keyof DirectoryState['errors'], patch: Partial<DirectoryState>, error?: string) => {
+    const errors = { ...state.errors }
+    if (error === undefined) delete errors[kind]
+    else errors[kind] = error
+    publish({ ...patch, errors, error: errors.refresh ?? errors.providers ?? errors.models ?? errors.status })
+  }
+  const failed = (kind: keyof DirectoryState['errors'], error: unknown, signal?: AbortSignal) => {
+    if (!signal?.aborted) result(kind, {}, messageFor(error))
+  }
   return {
     snapshot: () => state,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
     invalidate() { statusRead++; providerRead++; modelRead++; refreshRead++; publish({ checking: false }) },
     async readStatus(signal?: AbortSignal) {
+      if (signal?.aborted) return
       const read = ++statusRead
       try {
         const status = await api<CatalogStatus>('/models/catalog', undefined, signal)
-        if (read === statusRead && !signal?.aborted) publish({ status, error: undefined })
-      } catch (error) { if (read === statusRead) failed(error, signal) }
+        if (read === statusRead && !signal?.aborted) result('status', { status })
+      } catch (error) { if (read === statusRead) failed('status', error, signal) }
     },
     async readProviders(search = '', signal?: AbortSignal) {
+      if (signal?.aborted) return
       const read = ++providerRead
       try {
-        const providers = await api<readonly DirectoryProvider[]>(`/models/catalog/providers?${new URLSearchParams({ search })}`, undefined, signal)
-        if (read === providerRead && !signal?.aborted) publish({ providers, error: undefined })
-      } catch (error) { if (read === providerRead) failed(error, signal) }
+        const providers = await api<readonly DirectoryProvider[]>(`/models/providers?${new URLSearchParams({ search })}`, undefined, signal)
+        if (read === providerRead && !signal?.aborted) result('providers', { providers })
+      } catch (error) { if (read === providerRead) failed('providers', error, signal) }
     },
     async readModels(providerId: string, search = '', includeDeprecated = false, signal?: AbortSignal) {
+      if (signal?.aborted) return
       const read = ++modelRead
       if (providerId !== state.providerId) publish({ providerId, models: [] })
-      if (!providerId) { publish({ models: [] }); return }
+      if (!providerId) { result('models', { models: [] }); return }
       try {
-        const models = await api<readonly DirectoryModel[]>(`/models/catalog/models?${new URLSearchParams({ providerId, search, includeDeprecated: String(includeDeprecated) })}`, undefined, signal)
-        if (read === modelRead && !signal?.aborted) publish({ models, error: undefined })
-      } catch (error) { if (read === modelRead) failed(error, signal) }
+        const models = await api<readonly DirectoryModel[]>(`/models/definitions?${new URLSearchParams({ providerId, search, includeDeprecated: String(includeDeprecated) })}`, undefined, signal)
+        if (read === modelRead && !signal?.aborted) result('models', { models })
+      } catch (error) { if (read === modelRead) failed('models', error, signal) }
     },
     async refresh(signal?: AbortSignal) {
-      if (state.checking) return
+      if (signal?.aborted || state.checking) return
       const read = ++refreshRead
       statusRead++
-      publish({ checking: true, error: undefined })
+      publish({ checking: true })
       try {
         const status = await api<CatalogStatus>('/models/catalog/refresh', {}, signal)
-        if (read === refreshRead && !signal?.aborted) { statusRead++; publish({ status }) }
-      } catch (error) { if (read === refreshRead) failed(error, signal) }
+        if (read === refreshRead && !signal?.aborted) { statusRead++; result('refresh', { status }) }
+      } catch (error) { if (read === refreshRead) failed('refresh', error, signal) }
       finally { if (read === refreshRead) publish({ checking: false }) }
     },
   }
@@ -63,11 +75,21 @@ export function catalogSupportsText(model: DirectoryModel): boolean {
     (!model.modalities.input.length || model.modalities.input.includes('text')) &&
     (!model.modalities.output.length || model.modalities.output.includes('text'))
 }
-export function catalogMatchesConnection(model: DirectoryModel, provider: ProviderView | undefined): boolean {
-  return Boolean(provider?.catalogRef && provider.catalogRef.sourceId === model.sourceId &&
-    provider.catalogRef.providerId === model.providerId &&
-    (!model.connectionHints.protocolIds.length || model.connectionHints.protocolIds.includes(provider.protocolId) ||
-      model.connections.some(connection => connection.values.protocolId === provider.protocolId)))
+export function catalogMatchesConnection(model: DirectoryModel, connection: ProviderConnection | undefined): boolean {
+  return Boolean(connection && connection.providerDefinitionId === model.providerId &&
+    (model.connectionHints.protocolIds.includes(connection.protocolId) ||
+      model.source.kind === 'user' && !model.connectionHints.protocolIds.length ||
+      model.connections.some(recipe => recipe.values.protocolId === connection.protocolId)))
+}
+export function sourceLabel(source: SourceRef): string {
+  return source.kind === 'user' ? '用户自定义' : `${source.sourceId} / ${source.providerId}`
+}
+export function connectionModelAvailability(model: ConnectionModel): string {
+  if (model.available) return '可用'
+  return { disabled: '模型已停用', 'provider-disabled': '连接已停用', 'protocol-unavailable': '协议未安装',
+    'credential-missing': '尚未配置 Key', 'invalid-configuration': '需要调整配置', 'protocol-unmapped': '当前协议不适用',
+    'connection-mismatch': '需要另一连接地址', 'non-text': '当前不支持此模态', 'deprecated': '模型已弃用',
+    missing: '来源已移除', unresolved: '来源尚未解析', 'definition-missing': '来源已移除', 'text-unsupported': '当前不支持此模态' }[model.unavailableReason ?? 'invalid-configuration'] ?? '当前不可用'
 }
 const statusErrors = {
   unavailable: '目录来源暂时不可用', 'invalid-response': '目录数据未通过校验',
@@ -79,32 +101,37 @@ function option(value: string, label: string): HTMLOptionElement {
 }
 
 interface DirectoryActions {
-  context(): { readonly provider?: ProviderView; readonly ready: boolean; readonly busy: boolean }
-  useConnection(provider: DirectoryProvider, recipe?: ProviderTemplate): void
-  useModel(model: DirectoryModel): void
-  associate(ref: CatalogProviderRef | null): Promise<void>
+  context(): { readonly connection?: ProviderConnection; readonly connections: readonly ProviderConnection[]; readonly models: readonly ConnectionModel[]; readonly ready: boolean; readonly busy: boolean; readonly providerDefinitionId?: string; readonly protocolId?: string }
+  refreshConfigured(): Promise<void>
+  selectProvider(provider: DirectoryProvider): void
+  useConnection(provider: DirectoryProvider, recipe?: ProviderTemplate, focus?: boolean): void
 }
 
 export function setupModelsDirectory(root: HTMLElement, api: Api, messageFor: (error: unknown) => string, actions: DirectoryActions) {
   root.innerHTML = `
-    <div class="models-card-heading models-directory-heading"><div><h4>公共模型目录</h4><p>从 models.dev 选择参考配置，确认并保存后可供会话使用。</p></div><button type="button" data-directory-refresh class="secondary-button">刷新目录</button></div>
-    <p data-directory-status class="settings-hint" role="status" aria-live="polite">正在读取本地目录。</p>
+    <div class="models-card-heading models-directory-heading"><div><h4>选择提供方</h4><p>从目录填写连接信息。</p></div><button type="button" data-directory-refresh class="secondary-button">刷新目录</button></div>
+    <p data-directory-status class="settings-hint" role="status" aria-live="polite">正在读取模型目录。</p>
     <p data-directory-error class="models-notice error" role="status" hidden></p>
     <div class="models-directory-grid">
-      <div><label>搜索目录提供方<input type="search" data-directory-provider-search placeholder="名称或 ID"></label><label>目录提供方<select data-directory-provider aria-label="目录提供方"></select></label>
-        <p class="settings-hint"><a data-directory-doc target="_blank" rel="noopener noreferrer" hidden>提供方文档</a></p>
+      <div><label>搜索提供方<input type="search" data-directory-provider-search placeholder="名称或 ID"></label>
+        <p data-directory-provider-count class="settings-hint" role="status" aria-live="polite"></p>
+        <ul data-directory-providers class="models-provider-list" aria-label="提供方列表"></ul>
+        <p data-directory-provider-empty class="settings-hint" hidden></p>
+        <p data-directory-origin class="settings-hint"></p><p class="settings-hint"><a data-directory-doc target="_blank" rel="noopener noreferrer" hidden>提供方文档</a></p>
         <label>连接方案<select data-directory-connection aria-label="目录连接方案"></select></label>
-        <div class="settings-actions"><button type="button" data-directory-new-connection>填写新提供方</button><button type="button" data-directory-associate class="secondary-button">关联当前提供方</button><button type="button" data-directory-unbind class="secondary-button">解除关联</button></div>
-        <p data-directory-association class="settings-hint"></p>
+        <div class="settings-actions"><button type="button" data-directory-new-connection class="secondary-button">填写 API Key</button></div>
+        <p data-directory-guidance class="settings-hint">保存连接后，会自动准备该连接适用的模型。</p>
       </div>
-      <div><label>搜索目录模型<input type="search" data-directory-model-search placeholder="名称或远端模型 ID"></label><label>目录模型<select data-directory-model aria-label="目录模型"></select></label>
+    </div>
+    <details class="models-provider-preview"><summary>查看模型目录</summary>
+      <div><label>搜索模型<input type="search" data-directory-model-search placeholder="名称或远端模型 ID"></label><label>此提供方的模型<select data-directory-model aria-label="目录模型"></select></label>
         <label class="models-check"><input type="checkbox" data-directory-deprecated>显示已弃用模型</label>
-        <p data-directory-metadata class="models-directory-metadata"></p><p data-directory-guidance class="settings-hint"></p>
-        <button type="button" data-directory-use-model>填写模型配置</button>
+        <p data-directory-metadata class="models-directory-metadata"></p>
       </div>
-    </div>`
+    </details>
+    <details class="models-directory-provenance"><summary>目录信息</summary><p data-directory-provenance class="settings-hint models-directory-metadata"></p></details>`
   const get = <T extends HTMLElement>(selector: string) => root.querySelector<T>(selector)!
-  const providerSelect = get<HTMLSelectElement>('[data-directory-provider]'), modelSelect = get<HTMLSelectElement>('[data-directory-model]')
+  const providerList = get<HTMLUListElement>('[data-directory-providers]'), modelSelect = get<HTMLSelectElement>('[data-directory-model]')
   const connectionSelect = get<HTMLSelectElement>('[data-directory-connection]')
   const providerSearch = get<HTMLInputElement>('[data-directory-provider-search]'), modelSearch = get<HTMLInputElement>('[data-directory-model-search]')
   const deprecated = get<HTMLInputElement>('[data-directory-deprecated]')
@@ -113,63 +140,107 @@ export function setupModelsDirectory(root: HTMLElement, api: Api, messageFor: (e
   let active = false, controller: AbortController | undefined, timer: ReturnType<typeof setTimeout> | undefined
   let providerSearchTimer: ReturnType<typeof setTimeout> | undefined, modelSearchTimer: ReturnType<typeof setTimeout> | undefined
   let recipes: readonly ProviderTemplate[] = [], generation = 0
-  let selectedProviderId = '', selectedModelId = ''
-  const selectedProvider = () => directory.snapshot().providers.find(item => item.id === selectedProviderId)
-  const selectedModel = () => directory.snapshot().models.find(item => item.remoteModelId === selectedModelId && item.providerId === selectedProviderId)
+  let selectedProviderId = '', selectedModelId = '', selectedRecipeId = '', configuredRefreshError: string | undefined
+  let providerRows: { id: string; row: HTMLLIElement; button: HTMLButtonElement; name: HTMLElement; source: HTMLElement; count: HTMLElement }[] = []
+  const knownProviders = new Map<string, DirectoryProvider>()
+  const selectedProvider = () => directory.snapshot().providers.find(item => item.id === selectedProviderId) ?? knownProviders.get(selectedProviderId)
+  const selectedModel = () => directory.snapshot().models.find(item => item.id === selectedModelId && item.providerId === selectedProviderId)
   const clearTimer = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined }
+  const visible = () => dialog.open && !root.closest('[hidden]')
+  const current = (read: number, signal?: AbortSignal): signal is AbortSignal => Boolean(active && read === generation && signal && signal === controller?.signal && !signal.aborted)
   function render(): void {
-    const state = directory.snapshot(), context = actions.context(), provider = selectedProvider(), model = selectedModel()
+    const state = directory.snapshot(), context = actions.context()
+    for (const item of state.providers) knownProviders.set(item.id, item)
+    const provider = selectedProvider(), model = selectedModel()
+    const connection = context.connection?.providerDefinitionId === selectedProviderId ? context.connection : undefined
     const status = state.status
-    get('[data-directory-status]').textContent = status ? `${status.sourceId} · ${status.origin === 'bundled' ? '内置离线快照' : status.origin === 'cache' ? '本地缓存' : '在线快照'} · ${status.stale ? '待更新' : '已检查'} · 快照 ${date(status.fetchedAt)} · 最近检查 ${date(status.checkedAt)}${status.refreshing || state.checking ? ' · 正在检查更新' : ''}${status.cache.persistence === 'memory' ? ' · 仅内存缓存' : ''}` : '正在读取本地目录。'
-    const error = state.error ?? (status?.error ? statusErrors[status.error] : status?.cache.error ? statusErrors[status.cache.error] : undefined)
-    get('[data-directory-error]').textContent = error ? `${error}。可继续使用现有连接和最近有效目录。` : ''
+    get('[data-directory-status]').textContent = state.checking || status?.refreshing ? '正在更新目录…' : status ? `${status.stale ? '离线目录' : '目录已更新'} · ${date(status.checkedAt ?? status.fetchedAt)}` : '正在读取模型目录。'
+    get('[data-directory-provenance]').textContent = status ? [
+      `${status.sourceId} · ${status.origin === 'bundled' ? '内置离线快照' : status.origin === 'cache' ? '本地缓存' : status.origin === 'store' ? '已保存目录' : '在线快照'} · ${status.stale ? '待更新' : '已检查'}`,
+      `快照：${date(status.fetchedAt)}；最近检查：${date(status.checkedAt)}`,
+      `快照版本：${status.snapshotVersion}`,
+      `缓存：${status.cache.persistence === 'memory' ? '仅内存' : '本地数据库'}${status.nextRefreshAt === undefined ? '' : `；下次检查：${date(status.nextRefreshAt)}`}`,
+    ].join('\n') : '尚未读取目录来源。'
+    const error = configuredRefreshError ?? state.error ?? (status?.error ? statusErrors[status.error] : status?.cache.error ? statusErrors[status.cache.error] : undefined)
+    get('[data-directory-error]').textContent = error ? `${error}。可继续使用已保存连接和模型。` : ''
     get('[data-directory-error]').hidden = !error
     get<HTMLButtonElement>('[data-directory-refresh]').disabled = state.checking || Boolean(status?.refreshing)
-    providerSelect.replaceChildren(option('', '选择目录提供方'), ...state.providers.map(item => option(item.id, `${item.name} · ${item.id}`)))
-    providerSelect.value = selectedProviderId
-    modelSelect.replaceChildren(option('', provider ? '选择目录模型' : '先选择目录提供方'), ...state.models.map(item => option(item.remoteModelId, `${item.name} · ${item.remoteModelId}${item.status === 'deprecated' ? ' · 已弃用' : ''}`)))
+    const candidates = state.providers
+    if (providerRows.length !== candidates.length || providerRows.some((row, index) => row.id !== candidates[index].id)) {
+      providerRows = candidates.map(item => {
+        const row = document.createElement('li'), button = document.createElement('button'), heading = document.createElement('span')
+        const name = document.createElement('strong'), source = document.createElement('span'), count = document.createElement('span')
+        button.type = 'button'; button.className = 'models-directory-provider-item'; button.dataset.directoryProviderId = item.id
+        heading.className = 'models-directory-provider-heading'; source.className = 'models-connection-meta'; count.className = 'models-status-badge'
+        heading.append(name, count); button.append(heading, source); row.append(button)
+        return { id: item.id, row, button, name, source, count }
+      })
+      providerList.replaceChildren(...providerRows.map(item => item.row))
+    }
+    providerRows.forEach((row, index) => {
+      const item = candidates[index], count = context.connections.filter(value => value.providerDefinitionId === item.id).length
+      row.name.textContent = item.name; row.source.textContent = sourceLabel(item.source); row.source.title = row.source.textContent
+      row.count.textContent = count ? `${count} 个连接` : '未添加'; row.count.dataset.tone = count ? 'ready' : 'muted'
+      row.button.setAttribute('aria-pressed', String(item.id === selectedProviderId)); row.button.disabled = !context.ready || context.busy
+    })
+    get('[data-directory-provider-count]').textContent = `${candidates.length} 个提供方`
+    const empty = get('[data-directory-provider-empty]')
+    empty.hidden = candidates.length > 0
+    empty.textContent = providerSearch.value.trim() ? '没有匹配的提供方，请调整搜索。' : '暂时没有提供方，可刷新目录或添加自定义连接。'
+    providerSearch.disabled = !context.ready || context.busy
+    modelSelect.replaceChildren(option('', provider ? '查看模型详情' : '先选择提供方'), ...state.models.map(item => option(item.id, `${item.name} · ${item.remoteModelId}${item.status === 'deprecated' ? ' · 已弃用' : ''}`)))
     modelSelect.value = selectedModelId
-    const previousRecipe = connectionSelect.value
-    recipes = model?.connections ?? provider?.connections ?? []
-    connectionSelect.replaceChildren(...(recipes.length ? recipes.map((item, index) => option(String(index), item.name)) : [option('', '手动选择已安装协议与地址')]))
-    if (previousRecipe !== '' && recipes[Number(previousRecipe)]) connectionSelect.value = previousRecipe
+    recipes = provider?.connections ?? []
+    if (!recipes.some(recipe => recipe.id === selectedRecipeId)) {
+      selectedRecipeId = recipes.find(recipe => context.providerDefinitionId === selectedProviderId && recipe.values.protocolId === context.protocolId)?.id ?? recipes[0]?.id ?? ''
+    }
+    connectionSelect.replaceChildren(...(recipes.length ? recipes.map(item => option(item.id, item.name)) : [option('', '手动选择协议与地址')]))
+    connectionSelect.value = selectedRecipeId
+    connectionSelect.disabled = !provider || context.busy
     const doc = get<HTMLAnchorElement>('[data-directory-doc]'); doc.hidden = !provider?.documentationUrl
     if (provider?.documentationUrl) doc.href = provider.documentationUrl
+    get('[data-directory-origin]').textContent = provider ? `来源：${sourceLabel(provider.source)}` : ''
     get<HTMLButtonElement>('[data-directory-new-connection]').disabled = !provider || !context.ready || context.busy
-    get<HTMLButtonElement>('[data-directory-associate]').disabled = !provider || !context.provider || context.busy ||
-      context.provider.catalogRef?.sourceId === provider.sourceId && context.provider.catalogRef.providerId === provider.id
-    get<HTMLButtonElement>('[data-directory-unbind]').disabled = !context.provider?.catalogRef || context.busy
-    const ref = context.provider?.catalogRef
-    get('[data-directory-association]').textContent = context.provider ? `${context.provider.name}：${ref ? `已关联 ${ref.sourceId} / ${ref.providerId}` : '未关联目录'}。关联仅保存来源引用，连接设置仍由下方表单管理。` : '填写新提供方会预填连接方案；可调整账号名称和代理地址后保存。'
+    get('[data-directory-guidance]').textContent = connection ? `已有连接：${connection.name}。可为此提供方添加另一账号。` : provider ? '填写 API Key 并保存，适用模型会自动加入可用列表。' : '选择提供方后填写 API Key。'
     const metadata: string[] = []
     if (model) {
-      metadata.push(`远端 ID：${model.remoteModelId}`, `输入：${model.modalities.input.join('、') || '未知'}；输出：${model.modalities.output.join('、') || '未知'}`)
+      metadata.push(`来源：${sourceLabel(model.source)}`, `远端 ID：${model.remoteModelId}`, `输入：${model.modalities.input.join('、') || '未知'}；输出：${model.modalities.output.join('、') || '未知'}`)
       metadata.push(`上下文：${model.limits.context?.toLocaleString('zh-CN') ?? '未知'}；最大输出：${model.limits.output?.toLocaleString('zh-CN') ?? '未知'}`)
-      if (model.cost) metadata.push(`参考价格 USD / 百万 token：输入 ${model.cost.input ?? '未知'}；输出 ${model.cost.output ?? '未知'}${model.cost.cacheRead !== undefined ? `；缓存读取 ${model.cost.cacheRead}` : ''}${model.cost.cacheWrite !== undefined ? `；缓存写入 ${model.cost.cacheWrite}` : ''}${model.cost.tiers?.length ? `；另有 ${model.cost.tiers.length} 个价格档位` : ''}`)
+      if (model.cost) metadata.push(`参考价格 USD / 百万 token：输入 ${model.cost.input ?? '未知'}；输出 ${model.cost.output ?? '未知'}${model.cost.cacheRead !== undefined ? `；缓存读取 ${model.cost.cacheRead}` : ''}${model.cost.cacheWrite !== undefined ? `；缓存写入 ${model.cost.cacheWrite}` : ''}`)
       if (model.status || model.releaseDate || model.lastUpdated) metadata.push(`状态：${model.status ?? '未标记'}；发布：${model.releaseDate ?? '未知'}；更新：${model.lastUpdated ?? '未知'}`)
       const reasoning = model.controls.reasoning?.map(control => control.kind === 'effort' ? `档位 ${control.values?.join(', ')}` : control.kind === 'budget' ? `预算 ${control.min ?? '未知'}–${control.max ?? '未知'}` : '推理开关').join('；')
       if (reasoning) metadata.push(`推理参考：${reasoning}`)
       if (model.description) metadata.push(model.description)
     }
     get('[data-directory-metadata]').textContent = metadata.join('\n')
-    const text = model ? catalogSupportsText(model) : false, matches = model ? catalogMatchesConnection(model, context.provider) : false
-    get<HTMLButtonElement>('[data-directory-use-model]').disabled = !model || !text || !matches || context.busy
-    get('[data-directory-guidance]').textContent = !model ? '目录候选与连接返回的远端候选分别展示。' : !text ? '此模型用于其他模态；当前执行接口支持文本与函数工具，可浏览参考信息。' : !context.provider ? '先填写并保存提供方，再填写此模型。' : !matches ? '当前提供方未关联此目录，或协议不适用。请显式关联，或按此模型的连接方案新建提供方。' : '填写后请确认能力与默认参数，再保存。目录价格和能力均为参考信息。'
   }
-  async function readModels(): Promise<void> {
-    await directory.readModels(selectedProviderId, modelSearch.value, deprecated.checked, controller?.signal)
+  async function readModels(read = generation, signal = controller?.signal): Promise<void> {
+    if (!current(read, signal)) return
+    await directory.readModels(selectedProviderId, modelSearch.value, deprecated.checked, signal)
+  }
+  function failConfigured(error: unknown, read: number, signal?: AbortSignal): void {
+    if (!current(read, signal)) return
+    configuredRefreshError = messageFor(error); render()
   }
   function poll(): void {
     clearTimer()
-    if (!active || !directory.snapshot().status?.refreshing && !directory.snapshot().checking) return
-    const current = generation
-    timer = setTimeout(() => { timer = undefined; void directory.readStatus(controller?.signal).then(async () => {
-      if (!active || current !== generation) return
-      if (!directory.snapshot().status?.refreshing && !directory.snapshot().checking) {
-        await directory.readProviders(providerSearch.value, controller?.signal); await readModels()
-      }
-      poll()
-    }) }, 800)
+    const read = generation, signal = controller?.signal
+    if (!current(read, signal) || !directory.snapshot().status?.refreshing && !directory.snapshot().checking) return
+    timer = setTimeout(() => {
+      timer = undefined
+      void (async () => {
+        if (!current(read, signal)) return
+        await directory.readStatus(signal)
+        if (!current(read, signal)) return
+        if (!directory.snapshot().status?.refreshing && !directory.snapshot().checking) {
+          await directory.readProviders(providerSearch.value, signal)
+          if (!current(read, signal)) return
+          await readModels(read, signal)
+          if (!current(read, signal)) return
+        }
+        poll()
+      })().catch(error => failConfigured(error, read, signal))
+    }, 800)
   }
   function stop(): void {
     active = false; generation++; clearTimer()
@@ -179,48 +250,101 @@ export function setupModelsDirectory(root: HTMLElement, api: Api, messageFor: (e
     controller?.abort(); controller = undefined; directory.invalidate()
   }
   async function open(): Promise<void> {
-    if (active) return
-    const current = ++generation
+    if (active || !visible()) return
+    const read = ++generation
     active = true; controller = new AbortController()
-    await Promise.all([directory.readStatus(controller.signal), directory.readProviders(providerSearch.value, controller.signal)])
-    if (!active || current !== generation) return
-    if (!selectedProviderId && !providerSearch.value) selectedProviderId = actions.context().provider?.catalogRef?.providerId ?? ''
-    render(); await readModels(); poll()
+    const signal = controller.signal
+    try {
+      await Promise.all([directory.readStatus(signal), directory.readProviders(providerSearch.value, signal)])
+      if (!current(read, signal)) return
+      render(); await readModels(read, signal)
+      if (!current(read, signal)) return
+      poll()
+    } catch (error) { failConfigured(error, read, signal) }
+  }
+  function sync(): void {
+    if (visible()) { if (!active) void open() }
+    else if (active) stop()
+    render()
+  }
+  function select(providerId: string): void {
+    if (selectedProviderId === providerId) {
+      const context = actions.context(), provider = selectedProvider()
+      selectedRecipeId = provider?.connections.find(recipe => context.providerDefinitionId === providerId && recipe.values.protocolId === context.protocolId)?.id ?? provider?.connections[0]?.id ?? ''
+      render(); return
+    }
+    selectedProviderId = providerId; selectedModelId = ''; selectedRecipeId = ''; modelSearch.value = ''
+    const provider = selectedProvider(), context = actions.context()
+    selectedRecipeId = provider?.connections.find(recipe => context.providerDefinitionId === providerId && recipe.values.protocolId === context.protocolId)?.id ?? provider?.connections[0]?.id ?? ''
+    if (providerId && !provider) providerSearch.value = ''
+    render()
+    const read = generation, signal = controller?.signal
+    if (!current(read, signal)) return
+    void (async () => {
+      if (providerId && !provider) {
+        await directory.readProviders(providerSearch.value, signal)
+        if (!current(read, signal) || selectedProviderId !== providerId) return
+      }
+      await readModels(read, signal)
+    })().catch(error => failConfigured(error, read, signal))
   }
   const unsubscribe = directory.subscribe(render)
-  const observer = new MutationObserver(() => { if (dialog.open) void open(); else stop() })
+  const observer = new MutationObserver(sync)
   observer.observe(dialog, { attributes: true, attributeFilter: ['open'] })
-  const closed = () => { if (!dialog.open) stop() }
+  observer.observe(root, { attributes: true, attributeFilter: ['hidden'] })
+  const closed = () => { if (!dialog.open && active) stop() }
   dialog.addEventListener('close', closed)
-  providerSelect.addEventListener('change', () => { selectedProviderId = providerSelect.value; selectedModelId = ''; modelSearch.value = ''; render(); void readModels() })
+  providerList.addEventListener('click', event => {
+    const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('[data-directory-provider-id]') : null
+    if (!button || button.disabled || !actions.context().ready || actions.context().busy || button.dataset.directoryProviderId === selectedProviderId) return
+    selectedProviderId = button.dataset.directoryProviderId!; selectedModelId = ''; selectedRecipeId = ''; modelSearch.value = ''
+    const provider = selectedProvider(); if (provider) actions.selectProvider(provider)
+    render(); void readModels()
+  })
+  connectionSelect.addEventListener('change', () => {
+    selectedRecipeId = connectionSelect.value
+    const provider = selectedProvider()
+    if (provider && actions.context().ready && !actions.context().busy) actions.useConnection(provider, recipes.find(recipe => recipe.id === selectedRecipeId), false)
+    render()
+  })
   modelSelect.addEventListener('change', () => { selectedModelId = modelSelect.value; render() })
   providerSearch.addEventListener('input', () => {
     if (providerSearchTimer !== undefined) clearTimeout(providerSearchTimer)
-    providerSearchTimer = setTimeout(() => { providerSearchTimer = undefined; void directory.readProviders(providerSearch.value, controller?.signal) }, 200)
+    const read = generation, signal = controller?.signal
+    providerSearchTimer = setTimeout(() => {
+      providerSearchTimer = undefined
+      if (current(read, signal)) void directory.readProviders(providerSearch.value, signal)
+    }, 200)
   })
   modelSearch.addEventListener('input', () => {
     if (modelSearchTimer !== undefined) clearTimeout(modelSearchTimer)
-    modelSearchTimer = setTimeout(() => { modelSearchTimer = undefined; void readModels() }, 200)
+    const read = generation, signal = controller?.signal
+    modelSearchTimer = setTimeout(() => { modelSearchTimer = undefined; if (current(read, signal)) void readModels(read, signal) }, 200)
   })
   deprecated.addEventListener('change', () => { void readModels() })
   get('[data-directory-refresh]').addEventListener('click', () => {
-    if (!active) return
-    const work = directory.refresh(controller?.signal); poll()
-    void work.then(async () => {
-      if (!active) return
-      // Failed refreshes reject the POST; read its persisted check state as well.
-      await directory.readStatus(controller?.signal)
-      if (!active) return
-      await directory.readProviders(providerSearch.value, controller?.signal); await readModels(); poll()
-    })
+    const read = generation, signal = controller?.signal
+    if (!current(read, signal)) return
+    configuredRefreshError = undefined
+    const work = directory.refresh(signal); poll()
+    void (async () => {
+      await work
+      if (!current(read, signal)) return
+      await directory.readStatus(signal)
+      if (!current(read, signal)) return
+      await directory.readProviders(providerSearch.value, signal)
+      if (!current(read, signal)) return
+      await readModels(read, signal)
+      if (!current(read, signal)) return
+      await actions.refreshConfigured()
+      if (!current(read, signal)) return
+      poll()
+    })().catch(error => failConfigured(error, read, signal))
   })
-  get('[data-directory-new-connection]').addEventListener('click', () => { const provider = selectedProvider(); if (provider) actions.useConnection(provider, recipes[Number(connectionSelect.value)]) })
-  get('[data-directory-use-model]').addEventListener('click', () => { const model = selectedModel(); if (model && catalogSupportsText(model) && catalogMatchesConnection(model, actions.context().provider)) actions.useModel(model) })
-  for (const unbind of [false, true]) get(unbind ? '[data-directory-unbind]' : '[data-directory-associate]').addEventListener('click', () => {
-    const provider = selectedProvider()
-    if (!unbind && !provider) return
-    void actions.associate(unbind ? null : { sourceId: provider!.sourceId, providerId: provider!.id })
+  get('[data-directory-new-connection]').addEventListener('click', () => {
+    const provider = selectedProvider(), context = actions.context()
+    if (provider && context.ready && !context.busy) actions.useConnection(provider, recipes.find(recipe => recipe.id === selectedRecipeId), true)
   })
-  render(); if (dialog.open) void open()
-  return { sync: render, dispose() { stop(); unsubscribe(); observer.disconnect(); dialog.removeEventListener('close', closed) } }
+  sync()
+  return { select, sync, dispose() { stop(); unsubscribe(); observer.disconnect(); dialog.removeEventListener('close', closed) } }
 }

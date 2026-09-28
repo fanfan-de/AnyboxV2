@@ -24,9 +24,12 @@ export async function installManagedModels(root, directory, { controlled = contr
   await root.installComponent(createModelsCatalogComponent({ autoRefresh: false, bundledSnapshot: normalizeModelsDevCatalog(directoryData) }))
   const settings = root.get('models.settings')
   const declarations = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: 'supported' } }
-  if (!settings.providers().length) {
-    await settings.createProvider({ id: 'default', name: 'Test service', enabled: true, protocolId: 'controlled', baseUrl: 'https://example.invalid/v1', auth: 'none', timeoutMs: 30000 })
-    await settings.createModel({ id: 'default', name: 'Test model', enabled: true, providerId: 'default', remoteModelId: 'remote-test', capabilities: declarations, defaults: {} })
+  if (!settings.connections().length) {
+    const provider = await settings.createProvider({ id: 'default-provider-definition', name: 'Test service', connectionHints: { baseUrl: 'https://example.invalid/v1', protocolIds: ['controlled'] } })
+    const connection = await settings.createConnection({ id: 'default', providerDefinitionId: provider.id, name: 'Test service', enabled: true, protocolId: 'controlled', baseUrl: 'https://example.invalid/v1', auth: 'none', timeoutMs: 30000 })
+    const model = await settings.createModel({ id: 'default-model-definition', name: 'Test model', providerId: provider.id, remoteModelId: 'remote-test', capabilities: declarations,
+      controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['controlled'], baseUrl: connection.baseUrl } })
+    await settings.createConfiguration({ id: 'default', name: 'Test model', enabled: true, connectionId: connection.id, modelDefinitionId: model.id, capabilities: declarations, defaults: {}, baseline: true })
   }
   return { controlled, secrets, apiFiber, vaultFiber, installRuntime }
 }

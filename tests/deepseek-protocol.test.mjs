@@ -74,7 +74,7 @@ test('DeepSeek discovery and connection checks use authenticated GET and do not 
     assert.equal(request.body, undefined)
     assert.equal(request.headers.Authorization, 'Bearer private-deepseek-key')
   }
-  assert.equal(f.settings.models().length, 1)
+  assert.equal(f.settings.configurations().length, 1)
 })
 
 test('DeepSeek rejects unsupported reasoning options and required reasoning before any network call', async t => {
@@ -85,8 +85,8 @@ test('DeepSeek rejects unsupported reasoning options and required reasoning befo
   assert.ok(descriptor.modelFields.every(field => !field.key.startsWith('protocol.')))
   assert.equal(f.models.get('model').effectiveCapabilities.reasoning.support, 'unsupported')
   await assert.rejects(f.models.open({ modelId: 'model', requirements: { reasoning: true } }), { code: 'capability-unsupported' })
-  await assert.rejects(f.settings.updateModel('model', { defaults: { protocol: { reasoningEffort: 'high' } } }, 1), { code: 'capability-unsupported' })
-  await assert.rejects(f.settings.updateModel('model', { defaults: { protocol: { unknown: 1 } } }, 1), { code: 'capability-unsupported' })
+  await assert.rejects(f.settings.updateConfiguration('model', { defaults: { protocol: { reasoningEffort: 'high' } } }, 1), { code: 'capability-unsupported' })
+  await assert.rejects(f.settings.updateConfiguration('model', { defaults: { protocol: { unknown: 1 } } }, 1), { code: 'capability-unsupported' })
   assert.equal(calls, 0)
 })
 

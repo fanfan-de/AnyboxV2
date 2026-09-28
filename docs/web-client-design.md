@@ -4,15 +4,17 @@
 
 ## 边界
 
-浏览器只通过同源 `/api/v1` 与本机 Web 组件交互。应用宿主在同一个 Nya 根上安装 `packages/models` 的配置存储、系统凭据、模型服务、公开目录来源/缓存/服务、Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions，以及宿主的 DeepSeek 非推理扩展，再装配业务 SQLite、Harness、目录选择器和 `web-frontend`。多个 Provider 同时可用，Provider 和 Model 是配置记录，不为每条连接创建 Context 或组件。Models 配置使用独立的 `data/models.sqlite`，公开目录使用 `data/models-catalog.sqlite`，业务会话保留在 `data/harness.sqlite`；三库不能共用文件或文件别名。路径和凭据命名空间可由启动配置指定。配置数据库只保存凭据引用，密钥值仅存入系统凭据库。
+浏览器只通过同源 `/api/v1` 与本机 Web 组件交互。应用宿主在同一个 Nya 根上安装 `packages/models` 的配置存储、系统凭据、模型服务、公开目录来源/缓存/服务、Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions，以及宿主的 DeepSeek 非推理扩展，再装配业务 SQLite、Harness、目录选择器和 `web-frontend`。统一 Provider/Model 定义带 user/external 来源，多个 ProviderConnection 同时可用，实际执行使用 ModelConfiguration；这些都是数据记录，不为每条连接创建 Context 或组件。Models 配置使用独立的 `data/models.sqlite`，公开目录使用 `data/models-catalog.sqlite`，业务会话保留在 `data/harness.sqlite`；三库不能共用文件或文件别名。路径和凭据命名空间可由启动配置指定。配置数据库只保存凭据引用，密钥值仅存入系统凭据库。
 
-`ANYBOX_LLM_*` 保留为新 Models 数据库的初次迁入参数；已有 Provider/Model 不会被环境变量覆盖。初次启动建立迁入连接和本地 `default` Model，并尝试把旧凭据复制到 Models 管理的系统凭据条目；旧密钥缺失或系统凭据库暂不可访问时仍允许进入设置。后续连接、模型、参数及 Key 均通过 `models.settings` 修改，不需要重启应用。变量详情见 [README](../README.md#本机-web-界面)。Web 组件拥有 HTTP 监听器与静态页面；进程信号由入口处理，经 `harness.close()` 关闭整个根。Harness 负责项目、Session、Run 准入、幂等、工具执行、取消和结算，直接消费 `models`；原生请求、流解析、续轮状态、密钥使用及协议退出由 Models 管理。
+`ANYBOX_LLM_*` 保留为新 Models 数据库的初次迁入参数；已有连接/配置不会被环境变量覆盖。初次启动建立显式用户定义、迁入连接和稳定 `default` 配置，并尝试把旧凭据复制到 Models 管理的系统凭据条目；旧密钥缺失或系统凭据库暂不可访问时仍允许进入设置。后续连接、模型、参数及 Key 均通过 `models.settings` 修改，不需要重启应用。变量详情见 [README](../README.md#本机-web-界面)。Web 组件拥有 HTTP 监听器与静态页面；进程信号由入口处理，经 `harness.close()` 关闭整个根。Harness 负责项目、Session、Run 准入、幂等、工具执行、取消和结算，直接消费 `models`；原生请求、流解析、续轮状态、密钥使用及协议退出由 Models 管理。
 
 页面使用原生 TypeScript、HTML 和 CSS。`client.ts` 负责全局设置与启动，`models-client.ts` 管理连接/模型配置表单及跨面板共享的已保存模型列表，`models-directory-client.ts` 独立管理公共目录状态、查询、刷新和短暂轮询；`workspace-layout.ts` 提供纯布局函数，`workspace-client.ts` 管理工作区，`session-client.ts` 管理各会话请求与临时流文本，`session-view.ts` 管理面板 DOM，`tool-trace.ts` 归并两类工具的展示状态，`prompt-client.ts` 保留 Prompt 设置。浏览器运行时代码只使用浏览器 API；Models 类型导入仅用于编译检查，不向浏览器加载 Nya 或 Models 的服务端代码。
 
-`src/web/component.ts` 接收 Harness 校验后的 Agent ID 列表，通过 Nya 注入 Projects、Session、Run、Prompt、Agent Prompt、目录选择器、`models`、`models.settings` 与 `models.catalog`；`server.ts` 映射同源 HTTP 接口。业务查询取自 `harness.sessions`，执行控制取自 `harness.runs`，已保存模型查询取自 `models`，配置和 Key 操作取自 `models.settings`，参考目录取自 `models.catalog`。Web 不依赖旧 `credentials.settings`，也不向前端提供凭据读取服务或协议注册服务。
+模型服务主页面展示“我的连接”；添加连接流程以可搜索、可滚动的列表同时展示多个 Provider 定义，按定义 ID 显示来源、已有连接数量及当前选中项。点击提供方后在右侧填写连接配置，连接方案、模型目录预览和自定义连接入口沿用原流程。列表选择仅填写草稿，不创建连接或修改会话选模；目录状态更新保留列表按钮焦点。
 
-公开 Session 包含选定的 `modelId`；公开 Run 包含实际 `modelId`、调用者显式指定的 `requestedModelId` 和不含秘密的 `modelSnapshot`（Provider/Model 版本、协议版本、远端模型标识及有效参数）。Agent 指令、Prompt 内容快照、execution 句柄、原生续轮数据与密钥不进入普通 Session/Run DTO。Bash 命令和输出摘要、Apply Patch 预览和结果仍可展示；Prompt 管理单独返回可管理文档和版本。模型管理接口仅返回 Key 是否已配置，绝不回传密钥值或内部凭据引用。
+`src/web/component.ts` 接收 Harness 校验后的 Agent ID 列表，通过 Nya 注入 Projects、Session、Run、Prompt、Agent Prompt、目录选择器、`models`、`models.settings` 与 `models.catalog`；`server.ts` 映射同源 HTTP 接口。业务查询取自 `harness.sessions`，执行控制取自 `harness.runs`，已保存模型查询取自 `models`，配置和 Key 操作取自 `models.settings`，统一目录定义也取自 `models.settings`；`models.catalog` 仅提供来源状态和刷新。Web 不依赖旧 `credentials.settings`，也不向前端提供凭据读取服务或协议注册服务。
+
+公开 Session 包含选定的 `modelId`；公开 Run 包含实际 `modelId`、调用者显式指定的 `requestedModelId` 和不含秘密的 `modelSnapshot`（schemaVersion 2、配置/连接版本、Provider/Model 定义身份、模型定义版本、协议版本、远端模型标识及有效参数；旧快照不重写）。Agent 指令、Prompt 内容快照、execution 句柄、原生续轮数据与密钥不进入普通 Session/Run DTO。Bash 命令和输出摘要、Apply Patch 预览和结果仍可展示；Prompt 管理单独返回可管理文档和版本。模型管理接口仅返回 Key 是否已配置，绝不回传密钥值或内部凭据引用。
 
 依赖撤销时 Web 停止准入，取消目录选择、目录手动刷新、模型发现和连接检查，关闭 SSE 与 HTTP 并等待在途请求退出，包括已接收的 Prompt/模型配置写入，再释放依赖；依赖恢复后在原端口重启。目录刷新请求断连会取消其来源操作并等待 reader 实际退出。Web 单独关闭不取消已交给 Harness 的 Run，应用根关闭则按依赖顺序取消并等待所有执行。前端不保存权威业务状态，不直接连接 Provider、SQLite 或系统凭据库。
 
@@ -43,20 +45,24 @@
 | `GET /api/v1/models/protocols` | 已安装协议、表单字段描述、发现和检查能力 |
 | `GET /api/v1/models/templates` | 宿主提供的连接模板；模板只预填配置 |
 | `GET /api/v1/models/catalog` | 独立目录状态：快照、最近检查、陈旧/刷新中、持久化及固定错误码 |
-| `GET /api/v1/models/catalog/providers?search=…` | 本地目录提供方及根据已安装协议、宿主模板生成的连接建议 |
-| `GET /api/v1/models/catalog/models?providerId=…&search=…&includeDeprecated=…` | 本地目录模型、参考能力/价格/模态/限制与模型级连接建议；默认隐藏 deprecated |
 | `POST /api/v1/models/catalog/refresh` | 用 `{}` 手动后台来源检查；断连取消，等待实际退出与已接纳缓存提交 |
-| `GET /api/v1/models/providers` | 连接配置、版本与 `credentialConfigured` |
-| `POST /api/v1/models/providers` | 用 Provider 配置及可选 `id`、`apiKey` 创建连接 |
-| `POST /api/v1/models/providers/:id` | `{patch,expectedRevision}` 修改连接；协议 ID 不可修改 |
-| `POST /api/v1/models/providers/:id/key` | `{apiKey,expectedRevision}` 设置或替换 Key |
-| `POST /api/v1/models/providers/:id/key/delete` | `{expectedRevision}` 删除 Key |
-| `GET /api/v1/models/providers/:id/history` | 连接不可变版本历史；不返回旧 Key 值 |
-| `POST /api/v1/models/providers/:id/discover` | `{}` 获取候选模型，不自动保存或覆盖本地配置 |
-| `POST /api/v1/models/providers/:id/check` | `{}` 显式检查连接，成功返回 `{ok:true}`；保存配置无需网络检查 |
+| `GET /api/v1/models/providers?search=…` | 统一 Provider 定义、来源/状态和根据已安装协议生成的连接方案 |
+| `POST /api/v1/models/providers` | 用名称、文档地址、connectionHints 创建用户 Provider 定义 |
+| `POST /api/v1/models/providers/:id`、`GET …/:id/history` | 用户定义 CAS 编辑与不可变历史；外部来源定义不可直接编辑 |
+| `GET /api/v1/models/definitions?providerId=…&search=…&includeDeprecated=…` | 统一 Model 定义、来源/状态、能力/价格/模态/限制和模型连接方案 |
+| `POST /api/v1/models/definitions`、`POST …/:id`、`GET …/:id/history` | 用户模型定义创建、CAS 编辑和历史 |
+| `GET /api/v1/models/connections` | 账号连接、版本、credentialConfigured 和 pending/ready/failed 同步状态 |
+| `POST /api/v1/models/connections` | 关联内部 providerDefinitionId，保存连接与可选 API Key，自动准备适用基础模型 |
+| `POST /api/v1/models/connections/:id` | CAS 修改连接，协议和所属 Provider 定义固定 |
+| `POST /api/v1/models/connections/:id/delete` | 用 expectedRevision 删除当前连接及全部配置；清理 Key，保留定义、历史与已打开 execution |
+| `POST /api/v1/models/connections/:id/key`、`POST …/:id/key/delete` | 设置/替换/删除 Key，仅影响新 execution |
+| `GET /api/v1/models/connections/:id/history` | 不含旧 Key 的连接历史 |
+| `GET /api/v1/models/connections/:id/models` | 全部模型及其可用状态/原因与已有基础配置 ID |
+| `POST /api/v1/models/connections/:id/retry` | 显式重试缺失基础模型同步，幂等且保留已有参数 |
+| `POST /api/v1/models/connections/:id/discover`、`POST …/:id/check` | 获取候选或检查连接；不自动覆盖定义/配置，无生成调用 |
 | `GET /api/v1/models/configurations` | 可编辑的本地模型记录 |
-| `POST /api/v1/models/configurations` | 用 Model 配置及可选 `id` 创建本地模型 |
-| `POST /api/v1/models/configurations/:id` | `{patch,expectedRevision}` 修改模型；所属 Provider 不可修改 |
+| `POST /api/v1/models/configurations` | 关联 modelDefinitionId 和 connectionId 创建配置；额外预设 baseline:false |
+| `POST /api/v1/models/configurations/:id` | CAS 修改参数、名称、能力或启停；所属模型定义/连接固定 |
 | `GET /api/v1/models/configurations/:id/history` | 模型不可变版本历史 |
 | `GET /api/v1/prompts` | 列出本机用户的 Prompt 文档和草稿 |
 | `POST /api/v1/prompts` | 用 `{name,description?,kind,role,content}` 创建草稿 |
@@ -68,6 +74,8 @@
 | `POST /api/v1/agents/:id/prompts` | 用 `{versionId}` 将已发布版本应用到 Agent 的对应用途 |
 
 除 SSE 外，成功响应是 JSON。失败响应是 `{ "error": { "code": "..." } }`；已知输入错误、对象不存在、准入冲突或项目不可用、服务不可用分别使用 400、404、409、503，未知错误统一为 500，不传出内部异常。Models 配置冲突返回 `409 conflict`，无效配置/能力组合返回 400，网络超时返回 504；凭据、协议或远端服务不可用使用固定错误类别和 503。写请求要求同源 `Origin` 和 JSON；所有请求要求本机地址的 `Host`，宿主只监听 `127.0.0.1`，不开放 CORS。本机单用户版本没有账号或远程访问能力。
+
+连接详情顶部提供“删除连接”，先显示账号名、模型配置数量和影响说明，确认后才提交 CAS 删除。成功后清除该账号的草稿并刷新共享模型列表，选择剩余账号或进入添加流程；历史对话与已接受 Run 保持原快照，原会话保留模型 ID 并提示重新选模。刷新也会处理被其他页面删除的当前连接。删除最后一个连接后，启动不会重新迁入旧默认连接。
 
 ## Run 变更通知与模型流式进展
 
@@ -97,9 +105,15 @@ HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run
 
 不超过 760px 时，功能轨缩为 44px，侧栏默认收起，通过功能轨按钮打开覆盖式抽屉，不再挤占对话区高度。抽屉打开时主区域不可交互，键盘焦点留在侧栏；关闭按钮、遮罩或 Esc 收起抽屉并将焦点返回开关。点击可用的会话或新建会话按钮后收起抽屉，切换项目仍留在导航中。跨越断点时关闭抽屉，恢复页面内存中的桌面折叠偏好。侧栏显隐由 `client.ts` 管理，不持久化为服务端状态，也不重建会话控制器。
 
-配置项通过功能轨底部“设置”按钮打开原生模态弹窗，集中提供新会话的 Agent 选择、模型服务配置和 Prompt 编辑器入口。公共目录单独显示快照与检查状态，支持提供方/模型搜索、deprecated 开关和模态/价格/限制参考。连接方案由服务端根据已安装协议生成；填写后可改代理地址，确认保存才建立本地 Provider。已保存连接可显式关联或解除 `catalogRef`，关联不保存表单中的地址草稿或改变 Key、模型和参数。模型级协议提示不适用时提示新建合适连接；非文本候选仍可浏览。目录候选与连接返回的远端候选分开显示。刷新只更新目录状态和候选，保留配置表单与会话选模；关闭设置取消目录请求并释放搜索/轮询 timer。目录失败留在目录区域，已有配置仍可管理。
+配置项通过功能轨底部“设置”打开原生模态弹窗。模型服务默认展示“我的连接”和所选连接的模型列表；连接状态区分未配置 Key、协议未安装、准备失败和停用。列表可以按模型名称/远端 ID 搜索，筛选全部、可用或不可用项，并逐行展示来源、不可用原因和参数预设标记。点击“参数设置”打开对应模型的参数编辑器；连接设置默认折叠，需要补 Key 或处理失败时展开。
 
-模型服务区可以新增或选择 Provider、套用模板或自定义协议、编辑连接名称/API 地址/认证/超时/启用状态，并在同一连接内设置、替换或删除 API Key。协议创建后固定，高级连接设置默认折叠；新建时手动脱离模板协议会清除该模板关联。模型区支持候选发现或手填远端标识，可为同一远端模型建立多个名称和不同默认参数。能力按支持/不支持/未知声明，图片能力仅记录；推理档位、模式和预算可记录约束。生成参数按已安装协议的字段描述渲染，新建表单应用 `defaultValue`，读取旧配置保留省略值；Anthropic 新模型输出上限预填 4096，目录限制更小时取较小值。保存使用所读 `expectedRevision`，冲突保留表单并提示重新读取。连接与模型均可查询不可变版本历史。弹窗支持关闭按钮与 Esc，关闭后清空未提交的 Key；关闭后的焦点遵循原生 dialog 行为，仅当设置入口本身不可见时回到功能轨的侧栏开关。窄屏打开设置前先关闭导航抽屉。新会话使用弹窗中选定的 Agent，选择在当前页面内生效；弹窗内容超出小窗口高度时仅内部滚动，关闭按钮始终可见。功能轨的使用说明单独介绍分屏、分支、发送与换行，以及关闭面板不会停止运行。
+浏览器只在 `localStorage` 记住模型设置中选中的连接 ID；再次打开时按该 ID 恢复，即使连接当前不可用也保留选择，方便补 Key 或修复。没有有效偏好时，优先选择包含可用模型的启用连接，其次是已启用且有 Key 或无需认证的连接，最后回退到第一个；空列表进入添加流程。此偏好不包含凭据，也不改变会话的模型选择。首次状态读取失败仍可点击“刷新状态”重试。
+
+“添加提供方”打开独立流程：目录侧栏选择统一 Provider 定义与连接方案，表单确认账号连接名称、代理地址和 API Key，保存后自动准备适用模型并返回模型列表。目录只在添加流程中展示；模型详情、弃用开关、模态、价格、限制和完整快照来源放在折叠预览区。选择已有提供方仍可创建另一账号连接，公共定义与实际账号保持独立身份；未知映射可以在表单中手动选择协议。目录搜索保留可见的已选提供方，连接方案按自身身份匹配，不沿用其他提供方的选项序号。关闭或离开添加流程取消目录读取，释放搜索/轮询 timer；不同读取和刷新错误独立保留，已有连接仍可管理。
+
+连接名称、地址、认证、超时、启停与新 Key 使用同一保存操作；所属 Provider 与协议创建后固定，Key 留空保留现有凭据。删除 Key 需在表单内确认，随后模型列表更新可用状态。高级连接设置提供模板、认证方式、超时、连接检查与版本历史。模型参数编辑器提供生成参数、能力与推理声明、自定义模型和“另存为参数预设”，远端发现收进单独折叠区。用户自定义 Provider/Model 明确 source:user；参数预设 baseline:false，与基础配置共享模型定义但拥有独立稳定配置 ID。生成参数按协议字段渲染，初始化时保存 descriptor 默认值，读取已有配置保留省略；Anthropic 基础配置输出上限默认 4096，来源限制较小则取较小值。保存使用 expectedRevision，冲突保留表单；历史不返回秘密。非秘密草稿只在当前页面按连接/配置身份保留，Key 在切换账号、关闭或 Esc 时清空。窄屏先关闭导航抽屉，弹窗仅内部滚动。
+
+连接和 Key 分别提交：先保存连接配置，再使用返回的修订号更新新 Key。Key 写入失败时明确报告已保存的连接，并可在该连接上重试；保存成功后的状态刷新失败也保留已接纳的身份和修订号。刷新、重试或保存连接保留当前模型编辑器与非秘密草稿；每个账号分别记住已保存配置或新草稿这一编辑目标，以及编辑器是否可见和展开。新自定义模型和新参数预设即使收起、刷新或切换账号再返回，也可继续编辑；再次点击新建入口恢复已有的新草稿，仅显式“放弃修改”才清除它。草稿沿用开始修改时的修订号，服务器已有新修改时仍由 CAS 返回冲突。“另存为参数预设”使用当前表单参数与能力声明，与原配置共享模型定义但保存为独立配置，原模型配置继续保留。
 
 用户点击“添加项目”打开 macOS 原生文件夹选择窗口；选中后登记项目，列表常驻显示名称，完整路径通过悬停提示查看，目录不可访问时额外显示状态，取消不改变项目列表。浏览器不提供路径输入，也不能用旧的按路径 HTTP 接口登记项目。目录选择器在其他系统上报告不支持，Web 仍可启动。页面路由记录项目与可选 Session ID。无需切换项目即可浏览各项目展开的会话；点击项目名称选择顶部“新建会话”的所属项目，项目行右侧的新建按钮则直接在该项目中创建会话，均使用设置中选定的全局 Agent。行内新建按钮在悬停或键盘聚焦项目行时显示，触屏始终显示。已加载会话从首条可用输入在页面内派生标题，依次取祖先路径、直接子节点或已读 Run；未打开、尚无已知输入的列表项回退为 Session ID 摘要，不新增标题接口或持久字段。项目目录后来不可访问时，项目、Session 和 Run 历史数据仍保留，创建会话与新 Run 返回 `project-unavailable`。
 
@@ -107,7 +121,7 @@ HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run
 
 刷新或重新打开会话时，先按键只读查询已接受 Run，再恢复未确认提交。已有 `anybox.web.v2.pending` 格式继续读取；旧记录缺少父节点或缺少固定模型且查不到已接受 Run 时，仅恢复输入供用户选定位置和模型后确认，不猜测起点或模型，不自动发出写请求。已发出的写请求即使面板关闭也按原 Session 和幂等键结算；关闭面板只停止读取和轮询，不调用取消接口。Key 仅在 Provider 表单中提交；响应不返回原值，也不把 Key 写入 sessionStorage。
 
-每个会话的模型选择由服务端 `Session.modelId` 持久化，模型选择器按 Provider 分组并显示不可用原因。`ModelSummary.available` 为真的文本模型均可选择；有效工具能力未知或不支持时，Harness 不提供 Bash/Apply Patch，按纯文本方式调用，只有明确可用工具能力才提供这两项工具。没有选定可用模型时禁止新提交并显示“配置模型”入口；历史仍可阅读，已接受 Run 保持原快照。配置写入后刷新共享模型列表并更新所有面板，不自动替换会话选择。切换模型只影响后续 Run，重试未确认请求继续携带原 `modelId`，不会因另一个页面修改 Session 选择而改用其他模型。
+每个会话的模型选择由服务端 `Session.modelId` 持久化，模型选择器按 ProviderConnection 分组并显示不可用原因。`RunnableModelSummary.available` 为真的文本模型均可选择；有效工具能力未知或不支持时，Harness 不提供 Bash/Apply Patch，按纯文本方式调用，只有明确可用工具能力才提供这两项工具。没有选定可用模型时禁止新提交并显示“配置模型”入口；历史仍可阅读，已接受 Run 保持原快照。配置写入后刷新共享模型列表并更新所有面板，不自动替换会话选择。切换模型只影响后续 Run，重试未确认请求继续携带原 `modelId`，不会因另一个页面修改 Session 选择而改用其他模型。
 
 “设置 → Prompt 管理 → 打开 Prompt 编辑器”提供文档列表、草稿编辑、版本预览和 Agent 绑定。首次可点击“编辑当前指令”，将内置指令复制为本机用户的草稿；已有可管理绑定则直接打开对应文档。保存、发布、应用是三个独立步骤：保存不改变已发布内容，发布不自动切换绑定，应用只影响后续 Run，所有项目共享该 Agent 的绑定。用户可选择旧版本重新应用。编辑与发布都校验页面读取的修订号；冲突保留输入供复制，并提供显式放弃修改及重新读取操作。未保存时阻止切换文档或关闭编辑器，避免静默丢失输入。
 
@@ -153,6 +167,12 @@ HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run
 `tests/project-navigation.test.mjs` 覆盖不同项目并行读取、同项目刷新后的迟到响应、关闭取消以及失败保留旧数据和重试。`npm run check`：244 项通过，2 项默认门控跳过，0 失败。浏览器验证项目下会话归属、独立折叠、行内新建以及跨项目分屏，无控制台 error/warn；[分组侧栏截图](./ui/anybox-grouped-sidebar.png)使用隔离测试数据。
 
 
+### 连接删除验收（2026-09-28）
+
+连接详情顶部新增“删除连接”和确认区。临时浏览器宿主验证取消不会改变账号列表；删除后切换到剩余账号并保留其未保存草稿；删除最后一个账号进入添加流程，目录定义仍在。控制台无 warning/error。使用临时 SQLite、内存凭据和 HTTP 替身，未删除工作区连接或使用真实 Key。
+
+`packages/models/tests/connection-deletion.test.mjs` 验证多账号隔离、配置/预设删除、不可变历史、在途执行与续轮继续、凭据读取的准入顺序、存储失败原样保留、Vault 失败日志恢复，以及来源接纳与删除的队列协调。SQLite 测试验证事务/CAS、重启持久化和禁止复用已删除 ID；宿主测试验证不会重迁旧默认连接；Web HTTP 测试验证同源保护、错误状态、会话选模保留和在途 Run 成功结算。`npm run check`：433 项通过，2 项系统凭据测试按门控跳过，0 失败。
+
 ### Models 接入验收（2026-09-28）
 
 `tests/models-client.test.mjs` 验证协议描述生成参数时省略空值、保留零/false、拒绝无效枚举与范围，以及共享目录忽略过期读取；可用文本模型不因缺少工具能力而被禁选。`tests/model-selection-client.test.mjs` 验证按会话持久化选择、重试固定原模型、旧 pending 恢复确认、有界临时文本与终态清理。`tests/run-change-client.test.mjs` 增加模型进展的订阅范围、代次和数据校验。服务端和模块的配置、版本冲突、凭据隔离及执行生命周期由各自行为测试覆盖。
@@ -161,6 +181,8 @@ Chrome 验收使用真正的 Models/Harness/Web 与临时 SQLite，凭据库和 
 
 ### 公共目录与原生协议验收（2026-09-28）
 
-`tests/models-directory-web.test.mjs` 使用真实 Nya、三套临时 SQLite、本地 HTTP 和原生 JSON/SSE mock，验证 Anthropic 与 Gemini 的文本、Bash 工具续轮、最终答案，以及代理地址、4096 默认参数、来源解绑、目录删除、失败保旧、断连和关闭等待实际 reader 退出。`tests/models-client.test.mjs` 补充新表单默认值、模态与协议匹配、独立目录读取代次、刷新/查询乱序与关闭后取消发布。模块内测试覆盖缓存/ETag/退避、实际退出、旧配置、参数校验、签名私有化和分页发现。
+`tests/models-directory-web.test.mjs` 使用真实 Nya、三套临时 SQLite、本地 HTTP 和原生 JSON/SSE mock，验证 Anthropic 与 Gemini 的文本、Bash 工具续轮、最终答案，以及代理地址、4096 默认参数、目录移除保留配置、双账号自动基础配置、参数预设、幂等同步重试、失败保旧、断连和关闭等待实际 reader 退出。`tests/models-client.test.mjs` 补充新表单默认值、模态与协议匹配、独立目录读取代次、刷新/查询乱序、分通道错误保留、预先取消不发请求以及关闭后过期成功/失败响应不发布。模块内测试覆盖缓存/ETag/退避、实际退出、旧配置、参数校验、签名私有化和分页发现。
 
-实际浏览器在 Codex 内置浏览器中完成了目录选 Anthropic、调整代理地址、保存模型、会话选模、Bash 续轮至最终答案；手动刷新保留未保存名称/地址，页面重载后会话选择与答案仍在。另验证手动切换 Gemini 协议清除旧模板关联。复现入口为 `node tests/helpers/catalog-browser-host.mjs`；完整范围见[验收记录](models-catalog-validation.md)。
+2026-09-28 统一定义接入阶段的 Chrome 验收（此次布局整理前）使用临时 Models/Harness/Web 宿主和内存凭据、HTTP 替身：在目录选择 Anthropic、调整代理地址并保存一次测试 Key 后，兼容模型自动加入可用列表，基础配置持久保存 4096 输出默认值，弃用模型显示原因。高级模型设置默认折叠；新增 8192 输出的参数预设后基础配置仍在。会话选择自动模型后完成流式文本和 Bash 续轮至最终答案；手动刷新保留未保存的名称/地址，页面重载后会话选择与答案仍在，控制台无 error/warn。复现入口为 `node tests/helpers/catalog-browser-host.mjs`；测试标签页和临时宿主已关闭并清理，完整范围见[验收记录](models-catalog-validation.md)。
+
+同日的模型服务整理使用 Codex 内置浏览器验证独立添加流程、账号连接列表、模型搜索/状态筛选、统一保存连接与 Key、删除 Key 后整组不可用、参数预设保留原基础配置，以及保存/刷新/切换账号后保留非秘密草稿。新增模型与预设收起后仍能恢复，明确放弃才清除；受控外部修改后保存旧草稿返回冲突，表单内容保留，放弃修改可载入最新参数。窄屏验证单列布局和操作可达性，浏览器无 warning/error。截图与具体步骤见[界面验收](models-catalog-validation.md#模型服务排布与交互整理)。最终 `npm run check`：426 项通过，2 项系统凭据测试按门控跳过，0 失败。

@@ -11,9 +11,8 @@ import type { WebStartupConfig } from './startup-config.js'
 import { createDeepSeekProtocolComponent } from './deepseek-protocol.js'
 
 export const webProviderTemplates: readonly ProviderTemplate[] = Object.freeze([
-  Object.freeze({ id: 'deepseek', name: 'DeepSeek 非推理', values: Object.freeze({ enabled: true,
-    protocolId: 'deepseek-chat-completions', baseUrl: 'https://api.deepseek.com', auth: 'api-key' as const, timeoutMs: 30_000,
-    catalogRef: Object.freeze({ sourceId: 'models.dev', providerId: 'deepseek' }) }) }),
+  Object.freeze({ id: 'deepseek', name: 'DeepSeek 非推理', values: Object.freeze({ enabled: true, sourceRef: Object.freeze({ sourceId: 'models.dev', providerId: 'deepseek' }),
+    protocolId: 'deepseek-chat-completions', baseUrl: 'https://api.deepseek.com', auth: 'api-key' as const, timeoutMs: 30_000 }) }),
   ...builtinProviderTemplates,
 ])
 export interface WebModelsOptions extends ProtocolOptions {
@@ -25,32 +24,28 @@ export interface WebModelsOptions extends ProtocolOptions {
 
 /** Finite, trusted startup assembly. Nya owns all installed resource lifetimes. */
 export async function installWebModels(root: Context, config: WebStartupConfig, options: WebModelsOptions = {}): Promise<{ readonly defaultModelId?: string }> {
-  for (const component of [
+  const install = async (components: readonly Parameters<Context['installComponent']>[0][]) => {
+    for (const component of components) {
+      const fiber = root.installComponent(component)
+      await fiber
+      if (fiber.state !== FiberState.ACTIVE) throw new Error('Models startup failed')
+    }
+  }
+  await install([
     createModelsStoreComponent({ path: config.modelsDatabasePath }),
     createModelsVaultComponent({ namespace: config.credentialNamespace, openEntry: options.openEntry }),
     createModelsComponent(),
-    createResponsesProtocolComponent({ fetch: options.fetch }),
-    createChatCompletionsProtocolComponent({ fetch: options.fetch }),
-    createDeepSeekProtocolComponent({ fetch: options.fetch }),
-    createAnthropicMessagesProtocolComponent({ fetch: options.fetch }),
-    createGeminiInteractionsProtocolComponent({ fetch: options.fetch }),
-    createModelsDevCatalogSourceComponent({ fetch: options.catalogFetch }),
-    createModelsCatalogCacheComponent({ path: config.modelsCatalogDatabasePath, reservedPaths: [config.modelsDatabasePath, config.harnessDatabasePath] }),
-    createModelsCatalogComponent({ autoRefresh: options.catalogAutoRefresh }),
-  ]) {
-    const fiber = root.installComponent(component)
-    await fiber
-    if (fiber.state !== FiberState.ACTIVE) throw new Error('Models startup failed')
-  }
+  ])
   const settings = root.get<ModelsSettingsService>(modelsSettingsServiceKey)!
-  const providers = settings.providers()
-  const importedProviderId = 'anybox-imported-default'
-  // Recognize only our own interrupted bootstrap; never overwrite user-managed configuration.
-  const partial = providers.length === 1 && providers[0].id === importedProviderId && settings.models().length === 0
-  // A changed startup template cannot recover the original model selection. Keep
-  // the committed connection available in settings for explicit configuration.
-  if (partial && providers[0].protocolId !== config.legacy.provider.protocolId) return Object.freeze({})
-  if (providers.length === 0 || partial) {
+  const connections = settings.connections()
+  const importedConnectionId = 'anybox-imported-default'
+  // Only our interrupted bootstrap can be completed from the legacy environment.
+  const partial = connections.length === 1 && connections[0].id === importedConnectionId && settings.configurations().length === 0
+  const recoverable = !partial || connections[0].protocolId === config.legacy.provider.protocolId
+  // Retained history and user model definitions distinguish intentional deletion from first use.
+  const empty = connections.length === 0 && settings.connectionHistory(importedConnectionId).length === 0 &&
+    !settings.models({ includeMissing: true }).some(model => model.source.kind === 'user')
+  if (empty || partial && recoverable) {
     let secret: string | undefined
     if (!partial) {
       try {
@@ -59,23 +54,50 @@ export async function installWebModels(root: Context, config: WebStartupConfig, 
           const legacy = createSystemKeyringStore({ namespace: 'anybox', openEntry: options.openEntry })
           try { secret = await legacy.read(config.legacy.credentialId) } finally { await legacy.close() }
         }
-      } catch { /* An unavailable old vault must not prevent opening Web settings. */ }
+      } catch { /* Old credentials may be unavailable while editable metadata remains useful. */ }
     }
     if (!partial) {
-      // Writes go through the module's journal; metadata remains usable if the vault is unavailable.
-      try { await settings.createProvider({ ...config.legacy.provider, id: importedProviderId, ...(secret ? { apiKey: secret } : {}) }) }
+      const definitionId = 'anybox-imported-provider'
+      if (!settings.providers({ includeMissing: true }).some(provider => provider.id === definitionId)) {
+        await settings.createProvider({ id: definitionId, name: config.legacy.provider.name,
+          connectionHints: { baseUrl: config.legacy.provider.baseUrl, protocolIds: [config.legacy.provider.protocolId] } })
+      }
+      const input = { ...config.legacy.provider, providerDefinitionId: definitionId, id: importedConnectionId }
+      try { await settings.createConnection({ ...input, ...(secret ? { apiKey: secret } : {}) }) }
       catch (error) {
-        if (!secret || settings.providers().length || !isModelsError(error) || error.code !== 'credential-unavailable') throw error
-        await settings.createProvider({ ...config.legacy.provider, id: importedProviderId })
+        if (!secret || settings.connections().length || !isModelsError(error) || error.code !== 'credential-unavailable') throw error
+        await settings.createConnection(input)
       }
       secret = undefined
     }
-    const provider = settings.providers().find(provider => provider.id === importedProviderId)!
-    await settings.createModel({ id: 'default', name: '默认模型（迁入）', providerId: importedProviderId, enabled: true,
-      remoteModelId: config.legacy.remoteModelId, defaults: config.legacy.defaults,
-      capabilities: { tools: { support: 'supported' }, streaming: { support: 'supported' }, imageInput: { support: 'unknown' },
-        reasoning: { support: provider.protocolId === 'deepseek-chat-completions' ? 'unsupported' : 'unknown' } },
-    })
+    const connection = settings.connections().find(connection => connection.id === importedConnectionId)!
+    const definitionId = 'anybox-imported-model'
+    let definition = settings.models({ providerId: connection.providerDefinitionId, includeMissing: true }).find(model => model.id === definitionId)
+    if (!definition) {
+      definition = await settings.createModel({ id: definitionId, name: '默认模型（迁入）', providerId: connection.providerDefinitionId,
+        remoteModelId: config.legacy.remoteModelId,
+        capabilities: { tools: { support: 'supported' }, streaming: { support: 'supported' }, imageInput: { support: 'unknown' },
+          reasoning: { support: connection.protocolId === 'deepseek-chat-completions' ? 'unsupported' : 'unknown' } },
+        controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {},
+        connectionHints: { baseUrl: connection.baseUrl, protocolIds: [connection.protocolId] },
+      })
+    }
+    if (!settings.configurations().some(model => model.id === 'default')) {
+      await settings.createConfiguration({ id: 'default', name: '默认模型（迁入）', connectionId: connection.id,
+        modelDefinitionId: definition.id, enabled: true, baseline: true, defaults: config.legacy.defaults, capabilities: definition.capabilities })
+    }
   }
-  return Object.freeze(settings.models().some(model => model.id === 'default') ? { defaultModelId: 'default' } : {})
+  // Bootstrap persists the stable default ID before protocol registration can
+  // reconcile missing baselines after an interrupted definition/config write.
+  await install([
+    createResponsesProtocolComponent({ fetch: options.fetch }),
+    createChatCompletionsProtocolComponent({ fetch: options.fetch }),
+    createDeepSeekProtocolComponent({ fetch: options.fetch }),
+    createAnthropicMessagesProtocolComponent({ fetch: options.fetch }),
+    createGeminiInteractionsProtocolComponent({ fetch: options.fetch }),
+    createModelsDevCatalogSourceComponent({ fetch: options.catalogFetch }),
+    createModelsCatalogCacheComponent({ path: config.modelsCatalogDatabasePath, reservedPaths: [config.modelsDatabasePath, config.harnessDatabasePath] }),
+    createModelsCatalogComponent({ autoRefresh: options.catalogAutoRefresh }),
+  ])
+  return Object.freeze(settings.configurations().some(model => model.id === 'default') ? { defaultModelId: 'default' } : {})
 }

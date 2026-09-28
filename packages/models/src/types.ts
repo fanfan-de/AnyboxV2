@@ -1,5 +1,3 @@
-import type { CatalogProviderRef } from './catalog-types.js';
-
 /** All public values are protocol-neutral and contain no credentials. */
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue };
 export type Support = 'supported' | 'unsupported' | 'unknown';
@@ -47,32 +45,88 @@ export interface ModelCall {
   cancel(reason?: string): void;
 }
 export interface Versioned { readonly id: string; readonly revision: number; readonly versionId: string; readonly createdAt: string; readonly updatedAt: string }
-export interface ProviderInput {
+export type SourceRef =
+  | { readonly kind: 'user' }
+  | { readonly kind: 'external'; readonly sourceId: string; readonly providerId: string; readonly modelId?: string; readonly sourceVersion: string | null };
+export interface SourceProviderIdentity { readonly sourceId: string; readonly providerId: string }
+export interface ConnectionHints { readonly baseUrl?: string; readonly protocolIds: readonly string[] }
+export interface ReasoningControl { readonly kind: 'toggle' | 'effort' | 'budget'; readonly values?: readonly string[]; readonly min?: number; readonly max?: number }
+export interface ModelControls { readonly temperature: Support; readonly structuredOutput?: Support; readonly reasoning?: readonly ReasoningControl[] }
+export interface ModelCostTier { readonly contextMin?: number; readonly contextMax?: number; readonly input?: number; readonly output?: number; readonly cacheRead?: number; readonly cacheWrite?: number; readonly reasoning?: number }
+export interface ModelCost { readonly currency: 'USD'; readonly unit: 'million-tokens'; readonly input?: number; readonly output?: number; readonly cacheRead?: number; readonly cacheWrite?: number; readonly reasoning?: number; readonly tiers?: readonly ModelCostTier[] }
+export interface ProviderInput { readonly name: string; readonly documentationUrl?: string; readonly connectionHints: ConnectionHints }
+export interface Provider extends Versioned, ProviderInput { readonly source: SourceRef; readonly state: 'present' | 'missing' | 'unresolved' }
+export interface ModelInput {
+  readonly providerId: string;
+  readonly remoteModelId: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly family?: string;
+  readonly releaseDate?: string;
+  readonly lastUpdated?: string;
+  readonly status?: string;
+  readonly openWeights?: boolean;
+  readonly modelType?: string;
+  readonly capabilities: DeclaredCapabilities;
+  readonly controls: ModelControls;
+  readonly modalities: { readonly input: readonly string[]; readonly output: readonly string[] };
+  readonly limits: { readonly context?: number; readonly input?: number; readonly output?: number };
+  readonly cost?: ModelCost;
+  readonly connectionHints: ConnectionHints;
+}
+export interface Model extends Versioned, ModelInput { readonly source: SourceRef; readonly state: 'present' | 'missing' | 'unresolved' }
+export interface ProviderConnectionInput {
+  readonly providerDefinitionId: string;
   readonly name: string;
   readonly enabled: boolean;
   readonly protocolId: string;
   readonly baseUrl: string;
   readonly auth: 'none' | 'api-key';
   readonly timeoutMs: number;
-  readonly catalogRef?: CatalogProviderRef | null;
 }
-export interface ProviderView extends Versioned, ProviderInput { readonly credentialConfigured: boolean }
-export interface ModelInput {
+export interface ConnectionSyncState {
+  readonly connectionId: string;
+  readonly state: 'pending' | 'ready' | 'failed';
+  readonly targetSourceVersion: string | null;
+  readonly syncedSourceVersion: string | null;
+  readonly error?: string;
+}
+export interface ProviderConnection extends Versioned, ProviderConnectionInput { readonly credentialConfigured: boolean; readonly sync?: ConnectionSyncState }
+/** Credential references belong only to the trusted store and private execution boundary. */
+export interface ProviderConnectionRecord extends Versioned, ProviderConnectionInput { readonly credentialRef: string | null }
+export interface ModelConfigurationInput {
+  readonly modelDefinitionId: string;
+  readonly connectionId: string;
   readonly name: string;
   readonly enabled: boolean;
-  readonly providerId: string;
-  readonly remoteModelId: string;
   readonly capabilities: DeclaredCapabilities;
   readonly defaults: GenerationOptions;
+  readonly baseline: boolean;
 }
-export interface ModelRecord extends Versioned, ModelInput {}
-export interface ModelSummary extends ModelRecord {
+export interface ModelConfiguration extends Versioned, ModelConfigurationInput { readonly modelDefinitionVersionId: string; readonly remoteModelId: string }
+export interface RunnableModelSummary extends ModelConfiguration {
+  readonly providerDefinitionId: string;
+  readonly source: SourceRef;
   readonly available: boolean;
   readonly unavailableReason?: 'disabled' | 'provider-disabled' | 'protocol-unavailable' | 'credential-missing' | 'invalid-configuration';
   readonly effectiveCapabilities?: EffectiveCapabilities;
 }
-export interface ModelQuery { readonly providerId?: string; readonly available?: boolean }
+export interface ModelQuery { readonly connectionId?: string; readonly available?: boolean }
+export interface DefinitionQuery { readonly sourceId?: string; readonly providerId?: string; readonly search?: string; readonly includeMissing?: boolean; readonly includeDeprecated?: boolean; readonly textOnly?: boolean }
+export interface ConnectionModel extends Model { readonly configurationId?: string; readonly available: boolean; readonly unavailableReason?: string }
+export interface SourceState { readonly sourceId: string; readonly snapshotVersion: string; readonly fetchedAt: number }
+export interface SourceSnapshot extends SourceState { readonly schemaVersion: 2; readonly providers: readonly Provider[]; readonly models: readonly Model[] }
+export interface SourceCommitResult { readonly accepted: boolean; readonly source: SourceState; readonly connections: readonly ConnectionSyncState[] }
+export interface ModelsSourceDataService {
+  accepted(sourceId: string): SourceSnapshot | undefined;
+  accept(snapshot: SourceSnapshot, options?: { readonly confirmed?: boolean }): Promise<SourceCommitResult>;
+}
 export interface ExecutionSnapshot {
+  /** Optional only when reading historical snapshots. New executions always write 2. */
+  readonly schemaVersion?: 2;
+  readonly modelDefinitionId?: string;
+  readonly providerDefinitionId?: string;
+  readonly modelDefinitionVersionId?: string;
   readonly modelId: string;
   readonly modelRevision: number;
   readonly modelVersionId: string;
@@ -99,8 +153,8 @@ export interface OpenModelInput {
   readonly signal?: AbortSignal;
 }
 export interface ModelsService {
-  list(query?: ModelQuery): readonly ModelSummary[];
-  get(modelId: string): ModelSummary | undefined;
+  list(query?: ModelQuery): readonly RunnableModelSummary[];
+  get(modelId: string): RunnableModelSummary | undefined;
   open(input: OpenModelInput): Promise<ModelExecution>;
 }
 export interface FormField {
@@ -124,6 +178,7 @@ export interface ProtocolDescriptor {
   readonly modelFields: readonly FormField[];
   readonly supportsDiscovery: boolean;
   readonly supportsCheck: boolean;
+  readonly sourceMappings?: readonly { readonly sourceId: string; readonly providerId: string; readonly protocolIds: readonly string[] }[];
 }
 export interface DiscoveredModel {
   readonly remoteModelId: string;
@@ -132,35 +187,60 @@ export interface DiscoveredModel {
 }
 export interface ModelsSettingsService {
   protocols(): readonly ProtocolDescriptor[];
-  providers(): readonly ProviderView[];
-  providerHistory(providerId: string): readonly ProviderView[];
-  models(providerId?: string): readonly ModelRecord[];
-  modelHistory(modelId: string): readonly ModelRecord[];
-  createProvider(input: ProviderInput & { readonly id?: string; readonly apiKey?: string }): Promise<ProviderView>;
-  updateProvider(providerId: string, input: Partial<Omit<ProviderInput, 'protocolId'>>, expectedRevision: number): Promise<ProviderView>;
-  setApiKey(providerId: string, apiKey: string, expectedRevision: number): Promise<ProviderView>;
-  deleteApiKey(providerId: string, expectedRevision: number): Promise<ProviderView>;
-  createModel(input: ModelInput & { readonly id?: string }): Promise<ModelRecord>;
-  updateModel(modelId: string, input: Partial<Omit<ModelInput, 'providerId'>>, expectedRevision: number): Promise<ModelRecord>;
-  discoverModels(providerId: string, signal?: AbortSignal): Promise<readonly DiscoveredModel[]>;
-  checkConnection(providerId: string, signal?: AbortSignal): Promise<void>;
+  providers(query?: DefinitionQuery): readonly Provider[];
+  providerHistory(id: string): readonly Provider[];
+  models(query?: DefinitionQuery): readonly Model[];
+  modelHistory(id: string): readonly Model[];
+  createProvider(input: ProviderInput & { readonly id?: string }): Promise<Provider>;
+  updateProvider(id: string, input: Partial<ProviderInput>, expectedRevision: number): Promise<Provider>;
+  createModel(input: ModelInput & { readonly id?: string }): Promise<Model>;
+  updateModel(id: string, input: Partial<Omit<ModelInput, 'providerId'>>, expectedRevision: number): Promise<Model>;
+  connections(): readonly ProviderConnection[];
+  connectionHistory(id: string): readonly ProviderConnection[];
+  configurations(connectionId?: string): readonly ModelConfiguration[];
+  configurationHistory(id: string): readonly ModelConfiguration[];
+  connectionModels(connectionId: string): readonly ConnectionModel[];
+  createConnection(input: ProviderConnectionInput & { readonly id?: string; readonly apiKey?: string }): Promise<ProviderConnection>;
+  updateConnection(id: string, input: Partial<Omit<ProviderConnectionInput, 'protocolId' | 'providerDefinitionId'>>, expectedRevision: number): Promise<ProviderConnection>;
+  /** Removes current connection/configurations; preserves history and already opened executions. */
+  deleteConnection(id: string, expectedRevision: number): Promise<void>;
+  setApiKey(id: string, apiKey: string, expectedRevision: number): Promise<ProviderConnection>;
+  deleteApiKey(id: string, expectedRevision: number): Promise<ProviderConnection>;
+  retryConnection(id: string): Promise<ProviderConnection>;
+  createConfiguration(input: ModelConfigurationInput & { readonly id?: string }): Promise<ModelConfiguration>;
+  updateConfiguration(id: string, input: Partial<Omit<ModelConfigurationInput, 'connectionId' | 'modelDefinitionId' | 'baseline'>>, expectedRevision: number): Promise<ModelConfiguration>;
+  discoverModels(connectionId: string, signal?: AbortSignal): Promise<readonly DiscoveredModel[]>;
+  checkConnection(connectionId: string, signal?: AbortSignal): Promise<void>;
 }
-/** Trusted storage port. Not exposed through settings, snapshots, or host UI DTOs. */
-export interface ProviderRecord extends Versioned, ProviderInput { readonly credentialRef: string | null }
 export interface CredentialIntent { readonly id: string; readonly providerId: string; readonly slotId: string; readonly createdAt: string }
+export interface VersionChange<T extends Versioned> { readonly record: T; readonly expectedRevision: number | null }
 export interface StoreChange {
-  readonly provider?: { readonly record: ProviderRecord; readonly expectedRevision: number | null };
-  readonly model?: { readonly record: ModelRecord; readonly expectedRevision: number | null };
+  readonly providers?: readonly VersionChange<Provider>[];
+  readonly models?: readonly VersionChange<Model>[];
+  readonly connection?: VersionChange<ProviderConnectionRecord>;
+  readonly deleteConnection?: { readonly id: string; readonly expectedRevision: number };
+  readonly configurations?: readonly VersionChange<ModelConfiguration>[];
+  readonly sources?: readonly SourceState[];
+  readonly syncStates?: readonly ConnectionSyncState[];
+  readonly syncGuards?: readonly { readonly connectionId: string; readonly targetSourceVersion: string | null }[];
   readonly addIntents?: readonly CredentialIntent[];
   readonly removeIntentIds?: readonly string[];
 }
 export interface ModelsStore {
-  providers(): readonly ProviderRecord[];
-  provider(id: string): ProviderRecord | undefined;
-  providerHistory(id: string): readonly ProviderRecord[];
-  models(): readonly ModelRecord[];
-  model(id: string): ModelRecord | undefined;
-  modelHistory(id: string): readonly ModelRecord[];
+  providers(): readonly Provider[];
+  provider(id: string): Provider | undefined;
+  providerHistory(id: string): readonly Provider[];
+  models(): readonly Model[];
+  model(id: string): Model | undefined;
+  modelHistory(id: string): readonly Model[];
+  connections(): readonly ProviderConnectionRecord[];
+  connection(id: string): ProviderConnectionRecord | undefined;
+  connectionHistory(id: string): readonly ProviderConnectionRecord[];
+  configurations(): readonly ModelConfiguration[];
+  configuration(id: string): ModelConfiguration | undefined;
+  configurationHistory(id: string): readonly ModelConfiguration[];
+  sources(): readonly SourceState[];
+  syncState(connectionId: string): ConnectionSyncState | undefined;
   intents(): readonly CredentialIntent[];
   commit(change: StoreChange): Promise<void>;
 }
@@ -175,7 +255,7 @@ export interface ProtocolOperation<T> {
   readonly done: Promise<void>;
   cancel(reason?: string): void;
 }
-export interface ProtocolConnection { readonly provider: ProviderInput; readonly credential?: string; readonly signal: AbortSignal }
+export interface ProtocolConnection { readonly provider: ProviderConnectionInput; readonly credential?: string; readonly signal: AbortSignal }
 export interface ProtocolCallInput extends ProtocolConnection {
   readonly remoteModelId: string;
   readonly options: GenerationOptions;
@@ -189,7 +269,7 @@ export interface ProtocolCallInput extends ProtocolConnection {
 export interface ProtocolOutcome { readonly result: ModelResult; readonly continuation?: unknown }
 export interface ModelProtocol {
   readonly descriptor: ProtocolDescriptor;
-  validateProvider(provider: ProviderInput): void;
+  validateProvider(provider: ProviderConnectionInput): void;
   validateOptions(options: GenerationOptions, capabilities: DeclaredCapabilities): void;
   effectiveCapabilities(declared: DeclaredCapabilities, options: GenerationOptions): EffectiveCapabilities;
   call(input: ProtocolCallInput): ProtocolOperation<ProtocolOutcome>;
@@ -203,3 +283,5 @@ export const modelsSettingsServiceKey = 'models.settings';
 export const modelsProtocolsServiceKey = 'models.protocols';
 export const modelsStoreServiceKey = 'models.store';
 export const modelsVaultServiceKey = 'models.vault';
+
+export const modelsSourceDataServiceKey = 'models.source-data';

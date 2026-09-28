@@ -1,4 +1,4 @@
-import type { CatalogModel, CatalogProvider, ExecutionSnapshot, ProviderTemplate } from '@anybox/models'
+import type { Model, Provider, ExecutionSnapshot, ProviderTemplate } from '@anybox/models'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 
 export interface AgentView { readonly id: string }
@@ -78,8 +78,8 @@ export interface ApiError extends Error { readonly status: number; readonly code
 export type Api = <T>(path: string, body?: object, signal?: AbortSignal) => Promise<T>
 
 /** Connection recipes are resolved by the trusted host against installed protocols. */
-export interface DirectoryProvider extends CatalogProvider { readonly connections: readonly ProviderTemplate[] }
-export interface DirectoryModel extends CatalogModel { readonly connections: readonly ProviderTemplate[] }
+export interface DirectoryProvider extends Provider { readonly connections: readonly ProviderTemplate[] }
+export interface DirectoryModel extends Model { readonly connections: readonly ProviderTemplate[] }
 
 export interface NodeView {
   readonly id: string

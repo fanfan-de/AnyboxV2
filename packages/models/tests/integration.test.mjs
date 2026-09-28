@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { addConnection, addConfiguration } from './helpers.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -72,10 +73,10 @@ function responseMessage(text, phase = 'final_answer') {
   return { type: 'message', role: 'assistant', phase, status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] };
 }
 async function provider(settings, protocolId, baseUrl, apiKey) {
-  return settings.createProvider({ name: protocolId, enabled: true, protocolId, baseUrl, auth: 'api-key', timeoutMs: 5000, apiKey });
+  return addConnection(settings, { name: protocolId, enabled: true, protocolId, baseUrl, auth: 'api-key', timeoutMs: 5000, apiKey });
 }
 async function model(settings, owner, name, defaults = {}, remoteModelId = 'shared-remote') {
-  return settings.createModel({ name, enabled: true, providerId: owner.id, remoteModelId, capabilities, defaults });
+  return addConfiguration(settings, { name, enabled: true, providerId: owner.id, remoteModelId, capabilities, defaults });
 }
 
 test('Real Nya components, SQLite and HTTP serve concurrent modelId executions with fixed keys/defaults and native tool continuation', { timeout: 15_000 }, async t => {
@@ -137,7 +138,7 @@ test('Real Nya components, SQLite and HTTP serve concurrent modelId executions w
   assert.equal(responsesFirst.toolCalls[0].arguments.query, 'responses');
   assert.ok(chatEvents.length && responsesEvents.length);
   const changedProvider = await f.settings.setApiKey(chatProvider.id, 'chat-key-replaced', chatProvider.revision);
-  const changedModel = await f.settings.updateModel(fast.id, { defaults: { temperature: 0.4, maxOutputTokens: 44 } }, fast.revision);
+  const changedModel = await f.settings.updateConfiguration(fast.id, { defaults: { temperature: 0.4, maxOutputTokens: 44 } }, fast.revision);
   assert.equal(changedProvider.revision, 2);
   assert.equal(changedModel.revision, 2);
   assert.equal(chat.snapshot.providerRevision, 1);
@@ -173,8 +174,8 @@ test('Real Nya components, SQLite and HTTP serve concurrent modelId executions w
   assert.equal(responseRequests[1].body.input.at(-1).call_id, 'responses-call');
   assert.equal(responseRequests[1].body.input.at(-1).type, 'function_call_output');
   const publicValues = JSON.stringify({
-    providers: f.settings.providers(), providerHistory: f.settings.providerHistory(chatProvider.id),
-    models: f.models.list(), modelHistory: f.settings.modelHistory(fast.id),
+    providers: f.settings.connections(), providerHistory: f.settings.connectionHistory(chatProvider.id),
+    models: f.models.list(), modelHistory: f.settings.configurationHistory(fast.id),
     snapshots: [chat.snapshot, responses.snapshot, fixedDeep.snapshot, freshFast.snapshot],
     replies: [chatFirst, chatFinal, responsesFirst, responsesFinal], events: [chatEvents, responsesEvents],
   });

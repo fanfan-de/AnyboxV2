@@ -132,7 +132,7 @@ test('component close joins accepted key mutation and queued config writes befor
     f.vault.write = async (...args) => { entered.resolve(); await release.promise; return originalWrite(...args); };
     const replacing = f.settings.setApiKey(provider.id, 'replacement-secret', provider.revision);
     await entered.promise;
-    const renaming = f.settings.updateProvider(provider.id, { name: 'queued edit' }, provider.revision + 1);
+    const renaming = f.settings.updateConnection(provider.id, { name: 'queued edit' }, provider.revision + 1);
     disposal = f.component.dispose();
     const disposed = observe(disposal);
     await tick();
@@ -140,8 +140,8 @@ test('component close joins accepted key mutation and queued config writes befor
     await assert.rejects(f.settings.setApiKey(provider.id, 'rejected-secret', provider.revision), code('closed'));
     release.resolve();
     await Promise.all([replacing, renaming, disposal]);
-    assert.equal(f.store.provider(provider.id).name, 'queued edit');
-    assert.equal(f.store.provider(provider.id).revision, provider.revision + 2);
+    assert.equal(f.store.connection(provider.id).name, 'queued edit');
+    assert.equal(f.store.connection(provider.id).revision, provider.revision + 2);
     assert.deepEqual([...f.vault.secrets.values()], ['replacement-secret']);
     assert.deepEqual(f.store.intents(), []);
   } finally {

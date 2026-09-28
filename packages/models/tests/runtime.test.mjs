@@ -34,7 +34,7 @@ test('multiple local models of the same remote model apply their own defaults an
   const f = await fixture()
   try {
     const { model } = await f.add({ defaults: { temperature: 0.2, maxOutputTokens: 100 } })
-    await f.settings.createModel({ id: 'long', name: 'Long', providerId: model.providerId, remoteModelId: model.remoteModelId, capabilities: model.capabilities, enabled: true, defaults: { temperature: 0.9, maxOutputTokens: 500 } })
+    await f.addConfiguration({ id: 'long', name: 'Long', providerId: model.connectionId, remoteModelId: model.remoteModelId, capabilities: model.capabilities, enabled: true, defaults: { temperature: 0.9, maxOutputTokens: 500 } })
     const first = await f.models.open({ modelId: model.id, options: { maxOutputTokens: 50 } })
     const second = await f.models.open({ modelId: 'long' })
     await Promise.all([first.generate(input('short')).result, second.generate(input('long')).result])
@@ -241,10 +241,10 @@ test('protocol and provider ownership are immutable and unknown parameters are r
   const f = await fixture()
   try {
     const { provider, model } = await f.add()
-    await assert.rejects(f.settings.updateProvider(provider.id, { protocolId: 'other' }, provider.revision), code('invalid-config'))
-    await assert.rejects(f.settings.updateModel(model.id, { providerId: 'other' }, model.revision), code('invalid-config'))
-    await assert.rejects(f.settings.updateModel(model.id, { defaults: { protocol: { unsupported: true } } }, model.revision), code('invalid-config'))
-    assert.equal(f.settings.providerHistory(provider.id).length, 1); assert.equal(f.settings.modelHistory(model.id).length, 1)
+    await assert.rejects(f.settings.updateConnection(provider.id, { protocolId: 'other' }, provider.revision), code('invalid-config'))
+    await assert.rejects(f.settings.updateConfiguration(model.id, { connectionId: 'other' }, model.revision), code('invalid-config'))
+    await assert.rejects(f.settings.updateConfiguration(model.id, { defaults: { protocol: { unsupported: true } } }, model.revision), code('invalid-config'))
+    assert.equal(f.settings.connectionHistory(provider.id).length, 1); assert.equal(f.settings.configurationHistory(model.id).length, 1)
   } finally { await f.close() }
 })
 
@@ -255,7 +255,7 @@ test('discovery only returns candidates and never edits existing local models', 
     protocol.next(operation => operation.succeed([{ remoteModelId: 'new-remote', name: 'Suggested model', suggestedCapabilities: { tools: { support: 'unknown' } } }]))
     const discovered = await f.settings.discoverModels('provider')
     assert.equal(discovered[0].remoteModelId, 'new-remote')
-    assert.deepEqual(f.settings.models(), [model]); assert.deepEqual(f.settings.modelHistory(model.id), [model])
+    assert.deepEqual(f.settings.configurations(), [model]); assert.deepEqual(f.settings.configurationHistory(model.id), [model])
   } finally { await f.close() }
 })
 
@@ -264,9 +264,9 @@ test('editing model/provider and replacing keys only changes newly opened execut
   try {
     const { provider, model } = await f.add({ key: 'old-private-key', defaults: { temperature: 0.1 } })
     const old = await f.models.open({ modelId: 'model' })
-    const updatedModel = await f.settings.updateModel(model.id, { defaults: { temperature: 0.9 } }, model.revision)
+    const updatedModel = await f.settings.updateConfiguration(model.id, { defaults: { temperature: 0.9 } }, model.revision)
     const rotated = await f.settings.setApiKey(provider.id, 'new-private-key', provider.revision)
-    const updatedProvider = await f.settings.updateProvider(provider.id, { baseUrl: 'https://new.example.invalid/v1' }, rotated.revision)
+    const updatedProvider = await f.settings.updateConnection(provider.id, { baseUrl: 'https://new.example.invalid/v1' }, rotated.revision)
     const current = await f.models.open({ modelId: 'model' })
     await old.generate(input('old execution')).result; await current.generate(input('new execution')).result
     assert.deepEqual(protocol.calls.map(call => [call.input.credential, call.input.options.temperature, call.input.provider.baseUrl]), [
@@ -274,7 +274,7 @@ test('editing model/provider and replacing keys only changes newly opened execut
     ])
     assert.equal(old.snapshot.providerRevision, provider.revision); assert.equal(current.snapshot.providerRevision, updatedProvider.revision)
     assert.equal(old.snapshot.modelRevision, model.revision); assert.equal(current.snapshot.modelRevision, updatedModel.revision)
-    const publicData = JSON.stringify([f.settings.providers(), f.settings.providerHistory(provider.id), f.settings.models(), f.settings.modelHistory(model.id), f.models.list(), old.snapshot, current.snapshot])
+    const publicData = JSON.stringify([f.settings.connections(), f.settings.connectionHistory(provider.id), f.settings.configurations(), f.settings.configurationHistory(model.id), f.models.list(), old.snapshot, current.snapshot])
     assert.doesNotMatch(publicData, /old-private-key|new-private-key|credentialRef/)
     await Promise.all([old.close(), current.close()])
   } finally { await f.close() }
@@ -291,8 +291,8 @@ test('provider serialization holds edits behind local credential acquisition but
     await tick(); assert.equal(edited.settled, false)
     f.vault.reads[0].release.resolve(); const execution = await opening; await editing
     f.protocols[0].next(); const call = execution.generate(input('held network')); await tick()
-    const latest = f.settings.providers()[0]
-    await f.settings.updateProvider(provider.id, { name: 'still editable' }, latest.revision)
+    const latest = f.settings.connections()[0]
+    await f.settings.updateConnection(provider.id, { name: 'still editable' }, latest.revision)
     f.protocols[0].calls[0].succeed(); await call.result
     assert.equal(f.protocols[0].calls[0].input.credential, 'old-value')
     await execution.close()
@@ -303,7 +303,7 @@ test('disabled configuration does not interrupt existing executions and rejects 
   const f = await fixture()
   try {
     const { model } = await f.add(); const active = await f.models.open({ modelId: model.id })
-    await f.settings.updateModel(model.id, { enabled: false }, model.revision)
+    await f.settings.updateConfiguration(model.id, { enabled: false }, model.revision)
     assert.equal(f.models.get(model.id).available, false)
     await assert.rejects(f.models.open({ modelId: model.id }), code('unavailable'))
     await active.generate(input('already opened')).result; await active.close()
@@ -375,7 +375,7 @@ test('configuration remains queryable across restart when its protocol is absent
   await original.add(); await original.close()
   const restarted = await fixture({ store, vault, protocols: [] })
   try {
-    assert.equal(restarted.settings.providers().length, 1); assert.equal(restarted.settings.models().length, 1)
+    assert.equal(restarted.settings.connections().length, 1); assert.equal(restarted.settings.configurations().length, 1)
     assert.equal(restarted.models.get('model').unavailableReason, 'protocol-unavailable')
     await assert.rejects(restarted.models.open({ modelId: 'model' }), code('protocol-unavailable'))
   } finally { await restarted.close() }
@@ -386,16 +386,16 @@ test('optimistic revisions reject stale edits and preserve immutable provider an
   try {
     const { provider, model } = await f.add()
     const edits = await Promise.allSettled([
-      f.settings.updateProvider(provider.id, { name: 'first' }, provider.revision),
-      f.settings.updateProvider(provider.id, { name: 'second' }, provider.revision),
+      f.settings.updateConnection(provider.id, { name: 'first' }, provider.revision),
+      f.settings.updateConnection(provider.id, { name: 'second' }, provider.revision),
     ])
     assert.equal(edits.filter(item => item.status === 'fulfilled').length, 1)
     assert.equal(edits.find(item => item.status === 'rejected').reason.code, 'conflict')
-    await f.settings.updateModel(model.id, { name: 'new name' }, model.revision)
-    await assert.rejects(f.settings.updateModel(model.id, { name: 'stale' }, model.revision), code('conflict'))
-    assert.deepEqual(f.settings.providerHistory(provider.id).map(item => item.name), ['provider', 'first'])
-    assert.deepEqual(f.settings.modelHistory(model.id).map(item => item.name), ['model', 'new name'])
-    assert.equal(f.settings.providerHistory(provider.id)[0].versionId, provider.versionId)
+    await f.settings.updateConfiguration(model.id, { name: 'new name' }, model.revision)
+    await assert.rejects(f.settings.updateConfiguration(model.id, { name: 'stale' }, model.revision), code('conflict'))
+    assert.deepEqual(f.settings.connectionHistory(provider.id).map(item => item.name), ['provider', 'first'])
+    assert.deepEqual(f.settings.configurationHistory(model.id).map(item => item.name), ['model', 'new name'])
+    assert.equal(f.settings.connectionHistory(provider.id)[0].versionId, provider.versionId)
   } finally { await f.close() }
 })
 
@@ -403,12 +403,12 @@ test('failed key writes preserve the active reference and orphan journals recove
   const store = memoryStore(), vault = memoryVault(), f = await fixture({ store, vault })
   try {
     const { provider } = await f.add({ key: 'working-secret' })
-    const oldReference = store.provider(provider.id).credentialRef
+    const oldReference = store.connection(provider.id).credentialRef
     vault.failWrite = new Error('new-secret written but backend failed')
     vault.failDelete = new Error('native secret deletion failed')
     await assert.rejects(f.settings.setApiKey(provider.id, 'uncommitted-secret', provider.revision), error => error.code === 'credential-unavailable' && !String(error).includes('secret'))
-    assert.equal(store.provider(provider.id).credentialRef, oldReference)
-    assert.equal(store.provider(provider.id).revision, provider.revision)
+    assert.equal(store.connection(provider.id).credentialRef, oldReference)
+    assert.equal(store.connection(provider.id).revision, provider.revision)
     assert.equal(vault.secrets.get(oldReference), 'working-secret')
     assert.ok(store.intents().length > 0)
     vault.failWrite = undefined; vault.failDelete = undefined
@@ -424,7 +424,7 @@ test('failed key writes preserve the active reference and orphan journals recove
 
 test('recovery retains a referenced slot and deletes only unreferenced journal entries', async () => {
   const store = memoryStore(), vault = memoryVault(), f = await fixture({ store, vault })
-  const { provider } = await f.add({ key: 'current-secret' }), current = store.provider(provider.id).credentialRef
+  const { provider } = await f.add({ key: 'current-secret' }), current = store.connection(provider.id).credentialRef
   await f.close()
   vault.secrets.set('orphan-slot', 'old-secret')
   await store.commit({ addIntents: [

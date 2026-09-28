@@ -1,4 +1,4 @@
-import type { ModelEvent, ModelSummary } from '@anybox/models'
+import type { ModelEvent, RunnableModelSummary } from '@anybox/models'
 import { canUseModel } from './models-client.js'
 import type { Api, ApiError, PendingSubmission, RunEventView, RunView, SessionView, NodeView, NodePage, SessionPosition } from './client-types.js'
 import type { SessionRef } from './workspace-layout.js'
@@ -85,7 +85,7 @@ export interface SessionEnvironment {
   readonly schedule: (callback: () => void, ms: number) => unknown
   readonly clear: (timer: unknown) => void
   readonly missing: (ref: SessionRef) => void
-  readonly models?: () => readonly ModelSummary[]
+  readonly models?: () => readonly RunnableModelSummary[]
   readonly position?: SessionPosition
   readonly savePosition?: (value: SessionPosition) => void
 }

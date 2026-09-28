@@ -126,12 +126,12 @@ export async function startCatalogModelsHost(options = {}) {
     const seededModels = []
     if (options.seedModels) {
       for (const [providerId, protocolId, remoteModelId] of [['anthropic', 'anthropic-messages', 'claude-qa'], ['google', 'gemini-interactions', 'gemini-qa']]) {
-        const catalog = root.get('models.catalog'), candidate = catalog.model({ sourceId: 'models.dev', providerId }, remoteModelId)
-        const provider = await root.get('models.settings').createProvider({ id: `qa-${providerId}`, name: `${providerId} QA proxy`, enabled: true, protocolId,
-          baseUrl: providerId === 'anthropic' ? 'https://qa-proxy.invalid/anthropic/v1' : 'https://qa-proxy.invalid/google/v1beta', auth: 'api-key', apiKey: `qa-${providerId}-key`, timeoutMs: 30_000,
-          catalogRef: { sourceId: 'models.dev', providerId } })
-        seededModels.push(await root.get('models.settings').createModel({ id: `qa-${protocolId}`, name: candidate.name, providerId: provider.id, remoteModelId, enabled: true,
-          capabilities: candidate.suggestedCapabilities, defaults: { maxOutputTokens: 4096 } }))
+        const settings = root.get('models.settings')
+        const definition = settings.providers().find(value => value.source.kind === 'external' && value.source.sourceId === 'models.dev' && value.source.providerId === providerId)
+        const connection = await settings.createConnection({ id: `qa-${providerId}`, providerDefinitionId: definition.id, name: `${providerId} QA proxy`, enabled: true, protocolId,
+          baseUrl: providerId === 'anthropic' ? 'https://qa-proxy.invalid/anthropic/v1' : 'https://qa-proxy.invalid/google/v1beta', auth: 'api-key', apiKey: `qa-${providerId}-key`, timeoutMs: 30_000 })
+        const model = settings.configurations(connection.id).find(value => value.remoteModelId === remoteModelId && value.baseline)
+        seededModels.push(await settings.updateConfiguration(model.id, { defaults: { maxOutputTokens: 4096 } }, model.revision))
       }
     }
     await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))

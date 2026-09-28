@@ -81,7 +81,7 @@ Models 配置、公开目录缓存和业务存储使用三个独立 SQLite 文�
 - **停止接收与等待退出**：持有在途操作的组件通过接收标志或关闭状态拒绝新请求。模型、工具和执行循环还会取消已接受的工作并等待实际退出；存储及写入队列则等待已接受的操作完成。Session 通过清理 Effect 等待已接受的数据操作和提交后通知完成；SQLite 单独拥有连接与通用队列。
 - **工具 `OwnedCall`**（`src/contracts.ts`）：`result` 是业务结果，`cancel(reason)` 只请求取消，`done` 表示实际工作与资源退出。工具的结果可先于退出到达，AgentLoop 必须观察两者。
 - **模型 `ModelCall`**（`packages/models/src/types.ts`）：公共 `result` 在底层调用退出、完成成功结果的候选上下文提交并释放本轮占用后才结算；正常调用者只需等待一次 `result`。`done` 仍供资源所有者等待退出并识别清理失败，AgentLoop 统一立即观察两者。超时或取消不能用提前结束 Promise 代替资源退出。
-- **Models 公共服务**：`models.list/get/open` 查询与打开执行上下文；`models.settings` 管理连接、模型、密钥、版本、模型发现和连接检查；`models.protocols` 仅供受信协议组件注册实现；可选 `models.catalog` 提供公开目录与刷新状态。Nya 按名称提供服务，这些名字区分职责，不构成权限隔离。
+- **Models 公共服务**：`models.list/get/open` 查询与打开执行上下文；`models.settings` 管理连接、模型、密钥、版本、模型发现和连接检查；`models.protocols` 仅供受信协议组件注册实现；受信 `models.source-data` 接纳统一来源定义，可选 `models.catalog` 提供刷新状态。Nya 按名称提供服务，这些名字区分职责，不构成权限隔离。
 - **私有边界**：协议原生类型、错误、认证编码及续轮数据留在 Models 内；密钥值不进入 Provider/Model 查询 DTO、执行快照、Run、事件或日志。Host 将 Models 固定错误映射为 Run 的固定类别。
 - **纯函数与副作用分离**：领域模块放校验和状态转换的纯函数，返回冻结的新值；时间和 ID 通过 `RuntimeInputs`（`now`、`newId`）从外部传入。Nya 装配、存储、模型传输和工具执行分别集中在对应组件及其内部实现中。
 - **错误不泄露细节**：提供方的原始错误在边界处归一为固定类别和固定文案，不把第三方错误或传输细节带进 Run。
@@ -92,7 +92,7 @@ Models 配置、公开目录缓存和业务存储使用三个独立 SQLite 文�
 
 **服务** `models.store` · **注入** 无 · **创建** `createModelsStoreComponent({ path })`
 
-独占通用模块自己的 SQLite 文件，保存 Provider、Model 的当前记录与不可变版本，以及跨数据库/系统凭据库操作的意图日志。Provider 保存连接、凭据引用和可空 `catalogRef: { sourceId, providerId }`，Model 保存所属 Provider、远端模型 ID、能力声明和默认参数；同一远端模型可以有多项本地配置。目录引用不替代本地 ID，也不按地址推断来源。Provider 的协议和 Model 的所属 Provider 创建后不可修改。
+独占通用模块自己的 SQLite 文件，保存统一 Provider/Model 定义、连接和模型配置的当前记录与不可变版本、来源接纳版本/连接同步状态，以及系统凭据操作意图日志。定义带稳定内部 ID 与 user/external 来源；外部定义按命名空间更新，用户定义不推断来源。ProviderConnection 保存所属 Provider 定义、协议、地址与私有凭据引用；ModelConfiguration 保存所属模型定义、连接、固定远端 ID/定义版本、能力和参数。每组连接/模型定义只有一个基础配置，可增加 baseline:false 参数预设。连接的协议/所属定义，以及配置的连接/所属模型定义创建后不可修改。
 
 存储服务可通过 Nya 注入替换；包内默认实现不依赖 `local-storage` 或业务领域迁移。配置保存使用 `expectedRevision` 检测冲突。协议未安装时仍加载、保留配置，由 Models 查询将相应模型标为不可用。关闭时等待已接收提交并释放连接与排他所有权。
 
@@ -104,19 +104,21 @@ Models 配置、公开目录缓存和业务存储使用三个独立 SQLite 文�
 
 `read/write/delete` 按凭据槽位排序。初始化不要求凭据库可用；操作时以固定 `credential-unavailable` 等类别报告失败，所以缺少或无法访问 Key 不会阻止配置页面启动。关闭停止接收，取消并等待已接受操作实际退出；原生操作不能用提前拒绝 Promise 冒充退出。内存字符串只能释放引用，不能承诺擦除。
 
-密钥轮换由 Models 协调：先在配置数据库登记操作意图，再写新的系统凭据槽位，最后事务提交新引用并安排旧槽位清理。失败或异常退出后的日志用于回收孤立条目；历史仅保留非秘密配置。Provider 查询只返回 `credentialConfigured`，不会返回槽位引用或密钥值。
+密钥轮换由 Models 协调：先在配置数据库登记操作意图，再写新的系统凭据槽位，最后事务提交新引用并安排旧槽位清理。失败或异常退出后的日志用于回收孤立条目；历史仅保留非秘密配置。ProviderConnection 查询只返回 `credentialConfigured`，不会返回槽位引用或密钥值。
 
 ### Models 协调服务
 
-**服务** `models`、`models.settings`、`models.protocols` · **注入** `models.store`、`models.vault` · **创建** `createModelsComponent()`
+`models.settings.deleteConnection(id, expectedRevision)` 在连接队列内原子删除当前连接、全部执行配置与同步状态，保留定义和不可变版本历史。凭据退休意图同事务登记，删除后等待 Vault 清理，失败意图留待恢复；已打开 execution 继续使用私有快照与已读取凭据，新 execution 返回 not-found。来源接纳跳过排队期间已删除的连接，不重新创建账号。
 
-按 Provider 协调配置修改、密钥操作与 execution 初始化；解析本次配置并读完本地凭据后释放该 Provider 的顺序约束，远端请求不占用配置队列。`models.open({ modelId, history?, tools?, requirements?, options?, signal? })` 固定 Model、Provider、协议实现版本、有效参数和本次取得的凭据，返回内存中的 `ModelExecution`。普通配置修改、启停和密钥替换只影响新 execution。
+**服务** `models`、`models.settings`、`models.protocols`、`models.source-data` · **注入** `models.store`、`models.vault` · **创建** `createModelsComponent()`
+
+按 ProviderConnection 协调配置修改、密钥操作与 execution 初始化；解析本次配置并读完本地凭据后释放该连接的顺序约束，远端请求不占用配置队列。`models.open({ modelId, history?, tools?, requirements?, options?, signal? })` 固定 ModelConfiguration、ProviderConnection、模型定义版本、协议实现版本、有效参数和本次取得的凭据，返回内存中的 `ModelExecution`。普通配置修改、启停和密钥替换只影响新 execution。
 
 execution 不是 Nya 组件或业务 Session。它持有规范化消息和协议私有续轮信息，`generate({ messages, onEvent? })` 只接收新增消息。同一 execution 拒绝重叠调用，不同 execution 可并发。工具参数 JSON 与调用对应关系由模块校验；工具参数的业务含义、授权和执行归宿主 AgentLoop。
 
 结果同时包含文本、工具调用、用量和完成状态。只有 `completed` 的工具调用可执行；`incomplete`、`refused` 与真实清理失败结束执行链。只有完整成功、未取消且底层退出成功时才提交候选上下文，普通错误不自动重试。`close()` 幂等，停止新调用，取消并等待当前调用，释放上下文与凭据引用。
 
-能力声明区分支持、不支持与未知，并结合协议实现和当前参数计算有效能力。未知或不支持的必需能力在调用前拒绝；可选参数保持省略，不能静默丢弃。当前消息契约只接受文本与用户定义函数工具，图片能力可登记但有效值为 false。表单 `defaultValue` 只初始化可编辑输入；经保存的参数才进入快照，不在执行时插入隐藏默认值。
+能力声明区分支持、不支持与未知，并结合协议实现和当前参数计算有效能力。未知或不支持的必需能力在调用前拒绝；可选参数保持省略，不能静默丢弃。当前消息契约只接受文本与用户定义函数工具，图片能力可登记但有效值为 false。协议 `defaultValue` 初始化新基础配置和新建表单；保存的参数才进入快照，不在执行时插入隐藏默认值。
 
 ### Models 目录来源、缓存与服务
 
@@ -128,19 +130,19 @@ execution 不是 Nya 组件或业务 Session。它持有规范化消息和协议
 
 独占与配置库、业务库分离的 SQLite 文件，按规范化来源 URL 缓存快照、ETag 与成功检查时间。原子事务与排队写入由此组件拥有，关闭等待已接受写入后释放连接。初始化不可用时默认回退到内存，状态明确显示 `storage-unavailable`；宿主可禁止后备。该后备仅保存公开目录，不影响 Vault 的秘密存储要求。
 
-**目录服务** `models.catalog` · **注入** `models.catalog-source`、`models.catalog-cache` · **创建** `createModelsCatalogComponent({ autoRefresh? })`
+**目录服务** `models.catalog` · **注入** `models.catalog-source`、`models.catalog-cache`、`models.source-data` · **创建** `createModelsCatalogComponent({ autoRefresh? })`
 
-启动优先采用有效缓存，否则采用随包的上游快照；包内 provenance 记录 URL、采集时间、SHA-256 和版本，运行时验证后才加载。`apply` 完成有限初始化后返回。服务提供 Provider/Model 搜索、文本筛选、已弃用项开关、模态、价格、limits、能力建议与独立 controls；它不检查当前账号授权，也不保存用户配置。执行能力仍由本地声明与协议计算，目录没有给出的 reasoning modes、efforts 或预算不能猜测补齐。
+启动优先采用 Models 配置库已接纳的来源，再使用有效缓存或随包上游快照；provenance 记录 URL、采集时间、SHA-256 和版本，运行时验证后才加载。`apply` 完成有限初始化后返回。目录服务仅提供状态/刷新，统一定义的搜索、筛选、模态、价格、limits 与 controls 由 models.settings 提供。来源接纳原子更新外部定义与历史，再为连接补齐缺少的基础配置；同步有 pending/ready/failed 状态与 retryConnection。执行能力仍由保存的配置和协议计算，目录没有给出的 reasoning modes、efforts 或预算不能猜测补齐。
 
 自动刷新在首次或缓存距成功检查 24 小时时于后台运行；使用 ETag，`304` 保留数据并更新检查时间，失败保留旧快照、一小时后重试，默认 HTTP 超时 30 秒。手动 `refresh(signal?)` 与自动刷新共用一个在途所有权，重叠请求返回 `busy`。请求实际退出后才接纳缓存提交，提交成功后发布；已经开始的原子提交不因晚到取消回滚。清理停止准入和计时器，取消获取并等待退出与已接纳提交。目录依赖撤销会重启其 Web 消费者，不撤销 Run/AgentLoop 的模型 execution。
 
-Provider 的 `catalogRef` 显式关联来源命名空间；刷新不改写本地地址、Key、能力、参数或模型选择。`resolveCatalogConnections` 仅把已知连接提示与已安装协议转为候选，可由宿主模板补充。未知协议或非文本条目仍可查看，手动配置继续可用。打包快照仅通过显式 `npm --prefix packages/models run catalog:update` 更新，普通构建和测试不联网下载目录。
+定义的 source 显式标记来源命名空间；刷新不改写已保存连接/配置、Key 或会话选模，来源移除不删除配置。`resolveCatalogConnections` 仅把已知连接提示和已安装协议转为方案，可由宿主模板和协议 sourceMappings 补充。未知协议、非文本和弃用条目仍显示不可用原因，手动配置继续可用。打包快照仅通过显式 `npm --prefix packages/models run catalog:update` 更新，普通构建和测试不联网下载目录。
 
 ### 模型协议组件
 
 **注入** `models.protocols` · **创建** `createResponsesProtocolComponent()`、`createChatCompletionsProtocolComponent()`、`createAnthropicMessagesProtocolComponent()`、`createGeminiInteractionsProtocolComponent()`、宿主的 `createDeepSeekProtocolComponent()`
 
-五个协议可同时安装。组件在 `apply` 中注册协议 ID、实现版本、参数表单描述、校验、能力计算、模型发现/连接检查及原生调用函数，并通过 Effect 注销本次注册代。前端可以选择已注册协议，不能上传实现代码。运行时按 Provider 的 `protocolId` 分派，品牌模板只负责预填配置。
+五个协议可同时安装。组件在 `apply` 中注册协议 ID、实现版本、参数表单描述、校验、能力计算、模型发现/连接检查及原生调用函数，并通过 Effect 注销本次注册代。前端可以选择已注册协议，不能上传实现代码。运行时按 ProviderConnection 的 `protocolId` 分派，品牌模板只负责预填配置。
 
 - **Responses**：调用 `/responses`，使用 `store: false`，支持普通 JSON 与 SSE；私有保留 reasoning、消息 phase 和函数调用续轮信息，不使用服务端会话或 `previous_response_id`。函数调用通过 `call_id` 对应工具结果，最终消息 phase 使用 `final_answer`。
 - **标准 Chat Completions**：调用 `/chat/completions`，支持文本、文本与工具同时返回、工具参数增量与用量；输出长度编码为 `max_completion_tokens`，推理档位等参数由协议表单及模型声明校验。
@@ -401,11 +403,11 @@ Run 负责准入、幂等、配置固定和执行交接；AgentLoop 接管之后
 
 本机宿主在 `createHarness` 后将它安装到同一个应用根，并传入已校验的 Agent ID 列表。组件持有只监听 `127.0.0.1` 的 HTTP 服务，提供静态页面和同源 `/api/v1`；HTTP 层构造公开的 Agent ID、Session、Run、Run 事件视图、模型目录及配置状态。`GET /api/v1/runs/:id/events` 通过 Session 服务读取有序事件，返回按工具名区分的 `tool-*` 事件；Bash 的 stdout、stderr 与 Apply Patch 补丁预览分别最多 2048 UTF-8 字节。页面保留 Bash 命令、状态与退出码，并展示补丁的实际变更、未完成项及诊断；已取得的补丁结果在清理失败时也可展示。浏览器脚本是可替换的薄客户端，不导入 Nya 或 Harness。组件通过本轮 `deps` 调用 Projects、Session、Run、Prompt、Agent Prompt、目录选择器及 Models 服务，不缓存跨重启的服务引用。
 
-**模型管理。** Web 通过 `models.settings` 提供 Provider/Model 的创建、修改、启停、版本查询、密钥替换/删除、模型发现及显式连接检查；保存不要求远端可达。查询不返回 Key，修改携带 `expectedRevision`。协议字段描述与 `defaultValue` 驱动参数表单，页面区分能力声明和当前有效能力，Session 的模型选择持久化；提交 Run 时显式携带当前选择，不改变已在执行的 Run。
+**模型管理。** Web 通过 models.settings 查询统一 Provider/Model 定义、管理 ProviderConnection/ModelConfiguration、Key、CAS 版本、发现和检查；保存连接与 Key 后自动准备适用模型。目录服务仅提供来源状态和刷新。查询不返回 Key，修改携带 expectedRevision。协议字段驱动高级参数表单；Session 持久选择稳定配置 ID，模型选择器按连接分组。
 
-公开目录显示缓存来源、刷新状态、Provider/Model 搜索、已弃用项、模态、价格和 limits。已安装协议的连接候选可预填 Provider 表单；显式 `catalogRef` 绑定把本地账号关联到来源，选择匹配的文本模型后预填远端 ID 与建议能力，保存前仍可编辑。无映射或非文本模型保持可查看，手动配置继续可用。目录刷新不自动保存配置，不替当前 Key 验证账号可用性。
+统一目录展示 Provider/Model 的 user/external 来源、搜索、弃用、模态、价格和 limits。用户选 Provider、确认连接方案与 Key 后，系统自动准备文本契约与显式协议映射适用的模型，不要求逐个保存。全模型列表显示不可用原因；额外预设和自定义模型位于高级设置。同步失败保留连接和 Key并可重试。来源刷新补齐缺少基础配置，不改已有参数；来源移除仍可使用固定的执行配置。
 
-HTTP `/api/v1/models` 返回本地可用模型，`/api/v1/models/providers` 与 `/api/v1/models/configurations` 承接管理，Session 的 `/model` 路径修改默认选择。`/api/v1/models/catalog`、其 `/providers`、`/models` 查询与 `/refresh` 请求承接公开目录。远端发现、检查和手动刷新有请求取消跟踪；断开或服务停止会请求取消并等待退出，已接纳的目录缓存提交仍完成。首次迁入与环境变量见上一节和 [README](../README.md#本机-web-界面)，运行时配置无需重启。
+HTTP /api/v1/models 返回执行配置摘要；/models/providers 和 /models/definitions 查询/管理统一定义，/models/connections 和 /models/configurations 管理实际连接与执行参数，连接的 /models 展示全部模型状态、/retry 重试同步。目录 /models/catalog 只提供状态，/refresh 接纳来源。Session 的 /model 更新默认配置 ID。远端发现、检查和刷新支持断连取消并等待退出；已接纳提交仍完成。首次迁入在协议注册前恢复稳定 default 配置 ID，避免中途失败后生成额外随机基础配置。
 
 Prompt 管理以宿主固定的 `local-web-user` 身份调用文档与绑定服务，不接受浏览器声明身份。页面可编辑草稿、发布版本、预览历史并应用到 Agent；编辑与发布携带修订号检查，绑定继续由 Agent Prompt 校验。普通管理操作不重启组件。关闭监听器时等待已接收的写入请求完成，再由 Nya 关闭 Prompt 及绑定服务；管理能力直接复用现有组件，没有在 Web 中另存 Prompt 或拼装 Run 消息。
 
@@ -458,7 +460,7 @@ Web 通过 `ctx.on('harness.run.changed', ...)` 监听提交后的变化，通�
 | `harness.close()` | 根上全部组件，先消费者后资源提供者 | 取消并等待准入、调用、execution 关闭、目录刷新与已接纳写入和结算 | 三套 SQLite 中的已提交配置、目录缓存与业务历史 |
 | 替换/重启 Models 协调服务 | Web、Run、AgentLoop 和协议消费者退出，然后 Models 清理 execution 与管理操作 | 未完成工作通常以 `dependency-unavailable` 失败 | Session、Prompt、Agent Prompt、Projects、业务 SQLite |
 | 单个协议注销/重注册 | 仅该注册代的 execution、发现和连接检查 | 在途模型调用取消；已接受工具由 AgentLoop 继续执行并等待，下次生成因旧 execution 关闭而失败 | 其他协议、配置记录、业务查询；新代不会被旧代清理撤销 |
-| 编辑/停用 Provider 或 Model，替换/删除 Key | 不重启组件，不取消已打开 execution | 使用原快照和已取得凭据继续 | 已接受 Run；新 execution 使用新状态或明确拒绝 |
+| 编辑/停用 ProviderConnection 或 ModelConfiguration，替换/删除 Key | 不重启组件，不取消已打开 execution | 使用原快照和已取得凭据继续 | 已接受 Run；新 execution 使用新状态或明确拒绝 |
 | 卸载 Models 凭据/存储 | Models 及其消费者先退出，再清理凭据操作或配置数据库 | 取消并等待，通常以依赖不可用失败 | Session、Prompt、Projects 和业务数据库 |
 | 卸载 Models 目录来源/缓存/服务 | Web 与目录消费者先退出，再清理刷新、请求和缓存写入 | 模型调用继续使用已固定配置 | Models 执行、协议、凭据、Session 与业务数据库 |
 | 卸载业务 SQLite | Web、Run、AgentLoop、Session、工具、Projects、Agent Prompt、Prompt 按依赖退出，再关闭连接 | 取消并等待后结算 | Models 的配置库、协议与凭据服务 |

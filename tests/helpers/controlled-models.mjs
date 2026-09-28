@@ -10,7 +10,7 @@ export function deferred() {
 export function ids() { let next = 0; return () => `id-${++next}` }
 
 export function modelSnapshot(modelId = 'default', version = 'v1') {
-  return Object.freeze({ modelId, modelRevision: 1, modelVersionId: `model-${version}`, providerId: 'test-provider',
+  return Object.freeze({ schemaVersion: 2, modelDefinitionId: `definition-${modelId}`, providerDefinitionId: 'test-provider-definition', modelDefinitionVersionId: 'definition-v1', modelId, modelRevision: 1, modelVersionId: `model-${version}`, providerId: 'test-provider',
     providerRevision: 1, providerVersionId: 'provider-v1', remoteModelId: 'test-remote', protocolId: 'test', protocolVersion: version, options: {} })
 }
 
@@ -18,7 +18,7 @@ export function modelSnapshot(modelId = 'default', version = 'v1') {
 export function controlledModels({ version = 'v1', modelIds = ['default'], call, open } = {}) {
   const calls = [], events = [], opens = []
   const capabilities = Object.freeze({ tools: true, streaming: true, imageInput: false, reasoning: { support: 'unknown' } })
-  const summaries = modelIds.map(id => ({ id, name: id, enabled: true, revision: 1, versionId: `model-${version}`, createdAt: 'now', updatedAt: 'now', providerId: 'test-provider',
+  const summaries = modelIds.map(id => ({ id, name: id, enabled: true, revision: 1, versionId: `model-${version}`, createdAt: 'now', updatedAt: 'now', connectionId: 'test-provider', providerDefinitionId: 'test-provider-definition', modelDefinitionId: `definition-${id}`, modelDefinitionVersionId: 'definition-v1', source: { kind: 'user' }, baseline: true,
     remoteModelId: 'test-remote', capabilities: { tools: { support: 'supported' }, streaming: { support: 'supported' }, imageInput: { support: 'unknown' }, reasoning: { support: 'unknown' } },
     defaults: {}, available: true, effectiveCapabilities: capabilities }))
   const record = input => {

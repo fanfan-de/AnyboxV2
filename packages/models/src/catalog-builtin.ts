@@ -2,11 +2,11 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { normalizeModelsDevCatalog } from './catalog-domain.js';
 import { modelsError } from './errors.js';
-import type { CatalogSnapshot } from './catalog-types.js';
+import type { SourceSnapshot } from './types.js';
 
-let bundled: CatalogSnapshot | undefined;
+let bundled: SourceSnapshot | undefined;
 /** Real upstream data, captured explicitly by scripts/update-models-dev-snapshot.mjs. */
-export function loadBundledModelsDevCatalog(): CatalogSnapshot {
+export function loadBundledModelsDevCatalog(): SourceSnapshot {
   if (bundled) return bundled;
   try {
     const raw = readFileSync(new URL('../assets/models.dev.api.json', import.meta.url));

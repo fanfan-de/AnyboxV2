@@ -72,17 +72,17 @@ test('Models bootstrap imports the old key once and never overwrites user config
     assert.deepEqual(await installWebModels(root, config, options), { defaultModelId: 'default' })
     const settings = root.get('models.settings')
     assert.equal(settings.protocols().length, 5)
-    assert.equal(settings.providers()[0].credentialConfigured, true)
-    const original = settings.models()[0]
-    await settings.updateModel(original.id, { name: 'My model', defaults: { temperature: 0.3 } }, original.revision)
-    const provider = settings.providers()[0]
+    assert.equal(settings.connections()[0].credentialConfigured, true)
+    const original = settings.configurations()[0]
+    await settings.updateConfiguration(original.id, { name: 'My model', defaults: { temperature: 0.3 } }, original.revision)
+    const provider = settings.connections()[0]
     await settings.setApiKey(provider.id, 'new-private-key', provider.revision)
     await root.fiber.dispose(); root = new Context()
     await installWebModels(root, { ...config, legacy: { ...config.legacy, remoteModelId: 'changed-environment' } }, options)
     assert.equal(reads, 1)
-    assert.equal(root.get('models.settings').models()[0].name, 'My model')
-    assert.equal(root.get('models.settings').models()[0].remoteModelId, original.remoteModelId)
-    assert.deepEqual(root.get('models.settings').models()[0].defaults, { temperature: 0.3 })
+    assert.equal(root.get('models.settings').configurations()[0].name, 'My model')
+    assert.equal(root.get('models.settings').configurations()[0].remoteModelId, original.remoteModelId)
+    assert.deepEqual(root.get('models.settings').configurations()[0].defaults, { temperature: 0.3 })
     assert.deepEqual([...secrets.values()], ['new-private-key'])
     assert.doesNotMatch(readFileSync(config.modelsDatabasePath).toString('utf8'), /legacy-private-key|new-private-key/)
   } finally { await root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) }

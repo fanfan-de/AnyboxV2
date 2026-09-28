@@ -190,17 +190,17 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       get('.composer-agent > span').textContent = state.session?.agentId ?? 'Agent'
       if (models) {
         const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
-        const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.providerId, value.available, value.effectiveCapabilities?.tools]), catalog.providers.map(value => [value.id, value.name]), selected])
+        const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.connectionId, value.available, value.effectiveCapabilities?.tools]), catalog.providers.map(value => [value.id, value.name]), selected])
         if (modelSelect.dataset.choices !== key) {
           modelSelect.dataset.choices = key
           const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = '选择模型'
           modelSelect.replaceChildren(placeholder)
           const groups = new Map<string, HTMLOptGroupElement>()
           for (const value of catalog.models) {
-            let group = groups.get(value.providerId)
+            let group = groups.get(value.connectionId)
             if (!group) {
-              group = document.createElement('optgroup'); group.label = catalog.providers.find(provider => provider.id === value.providerId)?.name ?? value.providerId
-              groups.set(value.providerId, group); modelSelect.append(group)
+              group = document.createElement('optgroup'); group.label = catalog.providers.find(provider => provider.id === value.connectionId)?.name ?? value.connectionId
+              groups.set(value.connectionId, group); modelSelect.append(group)
             }
             const choice = document.createElement('option'); choice.value = value.id
             choice.textContent = canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`
@@ -213,7 +213,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         modelSelect.value = selected
         modelSelect.disabled = state.busy || state.loading || Boolean(state.pending) || catalog.loading
         const hint = get<HTMLElement>('.composer-model-hint')
-        hint.textContent = catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请打开“配置模型”，添加并启用服务和模型。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
+        hint.textContent = catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请打开“配置模型”，选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
         hint.hidden = !hint.textContent
       }
       get('.compose-position').textContent = state.position.viewNodeId ? '继续此分支' : '新分支'

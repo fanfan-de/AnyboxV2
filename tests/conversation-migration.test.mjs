@@ -113,3 +113,21 @@ test('invalid legacy data rolls back the entire tree migration and its version r
   assert.equal(JSON.parse(legacy.turns_json)[1].output, null)
   assert.equal((await f.db.read(reader => reader.get("SELECT status FROM harness_runs WHERE id = 'running'"))).status, 'running')
 })
+
+
+test('Session reads historical and version 2 execution snapshots without rewriting stored JSON', async t => {
+  const f = await legacyFixture(t)
+  await f.root.installComponent(createSessionComponent(f.inputs, agents))
+  const records = f.root.get(sessionRunServiceKey), sessions = f.root.get(sessionServiceKey)
+  const current = modelSnapshot('default', 'v2')
+  const { schemaVersion, modelDefinitionId, providerDefinitionId, modelDefinitionVersionId, ...historical } = current
+  for (const [id, snapshot] of [['historical-model', historical], ['current-model', current]]) {
+    const accepted = await records.registerRun(id, { sessionId: 'empty', parentNodeId: null, input: id, idempotencyKey: id }, 'now', [], snapshot)
+    await records.settleRun(accepted.run.id, { kind: 'completed', output: 'Answer' }, 'now')
+    const before = await f.db.read(reader => reader.get('SELECT model_snapshot_json FROM harness_runs WHERE id = ?', [id]))
+    assert.deepEqual((await records.getRun(id)).modelSnapshot, snapshot)
+    assert.deepEqual((await sessions.getRunByKey('empty', id)).modelSnapshot, snapshot)
+    const after = await f.db.read(reader => reader.get('SELECT model_snapshot_json FROM harness_runs WHERE id = ?', [id]))
+    assert.equal(after.model_snapshot_json, before.model_snapshot_json)
+  }
+})

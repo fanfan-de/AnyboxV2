@@ -1,8 +1,8 @@
 import { dirname, join, resolve } from 'node:path'
-import type { GenerationOptions, ProviderInput } from '@anybox/models'
+import type { GenerationOptions, ProviderConnectionInput } from '@anybox/models'
 
 export interface LegacyModelImport {
-  readonly provider: ProviderInput
+  readonly provider: Omit<ProviderConnectionInput, 'providerDefinitionId'>
   readonly remoteModelId: string
   readonly defaults: GenerationOptions
   readonly credentialId: string
