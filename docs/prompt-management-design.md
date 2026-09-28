@@ -1,12 +1,12 @@
 # Prompt 管理模块设计
 
-状态：首版管理、SQLite 持久化与本机 Web 编辑入口已实现，2026-09-26。Prompt 文档与版本由独立的 Nya Prompt 组件管理；Agent Prompt 组件管理 Agent 的版本绑定与默认指令。两者共用通用 SQLite 组件持有的数据库连接，Run 快照由 SQLite 状态组件持有。归档和团队共享仍是后续设计。
+状态：首版管理、SQLite 持久化与本机 Web 编辑入口已实现，2026-09-26。Prompt 文档与版本由独立的 Nya Prompt 组件管理；Agent Prompt 组件管理 Agent 的版本绑定与默认指令。两者共用通用 SQLite 组件持有的数据库连接，Run 快照由 Session 组件持有。归档和团队共享仍是后续设计。
 
 ## 目标与当前基线
 
 H1 起点只从 `AgentDefinition.instructions` 读取固定指令，并将它与 Session 历史和当前输入拼成字符串。当时用户不能创建、编辑或选择 prompt，Run 也没有记录实际使用的版本。
 
-目标是让有权限的用户管理**不同类型**的 prompt：创建、查看、编辑内容、发布版本、选择给 Agent 使用并查看历史。编辑必须对新 Run 生效，同时不改变已接受 Run 的输入。Prompt 文档与版本独立于 Agent；Agent Prompt 组件负责选择和绑定。文档、版本与绑定由 SQLite 持久化，Run 快照由 SQLite 状态组件持有。
+目标是让有权限的用户管理**不同类型**的 prompt：创建、查看、编辑内容、发布版本、选择给 Agent 使用并查看历史。编辑必须对新 Run 生效，同时不改变已接受 Run 的输入。Prompt 文档与版本独立于 Agent；Agent Prompt 组件负责选择和绑定。文档、版本与绑定由 SQLite 持久化，Run 快照由 Session 组件持有。
 
 ## 内容模型
 

@@ -5,27 +5,24 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createHarness } from '../../dist/harness.js'
 import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
-import { createApiKeyServiceComponent } from '../../dist/credentials/settings.js'
+import { installManagedModels } from './managed-models.mjs'
 import { createDirectoryPickerComponent } from '../../dist/web/directory-picker.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from '../../dist/web/component.js'
-import { controlledLLM, deferred } from './controlled-llm.mjs'
+import { controlledModels, deferred } from './controlled-models.mjs'
 
 const directory = mkdtempSync(join(tmpdir(), 'anybox-workspace-browser-'))
 const root = new Context()
 let harness
 try {
-  const llm = controlledLLM({ call(input) {
+  const llm = controlledModels({ call(input) {
     const result = deferred(), done = deferred()
     const message = input.messages.filter(item => item.role === 'user').at(-1)?.content ?? ''
     const timer = setTimeout(() => { result.resolve(`测试回答：${message}\n${'这是用于验证面板独立滚动的内容。\n'.repeat(16)}`); done.resolve() }, message.includes('hold') ? 60000 : 600)
     return { result: result.promise, done: done.promise, cancel() { clearTimeout(timer); result.reject(new Error('cancelled')); done.resolve() } }
   } })
-  await root.installComponent(createApiKeyServiceComponent({ namespace: 'split-browser-test', definitions: [
-    { id: 'test/model', label: '测试模型', category: '大语言模型' },
-  ], openEntry() { let value; return { async getPassword() { return value }, async setPassword(v) { value = v }, async deleteCredential() { value = undefined } } } }))
-  await root.installComponent(llm.component())
+  await installManagedModels(root, directory, { controlled: llm })
   await root.installComponent(createLocalSqliteComponent(join(directory, 'test.sqlite')))
-  harness = await createHarness(root, { agents: [{ id: 'assistant', modelProfileId: 'default', instructions: 'Browser acceptance model.' }] })
+  harness = await createHarness(root, { agents: [{ id: 'assistant', modelId: 'default', instructions: 'Browser acceptance model.' }] })
   const projects = []
   for (const name of ['Alpha', 'Beta']) { const path = join(directory, name); mkdirSync(path); projects.push(await harness.openProject(path)) }
   const sessions = []

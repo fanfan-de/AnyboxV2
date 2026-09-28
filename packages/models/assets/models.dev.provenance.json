@@ -1,0 +1,11 @@
+{
+  "format": "models.dev/type=all",
+  "sourceUrl": "https://models.dev/api.json?type=all",
+  "fetchedAt": 1790570964743,
+  "sha256": "2e15223fae7ebeb99289286b5fd8dc9aae0e1eb6dbdf24cf5e13828b5761b299",
+  "snapshotVersion": "eddc9fe56ac95e43f2ef57e6d932327b0b7fad37d09793edc977c28b345d8d02",
+  "license": "MIT",
+  "repository": "https://github.com/anomalyco/models.dev",
+  "providers": 225,
+  "models": 8268
+}

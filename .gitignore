@@ -4,3 +4,13 @@ dist/
 .env
 .env.*
 !.env.example
+
+# Local runtime data: Harness and Models SQLite databases, journals, and ownership locks.
+data/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite.lock/
+
+.DS_Store

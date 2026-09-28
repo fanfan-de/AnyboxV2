@@ -1,3 +1,5 @@
+import { createSessionComponent } from '../dist/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -7,24 +9,22 @@ import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createAgentPromptComponent } from '../dist/agent/prompt-binding-component.js'
 import { createHarness } from '../dist/harness.js'
-import { llmServiceKey } from '../dist/llm/port.js'
+import { modelsServiceKey } from '@anybox/models'
 import { createPromptComponent } from '../dist/prompt/component.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
 import { agentLoopServiceKey, createAgentLoopComponent } from '../dist/run/agent-loop-component.js'
 import { createRunComponent, runServiceKey } from '../dist/run/component.js'
-import { createSessionComponent, sessionServiceKey } from '../dist/run/session-component.js'
-import { createSqliteStateComponent, stateServiceKey } from '../dist/run/sqlite-state.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { bashServiceKey, bashToolDefinition } from '../dist/tool/bash-component.js'
-import { controlledLLM, deferred } from './helpers/controlled-llm.mjs'
+import { controlledModels, modelSnapshot, deferred } from './helpers/controlled-models.mjs'
 
-const agents = [{ id: 'assistant', instructions: 'Use Bash when useful.', modelProfileId: 'default' }]
+const agents = [{ id: 'assistant', instructions: 'Use Bash when useful.', modelId: 'default' }]
 
 async function fixture() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-loop-')))
   const root = new Context()
-  const llm = controlledLLM()
+  const llm = controlledModels()
   try {
     await root.installComponent(llm.component())
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
@@ -33,7 +33,7 @@ async function fixture() {
     const session = await harness.createSession(project.id, 'assistant')
     return {
       directory, root, llm, harness, session,
-      state: root.get(stateServiceKey),
+      records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey),
       async close() {
         try { await harness.close() }
         finally { rmSync(directory, { recursive: true, force: true }) }
@@ -61,14 +61,14 @@ test('one Bash result is persisted, returned to the model, and followed by a fin
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Inspect this project', idempotencyKey: 'one' })
     assert.equal(f.llm.calls[0].input.tools[0].name, 'bash')
-    f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [request('tool-1', 'printf hello')] })
+    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [request('tool-1', 'printf hello')] })
     f.llm.calls[0].done.resolve()
     await until(() => f.llm.calls.length === 2)
     const messages = f.llm.calls[1].input.messages
-    assert.deepEqual(messages[2], { role: 'assistant', content: null,
+    assert.deepEqual(messages[2], { role: 'assistant', content: '',
       toolCalls: [request('tool-1', 'printf hello')] })
     assert.equal(messages[3].role, 'tool')
-    assert.equal(messages[3].toolCallId, 'tool-1')
+    assert.equal(messages[3].callId, 'tool-1')
     assert.deepEqual(JSON.parse(messages[3].content),
       { exitCode: 0, signal: null, stdout: 'hello', stderr: '', truncated: false })
     f.llm.calls[1].result.resolve('The command printed hello.')
@@ -76,7 +76,7 @@ test('one Bash result is persisted, returned to the model, and followed by a fin
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'The command printed hello.')
-    assert.deepEqual((await f.state.getRunEvents(run.id)).map(event => event.kind), [
+    assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(event => event.kind), [
       'model-started', 'model-tool-calls', 'tool-started', 'tool-observed', 'model-started', 'terminal',
     ])
     assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes.map(({ input, output }) => ({ input, output })),
@@ -88,7 +88,7 @@ test('a Bash batch executes serially and returns nonzero exit codes as observati
   const f = await fixture()
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Run both', idempotencyKey: 'batch' })
-    f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
+    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [
       request('first', 'printf ready > first-started; while [ ! -f release ]; do sleep 0.02; done; exit 7'),
       request('second', 'printf ready > second-started; printf second'),
     ] })
@@ -100,13 +100,13 @@ test('a Bash batch executes serially and returns nonzero exit codes as observati
     await until(() => f.llm.calls.length === 2)
     assert.equal(existsSync(join(f.directory, 'second-started')), true)
     const toolMessages = f.llm.calls[1].input.messages.filter(message => message.role === 'tool')
-    assert.deepEqual(toolMessages.map(message => message.toolCallId), ['first', 'second'])
+    assert.deepEqual(toolMessages.map(message => message.callId), ['first', 'second'])
     assert.equal(JSON.parse(toolMessages[0].content).exitCode, 7)
     assert.equal(JSON.parse(toolMessages[1].content).stdout, 'second')
     f.llm.calls[1].result.resolve('Both commands finished.')
     f.llm.calls[1].done.resolve()
     assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
-    assert.deepEqual((await f.state.getRunEvents(run.id)).map(event => event.kind), [
+    assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(event => event.kind), [
       'model-started', 'model-tool-calls', 'tool-started', 'tool-observed',
       'tool-started', 'tool-observed', 'model-started', 'terminal',
     ])
@@ -117,7 +117,7 @@ test('one invalid request rejects the complete batch before any Bash command sta
   const f = await fixture()
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Invalid batch', idempotencyKey: 'invalid' })
-    f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
+    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [
       request('valid', 'printf bad > should-not-exist'),
       { id: 'invalid', name: 'other', arguments: { command: 'pwd' } },
     ] })
@@ -126,7 +126,7 @@ test('one invalid request rejects the complete batch before any Bash command sta
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'invalid-tool-request')
     assert.equal(existsSync(join(f.directory, 'should-not-exist')), false)
-    assert.deepEqual((await f.state.getRunEvents(run.id)).map(event => event.kind), ['model-started', 'terminal'])
+    assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(event => event.kind), ['model-started', 'terminal'])
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
@@ -135,7 +135,7 @@ test('a Run completes multiple batches beyond the former model and Bash call lim
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Finish all steps', idempotencyKey: 'many-steps' })
     for (let step = 0; step < 6; step++) {
-      f.llm.calls[step].result.resolve({ kind: 'tool-calls', calls: Array.from({ length: step === 0 ? 5 : 1 }, (_, index) =>
+      f.llm.calls[step].result.resolve({ status: 'completed', text: '', toolCalls: Array.from({ length: step === 0 ? 5 : 1 }, (_, index) =>
         request(`call-${step}-${index}`, `printf 'step-${step}-${index}'`)) })
       f.llm.calls[step].done.resolve()
       await until(() => f.llm.calls.length === step + 2)
@@ -146,11 +146,11 @@ test('a Run completes multiple batches beyond the former model and Bash call lim
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'All steps completed.')
-    const execution = await f.state.getRunExecution(run.id)
+    const execution = await f.records.getRunExecution(run.id)
     assert.equal(execution.modelCalls, 7)
     assert.equal(execution.toolCalls, 10)
     assert.equal(execution.phase, 'terminal')
-    assert.equal((await f.state.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed').length, 10)
+    assert.equal((await f.sessions.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed').length, 10)
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
@@ -158,14 +158,14 @@ test('the cumulative Bash output limit stops the Run before another model call',
   const f = await fixture()
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Large output', idempotencyKey: 'output-limit' })
-    f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [1, 2, 3].map(number =>
+    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [1, 2, 3].map(number =>
       request(`call-${number}`, "printf '%*s' 65536 '' | tr ' ' a")) })
     f.llm.calls[0].done.resolve()
     const terminal = await f.harness.waitRun(run.id)
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'limit-exceeded')
     assert.equal(f.llm.calls.length, 1)
-    assert.equal((await f.state.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed').length, 3)
+    assert.equal((await f.sessions.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed').length, 3)
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
@@ -186,7 +186,7 @@ test('cancelling an active Bash command waits for exit and starts no subsequent 
   const f = await fixture()
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Cancel', idempotencyKey: 'cancel' })
-    f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
+    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [
       request('first', "trap 'sleep 0.3; exit' TERM; printf ready > started; while :; do sleep 1; done"),
       request('second', 'printf bad > should-not-exist'),
     ] })
@@ -198,7 +198,7 @@ test('cancelling an active Bash command waits for exit and starts no subsequent 
     assert.equal(terminal.status, 'cancelled')
     assert.equal(existsSync(join(f.directory, 'should-not-exist')), false)
     assert.equal(f.llm.calls.length, 1)
-    assert.deepEqual((await f.state.getRunEvents(run.id)).map(event => event.kind), [
+    assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(event => event.kind), [
       'model-started', 'model-tool-calls', 'tool-started', 'tool-failed', 'terminal',
     ])
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
@@ -209,7 +209,7 @@ test('closing Harness waits for an active Bash command to exit', async () => {
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Close', idempotencyKey: 'close-bash' })
     const waiting = f.harness.waitRun(run.id)
-    f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [
+    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [
       request('tool-1', "trap 'sleep 0.25; printf stopped > stopped; exit' TERM; printf ready > started; while :; do sleep 1; done"),
     ] })
     f.llm.calls[0].done.resolve()
@@ -229,15 +229,16 @@ test('closing Harness waits for an active Bash command to exit', async () => {
 test('cancelling while the first model step starts cannot settle ahead of its call', async () => {
   const f = await fixture()
   try {
-    const accepted = await f.state.acceptRun('starting-run', {
+    const execution = await f.root.get(modelsServiceKey).open({ modelId: 'default' })
+    const accepted = await f.records.registerRun('starting-run', {
       sessionId: f.session.id, parentNodeId: null, input: 'Cancel at startup', idempotencyKey: 'starting',
-    }, 'now', [], f.root.get(llmServiceKey).prepare('default'))
+    }, 'now', [], execution.snapshot)
     assert.equal(accepted.created, true)
-    const originalGetRun = f.state.getRun.bind(f.state)
+    const originalGetRun = f.records.getRun.bind(f.records)
     const entered = deferred()
     const release = deferred()
     let reads = 0
-    f.state.getRun = async id => {
+    f.records.getRun = async id => {
       if (id === 'starting-run' && ++reads === 2) {
         entered.resolve()
         await release.promise
@@ -245,7 +246,7 @@ test('cancelling while the first model step starts cannot settle ahead of its ca
       return originalGetRun(id)
     }
     const loop = f.root.get(agentLoopServiceKey)
-    const starting = loop.start('starting-run')
+    const starting = loop.start({ runId: 'starting-run', execution })
     await entered.promise
     await loop.cancel('starting-run', 'user-requested')
     assert.equal((await originalGetRun('starting-run')).status, 'cancelling')
@@ -261,12 +262,13 @@ test('cancelling before the first Run read finishes still reaches a terminal sta
   const entered = deferred()
   const release = deferred()
   try {
-    await f.state.acceptRun('early-cancel-run', {
+    const execution = await f.root.get(modelsServiceKey).open({ modelId: 'default' })
+    await f.records.registerRun('early-cancel-run', {
       sessionId: f.session.id, parentNodeId: null, input: 'Cancel before read', idempotencyKey: 'early-cancel',
-    }, 'now', [], f.root.get(llmServiceKey).prepare('default'))
-    const originalGetRun = f.state.getRun.bind(f.state)
+    }, 'now', [], execution.snapshot)
+    const originalGetRun = f.records.getRun.bind(f.records)
     let held = false
-    f.state.getRun = async id => {
+    f.records.getRun = async id => {
       if (id === 'early-cancel-run' && !held) {
         held = true
         entered.resolve()
@@ -275,7 +277,7 @@ test('cancelling before the first Run read finishes still reaches a terminal sta
       return originalGetRun(id)
     }
     const loop = f.root.get(agentLoopServiceKey)
-    const starting = loop.start('early-cancel-run')
+    const starting = loop.start({ runId: 'early-cancel-run', execution })
     await entered.promise
     await loop.cancel('early-cancel-run', 'user-requested')
     assert.equal((await originalGetRun('early-cancel-run')).status, 'cancelling')
@@ -296,8 +298,8 @@ async function stateHost(file) {
   try {
     await root.installComponent(createLocalSqliteComponent(file))
     await root.installComponent(createProjectComponent(inputs))
-    await root.installComponent(createSqliteStateComponent(inputs))
-    return { root, state: root.get(stateServiceKey), projects: root.get(projectServiceKey) }
+    await root.installComponent(createSessionComponent(inputs, agents))
+    return { root, records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey), projects: root.get(projectServiceKey) }
   } catch (error) { await root.fiber.dispose(); throw error }
 }
 
@@ -309,27 +311,27 @@ test('a persisted Bash intent becomes interrupted on restart and is never replay
   try {
     first = await stateHost(file)
     const project = await first.projects.openProject(directory)
-    const session = await first.state.createSession('session-1', project.id, 'assistant', 'now')
-    const accepted = await first.state.acceptRun('run-1', {
+    const session = await first.sessions.createSession(project.id, 'assistant')
+    const accepted = await first.records.registerRun('run-1', {
       sessionId: session.id, parentNodeId: null, input: 'Maybe execute', idempotencyKey: 'once',
-    }, 'now', [], { snapshot: { profileId: 'default', configVersion: 'v1' } })
+    }, 'now', [], modelSnapshot())
     assert.equal(accepted.created, true)
-    await first.state.recordRunEvent('run-1', { kind: 'model-started' }, 'now')
-    await first.state.recordRunEvent('run-1',
+    await first.records.recordRunEvent('run-1', { kind: 'model-started' }, 'now')
+    await first.records.recordRunEvent('run-1',
       { kind: 'model-tool-calls', calls: [request('tool-1', 'printf duplicate >> marker')] }, 'now')
-    await first.state.recordRunEvent('run-1',
+    await first.records.recordRunEvent('run-1',
       { kind: 'tool-started', call: request('tool-1', 'printf duplicate >> marker') }, 'now')
     // The process might have performed this side effect before losing its result.
     writeFileSync(join(directory, 'marker'), 'already-executed')
     await first.root.fiber.dispose()
     second = await stateHost(file)
-    assert.equal((await second.state.getRun('run-1')).status, 'interrupted')
-    assert.equal((await second.state.getRunExecution('run-1')).phase, 'terminal')
-    assert.deepEqual((await second.state.getRunEvents('run-1')).map(event => event.kind), [
+    assert.equal((await second.records.getRun('run-1')).status, 'interrupted')
+    assert.equal((await second.records.getRunExecution('run-1')).phase, 'terminal')
+    assert.deepEqual((await second.sessions.getRunEvents('run-1')).map(event => event.kind), [
       'model-started', 'model-tool-calls', 'tool-started', 'interrupted',
     ])
     assert.equal((await import('node:fs')).readFileSync(join(directory, 'marker'), 'utf8'), 'already-executed')
-    assert.equal((await second.state.findAcceptedRun({ sessionId: session.id, parentNodeId: null,
+    assert.equal((await second.records.findAcceptedRun({ sessionId: session.id, parentNodeId: null,
       input: 'Maybe execute', idempotencyKey: 'once' })).id, 'run-1')
   } finally {
     await second?.root.fiber.dispose()
@@ -371,26 +373,25 @@ test('the Run state migration preserves legacy completed Runs and interrupts old
       tx.execute(sql, ['completed-1', 'session-1', 'completed', 'Saved', 'completed', 'old', 'old', '[]', snapshot, 'Answer'])
       tx.execute(sql, ['running-1', 'session-1', 'running', 'Pending', 'running', 'old', 'old', '[]', snapshot, null])
     })
-    await root.installComponent(createSqliteStateComponent(inputs))
-    const state = root.get(stateServiceKey)
+    await root.installComponent(createSessionComponent(inputs, agents))
+    const state = root.get(sessionRunServiceKey), sessions = root.get(sessionServiceKey)
     assert.equal((await state.getRun('completed-1')).output, 'Answer')
     assert.equal((await state.getRunExecution('completed-1')).phase, 'terminal')
-    assert.deepEqual(await state.getRunEvents('completed-1'), [])
+    assert.deepEqual(await sessions.getRunEvents('completed-1'), [])
     assert.equal((await state.getRun('running-1')).status, 'interrupted')
-    assert.deepEqual((await state.getRunEvents('running-1')).map(event => event.kind), ['interrupted'])
+    assert.deepEqual((await sessions.getRunEvents('running-1')).map(event => event.kind), ['interrupted'])
   } finally { await root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) }
 })
 
 test('revoking Bash waits for its done and prevents another model step', async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-revoke-')))
   const root = new Context()
-  const llm = controlledLLM()
+  const llm = controlledModels()
   const bashCalls = []
   const inputs = { now: () => 'now', newId: (() => { let id = 0; return () => `id-${++id}` })() }
   try {
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
     await root.installComponent(createProjectComponent(inputs))
-    await root.installComponent(createSqliteStateComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, agents))
     await root.installComponent(createPromptComponent(inputs))
     await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
@@ -422,13 +423,13 @@ test('revoking Bash waits for its done and prevents another model step', async (
     const runs = root.get(runServiceKey)
     const run = await runs.startRun({ sessionId: session.id, parentNodeId: null, input: 'Use Bash', idempotencyKey: 'one' })
     const waiting = runs.waitRun(run.id)
-    llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [request('tool-1', 'printf hello')] })
+    llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [request('tool-1', 'printf hello')] })
     llm.calls[0].done.resolve()
     await until(() => bashCalls.length === 1)
     bashCalls[0].result.resolve({ exitCode: 0, signal: null, stdout: 'hello', stderr: '', truncated: false })
     await Promise.resolve()
     assert.equal(llm.calls.length, 1)
-    assert.equal((await root.get(stateServiceKey).getRun(run.id)).status, 'running')
+    assert.equal((await root.get(sessionRunServiceKey).getRun(run.id)).status, 'running')
     let disposed = false
     const stopping = bashFiber.dispose().then(() => { disposed = true })
     assert.equal(await bashCalls[0].cancelled.promise, 'dependency-unavailable')

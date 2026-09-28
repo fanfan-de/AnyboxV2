@@ -1,6 +1,8 @@
 # Harness 组件说明
 
-状态：2026-09-26，对应当前代码。本文是项目现有 Nya 组件的职责清单，覆盖 Harness、本机 Web 宿主、可替换的凭据与模型实现，并单独说明仅用于验证的 H0 探针。逐个说明组件负责什么、提供哪个服务、依赖谁、持有哪些状态与资源、关闭时如何清理；组合根、Agent 定义和浏览器模块另行说明，不计为 Nya 组件。
+Harness 与本机 Web 已直接接入独立通用包 `packages/models`，通过 `models` 执行模型、通过 `models.settings` 管理连接、模型和密钥、通过 `models.catalog` 查询和刷新公开目录。多个 Provider 和协议可以同时工作；通用模块不导入本项目业务源码。包内契约与实现见 [Models 模块](../packages/models/README.md)。
+
+状态：2026-09-28，对应当前代码。本文是项目现有 Nya 组件的职责清单，覆盖 Harness、本机 Web 宿主和通用 Models 模块，并单独说明仅用于验证的 H0 探针。逐个说明组件负责什么、提供哪个服务、依赖谁、持有哪些状态与资源、关闭时如何清理；组合根、Agent 定义和浏览器模块另行说明，不计为 Nya 组件。
 
 先看下方职责总览；理解 Run 的执行与记录如何分工，可直接看[一次 Run 的执行与记录由谁维护](#一次-run-的执行与记录由谁维护)。阶段计划见 [Agent Harness 重建计划](./agent-harness-plan.md)，建模方法见 [用函数式思想建模 Agent Harness 的开发](./functional-agent-harness-development.md)，Prompt 与存储的专题设计见 [Prompt 管理模块设计](./prompt-management-design.md) 和 [本地 SQLite 存储组件](./local-sqlite-storage.md)。
 
@@ -8,56 +10,65 @@
 
 ### 放置规则
 
-当前只使用一个应用根 Context。应用先安装凭据组件、大模型 API 组件和本地 SQLite，`createHarness` 校验只读 Agent 定义，再把 Projects、Bash、Apply Patch、Prompt、状态、Session、Run、AgentLoop 等组件直接安装在同一个根上。本机 Web 宿主使用一个自包含的 API Key 服务组件，再在同一根上安装 Web 前端组件。组件按职责和依赖拆分，不为 Harness、项目或任务建立额外的 Nya 作用域。Nya 服务按名称注册在根上；同一个根只安装一套 Harness 服务，也只安装一种凭据组件和一种大模型 API 组件。
+当前只使用一个应用根 Context。宿主先安装 Models 配置存储、凭据、协调服务、协议与目录来源/缓存/服务组件，以及业务本地 SQLite；`createHarness` 校验只读 Agent 定义，再把 Projects、Bash、Apply Patch、Prompt、Session、Run、AgentLoop 等组件直接安装在同一个根上。目录选择器和 Web 也安装在这个根上，不为 Harness、Provider、Model、项目或任务创建额外 Context。
 
-应用拥有根上组件的生命周期。`harness.close()` 是当前的应用关闭入口：先停止接受外部调用，再卸载根上的全部组件，等待清理。大模型 API 组件的在途请求和数据库连接也会关闭；该 Harness 门面关闭后不可复用。重启应用时需重新装配组件，通常新建根。
+Models 配置、公开目录缓存和业务存储使用三个独立 SQLite 文件；配置库保存本地 Provider/Model，缓存库保存公共快照和 ETag，业务库持有 Session、Run、Prompt、Projects 等领域表。三者各有排他资源所有者，数据库路径不能相同。系统凭据使用独立命名空间。一个根安装一套 Models 服务与一套 Harness 服务，Provider 和 Model 是配置记录，多个协议组件通过注册服务接入。
+
+应用拥有根上组件的生命周期。`harness.close()` 先停止接受门面调用，再卸载根上的全部组件，等待模型 execution、HTTP、工具、数据库和凭据操作退出。该门面关闭后不可复用；重启须重新装配组件，通常新建根。
 
 ### 组件与依赖
 
 ```text
 应用根 Context
-├─ API Key 服务 ..... 提供 credentials.read、credentials.settings；无注入依赖
-│  （或系统凭据库 ..... 提供 credentials.read、credentials.manage）
-│  （或外部凭据来源 .. 只提供 credentials.read）
-├─ DeepSeek Chat Completions 或 OpenAI Responses
-│  └─ 提供 llm；注入 credentials.read（只安装其中一种）
-├─ 本地 SQLite ....... 提供 local-storage
-├─ 目录选择器 ......... 提供 host.directory-picker；无注入依赖
-├─ Projects ......... 提供 harness.projects      注入 local-storage
-├─ Bash ............. 提供 tools.bash            注入 projects
-├─ Apply Patch ...... 提供 tools.apply-patch     注入 projects
-├─ SQLite 状态 ...... 提供 harness.state         注入 local-storage、projects
-├─ Session .......... 提供 harness.sessions       注入 projects、state；接收 Agent 定义
-├─ Prompt ........... 提供 harness.prompts        注入 local-storage
-├─ Agent Prompt ..... 提供 harness.agent-prompts  注入 prompts、local-storage；接收 Agent 定义
-├─ AgentLoop ........ 提供 harness.agent-loop     注入 state、llm、tools.bash、tools.apply-patch
-├─ Run .............. 提供 harness.runs           注入 projects、state、agent-prompts、llm、agent-loop；接收 Agent 定义
-└─ Web 前端 ......... 提供 web.frontend            注入 projects、sessions、runs、prompts、agent-prompts、credentials.settings、host.directory-picker；接收 Agent ID 列表
+├─ Models 配置存储 ... 提供 models.store；拥有独立 SQLite
+├─ Models 凭据 ....... 提供 models.vault；拥有系统凭据操作
+├─ Models 协调服务 ... 提供 models、models.settings、models.protocols；注入 models.store、models.vault
+├─ Responses 协议 .... 注入 models.protocols，按注册代登记实现
+├─ 标准 Chat 协议 .... 注入 models.protocols，按注册代登记实现
+├─ Anthropic 协议 .... 原生 Messages；注入 models.protocols
+├─ Gemini 协议 ....... 原生 Interactions；注入 models.protocols
+├─ DeepSeek 协议 ..... 宿主扩展；注入 models.protocols，复用标准 Chat 的传输与解析
+├─ Models 目录来源 ... 提供 models.catalog-source；拥有匿名 HTTP 请求
+├─ Models 目录缓存 ... 提供 models.catalog-cache；拥有独立 SQLite
+├─ Models 目录服务 ... 提供 models.catalog；注入 catalog-source、catalog-cache
+├─ 业务本地 SQLite ... 提供 local-storage
+├─ 目录选择器 ........ 提供 host.directory-picker；无注入依赖
+├─ Projects ......... 提供 harness.projects；注入 local-storage
+├─ Bash ............. 提供 tools.bash；注入 projects
+├─ Apply Patch ...... 提供 tools.apply-patch；注入 projects
+├─ Session .......... 提供 harness.sessions、harness.session-runs；注入 local-storage、projects
+├─ Prompt ........... 提供 harness.prompts；注入 local-storage
+├─ Agent Prompt ..... 提供 harness.agent-prompts；注入 prompts、local-storage
+├─ AgentLoop ........ 提供 harness.agent-loop；注入 session-runs、models、tools.bash、tools.apply-patch
+├─ Run .............. 提供 harness.runs；注入 projects、sessions、session-runs、agent-prompts、models、agent-loop
+└─ Web 前端 ......... 提供 web.frontend；注入 projects、sessions、runs、prompts、agent-prompts、
+                     models、models.settings、models.catalog、host.directory-picker
 ```
 
-以上为服务依赖清单，不是额外的 Context 层级。`createHarness` 安装业务组件；本机宿主在它之前选择凭据、模型和 SQLite 实现，在它之后安装目录选择器与 Web。关闭时由 Nya 按依赖关系先清理消费者，再清理其资源提供者。
+这是服务依赖清单，不是 Context 层级。Agent 定义由组合根传给 Session、Agent Prompt 和 Run。协议组件依赖 Models 注册服务；Models 配置加载不依赖任何协议，缺少协议的配置仍可查询。公开目录只依赖来源与缓存，模型执行不依赖目录。Session 不注入 Models，因此模型服务替换不会撤销持久业务查询。关闭顺序由 Nya 根据真实依赖决定，组合根不复制依赖图。
 
 ### 职责与状态归属总览
 
-下表中的运行时组件都安装在应用根；三种凭据实现互斥，两种模型实现互斥。源码入口链接指向实际提供服务的组件，内部辅助模块由对应组件拥有。
+下表中的运行时组件都安装在应用根；Models 同时承载多个连接、模型与协议。源码入口链接指向实际提供服务的组件，内部辅助模块由对应组件拥有。
 
 | 组件 | 主要作用 | 持有的状态或资源 | 源码入口 |
 | --- | --- | --- | --- |
-| API Key 服务 | 向本机 Web 提供已注册凭据的读取与管理 | 注册清单、系统凭据库存储、按 ID 排序的在途操作 | [settings.ts](../src/credentials/settings.ts)；通用实现位于 `packages/api-key-manager/` |
-| 系统凭据库 | 向受信宿主提供系统凭据读写能力 | 系统存储访问、同 ID 操作顺序、取消与退出跟踪 | [system-keyring.ts](../src/credentials/system-keyring.ts) |
-| 外部凭据来源 | 将部署方的读取函数接入凭据服务 | 在途读取及中止控制；不缓存密钥、不自行持久化 | [external-source.ts](../src/credentials/external-source.ts) |
-| DeepSeek Chat Completions | 执行一次原生模型请求，返回文本或工具请求 | 模型配置、计划映射、每计划的密钥读取结果、HTTP 调用与超时 | [component.ts](../src/llm/deepseek-chat-completions/component.ts) |
-| OpenAI Responses | 执行一次 Responses 请求，返回文本或工具请求 | 模型配置、每计划的密钥读取结果与原生续轮上下文、HTTP 调用与超时 | [component.ts](../src/llm/openai-responses/component.ts) |
+| Models 配置存储 | 保存 Provider、Model、不可变版本与凭据操作日志 | 独立 SQLite 连接、排他所有权、配置记录与事务 | [store.ts](../packages/models/src/store.ts) |
+| Models 凭据 | 按槽位读写系统凭据，等待实际退出 | 系统凭据条目、按槽位排序的在途操作 | [vault.ts](../packages/models/src/vault.ts) |
+| Models 协调服务 | 配置协调、能力校验、协议注册和模型调用 | Provider 操作队列、协议注册代、待打开 execution 与在途管理操作 | [component.ts](../packages/models/src/component.ts) |
+| Models 目录来源 | 获取和归一公开 models.dev 数据 | 匿名 HTTP 请求、reader、ETag 条件请求与退出等待 | [catalog-source.ts](../packages/models/src/catalog-source.ts) |
+| Models 目录缓存 | 原子保存公开快照与刷新状态 | 第三套 SQLite 连接、排他所有权、写入队列或可观察的内存后备 | [catalog-cache.ts](../packages/models/src/catalog-cache.ts) |
+| Models 目录服务 | 查询快照、协调刷新与发布 | 不可变目录、刷新计时器、在途刷新、状态 | [catalog.ts](../packages/models/src/catalog.ts) |
+| 模型协议组件 | 编码原生请求，解析 JSON/SSE 与工具参数，维护候选续轮数据 | HTTP 调用、响应流与协议私有续轮状态 | [Responses](../packages/models/src/protocols/responses.ts)、[Chat Completions](../packages/models/src/protocols/chat-completions.ts)、[Anthropic](../packages/models/src/protocols/anthropic-messages.ts)、[Gemini](../packages/models/src/protocols/gemini-interactions.ts)、[DeepSeek 扩展](../src/web/deepseek-protocol.ts) |
 | Bash 工具 | 在指定项目目录执行一次命令 | 子进程、输出缓冲、超时与终止计时器、在途调用 | [bash-component.ts](../src/tool/bash-component.ts) |
 | Apply Patch 工具 | 预检并应用一次文本文件补丁 | 跨项目串行队列、源文件快照、临时文件与目录、提交事实、在途调用 | [apply-patch-component.ts](../src/tool/apply-patch-component.ts) |
 | 本地 SQLite | 提供通用读写事务与按领域迁移 | 数据库连接、文件排他锁、串行操作队列 | [sqlite.ts](../src/storage/sqlite.ts) |
 | Projects | 登记项目目录身份、检查目录可用性 | 项目持久记录、在途目录检查与存储操作 | [component.ts](../src/project/component.ts) |
-| SQLite 状态 | 保存并约束 Session、对话节点和 Run 的业务记录 | 持久状态、执行阶段与事件；内存中的活动 Run 计划和在途存储操作 | [sqlite-state.ts](../src/run/sqlite-state.ts) |
-| Session | 创建会话、查询会话及对话树 | 只读 Agent 配置与本轮服务依赖；会话数据交给状态组件 | [session-component.ts](../src/run/session-component.ts) |
+| Session | 拥有会话、对话树、Run 记录及其查询与事务规则 | 持久记录、配置快照、迁移、恢复、在途数据操作和提交后通知 | [component.ts](../src/session/component.ts) |
 | Prompt | 管理 Prompt 草稿和不可变发布版本 | 文档与版本表、已提交读投影、写入队列 | [component.ts](../src/prompt/component.ts) |
 | Agent Prompt | 管理 Agent 的版本绑定，解析 Run 所需的 Prompt 快照 | 绑定表与读投影、写入队列、默认指令映射 | [prompt-binding-component.ts](../src/agent/prompt-binding-component.ts) |
-| AgentLoop | 驱动已接受 Run 的模型与工具循环，取消并等待调用退出 | 活动 Run 登记、每 Run 执行闭包、调用句柄、等待者与清理错误 | [agent-loop-component.ts](../src/run/agent-loop-component.ts) |
-| Run | 准入、幂等协调、固定配置，以及对外查询和控制 | 准入与交接任务、已接收 Run ID；业务记录交给状态组件 | [component.ts](../src/run/component.ts) |
+| AgentLoop | 驱动已接受 Run 的模型与工具循环，取消并等待调用退出 | 活动 Run 登记、每 Run 的 ModelExecution 与执行闭包、调用句柄、等待者与清理错误 | [agent-loop-component.ts](../src/run/agent-loop-component.ts) |
+| Run | 准入、幂等协调、固定配置，以及启动、取消和等待 | 准入期间的 execution 与取消控制器、交接任务和已接收 Run ID；业务记录交给 Session | [component.ts](../src/run/component.ts) |
 | 目录选择器 | 打开一次原生目录选择窗口 | 单个在途对话框调用、子进程、中止与退出跟踪 | [directory-picker.ts](../src/web/directory-picker.ts) |
 | Web 前端 | 将本机 HTTP 请求接到业务服务，提供浏览器客户端 | HTTP 监听器、请求等待与取消跟踪、重启时沿用的端口 | [component.ts](../src/web/component.ts)、[server.ts](../src/web/server.ts) |
 
@@ -67,104 +78,79 @@
 
 - **组件形态**：每个组件是一个带 `name` 和 `apply(ctx, config, deps)` 的对象，有服务依赖时通过 `inject` 声明。`apply` 完成初始化并用 `ctx.provide` 提供服务后返回，不让长期任务阻塞启动。`deps` 是本轮依赖的快照，组件只通过它使用注入服务。
 - **撤销顺序**：Nya 卸载一个组件时，先撤回它提供的服务，并等所有依赖该服务的组件退出，再按后进先出执行它登记的 Effect 清理。所以任何组件被撤销时，下游消费者总是先停下。
-- **停止接收与等待退出**：持有在途操作的组件通过接收标志或关闭状态拒绝新请求。模型、工具和执行循环还会取消已接受的工作并等待实际退出；存储及写入队列则等待已接受的操作完成。Session 没有自有长期资源或清理 Effect，数据操作由其依赖组件持有。
-- **`OwnedCall`**（`src/contracts.ts`）：可取消的调用分成 `result`（业务结果）、`cancel(reason)` 和 `done`（实际工作与资源都已退出）。`result` 已结算不代表资源已释放，只有 `done` 才代表。
-- **`llm` 服务契约**（`src/llm/port.ts`）：Run 和 AgentLoop 只依赖 `prepare(profileId)`、`call({ plan, messages, tools? })`、`supportsTools`，以及项目自有的工具定义、请求、观察消息、结构化模型结果和失败类别。提供该服务的 API 组件把原生请求、响应类型和凭据留在自己内部。DeepSeek 与 OpenAI Responses 均声明 `supportsTools: true`。
-- **凭据契约**（`src/credentials/port.ts`）：`credentials.read` 提供 `read(id, signal?)`，缺失返回 `undefined`；`credentials.manage` 有 `write(id, secret)` 和 `delete(id)`。两者分开注册是给受信宿主的命名约定，不是访问边界：Nya 服务按名称寻址，根上任何组件都能注入。失败是带固定类别的 `CredentialFailure`：`store-unavailable`、`operation-failed`、`closed`、`cancelled`，不携带系统信息、条目名或密钥。
+- **停止接收与等待退出**：持有在途操作的组件通过接收标志或关闭状态拒绝新请求。模型、工具和执行循环还会取消已接受的工作并等待实际退出；存储及写入队列则等待已接受的操作完成。Session 通过清理 Effect 等待已接受的数据操作和提交后通知完成；SQLite 单独拥有连接与通用队列。
+- **工具 `OwnedCall`**（`src/contracts.ts`）：`result` 是业务结果，`cancel(reason)` 只请求取消，`done` 表示实际工作与资源退出。工具的结果可先于退出到达，AgentLoop 必须观察两者。
+- **模型 `ModelCall`**（`packages/models/src/types.ts`）：公共 `result` 在底层调用退出、完成成功结果的候选上下文提交并释放本轮占用后才结算；正常调用者只需等待一次 `result`。`done` 仍供资源所有者等待退出并识别清理失败，AgentLoop 统一立即观察两者。超时或取消不能用提前结束 Promise 代替资源退出。
+- **Models 公共服务**：`models.list/get/open` 查询与打开执行上下文；`models.settings` 管理连接、模型、密钥、版本、模型发现和连接检查；`models.protocols` 仅供受信协议组件注册实现；可选 `models.catalog` 提供公开目录与刷新状态。Nya 按名称提供服务，这些名字区分职责，不构成权限隔离。
+- **私有边界**：协议原生类型、错误、认证编码及续轮数据留在 Models 内；密钥值不进入 Provider/Model 查询 DTO、执行快照、Run、事件或日志。Host 将 Models 固定错误映射为 Run 的固定类别。
 - **纯函数与副作用分离**：领域模块放校验和状态转换的纯函数，返回冻结的新值；时间和 ID 通过 `RuntimeInputs`（`now`、`newId`）从外部传入。Nya 装配、存储、模型传输和工具执行分别集中在对应组件及其内部实现中。
 - **错误不泄露细节**：提供方的原始错误在边界处归一为固定类别和固定文案，不把第三方错误或传输细节带进 Run。
 
 ## 应用根中的资源组件
 
-### 系统凭据库
+### Models 配置存储
 
-**服务** `credentials.read`、`credentials.manage` · **注入** 无 · **创建** `createSystemKeyringComponent({ namespace, openEntry? })`
+**服务** `models.store` · **注入** 无 · **创建** `createModelsStoreComponent({ path })`
 
-系统凭据库把应用的密钥交给操作系统的凭据库保存，并独占对它的每次访问。它固定依赖 `@napi-rs/keyring@2.1.0` 的异步 API：macOS 接入 Keychain，Windows 接入 Credential Manager，Linux 明确指定 Secret Service（gnome-keyring、KWallet 等）。库在 Linux 默认会在没有 Secret Service 时静默改用内核 keyring，而那份存储重启即失，所以组件用 `{ linux: { store: 'secret-service' } }` 禁止回退。
+独占通用模块自己的 SQLite 文件，保存 Provider、Model 的当前记录与不可变版本，以及跨数据库/系统凭据库操作的意图日志。Provider 保存连接、凭据引用和可空 `catalogRef: { sourceId, providerId }`，Model 保存所属 Provider、远端模型 ID、能力声明和默认参数；同一远端模型可以有多项本地配置。目录引用不替代本地 ID，也不按地址推断来源。Provider 的协议和 Model 的所属 Provider 创建后不可修改。
 
-**职责与持有状态。** Nya 适配层拥有通用包创建的存储实例及其关闭时机；存储实例跟踪按凭据 ID 排序的操作、中止控制与退出等待。它不接收 Run ID、执行闭包或模型消息。凭据 ID 的管理范围由受信宿主决定；需要注册清单和 Web 管理接口时，选择下文的 API Key 服务组件。
+存储服务可通过 Nya 注入替换；包内默认实现不依赖 `local-storage` 或业务领域迁移。配置保存使用 `expectedRevision` 检测冲突。协议未安装时仍加载、保留配置，由 Models 查询将相应模型标为不可用。关闭时等待已接收提交并释放连接与排他所有权。
 
-**条目。** `namespace` 是条目的 service 名，凭据标识是条目的账户名：DeepSeek 使用 `llm/deepseek-chat-completions/default`，OpenAI Responses 使用 `llm/openai-responses/default`。不同安装、开发库与正式库、测试与正式必须用不同命名空间，否则共用同名条目。`openEntry` 只供测试替换条目来源，默认打开平台凭据库。
+### Models 凭据
 
-**启动。** `apply` 先打开一个探测条目：打开条目不读写内容，但在没有 Secret Service 的 Linux 上会失败，于是组件在安装时就以 `store-unavailable` 失败，而不是等 DeepSeek 首次读取。macOS 和 Windows 的真实访问发生在读取时。
+**服务** `models.vault` · **注入** 无 · **创建** `createModelsVaultComponent({ namespace, openEntry? })`
 
-**服务接口。**
+凭据组件使用 `@napi-rs/keyring` 的异步接口接入 macOS Keychain、Windows Credential Manager 和 Linux Secret Service；Linux 显式使用 `secret-service`，不回退到内核 keyring、SQLite 或明文文件。`openEntry` 是行为测试与宿主系统绑定的注入点。
 
-- `read(id, signal?)`：读取密钥，缺失返回 `undefined`；取消会等待底层读取退出。
-- `write(id, secret)`：写入或替换；密钥必须是非空字符串，不做修剪，也不出现在任何错误信息中。
-- `delete(id)`：删除；只在条目不存在时返回 `false`，凭据库拒绝删除时抛出。
+`read/write/delete` 按凭据槽位排序。初始化不要求凭据库可用；操作时以固定 `credential-unavailable` 等类别报告失败，所以缺少或无法访问 Key 不会阻止配置页面启动。关闭停止接收，取消并等待已接受操作实际退出；原生操作不能用提前拒绝 Promise 冒充退出。内存字符串只能释放引用，不能承诺擦除。
 
-标识和密钥的校验错误是 `TypeError`；打开条目失败是 `store-unavailable`；凭据库的读写拒绝（锁定、无权限、条目歧义等）一律归一为 `operation-failed`，原生错误不挂在 `cause` 上。
+密钥轮换由 Models 协调：先在配置数据库登记操作意图，再写新的系统凭据槽位，最后事务提交新引用并安排旧槽位清理。失败或异常退出后的日志用于回收孤立条目；历史仅保留非秘密配置。Provider 查询只返回 `credentialConfigured`，不会返回槽位引用或密钥值。
 
-**清理。** 卸载时停止接收（新操作以 `closed` 拒绝），对已接受的操作发出中止信号，然后等它们全部退出。原生调用一旦开始就无法打断，中止只对尚未开始的任务生效；被中止后才退出的操作以 `cancelled` 拒绝，即使底层库在中止后返回了值。同一个凭据 ID 的读取、写入、删除按接收顺序串行执行；写入完成后的新读取取得新值。
+### Models 协调服务
 
-**安全边界。** 凭据库只保护静态存储。密钥经 `read` 进入进程内存后由模型组件持有；两种模型组件均在同一 Run 的多个模型轮次复用，JavaScript 无法擦除字符串。macOS 的 Keychain 条目访问权绑定创建它的可执行文件；换用其他路径的 Node 二进制读取时系统可能弹出授权提示，无人值守时表现为读取阻塞或失败。
+**服务** `models`、`models.settings`、`models.protocols` · **注入** `models.store`、`models.vault` · **创建** `createModelsComponent()`
 
-### 外部凭据来源
+按 Provider 协调配置修改、密钥操作与 execution 初始化；解析本次配置并读完本地凭据后释放该 Provider 的顺序约束，远端请求不占用配置队列。`models.open({ modelId, history?, tools?, requirements?, options?, signal? })` 固定 Model、Provider、协议实现版本、有效参数和本次取得的凭据，返回内存中的 `ModelExecution`。普通配置修改、启停和密钥替换只影响新 execution。
 
-**服务** `credentials.read` · **注入** 无 · **创建** `createExternalCredentialSourceComponent({ read })`
+execution 不是 Nya 组件或业务 Session。它持有规范化消息和协议私有续轮信息，`generate({ messages, onEvent? })` 只接收新增消息。同一 execution 拒绝重叠调用，不同 execution 可并发。工具参数 JSON 与调用对应关系由模块校验；工具参数的业务含义、授权和执行归宿主 AgentLoop。
 
-给没有桌面凭据库的 Linux 部署使用：密钥的持久化由部署方负责，本组件只把受信宿主的异步读取函数 `read(id, signal)` 接成 `credentials.read`。它不落盘、不缓存、不注册 `credentials.manage`。读取函数返回 `undefined` 或 `null` 表示缺失，返回非字符串是 `TypeError`，抛错一律归一为 `store-unavailable`，调用中的 LLM 将其转为 `credential-unavailable`，不会退回到 SQLite 或明文文件。
+结果同时包含文本、工具调用、用量和完成状态。只有 `completed` 的工具调用可执行；`incomplete`、`refused` 与真实清理失败结束执行链。只有完整成功、未取消且底层退出成功时才提交候选上下文，普通错误不自动重试。`close()` 幂等，停止新调用，取消并等待当前调用，释放上下文与凭据引用。
 
-**持有状态。** 内部操作跟踪器维护接收标志，以及每次读取的 `AbortController` 与退出 Promise。它管理读取操作的生命周期；密钥来源、更新方式和持久存储由宿主提供。
+能力声明区分支持、不支持与未知，并结合协议实现和当前参数计算有效能力。未知或不支持的必需能力在调用前拒绝；可选参数保持省略，不能静默丢弃。当前消息契约只接受文本与用户定义函数工具，图片能力可登记但有效值为 false。表单 `defaultValue` 只初始化可编辑输入；经保存的参数才进入快照，不在执行时插入隐藏默认值。
 
-清理与系统凭据库相同：拒绝新读取，向在途读取的 `signal` 发出中止，等读取函数退出。行为测试用它加一个内存映射充当假凭据组件（`tests/helpers/memory-credentials.mjs`）。
+### Models 目录来源、缓存与服务
 
-### DeepSeek Chat Completions
+**来源服务** `models.catalog-source` · **注入** 无 · **创建** `createModelsDevCatalogSourceComponent({ fetch? })`
 
-**服务** `llm` · **注入** `credentials.read` · **创建** `createDeepSeekChatCompletionsComponent(config, transport?)`
+固定匿名请求 `https://models.dev/api.json?type=all`，保留所有模态的公共元数据，归一为自有契约。组件独占响应 reader、请求取消和实际退出；不读取 Provider Key。上游 SDK 标签只作为数据，不能触发动态导入。来源可通过 Nya 替换。
 
-这是本机 Web 宿主默认安装的大模型 API 组件。组件按 API 格式划分，而不是按供应商再抽象一层：它直接拥有 DeepSeek 非流式 Chat Completions 的原生请求格式、HTTP 传输、密钥、响应解析、超时、取消和清理。OpenAI Responses 是另一个提供同一 `llm` 服务的组件；应用启动时只安装其中一个。
+**缓存服务** `models.catalog-cache` · **注入** 无 · **创建** `createModelsCatalogCacheComponent({ path, fallbackToMemory? })`
 
-**持有状态与边界。** 组件级维护计划到配置的 `plans` 映射、计划到密钥读取 Promise 的 `runKeys` 映射、在途调用集合及清理错误。每次 `call` 创建自己的请求闭包，保存中止控制器、计时器与传输状态。它返回工具请求，由 AgentLoop 决定和执行后续步骤；它不持有完整 Run 执行闭包，也不写 Run 终态。
+独占与配置库、业务库分离的 SQLite 文件，按规范化来源 URL 缓存快照、ETag 与成功检查时间。原子事务与排队写入由此组件拥有，关闭等待已接受写入后释放连接。初始化不可用时默认回退到内存，状态明确显示 `storage-unavailable`；宿主可禁止后备。该后备仅保存公开目录，不影响 Vault 的秘密存储要求。
 
-**配置。** 构造组件时 `validateDeepSeekConfiguration` 校验配置：`version` 非空；`profiles` 非空，每个 profile 只允许 `id`、`model`、`maxOutputTokens`、`temperature`、`timeoutMs` 这几个字段，ID 唯一；`maxOutputTokens` 可选，提供时须为正整数，省略时使用模型 API 默认输出长度；`temperature` 在 0 到 2 之间，`timeoutMs` 为不超过 2147483647 的正整数。校验结果是冻结的选择项，附带配置版本号。配置或传输选项无效时构造直接抛出 `TypeError`。
+**目录服务** `models.catalog` · **注入** `models.catalog-source`、`models.catalog-cache` · **创建** `createModelsCatalogComponent({ autoRefresh? })`
 
-本机 Web 宿主默认使用 `deepseek-flash`，默认不设置 `maxOutputTokens`，不附加 1024 token 输出上限；可通过启动环境变量覆盖模型和输出长度，模型服务端的输出与上下文限制仍然适用。组件不硬编码模型名。
+启动优先采用有效缓存，否则采用随包的上游快照；包内 provenance 记录 URL、采集时间、SHA-256 和版本，运行时验证后才加载。`apply` 完成有限初始化后返回。服务提供 Provider/Model 搜索、文本筛选、已弃用项开关、模态、价格、limits、能力建议与独立 controls；它不检查当前账号授权，也不保存用户配置。执行能力仍由本地声明与协议计算，目录没有给出的 reasoning modes、efforts 或预算不能猜测补齐。
 
-**传输。** 可选的 `transport` 提供 `baseUrl`（必须是 HTTP 或 HTTPS，默认 `https://api.deepseek.com`）和 `fetch`。
+自动刷新在首次或缓存距成功检查 24 小时时于后台运行；使用 ETag，`304` 保留数据并更新检查时间，失败保留旧快照、一小时后重试，默认 HTTP 超时 30 秒。手动 `refresh(signal?)` 与自动刷新共用一个在途所有权，重叠请求返回 `busy`。请求实际退出后才接纳缓存提交，提交成功后发布；已经开始的原子提交不因晚到取消回滚。清理停止准入和计时器，取消获取并等待退出与已接纳提交。目录依赖撤销会重启其 Web 消费者，不撤销 Run/AgentLoop 的模型 execution。
 
-**凭据与轮换。** 组件注入 `credentials.read`，`apply` 只初始化配置与服务，缺少 Key 时也提供 `llm`。每个 Run 的调用计划首次传入 `call` 时，`OwnedCall` 异步读取一次 `deepSeekCredentialId`（`llm/deepseek-chat-completions/default`）；同一计划的后续模型轮次复用首次取得的 Key。缺失或空值为 `credential-missing`；读取失败为 `credential-unavailable`。Key 只留在组件私有内存，不进入计划的公开字段、Run 状态、快照或错误。Web 保存或删除后，新 Run 读取新状态，已取到 Key 的 Run 继续使用该值，无须重启。
+Provider 的 `catalogRef` 显式关联来源命名空间；刷新不改写本地地址、Key、能力、参数或模型选择。`resolveCatalogConnections` 仅把已知连接提示与已安装协议转为候选，可由宿主模板补充。未知协议或非文本条目仍可查看，手动配置继续可用。打包快照仅通过显式 `npm --prefix packages/models run catalog:update` 更新，普通构建和测试不联网下载目录。
 
-**服务接口**（`LLMPort`）：
+### 模型协议组件
 
-- `prepare(profileId)`：Run 准入时调用，返回冻结的调用计划。计划对外只包含 `profileId` 和 `configVersion`；对应的 profile 保存在组件私有的映射中，只对当前这一轮组件实例有效。未知 profile 抛出 `model-unavailable`，组件正在关闭时抛出 `dependency-unavailable`。
-- `call({ plan, messages, tools? })`：把项目自有的消息和工具定义映射为原生请求体（`model`、`messages`、`tools`、`temperature`、`stream: false`；仅显式配置输出上限时带 `max_tokens`），带 Bearer 密钥 POST 到 `/chat/completions`，返回 `OwnedCall<ModelReply>`。来自其他组件实例的计划抛出 `model-unavailable`。
+**注入** `models.protocols` · **创建** `createResponsesProtocolComponent()`、`createChatCompletionsProtocolComponent()`、`createAnthropicMessagesProtocolComponent()`、`createGeminiInteractionsProtocolComponent()`、宿主的 `createDeepSeekProtocolComponent()`
 
-**调用语义。**
+五个协议可同时安装。组件在 `apply` 中注册协议 ID、实现版本、参数表单描述、校验、能力计算、模型发现/连接检查及原生调用函数，并通过 Effect 注销本次注册代。前端可以选择已注册协议，不能上传实现代码。运行时按 Provider 的 `protocolId` 分派，品牌模板只负责预填配置。
 
-- **同步拒绝**：消息为空，或含有 `developer` 角色时，`call` 同步抛出 `unsupported-request`，不发起请求。Chat Completions 未记录 `developer` 角色，组件不会擅自改变其优先级。
-- **超时**：超过 profile 的 `timeoutMs` 后中止请求，`result` 立即以 `timeout` 失败；`done` 仍要等传输真正退出才结算。
-- **传输与 HTTP 失败**：`fetch` 抛错归一为 `provider-failure`；非 2xx 响应会先取消响应体，再以 `provider-failure` 失败，响应内容不进入错误信息。
-- **响应校验**：`finish_reason: stop` 须含最终文本；仅在提供工具定义时接受 `finish_reason: tool_calls`，解析函数 ID、名称和 JSON 参数并形成项目自有请求。畸形原生响应以 `invalid-response` 失败；参数 JSON 无效留给 AgentLoop 的整批校验，确保整批零执行。工具轮次显式设置 `thinking: { type: 'disabled' }`，异常返回的非空 `reasoning_content` 以 `invalid-response` 拒绝。
-- **取消**：`cancel(reason)` 通过 `AbortController` 中止请求，原因作为 `signal.reason` 传给传输。`result` 立即以 `provider-failure` 失败（由超时引起的则是 `timeout`）；`done` 在凭据读取、fetch 与响应体读取都退出后完成。
-- **清理失败**：取消非 2xx 响应体失败时，`done` 以 `cleanup-failure` 失败，并在组件卸载时一并报告。
+- **Responses**：调用 `/responses`，使用 `store: false`，支持普通 JSON 与 SSE；私有保留 reasoning、消息 phase 和函数调用续轮信息，不使用服务端会话或 `previous_response_id`。函数调用通过 `call_id` 对应工具结果，最终消息 phase 使用 `final_answer`。
+- **标准 Chat Completions**：调用 `/chat/completions`，支持文本、文本与工具同时返回、工具参数增量与用量；输出长度编码为 `max_completion_tokens`，推理档位等参数由协议表单及模型声明校验。
+- **Anthropic Messages**：调用 `/messages`，固定 `anthropic-version: 2023-06-01`，通过 `x-api-key` 发送 workspace-scoped API Key。`maxOutputTokens` 必填、表单默认 `4096`；disabled/adaptive/enabled 模式与 effort 需要本地能力声明，enabled 预算至少 `1024` 且低于输出上限，启用 thinking 时 temperature 只能省略或为 `1`。前导 system/developer 转成顶层 system，中途指令明确拒绝。私有保存有序 thinking、signature、redacted thinking 与原生工具 ID，以完整内容块续轮；不增加 beta 头。
+- **Gemini Interactions**：调用 `/interactions`，采用 `v1beta` 地址与 `x-goog-api-key`，固定 `store: false`。可选输出上限、已声明的 thinkingLevel 与 thinkingSummaries；不接受 temperature。私有保存原生步骤、thought 摘要与签名，不使用服务端会话、后台代理或内建工具。
+- **DeepSeek 非推理扩展**：位于宿主 `src/web/deepseek-protocol.ts`，复用通用 Chat 的传输与解析，将输出长度编码为 `max_tokens`，固定 `thinking: { type: 'disabled' }`。它不提供推理参数，不接受 `developer` 消息，相关输入明确失败，不悄悄改写角色或丢弃参数。
 
-失败类别包括：`model-unavailable`、`dependency-unavailable`、`unsupported-request`、`timeout`、`provider-failure`、`invalid-response`、`cleanup-failure`、`credential-missing`、`credential-unavailable`。每种类别都有固定文案，不带提供方的原始信息。
+模型发现和显式连接检查通过协议实现；发现返回候选项，不覆盖本地模型。Anthropic 与 Gemini 支持分页发现，拒绝重复模型 ID 或循环游标；检查只请求一个列表页，不执行付费生成。HTTP、SSE、工具参数解析与错误归一化留在协议边界；底层 `result` 与 `done` 分开，公共 Models 服务等待退出后再提交上下文和返回结果。流事件只表示临时进展，thinking 摘要复用 `reasoning-summary-delta`，签名不出公共结果；工具增量与最终工具调用复用同一公共 ID。不订阅时不缓存，订阅回调异常不会改变模型结果。
 
-**清理。** 卸载时停止接收，以 `llm-disposed` 中止所有在途请求并等待各自的 `done`，收集到的清理失败统一抛出。
-
-**替换与重启。** 应用卸载旧组件并安装新组件，或对组件调用 `restart()` 时，Nya 先停下 Run 和 AgentLoop，这期间的在途 Run 以 `dependency-unavailable` 失败；旧的一轮等请求退出后卸载，新的一轮一提供 `llm` 服务，Run 和 AgentLoop 就自动重启。同一幂等键仍返回原 Run，新键使用新配置；密钥轮换无需重启。
-
-**凭据组件被撤销。** `credentials.read` 消失时本组件和依赖它的 Run 服务停在 `PENDING`；在途调用被取消，并等待凭据读取或 HTTP 资源实际退出。新凭据组件提供服务后，Nya 自动重新启动消费者。
-
-**尚未支持**：流式输出、thinking 模式下的工具调用、`developer` 角色、`usage` 统计、`top_p` 等其他采样参数、重试与限流处理。2026-09-26 已用真实 DeepSeek 在临时项目完成贪吃蛇生成冒烟验证，长命令写文件和多轮工具调用均完成；默认行为测试仍使用本地 HTTP 服务或可控的 `fetch`。
-
-### OpenAI Responses
-
-**服务** `llm` · **注入** `credentials.read` · **创建** `createOpenAIResponsesComponent(config, transport?)`
-
-它与 DeepSeek Chat Completions 是互斥的 API 格式实现，Run 和 AgentLoop 不区分两者。配置包含版本和非空 profile 列表；profile 必须有 `id`、`model`、`timeoutMs`，可选 `maxOutputTokens` 和 `temperature`，省略时不发送对应参数。组件构造时校验配置及 `transport.baseUrl`、`transport.fetch`，默认端点为 `https://api.openai.com/v1/responses`。也可配置标准 Responses 兼容服务的 API 基础地址；实际模型名称由宿主选择。
-
-**职责与持有状态。** 它负责单次模型请求的协议转换与资源退出，持有配置、计划私有状态、在途调用集合、清理错误及每次调用的请求闭包。每个计划私有保存一次密钥读取的结果及工具续轮检查点；后者包含完整原生 input/output 与预期通用消息前缀，保留 reasoning、消息 phase 和函数调用。原生上下文不扩展 `LLMPort`，也不进入 Run、事件、Prompt 或 SQLite。Run 的循环、工具执行和结算仍归 AgentLoop。
-
-**凭据与生命周期。** 组件启动时提供 `llm`；同一 Run 首次调用内从 `credentials.read` 读取 `openAIResponsesCredentialId`（`llm/openai-responses/default`）一次。缺失、空值或读取失败使该 Run 以固定类别失败，密钥只留在组件内。受信宿主写入或轮换后，后续新 Run 读取新值，已取得密钥的 Run 继续复用。同一计划在上一次 `done` 完成前拒绝重叠调用；`prepare` 仅公开 profile ID 和配置版本。撤销、重启、关闭会停止接收，取消在途调用并等待 `done` 实际退出。
-
-**原生请求与响应。** `call` 将项目自有的四种文本消息角色和函数定义映射到 Responses 原生协议，非流式 POST 到基础地址下的 `/responses`，设置 `store: false`，提供工具时请求 `reasoning.encrypted_content`，不使用服务端会话或 `previous_response_id`。响应必须是 `status: completed`；`function_call` 使用 `call_id` 关联工具请求与 `function_call_output`，由 AgentLoop 校验并执行。最终助手文本接受 `final_answer`、未设置或 `null` 的 phase；`commentary` 只参与原生上下文续传，不作为最终回答。未完成、拒绝、未提供工具时的函数调用及畸形响应统一为 `invalid-response`；工具参数 JSON 无效交给 AgentLoop 整批校验，确保整批零执行。HTTP 与传输失败为 `provider-failure`。超时会立即结算 `result`，但 `done` 等 HTTP 传输退出；取消、清理失败与 DeepSeek 组件使用同一项目自有错误类别。
-
-**续轮与失败。** 下一次调用必须保留检查点中的通用消息前缀，并依原批次顺序追加全部工具观察；组件校验后只将这些结果追加到私有原生上下文。只有成功解析、未取消且清理完成后才推进检查点，检查点提交与计划解锁位于同一最终 `done` 阶段；失败、取消或清理失败均不推进，`done` 之后可显式重试同一模型输入，AgentLoop 不自动重试。最终文本释放续轮上下文；不同计划、Run 和组件实例之间互相隔离。新 Run 的历史仍仅由成功对话节点的文本构成，不恢复上个 Run 的私有 reasoning。
-
-**限制与验证。** 当前不支持流式输出、多模态、内置托管工具或服务端会话。需要特定模型支持的采样参数由宿主选择；省略可选的 `temperature` 可避免向不支持它的模型发送该字段。真实 OpenAI API 尚未联网验收，本地验证使用模拟 HTTP 和可控传输，覆盖原生工具闭环、reasoning/phase 回传、计划隔离、凭据复用与失败、取消、超时和清理等待。本机 Web 可在启动时选择本组件，仍只安装一种模型实现。
+注销先停止该注册代的新调用，取消并等待其 execution、模型发现与连接检查；其他协议继续工作。旧代清理不能撤销重新注册的新代。注销不会替 AgentLoop 取消它拥有的工具：已接受工具批次由 AgentLoop 继续执行并等待退出，后续 `generate()` 因旧 execution 已关闭而失败。若撤销整个 Models 服务，Nya 会先停止依赖它的 Run/AgentLoop，连同工具执行一起取消并等待。
 
 ### Bash 工具
 
@@ -202,9 +188,9 @@
 
 **服务** `local-storage` · **注入** 无 · **创建** `createLocalSqliteComponent(file)`
 
-本地 SQLite 是整个应用通用的本地持久化组件，排他持有一个数据库文件及其连接。它不知道任何领域的表结构。
+本地 SQLite 是业务域共用的本地持久化组件（Models 默认使用独立配置存储），排他持有一个数据库文件及其连接。它不知道任何领域的表结构。
 
-**职责边界。** 它持有连接、文件锁、接收标志和串行队列，保证回调中的读写与事务正确执行。Session、Run、Prompt 等记录的含义和合法变化由各领域组件决定；例如 Run 是否可以完成由 SQLite 状态组件的领域规则判断，本组件只负责提交或回滚其事务。
+**职责边界。** 它持有连接、文件锁、接收标志和串行队列，保证回调中的读写与事务正确执行。Session、Run、Prompt 等记录的含义和合法变化由各领域组件决定；例如 Run 是否可以完成由 Session 组件的领域规则判断，本组件只负责提交或回滚其事务。
 
 **启动。** `apply` 依次完成：规范化路径并创建父目录；创建同路径的 `.lock` 目录以取得排他所有权（已存在时以 `occupied` 失败）；打开连接；初始化存储自身的表布局。布局用 `PRAGMA user_version` 标记，并建立 `schema_migrations(domain, version)` 表；遇到无法识别的已有数据库会以 `schema-version` 拒绝启动。启动中任何一步失败，已取得的连接和锁都会回滚释放。
 
@@ -222,7 +208,7 @@
 
 **源码** `src/harness.ts` · **形态** 将业务组件安装到现有根的受信函数
 
-`createHarness(root, options)` 是受信的组合根。它只接受宿主的根 Context，要求根上已经有 `llm` 和 `local-storage` 服务。缺少密钥时 `llm` 仍启动，未配置就提交的 Run 以 `credential-missing` 失败。
+`createHarness(root, options)` 是受信的组合根。它只接受宿主的根 Context，要求根上已经有 `models` 和 `local-storage` 服务。Models 可以在空配置、缺少协议或密钥时启动；未选模型或无法打开模型时，Run 准入明确拒绝，不写入已接受记录。
 
 **持有状态与边界。** 组合根保存已校验的 Agent 定义、时间与 ID 输入、门面关闭标志及幂等关闭 Promise。它不注册自己的 Nya 服务，也不保存每 Run 的执行闭包；组件依赖与资源清理顺序交给 Nya。
 
@@ -233,19 +219,19 @@
 - `canManageAgent(actorId, agentId)`：可选，由宿主提供的 Agent 管理授权；默认允许所有已认证用户。
 - `now`、`newId`：可选，替换时钟和 ID 生成器，测试中用来得到确定的结果。
 
-**启动。** 它在根上按依赖顺序逐个安装组件并等待就绪。某个组件启动失败会直接抛出它的错误；如果它因缺少依赖停在 `PENDING`，会报出所缺的服务名，例如 `component harness-agent-loop is waiting for llm`。启动失败会卸载根上的全部组件，清理已安装组件以及大模型 API 组件和 SQLite，再抛出错误。
+**启动。** 它在根上按依赖顺序逐个安装组件并等待就绪。某个组件启动失败会直接抛出它的错误；如果它因缺少依赖停在 `PENDING`，会报出所缺的服务名，例如 `component harness-agent-loop is waiting for models`。启动失败会卸载根上的全部组件，清理已安装组件以及 Models、目录和三套 SQLite 资源，再抛出错误。
 
 **对外接口**（`Harness`）把 Projects、Session、Run、Prompt 和 Agent Prompt 服务的公开方法合在一起，包括 `getRunEvents(id)`，另加只返回 Agent ID 的 `listAgents()` 和 `close()`。服务调用每次都用 `context.get()` 取当前实例，不缓存跨组件重启的服务引用；服务暂时不可用时直接报错。`requireAvailable`、`getPublishedVersion` 和 `resolveRunPrompts` 只供内部组件使用，不对外暴露。
 
-**关闭。** `close()` 是幂等的：先设置关闭标志，之后所有调用立即报 `harness is closing`；然后卸载应用根上的全部组件。关闭会等待 Run 的实际退出、Prompt 写入、大模型 API 组件的请求退出和数据库连接的清理。该 Harness 门面不能再次使用；重启应用需重新安装所需组件。
+**关闭。** `close()` 是幂等的：先设置关闭标志，之后所有调用立即报 `harness is closing`；然后卸载应用根上的全部组件。关闭会等待 Run 的实际退出、Prompt 写入、Models 的请求与凭据操作退出和数据库连接的清理。该 Harness 门面不能再次使用；重启应用需重新安装所需组件。
 
 ## 应用根中的业务组件
 
 ### Agent 定义（只读配置）
 
-`src/agent/domain.ts` 定义 `id`、默认 `instructions`（默认系统指令）和 `modelProfileId`。它是启动配置，不提供 Nya 服务，也不持久化。`createHarness` 调用 `validateAgents`，要求列表非空、ID 唯一、三个字段都是非空字符串，并把冻结副本传给 Session、Agent Prompt 和 Run。修改定义需重新装配 Harness，通常新建应用根。
+`src/agent/domain.ts` 定义必填的 `id`、`instructions` 与可选的默认 `modelId`。它是启动配置，不提供 Nya 服务，也不持久化。`validateAgents` 要求列表非空、ID 唯一，已提供字段为非空字符串；冻结副本传给 Session、Agent Prompt 和 Run。修改定义需重新装配 Harness。
 
-`modelProfileId` 引用当前大模型 API 组件配置中的 profile，直到 Run 准入时才检查；profile 不存在时，新 Run 以 `model is unavailable` 被拒绝，不写入状态。
+没有默认模型也允许启动，用于先打开 Web 配置。Run 按显式 `RunInput.modelId`、Session 的 `modelId`、Agent 默认值的顺序选择；最终仍未选择时以 `model-unavailable` 拒绝。显式会话模型由 Harness/Web 入口查询当前 Models 服务校验，Session 自身仅保存模型 ID，不依赖 Models。
 
 ### Projects
 
@@ -255,31 +241,30 @@
 
 **持有状态与边界。** 项目身份持久化在 `projects` 领域表中，目录可用性在访问时重新检查；内存中只跟踪接收状态和在途操作。Projects 不持有对话数据或 Run 执行闭包，不为每个项目创建 Context；Bash 的工作目录检查与 Apply Patch 的相对路径基准检查也复用它。
 
-### SQLite 状态
-
-**服务** `harness.state` · **注入** `local-storage`、`harness.projects` · **创建** `createSqliteStateComponent(inputs)`
-
-**职责。** SQLite 状态组件保存 Session、对话节点和 Run 的权威业务记录，并在事务中校验、提交它们的合法变化。它被 Session、Run、AgentLoop 共同使用；它不发起模型请求或工具调用，不持有这些调用的取消句柄。
-
-**持有状态。**
-
-- **持久记录**：Session、不可变完整轮次节点、Run、幂等键、Prompt 内容快照、模型可见配置快照、执行阶段及事件，按 `run-state` 领域登记表迁移。执行记录包含 `phase`、修订号、模型调用次数 `modelCalls`、工具调用总数 `toolCalls`、工具批次和下一工具索引。
-- **内存状态**：`plans` 按 Run ID 保存活动 Run 的 `LLMPlan`，另有接收标志与在途存储操作集合。计划只作为不透明对象保留；原生配置和密钥仍在 LLM 组件内，只有 `plan.snapshot` 持久化。Run 结算后删除计划，组件退出时清空，不在重启后重放。
-- **转换规则**：`domain.ts` 与 `execution.ts` 的纯函数计算合法变化，本组件负责在事务中读取当前记录、应用变化并提交。执行阶段会反馈给 AgentLoop，决定下一步允许执行什么；状态组件自身不会调度外部调用。
-
-`StatePort` 的读写均返回 Promise：`createSession(id, projectId, agentId, now)`、`getSession(id)`、`listSessions(projectId)`、`findAcceptedRun(input)`、`acceptRun(id, input, now, prompts, plan)`、`getRun(id)`、`listRuns(sessionId, query?)`、`getRunByKey(sessionId, key)`、`getNode(sessionId, id)`、`getNodePath(sessionId, id)`、`listNodes(sessionId, parentId, query?)`、`getRunPrompts(id)`、`getRunPlan(id)`、`getRunExecution(id)`、`getRunEvents(id, afterSeq?)`、`recordRunEvent(id, event, at)`、`requestCancellation(id, now)`、`settleRun(id, outcome, now)`。接受 Run 的事务再次检查同键、父节点与完整祖先路径，并原子保存 Run、历史定位、组装版本和配置快照；模型与工具启动事件在外部调用前提交，观察事件在退出后提交。成功终态、完整轮次节点、结果节点引用、执行阶段及事件在同一事务提交。同键同输入同父节点返回原 Run，同键换输入或父节点拒绝。
-
-启动时在事务中将遗留的 `running`、`cancelling` 结算为 `interrupted` 并写入恢复事件，保留幂等键与历史，不重放已记录的工具意图；旧版 SQLite Run 表由 `run-state` 第 2 版迁移补齐执行状态与事件表，第 3 版迁移完整轮次树并将旧 Run 标为 `legacy-unknown`。卸载时停止接收并等待已接受的存储操作；Nya 先让 Session、AgentLoop 和 Run 等消费者退出。状态数据留在 SQLite 中。
-
-工具扩展不新增数据库表或列。新执行 JSON 只写 `toolCalls`，新工具事件只写 `tool-started`、`tool-observed`、`tool-failed`，请求与观察用工具名区分 Bash 和 Apply Patch。`parseRunExecution` 将历史 `bashCalls` 读成工具总数，`parseRunEvent` 将历史 `bash-*` 读成带 `name: 'bash'` 的新事件；保留原始序号、时间和输出，支持原有 `afterSeq` 光标。兼容只在持久读取边界保留，不维护旧写入器，也不全量改写已结算历史。
-
 ### Session
 
-**服务** `harness.sessions` · **注入** `harness.projects`、`harness.state` · **创建** `createSessionComponent(inputs, agents)`
+**服务** `harness.sessions`、`harness.session-runs` · **注入** `local-storage`、`harness.projects` · **创建** `createSessionComponent(inputs, agents)`
 
-Session 是创建和查询会话的入口。`createSession(projectId, agentId)` 显式指定项目，先校验全局 Agent 和项目目录可用，再在持久状态中创建会话。`getSession(id)` 和 `listSessions(projectId)` 返回会话元数据，`getNode(sessionId, id)`、`getNodePath(sessionId, parentId)`、`listNodes(sessionId, parentId, {cursor?, limit?})` 查询节点、祖先路径与分页子节点；目录后来不可访问时仍可查看。Session 自己不存数据，也不依赖模型或 AgentLoop。
+**职责。** Session 是会话事实的唯一领域所有者：会话元数据、不可变完整轮次节点、Run 记录、幂等键、Prompt 内容快照、模型可见配置快照、执行阶段与事件均由它管理。中间会话工作区通过它查询历史和运行记录。组件独立于模型与执行组件；卸载模型或 AgentLoop 不会撤销 Session 服务。它不维护全局当前节点，前端查看位置也不是后端事实。
 
-**持有状态与清理。** 只保留只读 Agent 定义、运行时输入及本轮依赖引用，没有每会话执行器、Run 闭包或自有长期资源，因而没有单独的清理 Effect。实际目录检查和持久操作由 Projects 与状态组件跟踪。它不维护全局当前节点，Run 的对话起点由请求显式提供。
+**两个服务面。** 两者由同一个组件、同一套存储和生命周期提供，拆分用于明确调用职责，不构成权限隔离。
+
+| 服务 | 调用者 | 接口 |
+| --- | --- | --- |
+| `harness.sessions` / `SessionPort` | Web、Harness；Run 读取会话 | `createSession`、`selectSessionModel`、`getSession`、`listSessions`、`getNode`、`getNodePath`、`listNodes`、`getRun`、`getRunByKey`、`listRuns`、`getRunEvents` |
+| `harness.session-runs` / `SessionRunPort` | Run、AgentLoop | `findAcceptedRun`、`registerRun`、`loadRunContext`、`getRun`、`getRunExecution`、`recordRunEvent`、`requestCancellation`、`settleRun` |
+
+`createSession(projectId, agentId, modelId?)` 校验 Agent 与项目目录后生成 ID、时间并提交会话，保存显式选择或 Agent 默认模型，没有选择时保存 `null`。`selectSessionModel(sessionId, modelId)` 修改后续调用的默认选择，不改变已接受 Run。历史查询不要求目录仍可访问。`registerRun(id, input, now, prompts, model)` 仅接收可持久化的配置快照，在事务内再次校验同键、父节点与完整祖先路径；同键同输入同父节点且显式模型选择一致时返回原 Run，冲突则拒绝。`loadRunContext(id)` 在一次读取中返回 Run、项目 ID、固定起点的祖先路径与 Prompt 快照，不返回运行期 execution。
+
+**持有状态与内部实现。** `src/session/domain.ts` 保存会话值、对话树类型和纯校验；`src/session/sqlite-records.ts` 是组件内部 SQL 实现，不独立注册 Nya 服务，也不持有 execution。它沿用 `run-state` 迁移账本和现有表名，重构无需改写既有数据。Run 及执行阶段的纯转换仍位于 `src/run/domain.ts` 与 `src/run/execution.ts`。内存中只有只读 Agent 配置、接收标志和在途数据操作；`ModelExecution` 由 Run 打开并直接交给 AgentLoop，密钥和协议续轮状态留在 Models 内部。
+
+**事务与恢复。** 模型与工具启动意图在外部调用前提交，观察在调用退出后提交。成功终态、完整轮次节点、结果节点引用、执行阶段及终态事件在同一事务提交。Session 校验持久转换，AgentLoop 负责确保资源已退出，两者共同保证成功节点不会提前可见。启动时在事务中将遗留的 `running`、`cancelling` 结算为 `interrupted` 并记录恢复事件，保留历史及幂等键，不恢复 execution 或重放外部副作用。`run-state` v4 增加会话/Run 的模型 ID 与请求选择，将旧 `llm_snapshot_json` 列改名为 `model_snapshot_json`；读取旧 profile 快照时只返回 `legacyModelSnapshot`，`modelSnapshot` 为 `null`。新写入只保存 ExecutionSnapshot；旧对话来源不明确的 Run 仍保持 `legacy-unknown`。
+
+Run 接受、执行记录、取消请求和结算实际提交后，通过 Nya `ctx.parallel` 发出类型化的 `harness.run.changed`，载荷只包含 `{ sessionId, runId, revision }`。幂等重试、无变化的取消或结算、失败及回滚均不发出通知；成功结算通知发生在完整轮次节点与 Run 终态原子提交之后。事件只提示消费者重新查询，持久 RunEvent 和查询服务仍为事实来源。监听器应只入队，通知失败只记日志，不把已提交写入变成失败；在途操作集合也覆盖事件分发的退出。
+
+**清理。** Nya 先撤回两个服务，并让 Web、Run、AgentLoop 等消费者退出；这期间已注入的 Session 服务仍能完成取消和结算。随后 Session 的 Effect 停止接收新操作，等待已接受的项目校验、数据库访问和通知分发完成。最后才允许上游 Projects 和 SQLite 清理资源。已保存记录留在数据库，重新安装 Session 会恢复查询能力。
+
+工具扩展不新增数据库表或列。新执行 JSON 只写 `toolCalls`，新工具事件只写 `tool-started`、`tool-observed`、`tool-failed`，请求与观察用工具名区分 Bash 和 Apply Patch。`parseRunExecution` 将历史 `bashCalls` 读成工具总数，`parseRunEvent` 将历史 `bash-*` 读成带 `name: 'bash'` 的新事件；保留原始序号、时间和输出，支持原有 `afterSeq` 光标。兼容只在持久读取边界保留，不维护旧写入器，也不全量改写已结算历史。
 
 ### Prompt
 
@@ -287,7 +272,7 @@ Session 是创建和查询会话的入口。`createSession(projectId, agentId)` 
 
 Prompt 组件管理用户编写的 Prompt 文档及其发布版本。它只依赖存储，不知道 Agent 的存在。
 
-**职责边界。** Prompt 拥有文档、版本和访问规则，Agent Prompt 拥有版本选择与绑定，状态组件拥有已接受 Run 的内容快照。编辑草稿或发布新版本不会修改已接受 Run 的快照；消息组装交给 AgentLoop 中调用的纯函数。
+**职责边界。** Prompt 拥有文档、版本和访问规则，Agent Prompt 拥有版本选择与绑定，Session 组件拥有已接受 Run 的内容快照。编辑草稿或发布新版本不会修改已接受 Run 的快照；消息组装交给 AgentLoop 中调用的纯函数。
 
 **概念。** 一个 Prompt 文档有所有者、名称、描述和一份可编辑的草稿。草稿带有递增的修订号、用途类型（kind）、消息角色（role）和内容。发布会把当前草稿复制成一个不可变的版本。用途类型与允许的角色如下：
 
@@ -297,7 +282,7 @@ Prompt 组件管理用户编写的 Prompt 文档及其发布版本。它只依�
 | `context` | `developer`、`user` | 无 |
 | `task-template` | `user` | 必须恰好包含一次 `{{input}}` |
 
-此外，名称最长 200 字符，描述最长 2000 字符，内容最长 100000 字符。这些规则都在 `src/prompt/domain.ts` 的纯函数中实现。绑定 `developer` 角色的版本在当前 DeepSeek 组件下会让新 Run 以 `unsupported-request` 失败，见上文。
+此外，名称最长 200 字符，描述最长 2000 字符，内容最长 100000 字符。这些规则都在 `src/prompt/domain.ts` 的纯函数中实现。绑定 `developer` 角色的版本在 DeepSeek 非推理协议下会让新 Run 以 `unsupported-request` 失败，见上文。
 
 **服务接口**（`PromptPort`）：
 
@@ -337,109 +322,68 @@ Agent Prompt 组件决定每个 Agent 实际使用哪些 Prompt 版本。每个 
 
 ### AgentLoop
 
-**服务** `harness.agent-loop` · **注入** `harness.state`、`llm`、`tools.bash`、`tools.apply-patch` · **创建** `createAgentLoopComponent(inputs)`
+**服务** `harness.agent-loop` · **注入** `harness.session-runs`、`models`、`tools.bash`、`tools.apply-patch` · **创建** `createAgentLoopComponent(inputs)`
 
-AgentLoop 是已接受 Run 的执行者，负责在途调用的执行协调与退出等待。模型可返回最终文本或由 Bash、Apply Patch 组成的工具批次；AgentLoop 先校验整批请求，再按顺序执行、记录观察并回填消息，继续调用模型。每次模型与工具调用都先通过状态组件记录启动意图，再发起外部调用；正常取得结果后还必须等待 `done` 才推进。它只通过 `llm` 服务契约发起模型调用，不知道背后是哪个 API 组件。DeepSeek、OpenAI Responses 和受控替身均使用同一个工具循环，原生协议差异留在 API 组件内部。
+AgentLoop 拥有已接受 Run 的 `ModelExecution`、模型与工具调用、取消状态和退出等待。`start({ runId, execution })` 在第一次异步读取前同步登记所有权，再读取 Session 的固定输入并核对 execution 快照。停止接收或拒绝其他 execution 的重复交接时同步抛错，不取得新对象的所有权；同一 Run、同一 execution 的重复交接复用原启动任务。
 
-`validateToolBatch` 以 `ValidatedToolRequest` 的两个已知名称检查整批 ID 和参数结构；未知名称、无效字段或重复 ID 使整批零执行。补丁文本语法与文件匹配交给 Apply Patch，在工具观察中返回可修正诊断。`ToolObservation` 按 `name` 关联 `BashResult` 或 `ApplyPatchResult`，不扩散文件系统或原生模型类型；AgentLoop 直接注入并分派两个服务，不增加工具注册中心或新 Context。
+组件级 `active` 保存 execution、启动/完成任务与取消函数；`rejected` 保留不能完成持久结算的失败任务，防止重放副作用；`failures` 汇总清理问题。每个 Run 有独立闭包，保存当前调用、当前工具、待发送新增消息、取消原因与状态写入 Promise、execution 的幂等关闭任务和累计工具输出量。同一 Run 内串行，不同 Run 可并发；Apply Patch 的资源队列仍跨项目串行。
 
-**组件级状态。** 一个组件实例统一管理多个并发 Run：
+**工具与消息。** `validateToolBatch` 检查整批 ID、已知名称及参数结构；未知工具、重复 ID 或无效字段使整批零执行。Bash 命令的业务校验归 AgentLoop，补丁文本语法与文件匹配由 Apply Patch 返回可修正观察。AgentLoop 直接注入两个工具服务，不增加工具注册中心。
 
-| 状态 | 用途 |
-| --- | --- |
-| `accepting` | 控制是否接受新执行，卸载时关闭接收 |
-| `active` | 按 Run ID 登记 `{ started, finished, cancel }`，用于去重、定位执行与统一关闭 |
-| `rejected` | 保存最终 Promise 拒绝的执行，防止在同一组件实例中再次启动并重放副作用；普通已结算的 `failed` Run 不进入这里 |
-| `failures` | 保存清理失败及未能正常结算的错误，供卸载时报告 |
-| `waitFor` | 管理可以独立取消的等待者订阅，不取消它们等待的 Run |
+第一次 `generate` 的消息由 `buildModelMessages` 按 Agent 指令、context、固定父节点的完整祖先对话、当前输入顺序组装；task-template 只替换当前输入。兄弟分支、失败记录和历史工具轨迹不进入上下文。此后只发送新增的 `{ role: 'tool', callId, content }`，不重复发送助手工具请求或完整历史；Models 已保存规范化消息与原生续轮信息。
 
-**每 Run 的执行状态。** 每次首次 `start(runId)` 创建一份独立闭包；两个活动 Run 各有一份下列状态，共用的只是注入服务和组件级登记：
+**执行与结算。**
 
-| 状态 | 用途 |
-| --- | --- |
-| `started`、`finished` | 表示启动交接与整个执行完成；启动前就终止时，`started` 随最终结果结算 |
-| `current` | 当前 `OwnedCall`，每 Run 最多一个；保存结果、取消和资源退出接口 |
-| `currentKind`、`request` | 当前模型或工具步骤，以及从执行记录取出的待执行工具请求 |
-| `messages` | 从固定快照、祖先路径和输入组装的消息，随后追加本 Run 的工具请求与观察 |
-| `reason`、`cancellation` | 取消原因和取消记录写入的 Promise，后续检查等待该写入 |
-| `cancelError`、`cleanupProblem` | 取消方法异常及已确认的清理失败 |
-| `totalToolOutputBytes` | 本 Run 的累计工具输出字节数，用于限制输出总量 |
+1. 每次模型/工具启动前向 Session 提交启动意图。模型通过 execution 的 `generate` 调用；工具通过各自的 `execute` 调用，句柄取得后立即观察 `result` 与 `done`。
+2. Models 公共 `result` 已保证底层退出；工具仍可能先返回业务结果。AgentLoop 统一等待实际退出，`done` 先拒绝时不无限等待悬空 `result`。
+3. 只有 `completed` 才消费工具调用；文本与多个工具请求可以同时出现。`incomplete`、`refused` 分别记为 `incomplete-response`、`refused-response`，不执行其中任何工具。没有工具调用时检查最终文本及大小，然后准备成功结算。
+4. 工具按整批顺序执行并记录观察，非零 Bash 退出码、Apply Patch 语法拒绝/冲突/部分提交可以交给下一轮模型。取消和执行器故障停止后续推进。模型与工具调用没有固定次数上限；最终文本最多 65536 字节，工具输出累计最多 131072 字节，其中 Bash 计 stdout/stderr，Apply Patch 计结构化结果的 JSON UTF-8 字节。
+5. 任一结算路径先关闭 execution 并等待退出，成功后才请求 Session 原子提交终态和完整节点。取消方法异常、调用 `done` 拒绝或 execution 关闭失败按固定清理类别失败，并留给组件关闭报告；清理失败不能被普通取消掩盖。
+6. 持久读取/写入失败会取消并等待已取得调用；可恢复时结算为 `state-write-failure`，持续失败保留失败任务并拒绝等待者。恢复只把遗留记录标为 `interrupted`，不会自动重放副作用。
 
-`active` 中的取消方法通过闭包访问对应 Run 的变量；详细执行状态没有传给其他组件。Run 服务只持有准入/交接任务和 ID，通过 `start/cancel/wait` 操作它。LLM、Bash 与 Apply Patch 各自持有单次调用的资源闭包，并与 AgentLoop 引用同一个 `OwnedCall`；它们不会因此取得整个 Run 的执行闭包。
+**进度。** `onEvent` 通过 `harness.run-model-event` 发出 `{ sessionId, runId, event }`。这是临时展示数据，不写成持久 RunEvent，也不作为工具执行依据；Web 监听器只向有界 SSE 队列入队。最终输出和工具事实以 Session 的已提交记录为准。
 
-**与业务记录的边界。** AgentLoop 驱动状态变化，SQLite 状态组件保存并约束变化。AgentLoop 不独立维护可写的 `run.status`，而是读取最新 Run、提交事件和结算请求；`currentKind`、`request` 根据状态服务返回的执行阶段推进。调用句柄、等待任务和消息累积留在本轮执行内存中，Run 终态与节点则通过状态服务原子提交。完整示例见[一次 Run 的执行与记录由谁维护](#一次-run-的执行与记录由谁维护)。
+**控制接口。** `cancel(runId, reason)` 记录取消原因、取消当前调用并关闭 execution；`wait(runId, signal?)` 等待启动、资源退出及结算。等待信号只释放等待者，不取消 Run。
 
-**服务接口**（`AgentLoopPort`）：
-
-- `start(runId)`：从 SQLite 状态读出 Run 的 Prompt 快照、调用计划和固定起点的祖先路径，用纯函数 `buildLLMMessages` 组装消息，再按持久执行阶段调用模型或工具。如果调用在发起时就同步失败，Run 按固定类别结算为 `failed`。
-- `cancel(runId, reason)`：取消一个 Run 的在途调用，见下文的取消原因。
-- `wait(runId, signal?)`：等待启动、资源退出与结算；Run 已经结束时返回当前状态。取消等待信号仅释放等待者，不取消 Run。
-
-**消息组装顺序**：`agent-instruction` 快照、`context` 快照、Run 固定起点的祖先节点（依次为原文 user 和最终 assistant），最后是当前输入。如果绑定了 `task-template`，当前输入会先填进模板。兄弟分支、失败记录和历史工具轨迹不参与上下文；工具请求及观察只在当前 Run 内累积。
-
-**结算规则。**
-
-1. 调用发起后立即开始观察 `done`，因为它可能早于 `result` 失败。
-2. `result` 得出完成或失败后仍等 `done`；若 `done` 先拒绝，直接报告清理失败，不无限等待可能永不完成的 `result`。
-3. `done` 拒绝或调用 `cancel()` 时抛出异常，按当前调用类型报告 `cleanup-failure` 或 `tool-cleanup-failure`。这类失败还会记录下来，在组件卸载时抛出，因此 `harness.close()` 会以失败结束。
-4. Run 没有处于取消中，而这个 Run 是因依赖撤销被取消的，结果改为 `dependency-unavailable`。
-5. Bash 非零退出码，以及 Apply Patch 的语法拒绝、冲突和部分提交，都是工具观察，会交给下一次模型调用；取消先于后续推进，执行器故障按固定类别结算。模型与工具调用次数只记录进度，不设固定次数上限，循环持续到最终回答、取消或失败；最终文本最多 65536 字节，累计工具输出最多 131072 字节，其中 Bash 计 stdout/stderr，Apply Patch 计结构化结果的 JSON UTF-8 字节。
-6. 最后交给 SQLite 状态原子写入终态、执行阶段与事件；成功时还创建节点并写入结果引用。取消先提交则不会创建成功节点，成功先提交则后续取消返回 completed。
-7. 状态读取或写入失败停止推进，取消并等待已取得的调用；可恢复写入时以 `failed` / `state-write-failure` 结算（取消请求不掩盖存储故障），已知清理失败仍优先保留；持续失败则等待者收到持久化错误。失败执行登记保留至组件退出，禁止重复 start 重放；重启只结算 interrupted。
-
-**取消原因。**
-
-| 原因 | 来源 | Run 终态 |
+| 原因 | 来源 | 终态（清理与持久化成功时） |
 | --- | --- | --- |
-| `user-requested` | `harness.cancelRun` | 先变为 `cancelling`，退出后为 `cancelled` |
-| `owner-disposed` | `harness.close()` 发起应用根关闭 | 同上 |
-| `dependency-unavailable` | 依赖被撤销，或 AgentLoop 自身被卸载 | `failed`，类别为 `dependency-unavailable` |
+| `user-requested` | `harness.cancelRun` | `cancelling` 后为 `cancelled` |
+| `owner-disposed` | 应用根关闭 | 同上 |
+| `dependency-unavailable` | 依赖或 AgentLoop 被撤销 | `failed`，类别 `dependency-unavailable` |
 
-**执行所有权。** 首次异步读取前按 runId 登记唯一启动/完成任务，重复 start 共用登记；启动期间的取消被保留，在发起下一调用前检查。wait 不因尚无调用句柄而提前返回。
-
-执行正常结算后从 `active` 删除；最终 Promise 拒绝时移入 `rejected` 并保留到组件退出。统一登记不意味着串行执行：每个 Run 的异步循环独立推进，同一 Run 内的模型与工具步骤串行；Apply Patch 还在自己的资源边界内跨 Run、跨项目串行处理补丁。组件重建不恢复这些闭包；异常退出遗留的持久记录在状态组件启动时按恢复规则结算。
-
-**清理。** 卸载时停止接收，以 `dependency-unavailable` 取消所有仍在启动或执行的 Run，并等它们全部退出和结算。
+取消先于成功提交则不创建成功节点，成功先提交则后续取消返回 completed。组件卸载时停止接收，取消并等待全部已登记 Run 的调用、execution 关闭和持久结算。
 
 ### Run
 
-**服务** `harness.runs` · **注入** `harness.projects`、`harness.state`、`harness.agent-prompts`、`llm`、`harness.agent-loop` · **创建** `createRunComponent(inputs, agents, isHarnessClosing)`
+**服务** `harness.runs` · **注入** `harness.projects`、`harness.sessions`、`harness.session-runs`、`harness.agent-prompts`、`models`、`harness.agent-loop` · **创建** `createRunComponent(inputs, agents, isHarnessClosing)`
 
-Run 组件是 Run 的准入与对外控制入口。它决定一个请求能否成为 Run，并在接受时固定这次 Run 使用的配置；实际执行交给 AgentLoop。
+Run 负责准入、幂等、配置固定和执行交接；AgentLoop 接管之后由它持有 execution 和工具调用。Run 的 `requests` 协调同键请求，`admissions` 跟踪异步准入，`opening` 持有准入中止控制器，`untransferred` 跟踪尚未交接的 execution；`handoffs` 和 `owned` 覆盖已可查询记录到执行器接管的窗口。
 
-**持有状态与边界。** 内存中的 `requests` 按 Session 与幂等键协调同键请求，`admissions` 跟踪准入任务，`handoffs` 按 Run ID 跟踪接受到启动的交接，`owned` 保存尚需等待结算的已接收 Run ID；另有接收标志和等待者订阅。这里的闭包处理准入与交接，不保存 AgentLoop 的 `current`、`messages` 或取消原因。Run 查询转给状态服务，执行取消和等待转给 AgentLoop；`owned` 中保存 ID 不表示拥有模型或子进程句柄。
-
-**服务接口**（`RunPort`）：
-
-- `startRun({ sessionId, parentNodeId, input, idempotencyKey })`：按下面的准入步骤接受 Run 并启动执行。输入中不能携带模型选择。
-- `getRun(id)`、`listRuns(sessionId, {active?, parentNodeId?})`、`getRunByKey(sessionId, key)`：按 ID、会话/起点或幂等键查询执行记录。
-- `getRunEvents(id, afterSeq?)`：按序增量读取 Run 的持久事件；未知 Run 返回 `undefined`。
-- `cancelRun(id)`：以 `user-requested` 取消并返回当前状态。
-- `waitRun(id, signal?)`：等待准入交接、启动、资源实际退出和终态。信号仅取消等待，不取消执行。
+**服务接口。** `startRun({ sessionId, parentNodeId, input, idempotencyKey, modelId? })` 接受显式模型 ID；`cancelRun(id)` 请求取消并返回当前状态；`waitRun(id, signal?)` 等待交接、执行和退出，信号只取消等待。Run 查询仍经 Session。
 
 **准入步骤。**
 
-1. 校验输入。
-2. 按 Session 的幂等键先用 `findAcceptedRun` 检查重复请求。同一幂等键且输入、父节点一致时返回最初的 Run，即使之后配置或 Prompt 绑定已经改变，也不重新解析配置、不发起第二次调用。
-3. 从状态组件读取 Session，通过 Projects 检查项目目录可用，读取启动时传入的 Agent 定义，调用 `resolveRunPrompts` 固定 Prompt 快照，调用 `llm.prepare` 固定调用计划。Run 不注入 Session 服务。
-4. 用 `acceptRun` 原子地写入 Run 和快照。
-5. 交给 `AgentLoop.start` 执行。
+1. 校验输入，并在任何新配置解析前检查幂等键。同键只有输入、父节点和显式 `modelId` 均一致才复用原 Run。未显式传模型的重试继续返回原结果，不受后来会话模型、配置或 Prompt 修改影响。
+2. 从 Session 读取会话，通过 Projects 检查目录，按显式请求、Session、Agent 默认值解析模型 ID；由 Agent Prompt 固定 Prompt 快照。
+3. 根据 Models 当前有效工具能力决定是否提供 Bash/Apply Patch 定义，调用 `models.open`，等待配置固定与凭据读取。此时已有取消所有者，但尚未创建 Run 记录；模型缺失、凭据不可用或能力冲突会拒绝准入。
+4. 在接收事务前登记交接任务，再调用 `registerRun` 原子保存业务输入、Prompt 和 `execution.snapshot`；Session 从未持有 execution 本身。
+5. 同步调用 `AgentLoop.start({ runId, execution })` 转移所有权。如果同步拒绝，由 Run 关闭 execution 后结算已接受记录；异步执行失败由 AgentLoop 负责。重复接受或准入失败时，未转移对象也必须关闭。
 
-准入按 `(sessionId, idempotencyKey)` 协调，同键冲突立即拒绝，不同键独立准备。同一 Session、同父节点可同时运行；SQLite 仅在短暂提交时串行，不持有 Session 或父节点执行锁。Run 在接受事务前登记交接任务，覆盖“数据库已可读、AgentLoop 尚未接管”的等待窗口。
+同键冲突立即拒绝，不同键独立打开 execution。同一 Session、同一父节点可以有并发 Run，不建立会话或父节点执行锁。交接前的取消只标记 `cancelling` 并请求中止，由准入所有者等待 execution 清理后结算，避免先宣告取消完成而隐藏清理失败。
 
-**对外可见的 Run** 包含 ID、Session、输入、幂等键、历史定位 `history`、`contextVersion`、递增 `revision`、状态、时间、`promptVersionIds` 和 `llmSnapshot`（profile ID 和配置版本），成功时还有 `output` 与 `resultNodeId`，否则可能有 `error` 与 `errorCategory`。Prompt 内容、模型参数和凭据都不会出现在对外的 Run 中。状态有 `running`、`cancelling`、`completed`、`cancelled`、`failed` 和异常退出后恢复的 `interrupted`。
+**可见快照。** Run 包含 `modelId`、`requestedModelId` 和 `modelSnapshot`；快照记录本地模型/Provider ID、版本、远端模型 ID、协议 ID/版本及有效生成参数，不包含地址、密钥或协议私有上下文。旧记录使用可空 modelSnapshot 与只读 legacyModelSnapshot。其余历史定位、Prompt 版本 ID、revision、时间、输出、错误类别和 resultNodeId 仍由 Session 提供。
 
-**清理。** 卸载时停止接收，立即取消已接管的启动/执行任务，同时等待准入与交接；关停期间刚提交的 Run 在首次调用前取消，最后等待全部结算。取消原因由关闭方式决定：应用根正在关闭时用 `owner-disposed`，Run 因为依赖被撤销而卸载时用 `dependency-unavailable`。
+**清理。** 停止接收后先中止正在打开的 execution，并取消已转移的 Run，等待所有准入、交接和执行退出。未转移的已接受记录由准入所有者关闭资源再结算；已转移记录由 AgentLoop 结算。应用根关闭使用 `owner-disposed`，依赖撤销使用 `dependency-unavailable`。
 
-## 自包含 API Key 服务组件
+## 本机宿主的 Models 装配与迁入
 
-**服务** `credentials.read`、`credentials.settings` · **注入** 无 · **创建** `createApiKeyServiceComponent({ namespace, definitions })`
+`src/web/models-startup.ts` 的 `installWebModels` 在同一根上安装 Models 存储、凭据、协调服务、Responses、标准 Chat、Anthropic Messages、Gemini Interactions、DeepSeek 扩展，以及公开目录的来源、缓存和服务。通用模块也可由独立宿主装配，示例见 [模块 README](../packages/models/README.md#install-in-an-application)。`src/web/startup-config.ts` 在打开资源前校验数据库路径、命名空间、端口和首次迁入配置。
 
-**职责与持有状态。** 这是本机 Web 默认的凭据组件，统一拥有注册清单、管理服务和系统存储实例。按凭据 ID 的操作排序、中止与退出等待由通用包实现，Nya 适配层负责注册服务和关闭实例。管理状态来自凭据库读取，密钥不进入 Run、Prompt 或 SQLite；模型配置与执行仍由模型组件和 AgentLoop 负责。
+`ANYBOX_MODELS_DATABASE` 默认为 `./data/models.sqlite`，`ANYBOX_MODELS_NAMESPACE` 默认为 `anybox.models`；`ANYBOX_HARNESS_DATABASE` 独立指定业务数据库。`ANYBOX_MODELS_CATALOG_DATABASE` 默认位于 Models 配置文件旁的 `models-catalog.sqlite`，三个文件路径必须不同。目录启动与刷新不使用旧 LLM 环境参数或账号 Key。只有 Models 配置为空时，旧 `ANYBOX_LLM_*` 参数才用于创建迁入 Provider 和默认 Model：默认 DeepSeek 非推理、`deepseek-flash`、temperature 0.7，输出长度省略；首次 Responses 导入须显式提供模型 ID。已有配置后重启不会覆盖用户编辑。
 
-可移植包 `packages/api-key-manager` 的 `createApiKeyService` 自己持有系统凭据库存储、已注册凭据清单和操作顺序，不依赖 Anybox 的其他组件。Anybox 只用一个无注入依赖的 Nya 适配层提供读取与管理服务。受信宿主注册 `{ id, label, category }` 清单；DeepSeek、视频模型和其他服务使用相同的 `read`、`list`、`write`、`delete` 方法。`list()` 只返回公开元数据和 `configured` 状态；写入与删除只返回该项状态，不回传原 Key。未注册 ID 被拒绝。关闭时组件等待在途凭据操作实际退出。现有 DeepSeek ID 和 `anybox` 命名空间不变，无需迁移钥匙串条目。
+首次迁入只读取旧 `anybox` 命名空间下对应固定凭据 ID，经 Models 日志化密钥流程复制到新槽位，旧条目不修改、不删除。旧凭据读取失败或新凭据库写入失败时仍创建可编辑配置，显示未配置密钥；不回退明文。`packages/api-key-manager` 仅在这一兼容读取路径使用，旧 `credentials.read/settings` 不再安装为应用服务。
 
-单独的系统凭据库组件仍可供不需要管理清单的宿主使用；外部来源组件供部署方提供只读凭据。当前 Web 宿主只安装自包含 API Key 服务组件，注册启动时所选 API 的一个凭据，不叠加安装这些备选组件。
+中断迁入只识别保留的导入 Provider ID 且尚无模型的状态，保留已提交 Provider/密钥并补建模型；若已提交协议与当前启动模板不一致，则保留连接、跳过自动建模，由用户在 Web 明确配置。已有用户连接不会被误认为导入任务。数据库没有可用默认配置时仍可启动设置页；Agent 可省略默认 modelId，配置后再选择。
 
 ## 原生目录选择组件
 
@@ -451,29 +395,33 @@ Run 组件是 Run 的准入与对外控制入口。它决定一个请求能否�
 
 ## 本机 Web 前端组件
 
-**服务** `web.frontend`（本机访问 URL）· **注入** `harness.projects`、`harness.sessions`、`harness.runs`、`harness.prompts`、`harness.agent-prompts`、`credentials.settings`、`host.directory-picker` · **创建** `createWebFrontendComponent(harness.listAgents(), port?)`
+**服务** `web.frontend`（本机访问 URL）· **注入** `harness.projects`、`harness.sessions`、`harness.runs`、`harness.prompts`、`harness.agent-prompts`、`models`、`models.settings`、`models.catalog`、`host.directory-picker` · **创建** `createWebFrontendComponent(harness.listAgents(), port?)`
 
 **职责与持有状态。** 服务端组件拥有 HTTP 监听器、已校验的 Agent ID 清单、监听端口及请求生命周期；服务器内部跟踪目录选择请求、中止或完成等待响应的操作及关闭 Promise。它调用业务服务完成写入和控制，不持有 AgentLoop 的执行闭包。浏览器显示的数据是服务端记录的读取结果，面板布局、草稿和查看位置由客户端模块独立维护。
 
-本机宿主在 `createHarness` 后将它安装到同一个应用根，并传入已校验的 Agent ID 列表。组件持有只监听 `127.0.0.1` 的 HTTP 服务，提供静态页面和同源 `/api/v1`；HTTP 层构造公开的 Agent ID、Session、Run、Run 事件视图和已注册凭据状态。`GET /api/v1/runs/:id/events` 通过 Run 服务读取有序事件，返回按工具名区分的 `tool-*` 事件；Bash 的 stdout、stderr 与 Apply Patch 补丁预览分别最多 2048 UTF-8 字节。页面保留 Bash 命令、状态与退出码，并展示补丁的实际变更、未完成项及诊断；已取得的补丁结果在清理失败时也可展示。浏览器脚本是可替换的薄客户端，不导入 Nya 或 Harness。组件通过本轮 `deps` 调用 Projects、Session、Run、Prompt、Agent Prompt、目录选择器和通用凭据设置服务，不缓存跨重启的服务引用。
+本机宿主在 `createHarness` 后将它安装到同一个应用根，并传入已校验的 Agent ID 列表。组件持有只监听 `127.0.0.1` 的 HTTP 服务，提供静态页面和同源 `/api/v1`；HTTP 层构造公开的 Agent ID、Session、Run、Run 事件视图、模型目录及配置状态。`GET /api/v1/runs/:id/events` 通过 Session 服务读取有序事件，返回按工具名区分的 `tool-*` 事件；Bash 的 stdout、stderr 与 Apply Patch 补丁预览分别最多 2048 UTF-8 字节。页面保留 Bash 命令、状态与退出码，并展示补丁的实际变更、未完成项及诊断；已取得的补丁结果在清理失败时也可展示。浏览器脚本是可替换的薄客户端，不导入 Nya 或 Harness。组件通过本轮 `deps` 调用 Projects、Session、Run、Prompt、Agent Prompt、目录选择器及 Models 服务，不缓存跨重启的服务引用。
 
-**模型启动配置。** `src/web/startup-config.ts` 的纯函数 `parseWebStartupConfig` 在打开资源前校验环境变量，`createWebLLMComponent` 构造选中的 API 组件；应用仍只安装一种模型实现。`ANYBOX_LLM_API` 默认 `deepseek-chat-completions`，也接受 `openai-responses`；DeepSeek 默认模型为 `deepseek-flash`，Responses 的 `ANYBOX_LLM_MODEL` 必填。API 基础地址、超时、输出长度和温度可通过 `ANYBOX_LLM_*` 配置；超时默认 30000 毫秒，输出长度默认省略，温度默认 DeepSeek 为 0.7、Responses 不发送。空变量和非法地址在启动前拒绝，不自动加载 dotenv。完整参数与官方、标准兼容端点启动示例见 [README](../README.md#本机-web-界面)。Web 设置页只管理已注册 Key，模型选择在重启时生效，不增加浏览器模型切换协议。
+**模型管理。** Web 通过 `models.settings` 提供 Provider/Model 的创建、修改、启停、版本查询、密钥替换/删除、模型发现及显式连接检查；保存不要求远端可达。查询不返回 Key，修改携带 `expectedRevision`。协议字段描述与 `defaultValue` 驱动参数表单，页面区分能力声明和当前有效能力，Session 的模型选择持久化；提交 Run 时显式携带当前选择，不改变已在执行的 Run。
+
+公开目录显示缓存来源、刷新状态、Provider/Model 搜索、已弃用项、模态、价格和 limits。已安装协议的连接候选可预填 Provider 表单；显式 `catalogRef` 绑定把本地账号关联到来源，选择匹配的文本模型后预填远端 ID 与建议能力，保存前仍可编辑。无映射或非文本模型保持可查看，手动配置继续可用。目录刷新不自动保存配置，不替当前 Key 验证账号可用性。
+
+HTTP `/api/v1/models` 返回本地可用模型，`/api/v1/models/providers` 与 `/api/v1/models/configurations` 承接管理，Session 的 `/model` 路径修改默认选择。`/api/v1/models/catalog`、其 `/providers`、`/models` 查询与 `/refresh` 请求承接公开目录。远端发现、检查和手动刷新有请求取消跟踪；断开或服务停止会请求取消并等待退出，已接纳的目录缓存提交仍完成。首次迁入与环境变量见上一节和 [README](../README.md#本机-web-界面)，运行时配置无需重启。
 
 Prompt 管理以宿主固定的 `local-web-user` 身份调用文档与绑定服务，不接受浏览器声明身份。页面可编辑草稿、发布版本、预览历史并应用到 Agent；编辑与发布携带修订号检查，绑定继续由 Agent Prompt 校验。普通管理操作不重启组件。关闭监听器时等待已接收的写入请求完成，再由 Nya 关闭 Prompt 及绑定服务；管理能力直接复用现有组件，没有在 Web 中另存 Prompt 或拼装 Run 消息。
 
-浏览器工作区支持最多四个跨项目 Session 面板。布局纯函数、工作区管理、会话控制器与面板视图只是前端模块，不是 Nya 组件。每个打开的 Session 独立持有读取 AbortController、串行轮询和视图监听器；移动时复用，关闭/替换时释放。已发出的提交/取消写入保持原对象归属，关闭面板不取消 Run。会话树查看节点、关注 Run 与活动 Run 集合分别管理；显式父节点与待提交键进入请求，布局和查看位置仅保存在浏览器标签页。新增脚本经静态资源白名单提供，后端服务契约和依赖图不变。
+浏览器工作区支持最多四个跨项目 Session 面板。布局纯函数、工作区管理、会话控制器与面板视图只是前端模块，不是 Nya 组件。每个工作区拥有一条按会话过滤的 EventSource；每个打开的 Session 独立持有读取 AbortController、串行刷新和视图监听器，移动时复用，关闭/替换时释放。SSE 通知触发对应会话补查，连接健康时 30 秒校准、未就绪或断线时 5 秒兜底，重连及恢复可见时补查。已发出的提交/取消写入保持原对象归属，关闭面板不取消 Run。会话树查看节点、关注 Run 与活动 Run 集合分别管理；显式父节点与待提交键进入请求，布局和查看位置仅保存在浏览器标签页。新增脚本经静态资源白名单提供；模型目录、会话选择与临时进度由薄客户端消费。
 
-HTTP 监听器由组件的 Effect 清理：卸载时停止接收请求，取消在途目录选择并等待服务关闭，再由 Nya 清理其依赖。依赖撤销时，Web 组件随之停下；依赖恢复后，组件在原监听端口重新提供服务。进程的 SIGINT/SIGTERM 由 `src/web/serve.ts` 接收，并通过 `harness.close()` 卸载整个根。协议、同源限制与刷新恢复见 [薄 Web 客户端设计](./web-client-design.md)。
+Web 通过 `ctx.on('harness.run.changed', ...)` 监听提交后的变化，通过 `harness.run-model-event` 监听临时流进度，Nya 自动清理订阅；监听回调只向 HTTP 层入队。服务器拥有 SSE 连接、每连接最多四会话的合并状态队列，以及最多 128 帧/256 KiB 的进度队列、心跳和背压超时，最多接收 64 条连接。慢消费者超限只断开展示订阅，不等待浏览器，也不影响模型结果；重连后补查持久记录，临时进度不重放。HTTP 监听器由组件的 Effect 清理：卸载时停止接收请求，取消在途目录选择，销毁 SSE 并等待连接与请求退出，再由 Nya 清理其依赖。依赖撤销时，Web 组件随之停下；依赖恢复后，组件在原监听端口重新提供服务并重新订阅。进程的 SIGINT/SIGTERM 由 `src/web/serve.ts` 接收，并通过 `harness.close()` 卸载整个根。协议、同源限制与刷新恢复见 [薄 Web 客户端设计](./web-client-design.md)。
 
 ## 一次 Run 经过的组件
 
-1. 宿主调用 `harness.startRun`，组合根取到当前的 Run 服务。
-2. **Run** 校验输入，通过**SQLite 状态**检查同一 Session、同一幂等键的重复请求；不同键可以并发接受。
-3. **Run** 从 **Projects** 检查会话目录，再从启动时传入的 Agent 定义读取配置，从 **Agent Prompt** 取得 Prompt 快照，再请所选的大模型 API 组件通过 `llm.prepare` 固定调用计划。这一步不读取凭据。
-4. **Run** 通过**SQLite 状态**原子地接受 Run，然后调用 **AgentLoop**。
-5. **AgentLoop** 组装消息并调用 `llm.call`；所选 API 组件在本 Run 首次调用时读取 Key，映射消息和工具定义并发送原生请求。Responses 另外在组件内部维护原生续轮上下文。
-6. 模型可返回最终回答或工具请求。**AgentLoop** 整批校验后逐项执行 Bash 或 Apply Patch，将助手请求和对应观察回填给模型，直到最终回答或固定失败；每次模型、工具启动和观察写入**SQLite 状态**，成功时在 Run 固定父节点下创建完整轮次节点，与终态一起原子提交。
-7. `harness.waitRun` 返回终态。
+1. 宿主调用 `harness.startRun`，门面取得当前 Run 服务。
+2. Run 检查输入及幂等键，读取 Session、项目和 Prompt，并解析显式/会话/Agent 默认模型 ID。
+3. Run 调用 `models.open`，由 Models 固定配置版本、有效参数、协议注册代和凭据；准入所有者负责取消和等待这一阶段。
+4. Run 将 execution 的公开快照交给 Session 持久化，然后把 execution 直接交给 AgentLoop。
+5. AgentLoop 记录模型启动意图，组装首轮消息并调用 `execution.generate`。Models 通过已固定的协议发送请求，解析 JSON/SSE、文本、工具参数与状态，在实际退出后提交候选续轮数据。
+6. 已完成的工具请求由 AgentLoop 整批校验并逐个执行，观察写入 Session；后续生成只提交新增工具结果。临时模型事件发给 Web 有界订阅，不作为执行依据。
+7. AgentLoop 等待工具退出并关闭 execution，随后 Session 原子提交成功 Run、完整轮次节点与结果引用，或提交明确失败/取消；`harness.waitRun` 返回终态。
 
 ## 一次 Run 的执行与记录由谁维护
 
@@ -481,41 +429,43 @@ HTTP 监听器由组件的 Effect 清理：卸载时停止接收请求，取消�
 
 | 组件 | 负责的问题 | 典型状态 |
 | --- | --- | --- |
-| Run | 请求能否被接受，配置是否固定，控制请求发给谁 | 准入任务、幂等协调、交接 Promise、Run ID |
-| AgentLoop | 当前调用是什么，如何继续、取消并等它退出 | 执行闭包中的调用句柄、消息、取消原因、启动与完成任务 |
-| SQLite 状态 | Run 当前是什么业务状态，哪些变化合法且已经提交 | `running/cancelling/completed` 等状态、执行阶段、事件、对话节点 |
+| Run | 请求能否被接受，配置是否固定，控制请求发给谁 | 准入任务、尚未交接的 execution、幂等协调、交接 Promise、Run ID |
+| AgentLoop | 当前调用是什么，如何继续、取消并等它退出 | 执行闭包中的 execution、调用句柄、新增消息、取消原因、启动与完成任务 |
+| Session | Run 当前是什么业务状态，哪些变化合法且已经提交 | `running/cancelling/completed` 等状态、执行阶段、事件、对话节点 |
 | 本地 SQLite | 如何排他访问数据库并提交或回滚事务 | 数据库连接、文件锁、串行操作队列 |
 
-例如 Run A 正在等待模型回答：AgentLoop 持有 A 的调用句柄，状态组件保存 A 的 `running` 与 `model-in-flight` 记录。记录阶段不会自动发起请求；真正调用 `llm.call()`、持有返回句柄并观察退出的是 AgentLoop。启动意图在调用之前提交，所以记录也不能单独证明某个 HTTP 请求已发出或仍然存活。
+例如 Run A 正在等待模型回答：AgentLoop 持有 A 的调用句柄，Session 组件保存 A 的 `running` 与 `model-in-flight` 记录。记录阶段不会自动发起请求；真正调用 `execution.generate()`、持有返回句柄并观察退出的是 AgentLoop。启动意图在调用之前提交，所以记录也不能单独证明某个 HTTP 请求已发出或仍然存活。
 
 用户取消 A 时，假设取消和清理均成功且取消先于成功提交：
 
-| 步骤 | AgentLoop 与资源提供方 | SQLite 状态组件 |
+| 步骤 | AgentLoop 与资源提供方 | Session 组件 |
 | --- | --- | --- |
 | 接收取消 | A 的闭包记住原因，调用 `current.cancel()`，请求写入取消状态 | 按规则将 A 从 `running` 改为 `cancelling` |
-| 等待退出 | LLM/Bash 中止请求或进程；Apply Patch 停止后续文件并等当前提交与清理退出；AgentLoop 等待 `done` | 保留 `cancelling`，不提前宣告资源已经释放 |
+| 等待退出 | Models/Bash 中止请求或进程；Apply Patch 停止后续文件并等当前提交与清理退出；AgentLoop 等待 `done` 和 execution 关闭 | 保留 `cancelling`，不提前宣告资源已经释放 |
 | 提交终态 | AgentLoop 确认退出后请求结算 | 在事务中提交 `cancelled`、终止阶段和事件 |
 | 释放登记 | AgentLoop 从 `active` 移除 A | 保留业务记录供查询 |
 
-若完成先提交，后续取消返回原成功结果；若清理失败，AgentLoop 请求提交对应失败。状态组件依据纯函数规则和事务确定最终记录，成功时将 Run 终态、完整轮次节点和结果引用一起提交。它不会通过修改一条状态记录来终止 HTTP 请求或子进程。
+若完成先提交，后续取消返回原成功结果；若清理失败，AgentLoop 请求提交对应失败。Session 组件依据纯函数规则和事务确定最终记录，成功时将 Run 终态、完整轮次节点和结果引用一起提交。它不会通过修改一条状态记录来终止 HTTP 请求或子进程。
 
-两个 Run 并发时，AgentLoop 用一个 `active` Map 管理两份独立执行闭包，状态组件按 Run ID 保存各自记录；同一进程的存储操作串行，模型与工具工作仍可并发。进程异常退出后闭包消失，持久记录仍在；状态组件重启时把遗留的在途 Run 结算为 `interrupted`，不自动续跑外部副作用。
+两个 Run 并发时，AgentLoop 用一个 `active` Map 管理两份独立执行闭包，Session 组件按 Run ID 保存各自记录；同一进程的存储操作串行，模型与工具工作仍可并发。进程异常退出后闭包消失，持久记录仍在；Session 组件重启时把遗留的在途 Run 结算为 `interrupted`，不自动续跑外部副作用。
 
 ## 撤销与关闭时发生什么
 
-下表列出主要业务与资源变化；已安装的 Web 也会随其依赖撤销而停下。终态描述以取消、清理和持久化成功为前提，清理或存储失败按前述失败规则报告；已经提交的终态不会因后续关闭而重写。
+下表的终态以取消、清理和持久化成功为前提；已提交终态不会因后续关闭而重写。清理与持久化失败按前述规则报告。
 
-| 事件 | 先停下的组件 | 在途 Run | 不受影响 |
+| 事件 | 清理范围 | 在途 Run | 保留或不受影响 |
 | --- | --- | --- | --- |
-| `harness.close()` | 应用根全部组件；先退出依赖消费者，再清理资源提供者 | `cancelled`；历史保留在 SQLite 中 | 无；模型请求中止、SQLite 也关闭 |
-| 应用替换或重启大模型 API 组件 | Run、AgentLoop，然后等旧组件的请求退出 | `failed`，`dependency-unavailable` | Session、Prompt、Agent Prompt、Projects、SQLite 状态、SQLite、凭据组件 |
-| Web 保存或删除 Key | 无 | 已取得 Key 的 Run 继续；后续 Run 读取新状态 | 所有组件 |
-| 应用卸载凭据组件 | Run、AgentLoop、大模型 API 组件，然后中止并等待凭据库操作 | `failed`，`dependency-unavailable` | Session、Prompt、Agent Prompt、Projects、SQLite 状态、SQLite |
-| 应用卸载 SQLite | Run、AgentLoop、Session、Bash、Apply Patch、SQLite 状态、Projects、Agent Prompt、Prompt 按依赖先后退出，然后关闭连接并释放锁 | `failed`，`dependency-unavailable` | 大模型 API 组件 |
-| Agent Prompt 被卸载 | Run，并取消、等待在途调用 | `failed`，`dependency-unavailable` | Prompt、Session、SQLite 状态、AgentLoop、大模型 API 组件 |
-| SQLite 状态被卸载 | Run、AgentLoop、Session | `failed`，`dependency-unavailable`；历史仍在数据库中 | Prompt、Agent Prompt、Projects、大模型 API 组件 |
+| `harness.close()` | 根上全部组件，先消费者后资源提供者 | 取消并等待准入、调用、execution 关闭、目录刷新与已接纳写入和结算 | 三套 SQLite 中的已提交配置、目录缓存与业务历史 |
+| 替换/重启 Models 协调服务 | Web、Run、AgentLoop 和协议消费者退出，然后 Models 清理 execution 与管理操作 | 未完成工作通常以 `dependency-unavailable` 失败 | Session、Prompt、Agent Prompt、Projects、业务 SQLite |
+| 单个协议注销/重注册 | 仅该注册代的 execution、发现和连接检查 | 在途模型调用取消；已接受工具由 AgentLoop 继续执行并等待，下次生成因旧 execution 关闭而失败 | 其他协议、配置记录、业务查询；新代不会被旧代清理撤销 |
+| 编辑/停用 Provider 或 Model，替换/删除 Key | 不重启组件，不取消已打开 execution | 使用原快照和已取得凭据继续 | 已接受 Run；新 execution 使用新状态或明确拒绝 |
+| 卸载 Models 凭据/存储 | Models 及其消费者先退出，再清理凭据操作或配置数据库 | 取消并等待，通常以依赖不可用失败 | Session、Prompt、Projects 和业务数据库 |
+| 卸载 Models 目录来源/缓存/服务 | Web 与目录消费者先退出，再清理刷新、请求和缓存写入 | 模型调用继续使用已固定配置 | Models 执行、协议、凭据、Session 与业务数据库 |
+| 卸载业务 SQLite | Web、Run、AgentLoop、Session、工具、Projects、Agent Prompt、Prompt 按依赖退出，再关闭连接 | 取消并等待后结算 | Models 的配置库、协议与凭据服务 |
+| 卸载 Agent Prompt | Web、Run 退出；Run 取消并等待已接收工作 | `dependency-unavailable` | Prompt、Session、Models；AgentLoop 服务可保留 |
+| 卸载 Session | Web、Run、AgentLoop 先退出，再等待记录操作与通知 | `dependency-unavailable`，历史保存在数据库 | Prompt、Agent Prompt、Projects、Models |
 
-所有情况下，停下的组件都会先拒绝新请求，再等已接受的操作真正退出。单个依赖组件恢复后，其消费者由 Nya 自动重启，组合根的下一次调用会取到新实例。`harness.close()` 后该门面保持关闭，重新启动须再次装配组件。
+单个依赖恢复后，其消费者由 Nya 自动重启，门面下一次调用取得当前服务。协议重新注册只使新 execution 可用，不复活旧执行链。应用整体 `close()` 后门面保持关闭，重新启动须再次装配。
 
 ## 附：H0 资源探针
 

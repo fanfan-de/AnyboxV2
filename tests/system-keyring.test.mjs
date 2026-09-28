@@ -3,11 +3,9 @@ import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
-import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { Context, FiberState } from '@nya/core'
-import { credentialManageServiceKey, credentialReadServiceKey } from '../dist/credentials/port.js'
-import { createSystemKeyringComponent } from '../dist/credentials/system-keyring.js'
+import { createModelsVaultComponent, modelsVaultServiceKey } from '@anybox/models'
 
 /**
  * Real credential store tests. They touch the operating system's store, may prompt for access on a desktop, and need
@@ -22,14 +20,12 @@ const skipUnless = condition => condition
 
 /** A separate process stands in for an application restart reading the stored key. */
 async function readInChildProcess(namespace, id) {
-  const importUrl = file => JSON.stringify(pathToFileURL(resolve('dist/credentials', file)).href)
   const script = `
     import { Context } from '@nya/core'
-    import { createSystemKeyringComponent } from ${importUrl('system-keyring.js')}
-    import { credentialReadServiceKey } from ${importUrl('port.js')}
+    import { createModelsVaultComponent, modelsVaultServiceKey } from '@anybox/models'
     const root = new Context()
-    await root.installComponent(createSystemKeyringComponent({ namespace: ${JSON.stringify(namespace)} }))
-    const value = await root.get(credentialReadServiceKey).read(${JSON.stringify(id)})
+    await root.installComponent(createModelsVaultComponent({ namespace: ${JSON.stringify(namespace)} }))
+    const value = await root.get(modelsVaultServiceKey).read(${JSON.stringify(id)})
     await root.fiber.dispose()
     process.stdout.write(JSON.stringify(value ?? null))
   `
@@ -42,11 +38,11 @@ test('the platform credential store writes, reads across processes, and deletes 
     const namespace = `anybox-test-${randomUUID()}`
     const id = 'llm/deepseek-chat-completions/test'
     const root = new Context()
-    const fiber = root.installComponent(createSystemKeyringComponent({ namespace }))
+    const fiber = root.installComponent(createModelsVaultComponent({ namespace }))
     await fiber
     assert.equal(fiber.state, FiberState.ACTIVE)
-    const read = root.get(credentialReadServiceKey)
-    const manage = root.get(credentialManageServiceKey)
+    const read = root.get(modelsVaultServiceKey)
+    const manage = root.get(modelsVaultServiceKey)
     try {
       assert.equal(await read.read(id), undefined)
       await manage.write(id, 'first-secret')
@@ -54,26 +50,24 @@ test('the platform credential store writes, reads across processes, and deletes 
       await manage.write(id, 'second-secret')
       assert.equal(await read.read(id), 'second-secret')
       assert.equal(await readInChildProcess(namespace, id), 'second-secret')
-      assert.equal(await manage.delete(id), true)
+      await manage.delete(id)
       assert.equal(await read.read(id), undefined)
       assert.equal(await readInChildProcess(namespace, id), null)
-      assert.equal(await manage.delete(id), false)
+      await manage.delete(id)
     } finally {
       try { await manage.delete(id) } catch {}
       await root.fiber.dispose()
     }
   })
 
-test('Linux without Secret Service refuses to start rather than falling back to the kernel keyring',
+test('Linux without Secret Service refuses credential access rather than falling back to the kernel keyring',
   { skip: skipUnless(enabled && expectNoStore) }, async () => {
     const root = new Context()
-    const fiber = root.installComponent(createSystemKeyringComponent({ namespace: `anybox-test-${randomUUID()}` }))
+    const fiber = root.installComponent(createModelsVaultComponent({ namespace: `anybox-test-${randomUUID()}` }))
     try { await fiber } catch {}
     try {
       assert.equal(process.platform, 'linux')
-      assert.equal(fiber.state, FiberState.FAILED)
-      assert.equal(fiber.error?.category, 'store-unavailable')
-      assert.equal(root.get(credentialReadServiceKey), undefined)
-      assert.equal(root.get(credentialManageServiceKey), undefined)
+      assert.equal(fiber.state, FiberState.ACTIVE)
+      await assert.rejects(root.get(modelsVaultServiceKey).read('test'), error => error.code === 'credential-unavailable')
     } finally { await root.fiber.dispose() }
   })

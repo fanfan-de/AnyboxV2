@@ -1,3 +1,5 @@
+import type { ModelEvent, ModelSummary } from '@anybox/models'
+import { canUseModel } from './models-client.js'
 import type { Api, ApiError, PendingSubmission, RunEventView, RunView, SessionView, NodeView, NodePage, SessionPosition } from './client-types.js'
 import type { SessionRef } from './workspace-layout.js'
 
@@ -17,6 +19,7 @@ export function createPendingStore(storage: BrowserStorage): PendingStore {
         const value = raw as Record<string, unknown>
         if (value.sessionId !== id || typeof value.input !== 'string' || typeof value.idempotencyKey !== 'string' ||
             (value.runId !== undefined && typeof value.runId !== 'string') ||
+            (value.modelId !== undefined && typeof value.modelId !== 'string') ||
             (value.parentNodeId !== undefined && value.parentNodeId !== null && typeof value.parentNodeId !== 'string')) continue
         entries.set(id, value as unknown as PendingSubmission)
       }
@@ -53,12 +56,17 @@ export interface SessionSnapshot {
   readonly draft: string
   readonly events: ReadonlyMap<string, readonly RunEventView[]>
   readonly expanded: ReadonlySet<string>
+  readonly progress: ReadonlyMap<string, string>
 }
 export interface SessionController {
   snapshot(): SessionSnapshot
   attach(listener: () => void): void
   detach(): void
   refresh(): Promise<void>
+  notifyChange(): void
+  setLive(connected: boolean): void
+  setModel(modelId: string): Promise<void>
+  modelProgress(runId: string, event: ModelEvent): void
   setDraft(value: string): void
   submit(): Promise<void>
   cancel(id: string): Promise<void>
@@ -77,6 +85,7 @@ export interface SessionEnvironment {
   readonly schedule: (callback: () => void, ms: number) => unknown
   readonly clear: (timer: unknown) => void
   readonly missing: (ref: SessionRef) => void
+  readonly models?: () => readonly ModelSummary[]
   readonly position?: SessionPosition
   readonly savePosition?: (value: SessionPosition) => void
 }
@@ -88,9 +97,10 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   let pathNodes: readonly NodeView[] = [], children: readonly NodeView[] = [], childCursor: string | undefined
   let notice = '', busy = false, loading = true, locationVersion = 0
   let listener: (() => void) | undefined, generation = 0, timer: unknown, refreshJob: Promise<void> | undefined
-  let refreshAgain = false, locationJob: Promise<void> | undefined
+  let refreshAgain = false, locationAgain = false, live = false, locationJob: Promise<void> | undefined
   const drafts = new Map<string | null, string>()
   const reads = new Set<AbortController>()
+  const progress = new Map<string, string>()
   const events = new Map<string, readonly RunEventView[]>(), expanded = new Set<string>(), eventJobs = new Map<string, Promise<void>>()
   const path = `/sessions/${encodeURIComponent(ref.sessionId)}`
   const pending = () => env.pending.get(ref.sessionId)
@@ -106,7 +116,13 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   }
   const schedule = () => {
     clearTimer()
-    if (attached() && !busy) timer = env.schedule(() => { void controller.refresh() }, env.hidden() || !runs.some(isActive) ? 5000 : 1200)
+    if (attached() && !busy) timer = env.schedule(() => { void controller.refresh() }, live ? 30_000 : 5000)
+  }
+  const finishWrite = () => {
+    busy = false
+    emit()
+    if (attached() && refreshAgain && !refreshJob) void controller.refresh()
+    else schedule()
   }
   const read = async <T>(url: string, version: number): Promise<T> => {
     const abort = new AbortController()
@@ -123,6 +139,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   }
   const adopt = (value: RunView) => {
     if (value.sessionId !== ref.sessionId) return
+    if (!isActive(value)) progress.delete(value.id)
     const previous = runs.find(item => item.id === value.id)
     if (previous && previous.revision > value.revision) return
     runs = [...runs.filter(item => item.id !== value.id), value]
@@ -169,7 +186,15 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     const run = runs.find(item => item.id === follow.runId)
     if (!run || isActive(run)) return
     if (run.status === 'completed' && run.resultNodeId) await controller.navigate(run.resultNodeId)
-    else { position = { ...position, follow: undefined }; remember() }
+    else {
+      notice = run.status === 'cancelled' ? '本次运行已取消。' : run.status === 'interrupted' ? '本次运行意外中断，请重新发送。' : `本次运行失败${run.error ? `：${run.error}` : '，请检查模型配置后重试。'}`
+      position = { ...position, follow: undefined }; remember()
+    }
+  }
+  const finishLocation = (job: Promise<void>) => {
+    if (locationJob !== job) return
+    locationJob = undefined
+    if (locationAgain) { locationAgain = false; void controller.refresh() }
   }
   const submitStored = async (submission: PendingSubmission, followVersion?: number) => {
     if (busy) return
@@ -180,9 +205,11 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try {
       const accepted = await env.api<RunView>(`${path}/runs`, {
         input: submission.input, idempotencyKey: submission.idempotencyKey, parentNodeId: submission.parentNodeId,
+        ...(submission.modelId !== undefined ? { modelId: submission.modelId } : {}),
       })
       if (accepted.sessionId !== ref.sessionId) throw new Error('session mismatch')
       adopt(accepted)
+      refreshAgain = true
       expanded.add(accepted.id)
       if (followVersion !== undefined && followVersion === locationVersion && position.viewNodeId === submission.parentNodeId) {
         position = { ...position, focusedRunId: accepted.id, follow: { runId: accepted.id, parentNodeId: submission.parentNodeId! } }
@@ -196,7 +223,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         if (!drafts.get(parent)) drafts.set(parent, submission.input)
         if (pending()?.idempotencyKey === submission.idempotencyKey) save(undefined)
       }
-    } finally { busy = false; emit(); schedule() }
+    } finally { finishWrite() }
   }
   const recover = async (version: number) => {
     const submission = pending()
@@ -205,8 +232,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try { existing = await read<RunView>(`${path}/runs/by-key/${encodeURIComponent(submission.idempotencyKey)}`, version) }
     catch (error) { if (!isApiError(error) || error.status !== 404) throw error }
     if (existing) { adopt(existing); save(undefined) }
-    else if (submission.parentNodeId === undefined) {
-      notice = '旧版待提交消息尚未被接受，已保留输入。请选定对话位置后确认发送。'
+    else if (submission.parentNodeId === undefined || (env.models && submission.modelId === undefined)) {
+      notice = '旧版待提交消息尚未被接受，已保留输入。请选定对话位置与模型后确认发送。'
       if (!drafts.get(position.viewNodeId)) drafts.set(position.viewNodeId, submission.input)
       save(undefined)
     } else await submitStored(submission)
@@ -214,15 +241,46 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   const controller: SessionController = {
     snapshot: () => ({ session, runs, run: runs.find(item => item.id === position.focusedRunId), position,
       path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice,
-      draft: drafts.get(position.viewNodeId) ?? '', events, expanded }),
+      draft: drafts.get(position.viewNodeId) ?? '', events, expanded, progress }),
     attach(value) { listener = value; session = undefined; loading = true; invalidate(); void controller.refresh() },
     detach() {
       listener = undefined
       invalidate()
       locationVersion++
+      progress.clear()
       position = { ...position, follow: undefined }
       remember()
       refreshAgain = false
+      locationAgain = false
+    },
+    notifyChange() {
+      if (!attached()) return
+      refreshAgain = true
+      if (!env.hidden()) void controller.refresh()
+    },
+    setLive(connected) {
+      if (!connected && progress.size) { progress.clear(); emit() }
+      live = connected
+      if (!refreshJob) schedule()
+    },
+    async setModel(modelId) {
+      if (!session || busy || pending() || !modelId) return
+      if (env.models && !canUseModel(env.models().find(value => value.id === modelId))) {
+        notice = '此模型暂不可用，请检查提供方与模型配置。'; emit(); return
+      }
+      busy = true; invalidate(); notice = ''; emit()
+      try { session = await env.api<SessionView>(`${path}/model`, { modelId }); refreshAgain = true }
+      catch (error) { notice = env.messageFor(error) }
+      finally { finishWrite() }
+    },
+    modelProgress(runId, event) {
+      if (!attached() || event.type !== 'text-delta' || !event.delta) return
+      const run = runs.find(value => value.id === runId)
+      if (run && !isActive(run)) return
+      // Display-only buffers stay bounded even if a run produces very long output.
+      if (!progress.has(runId) && progress.size >= 8) progress.delete(progress.keys().next().value!)
+      progress.set(runId, ((progress.get(runId) ?? '') + event.delta).slice(-65_536))
+      emit()
     },
     setDraft(value) {
       drafts.set(position.viewNodeId, value)
@@ -240,7 +298,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       const job = readLocation()
       locationJob = job
       await job
-      if (locationJob === job) locationJob = undefined
+      finishLocation(job)
     },
     focusRun(id) {
       locationVersion++
@@ -254,29 +312,29 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       const job = readLocation(true)
       locationJob = job
       await job
-      if (locationJob === job) locationJob = undefined
+      finishLocation(job)
     },
     refresh() {
       clearTimer()
-      if (!attached() || busy) { schedule(); return Promise.resolve() }
+      if (!attached()) return Promise.resolve()
+      if (busy) { refreshAgain = true; return Promise.resolve() }
       if (refreshJob) { refreshAgain = true; return refreshJob }
       refreshJob = Promise.resolve().then(async () => {
         do {
           refreshAgain = false
           const version = generation
           try {
-            if (!session) {
-              const loaded = await read<SessionView>(path, version)
-              if (loaded.projectId !== ref.projectId) { env.missing(ref); return }
-              session = loaded
-            }
+            const currentSession = await read<SessionView>(path, version)
+            if (currentSession.projectId !== ref.projectId) { env.missing(ref); return }
+            session = currentSession
             // Discover every run, including work started through another tab or host.
             const loaded = await read<readonly RunView[]>(`${path}/runs`, version)
             for (const value of loaded) adopt(value)
             for (const value of runs) {
               if (isActive(value) || expanded.has(value.id)) await loadEvents(value.id, version)
             }
-            if (!locationJob) await readLocation()
+            if (locationJob) locationAgain = true
+            else await readLocation()
             await recover(version)
             await followResult()
           } catch (error) {
@@ -293,9 +351,12 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (!session || busy || loading) return
       let submission = pending()
       if (!submission) {
+        if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
+          notice = '请先选择一个可用模型；没有可用模型时，请打开设置配置提供方和模型。'; emit(); return
+        }
         const input = (drafts.get(position.viewNodeId) ?? '').trim()
         if (!input) { notice = '请输入消息。'; emit(); return }
-        submission = { sessionId: ref.sessionId, input, idempotencyKey: env.newId(), parentNodeId: position.viewNodeId }
+        submission = { sessionId: ref.sessionId, input, idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
         if (!save(submission)) return
         drafts.set(position.viewNodeId, '')
       }
@@ -303,7 +364,10 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     },
     async regenerate(node) {
       if (busy || pending() || node.sessionId !== ref.sessionId) return
-      const submission: PendingSubmission = { sessionId: ref.sessionId, input: node.input, parentNodeId: node.parentId, idempotencyKey: env.newId() }
+      if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
+        notice = '请先选择一个可用模型。'; emit(); return
+      }
+      const submission: PendingSubmission = { sessionId: ref.sessionId, input: node.input, parentNodeId: node.parentId, idempotencyKey: env.newId(), ...(session?.modelId ? { modelId: session.modelId } : {}) }
       if (!save(submission)) return
       await controller.navigate(node.parentId)
       await submitStored(submission, locationVersion)
@@ -313,9 +377,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       busy = true
       invalidate()
       emit()
-      try { adopt(await env.api<RunView>(`/runs/${encodeURIComponent(id)}/cancel`, {})); notice = '' }
+      try { adopt(await env.api<RunView>(`/runs/${encodeURIComponent(id)}/cancel`, {})); refreshAgain = true; notice = '' }
       catch (error) { notice = env.messageFor(error) }
-      finally { busy = false; emit(); schedule() }
+      finally { finishWrite() }
     },
     toggleTrace(id) {
       if (expanded.has(id)) { expanded.delete(id); emit(); return }

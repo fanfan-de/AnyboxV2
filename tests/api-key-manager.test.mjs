@@ -32,6 +32,8 @@ test('the standalone manager supports unrelated services through one unchanged A
 })
 
 test('the standalone OS store can be supplied with a platform entry without Anybox or Nya', async () => {
+  assert.throws(() => createSystemKeyringStore({ namespace: ' ' }), /namespace/)
+  assert.throws(() => createSystemKeyringStore({ namespace: 'x', openEntry: 'nope' }), /entry factory/)
   const values = new Map()
   const store = createSystemKeyringStore({ namespace: 'portable-test', openEntry(namespace, id) {
     const key = `${namespace}:${id}`
@@ -46,6 +48,7 @@ test('the standalone OS store can be supplied with a platform entry without Anyb
     assert.equal(await store.read('video/example/default'), 'video-secret')
     assert.equal(await store.delete('video/example/default'), true)
     assert.equal(await store.read('video/example/default'), undefined)
+    assert.equal(await store.delete('video/example/default'), false)
   } finally { await store.close() }
 })
 

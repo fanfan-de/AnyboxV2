@@ -1,12 +1,12 @@
 # Run 状态转换设计（H2）
 
-状态：2026-09-26，受控 Bash 与 Apply Patch 工具循环、DeepSeek 与 OpenAI Responses 非流式原生工具协议、Web 过程展示已接入；真实服务验收与本地模拟验证分开记录，Apply Patch 尚未进行真实模型联网验收。
+状态：2026-09-28，Harness 已接入通用 Models execution、文本/工具/流式协议和 Web 配置。此次验证使用受控模型和临时存储，真实服务与系统凭据验收单独记录。
 
 ## 执行边界
 
-Run 服务负责准入、快照和取消入口；AgentLoop 独占执行期间的模型与工具调用；SQLite 状态组件持有 Run、执行阶段和事件。AgentLoop 从已固定的 Prompt、Session 历史和本次 Run 的工具轨迹组装模型消息。模型返回最终文本或一批工具请求，整批参数校验通过后才逐项执行。Bash 接收项目 ID 与命令，Apply Patch 接收项目 ID 与补丁；两者均通过 Projects 取得路径基准，项目目录不构成文件系统沙箱。
+Run 服务负责准入、快照和取消入口；AgentLoop 独占执行期间的模型与工具调用；Session 组件持有 Run、执行阶段和事件。AgentLoop 从已固定的 Prompt、Session 历史和本次 Run 的工具轨迹组装模型消息。模型返回最终文本或一批工具请求，整批参数校验通过后才逐项执行。Bash 接收项目 ID 与命令，Apply Patch 接收项目 ID 与补丁；两者均通过 Projects 取得路径基准，项目目录不构成文件系统沙箱。
 
-`src/run/execution.ts` 的 `advanceExecution(current, event)` 是纯函数。它根据已提交的事件推进阶段、调用次数、当前批次索引和修订号。状态组件在一个 SQLite 事务中提交新阶段与事件；模型和工具的启动事件必须先提交，外部调用才可开始。调用退出后再提交工具观察或固定类别的失败。终态事件、Run 状态和成功时新增的完整轮次节点也在一个事务中提交。
+`src/run/execution.ts` 的 `advanceExecution(current, event)` 是纯函数。它根据已提交的事件推进阶段、调用次数、当前批次索引和修订号。Session 组件在一个 SQLite 事务中提交新阶段与事件；模型和工具的启动事件必须先提交，外部调用才可开始。调用退出后再提交工具观察或固定类别的失败。终态事件、Run 状态和成功时新增的完整轮次节点也在一个事务中提交。
 
 | 内部阶段 | 含义 |
 | --- | --- |
@@ -20,13 +20,13 @@ Run 服务负责准入、快照和取消入口；AgentLoop 独占执行期间的
 
 ## 模型与工具协议
 
-`src/llm/port.ts` 定义项目自有的 `ModelReply`：`{ kind: 'final', text }` 或 `{ kind: 'tool-calls', content, calls }`。工具请求含 ID、名称与待校验参数。LLM 消息允许助手工具请求和按请求 ID 对应的工具观察。API 组件用 `supportsTools` 表示是否接受工具定义，DeepSeek 与 OpenAI Responses 均为 `true`。DeepSeek 将工具定义、助手工具请求和观察映射到 Chat Completions 的 `tools`、`tool_calls` 与 `role: tool`；工具请求显式关闭 thinking 模式，避免缺少 `reasoning_content` 回传的跨轮协议错误。
+`@anybox/models` 提供 `ModelExecution` 与 `ModelResult`：结果包含 `status`、文本、工具请求及可选用量，文本与多个工具请求可以同时返回。Run 在准入时解析模型 ID，通过 `open()` 固定配置与凭据；具备有效工具能力时传入 Bash/Apply Patch 定义，否则执行纯文本请求。AgentLoop 首轮发送 Prompt、祖先历史与本轮用户输入，后续只提交新增工具结果。
 
-Responses 将函数定义、请求与结果映射为平铺的 function 工具、`function_call` 和 `function_call_output`，使用 `call_id` 关联调用。组件按同一 Run 的计划私有保留原生 reasoning、加密推理上下文、消息 phase 与函数调用，校验通用消息前缀和完整工具观察后按原顺序续传；使用 `store: false`，不建立服务端会话。最终文本接受 `final_answer`、未设置或 `null` 的 phase，`commentary` 不作为最终回答。这些原生细节不扩展公共 `LLMPort`、Run 事件或数据库类型。两种组件都在每个 Run 的首次模型调用内读取一次密钥，后续工具轮次复用。
+Models 解析工具参数 JSON，并检查工具名称、调用 ID 与结果对应关系；AgentLoop 校验具体业务参数并执行。`incomplete` 和 `refused` 分别使 Run 以 `incomplete-response` 和 `refused-response` 失败，不执行其中的工具片段。原生 reasoning、phase 与续轮数据由协议私有保存，不进入 Session。DeepSeek 扩展显式关闭 thinking；Responses 使用 `store: false`。
 
-Responses 同一计划在 `done` 前拒绝重叠调用，成功解析、未取消且清理完成后才在最终 `done` 阶段提交私有检查点并解锁；失败不推进检查点，也不触发 Run 自动重试。最终文本释放私有续轮上下文；新 Run 仍从对话节点的文本历史开始。异常退出后的在途 Run 继续结算为 `interrupted`，不新增上下文恢复或外部副作用重放。
+模型公共 `result` 在实际退出、上下文提交与解锁后才返回。同一 execution 拒绝重叠调用，不同 execution 可以并发。AgentLoop 不自动重试，结算前必须 `execution.close()`；清理失败覆盖业务成功，不能创建节点。新 Run 从成功节点文本重新开始，不恢复跨进程原生上下文。临时流式事件只用于展示，不作为状态转换输入。
 
-当前有 `bash` 与 `apply_patch`，所有 Agent 可调用，不设置 Agent 工具允许列表。纯函数 `validateToolBatch` 在执行任何工具前校验整个批次的 ID、名称和参数结构；未知名称、重复 ID 或参数形状错误使整批零执行。Bash 命令须为非空字符串且不含 NUL，不按命令字节数拒绝合法的长文件写入；Apply Patch 接收字符串，补丁语法和文件冲突在执行时作为观察反馈。请求和结果使用两个已知工具的判别联合，AgentLoop 直接注入服务，无动态注册层。
+当前有 `bash` 与 `apply_patch`，使用有效工具能力模型的 Agent 可调用，不设置 Agent 工具允许列表。纯函数 `validateToolBatch` 在执行任何工具前校验整个批次的 ID、名称和参数结构；未知名称、重复 ID 或参数形状错误使整批零执行。Bash 命令须为非空字符串且不含 NUL，不按命令字节数拒绝合法的长文件写入；Apply Patch 接收字符串，补丁语法和文件冲突在执行时作为观察反馈。请求和结果使用两个已知工具的判别联合，AgentLoop 直接注入服务，无动态注册层。
 
 Bash 非零退出码是包含退出码与有界输出的普通观察。Apply Patch 返回 `applied/rejected/partial/cancelled`，附带已完成 `changes`、未完成 `pending` 和可选诊断；语法拒绝、匹配冲突及预期文件系统失败可回传模型修正，执行器故障仍按固定类别结束 Run。`partial` 不是完整成功，可能已经修改文件；移动可能只创建目标而未删除源。下一次模型调用只能在当前批次每个已启动工具的 `result` 与 `done` 都观察并记录后开始，取消或执行器故障后不启动下一项。
 
@@ -36,7 +36,9 @@ Bash 非零退出码是包含退出码与有界输出的普通观察。Apply Pat
 
 ## 持久化与恢复
 
-`run-state` 第 2 版迁移给旧 Run 表增加执行快照，并建立事件表。旧终态 Run 标为内部 `terminal`；旧在途 Run 在启动时结算为 `interrupted`。每次启动意图、工具观察与终态有递增序号，`StatePort.getRunExecution` 和 `getRunEvents` 可供受信组件读取。Run 服务与 Harness 门面提供事件读取，Web 通过 `GET /api/v1/runs/:id/events` 返回公开事件及有界输出摘要。
+`run-state` v4 迁移保存会话所选 `modelId`、Run 的实际模型与显式请求模型 ID，以及非秘密的 `ExecutionSnapshot`。旧 `llm_snapshot_json` 迁为 `model_snapshot_json`，历史 profile/configVersion 仅以 `legacyModelSnapshot` 读取，不伪造 Models 版本。
+
+`run-state` 第 2 版迁移给旧 Run 表增加执行快照，并建立事件表。旧终态 Run 标为内部 `terminal`；旧在途 Run 在启动时结算为 `interrupted`。每次启动意图、工具观察与终态有递增序号，`SessionRunPort.getRunExecution` 和 `SessionPort.getRunEvents` 可供受信组件读取。Session 服务与 Harness 门面提供事件读取，Web 通过 `GET /api/v1/runs/:id/events` 返回公开事件及有界输出摘要。
 
 工具扩展不新增表或列。新执行 JSON 只写 `toolCalls`，事件只写通用 `tool-*`；`parseRunExecution` 将旧 `bashCalls` 映射为工具总数，`parseRunEvent` 将旧 `bash-*` 映射为带 `name: 'bash'` 的事件。兼容只在读取边界保留，原序号、时间及 `afterSeq` 不变，不维护旧格式写入器，也不全量重写已结算历史。
 

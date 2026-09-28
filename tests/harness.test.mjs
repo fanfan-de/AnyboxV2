@@ -1,3 +1,5 @@
+import { createSessionComponent } from '../dist/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -7,21 +9,19 @@ import { test } from 'node:test'
 import { Context, FiberState } from '@nya/core'
 import { createHarness } from '../dist/harness.js'
 import { createAgentPromptComponent } from '../dist/agent/prompt-binding-component.js'
-import { llmServiceKey } from '../dist/llm/port.js'
+import { modelsServiceKey } from '@anybox/models'
 import { createRunComponent, runServiceKey } from '../dist/run/component.js'
 import { createAgentLoopComponent, agentLoopServiceKey } from '../dist/run/agent-loop-component.js'
-import { createSqliteStateComponent, stateServiceKey } from '../dist/run/sqlite-state.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
 import { createBashComponent } from '../dist/tool/bash-component.js'
-import { createSessionComponent, sessionServiceKey } from '../dist/run/session-component.js'
 import { createPromptComponent } from '../dist/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
-import { controlledLLM, deferred, ids } from './helpers/controlled-llm.mjs'
+import { controlledModels, modelSnapshot, deferred, ids } from './helpers/controlled-models.mjs'
 
-const agents = [{ id: 'assistant', modelProfileId: 'default', instructions: 'Answer briefly.' }]
+const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Answer briefly.' }]
 
-/** The application installs its LLM API component and SQLite before the Harness. */
+/** The application installs its Models component and SQLite before the Harness. */
 async function createHostHarness({ llm, databasePath, ...options }) {
   const root = new Context()
   try {
@@ -34,7 +34,7 @@ async function createHostHarness({ llm, databasePath, ...options }) {
   } catch (error) { await root.fiber.dispose(); throw error }
 }
 
-async function createTestHarness({ llm = controlledLLM(), ...options } = {}) {
+async function createTestHarness({ llm = controlledModels(), ...options } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-harness-'))
   try {
     const host = await createHostHarness({ ...options, llm, databasePath: join(directory, 'harness.sqlite') })
@@ -83,10 +83,10 @@ test('Runs deduplicate requests and build explicit immutable history', async () 
     const input = { sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'first' }
     const run = await harness.startRun(input)
     assert.equal(run.status, 'running')
-    assert.deepEqual(run.llmSnapshot, { profileId: 'default', configVersion: 'v1' })
+    assert.deepEqual(run.modelSnapshot, modelSnapshot())
     assert.equal((await harness.startRun(input)).id, run.id)
     assert.equal(llm.calls.length, 1)
-    assert.deepEqual(llm.calls[0].input.plan.snapshot, run.llmSnapshot)
+    assert.deepEqual(llm.calls[0].input.execution.snapshot, run.modelSnapshot)
     assert.deepEqual(llm.calls[0].input.messages, [
       { role: 'system', content: 'Answer briefly.' }, { role: 'user', content: 'Hello' },
     ])
@@ -121,20 +121,20 @@ test('Runs deduplicate requests and build explicit immutable history', async () 
   }
 })
 
-test('Run admission rejects LLM overrides and unknown profiles without state writes', async () => {
+test('Run admission rejects unknown models without state writes', async () => {
   const f = await createTestHarness({ agents, newId: ids() })
   try {
     const session = await createSession(f.harness)
     await assert.rejects(async () => await f.harness.startRun({
-      sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'x', modelProfileId: 'other',
-    }), /cannot override/)
+      sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'x', modelId: 'other',
+    }), /model is unavailable/)
     assert.equal(f.llm.calls.length, 0)
   } finally { await f.close() }
 
-  const missing = await createTestHarness({ agents: [{ ...agents[0], modelProfileId: 'missing' }], newId: ids() })
+  const missing = await createTestHarness({ agents, newId: ids() })
   try {
     const session = await createSession(missing.harness)
-    await assert.rejects(async () => await missing.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'x' }),
+    await assert.rejects(async () => await missing.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'x', modelId: 'missing' }),
       /model is unavailable/)
     assert.equal(missing.llm.calls.length, 0)
     assert.deepEqual((await missing.harness.listNodes(session.id, null)).nodes.map(({ input, output }) => ({ input, output })), [])
@@ -147,7 +147,7 @@ test('cancelling while AgentLoop loads a persisted Run never starts a model call
   const release = deferred()
   try {
     const session = await createSession(f.harness)
-    const state = f.root.get(stateServiceKey)
+    const state = f.root.get(sessionRunServiceKey)
     const originalGetRun = state.getRun.bind(state)
     const loading = deferred()
     let held = false
@@ -174,7 +174,7 @@ test('cancelling while AgentLoop loads a persisted Run never starts a model call
   }
 })
 
-test('cancellation and close wait until the LLM call actually exits', async () => {
+test('cancellation and close wait until the model call actually exits', async () => {
   const f = await createTestHarness({ agents, newId: ids() })
   const { harness, llm } = f
   const session = await createSession(harness)
@@ -199,7 +199,7 @@ test('cancellation and close wait until the LLM call actually exits', async () =
   assert.deepEqual(llm.events, ['disposed'])
 })
 
-test('closing Harness joins its call, releases the LLM API and storage, and lets a fresh root reopen storage', async () => {
+test('closing Harness joins its call, releases the Models service and storage, and lets a fresh root reopen storage', async () => {
   const f = await createTestHarness({ agents })
   const { harness, llm } = f
   try {
@@ -219,16 +219,16 @@ test('closing Harness joins its call, releases the LLM API and storage, and lets
     assert.equal((await waiting).status, 'cancelled')
     await closing
     assert.deepEqual(llm.events, ['disposed'])
-    assert.equal(f.root.get(llmServiceKey), undefined)
+    assert.equal(f.root.get(modelsServiceKey), undefined)
     assert.equal(f.root.get(runServiceKey), undefined)
     assert.equal(f.root.get(localStorageServiceKey), undefined)
     await assert.rejects(async () => await createSession(harness), /closing/)
 
-    const next = controlledLLM()
+    const next = controlledModels()
     const reopened = await createHostHarness({ llm: next, agents, databasePath: join(f.directory, 'harness.sqlite') })
     try {
       const again = await start(reopened.harness)
-      assert.deepEqual(again.llmSnapshot, { profileId: 'default', configVersion: 'v1' })
+      assert.deepEqual(again.modelSnapshot, modelSnapshot())
       next.calls[0].result.resolve('Reopened')
       next.calls[0].done.resolve()
       assert.equal((await reopened.harness.waitRun(again.id)).output, 'Reopened')
@@ -238,15 +238,14 @@ test('closing Harness joins its call, releases the LLM API and storage, and lets
   } finally { await f.close() }
 })
 
-test('removing the LLM API component waits for the run consumer and its call', async () => {
+test('removing the Models component waits for the run consumer and its call', async () => {
   const root = new Context()
   const directory = mkdtempSync(join(tmpdir(), 'anybox-harness-'))
-  const llm = controlledLLM()
+  const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
   const projects = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
-  const state = root.installComponent(createSqliteStateComponent(inputs))
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   const prompts = root.installComponent(createPromptComponent(inputs))
@@ -255,7 +254,7 @@ test('removing the LLM API component waits for the run consumer and its call', a
   const loop = root.installComponent(createAgentLoopComponent(inputs))
   const owner = root.installComponent(createRunComponent(inputs, agents))
   try {
-    await Promise.all([state, database, api])
+    await Promise.all([sessions, database, api])
     await loop
     await sessions
     await prompts
@@ -281,14 +280,14 @@ test('removing the LLM API component waits for the run consumer and its call', a
     assert.equal(root.get(runServiceKey), undefined)
     assert.equal((await root.get(sessionServiceKey).getSession(session.id)).id, session.id)
 
-    const replacement = controlledLLM({ version: 'v2' })
+    const replacement = controlledModels({ version: 'v2' })
     await root.installComponent(replacement.component())
     await loop
     await owner
     assert.equal(owner.state, FiberState.ACTIVE)
     const current = root.get(runServiceKey)
     const next = await current.startRun({ sessionId: session.id, parentNodeId: null, input: 'Again', idempotencyKey: 'next' })
-    assert.equal(next.llmSnapshot.configVersion, 'v2')
+    assert.equal(next.modelSnapshot.protocolVersion, 'v2')
     assert.equal(replacement.calls.length, 1)
     assert.equal(llm.calls.length, 1)
     replacement.calls[0].result.resolve('new model')
@@ -301,11 +300,12 @@ test('removing the LLM API component waits for the run consumer and its call', a
   }
 })
 
-test('replacing the LLM API component serves only new Run keys', async () => {
+test('replacing the Models component serves only new Run keys', async () => {
   const f = await createTestHarness({ agents })
   const first = f.llm
   try {
     const session = await createSession(f.harness)
+    const sessionService = f.root.get(sessionServiceKey)
     const request = { sessionId: session.id, parentNodeId: null, input: 'First', idempotencyKey: 'first' }
     const old = await f.harness.startRun(request)
     first.calls[0].result.resolve('Old')
@@ -313,13 +313,14 @@ test('replacing the LLM API component serves only new Run keys', async () => {
     await f.harness.waitRun(old.id)
     await f.api.dispose()
     assert.deepEqual(first.events, ['disposed'])
-    const next = controlledLLM({ version: 'v2' })
+    const next = controlledModels({ version: 'v2' })
     await f.root.installComponent(next.component())
     await serviceReady(f.root, runServiceKey)
+    assert.equal(f.root.get(sessionServiceKey), sessionService)
     assert.deepEqual(await f.harness.startRun(request), await f.harness.getRun(old.id))
     assert.equal(next.calls.length, 0)
     const fresh = await f.harness.startRun({ ...request, idempotencyKey: 'second' })
-    assert.equal(fresh.llmSnapshot.configVersion, 'v2')
+    assert.equal(fresh.modelSnapshot.protocolVersion, 'v2')
     assert.equal(next.calls.length, 1)
     next.calls[0].result.resolve('New')
     next.calls[0].done.resolve()
@@ -330,12 +331,11 @@ test('replacing the LLM API component serves only new Run keys', async () => {
 test('AgentLoop owns in-flight calls while Session and Run state survive its replacement', async () => {
   const root = new Context()
   const directory = mkdtempSync(join(tmpdir(), 'anybox-harness-'))
-  const llm = controlledLLM()
+  const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
   const projects = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
-  const state = root.installComponent(createSqliteStateComponent(inputs))
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   const prompts = root.installComponent(createPromptComponent(inputs))
@@ -344,7 +344,7 @@ test('AgentLoop owns in-flight calls while Session and Run state survive its rep
   const loop = root.installComponent(createAgentLoopComponent(inputs))
   const runs = root.installComponent(createRunComponent(inputs, agents))
   try {
-    await Promise.all([state, database, api])
+    await Promise.all([sessions, database, api])
     await prompts
     await agentPrompts
     await sessions
@@ -379,8 +379,8 @@ test('AgentLoop owns in-flight calls while Session and Run state survive its rep
   }
 })
 
-test('invalid input and synchronous LLM failure become explicit outcomes', async () => {
-  const llm = controlledLLM({ call() { throw new Error('model unavailable') } })
+test('invalid input and synchronous model failure become explicit outcomes', async () => {
+  const llm = controlledModels({ call() { throw new Error('model unavailable') } })
   const f = await createTestHarness({ agents, llm, newId: ids() })
   try {
     await assert.rejects(async () => await createSession(f.harness, 'missing'), /unknown agent/)
@@ -424,14 +424,14 @@ test('an early cleanup rejection settles the run without its result and stays ob
   assert.equal((await f.harness.getRun(run.id)).status, 'running')
   const terminal = await f.harness.waitRun(run.id)
   assert.equal(terminal.status, 'failed')
-  assert.equal(terminal.error, 'model call cleanup failed')
+  assert.equal(terminal.error, 'model resources could not be released')
   assert.equal(terminal.errorCategory, 'cleanup-failure')
   assert.equal(JSON.stringify(terminal).includes('secret'), false)
   await assert.rejects(f.close())
 })
 
 test('cancellation exceptions wait for done and fail cleanup safely', async () => {
-  const llm = controlledLLM()
+  const llm = controlledModels()
   llm.call = input => {
     const entry = { input, result: deferred(), done: deferred() }
     llm.calls.push(entry)
@@ -458,23 +458,23 @@ test('Harness startup names missing services and failed startups release the app
   const file = join(directory, 'db.sqlite')
   try {
     const noStorageRoot = new Context()
-    const noStorage = controlledLLM()
+    const noStorage = controlledModels()
     try {
       await noStorageRoot.installComponent(noStorage.component())
       await assert.rejects(createHarness(noStorageRoot, { agents }), /waiting for local-storage/)
       assert.deepEqual(noStorage.events, ['disposed'])
-      assert.equal(noStorageRoot.get(llmServiceKey), undefined)
+      assert.equal(noStorageRoot.get(modelsServiceKey), undefined)
     } finally { await noStorageRoot.fiber.dispose() }
 
     const noApiRoot = new Context()
     try {
       await noApiRoot.installComponent(createLocalSqliteComponent(file))
-      await assert.rejects(createHarness(noApiRoot, { agents }), /waiting for llm/)
+      await assert.rejects(createHarness(noApiRoot, { agents }), /waiting for models/)
       assert.equal(noApiRoot.get(localStorageServiceKey), undefined)
     } finally { await noApiRoot.fiber.dispose() }
 
     const invalidRoot = new Context()
-    const invalid = controlledLLM()
+    const invalid = controlledModels()
     try {
       await invalidRoot.installComponent(createLocalSqliteComponent(file))
       await invalidRoot.installComponent(invalid.component())
@@ -483,4 +483,43 @@ test('Harness startup names missing services and failed startups release the app
       assert.equal(invalidRoot.get(localStorageServiceKey), undefined)
     } finally { await invalidRoot.fiber.dispose() }
   } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+
+test('a synchronous handoff refusal settles the accepted Run and keeps its idempotency key', async () => {
+  const f = await createTestHarness({ agents })
+  try {
+    const session = await createSession(f.harness)
+    const loop = f.root.get(agentLoopServiceKey)
+    const originalStart = loop.start
+    loop.start = () => { throw new Error('execution owner unavailable') }
+    const input = { sessionId: session.id, parentNodeId: null, input: 'Refused', idempotencyKey: 'handoff' }
+    const run = await f.harness.startRun(input)
+    assert.equal(run.status, 'failed')
+    assert.equal(run.errorCategory, 'dependency-unavailable')
+    assert.deepEqual(await f.harness.waitRun(run.id), run)
+    assert.equal((await f.harness.getRunEvents(run.id)).at(-1).status, 'failed')
+    assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
+    loop.start = originalStart
+    assert.deepEqual(await f.harness.startRun(input), run)
+    assert.equal(f.llm.calls.length, 0)
+  } finally { await f.close() }
+})
+
+test('an execution that differs from the accepted snapshot cannot start execution', async () => {
+  const f = await createTestHarness({ agents })
+  try {
+    const session = await createSession(f.harness)
+    const records = f.root.get(sessionRunServiceKey)
+    const execution = await f.root.get(modelsServiceKey).open({ modelId: 'default' })
+    const { run } = await records.registerRun('mismatched-plan', {
+      sessionId: session.id, parentNodeId: null, input: 'Mismatch', idempotencyKey: 'mismatch',
+    }, 'now', [], { ...execution.snapshot, protocolVersion: 'another-version' })
+    const terminal = await f.root.get(agentLoopServiceKey).start({ runId: run.id, execution })
+    assert.equal(terminal.status, 'failed')
+    assert.equal(terminal.errorCategory, 'model-unavailable')
+    assert.equal(f.llm.calls.length, 0)
+    assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
+    assert.deepEqual((await f.harness.getRunEvents(run.id)).map(event => event.kind), ['terminal'])
+  } finally { await f.close() }
 })

@@ -1,3 +1,4 @@
+import type { CatalogModel, CatalogProvider, ExecutionSnapshot, ProviderTemplate } from '@anybox/models'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 
 export interface AgentView { readonly id: string }
@@ -5,6 +6,7 @@ export interface SessionView {
   readonly id: string
   readonly projectId: string
   readonly agentId: string
+  readonly modelId: string | null
   readonly createdAt: string
 }
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
@@ -15,6 +17,9 @@ export interface ProjectView {
   readonly available: boolean
 }
 export interface RunView {
+  readonly modelId: string | null
+  readonly requestedModelId: string | null
+  readonly modelSnapshot: ExecutionSnapshot | null
   readonly id: string
   readonly sessionId: string
   readonly input: string
@@ -62,6 +67,7 @@ export interface ApplyPatchTrace extends ToolTraceBase {
 }
 export type ToolTrace = BashTrace | ApplyPatchTrace
 export interface PendingSubmission {
+  readonly modelId?: string
   readonly sessionId: string
   readonly input: string
   readonly idempotencyKey: string
@@ -69,14 +75,11 @@ export interface PendingSubmission {
   readonly runId?: string
 }
 export interface ApiError extends Error { readonly status: number; readonly code: string }
-export interface CredentialView {
-  readonly id: string
-  readonly label: string
-  readonly category: string
-  readonly configured: boolean
-}
-
 export type Api = <T>(path: string, body?: object, signal?: AbortSignal) => Promise<T>
+
+/** Connection recipes are resolved by the trusted host against installed protocols. */
+export interface DirectoryProvider extends CatalogProvider { readonly connections: readonly ProviderTemplate[] }
+export interface DirectoryModel extends CatalogModel { readonly connections: readonly ProviderTemplate[] }
 
 export interface NodeView {
   readonly id: string

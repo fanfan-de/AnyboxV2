@@ -5,16 +5,17 @@
   "type": "module",
   "engines": { "node": ">=22.13.0" },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm --prefix packages/models run build && tsc -p tsconfig.json",
     "web": "npm run build && node dist/web/serve.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test tests/*.test.mjs",
+    "typecheck": "npm --prefix packages/models run typecheck && tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs packages/models/tests/*.test.mjs",
     "check": "npm run typecheck && npm test",
     "nya:build": "npm --prefix ../NyaCore run build",
     "nya:watch": "npm --prefix ../NyaCore run dev:core"
   },
   "dependencies": {
     "@anybox/api-key-manager": "file:packages/api-key-manager",
+    "@anybox/models": "file:packages/models",
     "@napi-rs/keyring": "2.1.0",
     "@nya/core": "file:../NyaCore/packages/core"
   },

@@ -2,17 +2,21 @@ import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { fileURLToPath } from 'node:url'
-import type { Run, Session } from '../run/domain.js'
-import type { RunInput, ConversationNode, NodePage, NodeQuery, RunQuery } from '../run/domain.js'
+import type { Run } from '../run/domain.js'
+import type { Session } from '../session/domain.js'
+import type { RunInput, RunQuery } from '../run/domain.js'
+import type { ConversationNode, NodePage, NodeQuery } from '../session/domain.js'
 import type { RunEvent } from '../run/execution.js'
 import type { ValidatedToolRequest } from '../run/domain.js'
-import { LLMFailure } from '../llm/port.js'
-import { CredentialFailure } from '../credentials/port.js'
-import { UnmanagedCredentialError } from '../credentials/settings.js'
-import type { ManagedCredentialStatus } from '../credentials/settings.js'
+import { isModelsError, resolveCatalogConnections } from '@anybox/models'
+import { isModelFailure } from '../run/model.js'
+import type { ModelsSettingsService, ModelsCatalogService, ModelSummary, ProviderTemplate, ProviderInput, ModelInput } from '@anybox/models'
 import { isProjectUnavailableError } from '../project/component.js'
 import type { Project } from '../project/component.js'
 import { DirectoryPickerFailure } from './directory-picker.js'
+import { openRunChangeStream } from './run-change-stream.js'
+import type { RunChangeStream } from './run-change-stream.js'
+import type { RunChange, RunModelEvent } from '../run/notifications.js'
 import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
   PromptSnapshot, PromptVersion } from '../prompt/domain.js'
 
@@ -21,7 +25,8 @@ export interface WebCommands {
   directoryPickerSupported(): boolean
   pickProject(signal: AbortSignal): Promise<Project | null>
   listProjects(): Promise<readonly Project[]>
-  createSession(projectId: string, agentId: string): Promise<Session>
+  createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
+  selectSessionModel(sessionId: string, modelId: string): Promise<Session>
   getSession(id: string): Promise<Session | undefined>
   listSessions(projectId: string): Promise<readonly Session[]>
   getNode(sessionId: string, id: string): Promise<ConversationNode | undefined>
@@ -34,9 +39,10 @@ export interface WebCommands {
   listRuns(sessionId: string, query?: RunQuery): Promise<readonly Run[]>
   getRunEvents(id: string, afterSeq?: number): Promise<readonly RunEvent[] | undefined>
   cancelRun(id: string): Promise<Run | undefined>
-  listCredentials(): Promise<readonly ManagedCredentialStatus[]>
-  saveCredential(id: string, secret: string): Promise<ManagedCredentialStatus>
-  deleteCredential(id: string): Promise<ManagedCredentialStatus>
+  readonly modelsSettings: ModelsSettingsService
+  readonly modelsCatalog: ModelsCatalogService
+  listModels(): readonly ModelSummary[]
+  modelTemplates(): readonly ProviderTemplate[]
   listPrompts(): readonly PromptDocument[]
   getPrompt(id: string): PromptDocument | undefined
   createPrompt(input: PromptCreateInput): Promise<PromptDocument>
@@ -49,6 +55,8 @@ export interface WebCommands {
 
 export interface WebServer {
   readonly url: string
+  notifyRunChange(change: RunChange): void
+  notifyModelProgress(progress: RunModelEvent): void
   close(): Promise<void>
 }
 
@@ -69,9 +77,15 @@ function knownFailure(error: unknown): HttpFailure {
   if (isFailure(error)) return error
   if (error instanceof URIError) return failure(400, 'invalid-input')
   if (error instanceof TypeError) return failure(400, 'invalid-input')
-  if (error instanceof LLMFailure) return failure(503, 'service-unavailable')
-  if (error instanceof CredentialFailure) return failure(503, 'credential-unavailable')
-  if (error instanceof UnmanagedCredentialError) return failure(404, 'not-found')
+  if (isModelsError(error)) {
+    const status = error.code === 'conflict' || error.code === 'busy' ? 409
+      : error.code === 'not-found' ? 404
+      : error.code === 'invalid-config' || error.code === 'capability-unsupported' ? 400
+      : error.code === 'timeout' ? 504 : 503
+    return failure(status, error.code)
+  }
+  if (isModelFailure(error)) return failure(error.category === 'model-unavailable' ? 409
+    : error.category === 'unsupported-request' ? 400 : error.category === 'timeout' ? 504 : 503, error.category)
   if (isProjectUnavailableError(error)) return failure(409, 'project-unavailable')
   if (error instanceof DirectoryPickerFailure) {
     if (error.code === 'busy') return failure(409, 'picker-busy')
@@ -105,6 +119,7 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 function sessionView(session: Session): object {
   return {
     id: session.id, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
+    modelId: session.modelId,
   }
 }
 
@@ -112,6 +127,8 @@ function runView(run: Run): object {
   return {
     id: run.id, sessionId: run.sessionId, input: run.input, status: run.status,
     createdAt: run.createdAt, updatedAt: run.updatedAt, revision: run.revision, history: run.history,
+    modelId: run.modelId, requestedModelId: run.requestedModelId, modelSnapshot: run.modelSnapshot,
+    ...(run.legacyModelSnapshot ? { legacyModelSnapshot: run.legacyModelSnapshot } : {}),
     ...(run.resultNodeId ? { resultNodeId: run.resultNodeId } : {}),
     ...(run.output === undefined ? {} : { output: run.output }),
     ...(run.error === undefined ? {} : { error: run.error }),
@@ -207,19 +224,36 @@ const assets = new Map([
   ['/style.css', { file: fileURLToPath(new URL('../../web/style.css', import.meta.url)), type: 'text/css; charset=utf-8' }],
   ['/client.js', { file: fileURLToPath(new URL('./client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/prompt-client.js', { file: fileURLToPath(new URL('./prompt-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/models-client.js', { file: fileURLToPath(new URL('./models-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/models-directory-client.js', { file: fileURLToPath(new URL('./models-directory-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-client.js', { file: fileURLToPath(new URL('./workspace-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-layout.js', { file: fileURLToPath(new URL('./workspace-layout.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/session-client.js', { file: fileURLToPath(new URL('./session-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/run-change-client.js', { file: fileURLToPath(new URL('./run-change-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/tool-trace.js', { file: fileURLToPath(new URL('./tool-trace.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/session-view.js', { file: fileURLToPath(new URL('./session-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
 ])
 
-/** Hosts the public browser contract, including registered credential status and mutations without raw reads. */
+/** Hosts model management DTOs and Harness commands; secret reads remain private to Models. */
 export async function startWebServer(commands: WebCommands, port = 0): Promise<WebServer> {
   let origin = ''
   let closing = false
   const pickerRequests = new Set<AbortController>()
+  const modelRequests = new Map<AbortController, Promise<unknown>>()
+  const modelRequest = async <T>(response: ServerResponse, work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    if (closing) throw failure(503, 'service-unavailable')
+    const controller = new AbortController()
+    const disconnected = () => { if (!response.writableEnded) controller.abort() }
+    response.once('close', disconnected)
+    if (response.destroyed) controller.abort()
+    // Register before invoking any asynchronous service work.
+    const task = Promise.resolve().then(() => work(controller.signal))
+    modelRequests.set(controller, task)
+    try { return await task }
+    finally { modelRequests.delete(controller); response.off('close', disconnected) }
+  }
   const waitRequests = new Set<() => void>()
+  const changeStreams = new Set<RunChangeStream>()
   const server = createServer((request, response) => {
     response.setHeader('Cache-Control', 'no-store')
     response.setHeader('X-Content-Type-Options', 'nosniff')
@@ -232,6 +266,24 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       const url = new URL(request.url ?? '/', origin)
       if (url.origin !== origin) throw failure(403, 'forbidden-host')
       const path = url.pathname
+      if (method === 'GET' && path === '/api/v1/changes') {
+        if ((request.headers.origin !== undefined && request.headers.origin !== origin) ||
+            (request.headers['sec-fetch-site'] !== undefined &&
+              !['same-origin', 'none'].includes(String(request.headers['sec-fetch-site'])))) throw failure(403, 'forbidden-origin')
+        const ids = url.searchParams.getAll('sessionId')
+        if (ids.length < 1 || ids.length > 4 || new Set(ids).size !== ids.length ||
+            ids.some(id => !id.trim() || id.length > 1024) ||
+            [...url.searchParams.keys()].some(key => key !== 'sessionId')) throw failure(400, 'invalid-input')
+        for (const id of ids) if (!await commands.getSession(id)) throw failure(404, 'not-found')
+        // Validation yields: shutdown/disconnection may have happened before stream admission.
+        if (closing) throw failure(503, 'service-unavailable')
+        if (response.destroyed) return
+        if (changeStreams.size >= 64) throw failure(503, 'service-unavailable')
+        const stream = openRunChangeStream(response, new Set(ids))
+        changeStreams.add(stream)
+        void stream.done.then(() => changeStreams.delete(stream))
+        return
+      }
       if (method === 'GET' && assets.has(path)) {
         const asset = assets.get(path)!
         const content = await readFile(asset.file)
@@ -316,26 +368,89 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         json(response, 200, (await commands.listSessions(decodeURIComponent(projectSessionsMatch[1]))).map(sessionView))
         return
       }
-      if (method === 'GET' && path === '/api/v1/credentials') {
-        json(response, 200, await commands.listCredentials())
-        return
+      if (method === 'GET' && path === '/api/v1/models') { json(response, 200, commands.listModels()); return }
+      if (method === 'GET' && path === '/api/v1/models/templates') { json(response, 200, commands.modelTemplates()); return }
+      if (method === 'GET' && path === '/api/v1/models/protocols') { json(response, 200, commands.modelsSettings.protocols()); return }
+      if (method === 'GET' && path === '/api/v1/models/catalog') { json(response, 200, commands.modelsCatalog.status()); return }
+      if (method === 'GET' && path === '/api/v1/models/catalog/providers') {
+        const protocols = commands.modelsSettings.protocols(), templates = commands.modelTemplates()
+        json(response, 200, commands.modelsCatalog.providers({ search: url.searchParams.get('search') ?? undefined }).map(provider => ({
+          ...provider, connections: resolveCatalogConnections(provider, protocols, templates),
+        }))); return
       }
-      const credentialMatch = /^\/api\/v1\/credentials\/([^/]+)$/.exec(path)
-      if (method === 'POST' && credentialMatch) {
-        const body = await requestObject(request, ['key'])
-        if (typeof body.key !== 'string' || !body.key.trim()) throw failure(400, 'invalid-input')
-        json(response, 200, await commands.saveCredential(decodeURIComponent(credentialMatch[1]), body.key))
-        return
+      if (method === 'GET' && path === '/api/v1/models/catalog/models') {
+        const providerId = url.searchParams.get('providerId')
+        const includeDeprecated = url.searchParams.get('includeDeprecated')
+        if (!providerId || (includeDeprecated !== null && !['true', 'false'].includes(includeDeprecated))) throw failure(400, 'invalid-input')
+        const protocols = commands.modelsSettings.protocols(), templates = commands.modelTemplates()
+        json(response, 200, commands.modelsCatalog.models({ providerId, search: url.searchParams.get('search') ?? undefined,
+          includeDeprecated: includeDeprecated === 'true' }).map(model => {
+            const provider = commands.modelsCatalog.provider({ sourceId: model.sourceId, providerId })
+            return { ...model, connections: provider ? resolveCatalogConnections(provider, protocols, templates, model) : [] }
+          })); return
       }
-      const credentialDeleteMatch = /^\/api\/v1\/credentials\/([^/]+)\/delete$/.exec(path)
-      if (method === 'POST' && credentialDeleteMatch) {
+      if (method === 'POST' && path === '/api/v1/models/catalog/refresh') {
         await requestObject(request, [])
-        json(response, 200, await commands.deleteCredential(decodeURIComponent(credentialDeleteMatch[1])))
-        return
+        json(response, 200, await modelRequest(response, signal => commands.modelsCatalog.refresh(signal))); return
+      }
+      if (path === '/api/v1/models/providers') {
+        if (method === 'GET') { json(response, 200, commands.modelsSettings.providers()); return }
+        if (method === 'POST') {
+          const body = await requestObject(request, ['id', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'apiKey', 'catalogRef'])
+          json(response, 200, await commands.modelsSettings.createProvider(body as unknown as ProviderInput)); return
+        }
+      }
+      const providerMatch = /^\/api\/v1\/models\/providers\/([^/]+)(?:\/(history|key|key\/delete|discover|check))?$/.exec(path)
+      if (providerMatch) {
+        const id = decodeURIComponent(providerMatch[1]), action = providerMatch[2]
+        if (method === 'GET' && action === 'history') { json(response, 200, commands.modelsSettings.providerHistory(id)); return }
+        if (method === 'POST') {
+          if (!action) {
+            const body = await requestObject(request, ['patch', 'expectedRevision'])
+            json(response, 200, await commands.modelsSettings.updateProvider(id, body.patch as Partial<ProviderInput>, promptRevision(body.expectedRevision))); return
+          }
+          if (action === 'key') {
+            const body = await requestObject(request, ['apiKey', 'expectedRevision'])
+            json(response, 200, await commands.modelsSettings.setApiKey(id, body.apiKey as string, promptRevision(body.expectedRevision))); return
+          }
+          if (action === 'key/delete') {
+            const body = await requestObject(request, ['expectedRevision'])
+            json(response, 200, await commands.modelsSettings.deleteApiKey(id, promptRevision(body.expectedRevision))); return
+          }
+          if (action === 'discover' || action === 'check') {
+            await requestObject(request, [])
+            json(response, 200, await modelRequest<unknown>(response, signal => action === 'discover'
+              ? commands.modelsSettings.discoverModels(id, signal)
+              : commands.modelsSettings.checkConnection(id, signal).then(() => ({ ok: true }))));
+            return
+          }
+        }
+      }
+      if (path === '/api/v1/models/configurations') {
+        if (method === 'GET') { json(response, 200, commands.modelsSettings.models()); return }
+        if (method === 'POST') {
+          const body = await requestObject(request, ['id', 'name', 'enabled', 'providerId', 'remoteModelId', 'capabilities', 'defaults'])
+          json(response, 200, await commands.modelsSettings.createModel(body as unknown as ModelInput)); return
+        }
+      }
+      const modelMatch = /^\/api\/v1\/models\/configurations\/([^/]+)(?:\/(history))?$/.exec(path)
+      if (modelMatch) {
+        const id = decodeURIComponent(modelMatch[1])
+        if (method === 'GET' && modelMatch[2] === 'history') { json(response, 200, commands.modelsSettings.modelHistory(id)); return }
+        if (method === 'POST' && !modelMatch[2]) {
+          const body = await requestObject(request, ['patch', 'expectedRevision'])
+          json(response, 200, await commands.modelsSettings.updateModel(id, body.patch as Partial<ModelInput>, promptRevision(body.expectedRevision))); return
+        }
       }
       if (method === 'POST' && path === '/api/v1/sessions') {
-        const body = await requestObject(request, ['projectId', 'agentId'])
-        json(response, 200, sessionView(await commands.createSession(body.projectId as string, body.agentId as string)))
+        const body = await requestObject(request, ['projectId', 'agentId', 'modelId'])
+        json(response, 200, sessionView(await commands.createSession(body.projectId as string, body.agentId as string, body.modelId as string | undefined)))
+        return
+      }
+      const sessionModelMatch = /^\/api\/v1\/sessions\/([^/]+)\/model$/.exec(path)
+      if (method === 'POST' && sessionModelMatch) {
+        const body = await requestObject(request, ['modelId'])
+        json(response, 200, sessionView(await commands.selectSessionModel(decodeURIComponent(sessionModelMatch[1]), body.modelId as string)))
         return
       }
       const nodesMatch = /^\/api\/v1\/sessions\/([^/]+)\/nodes$/.exec(path)
@@ -385,12 +500,13 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       }
       const createRunMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs$/.exec(path)
       if (method === 'POST' && createRunMatch) {
-        const body = await requestObject(request, ['parentNodeId', 'input', 'idempotencyKey'])
+        const body = await requestObject(request, ['parentNodeId', 'input', 'idempotencyKey', 'modelId'])
         const run = await commands.startRun({
           sessionId: decodeURIComponent(createRunMatch[1]),
           parentNodeId: body.parentNodeId as string | null,
           input: body.input as string,
           idempotencyKey: body.idempotencyKey as string,
+          ...(body.modelId === undefined ? {} : { modelId: body.modelId as string }),
         })
         json(response, 200, runView(run))
         return
@@ -470,12 +586,25 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
   let shutdown: Promise<void> | undefined
   return {
     url: origin,
+    notifyRunChange(change) {
+      if (!closing) for (const stream of changeStreams) stream.publish(change)
+    },
+    notifyModelProgress(progress) {
+      if (!closing) for (const stream of changeStreams) stream.publishModelProgress(progress)
+    },
     close() {
       if (shutdown) return shutdown
       closing = true
       for (const controller of pickerRequests) controller.abort()
+      for (const controller of modelRequests.keys()) controller.abort()
       for (const finish of waitRequests) finish()
-      shutdown = new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+      const streams = [...changeStreams]
+      for (const stream of streams) stream.close()
+      shutdown = Promise.all([
+        ...streams.map(stream => stream.done),
+        ...[...modelRequests.values()].map(task => task.then(() => {}, () => {})),
+        new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
+      ]).then(() => {})
       return shutdown
     },
   }

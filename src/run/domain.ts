@@ -1,62 +1,25 @@
 /** Harness domain values and transitions are independent of Nya and providers. */
-import type { LLMFailureCategory, LLMMessage, LLMPlan, LLMSnapshot, ToolRequest } from '../llm/port.js'
+import type { ExecutionSnapshot, ModelMessage, ToolCall } from '@anybox/models'
+import type { ModelFailureCategory } from './model.js'
 import type { BashResult } from '../tool/bash-component.js'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import { nonEmpty } from '../validation.js'
-
-export interface ConversationNode {
-  readonly id: string
-  readonly sessionId: string
-  readonly parentId: string | null
-  readonly input: string
-  readonly output: string
-  readonly sourceRunId: string | null
-}
+import type { ConversationNode } from '../session/domain.js'
 
 export type RunHistory =
   | { readonly kind: 'tree'; readonly parentNodeId: string | null }
   | { readonly kind: 'legacy-unknown' }
 
-export interface NodePage {
-  readonly nodes: readonly ConversationNode[]
-  readonly nextCursor?: string
-}
-
-export interface NodeQuery { readonly cursor?: string; readonly limit?: number }
 export interface RunQuery { readonly active?: boolean; readonly parentNodeId?: string | null }
-
-export function treeError(code: 'node-not-found' | 'invalid-history' | 'idempotency-conflict'): Error & { readonly code: string } {
-  return Object.assign(new Error(code === 'idempotency-conflict' ? 'idempotency key already used with different input or history' : code), { code })
-}
-
-/** Input is leaf-to-root; validate before exposing a root-to-leaf history. */
-export function assemblePath(sessionId: string, parentId: string | null, ancestors: readonly ConversationNode[]): readonly ConversationNode[] {
-  const seen = new Set<string>()
-  let expected = parentId
-  for (const node of ancestors) {
-    if (node.sessionId !== sessionId || node.id !== expected || seen.has(node.id)) throw treeError('invalid-history')
-    seen.add(node.id)
-    expected = node.parentId
-  }
-  if (expected !== null) throw treeError('invalid-history')
-  return Object.freeze([...ancestors].reverse())
-}
-
-export interface Session {
-  readonly id: string
-  readonly projectId: string
-  readonly agentId: string
-  readonly createdAt: string
-}
 
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 
-export type RunFailureCategory = LLMFailureCategory |
+export type RunFailureCategory = ModelFailureCategory |
   'invalid-tool-request' | 'limit-exceeded' | 'tool-unavailable' | 'tool-timeout' | 'tool-cancelled' | 'tool-cleanup-failure' | 'state-write-failure'
 
 export class RunFailure extends Error {
-  constructor(readonly category: Exclude<RunFailureCategory, LLMFailureCategory>) {
+  constructor(readonly category: Exclude<RunFailureCategory, ModelFailureCategory>) {
     super({
       'invalid-tool-request': 'model tool request is invalid',
       'limit-exceeded': 'run limit was exceeded',
@@ -76,8 +39,8 @@ export const runLimits = Object.freeze({
 })
 
 export type ValidatedToolRequest =
-  | (ToolRequest & { readonly name: 'bash'; readonly arguments: Readonly<{ command: string }> })
-  | (ToolRequest & { readonly name: 'apply_patch'; readonly arguments: Readonly<{ patch: string }> })
+  | (ToolCall & { readonly name: 'bash'; readonly arguments: Readonly<{ command: string }> })
+  | (ToolCall & { readonly name: 'apply_patch'; readonly arguments: Readonly<{ patch: string }> })
 
 export type ToolObservation =
   | { readonly name: 'bash'; readonly result: BashResult }
@@ -106,8 +69,8 @@ export function validateToolBatch(calls: unknown): readonly ValidatedToolRequest
   }))
 }
 
-export function toolObservationMessage(requestId: string, observation: ToolObservation): LLMMessage {
-  return Object.freeze({ role: 'tool', toolCallId: requestId, content: JSON.stringify(observation.result) })
+export function toolObservationMessage(requestId: string, observation: ToolObservation): ModelMessage {
+  return Object.freeze({ role: 'tool', callId: requestId, content: JSON.stringify(observation.result) })
 }
 
 export function toolOutputBytes(observation: ToolObservation): number {
@@ -129,13 +92,19 @@ export interface Run {
   readonly createdAt: string
   readonly updatedAt: string
   readonly promptVersionIds: readonly string[]
-  readonly llmSnapshot: LLMSnapshot
+  readonly modelId: string | null
+  /** The caller's explicit selection; null means Session/Agent defaults were resolved. */
+  readonly requestedModelId: string | null
+  readonly modelSnapshot: ExecutionSnapshot | null
+  /** Historical metadata only; no retired profile can be executed. */
+  readonly legacyModelSnapshot?: Readonly<{ profileId: string; configVersion: string }>
   readonly errorCategory?: RunFailureCategory
   readonly output?: string
   readonly error?: string
 }
 
 export interface RunInput {
+  readonly modelId?: string
   readonly sessionId: string
   readonly parentNodeId: string | null
   readonly input: string
@@ -150,25 +119,23 @@ export type RunOutcome =
 
 export function validateRunInput(input: RunInput): RunInput {
   if (input && ('modelProfileId' in input || 'model' in input || 'selection' in input || 'llmPlan' in input)) {
-    throw new TypeError('RunInput cannot override LLM selection')
+    throw new TypeError('RunInput accepts only a modelId for model selection')
   }
   return Object.freeze({
     sessionId: nonEmpty(input?.sessionId, 'sessionId'),
+    ...(input?.modelId === undefined ? {} : { modelId: nonEmpty(input.modelId, 'modelId') }),
     parentNodeId: input?.parentNodeId === null ? null : nonEmpty(input?.parentNodeId, 'parentNodeId'),
     input: nonEmpty(input?.input, 'input'),
     idempotencyKey: nonEmpty(input?.idempotencyKey, 'idempotencyKey'),
   })
 }
 
-export function createSession(id: string, projectId: string, agentId: string, now: string): Session {
-  return Object.freeze({ id, projectId, agentId, createdAt: now })
-}
-
-export function createRun(id: string, input: RunInput, prompts: readonly PromptSnapshot[], plan: LLMPlan, now: string): Run {
+export function createRun(id: string, input: RunInput, prompts: readonly PromptSnapshot[], model: ExecutionSnapshot, now: string): Run {
   return Object.freeze({
     id, sessionId: input.sessionId, input: input.input, idempotencyKey: input.idempotencyKey,
     history: Object.freeze({ kind: 'tree', parentNodeId: input.parentNodeId }), contextVersion: 'dialogue-v1', revision: 0,
-    llmSnapshot: plan.snapshot, promptVersionIds: Object.freeze(prompts.map(prompt => prompt.versionId)),
+    modelId: model.modelId, requestedModelId: input.modelId ?? null, modelSnapshot: model,
+    promptVersionIds: Object.freeze(prompts.map(prompt => prompt.versionId)),
     status: 'running', createdAt: now, updatedAt: now,
   })
 }
@@ -193,8 +160,8 @@ export function settleRun(run: Run, outcome: RunOutcome, now: string): Run {
   return Object.freeze({ ...run, status: 'cancelled', updatedAt: now })
 }
 
-export function buildLLMMessages(prompts: readonly PromptSnapshot[], history: readonly ConversationNode[], input: string): readonly LLMMessage[] {
-  const messages: LLMMessage[] = []
+export function buildModelMessages(prompts: readonly PromptSnapshot[], history: readonly ConversationNode[], input: string): readonly ModelMessage[] {
+  const messages: ModelMessage[] = []
   for (const kind of ['agent-instruction', 'context'] as const) {
     const prompt = prompts.find(item => item.kind === kind)
     if (prompt) messages.push(Object.freeze({ role: prompt.role, content: prompt.content }))

@@ -1,3 +1,5 @@
+import { createSessionComponent } from '../dist/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, realpathSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -7,10 +9,10 @@ import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
-import { createSqliteStateComponent, stateServiceKey } from '../dist/run/sqlite-state.js'
 import { initialRunExecution } from '../dist/run/execution.js'
-import { ids } from './helpers/controlled-llm.mjs'
+import { ids, modelSnapshot, controlledModels } from './helpers/controlled-models.mjs'
 const sample = JSON.parse(readFileSync(new URL('./fixtures/legacy-turns-v2.json', import.meta.url), 'utf8'))
+const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Test instructions.' }]
 
 async function legacyFixture(t, turns = sample.turns) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tree-migrate-')))
@@ -61,15 +63,15 @@ async function legacyFixture(t, turns = sample.turns) {
 
 test('legacy turns migrate in array order; ambiguous Run associations remain explicitly unknown', async t => {
   const f = await legacyFixture(t)
-  await f.root.installComponent(createSqliteStateComponent(f.inputs))
-  const state = f.root.get(stateServiceKey)
-  const first = (await state.listNodes('legacy', null)).nodes[0]
-  const second = (await state.listNodes('legacy', first.id)).nodes[0]
-  const third = (await state.listNodes('legacy', second.id)).nodes[0]
-  const path = await state.getNodePath('legacy', third.id)
+  await f.root.installComponent(createSessionComponent(f.inputs, agents))
+  const state = f.root.get(sessionRunServiceKey), sessions = f.root.get(sessionServiceKey)
+  const first = (await sessions.listNodes('legacy', null)).nodes[0]
+  const second = (await sessions.listNodes('legacy', first.id)).nodes[0]
+  const third = (await sessions.listNodes('legacy', second.id)).nodes[0]
+  const path = await sessions.getNodePath('legacy', third.id)
   assert.deepEqual(path.map(({ input, output }) => ({ input, output })), sample.turns)
   assert.ok(path.every(node => node.sourceRunId === null && node.id.startsWith('legacy:')))
-  assert.deepEqual(await state.getNodePath('empty', null), [])
+  assert.deepEqual(await sessions.getNodePath('empty', null), [])
   for (const old of sample.runs) {
     const run = await state.getRun(old.id)
     assert.deepEqual(run.history, { kind: 'legacy-unknown' })
@@ -78,30 +80,32 @@ test('legacy turns migrate in array order; ambiguous Run associations remain exp
     assert.equal(run.input, old.input)
     assert.equal(run.output, old.output)
     assert.deepEqual(run.promptVersionIds, ['v1'])
-    assert.equal((await state.getRunPrompts(old.id))[0].content, 'Saved prompt')
-    assert.deepEqual(run.llmSnapshot, { profileId: 'default', configVersion: 'old' })
-    assert.equal((await state.getRunByKey('legacy', old.id)).id, old.id)
+    const saved = await f.db.read(reader => reader.get('SELECT prompts_json FROM harness_runs WHERE id = ?', [old.id]))
+    assert.equal(JSON.parse(saved.prompts_json)[0].content, 'Saved prompt')
+    assert.equal(run.modelSnapshot, null)
+    assert.deepEqual(run.legacyModelSnapshot, { profileId: 'default', configVersion: 'old' })
+    assert.equal((await sessions.getRunByKey('legacy', old.id)).id, old.id)
     const active = old.status === 'running' || old.status === 'cancelling'
     assert.equal(run.status, active ? 'interrupted' : old.status)
-    const events = await state.getRunEvents(old.id)
+    const events = await sessions.getRunEvents(old.id)
     assert.equal(events.length, active ? 2 : 1)
     assert.deepEqual(events.map(e => e.seq), active ? [1, 2] : [1])
   }
   await assert.rejects(state.findAcceptedRun({ sessionId: 'legacy', parentNodeId: null, input: 'Duplicate', idempotencyKey: 'z-completed' }), /idempotency key/)
-  const accepted = await state.acceptRun('new-run', { sessionId: 'legacy', parentNodeId: third.id, input: 'Continue', idempotencyKey: 'new-key' }, 'now', [],
-    { snapshot: { profileId: 'default', configVersion: 'new' } })
+  const accepted = await state.registerRun('new-run', { sessionId: 'legacy', parentNodeId: third.id, input: 'Continue', idempotencyKey: 'new-key' }, 'now', [],
+    modelSnapshot('default', 'new'))
   const done = await state.settleRun(accepted.run.id, { kind: 'completed', output: 'New answer' }, 'now')
-  assert.equal((await state.getNodePath('legacy', done.resultNodeId)).length, 4)
+  assert.equal((await sessions.getNodePath('legacy', done.resultNodeId)).length, 4)
   const schema = await f.db.read(reader => reader.all('PRAGMA table_info(harness_sessions)'))
   assert.equal(schema.some(column => column.name === 'turns_json'), false)
-  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 3)
+  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 4)
 })
 
 test('invalid legacy data rolls back the entire tree migration and its version record', async t => {
   const f = await legacyFixture(t, [sample.turns[0], { input: 'broken', output: null }])
-  const installation = f.root.installComponent(createSqliteStateComponent(f.inputs))
+  const installation = f.root.installComponent(createSessionComponent(f.inputs, agents))
   await assert.rejects(Promise.resolve(installation))
-  assert.equal(f.root.get(stateServiceKey), undefined)
+  assert.equal(f.root.get(sessionRunServiceKey), undefined)
   const version = await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))
   assert.equal(version.version, 2)
   assert.equal(await f.db.read(reader => reader.get("SELECT name FROM sqlite_master WHERE name = 'harness_nodes'")), undefined)

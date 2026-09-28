@@ -1,3 +1,4 @@
+import { canUseModel, modelAvailability, type ModelsCatalog } from './models-client.js'
 import type { ToolTrace, RunView, RunEventView } from './client-types.js'
 import type { SessionController } from './session-client.js'
 import { isActive } from './session-client.js'
@@ -9,33 +10,47 @@ export interface SessionPanel {
   render(): void
   captureScroll(): number
   restoreScroll(top: number): void
+  resizeInput(): void
   dispose(): number
 }
 
 export function createSessionPanel(pane: Pane, projectName: string, controller: SessionController,
-  focus: () => void, close: () => void, initialScroll = 0): SessionPanel {
+  focus: () => void, close: () => void, initialScroll = 0, models?: ModelsCatalog, configureModels?: () => void): SessionPanel {
   const element = document.createElement('section')
   element.className = 'conversation session-pane'
   element.dataset.paneId = pane.id
   element.setAttribute('aria-label', `${projectName} · 会话 ${pane.sessionId.slice(0, 8)}`)
   element.innerHTML = `
     <div class="pane-heading">
+      <svg class="pane-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-4 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z"/></svg>
       <div class="pane-title"><strong></strong><small></small></div>
       <span class="run-status" role="status"></span>
-      <button class="pane-close" type="button" aria-label="关闭会话面板">×</button>
+      <button class="pane-close" type="button" aria-label="关闭会话面板" title="关闭会话面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
     </div>
-    <div class="branch-navigation">
-      <button type="button" data-go-root>起点</button><button type="button" data-go-parent>上一级</button>
-      <select aria-label="选择后续分支"></select><button type="button" data-more-children hidden>更多</button>
+    <div class="branch-navigation" aria-label="对话分支导航">
+      <button type="button" data-go-root title="返回会话起点" aria-label="返回会话起点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 11 9-8 9 8M5 9v12h14V9M9 21v-8h6v8"/></svg></button>
+      <button type="button" data-go-parent title="查看上一级对话" aria-label="查看上一级对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
+      <span class="branch-position"></span>
+      <select aria-label="选择后续分支"></select><button type="button" data-more-children title="加载更多后续分支" hidden>更多</button>
     </div>
     <div class="pane-notice notice" role="alert" hidden></div>
     <div class="transcript" role="log" aria-label="对话内容" aria-live="polite" tabindex="0" hidden></div>
-    <div class="empty-state"><span class="empty-icon" aria-hidden="true">✳</span><h2>从一个想法开始</h2><p>在下方输入消息。</p></div>
+    <div class="empty-state">
+      <svg class="empty-logo" aria-hidden="true" viewBox="0 0 128 128"><use href="#anybox-mark"/></svg>
+      <h2>有什么想法？</h2><p>从这里开始，与 Anybox 一起完成。</p>
+      <div class="empty-branches" aria-label="选择已有对话分支" hidden></div>
+    </div>
     <form class="composer">
-      <label class="compose-position">消息</label><textarea rows="3" placeholder="输入消息…" aria-label="消息"></textarea>
-      <div class="composer-footer"><span>Enter 发送 · Shift + Enter 换行</span><div class="actions">
-        <button class="cancel-button" type="button" hidden>取消运行</button>
-        <button class="send-button" type="submit">发送消息 ↗</button>
+      <div class="composer-model-row"><select class="composer-model" aria-label="本会话使用的模型"></select><button class="configure-models" type="button">配置模型</button></div>
+      <p class="composer-model-hint" role="status" hidden></p>
+      <textarea rows="2" placeholder="随心输入" aria-label="消息"></textarea>
+      <div class="composer-footer"><div class="composer-meta">
+        <span class="composer-agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3Z"/></svg><span>Agent</span></span>
+        <span class="compose-position"></span>
+      </div><div class="actions">
+        <span class="composer-hint">↵ 发送</span>
+        <button class="cancel-button" type="button" aria-label="取消运行" title="取消运行" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+        <button class="send-button" type="submit" aria-label="发送消息" title="发送消息 · Enter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
       </div></div>
     </form>`
   const get = <T extends HTMLElement>(selector: string) => element.querySelector<T>(selector)!
@@ -43,16 +58,23 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   heading.dataset.dragSession = pane.sessionId
   heading.dataset.projectId = pane.projectId
   heading.title = '拖动标题，将会话移动到其他面板边缘'
-  get('strong').textContent = projectName
-  get('small').textContent = `会话 · ${pane.sessionId.slice(0, 8)}`
+  get('strong').textContent = '新建会话'
+  get('small').textContent = projectName
   const transcript = get<HTMLElement>('.transcript'), messageInput = get<HTMLTextAreaElement>('textarea')
   const compose = get<HTMLFormElement>('form'), cancel = get<HTMLButtonElement>('.cancel-button')
   const send = get<HTMLButtonElement>('.send-button'), notice = get<HTMLElement>('.pane-notice')
   const empty = get<HTMLElement>('.empty-state'), status = get<HTMLElement>('.run-status')
+  const emptyBranches = get<HTMLElement>('.empty-branches')
   let eventCache: ReadonlyMap<string, readonly RunEventView[]> = new Map(), expandedTraces: ReadonlySet<string> = new Set()
   let contentKey = '', rendered = false, savedScroll = initialScroll
+  let conversationTitle: string | undefined
   const active = isActive
   const listeners = new AbortController(), options = { signal: listeners.signal }
+  const modelSelect = get<HTMLSelectElement>('.composer-model')
+  get<HTMLElement>('.composer-model-row').hidden = !models
+  modelSelect.addEventListener('change', () => { if (modelSelect.value) void controller.setModel(modelSelect.value) }, options)
+  get('.configure-models').addEventListener('click', () => configureModels?.(), options)
+  const modelReady = () => !models || canUseModel(models.snapshot().models.find(value => value.id === controller.snapshot().session?.modelId))
   const branchSelect = get<HTMLSelectElement>('.branch-navigation select')
   get('[data-go-root]').addEventListener('click', () => { void controller.navigate(null) }, options)
   get('[data-go-parent]').addEventListener('click', () => { void controller.navigate(controller.snapshot().path.at(-1)?.parentId ?? null) }, options)
@@ -61,12 +83,25 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   element.addEventListener('pointerdown', focus, options)
   element.addEventListener('focusin', focus, options)
   get('.pane-close').addEventListener('click', event => { event.stopPropagation(); close() }, options)
-  messageInput.addEventListener('input', () => controller.setDraft(messageInput.value), options)
+  const resizeInput = (): void => {
+    if (element.hidden || !element.isConnected) return
+    messageInput.style.height = 'auto'
+    if (messageInput.scrollHeight) messageInput.style.height = `${Math.min(messageInput.scrollHeight, 200)}px`
+  }
+  const updateSend = (): void => {
+    const state = controller.snapshot()
+    send.disabled = !state.session || state.busy || state.loading || (!state.pending && (!modelReady() || !messageInput.value.trim()))
+  }
+  messageInput.addEventListener('input', () => { controller.setDraft(messageInput.value); resizeInput(); updateSend() }, options)
   messageInput.addEventListener('keydown', event => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); compose.requestSubmit() }
   }, options)
-  compose.addEventListener('submit', event => { event.preventDefault(); void controller.submit() }, options)
+  compose.addEventListener('submit', event => { event.preventDefault(); if (!send.disabled) void controller.submit() }, options)
   cancel.addEventListener('click', () => { const id = controller.snapshot().run?.id; if (id) void controller.cancel(id) }, options)
+  emptyBranches.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-view-node]')
+    if (button?.dataset.viewNode) void controller.navigate(button.dataset.viewNode)
+  }, options)
   transcript.addEventListener('click', event => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button')
     if (!button) return
@@ -86,6 +121,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   label.className = 'message-label'
   label.textContent = role === 'user' ? '你' : 'Agent'
   const text = document.createElement('span')
+  text.className = 'message-content'
   text.textContent = content
   item.append(label, text)
   transcript.append(item)
@@ -126,6 +162,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
 
   const panel: SessionPanel = {
     element,
+    resizeInput,
     captureScroll() {
       if (!element.hidden && element.isConnected) savedScroll = transcript.scrollTop
       return savedScroll
@@ -136,15 +173,53 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       eventCache = state.events
       expandedTraces = state.expanded
       const activeCount = state.runs.filter(active).length
+      if (!state.loading && !conversationTitle) conversationTitle = state.path[0]?.input ?? state.children[0]?.input ?? state.runs.at(-1)?.input
+      if (conversationTitle) {
+        get('.pane-title strong').textContent = conversationTitle
+        get('.pane-title strong').title = conversationTitle
+      }
       status.textContent = state.loading ? '正在加载' : state.busy ? '正在处理' : activeCount ? `${activeCount} 个运行中` : '准备就绪'
       notice.hidden = !state.notice
       notice.textContent = state.notice
       messageInput.disabled = !state.session || state.busy || state.loading
-      send.disabled = !state.session || state.busy || state.loading
-      send.textContent = state.pending ? '重试提交 ↗' : '发送消息 ↗'
+      send.setAttribute('aria-label', state.pending ? '重试提交' : '发送消息')
+      send.title = state.pending ? '重试提交 · Enter' : '发送消息 · Enter'
       cancel.hidden = !active(state.run)
       cancel.disabled = state.busy || state.run?.status === 'cancelling'
-      get('.compose-position').textContent = state.position.viewNodeId ? `继续当前分支 · ${state.position.viewNodeId.slice(0, 8)}` : '从会话起点发送'
+      cancel.title = cancel.disabled ? '正在取消运行' : '取消运行'
+      get('.composer-agent > span').textContent = state.session?.agentId ?? 'Agent'
+      if (models) {
+        const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
+        const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.providerId, value.available, value.effectiveCapabilities?.tools]), catalog.providers.map(value => [value.id, value.name]), selected])
+        if (modelSelect.dataset.choices !== key) {
+          modelSelect.dataset.choices = key
+          const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = '选择模型'
+          modelSelect.replaceChildren(placeholder)
+          const groups = new Map<string, HTMLOptGroupElement>()
+          for (const value of catalog.models) {
+            let group = groups.get(value.providerId)
+            if (!group) {
+              group = document.createElement('optgroup'); group.label = catalog.providers.find(provider => provider.id === value.providerId)?.name ?? value.providerId
+              groups.set(value.providerId, group); modelSelect.append(group)
+            }
+            const choice = document.createElement('option'); choice.value = value.id
+            choice.textContent = canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`
+            choice.disabled = !canUseModel(value); group.append(choice)
+          }
+          if (selected && !catalog.models.some(value => value.id === selected)) {
+            const unavailable = document.createElement('option'); unavailable.value = selected; unavailable.textContent = '原模型已不可用'; unavailable.disabled = true; modelSelect.append(unavailable)
+          }
+        }
+        modelSelect.value = selected
+        modelSelect.disabled = state.busy || state.loading || Boolean(state.pending) || catalog.loading
+        const hint = get<HTMLElement>('.composer-model-hint')
+        hint.textContent = catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请打开“配置模型”，添加并启用服务和模型。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
+        hint.hidden = !hint.textContent
+      }
+      get('.compose-position').textContent = state.position.viewNodeId ? '继续此分支' : '新分支'
+      get('.compose-position').title = state.position.viewNodeId ? `从节点 ${state.position.viewNodeId} 继续` : '从会话起点发送'
+      get('.branch-position').textContent = state.position.viewNodeId ? `第 ${state.path.length} 轮` : '会话起点'
+      get<HTMLButtonElement>('[data-go-root]').disabled = state.loading || !state.position.viewNodeId
       get<HTMLButtonElement>('[data-go-parent]').disabled = state.loading || !state.position.viewNodeId
       get('[data-more-children]').hidden = !state.moreChildren
       const choices = JSON.stringify(state.children.map(node => [node.id, node.input]))
@@ -159,11 +234,31 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
           option.textContent = node.input.slice(0, 45)
           return option
         }))
+        emptyBranches.replaceChildren(...state.children.slice(0, 3).map(node => {
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.dataset.viewNode = node.id
+          button.textContent = node.input
+          button.title = `继续对话：${node.input}`
+          return button
+        }))
       }
       branchSelect.value = ''
       branchSelect.disabled = state.loading || !state.children.length
       if (messageInput.value !== state.draft) messageInput.value = state.draft
-      const key = JSON.stringify([state.path, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.busy])
+      resizeInput()
+      updateSend()
+      const progressRuns = state.runs.filter(run => active(run) && run.history.kind === 'tree' && run.history.parentNodeId === state.position.viewNodeId && state.progress?.has(run.id))
+      const hasVisibleMessages = Boolean(state.path.length || progressRuns.length || (state.pending && !state.runs.some(item => item.id === state.pending?.runId)))
+      empty.hidden = hasVisibleMessages
+      transcript.hidden = !hasVisibleMessages
+      element.classList.toggle('is-empty', !hasVisibleMessages)
+      emptyBranches.hidden = state.loading || !state.children.length
+      for (const button of emptyBranches.querySelectorAll('button')) button.disabled = state.loading || state.busy
+      empty.classList.toggle('has-branches', !emptyBranches.hidden)
+      get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : state.children.length ? '从这里，继续你的想法' : activeCount ? 'Agent 正在思考…' : state.runs.length ? '你正在会话起点' : '有什么想法？'
+      get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Anybox 一起完成。'
+      const key = JSON.stringify([state.path, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.busy, [...(state.progress ?? [])]])
       if (key === contentKey) return
       contentKey = key
       const top = rendered ? panel.captureScroll() : initialScroll
@@ -189,12 +284,15 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       }
       if (state.runs.length) {
         const heading = document.createElement('h3')
+        // Temporarily hide run history while keeping its data and controls intact.
+        heading.hidden = true
         heading.className = 'run-list-heading'
         heading.textContent = '运行记录'
         transcript.append(heading)
       }
       for (const item of state.runs) {
         const card = document.createElement('section')
+        card.hidden = true
         card.className = 'run-card'
         card.classList.toggle('focused-run', item.id === state.position.focusedRunId)
         const label = document.createElement('p')
@@ -221,9 +319,13 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         addRunTrace(item, card)
         transcript.append(card)
       }
+      for (const run of progressRuns) {
+        addMessage('user', run.input)
+        addMessage('assistant', state.progress.get(run.id)!, true)
+        const label = document.createElement('p'); label.className = 'streaming-label'; label.textContent = '正在生成 · 临时输出'
+        transcript.append(label)
+      }
       if (state.pending && !state.runs.some(item => item.id === state.pending?.runId)) addMessage('user', state.pending.input, true)
-      empty.hidden = Boolean(state.path.length || state.runs.length || state.pending)
-      transcript.hidden = !empty.hidden
       panel.restoreScroll(atBottom ? transcript.scrollHeight : top)
       if (focusedData) [...transcript.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
       if (state.path.length || state.runs.length) rendered = true

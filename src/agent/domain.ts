@@ -3,7 +3,7 @@ import { nonEmpty } from '../validation.js'
 export interface AgentDefinition {
   readonly id: string
   readonly instructions: string
-  readonly modelProfileId: string
+  readonly modelId?: string
 }
 
 export function validateAgents(agents: readonly AgentDefinition[]): readonly AgentDefinition[] {
@@ -12,9 +12,9 @@ export function validateAgents(agents: readonly AgentDefinition[]): readonly Age
   return Object.freeze(agents.map(agent => {
     const id = nonEmpty(agent?.id, 'agent.id')
     const instructions = nonEmpty(agent?.instructions, 'agent.instructions')
-    const modelProfileId = nonEmpty(agent?.modelProfileId, 'agent.modelProfileId')
+    const modelId = agent?.modelId === undefined ? undefined : nonEmpty(agent.modelId, 'agent.modelId')
     if (ids.has(id)) throw new TypeError(`duplicate agent ${id}`)
     ids.add(id)
-    return Object.freeze({ id, instructions, modelProfileId })
+    return Object.freeze({ id, instructions, ...(modelId === undefined ? {} : { modelId }) })
   }))
 }

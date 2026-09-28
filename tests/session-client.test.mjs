@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createPendingStore, createSessionController, pendingKey } from '../dist/web/session-client.js'
-import { deferred } from './helpers/controlled-llm.mjs'
+import { deferred } from './helpers/controlled-models.mjs'
 
 function fixture() {
   const storage = new Map(), timers = new Map(), calls = [], rows = new Map(), nodes = new Map(), positions = new Map()
@@ -172,7 +172,7 @@ test('unknown legacy pending restores input for explicit confirmation, never pos
   a.detach()
 })
 
-test('refresh merges monotone run revisions and visibility slows the single timer', async () => {
+test('refresh merges monotone run revisions and uses one fallback timer', async () => {
   const f = fixture(), a = f.make('a'); await f.load(a)
   a.setDraft('one'); await a.submit()
   const run = a.snapshot().runs[0]
@@ -182,6 +182,81 @@ test('refresh merges monotone run revisions and visibility slows the single time
   assert.equal(a.snapshot().runs[0].status, 'completed')
   assert.equal(f.timers.size, 1)
   assert.equal([...f.timers.values()][0].ms, 5000)
+  a.detach()
+})
+
+test('live changes use a calibration timer and retain notifications during an in-flight refresh', async () => {
+  const f = fixture(), a = f.make('a'); await f.load(a)
+  a.setLive(true)
+  assert.deepEqual([...f.timers.values()].map(timer => timer.ms), [30000])
+  const first = deferred(), entered = deferred()
+  let listing = 0
+  f.intercept(url => {
+    if (url === '/sessions/a/runs' && ++listing === 1) { entered.resolve(); return first.promise }
+  })
+  const refresh = a.refresh(); await entered.promise
+  f.rows.set('new', { id: 'new', sessionId: 'a', revision: 2, status: 'running', createdAt: '0' })
+  a.notifyChange(); a.notifyChange()
+  first.resolve([])
+  await refresh
+  assert.equal(listing, 2)
+  assert.equal(a.snapshot().runs[0].id, 'new')
+  a.setLive(false)
+  assert.deepEqual([...f.timers.values()].map(timer => timer.ms), [5000])
+  a.detach(); a.notifyChange()
+  assert.equal(f.timers.size, 0)
+})
+
+test('notifications while POST is pending refresh after settlement and discover the committed result node', async () => {
+  const f = fixture(), a = f.make('a'); await f.load(a)
+  a.setLive(true)
+  const response = deferred()
+  f.intercept((url, body) => {
+    if (url === '/sessions/a/runs' && body) {
+      f.rows.set('new', { id: 'new', sessionId: 'a', input: body.input, history: { kind: 'tree', parentNodeId: null },
+        key: body.idempotencyKey, revision: 0, status: 'running', createdAt: '0' })
+      return response.promise
+    }
+  })
+  a.setDraft('new run'); const posting = a.submit()
+  const before = f.calls.length
+  a.notifyChange(); a.notifyChange()
+  assert.equal(f.calls.length, before)
+  const accepted = { ...f.rows.get('new') }
+  f.finish('new')
+  response.resolve(accepted)
+  await posting
+  await a.refresh()
+  assert.equal(a.snapshot().runs[0].status, 'completed')
+  assert.equal(a.snapshot().position.viewNodeId, 'node-new')
+  a.detach()
+})
+
+test('a live notification received by a hidden view is reconciled when the view refreshes', async () => {
+  const f = fixture(), a = f.make('a'); await f.load(a)
+  a.setLive(true); f.hide()
+  const before = f.calls.length
+  f.rows.set('background', { id: 'background', sessionId: 'a', revision: 4, status: 'completed', createdAt: '0' })
+  a.notifyChange()
+  assert.equal(f.calls.length, before)
+  await a.refresh()
+  assert.equal(a.snapshot().runs[0].id, 'background')
+  assert.deepEqual([...f.timers.values()].map(timer => timer.ms), [30000])
+  a.detach()
+})
+
+test('a notification during node navigation schedules a fresh node query after navigation settles', async () => {
+  const f = fixture(), a = f.make('a'); await f.load(a)
+  const page = deferred(), entered = deferred()
+  let first = true
+  f.intercept(url => {
+    if (first && url === '/sessions/a/nodes?parentNodeId=root') { first = false; entered.resolve(); return page.promise }
+  })
+  const navigation = a.navigate(null); await entered.promise
+  f.nodes.set('new-node', { id: 'new-node', sessionId: 'a', parentId: null, input: 'hello', output: 'done' })
+  a.notifyChange(); await a.refresh()
+  page.resolve({ nodes: [] }); await navigation; await a.refresh()
+  assert.equal(a.snapshot().children[0].id, 'new-node')
   a.detach()
 })
 

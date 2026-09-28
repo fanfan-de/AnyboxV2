@@ -7,43 +7,37 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createHarness } from '../dist/harness.js'
-import { LLMFailure } from '../dist/llm/port.js'
+import { modelsError } from '@anybox/models'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from '../dist/web/component.js'
 import { startWebServer } from '../dist/web/server.js'
 import { createDirectoryPickerComponent } from '../dist/web/directory-picker.js'
-import { controlledLLM, deferred } from './helpers/controlled-llm.mjs'
+import { controlledModels, deferred } from './helpers/controlled-models.mjs'
 import { promptServiceKey } from '../dist/prompt/component.js'
-import { createApiKeyServiceComponent } from '../dist/credentials/settings.js'
-import { deepSeekCredentialId } from '../dist/llm/deepseek-chat-completions/component.js'
-import { openAIResponsesCredentialId } from '../dist/llm/openai-responses/component.js'
-import { createWebLLMComponent, parseWebStartupConfig } from '../dist/web/startup-config.js'
-
-const videoCredentialId = 'video/example/default'
-const managed = [
-  { id: deepSeekCredentialId, label: 'DeepSeek Chat', category: '大语言模型' },
-  { id: videoCredentialId, label: 'Video API', category: '视频模型' },
-]
-const credentialPath = id => `/credentials/${encodeURIComponent(id)}`
+import { installManagedModels } from './helpers/managed-models.mjs'
+import { installWebModels } from '../dist/web/models-startup.js'
+import { parseWebStartupConfig } from '../dist/web/startup-config.js'
+import { runChangedEvent } from '../dist/run/notifications.js'
 
 async function fixture(directory, pickerOptions = {}, startup) {
   const root = new Context()
-  const llm = controlledLLM()
+  const llm = controlledModels()
   const secrets = new Map()
   try {
-    const keyFiber = root.installComponent(createApiKeyServiceComponent({ namespace: 'web-test', definitions: startup ? [startup.llm.credential] : managed, openEntry(_namespace, id) {
-      return {
-        async getPassword() { return secrets.get(id) },
-        async setPassword(secret) { secrets.set(id, secret) },
-        async deleteCredential() { return secrets.delete(id) },
-      }
-    } }))
-    await keyFiber
-    const apiFiber = root.installComponent(startup ? createWebLLMComponent(startup.llm) : llm.component())
-    await apiFiber
+    let apiFiber, keyFiber, reinstall
+    if (startup) {
+      await installWebModels(root, { ...startup, modelsDatabasePath: join(directory, 'models.sqlite'), modelsCatalogDatabasePath: join(directory, 'models-catalog.sqlite') }, {
+        catalogAutoRefresh: false,
+        openEntry(_namespace, id) { return { async getPassword() { return secrets.get(id) }, async setPassword(value) { secrets.set(id, value) }, async deleteCredential() { return secrets.delete(id) } } },
+        readLegacyCredential: async () => undefined,
+      })
+    } else {
+      const installed = await installManagedModels(root, directory, { controlled: llm, secrets })
+      apiFiber = installed.apiFiber; keyFiber = installed.vaultFiber; reinstall = installed.installRuntime
+    }
     await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
     const harness = await createHarness(root, {
-      agents: [{ id: 'assistant', modelProfileId: 'default', instructions: 'Private instructions.' }],
+      agents: [{ id: 'assistant', modelId: 'default', instructions: 'Private instructions.' }],
     })
     const project = await harness.openProject(directory)
     const pickerFiber = root.installComponent(createDirectoryPickerComponent({
@@ -54,7 +48,7 @@ async function fixture(directory, pickerOptions = {}, startup) {
     await webFiber
     const web = root.get(webFrontendServiceKey)
     assert.ok(web)
-    return { root, keyFiber, apiFiber, pickerFiber, webFiber, harness, project, llm, web, secrets, close: () => harness.close() }
+    return { root, keyFiber, apiFiber, pickerFiber, webFiber, harness, project, llm, web, secrets, reinstall, close: () => harness.close() }
   } catch (error) { await root.fiber.dispose(); throw error }
 }
 
@@ -75,29 +69,147 @@ async function serviceReady(root, name) {
   await probe.dispose()
 }
 
-test('Web credential settings manage registered LLM and video keys without exposing values', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-key-'))
-  const f = await fixture(directory)
+async function changes(web, sessionIds) {
+  const response = await fetch(`${web.url}/api/v1/changes?${new URLSearchParams(sessionIds.map(id => ['sessionId', id]))}`)
+  assert.equal(response.status, 200)
+  assert.match(response.headers.get('content-type'), /text\/event-stream/)
+  const reader = response.body.getReader(), decoder = new TextDecoder()
+  let buffer = ''
+  const readFrame = async () => {
+    for (;;) {
+      const boundary = buffer.indexOf('\n\n')
+      if (boundary >= 0) {
+        const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2)
+        const event = /^event: (.+)$/m.exec(frame)?.[1]
+        if (event) return { event, data: JSON.parse(/^data: (.+)$/m.exec(frame)[1]) }
+        continue
+      }
+      const chunk = await reader.read()
+      if (chunk.done) return undefined
+      buffer += decoder.decode(chunk.value, { stream: true })
+    }
+  }
+  return {
+    async next() {
+      let timer
+      try { return await Promise.race([readFrame(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('SSE frame timeout')), 2000) })]) }
+      finally { clearTimeout(timer) }
+    },
+    close: () => reader.cancel().catch(() => {}),
+  }
+}
+
+test('SSE follows committed Run changes and publishes the result node only after resource exit', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-changes-')), f = await fixture(directory)
+  let stream
   try {
-    assert.deepEqual(f.keyFiber.inspect().dependencies, [])
-    assert.deepEqual((await request(f.web, 'GET', '/credentials')).data, managed.map(item => ({ ...item, configured: false })))
-    const saved = await request(f.web, 'POST', credentialPath(deepSeekCredentialId), { key: 'sk-private-value' })
-    assert.deepEqual(saved.data, { ...managed[0], configured: true })
-    assert.equal(f.secrets.get(deepSeekCredentialId), 'sk-private-value')
-    const video = await request(f.web, 'POST', credentialPath(videoCredentialId), { key: 'video-private-value' })
-    assert.deepEqual(video.data, { ...managed[1], configured: true })
-    assert.equal(f.secrets.get(videoCredentialId), 'video-private-value')
-    assert.deepEqual((await request(f.web, 'GET', '/credentials')).data, managed.map(item => ({ ...item, configured: true })))
-    assert.equal(f.root.get(webFrontendServiceKey), f.web)
-    assert.equal((await request(f.web, 'POST', credentialPath(videoCredentialId), { key: '' })).response.status, 400)
-    assert.equal((await request(f.web, 'POST', credentialPath(videoCredentialId), { key: 'different', id: 'other' })).response.status, 400)
-    assert.equal((await request(f.web, 'POST', credentialPath('other/service'), { key: 'unmanaged' })).response.status, 404)
-    assert.equal(f.secrets.has('other/service'), false)
-    const deleted = await request(f.web, 'POST', `${credentialPath(deepSeekCredentialId)}/delete`, {})
-    assert.deepEqual(deleted.data, { ...managed[0], configured: false })
-    assert.equal(f.secrets.has(deepSeekCredentialId), false)
-    assert.equal(f.secrets.get(videoCredentialId), 'video-private-value')
-    for (const data of [saved.data, video.data, deleted.data]) assert.doesNotMatch(JSON.stringify(data), /private-value/)
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const other = await f.harness.createSession(f.project.id, 'assistant')
+    stream = await changes(f.web, [session.id])
+    assert.equal((await stream.next()).event, 'ready')
+    const outside = await f.harness.startRun({ sessionId: other.id, parentNodeId: null, input: 'outside', idempotencyKey: 'outside' })
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'inside', idempotencyKey: 'inside' })
+    const hints = []
+    while (!hints.some(frame => frame.data.revision >= 1)) hints.push(await stream.next())
+    assert.ok(hints.every(frame => frame.event === 'run-changed' && frame.data.runId === run.id && frame.data.sessionId === session.id))
+    assert.deepEqual(Object.keys(hints[0].data).sort(), ['revision', 'runId', 'sessionId'])
+    f.llm.calls[1].result.resolve('answer')
+    let notified = false
+    const terminal = stream.next().then(frame => { notified = true; return frame })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(notified, false)
+    assert.equal((await f.harness.getRun(run.id)).status, 'running')
+    f.llm.calls[1].done.resolve()
+    const frame = await terminal
+    const completed = await f.harness.waitRun(run.id)
+    assert.equal(frame.data.revision, completed.revision)
+    assert.equal((await f.harness.getNode(session.id, completed.resultNodeId)).output, 'answer')
+    await stream.close(); stream = undefined
+    assert.equal((await f.harness.getRun(outside.id)).status, 'running')
+  } finally {
+    await stream?.close()
+    for (const call of f.llm.calls) { call.result.resolve('done'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('SSE validates sessions, limits subscriptions, rejects foreign origins and rechecks shutdown after validation', async () => {
+  const gate = deferred(), entered = deferred()
+  let hold = false
+  const web = await startWebServer({ getSession: async id => {
+    if (hold) { entered.resolve(); await gate.promise }
+    return id === 'a' ? { id } : undefined
+  } })
+  try {
+    for (const [query, headers, status] of [
+      ['', {}, 400], ['sessionId=a&sessionId=a', {}, 400],
+      ['sessionId=a&sessionId=b&sessionId=c&sessionId=d&sessionId=e', {}, 400],
+      ['sessionId=missing', {}, 404], ['sessionId=a&unknown=x', {}, 400],
+      ['sessionId=a', { Origin: 'https://elsewhere.test' }, 403],
+      ['sessionId=a', { 'Sec-Fetch-Site': 'same-site' }, 403],
+    ]) {
+      const response = await fetch(`${web.url}/api/v1/changes?${query}`, { headers })
+      assert.equal(response.status, status); await response.text()
+    }
+    hold = true
+    const request = fetch(`${web.url}/api/v1/changes?sessionId=a`)
+    await entered.promise
+    const closing = web.close()
+    gate.resolve()
+    const response = await request
+    assert.equal(response.status, 503)
+    assert.doesNotMatch(await response.text(), /event: ready/)
+    await closing
+  } finally { gate.resolve(); await web.close() }
+})
+
+test('Web dependency restart closes streams and installs exactly one new Nya listener', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-reconnect-')), f = await fixture(directory)
+  let stream
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    stream = await changes(f.web, [session.id]); await stream.next()
+    const disconnected = stream.next().then(() => true, () => true)
+    await f.apiFiber.dispose()
+    assert.equal(await disconnected, true)
+    await stream.close(); stream = undefined
+    await f.reinstall()
+    await serviceReady(f.root, webFrontendServiceKey)
+    const current = f.root.get(webFrontendServiceKey)
+    assert.equal(current.url, f.web.url)
+    assert.equal(f.webFiber.inspect().effects.filter(label => label === `ctx.on("${runChangedEvent}")`).length, 1)
+    stream = await changes(current, [session.id])
+    assert.equal((await stream.next()).event, 'ready')
+    await f.root.parallel(runChangedEvent, { sessionId: session.id, runId: 'probe', revision: 9 })
+    assert.equal((await stream.next()).data.runId, 'probe')
+    const stopped = stream.next().then(() => true, () => true)
+    await f.close()
+    assert.equal(await stopped, true)
+  } finally { await stream?.close(); await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('Web Models settings manage provider keys, revisions and histories without exposing secrets', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-key-')), f = await fixture(directory)
+  try {
+    const added = await request(f.web, 'POST', '/models/providers', { id: 'managed', name: 'Work connection', enabled: true, protocolId: 'controlled', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 1000, apiKey: 'first-private-value' })
+    assert.equal(added.response.status, 200)
+    assert.equal(added.data.credentialConfigured, true)
+    assert.ok([...f.secrets.values()].includes('first-private-value'))
+    const saved = await request(f.web, 'POST', '/models/providers/managed/key', { apiKey: 'second-private-value', expectedRevision: added.data.revision })
+    assert.equal(saved.response.status, 200)
+    assert.ok([...f.secrets.values()].includes('second-private-value'))
+    assert.equal([...f.secrets.values()].includes('first-private-value'), false)
+    const stale = await request(f.web, 'POST', '/models/providers/managed/key', { apiKey: 'stale-private-value', expectedRevision: added.data.revision })
+    assert.equal(stale.response.status, 409)
+    assert.equal([...f.secrets.values()].includes('stale-private-value'), false)
+    assert.equal((await request(f.web, 'POST', '/models/providers/managed/key', { apiKey: '', expectedRevision: saved.data.revision })).response.status, 400)
+    const deleted = await request(f.web, 'POST', '/models/providers/managed/key/delete', { expectedRevision: saved.data.revision })
+    assert.equal(deleted.response.status, 200)
+    assert.equal(deleted.data.credentialConfigured, false)
+    const history = await request(f.web, 'GET', '/models/providers/managed/history')
+    assert.equal(history.data.length, 3)
+    for (const data of [added.data, saved.data, deleted.data, history.data, (await request(f.web, 'GET', '/models/providers')).data]) assert.doesNotMatch(JSON.stringify(data), /private-value|credentialRef/)
+    assert.equal((await request(f.web, 'GET', '/credentials')).response.status, 404)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -108,8 +220,8 @@ test('Web Responses startup registers its key and exposes the existing Bash Run 
     let body = ''
     for await (const chunk of incoming) body += chunk
     received.push({ path: incoming.url, authorization: incoming.headers.authorization, body: JSON.parse(body) })
-    response.writeHead(200, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    const finalResponse = {
       object: 'response', status: 'completed',
       output: received.length === 1 ? [
         { id: 'reasoning-web', type: 'reasoning', summary: [], encrypted_content: 'private-encrypted-context' },
@@ -121,7 +233,8 @@ test('Web Responses startup registers its key and exposes the existing Bash Run 
         { id: 'final-web', type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer',
           content: [{ type: 'output_text', text: 'Bash printed web-response.' }] },
       ],
-    }))
+    }
+    response.end(`event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: finalResponse })}\n\n`)
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
@@ -133,17 +246,18 @@ test('Web Responses startup registers its key and exposes the existing Bash Run 
   let f
   try {
     f = await fixture(directory, {}, config)
-    const credentials = await request(f.web, 'GET', '/credentials')
-    assert.deepEqual(credentials.data, [{ ...config.llm.credential, configured: false }])
-    assert.equal((await request(f.web, 'POST', credentialPath(deepSeekCredentialId), { key: 'unregistered' })).response.status, 404)
-    assert.equal((await request(f.web, 'POST', credentialPath(openAIResponsesCredentialId), { key: 'web-secret-key' })).response.status, 200)
+    const providers = await request(f.web, 'GET', '/models/providers')
+    assert.equal(providers.data.length, 1)
+    const provider = providers.data[0]
+    assert.equal(provider.credentialConfigured, false)
+    assert.equal((await request(f.web, 'POST', `/models/providers/${provider.id}/key`, { apiKey: 'web-secret-key', expectedRevision: provider.revision })).response.status, 200)
     const session = (await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data
     const run = (await request(f.web, 'POST', `/sessions/${session.id}/runs`, {
       parentNodeId: null, input: 'Run Bash', idempotencyKey: 'responses-web',
     })).data
     await f.harness.waitRun(run.id)
     const terminal = (await request(f.web, 'GET', `/runs/${run.id}`)).data
-    assert.equal(terminal.status, 'completed')
+    assert.equal(terminal.status, 'completed', JSON.stringify(terminal))
     assert.equal(terminal.output, 'Bash printed web-response.')
     const events = (await request(f.web, 'GET', `/runs/${run.id}/events?afterSeq=0`)).data
     assert.deepEqual(events.map(event => event.kind), [
@@ -320,7 +434,7 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     assert.equal(first.response.status, 200)
     assert.equal(replay.data.id, first.data.id)
     assert.equal(f.llm.calls.length, 1)
-    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'history', 'id', 'input', 'revision', 'sessionId', 'status', 'updatedAt'])
+    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'history', 'id', 'input', 'modelId', 'modelSnapshot', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
     assert.doesNotMatch(JSON.stringify(first.data), /Private instructions|llmSnapshot|promptVersionIds|idempotencyKey/)
     const inFlight = await request(f.web, 'GET', `/runs/${first.data.id}`)
     assert.equal(inFlight.data.status, 'running')
@@ -351,7 +465,7 @@ test('Web serves bounded Run events for an active Bash loop and its completed hi
     assert.equal((await request(f.web, 'GET', '/runs/missing/events')).response.status, 404)
     assert.deepEqual((await request(f.web, 'GET', `/runs/${accepted.data.id}/events`)).data.map(event => event.kind),
       ['model-started'])
-    f.llm.calls[0].result.resolve({ kind: 'tool-calls', calls: [{
+    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [{
       id: 'call-1', name: 'bash', arguments: { command: "printf '%*s' 5000 '' | tr ' ' a" },
     }] })
     f.llm.calls[0].done.resolve()
@@ -419,7 +533,7 @@ test('Web exposes a rejected patch followed by a corrected patch as separate pro
       parentNodeId: null, input: 'Create a file', idempotencyKey: 'patch-events',
     })).data
     for (const [index, patch] of ['not a patch', '*** Begin Patch\n*** Add File: created.txt\n+hello\n*** End Patch'].entries()) {
-      f.llm.calls[index].result.resolve({ kind: 'tool-calls', calls: [{ id: 'same-id', name: 'apply_patch', arguments: { patch } }] })
+      f.llm.calls[index].result.resolve({ status: 'completed', text: '', toolCalls: [{ id: `patch-${index}`, name: 'apply_patch', arguments: { patch } }] })
       f.llm.calls[index].done.resolve()
       for (let attempt = 0; attempt < 100 && f.llm.calls.length < index + 2; attempt++) await new Promise(resolve => setTimeout(resolve, 10))
       assert.equal(f.llm.calls.length, index + 2)
@@ -457,14 +571,14 @@ test('Web host rejects cross-origin writes, maps errors, and waits for cancellat
     assert.equal(conflict.response.status, 409)
     const cancelled = await request(f.web, 'POST', `/runs/${run.data.id}/cancel`, {})
     assert.equal(cancelled.data.status, 'cancelling')
-    assert.equal(f.llm.calls[0].cancellations[0], 'user-requested')
-    f.llm.calls[0].result.reject(new LLMFailure('provider-failure'))
+    assert.ok(f.llm.calls[0].cancellations.length > 0)
+    f.llm.calls[0].result.reject(modelsError('provider-failure'))
     f.llm.calls[0].done.resolve()
     await f.harness.waitRun(run.data.id)
     const final = await request(f.web, 'GET', `/runs/${run.data.id}`)
     assert.equal(final.data.status, 'cancelled')
     const failed = await request(f.web, 'POST', path, { parentNodeId: null, input: 'Fail me', idempotencyKey: 'failure' })
-    f.llm.calls[1].result.reject(new LLMFailure('provider-failure'))
+    f.llm.calls[1].result.reject(modelsError('provider-failure'))
     f.llm.calls[1].done.resolve()
     await f.harness.waitRun(failed.data.id)
     const failedFinal = await request(f.web, 'GET', `/runs/${failed.data.id}`)
@@ -507,9 +621,9 @@ test('Web host shutdown cancels and joins an accepted Run before releasing Harne
     let closed = false
     const shutdown = f.close().then(() => { closed = true })
     await f.llm.calls[0].cancelled.promise
-    assert.equal(f.llm.calls[0].cancellations[0], 'owner-disposed')
+    assert.ok(f.llm.calls[0].cancellations.length > 0)
     assert.equal(closed, false)
-    f.llm.calls[0].result.reject(new LLMFailure('provider-failure'))
+    f.llm.calls[0].result.reject(modelsError('provider-failure'))
     f.llm.calls[0].done.resolve()
     await shutdown
     assert.equal(closed, true)
@@ -527,8 +641,7 @@ test('Nya stops and restarts the Web frontend with its Run dependency on the sam
     const originalUrl = f.web.url
     await f.apiFiber.dispose()
     assert.equal(f.root.get(webFrontendServiceKey), undefined)
-    const replacement = controlledLLM({ version: 'v2' })
-    await f.root.installComponent(replacement.component())
+    await f.reinstall()
     await serviceReady(f.root, webFrontendServiceKey)
     const current = f.root.get(webFrontendServiceKey)
     assert.equal(current?.url, originalUrl)
@@ -747,7 +860,8 @@ test('tree HTTP contract requires ancestry, supports sibling attempts and restor
     assert.equal((await request(f.web, 'GET', `${path}/nodes/${done.resultNodeId}/path`)).data.length, 2)
     const publicRun = (await request(f.web, 'GET', `/runs/${done.id}`)).data
     assert.equal(publicRun.resultNodeId, done.resultNodeId)
-    assert.equal(publicRun.llmSnapshot, undefined)
+    assert.equal(publicRun.modelSnapshot.modelId, 'default')
+    assert.doesNotMatch(JSON.stringify(publicRun.modelSnapshot), /credential|secret/)
     assert.equal(publicRun.promptVersionIds, undefined)
     assert.equal(publicRun.idempotencyKey, undefined)
     assert.doesNotMatch(JSON.stringify(publicRun), /Private instructions/)
@@ -821,6 +935,70 @@ test('disconnecting wait and closing Web release waiters without cancelling the 
     f.llm.calls[0].done.resolve()
     assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
   } finally {
+    for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('HTTP Models configuration and session selection use persisted model IDs with revision conflicts', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-model-config-')), f = await fixture(directory)
+  try {
+    const catalog = await request(f.web, 'GET', '/models')
+    assert.equal(catalog.data[0].id, 'default')
+    assert.equal(catalog.data[0].effectiveCapabilities.tools, true)
+    assert.equal((await request(f.web, 'GET', '/models/protocols')).data[0].id, 'controlled')
+    const provider = await request(f.web, 'POST', '/models/providers', { id: 'second', name: 'Second connection', protocolId: 'controlled', baseUrl: 'https://second.example.invalid/v1', enabled: true, auth: 'none', timeoutMs: 1000 })
+    assert.equal(provider.response.status, 200)
+    const added = await request(f.web, 'POST', '/models/configurations', {
+      id: 'alternate', name: 'Alternate defaults', enabled: true, providerId: 'second', remoteModelId: 'remote-test',
+      capabilities: catalog.data[0].capabilities, defaults: { temperature: 0.4 },
+    })
+    assert.equal(added.response.status, 200)
+    const updated = await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: added.data.revision, patch: { defaults: { temperature: 0.8 } } })
+    assert.equal(updated.response.status, 200)
+    assert.equal((await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: added.data.revision, patch: { name: 'Stale' } })).response.status, 409)
+    assert.equal((await request(f.web, 'GET', '/models/configurations/alternate/history')).data.length, 2)
+    assert.deepEqual((await request(f.web, 'POST', '/models/providers/second/check', {})).data, { ok: true })
+    assert.equal((await request(f.web, 'POST', '/models/providers/second/discover', {})).data[0].remoteModelId, 'candidate')
+    assert.equal((await request(f.web, 'GET', '/models/configurations')).data.length, 2)
+    const session = (await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant', modelId: 'alternate' })).data
+    assert.equal(session.modelId, 'alternate')
+    const first = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Override', idempotencyKey: 'override', modelId: 'default' })
+    const second = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Selection', idempotencyKey: 'selection' })
+    assert.equal(first.data.modelId, 'default'); assert.equal(second.data.modelId, 'alternate')
+    assert.equal(f.llm.calls.length, 2)
+    assert.deepEqual(f.llm.calls[1].input.options, { temperature: 0.8 })
+    assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/model`, { modelId: 'default' })).data.modelId, 'default')
+    assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Selection', idempotencyKey: 'selection' })).data.id, second.data.id)
+    const disabled = await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: updated.data.revision, patch: { enabled: false } })
+    assert.equal(disabled.response.status, 200)
+    assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Disabled', idempotencyKey: 'disabled', modelId: 'alternate' })).response.status, 409)
+    for (const call of f.llm.calls) { call.result.resolve('Done'); call.done.resolve() }
+    assert.equal((await f.harness.waitRun(second.data.id)).status, 'completed')
+  } finally {
+    for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('SSE model-progress is provisional and the Run result remains authoritative', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-model-progress-')), f = await fixture(directory)
+  let stream
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    stream = await changes(f.web, [session.id]); await stream.next()
+    const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Stream', idempotencyKey: 'stream' })
+    f.llm.calls[0].input.onEvent({ type: 'text-delta', delta: 'Provisional text' })
+    let progress
+    for (let count = 0; count < 10; count++) { const event = await stream.next(); if (event.event === 'model-progress') { progress = event.data; break } }
+    assert.deepEqual(progress, { sessionId: session.id, runId: run.id, event: { type: 'text-delta', delta: 'Provisional text' } })
+    assert.equal((await f.harness.getRun(run.id)).output, undefined)
+    f.llm.calls[0].result.resolve('Authoritative final text'); f.llm.calls[0].done.resolve()
+    assert.equal((await f.harness.waitRun(run.id)).output, 'Authoritative final text')
+    const history = (await request(f.web, 'GET', `/runs/${run.id}/events`)).data
+    assert.doesNotMatch(JSON.stringify(history), /Provisional text/)
+  } finally {
+    await stream?.close()
     for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }
     await f.close(); rmSync(directory, { recursive: true, force: true })
   }

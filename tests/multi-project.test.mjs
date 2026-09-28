@@ -7,13 +7,13 @@ import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createHarness } from '../dist/harness.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { controlledLLM } from './helpers/controlled-llm.mjs'
+import { controlledModels } from './helpers/controlled-models.mjs'
 
-const agents = [{ id: 'assistant', instructions: 'Shared instructions.', modelProfileId: 'default' }]
+const agents = [{ id: 'assistant', instructions: 'Shared instructions.', modelId: 'default' }]
 
 async function host(file) {
   const root = new Context()
-  const llm = controlledLLM()
+  const llm = controlledModels()
   try {
     await root.installComponent(llm.component())
     await root.installComponent(createLocalSqliteComponent(file))
@@ -105,11 +105,11 @@ test('a new process settles an abandoned Run as interrupted without replaying it
     import { Context } from '@nya/core'
     import { createHarness } from './dist/harness.js'
     import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
-    import { controlledLLM } from './tests/helpers/controlled-llm.mjs'
+    import { controlledModels } from './tests/helpers/controlled-models.mjs'
     const root = new Context()
-    await root.installComponent(controlledLLM().component())
+    await root.installComponent(controlledModels().component())
     await root.installComponent(createLocalSqliteComponent(process.argv[1]))
-    const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Shared instructions.', modelProfileId: 'default' }] })
+    const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Shared instructions.', modelId: 'default' }] })
     const project = await harness.openProject(process.cwd())
     const session = await harness.createSession(project.id, 'assistant')
     const run = await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Maybe executed', idempotencyKey: 'original' })

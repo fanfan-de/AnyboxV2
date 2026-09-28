@@ -1,6 +1,6 @@
 # 本地 SQLite 存储组件
 
-状态：提供方安装在应用唯一的 Nya 根上，Prompt、Agent Prompt、Projects 与 Run 状态组件各自登记表迁移；旧 JSON 读取逻辑仅供 Prompt 显式迁入。
+状态：提供方安装在应用唯一的 Nya 根上，Prompt、Agent Prompt、Projects 与 Session 组件各自登记表迁移；旧 JSON 读取逻辑仅供 Prompt 显式迁入。
 
 ## 公开接口
 
@@ -12,6 +12,8 @@
 
 `createLocalSqliteComponent(file)` 返回一个 Nya 组件，由应用安装在唯一的根 Context 上。`apply` 中规范化路径，创建父目录，独占同路径的 `.lock` 目录，打开一个 SQLite 连接，初始化提供方自己的布局，然后提供服务。`harness.close()` 卸载根上的全部组件，因此也等待 SQLite 操作结束、关闭连接并释放锁。提供方只用 `PRAGMA user_version` 标记布局版本，并在 `schema_migrations(domain, version)` 表中记录各领域已应用的迁移版本；无法识别的已有数据库拒绝启动。
 
+本机 Web 另有两个独立 Models 数据库：`models.store` 独占配置、不可变版本和凭据操作日志的 `models.sqlite`；`models.catalog-cache` 独占公开目录的 `models-catalog.sqlite`。三者各有连接和布局，目录缓存不占业务迁移账本，也不要求可替换的 ModelsStore 增加方法。宿主传入配置库和业务库的 `reservedPaths`，目录缓存启动前拒绝同文件、符号链接或硬链接别名。公开缓存初始化失败并释放部分资源后，可报告故障并退回内存；密钥 Vault 没有这种后备策略。关闭依赖于 Nya 的真实注入关系，先等待目录获取与已接纳缓存事务，再释放目录连接。
+
 表结构由领域所有者定义。领域组件在 `apply` 中调用 `migrate(domain, migrations)`，版本在该领域内从 1 连续编号；不同领域互不占用版本号，存储组件和组合根都不需要知道领域表。迁移与其他操作在同一队列中串行执行；每个迁移及其版本记录处于同一事务，失败回滚并使调用方的启动失败，已提交的其他领域不受影响。领域记录的版本高于当前迁移列表时拒绝，以免旧代码误读新结构。跨领域的先后依赖由 Nya `inject` 保证，例如 Agent Prompt 依赖 Prompt，因此在 Prompt 迁移与导入完成后才建立绑定表。
 
 锁由 Effect 持有。第二个提供方占用同一数据库文件时启动失败，错误码为 `occupied`。关闭时先拒绝新操作，等待所有已接受的读、事务与迁移结束，再关闭连接并释放锁。应用根卸载时，Nya 先撤回存储服务并等待消费组件退出，再执行上述清理。异常退出后若遗留 `.lock`，须在确认原进程已退出后手动清理。数据库文件和目录不会在正常卸载时删除。
@@ -20,7 +22,7 @@
 
 Prompt 领域（`prompt`）持有文档、版本和旧 JSON 导入记录表；Agent Prompt 领域（`agent-prompt`）持有绑定表和自己的导入记录。绑定写入先提交 SQLite 事务，再更新该投影；两类写入成功返回时均已提交。可选的旧 JSON 导入由两个组件各自在一个事务内完成并记录来源：Prompt 先导入文档与版本，Agent Prompt 随后导入绑定并校验所引用的版本。若后者失败，重启时只补做未完成的一方，不会重复导入。
 
-Projects 领域（`projects`）登记规范化目录身份表；Run 状态领域（`run-state`）登记 Session 元数据、完整轮次节点、Run、幂等键、Prompt 内容与模型可见配置快照。各领域共用同一数据库。状态组件在一笔事务内接受 Run，并在另一笔事务内同时提交成功终态、结果节点、Run 结果节点引用、执行阶段与终态事件。启动时在事务中把遗留的 `running`、`cancelling` 结算为 `interrupted`；旧调用计划不会重放。Prompt 和 Agent Prompt 仍保留各自的已提交读投影，新 Run 在接受前解析全局绑定，状态事务内重新校验幂等键、同 Session 父节点与完整祖先链；不再限制同会话或同父节点活动 Run 的数量。数据库连接上的短事务串行不等于整个 Run 串行。
+Projects 领域（`projects`）登记规范化目录身份表；Session 组件沿用的迁移领域（`run-state`）登记 Session 元数据、完整轮次节点、Run、幂等键、Prompt 内容与模型可见配置快照。各领域共用同一数据库。Session 组件在一笔事务内接受 Run，并在另一笔事务内同时提交成功终态、结果节点、Run 结果节点引用、执行阶段与终态事件。启动时在事务中把遗留的 `running`、`cancelling` 结算为 `interrupted`；旧调用计划不会重放。Prompt 和 Agent Prompt 仍保留各自的已提交读投影，新 Run 在接受前解析全局绑定，状态事务内重新校验幂等键、同 Session 父节点与完整祖先链；不再限制同会话或同父节点活动 Run 的数量。数据库连接上的短事务串行不等于整个 Run 串行。
 
 
 `run-state` v3 将 `turns_json` 数组按原始索引迁为单链，生成带 Session/数组索引的确定性 `legacy:` 节点 ID，`sourceRunId` 留空。所有旧 Run 的起点标记为 `legacy-unknown`，保留输入、输出、失败、配置快照及事件，不按时间或内容猜关联。v3 迁移及版本记录原子提交，格式错误使整个 v3 回滚；迁移后删除 `turns_json` 列，只保留迁移读取代码。再执行正常的活动 Run 中断恢复，不自动重放。

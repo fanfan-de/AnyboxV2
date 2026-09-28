@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<mxfile host="Electron" agent="Anybox component architecture" modified="2026-09-26T00:00:00.000Z" pages="2">
+<mxfile host="Electron" agent="Anybox component architecture" modified="2026-09-27T00:00:00.000Z" pages="2">
   <diagram id="components" name="01 · 运行组件（13）">
     <mxGraphModel grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="0" page="0" pageScale="1" pageWidth="2660" pageHeight="1410" math="0" shadow="0" dx="2660" dy="1410">
       <root>
@@ -13,19 +13,19 @@
             <mxGeometry height="122" width="270" x="42.0" y="137.75" as="geometry" />
           </mxCell>
         </object>
-        <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#3B61C8;margin-bottom:7px;&quot;&gt;Run&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;harness.runs&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;准入 · 幂等 · 启动与取消&lt;/div&gt;" component_name="harness-runs" source_file="src/run/component.ts" provided_services="harness.runs" kind="component" id="run" inject_services="harness.state, harness.agent-prompts, llm, harness.agent-loop, harness.projects" tooltip="组件：harness-runs&#10;源码：src/run/component.ts&#10;提供：harness.runs&#10;注入：harness.state, harness.agent-prompts, llm, harness.agent-loop, harness.projects">
+        <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#3B61C8;margin-bottom:7px;&quot;&gt;Run&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;harness.runs&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;准入 · 幂等 · 启动与取消&lt;/div&gt;" component_name="harness-runs" source_file="src/run/component.ts" provided_services="harness.runs" kind="component" id="run" inject_services="harness.sessions, harness.session-runs, harness.agent-prompts, llm, harness.agent-loop, harness.projects" tooltip="组件：harness-runs&#10;源码：src/run/component.ts&#10;提供：harness.runs&#10;注入：harness.sessions, harness.session-runs, harness.agent-prompts, llm, harness.agent-loop, harness.projects">
           <mxCell parent="context" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#ECF1FF;strokeColor=#3B61C8;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=16;shadow=0;" vertex="1">
             <mxGeometry height="122" width="270" x="450.33" y="346.67" as="geometry" />
           </mxCell>
         </object>
-        <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#3B61C8;margin-bottom:7px;&quot;&gt;AgentLoop&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;harness.agent-loop&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;模型 / 工具循环 · 在途资源&lt;/div&gt;" component_name="harness-agent-loop" source_file="src/run/agent-loop-component.ts" provided_services="harness.agent-loop" kind="component" id="loop" inject_services="harness.state, llm, tools.bash" tooltip="组件：harness-agent-loop&#10;源码：src/run/agent-loop-component.ts&#10;提供：harness.agent-loop&#10;注入：harness.state, llm, tools.bash">
+        <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#3B61C8;margin-bottom:7px;&quot;&gt;AgentLoop&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;harness.agent-loop&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;模型计划 · 工具循环 · 在途资源&lt;/div&gt;" component_name="harness-agent-loop" source_file="src/run/agent-loop-component.ts" provided_services="harness.agent-loop" kind="component" id="loop" inject_services="harness.session-runs, llm, tools.bash, tools.apply-patch" tooltip="组件：harness-agent-loop&#10;源码：src/run/agent-loop-component.ts&#10;提供：harness.agent-loop&#10;注入：harness.session-runs, llm, tools.bash, tools.apply-patch">
           <mxCell parent="context" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#ECF1FF;strokeColor=#3B61C8;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=16;shadow=0;" vertex="1">
             <mxGeometry height="122" width="313" x="857.75" y="565.0" as="geometry" />
           </mxCell>
         </object>
-        <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#3B61C8;margin-bottom:7px;&quot;&gt;Session&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;harness.sessions&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;会话入口 · 节点与祖先路径&lt;/div&gt;" component_name="harness-sessions" source_file="src/run/session-component.ts" provided_services="harness.sessions" kind="component" id="session" inject_services="harness.state, harness.projects" tooltip="组件：harness-sessions&#10;源码：src/run/session-component.ts&#10;提供：harness.sessions&#10;注入：harness.state, harness.projects">
+        <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#3B61C8;margin-bottom:7px;&quot;&gt;Session&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;harness.sessions · harness.session-runs&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;会话 · Nodes · Runs · Events&lt;/div&gt;" component_name="harness-sessions" source_file="src/session/component.ts" provided_services="harness.sessions, harness.session-runs" kind="component" id="session" inject_services="local-storage, harness.projects" tooltip="组件：harness-sessions&#10;源码：src/session/component.ts&#10;提供：harness.sessions, harness.session-runs&#10;注入：local-storage, harness.projects">
           <mxCell parent="context" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#ECF1FF;strokeColor=#3B61C8;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=16;shadow=0;" vertex="1">
-            <mxGeometry height="122" width="289" x="870.0" y="235.0" as="geometry" />
+            <mxGeometry height="122" width="320" x="870.0" y="235.0" as="geometry" />
           </mxCell>
         </object>
         <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#805BB2;margin-bottom:7px;&quot;&gt;Agent Prompt&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;harness.agent-prompts&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;版本绑定 · Run Prompt 快照&lt;/div&gt;" component_name="harness-agent-prompts" source_file="src/agent/prompt-binding-component.ts" provided_services="harness.agent-prompts" kind="component" id="agentPrompt" inject_services="harness.prompts, local-storage" tooltip="组件：harness-agent-prompts&#10;源码：src/agent/prompt-binding-component.ts&#10;提供：harness.agent-prompts&#10;注入：harness.prompts, local-storage">
@@ -58,8 +58,8 @@
             <mxGeometry height="122" width="322" x="407.0" y="92.0" as="geometry" />
           </mxCell>
         </object>
-        <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#52677F;margin-bottom:7px;&quot;&gt;SQLite State&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;harness.state&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;Sessions · Nodes · Runs · Events&lt;/div&gt;" component_name="harness-sqlite-state" source_file="src/run/sqlite-state.ts" provided_services="harness.state" kind="component" id="state" inject_services="local-storage, harness.projects" tooltip="组件：harness-sqlite-state&#10;源码：src/run/sqlite-state.ts&#10;提供：harness.state&#10;注入：local-storage, harness.projects">
-          <mxCell parent="context" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#EDF2F7;strokeColor=#52677F;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=16;shadow=0;" vertex="1">
+        <object label="&lt;div style=&quot;font-size:18px;font-weight:700;color:#24776F;margin-bottom:7px;&quot;&gt;Apply Patch&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#5A6A7D;line-height:1.5;&quot;&gt;tools.apply-patch&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#273A50;margin-top:8px;&quot;&gt;预检 · 串行提交 · 临时资源&lt;/div&gt;" component_name="apply-patch-tool" source_file="src/tool/apply-patch-component.ts" provided_services="tools.apply-patch" kind="component" id="patch" inject_services="harness.projects" tooltip="组件：apply-patch-tool&#10;源码：src/tool/apply-patch-component.ts&#10;提供：tools.apply-patch&#10;注入：harness.projects">
+          <mxCell parent="context" style="rounded=1;arcSize=10;whiteSpace=wrap;html=1;fillColor=#E8F4F2;strokeColor=#24776F;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=16;shadow=0;" vertex="1">
             <mxGeometry height="122" width="330" x="1280.6" y="378.0" as="geometry" />
           </mxCell>
         </object>
@@ -135,12 +135,11 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="run-state" edge="1" parent="context" source="run" style="rounded=0;html=1;endArrow=block;endFill=1;endSize=7;strokeWidth=1.35;strokeColor=#52677F;jumpStyle=arc;jumpSize=7;exitX=1;exitY=0.3333;entryX=0;entryY=0.5;edgeStyle=orthogonalEdgeStyle;" target="state">
+        <mxCell id="run-session" edge="1" parent="context" source="run" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=1.35;strokeColor=#3B61C8;jumpStyle=arc;jumpSize=7;" target="session">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="775.0" y="387.33" />
-              <mxPoint x="775.0" y="439.0" />
-              <mxPoint x="1003.0" y="439.0" />
+              <mxPoint x="800" y="385" />
+              <mxPoint x="800" y="326" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -177,11 +176,11 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="loop-state" edge="1" parent="context" source="loop" style="rounded=0;html=1;endArrow=block;endFill=1;endSize=7;strokeWidth=1.35;strokeColor=#52677F;jumpStyle=arc;jumpSize=7;exitX=1;exitY=0.25;entryX=0;entryY=0.75;edgeStyle=orthogonalEdgeStyle;" target="state">
+        <mxCell id="loop-session" edge="1" parent="context" source="loop" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=1.35;strokeColor=#3B61C8;jumpStyle=arc;jumpSize=7;" target="session">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="1198.0" y="595.5" />
-              <mxPoint x="1198.0" y="469.5" />
+              <mxPoint x="1215" y="591" />
+              <mxPoint x="1215" y="325" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -197,14 +196,6 @@
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="1241.13" y="626.0" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="session-state" edge="1" parent="context" source="session" style="rounded=0;html=1;endArrow=block;endFill=1;endSize=7;strokeWidth=1.35;strokeColor=#52677F;jumpStyle=arc;jumpSize=7;exitX=1;exitY=0.6666;entryX=0;entryY=0.25;edgeStyle=orthogonalEdgeStyle;" target="state">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="1198.0" y="316.33000000000004" />
-              <mxPoint x="1198.0" y="408.5" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -258,18 +249,11 @@
             </Array>
           </mxGeometry>
         </mxCell>
-        <mxCell id="state-storage" edge="1" parent="context" source="state" style="rounded=0;html=1;endArrow=block;endFill=1;endSize=7;strokeWidth=1.35;strokeColor=#52677F;jumpStyle=arc;jumpSize=7;exitX=1;exitY=0.6666;entryX=0;entryY=0.4;edgeStyle=orthogonalEdgeStyle;" target="storage">
+        <mxCell id="patch-project" edge="1" parent="context" source="patch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=1.35;strokeColor=#3B61C8;jumpStyle=arc;jumpSize=7;" target="project">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
-              <mxPoint x="1911.5" y="459.33" />
-            </Array>
-          </mxGeometry>
-        </mxCell>
-        <mxCell id="state-project" edge="1" parent="context" source="state" style="rounded=0;html=1;endArrow=block;endFill=1;endSize=7;strokeWidth=1.35;strokeColor=#52677F;jumpStyle=arc;jumpSize=7;exitX=1;exitY=0.3334;entryX=0;entryY=0.6666;edgeStyle=orthogonalEdgeStyle;" target="project">
-          <mxGeometry relative="1" as="geometry">
-            <Array as="points">
-              <mxPoint x="1632.0" y="418.67" />
-              <mxPoint x="1632.0" y="387.33" />
+              <mxPoint x="1642" y="420" />
+              <mxPoint x="1642" y="387" />
             </Array>
           </mxGeometry>
         </mxCell>
@@ -299,69 +283,70 @@
         <mxCell id="scope" value="装配入口：src/web/serve.ts + src/harness.ts。AgentDefinition、Harness 门面和 api-key-manager 包不另计组件；文件与系统凭据库是组件持有的资源。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=15;fontColor=#56677A;fontStyle=0;spacing=0;">
           <mxGeometry as="geometry" x="52" y="1350" width="2500" height="24" />
         </mxCell>
-        <mxCell id="snapshot" value="2026-09-26 · 根据当前工作区源码核对 · 节点属性含组件名、源码路径、服务与完整依赖 · 其他实现见第 2 页" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=13;fontColor=#7A8797;fontStyle=0;spacing=0;">
+        <mxCell id="snapshot" value="2026-09-27 · 根据当前工作区源码核对 · 节点属性含组件名、源码路径、服务与完整依赖 · 其他实现见第 2 页" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=13;fontColor=#7A8797;fontStyle=0;spacing=0;">
           <mxGeometry as="geometry" x="52" y="1382" width="2500" height="20" />
+        </mxCell>
+        <mxCell id="session-storage" edge="1" parent="context" source="session" target="storage" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=1.35;strokeColor=#3B61C8;jumpStyle=arc;jumpSize=7;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1220" y="265" />
+              <mxPoint x="2160" y="265" />
+              <mxPoint x="2160" y="471" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="loop-patch" edge="1" parent="context" source="loop" target="patch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=1.35;strokeColor=#3B61C8;jumpStyle=arc;jumpSize=7;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1235" y="603" />
+              <mxPoint x="1235" y="449" />
+            </Array>
+          </mxGeometry>
         </mxCell>
       </root>
     </mxGraphModel>
   </diagram>
-  <diagram id="alternatives" name="02 · 替代实现与 H0（4）">
-    <mxGraphModel dx="1600" dy="1190" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1600" pageHeight="1190" background="#FFFFFF" math="0" shadow="0">
+  <diagram id="alternatives" name="02 · 替代实现与 H0（2）">
+    <mxGraphModel dx="1600" dy="800" grid="1" gridSize="10" page="1" pageScale="1" pageWidth="1600" pageHeight="800" background="#FFFFFF" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
         <mxCell id="title" value="可替换实现与验证组件" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=32;fontColor=#1A2D43;fontStyle=1;spacing=0;">
           <mxGeometry as="geometry" x="50" y="34" width="1400" height="50" />
         </mxCell>
-        <mxCell id="subtitle" value="以下 4 个组件均已有实现；当前默认 Web 宿主未安装。每个卡片仍只代表一个 Nya 组件。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=18;fontColor=#56677A;fontStyle=0;spacing=0;">
+        <mxCell id="subtitle" value="以下 2 个组件均已有实现；当前默认 Web 宿主未安装。每个卡片仍只代表一个 Nya 组件。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=18;fontColor=#56677A;fontStyle=0;spacing=0;">
           <mxGeometry as="geometry" x="52" y="93" width="1490" height="30" />
         </mxCell>
-        <mxCell id="credential-heading" value="凭据实现  ·  与首页 API Key 服务三选一" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=22;fontColor=#A96C1E;fontStyle=1;spacing=0;">
-          <mxGeometry as="geometry" x="52" y="155" width="1450" height="36" />
-        </mxCell>
-        <mxCell id="credential-note" value="两个替代组件均不提供 credentials.settings；当前 Web 组件依赖该服务，不能直接用它们替换后照常启动 Web。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=16;fontColor=#56677A;fontStyle=0;spacing=0;">
-          <mxGeometry as="geometry" x="52" y="204" width="1490" height="32" />
-        </mxCell>
-        <object id="system-keyring" label="&lt;div style=&quot;font-size:22px;font-weight:700;color:#A96C1E;margin-bottom:8px;&quot;&gt;系统凭据库组件&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#627185;&quot;&gt;system-keyring&lt;/div&gt;&lt;div style=&quot;font-size:15px;line-height:1.8;color:#273A50;margin-top:14px;&quot;&gt;提供：credentials.read · credentials.manage&lt;br&gt;注入：无&lt;br&gt;系统凭据库读 / 写 / 删；通用实现位于 api-key-manager。&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#627185;margin-top:15px;&quot;&gt;src/credentials/system-keyring.ts&lt;/div&gt;" kind="component" component_name="system-keyring" source_file="src/credentials/system-keyring.ts" provided_services="credentials.read · credentials.manage" inject_services="无">
-          <mxCell parent="1" vertex="1" style="rounded=1;arcSize=7;whiteSpace=wrap;html=1;fillColor=#FFF4DF;strokeColor=#A96C1E;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=24;shadow=0;">
-            <mxGeometry as="geometry" x="52" y="264" width="720" height="230" />
-          </mxCell>
-        </object>
-        <object id="external-source" label="&lt;div style=&quot;font-size:22px;font-weight:700;color:#A96C1E;margin-bottom:8px;&quot;&gt;外部凭据来源组件&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#627185;&quot;&gt;external-credential-source&lt;/div&gt;&lt;div style=&quot;font-size:15px;line-height:1.8;color:#273A50;margin-top:14px;&quot;&gt;提供：credentials.read&lt;br&gt;注入：无&lt;br&gt;接入部署方提供的读取函数；不落盘，不缓存密钥。&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#627185;margin-top:15px;&quot;&gt;src/credentials/external-source.ts&lt;/div&gt;" kind="component" component_name="external-credential-source" source_file="src/credentials/external-source.ts" provided_services="credentials.read" inject_services="无">
-          <mxCell parent="1" vertex="1" style="rounded=1;arcSize=7;whiteSpace=wrap;html=1;fillColor=#FFF4DF;strokeColor=#A96C1E;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=24;shadow=0;">
-            <mxGeometry as="geometry" x="822" y="264" width="720" height="230" />
-          </mxCell>
-        </object>
         <mxCell id="llm-heading" value="模型 API  ·  与首页 DeepSeek 二选一" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=21;fontColor=#A96C1E;fontStyle=1;spacing=0;">
-          <mxGeometry as="geometry" x="52" y="548" width="740" height="36" />
+          <mxGeometry as="geometry" x="52" y="154" width="740" height="36" />
         </mxCell>
         <mxCell id="probe-heading" value="H0 探针  ·  仅资源归属验证" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=21;fontColor=#52677F;fontStyle=1;spacing=0;">
-          <mxGeometry as="geometry" x="822" y="548" width="740" height="36" />
+          <mxGeometry as="geometry" x="822" y="154" width="740" height="36" />
         </mxCell>
-        <object id="openai" label="&lt;div style=&quot;font-size:22px;font-weight:700;color:#A96C1E;margin-bottom:8px;&quot;&gt;OpenAI Responses&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#627185;&quot;&gt;openai-responses&lt;/div&gt;&lt;div style=&quot;font-size:15px;line-height:1.8;color:#273A50;margin-top:14px;&quot;&gt;提供：llm&lt;br&gt;注入：credentials.read&lt;br&gt;原生 Responses 协议；当前仅纯文本，不支持工具。&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#627185;margin-top:15px;&quot;&gt;src/llm/openai-responses/component.ts&lt;/div&gt;" kind="component" component_name="openai-responses" source_file="src/llm/openai-responses/component.ts" provided_services="llm" inject_services="credentials.read">
+        <object id="openai" label="&lt;div style=&quot;font-size:22px;font-weight:700;color:#A96C1E;margin-bottom:8px;&quot;&gt;OpenAI Responses&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#627185;&quot;&gt;openai-responses&lt;/div&gt;&lt;div style=&quot;font-size:15px;line-height:1.8;color:#273A50;margin-top:14px;&quot;&gt;提供：llm&lt;br&gt;注入：credentials.read&lt;br&gt;原生 Responses 协议；支持非流式文本与工具循环。&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#627185;margin-top:15px;&quot;&gt;src/llm/openai-responses/component.ts&lt;/div&gt;" kind="component" component_name="openai-responses" source_file="src/llm/openai-responses/component.ts" provided_services="llm" inject_services="credentials.read">
           <mxCell parent="1" vertex="1" style="rounded=1;arcSize=7;whiteSpace=wrap;html=1;fillColor=#FFF4DF;strokeColor=#A96C1E;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=24;shadow=0;">
-            <mxGeometry as="geometry" x="52" y="604" width="720" height="245" />
+            <mxGeometry as="geometry" x="52" y="210" width="720" height="245" />
           </mxCell>
         </object>
         <object id="h0" label="&lt;div style=&quot;font-size:22px;font-weight:700;color:#52677F;margin-bottom:8px;&quot;&gt;H0 Resource Probe&lt;/div&gt;&lt;div style=&quot;font-size:13px;color:#627185;&quot;&gt;h0-resource-probe&lt;/div&gt;&lt;div style=&quot;font-size:15px;line-height:1.8;color:#273A50;margin-top:14px;&quot;&gt;提供：h0.runs&lt;br&gt;注入：h0.model（由测试宿主提供）&lt;br&gt;验证在途调用的取消与 done 清理等待。&lt;/div&gt;&lt;div style=&quot;font-size:12px;color:#627185;margin-top:15px;&quot;&gt;src/resource-probe.ts&lt;/div&gt;" kind="component" component_name="h0-resource-probe" source_file="src/resource-probe.ts" provided_services="h0.runs" inject_services="h0.model（由测试宿主提供）">
           <mxCell parent="1" vertex="1" style="rounded=1;arcSize=7;whiteSpace=wrap;html=1;fillColor=#EDF2F7;strokeColor=#52677F;strokeWidth=1.3;fontFamily=Helvetica;align=left;verticalAlign=middle;spacing=24;shadow=0;">
-            <mxGeometry as="geometry" x="822" y="604" width="720" height="245" />
+            <mxGeometry as="geometry" x="822" y="210" width="720" height="245" />
           </mxCell>
         </object>
         <mxCell id="model-note" value="模型组件只经 llm 服务契约供 Run / AgentLoop 使用。&lt;br&gt;原生协议、HTTP、密钥、超时与取消由所选模型组件拥有。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=16;fontColor=#56677A;fontStyle=0;spacing=0;">
-          <mxGeometry as="geometry" x="52" y="875" width="730" height="64" />
+          <mxGeometry as="geometry" x="52" y="481" width="730" height="64" />
         </mxCell>
         <mxCell id="probe-note" value="H0 使用独立的 h0.* 服务名。&lt;br&gt;不连接首页生产组件，不作为当前 Run 链路的一部分。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=16;fontColor=#56677A;fontStyle=0;spacing=0;">
-          <mxGeometry as="geometry" x="822" y="875" width="730" height="64" />
+          <mxGeometry as="geometry" x="822" y="481" width="730" height="64" />
         </mxCell>
-        <mxCell id="summary" value="范围：13 个默认运行组件 + 3 个替代组件 + 1 个 H0 验证组件 = 17 个已有组件实现。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=21;fontColor=#1A2D43;fontStyle=1;spacing=0;">
-          <mxGeometry as="geometry" x="52" y="1002" width="1500" height="40" />
+        <mxCell id="summary" value="图中：13 个默认运行组件 + 1 个替代组件 + 1 个 H0 验证组件 = 15 个组件。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=21;fontColor=#1A2D43;fontStyle=1;spacing=0;">
+          <mxGeometry as="geometry" x="52" y="608" width="1500" height="40" />
         </mxCell>
         <mxCell id="exclusion" value="不额外绘制 AgentDefinition、createHarness、packages/api-key-manager 或测试 mock：它们不是这里的独立应用组件。" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=16;fontColor=#56677A;fontStyle=0;spacing=0;">
-          <mxGeometry as="geometry" x="52" y="1063" width="1490" height="35" />
+          <mxGeometry as="geometry" x="52" y="669" width="1490" height="35" />
         </mxCell>
-        <mxCell id="date" value="2026-09-26 · 所有卡片均可在 draw.io 中独立编辑 · 具体服务注入关系以节点属性及源码为准" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=13;fontColor=#7A8797;fontStyle=0;spacing=0;">
-          <mxGeometry as="geometry" x="52" y="1122" width="1490" height="25" />
+        <mxCell id="date" value="2026-09-27 · 所有卡片均可在 draw.io 中独立编辑 · 具体服务注入关系以节点属性及源码为准" parent="1" vertex="1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Helvetica;fontSize=13;fontColor=#7A8797;fontStyle=0;spacing=0;">
+          <mxGeometry as="geometry" x="52" y="728" width="1490" height="25" />
         </mxCell>
       </root>
     </mxGraphModel>

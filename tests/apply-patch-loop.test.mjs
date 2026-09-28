@@ -1,3 +1,5 @@
+import { createSessionComponent } from '../dist/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,18 +10,17 @@ import { createHarness } from '../dist/harness.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
-import { createSqliteStateComponent, stateServiceKey } from '../dist/run/sqlite-state.js'
 import { applyPatchServiceKey } from '../dist/tool/apply-patch-component.js'
-import { controlledLLM, deferred } from './helpers/controlled-llm.mjs'
+import { controlledModels, modelSnapshot, deferred } from './helpers/controlled-models.mjs'
 
-const agents = [{ id: 'assistant', instructions: 'Use the available tools.', modelProfileId: 'default' }]
+const agents = [{ id: 'assistant', instructions: 'Use the available tools.', modelId: 'default' }]
 const patch = (id, text) => ({ id, name: 'apply_patch', arguments: { patch: text } })
 const bash = (id, command) => ({ id, name: 'bash', arguments: { command } })
 const add = (path, content) => `*** Begin Patch\n*** Add File: ${path}\n+${content}\n*** End Patch`
 
 async function fixture(t) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-patch-loop-')))
-  const root = new Context(), llm = controlledLLM()
+  const root = new Context(), llm = controlledModels()
   await root.installComponent(llm.component())
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   const harness = await createHarness(root, { agents })
@@ -48,19 +49,19 @@ function start(f) {
 test('Bash, Apply Patch and Bash share one ordered batch and native tool observations', async t => {
   const f = await fixture(t), run = await start(f)
   assert.deepEqual(f.llm.calls[0].input.tools.map(tool => tool.name), ['bash', 'apply_patch'])
-  answer(f.llm.calls[0], { kind: 'tool-calls', calls: [
+  answer(f.llm.calls[0], { status: 'completed', text: '', toolCalls: [
     bash('before', 'printf old > source.txt'),
     patch('edit', '*** Begin Patch\n*** Update File: source.txt\n@@\n-old\n+new\n*** End Patch'),
     bash('after', 'cat source.txt'),
   ] })
   await until(() => f.llm.calls.length === 2)
   const observations = f.llm.calls[1].input.messages.filter(message => message.role === 'tool')
-  assert.deepEqual(observations.map(message => message.toolCallId), ['before', 'edit', 'after'])
+  assert.deepEqual(observations.map(message => message.callId), ['before', 'edit', 'after'])
   assert.equal(JSON.parse(observations[1].content).status, 'applied')
   assert.equal(JSON.parse(observations[2].content).stdout, 'new')
   answer(f.llm.calls[1], 'Updated and checked.')
   assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
-  assert.equal((await f.root.get(stateServiceKey).getRunExecution(run.id)).toolCalls, 3)
+  assert.equal((await f.root.get(sessionRunServiceKey).getRunExecution(run.id)).toolCalls, 3)
   const events = await f.harness.getRunEvents(run.id)
   assert.deepEqual(events.filter(event => event.kind === 'tool-observed').map(event => event.name), ['bash', 'apply_patch', 'bash'])
   const stored = await f.root.get(localStorageServiceKey).read(reader => reader.all('SELECT payload_json FROM harness_run_events'))
@@ -69,13 +70,13 @@ test('Bash, Apply Patch and Bash share one ordered batch and native tool observa
 
 test('invalid patch text is returned to the model and a corrected patch can succeed', async t => {
   const f = await fixture(t), run = await start(f)
-  answer(f.llm.calls[0], { kind: 'tool-calls', calls: [patch('bad', 'not a patch')] })
+  answer(f.llm.calls[0], { status: 'completed', text: '', toolCalls: [patch('bad', 'not a patch')] })
   await until(() => f.llm.calls.length === 2)
   const rejected = JSON.parse(f.llm.calls[1].input.messages.at(-1).content)
   assert.equal(rejected.status, 'rejected')
   assert.deepEqual(rejected.changes, [])
   assert.ok(rejected.diagnostic.message)
-  answer(f.llm.calls[1], { kind: 'tool-calls', calls: [patch('good', add('fixed.txt', 'fixed'))] })
+  answer(f.llm.calls[1], { status: 'completed', text: '', toolCalls: [patch('good', add('fixed.txt', 'fixed'))] })
   await until(() => f.llm.calls.length === 3)
   answer(f.llm.calls[2], 'Fixed.')
   assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
@@ -84,7 +85,7 @@ test('invalid patch text is returned to the model and a corrected patch can succ
 
 test('a malformed argument envelope prevents every tool in a mixed batch', async t => {
   const f = await fixture(t), run = await start(f)
-  answer(f.llm.calls[0], { kind: 'tool-calls', calls: [
+  answer(f.llm.calls[0], { status: 'completed', text: '', toolCalls: [
     patch('valid', add('untouched.txt', 'must not exist')),
     { id: 'bad', name: 'apply_patch', arguments: { patch: 42 } },
     bash('also-valid', 'touch bash-marker'),
@@ -104,7 +105,7 @@ for (const cleanupFailure of [false, true]) {
       return { result: result.promise, done: done.promise, cancel: reason => cancelled.resolve(reason) }
     }
     const run = await start(f)
-    answer(f.llm.calls[0], { kind: 'tool-calls', calls: [patch('edit', add('written.txt', 'written'))] })
+    answer(f.llm.calls[0], { status: 'completed', text: '', toolCalls: [patch('edit', add('written.txt', 'written'))] })
     await entered.promise
     const waiting = f.harness.waitRun(run.id)
     let finished = false
@@ -132,8 +133,8 @@ async function stateHost(directory) {
   const root = new Context(), inputs = { now: () => 'now', newId: () => 'project' }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createProjectComponent(inputs))
-  await root.installComponent(createSqliteStateComponent(inputs))
-  return { root, state: root.get(stateServiceKey), db: root.get(localStorageServiceKey), projects: root.get(projectServiceKey) }
+  await root.installComponent(createSessionComponent(inputs, agents))
+  return { root, records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey), db: root.get(localStorageServiceKey), projects: root.get(projectServiceKey) }
 }
 
 test('old Bash JSON reads as tool events without rewriting completed history or changing cursors', async t => {
@@ -142,13 +143,13 @@ test('old Bash JSON reads as tool events without rewriting completed history or 
   let second
   t.after(async () => { await second?.root.fiber.dispose(); await first.root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) })
   const project = await first.projects.openProject(directory)
-  const session = await first.state.createSession('session', project.id, 'assistant', 'old')
-  const plan = { snapshot: { profileId: 'default', configVersion: 'v1' } }
+  const session = await first.sessions.createSession(project.id, 'assistant')
+  const plan = modelSnapshot()
   for (const id of ['completed', 'in-flight', 'failed']) {
-    await first.state.acceptRun(id, { sessionId: session.id, parentNodeId: null, input: id, idempotencyKey: id }, 'old', [], plan)
+    await first.records.registerRun(id, { sessionId: session.id, parentNodeId: null, input: id, idempotencyKey: id }, 'old', [], plan)
   }
-  await first.state.settleRun('completed', { kind: 'completed', output: 'saved' }, 'old')
-  await first.state.settleRun('failed', { kind: 'failed', error: 'old failure', category: 'tool-timeout' }, 'old')
+  await first.records.settleRun('completed', { kind: 'completed', output: 'saved' }, 'old')
+  await first.records.settleRun('failed', { kind: 'failed', error: 'old failure', category: 'tool-timeout' }, 'old')
   const call = bash('legacy-call', 'printf old')
   const legacyResult = { exitCode: 0, signal: null, stdout: 'old', stderr: '', truncated: false }
   const completedEvents = [
@@ -174,16 +175,16 @@ test('old Bash JSON reads as tool events without rewriting completed history or 
   const legacyBytes = await first.db.read(reader => reader.get('SELECT execution_json FROM harness_runs WHERE id = ?', ['completed']).execution_json)
   await first.root.fiber.dispose()
   second = await stateHost(directory)
-  assert.equal((await second.state.getRunExecution('completed')).toolCalls, 1)
-  const events = await second.state.getRunEvents('completed', 3)
+  assert.equal((await second.records.getRunExecution('completed')).toolCalls, 1)
+  const events = await second.sessions.getRunEvents('completed', 3)
   assert.deepEqual(events.map(event => [event.seq, event.kind, event.at]), [[4, 'tool-observed', 'old'], [5, 'model-started', 'old'], [6, 'terminal', 'old']])
   assert.equal(events[0].name, 'bash')
   assert.deepEqual(events[0].result, legacyResult)
   assert.equal(await second.db.read(reader => reader.get('SELECT execution_json FROM harness_runs WHERE id = ?', ['completed']).execution_json), legacyBytes)
-  const oldFailure = (await second.state.getRunEvents('failed', 3))[0]
+  const oldFailure = (await second.sessions.getRunEvents('failed', 3))[0]
   assert.deepEqual(oldFailure, { kind: 'tool-failed', name: 'bash', requestId: call.id, category: 'tool-timeout', seq: 4, at: 'old' })
-  assert.equal((await second.state.getRun('in-flight')).status, 'interrupted')
-  assert.equal((await second.state.getRunEvents('in-flight')).at(-1).seq, 4)
+  assert.equal((await second.records.getRun('in-flight')).status, 'interrupted')
+  assert.equal((await second.sessions.getRunEvents('in-flight')).at(-1).seq, 4)
 })
 
 test('an in-flight Apply Patch intent is interrupted on restart without replaying files', async t => {
@@ -192,17 +193,17 @@ test('an in-flight Apply Patch intent is interrupted on restart without replayin
   let second
   t.after(async () => { await second?.root.fiber.dispose(); await first.root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) })
   const project = await first.projects.openProject(directory)
-  const session = await first.state.createSession('s', project.id, 'assistant', 'old')
-  await first.state.acceptRun('r', { sessionId: session.id, parentNodeId: null, input: 'edit', idempotencyKey: 'one' }, 'old', [],
-    { snapshot: { profileId: 'default', configVersion: 'v1' } })
+  const session = await first.sessions.createSession(project.id, 'assistant')
+  await first.records.registerRun('r', { sessionId: session.id, parentNodeId: null, input: 'edit', idempotencyKey: 'one' }, 'old', [],
+    modelSnapshot())
   const call = patch('patch', add('marker', 'would overwrite'))
-  await first.state.recordRunEvent('r', { kind: 'model-started' }, 'old')
-  await first.state.recordRunEvent('r', { kind: 'model-tool-calls', calls: [call] }, 'old')
-  await first.state.recordRunEvent('r', { kind: 'tool-started', call }, 'old')
+  await first.records.recordRunEvent('r', { kind: 'model-started' }, 'old')
+  await first.records.recordRunEvent('r', { kind: 'model-tool-calls', calls: [call] }, 'old')
+  await first.records.recordRunEvent('r', { kind: 'tool-started', call }, 'old')
   writeFileSync(join(directory, 'marker'), 'already written')
   await first.root.fiber.dispose()
   second = await stateHost(directory)
-  assert.equal((await second.state.getRun('r')).status, 'interrupted')
+  assert.equal((await second.records.getRun('r')).status, 'interrupted')
   assert.equal(readFileSync(join(directory, 'marker'), 'utf8'), 'already written')
-  assert.deepEqual((await second.state.getRunEvents('r')).map(event => event.kind), ['model-started', 'model-tool-calls', 'tool-started', 'interrupted'])
+  assert.deepEqual((await second.sessions.getRunEvents('r')).map(event => event.kind), ['model-started', 'model-tool-calls', 'tool-started', 'interrupted'])
 })

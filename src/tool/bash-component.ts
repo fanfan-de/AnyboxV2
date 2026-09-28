@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import type { Component } from '@nya/core'
 import type { OwnedCall } from '../contracts.js'
-import type { LLMToolDefinition } from '../llm/port.js'
+import type { ToolDefinition } from '@anybox/models'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 
@@ -17,11 +17,11 @@ export interface BashResult {
 }
 
 export interface BashPort {
-  readonly definition: LLMToolDefinition
+  readonly definition: ToolDefinition
   execute(input: { readonly projectId: string; readonly command: string }): OwnedCall<BashResult>
 }
 
-export const bashToolDefinition: LLMToolDefinition = Object.freeze({
+export const bashToolDefinition: ToolDefinition = Object.freeze({
   name: 'bash',
   description: 'Run a Bash command in the current project directory. The command has the application user\'s filesystem and network access.',
   parameters: Object.freeze({

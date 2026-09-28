@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { Context, FiberState } from '@nya/core'
 import type { Fiber } from '@nya/core'
+import { modelsServiceKey, modelsError } from '@anybox/models'
+import type { ModelsService } from '@anybox/models'
 import type { RuntimeInputs } from './contracts.js'
 import { validateAgents } from './agent/domain.js'
 import type { AgentDefinition } from './agent/domain.js'
@@ -9,9 +11,9 @@ import type { AgentPromptPort } from './agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from './run/component.js'
 import type { RunPort } from './run/component.js'
 import { createAgentLoopComponent } from './run/agent-loop-component.js'
-import { createSqliteStateComponent } from './run/sqlite-state.js'
-import { createSessionComponent, sessionServiceKey } from './run/session-component.js'
-import type { SessionPort } from './run/session-component.js'
+import { createSessionComponent } from './session/component.js'
+import { sessionServiceKey } from './session/port.js'
+import type { SessionPort } from './session/port.js'
 import { createPromptComponent, promptServiceKey } from './prompt/component.js'
 import type { PromptPort } from './prompt/component.js'
 import { createProjectComponent, projectServiceKey } from './project/component.js'
@@ -19,7 +21,7 @@ import type { ProjectPort } from './project/component.js'
 import { createBashComponent } from './tool/bash-component.js'
 import { createApplyPatchComponent } from './tool/apply-patch-component.js'
 
-/** The application root must provide the LLM API and local storage services before the Harness starts. */
+/** The application root must provide Models and local storage services before the Harness starts. */
 export interface HarnessOptions extends Partial<RuntimeInputs> {
   readonly agents: readonly AgentDefinition[]
   /** Optional one-time import of the previous Prompt JSON store. The source is left untouched. */
@@ -59,6 +61,12 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     shutdown = context.fiber.dispose()
     return shutdown
   }
+  const validateSelectedModel = (modelId: string): void => {
+    if (closing) throw new Error('harness is closing')
+    const models = context.get<ModelsService>(modelsServiceKey)
+    if (!models) throw modelsError('unavailable')
+    if (!models.get(modelId)) throw modelsError('not-found')
+  }
   const current = (): RunPort => {
     if (closing) throw new Error('harness is closing')
     const service = context.get<RunPort>(runServiceKey)
@@ -96,7 +104,6 @@ export async function createHarness(context: Context, options: HarnessOptions): 
       createProjectComponent(inputs),
       createBashComponent(),
       createApplyPatchComponent(),
-      createSqliteStateComponent(inputs),
       createSessionComponent(inputs, agents),
       createPromptComponent(inputs, options.legacyPromptStorePath),
       createAgentPromptComponent(inputs, agents, options.canManageAgent ?? (() => true), options.legacyPromptStorePath),
@@ -121,17 +128,24 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     openProject: path => currentProjects().openProject(path),
     listProjects: () => currentProjects().listProjects(),
     getProject: id => currentProjects().getProject(id),
-    createSession: (projectId, agentId) => currentSessions().createSession(projectId, agentId),
+    createSession: (projectId, agentId, modelId) => {
+      if (modelId !== undefined) validateSelectedModel(modelId)
+      return currentSessions().createSession(projectId, agentId, modelId)
+    },
+    selectSessionModel: (sessionId, modelId) => {
+      validateSelectedModel(modelId)
+      return currentSessions().selectSessionModel(sessionId, modelId)
+    },
     getSession: id => currentSessions().getSession(id),
     getNode: (sessionId, id) => currentSessions().getNode(sessionId, id),
     getNodePath: (sessionId, id) => currentSessions().getNodePath(sessionId, id),
     listNodes: (sessionId, parentId, query) => currentSessions().listNodes(sessionId, parentId, query),
     listSessions: id => currentSessions().listSessions(id),
     startRun: input => current().startRun(input),
-    getRun: id => current().getRun(id),
-    getRunByKey: (id, key) => current().getRunByKey(id, key),
-    listRuns: (id, query) => current().listRuns(id, query),
-    getRunEvents: (id, afterSeq) => current().getRunEvents(id, afterSeq),
+    getRun: id => currentSessions().getRun(id),
+    getRunByKey: (id, key) => currentSessions().getRunByKey(id, key),
+    listRuns: (id, query) => currentSessions().listRuns(id, query),
+    getRunEvents: (id, afterSeq) => currentSessions().getRunEvents(id, afterSeq),
     cancelRun: id => current().cancelRun(id),
     waitRun: (id, signal) => current().waitRun(id, signal),
     createPrompt: (actorId, input) => currentPrompts().createPrompt(actorId, input),

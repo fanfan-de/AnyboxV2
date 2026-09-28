@@ -1,16 +1,19 @@
 import type { Component } from '@nya/core'
 import type { OwnedCall, RuntimeInputs } from '../contracts.js'
-import { LLMFailure, llmServiceKey, normalizeLLMFailure } from '../llm/port.js'
-import type { LLMMessage, LLMPort, ModelReply } from '../llm/port.js'
+import { modelsServiceKey } from '@anybox/models'
+import type { ModelExecution, ModelMessage, ModelsService, ModelResult } from '@anybox/models'
+import { modelFailure, normalizeModelFailure } from './model.js'
+import type { ModelFailure } from './model.js'
+import { runModelEvent } from './notifications.js'
 import { BashFailure, bashServiceKey } from '../tool/bash-component.js'
 import type { BashPort, BashResult } from '../tool/bash-component.js'
 import { applyPatchServiceKey, isApplyPatchFailure } from '../tool/apply-patch-component.js'
 import type { ApplyPatchPort } from '../tool/apply-patch-component.js'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
-import { toolObservationMessage, toolOutputBytes, buildLLMMessages, RunFailure, runLimits, validateToolBatch } from './domain.js'
+import { toolObservationMessage, toolOutputBytes, buildModelMessages, RunFailure, runLimits, validateToolBatch } from './domain.js'
 import type { Run, RunOutcome, ValidatedToolRequest, ToolObservation } from './domain.js'
-import { stateServiceKey } from './sqlite-state.js'
-import type { StatePort } from './sqlite-state.js'
+import { sessionRunServiceKey } from '../session/port.js'
+import type { SessionRunPort } from '../session/port.js'
 import { createWaiters } from './waiters.js'
 
 export const agentLoopServiceKey = 'harness.agent-loop'
@@ -18,12 +21,14 @@ export const agentLoopServiceKey = 'harness.agent-loop'
 export type LoopCancelReason = 'user-requested' | 'owner-disposed' | 'dependency-unavailable'
 
 export interface AgentLoopPort {
-  start(runId: string): Promise<Run>
+  /** Registers ownership synchronously before any await; a synchronous refusal acquires no execution. */
+  start(input: { readonly runId: string; readonly execution: ModelExecution }): Promise<Run>
   cancel(runId: string, reason: LoopCancelReason): Promise<void>
   wait(runId: string, signal?: AbortSignal): Promise<Run | undefined>
 }
 
 interface ActiveRun {
+  readonly execution: ModelExecution
   readonly started: Promise<Run>
   readonly finished: Promise<Run>
   cancel(reason: LoopCancelReason): Promise<void>
@@ -71,23 +76,22 @@ function observation(request: ValidatedToolRequest, value: unknown): ToolObserva
 
 /** Owns every model and tool call until its result and actual exit have been observed. */
 export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Object<void, {
-  [stateServiceKey]: StatePort
-  [llmServiceKey]: LLMPort
+  [sessionRunServiceKey]: SessionRunPort
+  [modelsServiceKey]: ModelsService
   [bashServiceKey]: BashPort
   [applyPatchServiceKey]: ApplyPatchPort
 }> {
   return {
     name: 'harness-agent-loop',
-    inject: [stateServiceKey, llmServiceKey, bashServiceKey, applyPatchServiceKey],
+    inject: [sessionRunServiceKey, modelsServiceKey, bashServiceKey, applyPatchServiceKey],
     apply(ctx, _config, deps) {
-      const state = deps[stateServiceKey]
-      const llm = deps[llmServiceKey]
+      const records = deps[sessionRunServiceKey]
       const bash = deps[bashServiceKey]
       const applyPatch = deps[applyPatchServiceKey]
       const active = new Map<string, ActiveRun>()
       const waitFor = createWaiters<Run | undefined>()
       // Retain rejected owners until this component exits; a persistence error must never allow replay.
-      const rejected = new Map<string, Promise<Run>>()
+      const rejected = new Map<string, { execution: ModelExecution; finished: Promise<Run> }>()
       const failures: unknown[] = []
       let accepting = true
 
@@ -101,12 +105,18 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
       }, 'cancel and join agent loop calls')
 
       const service: AgentLoopPort = {
-        start(runId) {
+        start({ runId, execution }) {
           const existing = active.get(runId)
-          if (existing) return existing.started
+          if (existing) {
+            if (existing.execution !== execution) throw modelFailure('model-unavailable')
+            return existing.started
+          }
           const previousFailure = rejected.get(runId)
-          if (previousFailure) return previousFailure
-          if (!accepting) return Promise.reject(new LLMFailure('dependency-unavailable'))
+          if (previousFailure) {
+            if (previousFailure.execution !== execution) throw modelFailure('model-unavailable')
+            return previousFailure.finished
+          }
+          if (!accepting) throw modelFailure('dependency-unavailable')
           let resolveStarted!: (run: Run) => void
           let rejectStarted!: (error: unknown) => void
           const started = new Promise<Run>((resolve, reject) => { resolveStarted = resolve; rejectStarted = reject })
@@ -114,40 +124,61 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
           let currentKind: 'model' | 'tool' = 'model'
           let reason: LoopCancelReason | undefined
           let cancelError: unknown
-          let cleanupProblem: LLMFailure | RunFailure | undefined
+          let cleanupProblem: ModelFailure | RunFailure | undefined
           let cancellation: Promise<unknown> = Promise.resolve()
           const cancelCurrent = () => {
             try { current?.cancel(reason ?? 'dependency-unavailable') } catch (error) { cancelError = error }
           }
-          const settle = (outcome: RunOutcome) => state.settleRun(runId, outcome, inputs.now())
-          const fail = (failure: LLMFailure | RunFailure) => settle({ kind: 'failed', error: failure.message, category: failure.category })
-          const cleanupFailure = () => currentKind === 'model' ? new LLMFailure('cleanup-failure') : new RunFailure('tool-cleanup-failure')
+          let closingExecution: Promise<void> | undefined
+          const closeExecution = (): Promise<void> => {
+            if (!closingExecution) {
+              closingExecution = Promise.resolve().then(() => execution.close()).catch(() => {
+                if (!cleanupProblem) { cleanupProblem = modelFailure('cleanup-failure'); failures.push(cleanupProblem) }
+                throw cleanupProblem
+              })
+              void closingExecution.catch(() => {})
+            }
+            return closingExecution
+          }
+          const settle = async (outcome: RunOutcome) => {
+            // No successful node or terminal record is published while model resources remain owned.
+            try { await closeExecution() }
+            catch {
+              const failure = cleanupProblem!
+              outcome = { kind: 'cleanup-failed', error: failure.message, category: failure.category }
+            }
+            return records.settleRun(runId, outcome, inputs.now())
+          }
+          const fail = (failure: ModelFailure | RunFailure) => settle({ kind: 'failed', error: failure.message, category: failure.category })
+          const cleanupFailure = () => currentKind === 'model' ? modelFailure('cleanup-failure') : new RunFailure('tool-cleanup-failure')
           const rememberCleanupFailure = () => {
             if (!cleanupProblem) { cleanupProblem = cleanupFailure(); failures.push(cleanupProblem) }
             return cleanupProblem
           }
           const stop = async (): Promise<Run | undefined> => {
             await cancellation
-            const latest = await state.getRun(runId)
+            const latest = await records.getRun(runId)
             if (!latest) throw new Error('missing accepted Run')
             if (latest.status !== 'running' && latest.status !== 'cancelling') return latest
             if (latest.status === 'cancelling') return settle({ kind: 'cancelled' })
-            if (!accepting || reason === 'dependency-unavailable') return fail(new LLMFailure('dependency-unavailable'))
+            if (!accepting || reason === 'dependency-unavailable') return fail(modelFailure('dependency-unavailable'))
             if (reason) return settle({ kind: 'cancelled' })
             return undefined
           }
           const finished = Promise.resolve().then(async (): Promise<Run> => {
-            const run = await state.getRun(runId)
+            const run = await records.getRun(runId)
             if (!run) throw new Error(`unknown run ${runId}`)
             const stopped = await stop()
             if (stopped) return stopped
-            if (run.history.kind !== 'tree' || run.contextVersion !== 'dialogue-v1') return fail(new LLMFailure('dependency-unavailable'))
-            const [session, history, prompts, plan] = await Promise.all([
-              state.getSession(run.sessionId), state.getNodePath(run.sessionId, run.history.parentNodeId),
-              state.getRunPrompts(run.id), state.getRunPlan(run.id),
-            ])
-            if (!session || !prompts || !plan) return fail(new LLMFailure('dependency-unavailable'))
-            const messages: LLMMessage[] = [...buildLLMMessages(prompts, history, run.input)]
+            if (run.history.kind !== 'tree' || run.contextVersion !== 'dialogue-v1') return fail(modelFailure('dependency-unavailable'))
+            const context = await records.loadRunContext(run.id)
+            if (!context) return fail(modelFailure('dependency-unavailable'))
+            if (!run.modelSnapshot || execution.snapshot.modelId !== run.modelSnapshot.modelId ||
+              execution.snapshot.modelVersionId !== run.modelSnapshot.modelVersionId ||
+              execution.snapshot.providerVersionId !== run.modelSnapshot.providerVersionId ||
+              execution.snapshot.protocolVersion !== run.modelSnapshot.protocolVersion) return fail(modelFailure('model-unavailable'))
+            const { projectId, history, prompts } = context
+            const messages: ModelMessage[] = [...buildModelMessages(prompts, history, run.input)]
             let request: ValidatedToolRequest | undefined
             let totalToolOutputBytes = 0
             while (true) {
@@ -155,7 +186,7 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
               if (stopped) return stopped
               const intent = currentKind === 'model' ? { kind: 'model-started' as const }
                 : { kind: 'tool-started' as const, call: request! }
-              if (!await state.recordRunEvent(runId, intent, inputs.now())) {
+              if (!await records.recordRunEvent(runId, intent, inputs.now())) {
                 return (await stop()) ?? await settle({ kind: 'cancelled' })
               }
               const afterIntent = await stop()
@@ -164,14 +195,17 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
               if (reason || !accepting) return (await stop())!
               try {
                 current = currentKind === 'model'
-                  ? llm.call({ plan, messages: Object.freeze([...messages]),
-                    ...(llm.supportsTools ? { tools: Object.freeze([bash.definition, applyPatch.definition]) } : {}) })
+                  ? execution.generate({ messages: Object.freeze(messages.splice(0)),
+                    onEvent(event) {
+                      try { ctx.emit(runModelEvent, Object.freeze({ sessionId: run.sessionId, runId, event })) }
+                      catch { /* Display observers cannot fail a Run. */ }
+                    } })
                   : request!.name === 'bash'
-                    ? bash.execute({ projectId: session.projectId, command: request!.arguments.command })
-                    : applyPatch.execute({ projectId: session.projectId, patch: request!.arguments.patch })
+                    ? bash.execute({ projectId, command: request!.arguments.command })
+                    : applyPatch.execute({ projectId, patch: request!.arguments.patch })
               } catch (error) {
-                const failure = currentKind === 'model' ? normalizeLLMFailure(error) : toolFailure(error)
-                if (currentKind === 'tool') await state.recordRunEvent(runId,
+                const failure = currentKind === 'model' ? normalizeModelFailure(error) : toolFailure(error)
+                if (currentKind === 'tool') await records.recordRunEvent(runId,
                   { kind: 'tool-failed', name: request!.name, requestId: request!.id, category: failure.category }, inputs.now())
                 return fail(failure)
               }
@@ -182,48 +216,49 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
               current = undefined
               if (observed.kind === 'cleanup-failed' || cancelError) {
                 const failure = rememberCleanupFailure()
-                if (currentKind === 'tool') await state.recordRunEvent(runId,
+                if (currentKind === 'tool') await records.recordRunEvent(runId,
                   { kind: 'tool-failed', name: request!.name, requestId: request!.id, category: failure.category,
                     ...(request!.name === 'apply_patch' && 'value' in observed && observed.value !== undefined
                       ? { result: observed.value as ApplyPatchResult } : {}) }, inputs.now())
                 return settle({ kind: 'cleanup-failed', error: failure.message, category: failure.category })
               }
               if (currentKind === 'tool') {
-                await state.recordRunEvent(runId, observed.kind === 'value'
+                await records.recordRunEvent(runId, observed.kind === 'value'
                   ? { kind: 'tool-observed', requestId: request!.id, ...observation(request!, observed.value) }
                   : { kind: 'tool-failed', name: request!.name, requestId: request!.id, category: toolFailure(observed.error).category }, inputs.now())
               }
               const afterCall = await stop()
               if (afterCall) return afterCall
-              if (observed.kind === 'error') return fail(currentKind === 'model' ? normalizeLLMFailure(observed.error) : toolFailure(observed.error))
+              if (observed.kind === 'error') return fail(currentKind === 'model' ? normalizeModelFailure(observed.error) : toolFailure(observed.error))
               if (currentKind === 'model') {
-                const reply = observed.value as ModelReply
-                if (!reply || typeof reply !== 'object') return fail(new LLMFailure('invalid-response'))
-                if (reply.kind === 'final') {
-                  if (typeof reply.text !== 'string' || !reply.text.trim()) return fail(new LLMFailure('invalid-response'))
+                const reply = observed.value as ModelResult
+                if (!reply || typeof reply !== 'object' || typeof reply.text !== 'string' || !Array.isArray(reply.toolCalls)) {
+                  return fail(modelFailure('invalid-response'))
+                }
+                if (reply.status === 'incomplete') return fail(modelFailure('incomplete-response'))
+                if (reply.status === 'refused') return fail(modelFailure('refused-response'))
+                if (reply.status !== 'completed') return fail(modelFailure('invalid-response'))
+                if (!reply.toolCalls.length) {
+                  if (!reply.text.trim()) return fail(modelFailure('invalid-response'))
                   if (Buffer.byteLength(reply.text, 'utf8') > runLimits.finalBytes) return fail(new RunFailure('limit-exceeded'))
                   return settle({ kind: 'completed', output: reply.text })
                 }
-                if (reply.kind !== 'tool-calls' || (reply.content !== undefined && reply.content !== null && typeof reply.content !== 'string')) {
-                  return fail(new LLMFailure('invalid-response'))
-                }
                 let batch: readonly ValidatedToolRequest[]
-                try { batch = validateToolBatch(reply.calls) }
+                try { batch = validateToolBatch(reply.toolCalls) }
                 catch { return fail(new RunFailure('invalid-tool-request')) }
-                await state.recordRunEvent(runId, { kind: 'model-tool-calls', calls: batch }, inputs.now())
-                messages.push(Object.freeze({ role: 'assistant', content: reply.content ?? null, toolCalls: batch }))
+                await records.recordRunEvent(runId, { kind: 'model-tool-calls', calls: batch }, inputs.now())
               } else {
                 const result = observation(request!, observed.value)
                 totalToolOutputBytes += toolOutputBytes(result)
                 if (totalToolOutputBytes > runLimits.totalToolOutputBytes) return fail(new RunFailure('limit-exceeded'))
                 messages.push(toolObservationMessage(request!.id, result))
               }
-              const execution = await state.getRunExecution(runId)
-              if (execution?.phase === 'ready-tool') {
-                request = execution.batch[execution.nextToolIndex]
+              const executionState = await records.getRunExecution(runId)
+              if (executionState?.phase === 'ready-tool') {
+                request = executionState.batch[executionState.nextToolIndex]
                 if (!request) throw new Error('missing queued tool request')
                 currentKind = 'tool'
-              } else if (execution?.phase === 'ready-model') {
+              } else if (executionState?.phase === 'ready-model') {
                 currentKind = 'model'
                 request = undefined
               } else throw new Error('Run has no executable next phase')
@@ -239,15 +274,18 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
             }
             if (cleanupProblem) return settle({ kind: 'cleanup-failed', error: cleanupProblem.message, category: cleanupProblem.category })
             return fail(new RunFailure('state-write-failure'))
+          }).finally(async () => {
+            try { await closeExecution() } catch { /* Reported by the failed Run and component cleanup. */ }
           })
           const entry: ActiveRun = {
-            started, finished,
+            execution, started, finished,
             cancel(nextReason) {
               // Dependency loss cannot replace a user's already requested cancellation.
               if (!reason || reason === 'dependency-unavailable') reason = nextReason
               cancelCurrent()
+              void closeExecution().catch(() => {})
               const write = nextReason === 'dependency-unavailable' ? Promise.resolve()
-                : state.requestCancellation(runId, inputs.now())
+                : records.requestCancellation(runId, inputs.now())
               cancellation = write
               void write.catch(() => {})
               return write.then(() => {})
@@ -258,7 +296,7 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
           void started.catch(() => {})
           void finished.then(() => { active.delete(runId) }, error => {
             active.delete(runId)
-            rejected.set(runId, finished)
+            rejected.set(runId, { execution, finished })
             failures.push(error)
           })
           return started
@@ -266,18 +304,18 @@ export function createAgentLoopComponent(inputs: RuntimeInputs): Component.Objec
         async cancel(runId, reason) {
           const entry = active.get(runId)
           if (entry) return entry.cancel(reason)
-          const run = reason === 'dependency-unavailable' ? await state.getRun(runId) : await state.requestCancellation(runId, inputs.now())
+          const run = reason === 'dependency-unavailable' ? await records.getRun(runId) : await records.requestCancellation(runId, inputs.now())
           // A handoff can register an owner while the cancellation transaction is pending.
           const handedOff = active.get(runId)
           if (handedOff) return handedOff.cancel(reason)
           if (run?.status === 'running' || run?.status === 'cancelling') {
-            const failure = new LLMFailure('dependency-unavailable')
-            await state.settleRun(runId, reason === 'dependency-unavailable'
+            const failure = modelFailure('dependency-unavailable')
+            await records.settleRun(runId, reason === 'dependency-unavailable'
               ? { kind: 'failed', error: failure.message, category: failure.category } : { kind: 'cancelled' }, inputs.now())
           }
         },
         wait(runId, signal) {
-          return waitFor(active.get(runId)?.finished ?? rejected.get(runId) ?? state.getRun(runId), signal)
+          return waitFor(active.get(runId)?.finished ?? rejected.get(runId)?.finished ?? records.getRun(runId), signal)
         },
       }
       ctx.provide(agentLoopServiceKey, service)

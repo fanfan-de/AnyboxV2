@@ -1,3 +1,5 @@
+import { createSessionComponent } from '../dist/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
@@ -10,13 +12,11 @@ import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/agent
 import { createRunComponent, runServiceKey } from '../dist/run/component.js'
 import { createAgentLoopComponent } from '../dist/run/agent-loop-component.js'
 import { createBashComponent } from '../dist/tool/bash-component.js'
-import { createSqliteStateComponent } from '../dist/run/sqlite-state.js'
 import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
-import { createSessionComponent, sessionServiceKey } from '../dist/run/session-component.js'
 import { createPromptComponent, promptServiceKey } from '../dist/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
-import { controlledLLM, ids } from './helpers/controlled-llm.mjs'
+import { controlledModels, ids } from './helpers/controlled-models.mjs'
 
 /** The application installs its LLM API component and SQLite before the Harness. */
 async function createHostHarness({ llm, databasePath, ...options }) {
@@ -46,7 +46,7 @@ async function createTestHarness(options) {
   }
 }
 
-const agents = [{ id: 'assistant', modelProfileId: 'default', instructions: 'Default instruction.' }]
+const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Default instruction.' }]
 
 async function createSession(harness, agentId = 'assistant') {
   const project = await harness.openProject(process.cwd())
@@ -59,7 +59,7 @@ async function createRootSession(root) {
 }
 
 test('editing and activating a prompt changes new runs while accepted runs keep their snapshot', async () => {
-  const llm = controlledLLM()
+  const llm = controlledModels()
   const harness = await createTestHarness({ agents, llm, newId: ids(), now: () => 'now' })
   try {
     const firstSession = await createSession(harness)
@@ -109,7 +109,7 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
 })
 
 test('prompt kinds and roles compose into structured model messages', async () => {
-  const llm = controlledLLM()
+  const llm = controlledModels()
   const harness = await createTestHarness({ agents, llm, newId: ids() })
   try {
     for (const input of [
@@ -151,7 +151,7 @@ test('a new Harness restores prompts and the active binding from local storage',
   let second
   try {
     first = await createHostHarness({
-      agents, databasePath, llm: controlledLLM({ call() { throw new Error('unused') } }), newId: ids(),
+      agents, databasePath, llm: controlledModels({ call() { throw new Error('unused') } }), newId: ids(),
     })
     const document = await first.createPrompt('alice', {
       name: 'Saved instruction', kind: 'agent-instruction', role: 'system', content: 'Persisted instruction.',
@@ -160,7 +160,7 @@ test('a new Harness restores prompts and the active binding from local storage',
     await first.bindPrompt('alice', 'assistant', version.id)
     await first.close()
 
-    const llm = controlledLLM()
+    const llm = controlledModels()
     second = await createHostHarness({ agents, databasePath, llm })
     assert.equal(second.getPrompt('alice', document.id).draft.content, 'Persisted instruction.')
     assert.equal(second.getPromptVersions('alice', document.id)[0].id, version.id)
@@ -186,7 +186,7 @@ test('concurrent publish and edit preserve version history in SQLite and the liv
   let second
   try {
     first = await createHostHarness({
-      agents, databasePath, llm: controlledLLM({ call() { throw new Error('unused') } }), newId: ids(),
+      agents, databasePath, llm: controlledModels({ call() { throw new Error('unused') } }), newId: ids(),
     })
     const document = await first.createPrompt('alice', {
       name: 'Concurrent', kind: 'agent-instruction', role: 'system', content: 'First draft.',
@@ -200,7 +200,7 @@ test('concurrent publish and edit preserve version history in SQLite and the liv
     await assert.rejects(first.editPrompt('alice', document.id, 1, { content: 'Lost edit.' }), /revision conflict/)
     await first.close()
 
-    second = await createHostHarness({ agents, databasePath, llm: controlledLLM({ call() { throw new Error('unused') } }) })
+    second = await createHostHarness({ agents, databasePath, llm: controlledModels({ call() { throw new Error('unused') } }) })
     assert.deepEqual(second.getPrompt('alice', document.id), edited)
     assert.deepEqual(second.getPromptVersions('alice', document.id).map(item => item.id), [version.id])
   } finally {
@@ -222,7 +222,7 @@ test('a legacy Prompt JSON file imports once into SQLite without changing the so
 
     first = await createHostHarness({
       agents, databasePath, legacyPromptStorePath,
-      llm: controlledLLM({ call() { throw new Error('unused') } }),
+      llm: controlledModels({ call() { throw new Error('unused') } }),
     })
     assert.equal(first.getPrompt('alice', 'old-document').draft.content, 'Old instruction.')
     assert.equal(first.getAgentPrompts('alice', 'assistant')[0].versionId, 'old-version')
@@ -230,7 +230,7 @@ test('a legacy Prompt JSON file imports once into SQLite without changing the so
 
     second = await createHostHarness({
       agents, databasePath, legacyPromptStorePath,
-      llm: controlledLLM({ call() { throw new Error('unused') } }),
+      llm: controlledModels({ call() { throw new Error('unused') } }),
     })
     assert.deepEqual(second.getPromptVersions('alice', 'old-document').map(item => item.id), ['old-version'])
     assert.equal(second.getAgentPrompts('alice', 'assistant')[0].versionId, 'old-version')
@@ -244,7 +244,7 @@ test('a legacy Prompt JSON file imports once into SQLite without changing the so
 
 test('ownership and agent management permissions protect prompt editing and binding', async () => {
   const harness = await createTestHarness({
-    agents, llm: controlledLLM({ call() { throw new Error('unused') } }), newId: ids(),
+    agents, llm: controlledModels({ call() { throw new Error('unused') } }), newId: ids(),
     canManageAgent: actorId => actorId === 'alice',
   })
   try {
@@ -311,12 +311,11 @@ test('Prompt stays available when Agent Prompt is removed and accepted binding w
 test('removing the prompt component cancels and joins dependent runs', async () => {
   const root = new Context()
   const directory = mkdtempSync(join(tmpdir(), 'anybox-prompts-'))
-  const llm = controlledLLM()
+  const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
   const projectsFiber = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
-  const stateFiber = root.installComponent(createSqliteStateComponent(inputs))
   const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   const promptFiber = root.installComponent(createPromptComponent(inputs))
@@ -325,7 +324,7 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   const loopFiber = root.installComponent(createAgentLoopComponent(inputs))
   const runsFiber = root.installComponent(createRunComponent(inputs, agents))
   try {
-    await Promise.all([stateFiber, databaseFiber, llmFiber])
+    await Promise.all([sessionFiber, databaseFiber, llmFiber])
     await loopFiber
     await sessionFiber
     await promptFiber

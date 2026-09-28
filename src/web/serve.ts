@@ -1,22 +1,20 @@
 import { Context } from '@nya/core'
-import { createApiKeyServiceComponent } from '../credentials/settings.js'
 import { createLocalSqliteComponent } from '../storage/sqlite.js'
 import { createHarness } from '../harness.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from './component.js'
 import { createDirectoryPickerComponent } from './directory-picker.js'
 import type { WebFrontendPort } from './component.js'
-import { createWebLLMComponent, parseWebStartupConfig } from './startup-config.js'
+import { parseWebStartupConfig } from './startup-config.js'
+import { installWebModels } from './models-startup.js'
 
 async function main(): Promise<void> {
   const config = parseWebStartupConfig(process.env)
-  const llmComponent = createWebLLMComponent(config.llm)
   const root = new Context()
   try {
-    await root.installComponent(createApiKeyServiceComponent({ namespace: 'anybox', definitions: [config.llm.credential] }))
-    await root.installComponent(llmComponent)
-    await root.installComponent(createLocalSqliteComponent('./data/harness.sqlite'))
+    const { defaultModelId } = await installWebModels(root, config)
+    await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
     const harness = await createHarness(root, {
-      agents: [{ id: 'assistant', instructions: 'You are a helpful assistant.', modelProfileId: 'default' }],
+      agents: [{ id: 'assistant', instructions: 'You are a helpful assistant.', ...(defaultModelId ? { modelId: defaultModelId } : {}) }],
     })
     await root.installComponent(createDirectoryPickerComponent())
     await root.installComponent(createWebFrontendComponent(harness.listAgents(), config.port))

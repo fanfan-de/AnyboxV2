@@ -1,0 +1,16 @@
+{
+  "name": "@anybox/models",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist", "README.md", "assets", "scripts"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "catalog:update": "node scripts/update-models-dev-snapshot.mjs"
+  },
+  "peerDependencies": { "@nya/core": "^0.1.0-rc.1" },
+  "dependencies": { "@napi-rs/keyring": "2.1.0" }
+}
