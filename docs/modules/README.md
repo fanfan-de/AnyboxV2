@@ -2,7 +2,7 @@
 
 [返回文档首页](../README.md)
 
-本手册按当前源码的实际组件边界组织。模块是职责与协作边界，不是 Nya 子 Context；本机应用的所有组件安装在同一个根上。完整本机装配有 29 个运行期组件，另保留 1 个不参与正式执行的 H0 探针。按本机默认安装的五种协议统计；定制宿主可只安装需要的协议与应用绑定。
+本手册按当前源码的实际组件边界组织。模块是职责与协作边界，不是 Nya 子 Context；本机应用的所有组件安装在同一个根上。完整本机装配有 30 个运行期组件，另保留 1 个不参与正式执行的 H0 探针。按本机默认安装的五种协议统计；定制宿主可只安装需要的协议与应用绑定。
 
 ## 模块目录
 
@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | [models/](./models/README.md) | 可复用模型配置、凭据、原生驱动及可选公开目录 | 11 |
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 8 |
-| [sessions/](./sessions/README.md) | 项目身份、会话树、Run 持久事实及恢复 | 2 |
+| [sessions/](./sessions/README.md) | 项目身份、文件快照、会话树、Run 持久事实及恢复 | 3 |
 | [images/](./images/README.md) | 图片导入、不可变字节、草稿续期与事务保留 | 1 |
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
 | [tools/](./tools/README.md) | 本地进程和文本文件变更 | 2 |
@@ -44,6 +44,7 @@
 | 执行 | [Gemini 应用绑定](./execution/gemini-agent.md) | `harness-protocol-agent-gemini-interactions` | 将该驱动代与 Gemini Loop 绑定 |
 | 执行 | [DeepSeek 应用绑定](./execution/deepseek-agent.md) | `harness-protocol-agent-deepseek-chat-completions` | 将该驱动代与非推理 Chat Loop 绑定 |
 | 项目与会话 | [Projects](./sessions/projects.md) | `harness-projects` | `harness.projects` |
+| 项目与会话 | [Project Files](./sessions/project-files.md) | `harness-project-files` | `harness.project-files` |
 | 项目与会话 | [Session](./sessions/session.md) | `harness-sessions` | `harness.sessions`、`harness.session-runs` |
 | 图片资源 | [Image Assets](./images/image-assets.md) | `harness-image-assets` | `harness.image-assets` |
 | Prompt | [Prompt](./prompts/prompts.md) | `harness-prompts` | `harness.prompts` |

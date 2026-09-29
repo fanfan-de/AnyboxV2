@@ -116,7 +116,7 @@ Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返
 | `GET /agents/:id/prompts` | 已绑定 Prompt 快照 |
 | `POST /agents/:id/prompts` | `{ versionId }`，绑定已发布版本 |
 
-发布前校验浏览器所见草稿 revision；权限由宿主固定身份对应的领域访问规则执行。Prompt 内容展开与首次 Run 固定 instruction/context 的行为分别由 [Prompts](../prompts/prompts.md)、[Agent Prompts](../prompts/agent-prompts.md)、Session 和 Run 决定。浏览器发送原始本次文本和有序图片引用，不提前扩展 task-template。仅 Chat Completions 和 DeepSeek 允许图片；一段文本加有序图片，不支持文本图片交错。模板仅对文本替换 `{{input}}` 一次，原生请求顺序为模板后的可选文本，再依次排列图片。纯图片消息合法；其他协议仍保留文本路径。
+发布前校验浏览器所见草稿 revision；权限由宿主固定身份对应的领域访问规则执行。Prompt 内容展开与首次 Run 固定 instruction/context 的行为分别由 [Prompts](../prompts/prompts.md)、[Agent Prompts](../prompts/agent-prompts.md)、Session 和 Run 决定。浏览器发送原始本次文本和有序图片引用，不提前扩展 task-template。五种协议均允许图片，且所选模型必须具备有效图片能力；一段文本加有序图片，不支持文本图片交错。模板仅对文本替换 `{{input}}` 一次，原生请求顺序为模板后的可选文本，再依次排列图片。五种协议均允许纯图片消息；无图片时保留原文本编码。
 
 ## 图片草稿与保留
 
@@ -158,3 +158,9 @@ HTTP 只返回安全 `{ error: { code } }`：非法输入 400，JSON 类型 415�
 - [protocol-web-modules.test.mjs](../../../tests/protocol-web-modules.test.mjs)、[protocol-view-client.test.mjs](../../../tests/protocol-view-client.test.mjs)：协议隔离、白名单、替换视图顺序与不兼容拒绝。
 
 `startWebServer` 可通过 `WebCommands` 测试替身独立验证；替换浏览器或 HTTP 实现时保持显式父节点、幂等键、临时/持久状态区分和清理语义。完整验收运行 `npm run check`。
+
+## 项目文件引用
+
+输入框支持 @ 搜索或“引用项目文件”，默认整文件，预览可选择闭区间行范围。搜索包含点文件及 ignore 文件，仅排除元数据和依赖目录。发送时通过 Session 准备不可变快照，再以 ID 提交 Run。pending v3 先保存准备键，取得快照后先保存 ID，再发送；重试和重新生成默认复用快照。历史预览读取快照，编辑可显式更新为当前文件。
+
+HTTP 路由、限制、作用域和恢复规则见[文件引用设计](../../project-file-references-design.md)。文件操作使用既有请求取消/实际退出包装，错误只暴露固定 code 及可选 fileIndex。浏览器的 draft-client 是通用草稿存储，file-client 管理文件待提交和 5 分钟租期，file-view 拥有各面板的候选查询与预览；组件关闭/面板卸载取消对应操作。

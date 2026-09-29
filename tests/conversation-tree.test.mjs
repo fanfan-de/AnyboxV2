@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import { registerNativeRun, completeNativeRun, completedOutcome } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
@@ -376,6 +377,7 @@ test('restart interrupts multiple active Runs independently while retaining thei
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
+    await root.installComponent(createProjectFilesComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, agents))
     const project = await root.get(projectServiceKey).openProject(directory)
     const state = root.get(sessionRunServiceKey), sessions = root.get(sessionServiceKey)

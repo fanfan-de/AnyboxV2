@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
@@ -22,6 +23,7 @@ async function legacyFixture(t, turns = sample.turns) {
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   await root.installComponent(createProjectComponent(inputs))
+  await root.installComponent(createProjectFilesComponent(inputs))
   const project = await root.get(projectServiceKey).openProject(directory)
   const db = root.get(localStorageServiceKey)
   await db.migrate('run-state', [{ version: 1, up(tx) {

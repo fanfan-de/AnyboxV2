@@ -35,6 +35,6 @@ Effect 清理先等待 registration.unregister()，停止本绑定代的新 prog
 
 ## 兼容限制与验证
 
-Session 固定 responses 协议；恢复要求 Loop 1.0.0、记录格式 1、匹配 checkpoint，并由 Models 验证连接、历史作用域和参数兼容。不能把 Chat 或旧 dialogue-v1 历史转换为 Responses；有效图片能力为 false，未知多模态输出明确拒绝。
+Session 固定 responses 协议；恢复接受 Loop 1.0.0/1.1.0、记录格式 1/2、匹配 checkpoint，并由 Models 验证连接、历史作用域和参数兼容。不能把 Chat 或旧 dialogue-v1 历史转换为 Responses；显式声明图片能力的配置支持用户图片输入，未知多模态输出明确拒绝。
 
 [原生协议测试](../../../tests/native-protocol-agents.test.mjs) 验证工具续轮、加密续接跨 Run/重启保存、分支隔离、搜索引用、拒绝和截断；[Models 协议测试](../../../packages/models/tests/protocols.test.mjs) 与[原生边界测试](../../../packages/models/tests/native-boundaries.test.mjs) 验证驱动传输和原生边界；[投影测试](../../../tests/native-projection.test.mjs) 验证安全且有界的显示。统一执行 `npm run check`。

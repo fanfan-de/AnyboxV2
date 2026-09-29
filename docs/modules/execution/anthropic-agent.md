@@ -38,6 +38,6 @@ ordered thinking、签名、redacted 块、服务端搜索块及引用元数据�
 
 ## 兼容与验证
 
-恢复要求同协议、记录格式 1、Loop 1.0.0 和兼容的模型执行语义；不能把有签名的历史转成普通文本继续执行，也不支持旧 dialogue-v1。有效图片能力为 false，不认识的多模态块会拒绝。
+恢复要求同协议、记录格式 1/2、Loop 1.0.0/1.1.0 和兼容的模型执行语义；不能把有签名的历史转成普通文本继续执行，也不支持旧 dialogue-v1。显式声明图片能力的配置支持用户 image 块，不认识的多模态输出块会拒绝。
 
 [原生协议测试](../../../tests/native-protocol-agents.test.mjs) 覆盖 thinking/签名跨 Run 恢复、pause_turn 自动续轮、服务端搜索关联、重启、分支和拒绝/截断；[Messages 驱动测试](../../../packages/models/tests/anthropic-messages.test.mjs) 覆盖原生块顺序、流式签名、参数、清理和注销；[投影测试](../../../tests/native-projection.test.mjs) 覆盖安全显示与工具块身份。统一执行 `npm run check`。

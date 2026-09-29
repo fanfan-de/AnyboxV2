@@ -89,7 +89,7 @@ export function protocolComponent(protocol: NativeProtocol): Component.Object<vo
   } };
 }
 
-/** The currently declared input contract is text and local function results; media stays unavailable. */
+/** Text-only fields, including instructions and local function results, reject media blocks. */
 export function textBlocks(value: unknown, type: 'text' | 'input_text' = 'text'): void {
   if (typeof value === 'string') return;
   for (const item of array(value)) { const block = object(item); if (block.type !== type) throw modelsError('capability-unsupported'); string(block.text); }

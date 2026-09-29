@@ -498,3 +498,25 @@ button { touch-action: manipulation; }
 .message-image-link { display: block; max-width: 100%; }
 .message-image-link img { display: block; width: 180px; height: 140px; max-width: 100%; object-fit: contain; border-radius: 4px; background: #eee; }
 .draft-image .message-image-link img { width: 118px; height: 82px; }
+
+/* Project references share the existing composer and remain readable in split panes. */
+.composer-files, .message-files { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.draft-file { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--border, #ddd); border-radius: 8px; max-width: 100%; }
+.draft-file button, .message-file { overflow-wrap: anywhere; text-align: left; font-size: 12px; }
+.draft-file small, .file-hint { font-size: 12px; color: var(--text-secondary, #777); }
+.file-error { color: #b43b30 !important; }
+.file-picker { max-height: 260px; overflow-y: auto; padding: 10px; border: 1px solid var(--border, #ddd); border-radius: 10px; background: var(--surface, #fff); }
+.file-picker > input { width: 100%; margin-bottom: 8px; }
+.file-picker [role="option"] { display: block; width: 100%; padding: 7px 9px; text-align: left; overflow-wrap: anywhere; border-radius: 6px; }
+.file-picker [aria-selected="true"] { background: #e8e5ff; color: #33266f; }
+.file-preview { width: min(860px, 90vw); max-height: 85vh; padding: 22px; border: 1px solid #ccc; border-radius: 14px; color: var(--text, #242424); background: var(--surface, #fff); }
+.file-preview::backdrop { background: #0006; }
+.file-preview h3 { font-size: 16px; overflow-wrap: anywhere; }
+.file-preview pre { max-height: 52vh; min-height: 80px; overflow: auto; white-space: pre; font-size: 12px; line-height: 1.6; padding: 12px; border-radius: 8px; background: #f4f4f6; color: #242424; }
+.file-range, .file-preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
+.file-range label { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.file-range input { width: 85px; }
+.file-preview-actions { justify-content: flex-end; }
+.file-preview button, .file-preview input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; }
+.attach-files { font-size: 12px; white-space: nowrap; }
+.file-range[hidden], .composer-files[hidden], .file-picker[hidden] { display: none; }

@@ -9,7 +9,7 @@ Session 是会话、不可变对话节点、Run 状态、事件和原生恢复�
 - 源码：[组件](../../../src/session/component.ts)、[完整端口](../../../src/session/port.ts)、[领域值与路径校验](../../../src/session/domain.ts)、[SQLite 记录实现](../../../src/session/sqlite-records.ts)、[Run 事件读写](../../../src/run/execution.ts)。
 - 工厂：`createSessionComponent(inputs, agents)`；组件名：`harness-sessions`；配置类型：`void`。
 - `inputs` 注入 now/newId；`agents` 是组合根启动时校验的只读定义，用于创建校验与默认模型。
-- 注入 `local-storage`、`harness.projects` 和 `harness.image-assets`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。
+- 注入 `local-storage`、`harness.projects`、`harness.image-assets` 和 `harness.project-files`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。
 
 ## 公开查询与会话接口
 
@@ -76,3 +76,9 @@ Effect 先停止新调用，再等待已经接受的所有记录操作，包括�
 `importImage(sessionId, bytes, signal?)` 和 `getImage(sessionId, assetId, signal?)` 返回 OwnedCall；`renewImages(sessionId, assetIds)` 续期草稿，所有入口先验证 Session。受信 `describeImages` 在准备时取得服务端元数据；Run 接受事务调用图片组件 `retainIn`，核对不可变元数据并写入不透明 Run 保留凭证。已接受失败/取消 Run 同样保留输入。图片字节、读取与 GC 归[图片组件](../images/image-assets.md)。
 
 原生 v2 请求的顶层 resourceRefs 保存到独立列，Session 校验其与本 Run 已接受图片一致；不解释 payload 中的协议图片块。幂等比较包含图片 ID 和顺序，重复接纳不会重复保留或重新检查已接受输入的草稿期限。
+
+## 项目文件引用
+
+Session 对外提供 searchProjectFiles、previewProjectFile、prepareProjectFiles、getFileSnapshot、renewProjectFiles，先验证会话，再调用 [Project Files](project-files.md)。受信 session-runs 提供 readFileSnapshots，Run 准入等待读取和实际退出。文件搜索/读取句柄归 Project Files，Session 跟踪并在关闭时取消、等待包装调用。
+
+NativeRunInput v3 保存文件引用及顺序，v1/v2 读取时 files=[]，旧 JSON 不改写。Run 和节点投影返回 files 元数据；正文经单独的会话作用域接口读取。接受事务复核引用 ID、项目及元数据，并调用同步 retainIn，与图片及 Run 一起提交。已接受失败/取消/interrupted 仍永久保留。新表归 project-files 迁移域，run-state 保持 v6。

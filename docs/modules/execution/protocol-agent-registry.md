@@ -22,7 +22,7 @@
 
 `PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input 和可选 history。initialization 固定 `schemaVersion: 1`、`known-tools-v1`、Prompt 快照与工具定义；只接受当前完整 Bash/Apply Patch 定义且不允许重名。input v2 保存 schemaVersion、raw、text、template 和有序图片描述，旧 v1 输入按无图片读取。
 
-`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（Chat/DeepSeek 为 1.1.0，其他为 1.0.0）、execution 实际记录格式（Chat/DeepSeek 为 2，其他为 1） 和 `viewSchemaVersion: 1`。这些值是历史兼容判断依据。
+`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（五种协议均为 1.1.0）、execution 实际记录格式（五种协议均为 2） 和 `viewSchemaVersion: 1`。这些值是历史兼容判断依据。
 
 ## 准备与执行
 
@@ -50,6 +50,10 @@ program 的 `close()` 缓存关闭 Promise，等待 execution 退出，返回原
 
 ## 图片资源与版本兼容
 
-Chat/DeepSeek 把模板文本与图片资源 URI 编码为同一个 user content 数组；首个 exchange 携带本轮 resourceRefs，工具续轮不重复声明祖先资源。注册表为每个 execution 提供限定本轮与所选成功父路径资源的读取端口，作用域固定为当前 Session。Models 在受管 start 后读取字节并生成实际请求。Session 不解释协议 URI，Runtime 不解释图片块。
+各协议把模板文本与图片资源 URI 编码为同一个用户 content 数组（Gemini 使用 user_input）；首个 exchange 携带本轮 resourceRefs，工具续轮不重复声明祖先资源。注册表为每个 execution 提供限定本轮与所选成功父路径资源的读取端口，作用域固定为当前 Session。Models 在受管 start 后读取字节并生成实际请求。Session 不解释协议 URI，Runtime 不解释图片块。
 
-Chat/DeepSeek 接受 Loop 1.0.0/1.1.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。
+五种协议均接受 Loop 1.0.0/1.1.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。
+
+## 项目文件资料
+
+PrepareRunInput.fileContents 是 Run 从 Session 读取的本轮文件内容。注册表将相对路径、实际行范围和正文按 project-file-context v1 JSON 附加在本轮用户文本之后、图片之前。文件正文不参与 task-template，不成为系统提示词；NativeRunInput v3 只保存引用，原生请求记录保存实际资料文本。父链恢复直接复用原生记录，不读取源文件、不重复附加祖先文件。五种协议复用现有文本编码，Models 的图片 resourceRefs、驱动版本和工具契约不变。

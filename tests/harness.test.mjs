@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
@@ -248,6 +249,7 @@ test('removing the Models component waits for the run consumer and its call', as
   const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
   const projects = root.installComponent(createProjectComponent(inputs))
+  root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
@@ -341,6 +343,7 @@ test('RunRuntime owns in-flight calls while Session and Run state survive its re
   const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
   const projects = root.installComponent(createProjectComponent(inputs))
+  root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
   const sessions = root.installComponent(createSessionComponent(inputs, agents))

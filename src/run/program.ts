@@ -1,4 +1,5 @@
 import type { JsonValue, NativeModelSnapshot, NativeImageResourceRef } from '@anybox/models'
+import type { FileRef, FileContent } from '../project-files/domain.js'
 import type { ImageRef } from '../image/port.js'
 import type { ToolDefinition } from '../tool/definition.js'
 export type { NativeModelSnapshot } from '@anybox/models'
@@ -35,10 +36,19 @@ export type NativeRunInput = {
   readonly text: string
   readonly images: readonly ImageRef[]
   readonly template: PromptSnapshot | null
+} | {
+  readonly schemaVersion: 3
+  readonly raw: string
+  readonly text: string
+  readonly images: readonly ImageRef[]
+  readonly files: readonly FileRef[]
+  readonly template: PromptSnapshot | null
 }
 
+export function inputFiles(input: NativeRunInput | undefined): readonly FileRef[] { return input?.schemaVersion === 3 ? input.files : [] }
+
 export function inputImages(input: NativeRunInput | undefined): readonly ImageRef[] {
-  return input?.schemaVersion === 2 ? input.images : []
+  return input && input.schemaVersion !== 1 ? input.images : []
 }
 
 export interface ProtocolRecord {
@@ -123,6 +133,7 @@ export interface PrepareRunInput {
   readonly signal: AbortSignal
   readonly initialization: NativeInitialization
   readonly input: NativeRunInput
+  readonly fileContents?: readonly FileContent[]
   readonly history?: NativeHistory
 }
 

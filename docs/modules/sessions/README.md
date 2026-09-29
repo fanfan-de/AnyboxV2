@@ -7,11 +7,12 @@
 | 组件 | Nya 名称 | 服务 |
 | --- | --- | --- |
 | [Projects](projects.md) | `harness-projects` | `harness.projects` |
+| [Project Files](project-files.md) | `harness-project-files` | `harness.project-files` |
 | [Session](session.md) | `harness-sessions` | `harness.sessions`、`harness.session-runs` |
 
 ## 依赖与职责
 
-Projects 注入 [本地 SQLite](../infrastructure/local-sqlite.md)；Session 注入本地 SQLite 和 Projects。组件都安装在应用根 Context，项目仅是数据归属边界，不创建项目 Context。Session 的内部 SQLite records 实现没有独立组件和独立数据库连接；数据库排他所有权归存储组件，领域表与迁移归这里。
+Projects 注入 [本地 SQLite](../infrastructure/local-sqlite.md)；Project Files 注入本地 SQLite 和 Projects，独占文件搜索、读取和文本快照；Session 注入本地 SQLite、Projects、Image Assets 和 Project Files。组件都安装在应用根 Context，项目仅是数据归属边界，不创建项目 Context。Session 的内部 SQLite records 实现没有独立组件和独立数据库连接；数据库排他所有权归存储组件，领域表与迁移归这里。
 
 外部使用 Harness 的 `openProject`、`createSession`、节点及 Run 查询方法。[执行模块](../execution/README.md) 使用 Session 的受信执行记录端口进行准入、操作观察和结算；RunRuntime 独占运行期资源。服务名称用于依赖声明，不构成授权边界。
 

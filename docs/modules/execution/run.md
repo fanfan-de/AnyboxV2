@@ -29,9 +29,9 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 
 首次请求按以下顺序处理：读取 Session，拒绝旧历史模式；检查项目目录可用；解析 Agent；以 `input.modelId ?? session.modelId ?? agent.modelId` 选模；检查 Session 固定协议；加载父路径历史和 Session 固定初始化。固定工具声明必须与当前 Bash/Apply Patch 定义精确匹配，否则拒绝续接。
 
-没有固定初始化时，[Agent Prompt](../prompts/agent-prompts.md) 提供 instruction/context；模型有效 tools 能力为 true 时声明 Bash 和 Apply Patch，否则为空。task-template 每次重新解析，但只把 `{{input}}` 替换为本次原始输入一次，并保存 v2 raw/text/template/images 快照，图片不参与模板替换。历史不重新套用模板。
+没有固定初始化时，[Agent Prompt](../prompts/agent-prompts.md) 提供 instruction/context；模型有效 tools 能力为 true 时声明 Bash 和 Apply Patch，否则为空。task-template 每次重新解析，但只把 `{{input}}` 替换为本次原始输入一次，并保存 v3 raw/text/template/images/files 快照，图片和文件内容不参与模板替换。历史不重新套用模板。
 
-[协议注册表](protocol-agent-registry.md) 为这些输入创建 `PreparedRunProgram`。Session 的 `registerRun` 事务复核父上下文引用、协议和初始化，并通过图片组件的同步 retainIn 固定图片引用，再保存接受结果；引用与 Run 一起提交或回滚。只有 `created: true` 的 Run 会交给 Runtime。事务返回已有幂等结果时，当前多余 program 仍需关闭和释放。
+[协议注册表](protocol-agent-registry.md) 为这些输入创建 `PreparedRunProgram`。Session 的 `registerRun` 事务复核父上下文引用、协议和初始化，并通过图片与项目文件组件的同步 retainIn 固定资源引用，再保存接受结果；引用与 Run 一起提交或回滚。只有 `created: true` 的 Run 会交给 Runtime。事务返回已有幂等结果时，当前多余 program 仍需关闭和释放。
 
 ## 所有权、取消和关闭
 
@@ -48,3 +48,5 @@ Effect 清理先关闭新准入、中止正在准备的 execution，取消已接
 ## 验证
 
 [Harness 测试](../../../tests/harness.test.mjs) 验证幂等、未知模型、同步交接拒绝、快照不匹配、依赖替换与关闭；[会话树测试](../../../tests/conversation-tree.test.mjs) 验证同父并发、启动窗口取消、等待者中止与分支隔离；[原生 Session 测试](../../../tests/native-session.test.mjs) 验证父引用二次检查和首次初始化竞争。统一执行 `npm run check`。
+
+项目文件只接受已准备的 snapshotId，幂等比较包含 ID 及顺序。新 Run 经 session-runs.readFileSnapshots 获取并校验有界文本，取消使用准入 AbortController，读取后等待 done；协议绑定在模板处理之后附加用户文件资料。已接受幂等请求不重新查草稿期限或源路径，详见[文件引用设计](../../project-file-references-design.md)。

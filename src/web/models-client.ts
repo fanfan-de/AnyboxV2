@@ -246,7 +246,7 @@ export function setupModelsSettings(api: Api, messageFor: (error: unknown) => st
     get('[data-provider-draft]').textContent = changed ? provider?.revision !== connectionBaseRevision ? '有未保存的修改；已保存配置有更新，保存时将检查版本。' : '有未保存的修改' : ''
     get('[data-provider-draft]').hidden = !changed
   }
-  for (const [name, label] of [['tools', '工具调用'], ['streaming', '流式输出'], ['imageInput', '图片输入（Chat Completions / DeepSeek）'], ['reasoning', '推理'], ['webSearch', '服务端网络搜索']] as const) {
+  for (const [name, label] of [['tools', '工具调用'], ['streaming', '流式输出'], ['imageInput', '图片输入'], ['reasoning', '推理'], ['webSearch', '服务端网络搜索']] as const) {
     const wrapper = document.createElement('label'), field = document.createElement('select')
     wrapper.textContent = label; field.dataset.capability = name
     field.append(...supportChoices.map(([value, text]) => option(value, text))); wrapper.append(field); get('[data-capabilities]').append(wrapper)

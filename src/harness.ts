@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from './project-files/component.js'
 import { randomUUID } from 'node:crypto'
 import { Context, FiberState } from '@nya/core'
 import type { Fiber } from '@nya/core'
@@ -110,6 +111,7 @@ export async function createHarness(context: Context, options: HarnessOptions): 
     for (const component of [
       ...protocolComponents,
       createProjectComponent(inputs),
+      createProjectFilesComponent(inputs),
       createBashComponent(),
       createApplyPatchComponent(),
       createSessionComponent(inputs, agents),
@@ -145,6 +147,11 @@ export async function createHarness(context: Context, options: HarnessOptions): 
       return currentSessions().selectSessionModel(sessionId, modelId, protocolId)
     },
     getSession: id => currentSessions().getSession(id),
+    searchProjectFiles: (...args) => currentSessions().searchProjectFiles(...args),
+    previewProjectFile: (...args) => currentSessions().previewProjectFile(...args),
+    prepareProjectFiles: (...args) => currentSessions().prepareProjectFiles(...args),
+    getFileSnapshot: (...args) => currentSessions().getFileSnapshot(...args),
+    renewProjectFiles: (...args) => currentSessions().renewProjectFiles(...args),
     importImage: (sessionId, bytes, signal) => currentSessions().importImage(sessionId, bytes, signal),
     getImage: (sessionId, assetId, signal) => currentSessions().getImage(sessionId, assetId, signal),
     renewImages: (sessionId, assetIds) => currentSessions().renewImages(sessionId, assetIds),

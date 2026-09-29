@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createDraftStore, createImageUploads, createImageLeaseKeeper, draftFromInput, draftsKey, imageURL } from '../dist/web/image-client.js'
+import { createImageUploads, createImageLeaseKeeper, imageURL } from '../dist/web/image-client.js'
+import { createDraftStore, draftFromInput, draftsKey } from '../dist/web/draft-client.js'
 import { createPendingStore } from '../dist/web/session-client.js'
 import { imageLimits } from '../dist/image/limits.js'
 import { deferred } from './helpers/controlled-models.mjs'

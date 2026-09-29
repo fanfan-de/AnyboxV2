@@ -119,3 +119,7 @@ Bash 组件拥有子进程、输出缓冲、超时与终止计时器。Apply Pat
 完整契约见[图片输入设计](./multimodal-image-input-design.md)。图片组件保存原始字节，并在与 Run 共用的业务事务中保留引用；Session v2 输入及原生 v2 请求只存元数据。Chat/DeepSeek 的 execution 固定作用域读取端口，只有操作意图持久化且 start 登记后才读取、校验、生成临时 data URL 和发送请求。工具续轮和重启从所选父路径恢复引用。读失败、摘要不符和超限都明确失败；不退回纯文本。
 
 Chat/DeepSeek 驱动为 2.1.0、Loop 为 1.1.0、新记录为 v2，兼容旧 2.0.0/1.0.0 的 v1 文本历史及混合父链。只有验证整条父路径无图片时允许有效 imageInput 从 false 变 true；账户 epoch、模型定义版本、参数和其他能力仍严格比较。
+
+## 项目文件引用
+
+Harness 在应用根安装 [Project Files](modules/sessions/project-files.md)，注入 Projects 与业务存储，Session 通过依赖使用它。组件独占文本文件搜索、读取、SQLite 快照和回收，project-files v1 自行登记表。Session 接受事务同步保留文件引用，Run 准备时读取本轮内容并等待退出，协议注册表仅编码用户资料。没有新增数据库连接、文件目录、Context 或模型工具。详见[跨组件设计](project-file-references-design.md)。

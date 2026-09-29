@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createPendingStore, createSessionController, pendingKey } from '../dist/web/session-client.js'
-import { createDraftStore, draftFromInput } from '../dist/web/image-client.js'
+import { createDraftStore, draftFromInput } from '../dist/web/draft-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 function fixture() {
@@ -322,7 +322,7 @@ test('image-only submission persists pending v2 and sends only ordered asset IDs
     if (url.endsWith('/images/renew')) { persisted = f.pending.get('a'); return { valid: images, invalid: [] } }
   })
   const a = f.make('a', { drafts }); await f.load(a); await a.submit()
-  assert.equal(persisted.schemaVersion, 2)
+  assert.equal(persisted.schemaVersion, 3)
   assert.deepEqual(persisted.images, images)
   const submitted = f.calls.find(call => call.url === '/sessions/a/runs' && call.body)
   assert.equal(submitted.body.input, '')
@@ -423,4 +423,78 @@ test('merged pending drafts retain more than eight images across reload and bloc
   assert.equal(f.calls.some(call => call.body), false)
   assert.match(restored.snapshot().notice, /删减图片/)
   restored.dispose()
+})
+
+const fileRef = { snapshotId: 'snapshot', projectId: 'p-a', path: 'src/example.ts', actualRange: { start: 1, end: 1 }, byteLength: 4,
+  sha256: 'a'.repeat(64), createdAt: '2026-09-29T00:00:00.000Z', expiresAt: '2026-09-30T00:00:00.000Z' }
+
+test('file-only input persists a preparation key before reading and retries a lost preparation response', async () => {
+  const f = fixture(), controller = f.make('a'); await f.load(controller)
+  let attempts = 0, key
+  f.intercept((url, body) => {
+    if (url.endsWith('/project-files/prepare')) {
+      const saved = f.pending.get('a')
+      assert.equal(saved.preparationKey, body.preparationKey)
+      assert.deepEqual(saved.fileSelections, body.selections)
+      if (!attempts++) { key = body.preparationKey; return Promise.reject(new Error('response lost')) }
+      assert.equal(body.preparationKey, key); return [fileRef]
+    }
+    if (url.endsWith('/project-files/renew')) return { valid: [fileRef], invalid: [] }
+    if (url.endsWith('/runs') && body) assert.equal(f.pending.get('a').files[0].snapshotId, 'snapshot')
+  })
+  controller.setFiles([{ id: 'draft', selection: { kind: 'project-file', path: 'src/example.ts' } }])
+  await controller.submit()
+  assert.equal(f.calls.filter(call => call.url.endsWith('/runs') && call.body).length, 0)
+  assert.equal(f.pending.get('a').preparationKey, key)
+  await controller.submit()
+  const sent = f.calls.find(call => call.url.endsWith('/runs') && call.body)
+  assert.equal(sent.body.input, ''); assert.deepEqual(sent.body.files, [{ snapshotId: 'snapshot' }]); assert.equal(attempts, 2)
+  assert.equal(f.pending.get('a'), undefined); controller.dispose()
+})
+
+test('lost Run response reuses saved snapshots without preparing current files again', async () => {
+  const f = fixture(), controller = f.make('a'); await f.load(controller)
+  let failed = false
+  f.intercept((url, body) => {
+    if (url.endsWith('/project-files/prepare')) return [fileRef]
+    if (url.endsWith('/project-files/renew')) return { valid: [fileRef], invalid: [] }
+    if (url.endsWith('/runs') && body && !failed) { failed = true; return Promise.reject(new Error('network')) }
+  })
+  controller.setFiles([{ id: 'draft', selection: { kind: 'project-file', path: 'src/example.ts' } }])
+  await controller.submit(); assert.equal(f.pending.get('a').files[0].snapshotId, 'snapshot')
+  await controller.submit()
+  assert.equal(f.calls.filter(call => call.url.endsWith('/project-files/prepare')).length, 1)
+  assert.equal(f.calls.filter(call => call.url.endsWith('/runs') && call.body).length, 2)
+  controller.dispose()
+})
+
+test('file preparation errors restore the original branch draft without dropping references', async () => {
+  const f = fixture(), controller = f.make('a'); await f.load(controller)
+  f.intercept(url => url.endsWith('/project-files/prepare') ? Promise.reject(Object.assign(new Error('file missing'), { status: 404, code: 'file-missing' })) : undefined)
+  controller.setDraft('question'); controller.setFiles([{ id: 'draft', selection: { kind: 'project-file', path: 'gone.txt' } }])
+  await controller.submit()
+  assert.equal(controller.snapshot().draft, 'question'); assert.equal(controller.snapshot().files[0].selection.path, 'gone.txt')
+  assert.equal(f.pending.get('a'), undefined); assert.equal(f.rows.size, 0); controller.dispose()
+})
+
+test('history editing and regeneration keep immutable snapshot IDs', async () => {
+  const f = fixture(), controller = f.make('a'); await f.load(controller)
+  const node = { id: 'node', sessionId: 'a', parentId: null, input: 'question', images: [], files: [fileRef], output: 'answer', sourceRunId: 'old' }
+  f.intercept(url => url.endsWith('/project-files/renew') ? { valid: [fileRef], invalid: [] } : undefined)
+  await controller.navigate(null, node.input, [], node.files)
+  assert.deepEqual(controller.snapshot().files[0].selection, { kind: 'snapshot', snapshotId: 'snapshot' })
+  await controller.regenerate(node)
+  assert.equal(f.calls.filter(call => call.url.endsWith('/project-files/prepare')).length, 0)
+  assert.deepEqual(f.calls.find(call => call.url.endsWith('/runs') && call.body).body.files, [{ snapshotId: 'snapshot' }])
+  controller.dispose()
+})
+
+test('malformed persisted file references remain visible and cannot become text-only submissions', async () => {
+  const f = fixture()
+  f.store.setItem(pendingKey, JSON.stringify({ a: { schemaVersion: 3, sessionId: 'a', parentNodeId: null, input: 'question', idempotencyKey: 'bad', files: [{ snapshotId: 'missing-metadata' }] } }))
+  const pending = createPendingStore(f.store), controller = f.make('a', { pending })
+  await f.load(controller)
+  assert.ok(controller.snapshot().files[0].error)
+  await controller.submit(); assert.equal(f.calls.filter(call => call.url.endsWith('/runs') && call.body).length, 0)
+  controller.dispose()
 })

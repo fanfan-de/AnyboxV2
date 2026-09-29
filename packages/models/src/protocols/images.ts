@@ -1,4 +1,5 @@
-import { assert } from '../domain.js';
+import { assert, immutable } from '../domain.js';
+import { nativeDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
 import { modelsError, normalizeError } from '../errors.js';
 import { abortLink, deferred, joinOperation, throwAborted } from '../lifecycle.js';
 import { nativeWireLimit, parseNativeImageResourceUri, resourceDataUrl } from '../resources.js';
@@ -50,7 +51,7 @@ export const geminiImages = codec('input', item => item.type === 'user_input', '
 
 export function imageContent(value: unknown, images: ImageCodec, allowed: boolean, textType: 'text' | 'input_text' = 'text'): void {
   if (typeof value === 'string') return;
-  const blocks = array(value); assert(blocks.length > 0);
+  const blocks = array(value);
   for (const value of blocks) {
     const block = object(value);
     if (block.type === textType) string(block.text);
@@ -59,12 +60,13 @@ export function imageContent(value: unknown, images: ImageCodec, allowed: boolea
 }
 
 /** Resource reads, materialization and HTTP share one cancellation/actual-exit barrier. */
-export function withImages<T>(images: ImageCodec,
+export function withImages<T extends NativeObject>(images: ImageCodec,
   input: { readonly request: NativeObject; readonly signal: AbortSignal; readonly resources?: NativeResourceResolver; readonly resourceRefs?: readonly NativeImageResourceRef[] },
   start: (request: NativeObject, signal: AbortSignal) => ProtocolOperation<T>): ProtocolOperation<T> {
   const controller = new AbortController(), unlink = abortLink(input.signal, controller), output = deferred<T>();
   const done = (async () => {
     const data = new Map<string, ImageData>();
+    let candidate: NativeObject | undefined, diagnostic: NativeObject | undefined;
     try {
       throwAborted(controller.signal);
       const refs = new Map((input.resourceRefs ?? []).map(ref => [ref.id, ref]));
@@ -83,9 +85,12 @@ export function withImages<T>(images: ImageCodec,
       throwAborted(controller.signal);
       const wire = images.map(input.request, id => { const value = data.get(id); assert(value); return value; });
       if (Buffer.byteLength(JSON.stringify(wire)) > nativeWireLimit) throw modelsError('request-too-large');
-      output.resolve(await joinOperation(start(wire, controller.signal), controller.signal));
+      const operation = start(wire, controller.signal);
+      // Preserve terminal native diagnostics when cancellation or cleanup prevents a successful result.
+      void operation.result.then(value => { candidate = immutable(value); }, error => { diagnostic = nativeDiagnostic(error); }).catch(() => {});
+      output.resolve(await joinOperation(operation, controller.signal));
     } catch (error) {
-      const failure = normalizeError(error); output.reject(failure);
+      const failure = withNativeDiagnostic(normalizeError(error), diagnostic ?? nativeDiagnostic(error) ?? candidate); output.reject(failure);
       if (failure.code === 'cleanup-failure') throw failure;
     } finally { data.clear(); unlink(); }
   })();

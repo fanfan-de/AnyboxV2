@@ -1,3 +1,4 @@
+import type { FileSelection, FileRef } from '../project-files/domain.js'
 import type { Model, Provider, NativeModelSnapshot, ProviderTemplate } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
@@ -30,6 +31,7 @@ export interface RunView {
   readonly sessionId: string
   readonly input: string
   readonly images?: readonly ImageRef[]
+  readonly files?: readonly FileRef[]
   readonly status: RunStatus
   readonly resultNodeId?: string
   readonly history: { readonly kind: 'tree'; readonly parentNodeId: string | null } | { readonly kind: 'legacy-unknown' }
@@ -83,13 +85,17 @@ export interface PendingSubmission {
   readonly sessionId: string
   readonly input: string
   readonly images?: readonly ImageRef[]
+  readonly files?: readonly FileRef[]
   /** Unknown image data must never be silently submitted as text only. */
   readonly invalidImages?: boolean
+  readonly invalidFiles?: boolean
+  readonly fileSelections?: readonly FileSelection[]
+  readonly preparationKey?: string
   readonly idempotencyKey: string
   readonly parentNodeId?: string | null
   readonly runId?: string
 }
-export interface ApiError extends Error { readonly status: number; readonly code: string }
+export interface ApiError extends Error { readonly status: number; readonly code: string; readonly fileIndex?: number }
 export type Api = <T>(path: string, body?: object, signal?: AbortSignal) => Promise<T>
 
 /** Connection recipes are resolved by the trusted host against installed protocols. */
@@ -102,6 +108,7 @@ export interface NodeView {
   readonly parentId: string | null
   readonly input: string
   readonly images?: readonly ImageRef[]
+  readonly files?: readonly FileRef[]
   readonly output: string
   readonly sourceRunId: string | null
 }

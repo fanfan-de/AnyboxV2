@@ -1,3 +1,4 @@
+import type { FileRef } from '../project-files/domain.js'
 /** Immutable conversation facts, independent of persistence and execution. */
 import type { ImageRef } from '../image/port.js'
 export interface Session {
@@ -16,6 +17,7 @@ export interface ConversationNode {
   readonly parentId: string | null
   readonly input: string
   readonly images: readonly ImageRef[]
+  readonly files: readonly FileRef[]
   readonly output: string
   readonly sourceRunId: string | null
 }

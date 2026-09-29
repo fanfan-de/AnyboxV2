@@ -1,3 +1,5 @@
+import { createFileView } from './file-view.js'
+import type { FileRef } from '../project-files/domain.js'
 import { canUseModel, modelAvailability, type ModelsCatalog } from './models-client.js'
 import type { ToolTrace, RunView, RunEventView, ImageRef } from './client-types.js'
 import { imageURL } from './image-client.js'
@@ -92,6 +94,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   }
   const imagePicker = get<HTMLInputElement>('.image-picker'), imageList = get<HTMLElement>('.composer-images')
   const attachImages = get<HTMLButtonElement>('.attach-images')
+  const fileView = createFileView(compose, messageInput, controller)
   let imageListKey = ''
   attachImages.addEventListener('click', () => imagePicker.click(), options)
   imagePicker.addEventListener('change', () => { controller.addImages(Array.from(imagePicker.files ?? [])); imagePicker.value = '' }, options)
@@ -129,10 +132,11 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   const updateSend = (): void => {
     const state = controller.snapshot()
     const imagesReady = !state.images.length || (imageModelReady() && state.images.every(image => image.status === 'ready'))
-    send.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || (!state.pending && (!modelReady() || !imagesReady || (!messageInput.value.trim() && !state.images.length)))
+    send.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || (!state.pending && (!modelReady() || !imagesReady || state.files.some(file => !file.selection || Boolean(file.error)) || (!messageInput.value.trim() && !state.images.length && !state.files.length)))
   }
   messageInput.addEventListener('input', () => { controller.setDraft(messageInput.value); resizeInput(); updateSend() }, options)
   messageInput.addEventListener('keydown', event => {
+    if (fileView.keydown(event)) return
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); compose.requestSubmit() }
   }, options)
   compose.addEventListener('submit', event => { event.preventDefault(); if (!send.disabled) void controller.submit() }, options)
@@ -150,7 +154,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     if (data.cancelRun) void controller.cancel(data.cancelRun)
     if (data.viewNode) void controller.navigate(data.viewNode)
     const node = controller.snapshot().path.find(item => item.id === (data.editNode ?? data.regenerateNode))
-    if (node && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images).then(() => messageInput.focus())
+    if (node && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images, node.files).then(() => messageInput.focus())
     if (node && data.regenerateNode) void controller.regenerate(node)
   }, options)
 function imagePreview(image: ImageRef, index: number): HTMLAnchorElement {
@@ -163,7 +167,7 @@ function imagePreview(image: ImageRef, index: number): HTMLAnchorElement {
   link.append(preview)
   return link
 }
-function addMessage(role: 'user' | 'assistant', content: string, isPending = false, images: readonly ImageRef[] = []): void {
+function addMessage(role: 'user' | 'assistant', content: string, isPending = false, images: readonly ImageRef[] = [], files: readonly FileRef[] = []): void {
   const item = document.createElement('div')
   item.className = `message ${role}${isPending ? ' pending' : ''}`
   const label = document.createElement('span')
@@ -173,6 +177,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   text.className = 'message-content'
   text.textContent = content
   item.append(label, text)
+  if (files.length) { const refs = document.createElement('div'); refs.className = 'message-files'; files.forEach(file => refs.append(fileView.snapshotButton(file))); item.append(refs) }
   if (images.length) {
     const gallery = document.createElement('div'); gallery.className = 'message-images'
     images.forEach((image, index) => gallery.append(imagePreview(image, index)))
@@ -224,6 +229,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
     restoreScroll(top) { savedScroll = top; if (!element.hidden) transcript.scrollTop = top },
     render() {
       const state = controller.snapshot()
+      fileView.render(state)
       const readOnly = state.session?.historyMode === 'dialogue-v1'
       eventCache = state.events
       expandedTraces = state.expanded
@@ -310,14 +316,14 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         branchSelect.replaceChildren(placeholder, ...state.children.map(node => {
           const option = document.createElement('option')
           option.value = node.id
-          option.textContent = node.input.slice(0, 45) || `${node.images?.length ?? 0} 张图片`
+          option.textContent = node.input.slice(0, 45) || (node.files?.length ? `${node.files.length} 个文件` : `${node.images?.length ?? 0} 张图片`)
           return option
         }))
         emptyBranches.replaceChildren(...state.children.slice(0, 3).map(node => {
           const button = document.createElement('button')
           button.type = 'button'
           button.dataset.viewNode = node.id
-          button.textContent = node.input || `${node.images?.length ?? 0} 张图片`
+          button.textContent = node.input || (node.files?.length ? `${node.files.length} 个文件` : `${node.images?.length ?? 0} 张图片`)
           button.title = `${readOnly ? '查看历史' : '继续对话'}：${button.textContent}`
           return button
         }))
@@ -367,7 +373,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         return button
       }
       for (const node of state.path) {
-        addMessage('user', node.input, false, node.images)
+        addMessage('user', node.input, false, node.images, node.files)
         if (!appendTurn(node.sourceRunId)) addMessage('assistant', node.output)
         const actions = document.createElement('div')
         actions.className = 'node-actions'
@@ -410,12 +416,12 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         renderNodes.push(card)
       }
       for (const run of progressRuns) {
-        addMessage('user', run.input, false, run.images)
+        addMessage('user', run.input, false, run.images, run.files)
         appendTurn(run.id)
         const label = document.createElement('p'); label.className = 'streaming-label'; label.textContent = '正在生成 · 临时输出'
         renderNodes.push(label)
       }
-      if (state.pending && !state.runs.some(item => item.id === state.pending?.runId)) addMessage('user', state.pending.input, true, state.pending.images)
+      if (state.pending && !state.runs.some(item => item.id === state.pending?.runId)) addMessage('user', state.pending.input, true, state.pending.images, state.pending.files)
       // Move only changed siblings; protocol components retain their DOM and local state.
       let cursor: ChildNode | null = transcript.firstChild
       for (const node of renderNodes) {
@@ -428,7 +434,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       if (focusedData) [...transcript.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
       if (state.path.length || state.runs.length) rendered = true
     },
-    dispose() { listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return panel.captureScroll() },
+    dispose() { fileView.dispose(); listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return panel.captureScroll() },
   }
   panel.render()
   return panel

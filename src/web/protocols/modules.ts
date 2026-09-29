@@ -7,20 +7,20 @@ export type { MountedProtocolTurn } from './view.js'
 export interface ProtocolWebModule {
   readonly protocolId: string
   readonly imageInput: boolean
-  encodeInput(text: string, imageCount?: number): string
+  encodeInput(text: string, imageCount?: number, fileCount?: number): string
   decode(value: unknown): ProtocolViewSnapshot | undefined
   reduce(current: ProtocolViewSnapshot | undefined, next: ProtocolViewSnapshot): ProtocolViewSnapshot | undefined
   mount(initial: ProtocolViewSnapshot): MountedProtocolTurn
 }
 
 /** Text is sent unchanged. Prompt/template expansion belongs exclusively to the server. */
-function encodeTextInput(text: string, imageCount = 0): string {
-  if (typeof text !== 'string' || (!text.trim() && !imageCount)) throw new TypeError('请输入消息或添加图片。')
+function encodeTextInput(text: string, imageCount = 0, fileCount = 0): string {
+  if (typeof text !== 'string' || (!text.trim() && !imageCount && !fileCount)) throw new TypeError('请输入消息、添加图片或引用项目文件。')
   return text
 }
 
-function bindTextProtocol(protocolId: string, name: string): ProtocolWebModule {
-  const imageInput = protocolId === 'chat-completions' || protocolId === 'deepseek-chat-completions'
+function bindProtocol(protocolId: string, name: string): ProtocolWebModule {
+  const imageInput = true
   const decode = (value: unknown): ProtocolViewSnapshot | undefined => {
     const snapshot = decodeProtocolView(value)
     return snapshot?.protocolId === protocolId ? snapshot : undefined
@@ -29,9 +29,8 @@ function bindTextProtocol(protocolId: string, name: string): ProtocolWebModule {
     if (next.protocolId !== protocolId || (current && current.protocolId !== protocolId)) return current
     return reduceProtocolView(current, next)
   }
-  return Object.freeze({ protocolId, imageInput, encodeInput(text: string, imageCount = 0) {
-    if (imageCount && !imageInput) throw new TypeError('此协议暂不支持图片输入。')
-    return encodeTextInput(text, imageCount)
+  return Object.freeze({ protocolId, imageInput, encodeInput(text: string, imageCount = 0, fileCount = 0) {
+    return encodeTextInput(text, imageCount, fileCount)
   }, decode, reduce,
     mount(initial: ProtocolViewSnapshot) {
       const snapshot = decode(initial)
@@ -41,11 +40,11 @@ function bindTextProtocol(protocolId: string, name: string): ProtocolWebModule {
   })
 }
 
-export const responsesWebModule = bindTextProtocol('responses', 'Responses')
-export const chatWebModule = bindTextProtocol('chat-completions', 'Chat Completions')
-export const deepSeekWebModule = bindTextProtocol('deepseek-chat-completions', 'DeepSeek')
-export const anthropicWebModule = bindTextProtocol('anthropic-messages', 'Anthropic')
-export const geminiWebModule = bindTextProtocol('gemini-interactions', 'Gemini')
+export const responsesWebModule = bindProtocol('responses', 'Responses')
+export const chatWebModule = bindProtocol('chat-completions', 'Chat Completions')
+export const deepSeekWebModule = bindProtocol('deepseek-chat-completions', 'DeepSeek')
+export const anthropicWebModule = bindProtocol('anthropic-messages', 'Anthropic')
+export const geminiWebModule = bindProtocol('gemini-interactions', 'Gemini')
 
 const modules = new Map([responsesWebModule, chatWebModule, deepSeekWebModule, anthropicWebModule, geminiWebModule]
   .map(module => [module.protocolId, module]))

@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import { registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
@@ -137,6 +138,7 @@ async function stateHost(directory) {
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   await root.installComponent(createProjectComponent(inputs))
+  await root.installComponent(createProjectFilesComponent(inputs))
   await root.installComponent(createSessionComponent(inputs, agents))
   return { root, records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey), db: root.get(localStorageServiceKey), projects: root.get(projectServiceKey) }
 }

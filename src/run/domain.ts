@@ -1,3 +1,5 @@
+import { validateSnapshotIds } from '../project-files/domain.js'
+import type { FileRef } from '../project-files/domain.js'
 /** Harness domain values and transitions are independent of Nya and providers. */
 import type { NativeModelSnapshot } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from './legacy-snapshot.js'
@@ -82,6 +84,7 @@ export interface Run {
   readonly sessionId: string
   readonly input: string
   readonly images: readonly ImageRef[]
+  readonly files: readonly FileRef[]
   readonly idempotencyKey: string
   readonly status: RunStatus
   readonly history: RunHistory
@@ -111,6 +114,7 @@ export interface RunInput {
   readonly parentNodeId: string | null
   readonly input: string
   readonly images?: readonly { readonly assetId: string }[]
+  readonly files?: readonly { readonly snapshotId: string }[]
   readonly idempotencyKey: string
 }
 
@@ -125,17 +129,21 @@ export function validateRunInput(input: RunInput): RunInput {
   if (input && ('modelProfileId' in input || 'model' in input || 'selection' in input || 'llmPlan' in input)) {
     throw new TypeError('RunInput accepts only a modelId for model selection')
   }
+  const rawFiles = input?.files ?? []
+  if (!Array.isArray(rawFiles) || rawFiles.some(file => !file || typeof file !== 'object' || Array.isArray(file) || Object.keys(file).some(key => key !== 'snapshotId'))) throw new TypeError('invalid input files')
+  const files = validateSnapshotIds(rawFiles.map(file => file.snapshotId))
   const images = input?.images ?? []
   if (!Array.isArray(images) || images.length > imageLimits.maxImages || images.some(image => !image || typeof image !== 'object' ||
     Array.isArray(image) || Object.keys(image).some(key => key !== 'assetId') || typeof image.assetId !== 'string' || !image.assetId.trim())) {
     throw new TypeError('invalid input images')
   }
-  if (typeof input?.input !== 'string' || (!input.input.trim() && !images.length)) throw new TypeError('input must contain text or images')
+  if (typeof input?.input !== 'string' || (!input.input.trim() && !images.length && !files.length)) throw new TypeError('input must contain text, images or files')
   return Object.freeze({
     sessionId: nonEmpty(input?.sessionId, 'sessionId'),
     ...(input?.modelId === undefined ? {} : { modelId: nonEmpty(input.modelId, 'modelId') }),
     parentNodeId: input?.parentNodeId === null ? null : nonEmpty(input?.parentNodeId, 'parentNodeId'),
     input: input.input.trim(),
+    files: Object.freeze(files.map(snapshotId => Object.freeze({ snapshotId }))),
     images: Object.freeze(images.map(image => Object.freeze({ assetId: nonEmpty(image.assetId, 'assetId') }))),
     idempotencyKey: nonEmpty(input?.idempotencyKey, 'idempotencyKey'),
   })
@@ -143,7 +151,8 @@ export function validateRunInput(input: RunInput): RunInput {
 
 export function sameRunInput(left: RunInput, right: RunInput): boolean {
   return left.input === right.input && left.parentNodeId === right.parentNodeId && left.modelId === right.modelId &&
-    JSON.stringify((left.images ?? []).map(image => image.assetId)) === JSON.stringify((right.images ?? []).map(image => image.assetId))
+    JSON.stringify((left.images ?? []).map(image => image.assetId)) === JSON.stringify((right.images ?? []).map(image => image.assetId)) &&
+    JSON.stringify((left.files ?? []).map(file => file.snapshotId)) === JSON.stringify((right.files ?? []).map(file => file.snapshotId))
 }
 
 export function requestCancellation(run: Run, now: string): Run {

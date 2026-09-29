@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import { registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
@@ -22,6 +23,7 @@ async function fixture() {
     await root.installComponent(createLocalSqliteComponent(join(directory, 'test.sqlite')))
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'test.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
+    await root.installComponent(createProjectFilesComponent(inputs))
     const stateFiber = root.installComponent(createSessionComponent(inputs, agents)); await stateFiber
     const state = root.get(sessionRunServiceKey), sessions = root.get(sessionServiceKey), project = await root.get(projectServiceKey).openProject(directory)
     const session = await sessions.createSession(project.id, 'assistant')

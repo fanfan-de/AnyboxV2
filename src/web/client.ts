@@ -128,7 +128,8 @@ async function api<T>(path: string, body?: object, signal?: AbortSignal): Promis
     const code = typeof data === 'object' && data !== null && 'error' in data &&
       typeof data.error === 'object' && data.error !== null && 'code' in data.error &&
       typeof data.error.code === 'string' ? data.error.code : 'internal-error'
-    throw Object.assign(new Error(code), { status: response.status, code }) as ApiError
+    const fileIndex = data && typeof data === 'object' && 'error' in data && data.error && typeof data.error === 'object' && 'fileIndex' in data.error && Number.isSafeInteger(data.error.fileIndex) ? Number(data.error.fileIndex) : undefined
+    throw Object.assign(new Error(code), { status: response.status, code, ...(fileIndex === undefined ? {} : { fileIndex }) }) as ApiError
   }
   return data as T
 }
@@ -137,6 +138,18 @@ function messageFor(error: unknown): string {
   if (!apiError(error)) return '无法连接本机服务。请检查服务是否仍在运行，然后重试。'
   return {
     'invalid-input': '输入无效，请检查内容后重试。',
+    'file-invalid': '文件路径或引用无效，请重新选择项目内的普通文件。',
+    'file-missing': '文件或快照不存在，或不属于此会话。',
+    'file-unavailable': '文件暂时无法读取，请检查权限后重试。',
+    'file-unsupported': '只支持普通 UTF-8 文本文件。',
+    'file-too-large': '源文件最多 10 MiB；每个引用最多 64 KiB，每轮合计 256 KiB。请选择较小的行范围。',
+    'file-range-invalid': '行范围无效或超出文件行数，请重新选择。',
+    'file-changed': '读取期间文件发生变化，请重试。',
+    'file-expired': '文件快照已过期，请更新为当前文件后重新发送。',
+    'file-corrupt': '文件快照损坏，无法使用该历史内容。',
+    'file-preparation-conflict': '同一快照准备编号对应了不同内容，请重新发送。',
+    'file-cancelled': '文件读取已取消。',
+    'file-cleanup-failed': '文件资源清理失败，请重新启动服务。',
     'image-required': '请上传 PNG、JPEG 或 WebP 图片。',
     'asset-invalid': '图片信息无效，请重新添加。',
     'asset-too-large': '每张图片最多 10 MiB，每条消息最多 8 张、合计 20 MiB，图片宽高不能超过 4096 像素。',

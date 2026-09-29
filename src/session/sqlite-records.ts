@@ -1,8 +1,11 @@
+import type { ProjectFilesPort } from '../project-files/port.js'
+import { validateFileBatch } from '../project-files/domain.js'
+import type { FileRef } from '../project-files/domain.js'
 /** SQLite implementation owned by the Session component; no runtime model plans or Nya services. */
 import type { RuntimeInputs } from '../contracts.js'
 import { isDeepStrictEqual } from 'node:util'
 import type { ImageAssetsPort, ImageRef } from '../image/port.js'
-import { inputImages } from '../run/program.js'
+import { inputImages, inputFiles } from '../run/program.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
 import type { NativeHistory, NativeInitialization, NativeRunInput, ProtocolBindingSnapshot, ProtocolRecord, StoredProtocolRecord } from '../run/program.js'
@@ -16,7 +19,7 @@ import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent
 import type { RunEventData } from '../run/execution.js'
 import type { SessionPort, SessionRunPort } from './port.js'
 
-type SessionRecords = Omit<SessionPort, 'createSession' | 'importImage' | 'getImage' | 'renewImages'> & Omit<SessionRunPort, 'describeImages'> & {
+type SessionRecords = Omit<SessionPort, 'createSession' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles'> & Omit<SessionRunPort, 'describeImages' | 'readFileSnapshots'> & {
   createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string | null): Promise<Session>
 }
 
@@ -320,7 +323,7 @@ function nodeFromRow(row: StorageRow, reader: StorageReader): ConversationNode {
   const run = runId ? reader.get('SELECT native_input_json FROM harness_runs WHERE id = ?', [runId]) : undefined
   const images = storedImages(run ? optional(run, 'native_input_json') : undefined)
   return Object.freeze({ id: required(row, 'id'), sessionId: required(row, 'session_id'),
-    parentId: optional(row, 'parent_id') ?? null, input: required(row, 'input'), images, output: required(row, 'output'),
+    parentId: optional(row, 'parent_id') ?? null, input: required(row, 'input'), images, files: storedFiles(run ? optional(run, 'native_input_json') : undefined), output: required(row, 'output'),
     sourceRunId: optional(row, 'source_run_id') ?? null })
 }
 
@@ -358,10 +361,20 @@ function promptsFromRow(row: StorageRow): readonly PromptSnapshot[] {
 function storedImages(json: string | undefined): readonly ImageRef[] {
   if (!json) return Object.freeze([])
   const input = JSON.parse(json) as NativeRunInput
-  if (input.schemaVersion !== 1 && input.schemaVersion !== 2) throw treeError('invalid-history')
+  if (input.schemaVersion !== 1 && input.schemaVersion !== 2 && input.schemaVersion !== 3) throw treeError('invalid-history')
   const images = inputImages(input)
   if (!Array.isArray(images)) throw treeError('invalid-history')
   return Object.freeze(images.map(image => Object.freeze({ ...image })))
+}
+
+function storedFiles(json: string | undefined): readonly FileRef[] {
+  if (!json) return Object.freeze([])
+  const input = JSON.parse(json) as NativeRunInput
+  if (![1, 2, 3].includes(input.schemaVersion)) throw treeError('invalid-history')
+  const files = inputFiles(input)
+  if (!Array.isArray(files)) throw treeError('invalid-history')
+  try { validateFileBatch(files) } catch { throw treeError('invalid-history') }
+  return Object.freeze(files.map(file => Object.freeze({ ...file })))
 }
 
 function runFromRow(row: StorageRow): Run {
@@ -401,6 +414,7 @@ function runFromRow(row: StorageRow): Run {
     id: required(row, 'id'), sessionId: required(row, 'session_id'),
     input: required(row, 'input'), idempotencyKey: required(row, 'idempotency_key'),
     images: storedImages(optional(row, 'native_input_json')),
+    files: storedFiles(optional(row, 'native_input_json')),
     status: required(row, 'status') as Run['status'],
     history: required(row, 'history_kind') === 'tree'
       ? Object.freeze({ kind: 'tree' as const, parentNodeId: optional(row, 'parent_node_id') ?? null })
@@ -434,6 +448,7 @@ function accepted(reader: StorageReader, input: RunInput): Run | undefined {
   if (prior) {
     const run = runFromRow(prior)
     if (run.input !== input.input || run.history.kind !== 'tree' || run.history.parentNodeId !== input.parentNodeId || run.requestedModelId !== (input.modelId ?? null) ||
+      !isDeepStrictEqual(run.files.map(file => file.snapshotId), (input.files ?? []).map(file => file.snapshotId)) ||
       !isDeepStrictEqual(run.images.map(image => image.assetId), (input.images ?? []).map(image => image.assetId))) throw treeError('idempotency-conflict')
     return run
   }
@@ -446,6 +461,7 @@ export async function openSqliteSessionRecords(
   inputs: RuntimeInputs,
   notify: (run: Pick<Run, 'id' | 'sessionId' | 'revision'>) => Promise<void>,
   images: ImageAssetsPort,
+  files: ProjectFilesPort,
 ): Promise<SessionRecords> {
   await db.migrate('run-state', migrations)
   // A previous process cannot own an in-flight call. Never replay its side effects.
@@ -560,9 +576,12 @@ export async function openSqliteSessionRecords(
             [initializationId, input.sessionId, binding.protocolId, serialize(native.initialization)])
         }
         if (savedInitialization && (required(savedInitialization, 'protocol_id') !== binding.protocolId || required(savedInitialization, 'payload_json') !== serialize(native.initialization))) throw treeError('history-incompatible')
-        if (native.input.raw !== input.input || ![1, 2].includes(native.input.schemaVersion) ||
+        if (native.input.raw !== input.input || ![1, 2, 3].includes(native.input.schemaVersion) ||
+          !isDeepStrictEqual(inputFiles(native.input).map(file => file.snapshotId), (input.files ?? []).map(file => file.snapshotId)) ||
           !isDeepStrictEqual(inputImages(native.input).map(image => image.assetId), (input.images ?? []).map(image => image.assetId))) throw treeError('invalid-history')
         if (inputImages(native.input).length) images.retainIn(tx, input.sessionId, `run-input:${id}`, inputImages(native.input))
+        if (inputFiles(native.input).some(file => file.projectId !== session.projectId)) throw treeError('invalid-history')
+        if (inputFiles(native.input).length) files.retainIn(tx, input.sessionId, `run-input:${id}`, inputFiles(native.input))
         const execution = { ...initialRunExecution, phase: 'active' }
         tx.execute('UPDATE harness_sessions SET protocol_id = ? WHERE id = ? AND protocol_id IS NULL', [binding.protocolId, input.sessionId])
         tx.execute(`INSERT INTO harness_runs (

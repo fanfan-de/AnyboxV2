@@ -22,7 +22,8 @@
 | --- | --- |
 | [Harness 组件协作总览](./harness-components.md) | 单根装配、资源所有权与关键调用路径 |
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
-| [多模态图片输入设计](./multimodal-image-input-design.md) | Chat/DeepSeek 图片输入的端到端链路、历史升级兼容与验收 |
+| [多模态图片输入设计](./multimodal-image-input-design.md) | 五种原生协议图片输入的端到端链路、历史升级兼容与验收 |
+| [项目文件引用](./project-file-references-design.md) | @ 搜索、发送快照、原子保留、幂等提交与历史恢复 |
 | [Session 对话树](./session-conversation-tree.md) | 父节点选择、分支并发、原子成功节点及旧历史读取 |
 | [Prompt 管理设计](./prompt-management-design.md) | 提示词产品语义、权限与版本固定 |
 | [Run 状态转换](./run-state-machine-design.md) | Run 状态与执行/持久化边界 |

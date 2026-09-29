@@ -1,9 +1,10 @@
+import { encodeFileContents } from '../project-files/domain.js'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Component } from '@nya/core'
 import { modelsServiceKey, modelsProtocolsServiceKey, nativeImageResourceUri, modelsError } from '@anybox/models'
 import type { JsonValue, ModelsService, ModelsProtocolsService, NativeExecution, NativeObject, NativeProtocolLease, NativeRestoreState, NativeImageResourceRef, NativeResourceResolver } from '@anybox/models'
-import { protocolAgentServiceKey, inputImages } from '../run/program.js'
+import { protocolAgentServiceKey, inputImages, inputFiles } from '../run/program.js'
 import { imageAssetsServiceKey } from '../image/port.js'
 import type { ImageAssetsPort } from '../image/port.js'
 import type { NativeInitialization, PreparedRunProgram, PrepareRunInput, ProgramExitReport, ProtocolAgentPort, ProtocolBindingSnapshot } from '../run/program.js'
@@ -42,31 +43,39 @@ function validateInitialization(initialization: NativeInitialization): void {
 
 function encodeInitial(protocolId: string, input: PrepareRunInput): NativeObject {
   const images = inputImages(input.input)
-  if (images.length && protocolId !== 'chat-completions' && protocolId !== 'deepseek-chat-completions') throw modelFailure('unsupported-request')
+  const contents = input.fileContents ?? []
+  const withoutExpiry = ({ expiresAt: _expiry, ...file }: import('../project-files/domain.js').FileRef) => file
+  if (!isDeepStrictEqual(contents.map(value => withoutExpiry(value.file)), inputFiles(input.input).map(withoutExpiry))) throw modelFailure('unsupported-request')
+  const fileText = encodeFileContents(contents)
+  const text = [input.input.text, fileText].filter(Boolean).join('\n\n')
   const prompts = input.history ? [] : initialMessages(input.initialization)
   const tools = input.initialization.tools
   const withTools = (encoded: readonly NativeObject[]): NativeObject => input.history ? {} : { tools: encoded }
   const declaration = (tool: typeof tools[number]) => ({ name: tool.name,
     ...(tool.description === undefined ? {} : { description: tool.description }), parameters: tool.parameters })
-  if (protocolId === 'responses') return { input: [...prompts, { role: 'user', content: input.input.text }],
+  if (protocolId === 'responses') return { input: [...prompts, { role: 'user', content: images.length
+    ? [...(text ? [{ type: 'input_text', text }] : []),
+      ...images.map(image => ({ type: 'input_image', image_url: nativeImageResourceUri(image.assetId) }))] : text }],
     ...withTools(tools.map(tool => ({ type: 'function', ...declaration(tool), strict: false }))) }
   if (protocolId === 'chat-completions' || protocolId === 'deepseek-chat-completions') {
     if (protocolId === 'deepseek-chat-completions' && prompts.some(prompt => prompt.role === 'developer')) throw modelFailure('unsupported-request')
-    const content = images.length ? [...(input.input.text ? [{ type: 'text', text: input.input.text }] : []),
-      ...images.map(image => ({ type: 'image_url', image_url: { url: nativeImageResourceUri(image.assetId) } }))] : input.input.text
+    const content = images.length ? [...(text ? [{ type: 'text', text }] : []),
+      ...images.map(image => ({ type: 'image_url', image_url: { url: nativeImageResourceUri(image.assetId) } }))] : text
     return { messages: [...prompts, { role: 'user', content }],
       ...withTools(tools.map(tool => ({ type: 'function', function: declaration(tool) }))) }
   }
   const instructions = prompts.filter(prompt => prompt.role === 'system' || prompt.role === 'developer').map(prompt => String(prompt.content))
   if (protocolId === 'anthropic-messages') return {
     messages: [...prompts.filter(prompt => prompt.role === 'user').map(prompt => ({ role: 'user', content: [{ type: 'text', text: prompt.content }] })),
-      { role: 'user', content: [{ type: 'text', text: input.input.text }] }],
+      { role: 'user', content: [...(!images.length || text ? [{ type: 'text', text }] : []),
+        ...images.map(image => ({ type: 'image', source: { type: 'url', url: nativeImageResourceUri(image.assetId) } }))] }],
     ...(instructions.length ? { system: instructions.map(text => ({ type: 'text', text })) } : {}),
     ...withTools(tools.map(tool => ({ name: tool.name, ...(tool.description === undefined ? {} : { description: tool.description }), input_schema: tool.parameters }))),
   }
   if (protocolId === 'gemini-interactions') return {
     input: [...prompts.filter(prompt => prompt.role === 'user').map(prompt => ({ type: 'user_input', content: [{ type: 'text', text: prompt.content }] })),
-      { type: 'user_input', content: [{ type: 'text', text: input.input.text }] }],
+      { type: 'user_input', content: [...(!images.length || text ? [{ type: 'text', text }] : []),
+        ...images.map(image => ({ type: 'image', uri: nativeImageResourceUri(image.assetId) }))] }],
     ...(instructions.length ? { system_instruction: instructions.join('\n\n') } : {}),
     ...withTools(tools.map(tool => ({ type: 'function', ...declaration(tool) }))),
   }
@@ -120,10 +129,9 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         const protocolId = service.protocolForModel(input.modelId), entry = entries.get(protocolId)
         if (!accepting || !entry?.accepting) throw modelFailure('dependency-unavailable')
         validateInitialization(input.initialization)
-        const imageProtocol = protocolId === 'chat-completions' || protocolId === 'deepseek-chat-completions'
         if (input.history && (input.history.binding.protocolId !== protocolId ||
-          !(imageProtocol ? ['1.0.0', '1.1.0'] : ['1.0.0']).includes(input.history.binding.loopVersion) ||
-          !(imageProtocol ? [1, 2] : [1]).includes(input.history.binding.recordFormatVersion) || input.history.initialization.toolContractVersion !== 'known-tools-v1')) throw modelFailure('unsupported-request')
+          !['1.0.0', '1.1.0'].includes(input.history.binding.loopVersion) ||
+          ![1, 2].includes(input.history.binding.recordFormatVersion) || input.history.initialization.toolContractVersion !== 'known-tools-v1')) throw modelFailure('unsupported-request')
         if (input.history) {
           const checkpoint = input.history.checkpoint
           if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) throw modelFailure('unsupported-request')
@@ -174,7 +182,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
           if (input.initialization.tools.length && !execution.capabilities.tools) throw modelFailure('unsupported-request')
           const initial = encodeInitial(protocolId, input), owned = execution
           const binding: ProtocolBindingSnapshot = { protocolId, generationId: entry.id + ':' + driver.generationId,
-            driverVersion: owned.snapshot.protocolVersion, loopVersion: imageProtocol ? '1.1.0' : '1.0.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 1 }
+            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.1.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 1 }
           let closing: Promise<ProgramExitReport> | undefined, executed = false
           const program: PreparedRunProgram = { binding, modelSnapshot: owned.snapshot, initialization: input.initialization, input: input.input,
             signal,

@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
@@ -320,6 +321,7 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
   const projectsFiber = root.installComponent(createProjectComponent(inputs))
+  root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
   const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))

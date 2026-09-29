@@ -1,3 +1,7 @@
+import { projectFilesServiceKey } from '../project-files/port.js'
+import type { ProjectFilesPort } from '../project-files/port.js'
+import { fileError } from '../project-files/domain.js'
+import type { Session } from './domain.js'
 import type { Component } from '@nya/core'
 import type { RuntimeInputs, OwnedCall } from '../contracts.js'
 import { imageAssetsServiceKey, imageAssetError } from '../image/port.js'
@@ -18,22 +22,23 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
   [localStorageServiceKey]: LocalStoragePort
   [projectServiceKey]: ProjectPort
   [imageAssetsServiceKey]: ImageAssetsPort
+  [projectFilesServiceKey]: ProjectFilesPort
 }> {
   return {
     name: 'harness-sessions',
-    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey],
+    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey],
     async apply(ctx, _config, deps) {
-      const projects = deps[projectServiceKey], images = deps[imageAssetsServiceKey]
+      const projects = deps[projectServiceKey], images = deps[imageAssetsServiceKey], files = deps[projectFilesServiceKey]
       const records = await openSqliteSessionRecords(deps[localStorageServiceKey], inputs, async run => {
         const change = Object.freeze({ sessionId: run.sessionId, runId: run.id, revision: run.revision })
         try { await ctx.parallel(runChangedEvent, change) }
         catch { ctx.logger.warn('Run change notification failed after commit', change) }
-      }, images)
+      }, images, files)
       let accepting = true
       const pending = new Set<Promise<unknown>>()
-      const imageCalls = new Set<OwnedCall<unknown>>()
-      const imageCall = <T>(sessionId: string, signal: AbortSignal | undefined,
-        start: (signal: AbortSignal) => Promise<OwnedCall<T>>): OwnedCall<T> => {
+      const resourceCalls = new Set<OwnedCall<unknown>>()
+      const resourceCall = <T>(sessionId: string, signal: AbortSignal | undefined,
+        start: (signal: AbortSignal, session: Session) => Promise<OwnedCall<T>>, kind: 'image' | 'file' = 'image'): OwnedCall<T> => {
         if (!accepting) throw new Error('session is closing')
         const abort = new AbortController(), combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal
         let cleanupFailed = false
@@ -43,12 +48,12 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           if (!session) throw new Error(`unknown session ${sessionId}`)
           if (session.historyMode !== 'native-local-v1') throw new Error('legacy-session-readonly')
           combined.throwIfAborted()
-          const call = await start(combined)
+          const call = await start(combined, session)
           let cancellationRequested = false, valueFailed = false, valueError: unknown, value!: T
           const cancel = () => {
             if (cancellationRequested) return
             cancellationRequested = true
-            try { call.cancel('session-image-cancelled') } catch { cleanupFailed = true }
+            try { call.cancel(kind === 'file' ? 'session-file-cancelled' : 'session-image-cancelled') } catch { cleanupFailed = true }
           }
           combined.addEventListener('abort', cancel, { once: true })
           if (combined.aborted) cancel()
@@ -57,17 +62,17 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
             // A result failure requests cancellation but still joins the provider's real exit.
             await Promise.all([
               call.result.then(result => { value = result }, error => { valueFailed = true; valueError = error; cancel() }),
-              call.done.catch(() => { cleanupFailed = true; cancel(); throw imageAssetError('asset-cleanup-failed') }),
+              call.done.catch(() => { cleanupFailed = true; cancel(); throw kind === 'file' ? fileError('file-cleanup-failed') : imageAssetError('asset-cleanup-failed') }),
             ])
-            if (cleanupFailed) throw imageAssetError('asset-cleanup-failed')
+            if (cleanupFailed) throw kind === 'file' ? fileError('file-cleanup-failed') : imageAssetError('asset-cleanup-failed')
             if (valueFailed) throw valueError
             combined.throwIfAborted()
             return value
           } finally { combined.removeEventListener('abort', cancel) }
         })
-        const done = result.then(() => {}, () => { if (cleanupFailed) throw imageAssetError('asset-cleanup-failed') }).finally(() => imageCalls.delete(handle))
+        const done = result.then(() => {}, () => { if (cleanupFailed) throw kind === 'file' ? fileError('file-cleanup-failed') : imageAssetError('asset-cleanup-failed') }).finally(() => resourceCalls.delete(handle))
         const handle: OwnedCall<T> = { result, done, cancel: reason => abort.abort(reason) }
-        imageCalls.add(handle)
+        resourceCalls.add(handle)
         void result.catch(() => {}); void done.catch(() => {})
         return handle
       }
@@ -80,17 +85,28 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
       }
       ctx.effect(() => async () => {
         accepting = false
-        for (const call of imageCalls) call.cancel('session-closed')
-        const exits = await Promise.allSettled([...imageCalls].map(call => call.done))
+        for (const call of resourceCalls) call.cancel('session-closed')
+        const exits = await Promise.allSettled([...resourceCalls].map(call => call.done))
         await Promise.allSettled([...pending])
         const failures = exits.flatMap(exit => exit.status === 'rejected' ? [exit.reason] : [])
-        if (failures.length) throw new AggregateError(failures, 'image calls failed to exit')
+        if (failures.length) throw new AggregateError(failures, 'session resource calls failed to exit')
       }, 'join session record operations')
 
       const sessions: SessionPort = {
-        importImage: (sessionId, bytes, signal) => imageCall(sessionId, signal,
+        searchProjectFiles: (id, query, signal) => resourceCall(id, signal, async (signal, session) => files.search(session.projectId, query, signal), 'file'),
+        previewProjectFile: (id, selection, signal) => resourceCall(id, signal, async (signal, session) => files.preview(session.projectId, selection, signal), 'file'),
+        prepareProjectFiles: (id, key, selections, signal) => resourceCall(id, signal, async (signal, session) => files.prepare(id, session.projectId, key, selections, signal), 'file'),
+        getFileSnapshot: (id, snapshotId, signal) => resourceCall(id, signal, async signal => {
+          const call = files.read(id, [snapshotId], signal)
+          return { ...call, result: call.result.then(values => values[0]) }
+        }, 'file'),
+        renewProjectFiles: (id, ids) => track(async () => {
+          if (!await records.getSession(id)) throw new Error(`unknown session ${id}`)
+          return files.renew(id, ids)
+        }),
+        importImage: (sessionId, bytes, signal) => resourceCall(sessionId, signal,
           async signal => images.importImage({ scopeId: sessionId, bytes }, signal)),
-        getImage: (sessionId, assetId, signal) => imageCall(sessionId, signal, async signal => {
+        getImage: (sessionId, assetId, signal) => resourceCall(sessionId, signal, async signal => {
           const [image] = await images.describe(sessionId, [assetId])
           signal.throwIfAborted()
           const call = images.readImage(sessionId, assetId, signal)
@@ -131,6 +147,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         getRunRecords: id => track(() => records.getRunRecords(id)),
       }
       const runs: SessionRunPort = {
+        readFileSnapshots: (id, ids, signal) => resourceCall(id, signal, async signal => files.read(id, ids, signal), 'file'),
         describeImages: (sessionId, assetIds) => track(() => images.describe(sessionId, assetIds)),
         findAcceptedRun: input => track(() => records.findAcceptedRun(input)),
         registerRun: (id, input, now, prompts, model, native) => track(() => records.registerRun(id, input, now, prompts, model, native)),

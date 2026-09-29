@@ -27,7 +27,7 @@ import sharp from 'sharp'
 // Limit paths: Responses max_output_tokens; Chat max_completion_tokens; Anthropic/DeepSeek max_tokens;
 // Gemini generation_config.max_output_tokens. No tools or reasoning controls are enabled by this smoke.
 // After npm run build: node --test tests/native-live-api.test.mjs
-// Additionally set ANYBOX_NATIVE_API_IMAGES=1 to exercise images for selected Chat/DeepSeek models.
+// Additionally set ANYBOX_NATIVE_API_IMAGES=1 to exercise images for selected models.
 const factories = {
   responses: createResponsesProtocol,
   'chat-completions': createChatCompletionsProtocol,
@@ -154,7 +154,7 @@ for (const protocolId of Object.keys(factories)) test(`${protocolId}: opt-in liv
   }
 })
 
-for (const protocolId of ['chat-completions', 'deepseek-chat-completions']) test(`${protocolId}: opt-in live image and restart continuation smoke`, {
+for (const protocolId of Object.keys(factories)) test(`${protocolId}: opt-in live image and restart continuation smoke`, {
   skip: !selected.has(protocolId) || process.env.ANYBOX_NATIVE_API_IMAGES !== '1', timeout: 150_000,
 }, async t => {
   const base = configuration(protocolId), config = { ...base, capabilities: { ...base.capabilities, imageInput: { support: 'supported' } } }

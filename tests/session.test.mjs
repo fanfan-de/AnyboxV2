@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import { imageAssetsServiceKey } from '../dist/image/port.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
@@ -33,6 +34,7 @@ async function fixture(execution = false, imagePort) {
     await root.installComponent(imagePort ? { name: 'test-session-images', apply(ctx) { ctx.provide(imageAssetsServiceKey, imagePort) } }
       : createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
+    await root.installComponent(createProjectFilesComponent(inputs))
     const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
     await sessionFiber
     if (execution) {

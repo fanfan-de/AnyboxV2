@@ -484,7 +484,7 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     assert.equal(first.response.status, 200)
     assert.equal(replay.data.id, first.data.id)
     assert.equal(f.llm.calls.length, 1)
-    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'history', 'id', 'images', 'input', 'modelId', 'modelSnapshot', 'protocolBinding', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
+    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'files', 'history', 'id', 'images', 'input', 'modelId', 'modelSnapshot', 'protocolBinding', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
     assert.doesNotMatch(JSON.stringify(first.data), /Private instructions|llmSnapshot|promptVersionIds|idempotencyKey/)
     const inFlight = await request(f.web, 'GET', `/runs/${first.data.id}`)
     assert.equal(inFlight.data.status, 'running')
@@ -1168,4 +1168,38 @@ test('a failed image done rejects the HTTP request even when replacement result 
     assert.deepEqual(await response.json(), { error: { code: 'asset-cleanup-failed' } })
     assert.ok(cancellations > 0)
   } finally { await server.close() }
+})
+
+test('Web project references prepare atomically, preserve history and expose safe scoped errors', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-files-'))
+  const f = await fixture(directory)
+  const { writeFile, unlink } = await import('node:fs/promises')
+  try {
+    await writeFile(join(directory, '.reference.txt'), 'first\nsecond\n')
+    const session = await f.harness.createSession(f.project.id, 'assistant', 'default'), base = `/sessions/${session.id}/project-files`
+    const search = await request(f.web, 'GET', `${base}/search?q=reference`)
+    assert.equal(search.response.status, 200); assert.ok(search.data.paths.includes('.reference.txt'))
+    const preview = await request(f.web, 'POST', `${base}/preview`, { path: '.reference.txt', range: { start: 2, end: 2 } })
+    assert.equal(preview.data.text, 'second\n')
+    const prepared = await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'key', selections: [{ kind: 'project-file', path: '.reference.txt' }] })
+    assert.equal(prepared.response.status, 200); const ref = prepared.data[0]
+    await unlink(join(directory, '.reference.txt'))
+    assert.equal((await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'key', selections: [{ kind: 'project-file', path: '.reference.txt' }] })).data[0].snapshotId, ref.snapshotId)
+    const submitted = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { input: '', parentNodeId: null, files: [{ snapshotId: ref.snapshotId }], idempotencyKey: 'run' })
+    assert.equal(submitted.response.status, 200)
+    f.llm.calls[0].result.resolve('file answer'); f.llm.calls[0].done.resolve()
+    const terminal = await f.harness.waitRun(submitted.data.id)
+    assert.equal(terminal.status, 'completed')
+    assert.deepEqual(terminal.files.map(value => value.snapshotId), [ref.snapshotId])
+    const snapshot = await request(f.web, 'GET', `${base}/snapshots/${ref.snapshotId}`)
+    assert.equal(snapshot.data.text, 'first\nsecond\n'); assert.ok(!JSON.stringify(snapshot.data).includes(directory))
+    const other = await f.harness.createSession(f.project.id, 'assistant', 'default')
+    assert.equal((await request(f.web, 'GET', `/sessions/${other.id}/project-files/snapshots/${ref.snapshotId}`)).response.status, 404)
+    const invalid = await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'bad', selections: [{ kind: 'project-file', path: 'missing.txt' }] })
+    assert.deepEqual(invalid.data, { error: { code: 'file-missing', fileIndex: 0 } })
+    assert.equal((await request(f.web, 'POST', `${base}/preview`, { path: '../escape' })).response.status, 400)
+    const response = await fetch(`${f.web.url}/api/v1${base}/snapshots/${ref.snapshotId}`, { headers: { Origin: 'https://different.invalid' } })
+    assert.equal(response.status, 403)
+    for (const asset of ['/draft-client.js', '/file-client.js', '/file-view.js', '/project-files/domain.js']) assert.equal((await fetch(`${f.web.url}${asset}`)).status, 200)
+  } finally { for (const call of f.llm.calls) { call.result.resolve('cleanup'); call.done.resolve() } await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })

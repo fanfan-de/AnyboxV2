@@ -1,3 +1,5 @@
+import type { SessionPort } from '../session/port.js'
+import { validateFileSelections, validateSnapshotIds, validId } from '../project-files/domain.js'
 import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -24,7 +26,7 @@ import type { ProtocolViewFrame, ProtocolViewSnapshot } from './protocols/types.
 import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
   PromptSnapshot, PromptVersion } from '../prompt/domain.js'
 
-export interface WebCommands {
+export interface WebCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles'> {
   listAgents(): readonly { readonly id: string }[]
   directoryPickerSupported(): boolean
   pickProject(signal: AbortSignal): Promise<Project | null>
@@ -101,6 +103,12 @@ function knownFailure(error: unknown): HttpFailure {
     return failure(503, 'picker-unavailable')
   }
   if (error instanceof Error) {
+    if (error.name === 'ProjectFileError' && 'code' in error) {
+      const code = String(error.code)
+      return failure(code === 'file-too-large' ? 413 : code === 'file-missing' ? 404
+        : ['file-expired', 'file-changed', 'file-preparation-conflict'].includes(code) ? 409
+        : ['file-invalid', 'file-range-invalid', 'file-unsupported', 'file-corrupt'].includes(code) ? 400 : 503, code)
+    }
     if (error.name === 'ImageAssetError' && 'code' in error) {
       const code = String(error.code)
       return failure(code === 'asset-too-large' ? 413 : code === 'asset-missing' ? 404 : code === 'asset-expired' ? 409
@@ -140,7 +148,7 @@ function sessionView(session: Session): object {
 
 function runView(run: Run): object {
   return {
-    id: run.id, sessionId: run.sessionId, input: run.input, images: run.images ?? [], status: run.status,
+    id: run.id, sessionId: run.sessionId, input: run.input, images: run.images ?? [], files: run.files ?? [], status: run.status,
     createdAt: run.createdAt, updatedAt: run.updatedAt, revision: run.revision, history: run.history,
     modelId: run.modelId, requestedModelId: run.requestedModelId, modelSnapshot: run.modelSnapshot,
     ...(run.protocolBinding ? { protocolBinding: run.protocolBinding } : {}),
@@ -253,6 +261,10 @@ const assets = new Map([
   ['/run-change-client.js', { file: fileURLToPath(new URL('./run-change-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/tool-trace.js', { file: fileURLToPath(new URL('./tool-trace.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/session-view.js', { file: fileURLToPath(new URL('./session-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/draft-client.js', { file: fileURLToPath(new URL('./draft-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/file-client.js', { file: fileURLToPath(new URL('./file-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/file-view.js', { file: fileURLToPath(new URL('./file-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/project-files/domain.js', { file: fileURLToPath(new URL('../project-files/domain.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/image-client.js', { file: fileURLToPath(new URL('./image-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/image/limits.js', { file: fileURLToPath(new URL('../image/limits.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/image/port.js', { file: fileURLToPath(new URL('../image/port.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
@@ -278,13 +290,13 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
     try { return await task }
     finally { imageRequests.delete(abort); response.off('close', disconnected); abort.signal.removeEventListener('abort', stopReading) }
   }
-  const joinImageCall = async <T>(call: OwnedCall<T>, signal: AbortSignal): Promise<T> => {
-    const cancel = () => call.cancel('Web image request cancelled')
+  const joinImageCall = async <T>(call: OwnedCall<T>, signal: AbortSignal, kind: 'image' | 'file' = 'image'): Promise<T> => {
+    const cancel = () => call.cancel('Web resource request cancelled')
     signal.addEventListener('abort', cancel, { once: true })
     if (signal.aborted) cancel()
     // A replacement service may fail during exit without ever settling result.
     // Observe both promises now; a done failure must not leave HTTP shutdown waiting forever.
-    const exited = call.done.then(() => undefined, () => ({ error: failure(503, 'asset-cleanup-failed') }))
+    const exited = call.done.then(() => undefined, () => ({ error: failure(503, kind === 'file' ? 'file-cleanup-failed' : 'asset-cleanup-failed') }))
     const exitFailure = exited.then(exit => {
       if (exit) { call.cancel('image resource cleanup failed'); throw exit.error }
       return new Promise<never>(() => {})
@@ -599,6 +611,35 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         json(response, 200, sessionView(session))
         return
       }
+      const projectFilesMatch = /^\/api\/v1\/sessions\/([^/]+)\/project-files\/(search|preview|prepare|renew|snapshots\/([^/]+))$/.exec(path)
+      if (projectFilesMatch) {
+        if ((request.headers.origin !== undefined && request.headers.origin !== origin) ||
+            (request.headers['sec-fetch-site'] !== undefined && !['same-origin', 'none'].includes(String(request.headers['sec-fetch-site'])))) throw failure(403, 'forbidden-origin')
+        const sessionId = decodeURIComponent(projectFilesMatch[1]), action = projectFilesMatch[2]
+        if (method === 'GET' && action === 'search') {
+          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.searchProjectFiles(sessionId, url.searchParams.get('q') ?? '', signal), signal, 'file'))); return
+        }
+        if (method === 'POST' && action === 'preview') {
+          const body = await requestObject(request, ['path', 'range'])
+          const [selection] = validateFileSelections([{ kind: 'project-file', ...body }])
+          if (selection.kind !== 'project-file') throw failure(400, 'invalid-input')
+          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.previewProjectFile(sessionId, selection, signal), signal, 'file'))); return
+        }
+        if (method === 'POST' && action === 'prepare') {
+          const body = await requestObject(request, ['preparationKey', 'selections'])
+          if (!validId(body.preparationKey)) throw failure(400, 'invalid-input')
+          const selections = validateFileSelections(body.selections), key = body.preparationKey
+          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.prepareProjectFiles(sessionId, key, selections, signal), signal, 'file'))); return
+        }
+        if (method === 'POST' && action === 'renew') {
+          const body = await requestObject(request, ['snapshotIds']), ids = validateSnapshotIds(body.snapshotIds)
+          json(response, 200, await imageRequest(request, response, () => commands.renewProjectFiles(sessionId, ids))); return
+        }
+        if (method === 'GET' && projectFilesMatch[3]) {
+          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.getFileSnapshot(sessionId, decodeURIComponent(projectFilesMatch[3]), signal), signal, 'file'))); return
+        }
+        throw failure(405, 'method-not-allowed')
+      }
       const imagesMatch = /^\/api\/v1\/sessions\/([^/]+)\/images(?:\/(renew)|\/([^/]+)\/content)?$/.exec(path)
       if (imagesMatch) {
         const sessionId = decodeURIComponent(imagesMatch[1])
@@ -637,13 +678,14 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       }
       const createRunMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs$/.exec(path)
       if (method === 'POST' && createRunMatch) {
-        const body = await requestObject(request, ['parentNodeId', 'input', 'images', 'idempotencyKey', 'modelId'])
+        const body = await requestObject(request, ['parentNodeId', 'input', 'images', 'files', 'idempotencyKey', 'modelId'])
         if (body.images !== undefined && (!Array.isArray(body.images) || body.images.length > imageLimits.maxImages || body.images.some(image =>
           !image || typeof image !== 'object' || Array.isArray(image) || Object.keys(image).some(key => key !== 'assetId') || typeof image.assetId !== 'string' || !image.assetId || image.assetId.length > 1024))) throw failure(400, 'invalid-input')
         const run = await commands.startRun({
           sessionId: decodeURIComponent(createRunMatch[1]),
           parentNodeId: body.parentNodeId as string | null,
           input: body.input as string,
+          ...(body.files === undefined ? {} : { files: body.files as { snapshotId: string }[] }),
           ...(body.images === undefined ? {} : { images: body.images as { assetId: string }[] }),
           idempotencyKey: body.idempotencyKey as string,
           ...(body.modelId === undefined ? {} : { modelId: body.modelId as string }),
@@ -714,7 +756,8 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       throw failure(404, 'not-found')
     })().catch(error => {
       const safe = knownFailure(error)
-      if (!response.headersSent) json(response, safe.status, { error: { code: safe.code } })
+      const fileIndex = error && typeof error === 'object' && 'fileIndex' in error && Number.isSafeInteger(error.fileIndex) && Number(error.fileIndex) >= 0 && Number(error.fileIndex) < 8 ? Number(error.fileIndex) : undefined
+      if (!response.headersSent) json(response, safe.status, { error: { code: safe.code, ...(fileIndex === undefined ? {} : { fileIndex }) } })
       else response.destroy()
     })
   })

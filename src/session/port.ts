@@ -1,3 +1,4 @@
+import type { FileSelection, FileContent, FileRef, FileSearch, FilePreview, FileRenewal } from '../project-files/domain.js'
 import type { Session, ConversationNode, NodePage, NodeQuery } from './domain.js'
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
 import type { RunEvent, RunExecution } from '../run/execution.js'
@@ -13,6 +14,11 @@ export const sessionRunServiceKey = 'harness.session-runs'
 
 /** Public session facts. Run commands and in-flight resources belong to the execution components. */
 export interface SessionPort {
+  searchProjectFiles(sessionId: string, query: string, signal?: AbortSignal): OwnedCall<FileSearch>
+  previewProjectFile(sessionId: string, selection: Extract<FileSelection, { kind: 'project-file' }>, signal?: AbortSignal): OwnedCall<FilePreview>
+  prepareProjectFiles(sessionId: string, key: string, selections: readonly FileSelection[], signal?: AbortSignal): OwnedCall<readonly FileRef[]>
+  getFileSnapshot(sessionId: string, snapshotId: string, signal?: AbortSignal): OwnedCall<FileContent>
+  renewProjectFiles(sessionId: string, ids: readonly string[]): Promise<FileRenewal>
   importImage(sessionId: string, bytes: AsyncIterable<Uint8Array>, signal?: AbortSignal): OwnedCall<ImageRef>
   getImage(sessionId: string, assetId: string, signal?: AbortSignal): OwnedCall<{ readonly image: ImageRef; readonly bytes: Uint8Array }>
   renewImages(sessionId: string, assetIds: readonly string[]): Promise<ImageRenewal>
@@ -38,6 +44,7 @@ export interface RunContext {
 
 /** Trusted execution-facing operations on the same Session owner, not an access boundary. */
 export interface SessionRunPort {
+  readFileSnapshots(sessionId: string, ids: readonly string[], signal?: AbortSignal): OwnedCall<readonly FileContent[]>
   describeImages(sessionId: string, assetIds: readonly string[]): Promise<readonly ImageRef[]>
   findAcceptedRun(input: RunInput): Promise<Run | undefined>
   registerRun(id: string, input: RunInput, now: string,

@@ -115,7 +115,7 @@ test('Anthropic required defaults are saved explicitly and bounded by output lim
   try {
     await f.settings.createConnection(account(provider, 'anthropic', { protocolId: 'anthropic-messages' }))
     assert.equal(f.settings.configurations()[0].parameters.value.max_tokens, 1000)
-    assert.equal(f.models.list()[0].effectiveCapabilities.imageInput, false)
+    assert.equal(f.models.list()[0].effectiveCapabilities.imageInput, true)
   } finally { await f.root.fiber.dispose() }
 })
 

@@ -8,7 +8,7 @@
 
 Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResult 与统一消息执行路径。保留配置、Vault、目录和驱动注册，提供 openNative、原生参数、版本化记录和恢复 codec。旧 dialogue-v1 Session 只读，不导入文本，不提供跨协议或跨账户转换。新 Session 使用 native-local-v1，在第一次接受事务中固定协议，失败和取消不解除绑定。
 
-继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、已知 Bash/Apply Patch 判别联合、实际退出后结算和 interrupted 不重放规则。Chat/DeepSeek 已增加静态本地图片输入；其余协议图片能力保持关闭。本期不包含图片输出、工具返回图片、音频、远端后台任务、并行工具调度、动态工具注册中心或用户交互等待机制。
+继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、已知 Bash/Apply Patch 判别联合、实际退出后结算和 interrupted 不重放规则。五种协议均支持显式声明能力的静态本地图片输入。本期不包含图片输出、工具返回图片、音频、远端后台任务、并行工具调度、动态工具注册中心或用户交互等待机制。
 
 ## 2. 已实现模块与职责
 
@@ -172,7 +172,7 @@ ANYBOX_NATIVE_API_TESTS=1 ANYBOX_NATIVE_API_PROTOCOLS=responses node --test test
 
 运行前另提供每个选中协议的 `ANYBOX_NATIVE_API_<ID>_ENDPOINT`、`_MODEL`、`_KEY` 和 `_PARAMETERS`；ID转大写并将连字符替换为下划线，例如 `ANTHROPIC_MESSAGES`。地址和模型ID由验证者明确指定；参数是原生JSON对象，必须显式包含正整数输出上限（Responses `max_output_tokens`、Chat `max_completion_tokens`、Anthropic/DeepSeek `max_tokens`、Gemini `generation_config.max_output_tokens`）。不从现有配置或业务库推断任何值。
 
-该入口使用临时SQLite、内存Vault与实际协议传输，验证首轮文本、关闭重开、指定成功父节点的文本续接及原记录不变。对显式选中的 Chat/DeepSeek 再设置 `ANYBOX_NATIVE_API_IMAGES=1`，会增加图片颜色识别及重启后沿图片父节点继续的验收；无需访问已保存 Key 或实际业务数据。它不构成工具、搜索、流式或跨平台凭据验收。系统凭据仍独立使用 `ANYBOX_KEYRING_TESTS=1` 门控。本次没有启用这两类真实验证。
+该入口使用临时SQLite、内存Vault与实际协议传输，验证首轮文本、关闭重开、指定成功父节点的文本续接及原记录不变。对显式选中的任一协议再设置 `ANYBOX_NATIVE_API_IMAGES=1`，会增加图片颜色识别及重启后沿图片父节点继续的验收；无需访问已保存 Key 或实际业务数据。它不构成工具、搜索、流式或跨平台凭据验收。系统凭据仍独立使用 `ANYBOX_KEYRING_TESTS=1` 门控。本次没有启用这两类真实验证。
 
 ## 12. 最终验收记录（2026-09-28）
 
@@ -180,3 +180,7 @@ ANYBOX_NATIVE_API_TESTS=1 ANYBOX_NATIVE_API_PROTOCOLS=responses node --test test
 - Models 包独立验证180项全部通过；正式源码不再引用 `models.open()`、ModelResult、ModelMessage、旧AgentLoop或统一消息执行组装器。
 - Chrome 使用临时SQLite、内存Vault与模拟HTTP验收文本发送、流式临时输出、运行中刷新校准、最终历史展示、Bash工具结果、同父分支、原文安全展示、搜索能力开关和旧会话只读。协议Web分派调整后另复验发送、流式及运行中刷新，控制台无error/warn；临时宿主与测试标签页已关闭。
 - `git diff --check` 通过。未修改NyaCore，未升级实际业务数据库，未调用真实模型API，未执行真实系统凭据或跨平台验收。
+
+### 项目文件输入扩展
+
+应用输入现有 v1/v2 继续读取，v3 增加 files 快照引用；文件内容由 Run 准备后交给协议绑定，作为本轮用户文本保存进增量原生请求。原生驱动和记录格式不升级，Models 不解释项目路径，历史恢复不回源文件。详见[项目文件引用](project-file-references-design.md)。

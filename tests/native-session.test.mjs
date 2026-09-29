@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
@@ -25,6 +26,7 @@ async function host(t, executing = false) {
     harness = await createHarness(root, { agents })
   } else {
     await root.installComponent(createProjectComponent(inputs))
+    await root.installComponent(createProjectFilesComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, agents))
   }
   const sessions = root.get('harness.sessions'), records = root.get('harness.session-runs'), db = root.get('local-storage')

@@ -4,7 +4,7 @@
 
 ## 定位与装配
 
-源码：[protocols/chat-completions.ts](../../../packages/models/src/protocols/chat-completions.ts)，共用 [shared.ts](../../../packages/models/src/protocols/shared.ts) 与 [transport.ts](../../../packages/models/src/protocols/transport.ts)。内部 [chat-images.ts](../../../packages/models/src/protocols/chat-images.ts) 负责已知图片字段的资源映射、wire 大小预检与包含资源读取的 operation，不注册额外组件。工厂 `createChatCompletionsProtocolComponent(options?)`，组件名 `models-protocol-chat-completions`，注入 `models.protocols` 并注册 `chat-completions`（版本 `2.1.0`），无独立服务键。
+源码：[protocols/chat-completions.ts](../../../packages/models/src/protocols/chat-completions.ts)，共用 [shared.ts](../../../packages/models/src/protocols/shared.ts) 与 [transport.ts](../../../packages/models/src/protocols/transport.ts)。内部 [images.ts](../../../packages/models/src/protocols/images.ts) 负责已知图片字段的资源映射、wire 大小预检与包含资源读取的 operation，不注册额外组件。工厂 `createChatCompletionsProtocolComponent(options?)`，组件名 `models-protocol-chat-completions`，注入 `models.protocols` 并注册 `chat-completions`（版本 `2.1.0`），无独立服务键。
 
 驱动负责原生协议与恢复；[Chat Completions Agent](../execution/chat-completions-agent.md)负责解释 finish reason、执行工具与决定结论。独立工厂 `createChatCompletionsProtocol(options?, policy?)` 可复用实现显式扩展，工厂选项只接受可替换 `fetch`。
 

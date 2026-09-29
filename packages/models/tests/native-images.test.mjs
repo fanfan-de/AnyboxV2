@@ -54,13 +54,13 @@ test('image admission rejects missing, extra and conflicting resource metadata w
   assert.throws(() => unavailable.prepareExchange(intent(), { resourceRefs: [ref] }), { code: 'resource-unavailable' }); await unavailable.close()
 })
 
-test('image capability requires explicit model support and only Chat enables it', async () => {
+test('image capability requires explicit model support', async () => {
   const protocol = createChatCompletionsProtocol()
   for (const support of ['unsupported', 'unknown']) {
     const execution = nativeSession(protocol, { declaration: { ...declaration, imageInput: { support } }, resources: reader() })
     assert.throws(() => execution.prepareExchange(intent(), { resourceRefs: [ref] }), { code: 'capability-unsupported' }); await execution.close()
   }
-  for (const create of [createResponsesProtocol, createAnthropicMessagesProtocol, createGeminiInteractionsProtocol]) assert.equal(create().effectiveCapabilities(declaration, {}).imageInput, false)
+  for (const create of [createResponsesProtocol, createAnthropicMessagesProtocol, createGeminiInteractionsProtocol]) assert.equal(create().effectiveCapabilities(declaration, {}).imageInput, true)
   const f = await fixture({ protocols: [protocol] })
   try {
     await f.add({ key: 'private-key' }); const reads = f.vault.reads.length

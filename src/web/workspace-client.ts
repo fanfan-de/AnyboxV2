@@ -1,8 +1,10 @@
+import { createFileLeaseKeeper } from './file-client.js'
 import type { ModelsCatalog } from './models-client.js'
 import type { Api, ProjectView, SessionView, SessionPosition } from './client-types.js'
 import { createPendingStore, createSessionController } from './session-client.js'
 import type { BrowserStorage, SessionController } from './session-client.js'
-import { createDraftStore, createImageLeaseKeeper } from './image-client.js'
+import { createImageLeaseKeeper } from './image-client.js'
+import { createDraftStore } from './draft-client.js'
 import type { ImageRef } from './client-types.js'
 import { createRunChangeClient } from './run-change-client.js'
 import { createSessionPanel } from './session-view.js'
@@ -66,6 +68,11 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   const listeners = new AbortController(), options = { signal: listeners.signal }
   const showNotice = (message = '') => { notice.textContent = message; notice.hidden = !message }
   const imageLeases = createImageLeaseKeeper({ api, drafts, pending,
+    schedule: (callback, ms) => window.setTimeout(callback, ms), clear: timer => window.clearTimeout(timer as number),
+    changed: () => { for (const bundle of bundles.values()) bundle.controller.imagesChanged() },
+    error: error => showNotice(messageFor(error)),
+  })
+  const fileLeases = createFileLeaseKeeper({ api, drafts, pending,
     schedule: (callback, ms) => window.setTimeout(callback, ms), clear: timer => window.clearTimeout(timer as number),
     changed: () => { for (const bundle of bundles.values()) bundle.controller.imagesChanged() },
     error: error => showNotice(messageFor(error)),
@@ -593,7 +600,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   window.addEventListener('hashchange', route, options)
   window.addEventListener('popstate', route, options)
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) void imageLeases.refresh()
+    if (!document.hidden) { void imageLeases.refresh(); void fileLeases.refresh() }
     if (document.hidden) { dragCleanup?.(); resizeCleanup?.() }
     for (const bundle of bundles.values()) if (bundle.view) void bundle.controller.refresh()
   }, options)
@@ -643,6 +650,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       disposed = true
       changes.dispose()
       imageLeases.dispose()
+      fileLeases.dispose()
       unsubscribeModels?.()
       listeners.abort()
       sessionIndex.dispose()

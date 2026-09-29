@@ -40,14 +40,11 @@ test('unknown protocol and incompatible view schema never select a generic fallb
   assert.equal(decodeProtocolWebView(null), undefined)
 })
 
-test('only Chat and DeepSeek encode image-only input and leave template expansion to the host', () => {
-  for (const id of ['chat-completions', 'deepseek-chat-completions']) {
+test('all five protocols encode image-only input and leave template expansion to the host', () => {
+  for (const id of ['responses', 'anthropic-messages', 'gemini-interactions', 'chat-completions', 'deepseek-chat-completions']) {
     const module = getProtocolWebModule(id)
     assert.equal(module.imageInput, true)
     assert.equal(module.encodeInput('', 2), '')
     assert.equal(module.encodeInput(' {{input}} ', 1), ' {{input}} ')
-  }
-  for (const id of ['responses', 'anthropic-messages', 'gemini-interactions']) {
-    assert.throws(() => getProtocolWebModule(id).encodeInput('text', 1), /不支持图片/)
   }
 })

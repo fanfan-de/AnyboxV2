@@ -1,3 +1,4 @@
+import { createProjectFilesComponent } from '../dist/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
@@ -300,6 +301,7 @@ async function stateHost(file) {
     await root.installComponent(createLocalSqliteComponent(file))
     await root.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
+    await root.installComponent(createProjectFilesComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, agents))
     return { root, records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey), projects: root.get(projectServiceKey) }
   } catch (error) { await root.fiber.dispose(); throw error }
@@ -347,6 +349,7 @@ test('the Run state migration preserves legacy completed Runs and interrupts old
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
+    await root.installComponent(createProjectFilesComponent(inputs))
     const project = await root.get(projectServiceKey).openProject(directory)
     const db = root.get(localStorageServiceKey)
     await db.migrate('run-state', [{ version: 1, up(tx) {
@@ -393,6 +396,7 @@ test('revoking Bash waits for its done and prevents another model step', async (
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
+    await root.installComponent(createProjectFilesComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, agents))
     await root.installComponent(createPromptComponent(inputs))
     await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))

@@ -1,3 +1,4 @@
+import type { FileContent } from '../project-files/domain.js'
 import type { Component } from '@nya/core'
 import type { JsonValue, ModelsService } from '@anybox/models'
 import { modelsServiceKey } from '@anybox/models'
@@ -105,11 +106,17 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             const images = (input.images?.length ? await records.describeImages(session.id, input.images.map(image => image.assetId)) : [])
               .map(({ expiresAt: _expiresAt, ...image }) => Object.freeze(image))
             validateImageBatch(images)
-            const nativeInput: NativeRunInput = Object.freeze({ schemaVersion: 2, raw: input.input,
-              text: template ? template.content.replace('{{input}}', () => input.input) : input.input, images: Object.freeze(images), template })
+            let fileContents: readonly FileContent[] = []
+            if (input.files?.length) {
+              const call = records.readFileSnapshots(session.id, input.files.map(file => file.snapshotId), controller.signal)
+              try { fileContents = await call.result } finally { await call.done }
+            }
+            const files = fileContents.map(({ file: { expiresAt: _expiry, ...file } }) => Object.freeze(file))
+            const nativeInput: NativeRunInput = Object.freeze({ schemaVersion: 3, raw: input.input,
+              text: template ? template.content.replace('{{input}}', () => input.input) : input.input, images: Object.freeze(images), files: Object.freeze(files), template })
             const id = inputs.newId()
             let program: PreparedRunProgram
-            try { program = await protocols.prepare({ runId: id, sessionId: session.id, modelId, signal: controller.signal, initialization, input: nativeInput, ...(history ? { history } : {}) }) }
+            try { program = await protocols.prepare({ runId: id, sessionId: session.id, modelId, signal: controller.signal, initialization, input: nativeInput, fileContents, ...(history ? { history } : {}) }) }
             catch (error) { if (error instanceof Error && 'code' in error && String(error.code).startsWith('history-')) throw error; throw normalizeModelFailure(error) }
             let transferred = false
             untransferred.set(id, controller)
