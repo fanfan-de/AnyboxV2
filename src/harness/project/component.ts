@@ -1,7 +1,10 @@
 import { realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 import type { Component } from '@nya/core'
-import type { RuntimeInputs } from '../contracts.js'
+import type { OwnedCall, RuntimeInputs } from '../contracts.js'
+import { createDirectoryBrowser } from './directory-browser.js'
+import type { DirectoryBrowserOptions } from './directory-browser.js'
+import type { DirectoryBrowseOpened, DirectoryBrowseOptions, DirectoryPage } from './directories.js'
 import { localStorageServiceKey } from '../storage/port.js'
 import type { LocalStoragePort, StorageMigration, StorageRow } from '../storage/port.js'
 
@@ -30,10 +33,22 @@ export function isProjectUnavailableError(error: unknown): error is ProjectUnava
 }
 
 export interface ProjectPort {
+  readonly directoryBrowsingSupported: boolean
+  openDirectoryBrowse(owner: string, input: DirectoryBrowseOptions, signal?: AbortSignal): OwnedCall<DirectoryBrowseOpened>
+  readDirectoryPage(owner: string, browseId: string, page: number, signal?: AbortSignal): OwnedCall<DirectoryPage>
+  closeDirectoryBrowse(owner: string, browseId: string): Promise<void>
+  onDirectoryBrowseRetired(listener: (browseId: string) => void): () => void
   openProject(path: string): Promise<Project>
   listProjects(): Promise<readonly Project[]>
   getProject(id: string): Promise<Project | undefined>
   requireAvailable(id: string): Promise<Project>
+}
+
+export interface ProjectOptions {
+  /** A host supplies its own operating-system user's home, never a browser's home. */
+  readonly directoryHome?: string
+  /** Internal provider and clocks can be replaced for lifecycle verification. */
+  readonly directoryBrowser?: Omit<DirectoryBrowserOptions, 'homePath'>
 }
 
 const migrations: readonly StorageMigration[] = [{
@@ -61,7 +76,7 @@ async function availability(project: Project): Promise<Project> {
 }
 
 /** Project identity and directory availability; conversation state belongs to the state provider. */
-export function createProjectComponent(inputs: RuntimeInputs): Component.Object<void, {
+export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOptions = {}): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
 }> {
   return {
@@ -70,11 +85,13 @@ export function createProjectComponent(inputs: RuntimeInputs): Component.Object<
     async apply(ctx, _config, deps) {
       const db = deps[localStorageServiceKey]
       await db.migrate('projects', migrations)
+      const directories = createDirectoryBrowser({ ...options.directoryBrowser, homePath: options.directoryHome })
       let accepting = true
       const pending = new Set<Promise<unknown>>()
       ctx.effect(() => async () => {
         accepting = false
-        await Promise.allSettled([...pending])
+        const [directoryCleanup] = await Promise.allSettled([directories.close(), Promise.allSettled([...pending])])
+        if (directoryCleanup.status === 'rejected') throw directoryCleanup.reason
       }, 'join project operations')
       const track = <T>(work: () => Promise<T>): Promise<T> => {
         if (!accepting) return Promise.reject(new Error('project service is closing'))
@@ -86,6 +103,11 @@ export function createProjectComponent(inputs: RuntimeInputs): Component.Object<
       const get = (id: string) => db.read(reader => reader.get(
         'SELECT * FROM harness_projects WHERE id = ?', [id]))
       const service: ProjectPort = {
+        directoryBrowsingSupported: directories.supported,
+        openDirectoryBrowse: (owner, input, signal) => directories.open(owner, input, signal),
+        readDirectoryPage: (owner, browseId, page, signal) => directories.page(owner, browseId, page, signal),
+        closeDirectoryBrowse: (owner, browseId) => directories.release(owner, browseId),
+        onDirectoryBrowseRetired: listener => directories.onRetired(listener),
         openProject(path) {
           return track(async () => {
             if (typeof path !== 'string' || !isAbsolute(path) || !path.trim()) {

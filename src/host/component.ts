@@ -55,6 +55,11 @@ export function createHarnessApiComponent(agents: readonly Readonly<{ id: string
       const commands: HarnessApiCommands = {
         listAgents: () => agentIds,
         directoryPickerSupported: () => deps[directoryPickerServiceKey]?.supported ?? false,
+        directoryBrowsingSupported: () => deps[projectServiceKey].directoryBrowsingSupported,
+        openDirectoryBrowse: (...args) => deps[projectServiceKey].openDirectoryBrowse(...args),
+        readDirectoryPage: (...args) => deps[projectServiceKey].readDirectoryPage(...args),
+        closeDirectoryBrowse: (...args) => deps[projectServiceKey].closeDirectoryBrowse(...args),
+        onDirectoryBrowseRetired: listener => deps[projectServiceKey].onDirectoryBrowseRetired(listener),
         async pickProject(signal) {
           const path = await deps[directoryPickerServiceKey]?.pick(signal)
           if (!path || signal.aborted) return null

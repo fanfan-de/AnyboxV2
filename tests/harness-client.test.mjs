@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createHarnessClient, scopedId, splitScopedId, connectionResourceURL, mapResourceIds } from '../dist/client/harness-client.js'
 import { migrateLegacyState } from '../dist/client/legacy-state.js'
-import { emptyWorkspace, splitSession, openSession, panes, restoreWorkspace } from '../dist/client/workspace-layout.js'
+import { emptyWorkspace, splitSession, openSession, panes, restoreWorkspace, waitForProjectSnapshot } from '../dist/client/workspace-layout.js'
 import { createPendingStore } from '../dist/client/session-client.js'
 import { createDraftStore } from '../dist/client/draft-client.js'
 const a = '11111111-1111-4111-8111-111111111111', b = '22222222-2222-4222-8222-222222222222'
@@ -98,4 +98,59 @@ test('healthy list updates are observable before a stalled device responds; late
   assert.ok(snapshots.at(-1).some(value => value.id === scopedId(b, 'new')))
   assert.ok(!snapshots.at(-1).some(value => value.id === scopedId(b, 'old')))
   off(); api.dispose()
+})
+
+test('project selection captures connection identity and revision for browse, native pick and registration', async t => {
+  const calls = [], targets = connections.map((connection, index) => ({ ...connection, revision: index + 4 }))
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options })
+    if (url === '/api/client/v1/local') return Response.json({ instanceId: a, picker: true })
+    if (url.endsWith('/pick')) return Response.json({ path: '/same/path' })
+    if (url.endsWith('/projects')) return Response.json({ id: 'same', name: 'project', path: '/same/path', available: true })
+    return Response.json({ instanceId: b, apiVersion: 1, capabilities: ['projects.browse'] })
+  })
+  const api = createHarnessClient(targets, 'b'), bound = api.directoryTarget()
+  assert.equal(bound.connection.instanceId, b)
+  targets[1].revision = 99; targets[1].instanceId = a
+  await bound.api('/instance')
+  await bound.api('/projects/directories/browse', { action: 'open', path: '/same/path' })
+  const project = await bound.register('/same/path', new AbortController().signal)
+  assert.equal(project.id, scopedId(b, 'same')); assert.equal(project.harnessName, 'Server')
+  assert.equal(await bound.nativeAvailable(new AbortController().signal), false)
+  for (const call of calls.filter(call => call.url.startsWith('/api/connections/b/'))) {
+    assert.equal(call.options.headers['X-Anybox-Expected-Instance-Id'], b)
+    assert.equal(call.options.headers['X-Anybox-Connection-Revision'], '5')
+  }
+  const local = api.directoryTarget('a')
+  assert.equal(await local.nativeAvailable(new AbortController().signal), true)
+  assert.equal(await local.pickNative(new AbortController().signal), '/same/path')
+  assert.equal(calls.at(-1).url, '/api/client/v1/connections/a/pick')
+  assert.equal(calls.at(-1).options.headers['X-Anybox-Expected-Instance-Id'], a)
+  assert.equal(calls.at(-1).options.headers['X-Anybox-Connection-Revision'], '4')
+  assert.equal(Object.isFrozen(bound.connection), true)
+  api.dispose()
+})
+
+test('partial device lists preserve a pending project route while healthy projects remain usable', async t => {
+  let finishB
+  t.mock.method(globalThis, 'fetch', async url => url.includes('/a/')
+    ? Response.json([{ id: 'same', available: true }])
+    : new Promise(resolve => { finishB = resolve }))
+  const api = createHarnessClient(connections), target = scopedId(b, 'same'), snapshots = [], routed = []
+  const receive = (values, settled) => {
+    snapshots.push(values)
+    if (!waitForProjectSnapshot(target, values, settled)) routed.push(values.find(project => project.id === target)?.id ?? 'missing')
+  }
+  const unsubscribe = api.subscribeList('/projects', values => receive(values, false))
+  const loading = api('/projects'); await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(snapshots.at(-1).map(project => project.id), [scopedId(a, 'same')])
+  assert.equal(waitForProjectSnapshot(scopedId(a, 'same'), snapshots.at(-1), false), false, 'healthy project can be opened without waiting for every device')
+  assert.equal(waitForProjectSnapshot(null, snapshots.at(-1), false), false, 'a new workspace has no pending selection')
+  assert.deepEqual(routed, [], 'the other device is still loading, not missing')
+  finishB(Response.json([{ id: 'same', available: true }]))
+  receive(await loading, true)
+  assert.ok(routed.length > 0); assert.ok(routed.every(id => id === target))
+  assert.equal(waitForProjectSnapshot(scopedId(b, 'absent'), snapshots.at(-1), false), true)
+  assert.equal(waitForProjectSnapshot(scopedId(b, 'absent'), snapshots.at(-1), true), false, 'only a settled aggregate may resolve an absent target')
+  unsubscribe(); api.dispose()
 })

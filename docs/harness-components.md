@@ -23,7 +23,7 @@
 | 目录调度 | `models.catalog`；注入 source/cache/source-data | 定时器、刷新及接纳；停止调度、取消并等待提交 |
 | 业务 SQLite | `local-storage` | 排他连接、串行事务和领域迁移；等所有下游退出 |
 | 图片资源 | `harness.image-assets`；注入 local-storage | 排他图片目录、校验队列、临时文件、读取与 GC；取消并等待实际退出 |
-| Projects | `harness.projects`；注入 local-storage | 项目目录身份、目录检查与记录 |
+| Projects | `harness.projects`；注入 local-storage | 项目目录身份、目录检查与记录、有界浏览会话/目录句柄及取消清理 |
 | Project Files | `harness.project-files`；注入 local-storage/projects | 文件搜索、读取、SQLite 快照、准备批次与保留凭证；取消并等待文件和数据库操作 |
 | Bash / Apply Patch | `tools.bash` / `tools.apply-patch`；注入 projects | 子进程 / 跨项目文件队列与临时资源；取消后等实际退出 |
 | Prompt | `harness.prompts`；注入 local-storage | 草稿、不可变发布版本及已接纳写入 |

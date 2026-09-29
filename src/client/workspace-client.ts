@@ -1,6 +1,7 @@
 import { splitScopedId } from './harness-client.js'
 import type { HarnessClient } from './harness-client.js'
 import { setupArchivePanel } from './archive-client.js'
+import { setupProjectDirectoryPicker } from './project-directory-view.js'
 import { createFileLeaseKeeper } from './file-client.js'
 import type { ModelsCatalog } from './models-client.js'
 import type { Api, ProjectView, SessionView, SessionPosition } from './client-types.js'
@@ -13,7 +14,7 @@ import { createRunChangeClient } from './run-change-client.js'
 import { createSessionPanel } from './session-view.js'
 import type { SessionPanel } from './session-view.js'
 import { closePane, emptyWorkspace, fitRatios, fits, openSession, panes, parseRoute, ratioBounds,
-  resizeSplit, restoreWorkspace, sessionHash, splitSession, separatorSize } from './workspace-layout.js'
+  resizeSplit, restoreWorkspace, sessionHash, splitSession, separatorSize, waitForProjectSnapshot } from './workspace-layout.js'
 import type { Edge, LayoutNode, Pane, SessionRef, Size, Split, Workspace } from './workspace-layout.js'
 
 export const workspaceKey = 'anybox.web.workspace.v2'
@@ -44,7 +45,8 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     }
   } catch { /* Layout and server data can still be recovered independently. */ }
   let state: Workspace = emptyWorkspace, projects: readonly ProjectView[] = []
-  let ready = false, compact = false, creating = false, picking = false, pickerSupported = false
+  let initialProjectsSettled = false, receivedProjects: readonly ProjectView[] = []
+  let ready = false, compact = false, creating = false, pickerSupported = false
   let disposed = false
   const collapsedProjects = new Set<string>()
   const projectGroups = new Map<string, HTMLElement>()
@@ -145,7 +147,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
 
   function refreshControls(): void {
     newSession.disabled = creating || !project()?.available || !selectedAgent(state.sidebarProjectId ?? undefined)
-    addProject.disabled = !pickerSupported || picking
+    addProject.disabled = !pickerSupported
     newSession.title = project() ? `在 ${project()!.name} 中新建会话` : '先选择一个项目'
     for (const button of projectList.querySelectorAll<HTMLButtonElement>('.project-button')) {
       const selected = button.dataset.projectId === state.sidebarProjectId
@@ -517,6 +519,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     if (!ready) return
     const parsed = parseRoute(location.hash)
     if (!parsed) return
+    if (waitForProjectSnapshot(parsed.projectId, receivedProjects, initialProjectsSettled)) return
     if (!projects.some(item => item.id === parsed.projectId)) { showNotice('项目不存在。'); updateURL(); return }
     if (parsed.sessionId) open({ projectId: parsed.projectId, sessionId: parsed.sessionId }, false)
     else void selectProject(parsed.projectId)
@@ -658,20 +661,21 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     }).catch(error => { if (!disposed) showNotice(messageFor(error)) }).finally(() => { creating = false; if (!disposed) refreshControls() })
   }
   newSession.addEventListener('click', () => { if (state.sidebarProjectId) createSession(state.sidebarProjectId) }, options)
-  addProject.addEventListener('click', () => {
-    if (!pickerSupported || picking) return
-    picking = true
-    refreshControls()
-    pickerStatus.hidden = false
-    pickerStatus.textContent = multi.connections ? '请指定执行设备上的项目目录…' : '请在系统窗口中选择项目目录…'
-    void api<ProjectView | null>('/projects/pick', {}).then(async opened => {
-      if (!opened || disposed) return
-      projects = await api<readonly ProjectView[]>('/projects')
+  const projectPicker = setupProjectDirectoryPicker(messageFor, opened => {
+    if (disposed) return
+    // Show the confirmed target immediately; an unrelated offline device must not delay it.
+    projects = [...projects.filter(project => project.id !== opened.id), opened]
+    renderNavigation(); selectProject(opened.id)
+    void sessionIndex.load(opened.id)
+    void api<readonly ProjectView[]>('/projects').then(value => {
       if (disposed) return
-      renderNavigation()
-      selectProject(opened.id)
+      projects = value; renderNavigation(); refreshControls()
       for (const item of projects) if (!sessionIndex.get(item.id)) void sessionIndex.load(item.id)
-    }).catch(error => showNotice(messageFor(error))).finally(() => { picking = false; pickerStatus.hidden = pickerSupported; refreshControls() })
+    }).catch(error => { if (!disposed) showNotice(messageFor(error)) })
+  })
+  addProject.addEventListener('click', () => {
+    const target = multi.directoryTarget?.()
+    if (target) projectPicker.open(target, addProject)
   }, options)
   window.addEventListener('hashchange', route, options)
   window.addEventListener('popstate', route, options)
@@ -700,14 +704,13 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     if ((window.innerWidth <= 760 || !fits(state.root, size())) !== compact) renderLayout()
   }, options)
   renderLayout()
-  void api<{ supported: boolean }>('/projects/picker').then(value => {
-    pickerSupported = value.supported
-    pickerStatus.hidden = value.supported
-    pickerStatus.textContent = value.supported ? '' : '当前系统暂不支持原生目录选择。'
-    refreshControls()
-  }).catch(() => { pickerStatus.hidden = false; pickerStatus.textContent = '无法检查目录选择器，请刷新页面。' })
+  pickerSupported = !!multi.directoryTarget?.()
+  pickerStatus.hidden = pickerSupported
+  pickerStatus.textContent = pickerSupported ? '' : '请先添加 Harness 连接，再选择项目目录。'
+  refreshControls()
   const receiveProjects = (value: readonly ProjectView[]) => {
     if (disposed) return
+    receivedProjects = value
     projects = [...value]
     // Keep a saved pane for an offline or removed connection. It must never fall back to another target.
     for (const pane of panes(state.root)) {
@@ -720,19 +723,19 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     for (const pane of panes(state.root)) if (!projects.some(item => item.id === pane.projectId)) state = closePane(state, pane.id)
     ready = true
     const parsed = parseRoute(location.hash)
+    const waiting = waitForProjectSnapshot(parsed?.projectId ?? state.sidebarProjectId, value, initialProjectsSettled)
     const selected = (parsed && !parsed.sessionId ? parsed.projectId : undefined) ??
       projects.find(item => item.id === state.sidebarProjectId)?.id ?? parsed?.projectId ?? projects[0]?.id
     // Views are first mounted after projects load, so their titles use the project names.
     renderLayout()
-    route()
+    if (!waiting) route()
     renderNavigation()
-    if (selected) selectProject(selected)
+    if (!waiting && selected) selectProject(selected)
     for (const item of projects) void sessionIndex.load(item.id)
-    persist()
-    updateURL()
+    if (!waiting) { persist(); updateURL() }
   }
   const unsubscribeProjects = multi.subscribeList?.('/projects', values => receiveProjects(values as readonly ProjectView[]))
-  void api<readonly ProjectView[]>('/projects').then(receiveProjects).catch(error => showNotice(messageFor(error)))
+  void api<readonly ProjectView[]>('/projects').then(values => { initialProjectsSettled = true; receiveProjects(values) }).catch(error => showNotice(messageFor(error)))
   return {
     refreshControls,
     dispose() {
@@ -745,6 +748,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       listeners.abort()
       sessionIndex.dispose()
       archivePanel.dispose()
+      projectPicker.dispose()
       observer.disconnect()
       resizeCleanup?.()
       dragCleanup?.()

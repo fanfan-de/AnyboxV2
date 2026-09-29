@@ -2,6 +2,7 @@ import type { FileSelection, FileRef } from '../harness/project-files/domain.js'
 import type { ApplyPatchResult } from '../harness/tool/apply-patch-types.js'
 import type { ImageRef } from '../harness/image/port.js'
 export type * from '../harness/api.js'
+export type { DirectoryPage } from '../harness/project/directories.js'
 
 export type ToolTraceState = 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'interrupted' |
   ApplyPatchResult['status']

@@ -1,4 +1,4 @@
-import type { Api, ImageRef } from './client-types.js'
+import type { Api, ImageRef, ProjectView } from './client-types.js'
 import type { ProtocolViewSnapshot } from '../harness/view/types.js'
 import { createRunChangeClient } from './run-change-client.js'
 export interface HarnessConnection { readonly id: string; readonly name: string; readonly endpoint: string; readonly instanceId: string; readonly revision: number; readonly credentialConfigured: boolean }
@@ -15,8 +15,8 @@ export function mapResourceIds(value: unknown, map: (id: string) => string, key 
   if (['parameters', 'modelSnapshot', 'capabilities', 'controls', 'source'].includes(key)) return value
   return Object.fromEntries(Object.entries(value).map(([field, item]) => [field, mapResourceIds(item, map, field)]))
 }
-export async function requestJSON<T>(url: string, body?: object, signal?: AbortSignal): Promise<T> {
-  const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? undefined : { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body), signal, cache: 'no-store' })
+export async function requestJSON<T>(url: string, body?: object, signal?: AbortSignal, headers?: Readonly<Record<string, string>>): Promise<T> {
+  const response = await fetch(url, { method: body === undefined ? 'GET' : 'POST', headers: { ...headers, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body), signal, cache: 'no-store' })
   const data = await response.json()
   if (!response.ok) throw Object.assign(new Error(data?.error?.code ?? 'request-failed'), { status: response.status, code: data?.error?.code ?? 'request-failed', ...(data?.error?.fileIndex === undefined ? {} : { fileIndex: data.error.fileIndex }) })
   return data as T
@@ -37,10 +37,19 @@ export interface HarnessClient extends Api {
   readonly errors: ReadonlyMap<string, string>
   subscribeList(path: string, listener: (values: readonly unknown[]) => void): () => void
   forConnection(id: string): Api
+  directoryTarget(id?: string): ProjectDirectoryTarget | undefined
   resource(path: string): string
   upload(sessionId: string, file: File, signal: AbortSignal): Promise<ImageRef>
   changes(handlers: { refresh(id: string): void; view(snapshot: ProtocolViewSnapshot): void; connected(ids: readonly string[], value: boolean): void }): { update(ids: readonly string[]): void; dispose(): void }
   dispose(): void
+}
+/** A selector holds this immutable binding until it closes, including its final write. */
+export interface ProjectDirectoryTarget {
+  readonly connection: HarnessConnection
+  readonly api: Api
+  nativeAvailable(signal: AbortSignal): Promise<boolean>
+  pickNative(signal: AbortSignal): Promise<string | null>
+  register(path: string, signal: AbortSignal): Promise<ProjectView>
 }
 export function createHarnessClient(connections: readonly HarnessConnection[], selectedId?: string): HarnessClient {
   configured.clear()
@@ -49,16 +58,17 @@ export function createHarnessClient(connections: readonly HarnessConnection[], s
   const listListeners = new Map<string, Set<(values: readonly unknown[]) => void>>(), revisions = new Map<string, number>()
   let disposed = false
   const selected = () => connections.find(item => item.id === selectedId) ?? connections[0]
-  const call = async <T>(connection: HarnessConnection, path: string, body?: object, signal?: AbortSignal): Promise<T> => {
+  const call = async <T>(connection: HarnessConnection, path: string, body?: object, signal?: AbortSignal, pinned = false, local = false): Promise<T> => {
     if (disposed) throw new Error('client-disposed')
     const controller = new AbortController(); requests.add(controller)
     const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
     try {
-      const result = await requestJSON<T>(`/api/connections/${encodeURIComponent(connection.id)}/v1${path}`, body, controller.signal)
+      const headers = pinned ? { 'X-Anybox-Expected-Instance-Id': connection.instanceId, 'X-Anybox-Connection-Revision': String(connection.revision) } : undefined
+      const result = await requestJSON<T>(local ? `/api/client/v1${path}` : `/api/connections/${encodeURIComponent(connection.id)}/v1${path}`, body, controller.signal, headers)
       errors.delete(connection.id); return result
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String(error.code) : 'connection-unavailable'
-      if (!controller.signal.aborted && ['connection-unavailable', 'authentication-failed', 'credential-unavailable', 'instance-mismatch', 'version-incompatible', 'service-unavailable'].includes(code)) errors.set(connection.id, code)
+      if (!controller.signal.aborted && ['connection-unavailable', 'connection-changed', 'authentication-failed', 'credential-unavailable', 'instance-mismatch', 'version-incompatible', 'service-unavailable'].includes(code)) errors.set(connection.id, code)
       throw error
     }
     finally { requests.delete(controller); signal?.removeEventListener('abort', abort) }
@@ -93,16 +103,6 @@ export function createHarnessClient(connections: readonly HarnessConnection[], s
   const api = (async <T>(path: string, body?: object, signal?: AbortSignal): Promise<T> => {
     if (disposed) throw new Error('client-disposed')
     if (!body && ['/projects', '/agents', '/models', '/models/connections', '/sessions/archived'].includes(path)) return await aggregate(path, signal) as T
-    if (path === '/projects/picker') return { supported: connections.length > 0 } as T
-    if (path === '/projects/pick') {
-      const target = selected(); if (!target) throw new Error('instance-unavailable')
-      const local = await requestJSON<{ instanceId: string | null; picker: boolean }>('/api/client/v1/local', undefined, signal)
-      const directory = local.picker && local.instanceId === target.instanceId
-        ? (await requestJSON<{ path: string | null }>(`/api/client/v1/connections/${target.id}/pick`, {}, signal)).path
-        : window.prompt(`输入 ${target.name} 上的项目绝对路径`)
-      if (!directory) return null as T
-      return mapResourceIds(await call(target, '/projects', { path: directory }, signal), id => scopedId(target.instanceId, id)) as T
-    }
     const target = route(path, body)
     return mapResourceIds(await call(target.connection, target.path, target.body, signal), id => scopedId(target.connection.instanceId, id)) as T
   }) as HarnessClient
@@ -115,6 +115,29 @@ export function createHarnessClient(connections: readonly HarnessConnection[], s
     forConnection(id: string): Api {
       const connection = connections.find(item => item.id === id)
       return <T>(path: string, body?: object, signal?: AbortSignal) => connection ? call<T>(connection, path, body, signal) : Promise.reject(new Error('instance-unavailable'))
+    },
+    directoryTarget(id?: string): ProjectDirectoryTarget | undefined {
+      const value = id ? connections.find(item => item.id === id) : selected()
+      if (!value || disposed) return undefined
+      const connection = Object.freeze({ ...value })
+      const fixed: Api = (path, body, signal) => call(connection, path, body, signal, true)
+      return {
+        connection, api: fixed,
+        async nativeAvailable(signal) {
+          const local = await call<{ instanceId: string | null; picker: boolean }>(connection, '/local', undefined, signal, false, true)
+          return local.picker && local.instanceId === connection.instanceId
+        },
+        async pickNative(signal) {
+          return (await call<{ path: string | null }>(connection, `/connections/${encodeURIComponent(connection.id)}/pick`, {}, signal, true, true)).path
+        },
+        async register(path, signal) {
+          const raw = await fixed<ProjectView>('/projects', { path }, signal)
+          const key = `${connection.id}:/projects`
+          cache.set(key, [...(cache.get(key) ?? []).filter(value => (value as ProjectView).id !== raw.id), raw])
+          const project = mapResourceIds(raw, id => scopedId(connection.instanceId, id)) as ProjectView
+          return { ...project, instanceId: connection.instanceId, harnessName: connection.name }
+        },
+      }
     },
     resource(path: string) { const target = route(path); return `/api/connections/${encodeURIComponent(target.connection.id)}/v1${target.path}` },
     async upload(sessionId: string, file: File, signal: AbortSignal): Promise<ImageRef> {

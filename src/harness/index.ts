@@ -27,6 +27,8 @@ import { createApplyPatchComponent } from './tool/apply-patch-component.js'
 /** The application root must provide Models, local storage and image assets before the Harness starts. */
 export interface HarnessOptions extends Partial<RuntimeInputs> {
   readonly agents: readonly AgentDefinition[]
+  /** Host-supplied default for its directory picker; omission disables browsing for embedded callers. */
+  readonly projectDirectoryHome?: string
   /** Optional one-time import of the previous Prompt JSON store. The source is left untouched. */
   readonly legacyPromptStorePath?: string
   /** Host-provided authorization for changing an Agent's prompt bindings. */
@@ -112,7 +114,7 @@ export async function createHarness(context: Context, options: HarnessOptions): 
       ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
     for (const component of [
       ...protocolComponents,
-      createProjectComponent(inputs),
+      createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome }),
       createProjectFilesComponent(inputs),
       createBashComponent(),
       createApplyPatchComponent(),
@@ -138,6 +140,11 @@ export async function createHarness(context: Context, options: HarnessOptions): 
       return Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
     },
     openProject: path => currentProjects().openProject(path),
+    get directoryBrowsingSupported() { return currentProjects().directoryBrowsingSupported },
+    openDirectoryBrowse: (...args) => currentProjects().openDirectoryBrowse(...args),
+    readDirectoryPage: (...args) => currentProjects().readDirectoryPage(...args),
+    closeDirectoryBrowse: (...args) => currentProjects().closeDirectoryBrowse(...args),
+    onDirectoryBrowseRetired: listener => currentProjects().onDirectoryBrowseRetired(listener),
     listProjects: () => currentProjects().listProjects(),
     getProject: id => currentProjects().getProject(id),
     createSession: (projectId, agentId, modelId) => {

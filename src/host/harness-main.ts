@@ -1,5 +1,6 @@
 import { Context } from '@nya/core'
 import { pathToFileURL } from 'node:url'
+import { homedir } from 'node:os'
 import { createLocalSqliteComponent } from '../storage/sqlite.js'
 import { createImageAssetsComponent } from '../harness/image/component.js'
 import { createHarness } from '../harness/index.js'
@@ -12,14 +13,14 @@ import type { WebModelsOptions } from './models-startup.js'
 import { createHostAccessComponent, hostAccessServiceKey } from './access.js'
 import type { HostAccessPort } from './access.js'
 
-export async function createHarnessHost(config: WebStartupConfig, options: { name?: string; host?: string; projects?: readonly string[]; models?: WebModelsOptions } = {}) {
+export async function createHarnessHost(config: WebStartupConfig, options: { name?: string; host?: string; projects?: readonly string[]; projectDirectoryHome?: string; models?: WebModelsOptions } = {}) {
   const root = new Context()
   try {
     const { defaultModelId } = await installWebModels(root, config, options.models)
     await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
     await root.installComponent(createHostAccessComponent(options.name))
     await root.installComponent(createImageAssetsComponent({ directory: config.imageAssetsDirectory }))
-    const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'You are a helpful assistant.', ...(defaultModelId ? { modelId: defaultModelId } : {}) }] })
+    const harness = await createHarness(root, { projectDirectoryHome: options.projectDirectoryHome ?? homedir(), agents: [{ id: 'assistant', instructions: 'You are a helpful assistant.', ...(defaultModelId ? { modelId: defaultModelId } : {}) }] })
     for (const path of options.projects ?? []) await harness.openProject(path)
     await root.installComponent(createHarnessApiComponent(harness.listAgents(), config.port, { authenticated: true, host: options.host }))
     const web = root.get<HarnessApiPort>(harnessApiServiceKey)!

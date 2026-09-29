@@ -140,6 +140,11 @@ export function parseRoute(hash: string): { projectId: string; sessionId?: strin
   catch { return undefined }
 }
 
+/** A healthy device's partial list says nothing about a different device's project. */
+export function waitForProjectSnapshot(projectId: string | null | undefined, projects: readonly { readonly id: string }[], settled: boolean): boolean {
+  return !settled && !!projectId && !projects.some(project => project.id === projectId)
+}
+
 export function sessionHash(ref: SessionRef): string {
   return `#/projects/${encodeURIComponent(ref.projectId)}/sessions/${encodeURIComponent(ref.sessionId)}`
 }

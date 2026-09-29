@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { pipeline } from 'node:stream/promises'
 import type { Component } from '@nya/core'
 import { connectionsServiceKey } from './connections.js'
-import type { ConnectionsPort, ConnectionInput } from './connections.js'
+import type { ConnectionsPort, ConnectionInput, Connection } from './connections.js'
 import { assets } from '../assets.js'
 import { json, requestObject, failure } from '../http-utils.js'
 import { directoryPickerServiceKey } from '../directory-picker.js'
@@ -21,6 +21,7 @@ const paths: Record<string, readonly RegExp[]> = {
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
     new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|connections|configurations)(/${id}(/(history|models))?)?$`) ],
   POST: [ /^\/(projects|sessions|prompts|access\/tokens)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
+    /^\/projects\/directories\/(browse|close)$/,
     new RegExp(`^/agents/${id}/prompts$`), new RegExp(`^/prompts/${id}(/publish)?$`),
     new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew))$`), new RegExp(`^/runs/${id}/cancel$`),
     /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|connections|configurations)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`) ],
@@ -30,9 +31,20 @@ export function allowedProxyPath(method: string, path: string): boolean {
     try { const s = decodeURIComponent(segment); return s === '.' || s === '..' || /[\\/\0]/.test(s) } catch { return true }
   })
 }
+/** Preconditions bind a multi-request picker to the connection captured when it opened. */
+function expectedConnection(request: IncomingMessage, connection: Connection): void {
+  const instance = request.headers['x-anybox-expected-instance-id']
+  const revision = request.headers['x-anybox-connection-revision']
+  if (instance === undefined && revision === undefined) return
+  if (typeof instance !== 'string' || !/^[0-9a-f-]{36}$/.test(instance) ||
+      typeof revision !== 'string' || !/^[1-9]\d*$/.test(revision) || !Number.isSafeInteger(Number(revision))) throw failure(400, 'invalid-input')
+  if (instance !== connection.instanceId) throw failure(409, 'instance-mismatch')
+  if (Number(revision) !== connection.revision) throw failure(409, 'connection-changed')
+}
 async function forward(connections: ConnectionsPort, connectionId: string, path: string, query: string, request: IncomingMessage, response: ServerResponse, signal: AbortSignal) {
   const lease = await connections.acquire(connectionId)
   signal.throwIfAborted()
+  expectedConnection(request, lease.connection)
   const url = new URL(`${lease.connection.endpoint}/api/v1${path}${query}`)
   const headers: Record<string, string> = { Authorization: `Bearer ${lease.token}`, 'X-Anybox-Instance-Id': lease.connection.instanceId }
   if (request.headers['content-type']) headers['Content-Type'] = request.headers['content-type']
@@ -95,7 +107,12 @@ export async function startClientGateway(connections: ConnectionsPort, options: 
         if (action[2] === 'pick') {
           const connection = (await connections.list()).find(item => item.id === connectionId)
           if (!connection || !options.localInstanceId || connection.instanceId !== options.localInstanceId || !options.picker?.supported) throw failure(403, 'picker-unavailable')
-          json(response, 200, { path: await options.picker.pick(controller.signal) ?? null }); return
+          expectedConnection(request, connection)
+          const path = await options.picker.pick(controller.signal) ?? null
+          const current = (await connections.list()).find(item => item.id === connectionId)
+          if (!current || current.instanceId !== connection.instanceId || current.revision !== connection.revision) throw failure(409, 'connection-changed')
+          expectedConnection(request, current)
+          json(response, 200, { path }); return
         }
         await connections.remove(connectionId, body.expectedRevision as number); json(response, 200, { ok: true }); return
       }

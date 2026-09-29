@@ -12,7 +12,7 @@ src/
     index.ts                      受信组合入口与整根关闭
     contracts.ts, api.ts, validation.ts 业务契约、公开 DTO 与无副作用校验
     agent/, prompt/               Agent 只读配置、Prompt 与绑定
-    project/, project-files/      执行目录、文件快照
+    project/, project-files/      执行目录身份与有界浏览、文件快照
     session/, image/              历史、恢复、归档与图片资源
     run/, protocol-agents/        Run、Runtime、原生 Loop
     tool/, storage/port.ts        工具与存储端口

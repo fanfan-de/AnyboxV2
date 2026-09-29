@@ -23,7 +23,8 @@ Effect 先停止监听准入，取消并等待尚未完成的请求体、目录/
 | `GET /agents` | 可选 Agent ID 列表 |
 | `GET /projects` | 项目列表 |
 | `POST /projects` | `{path}`，目标端绝对目录，经 Projects 校验、规范化和登记 |
-| `POST /projects/pick` | `{}`；选择目录并登记项目，用户取消返回 `null` |
+| `POST /projects/directories/browse` | `{action:"open",path?,query?,showHidden?}` 预留会话；`{action:"page",browseId,page}` 分页浏览 |
+| `POST /projects/directories/close` | `{browseId}`，幂等关闭并等待清理 |
 | `GET /projects/:id/sessions` | 项目下未归档会话 |
 | `POST /sessions` | `{ projectId, agentId, modelId? }` |
 | `GET /sessions/archived` | 跨项目归档列表，按归档时间倒序 |
@@ -45,6 +46,8 @@ Effect 先停止监听准入，取消并等待尚未完成的请求体、目录/
 | `GET /runs/:id/wait` | 可选 `timeoutMs`（0..25000，默认 25000）；返回 `{ done, timedOut, run }` |
 | `POST /runs/:id/cancel` | `{}`；请求取消并返回当前状态，实际结束由 wait/查询确认 |
 | `GET /changes` | 重复 `sessionId` 参数，订阅 1..4 个不同会话的 SSE |
+
+目录浏览公开 DTO、分页上限、错误码与生命周期见[项目目录选择](../../project-directory-picker.md)。API v1 的 projects.browse 能力由实际 Projects 配置决定；浏览会话绑定认证令牌，目录操作不写项目表。旧无认证测试宿主保留的原生 pick 路由不属于生产浏览流程。
 
 等待超时只取消本次 waiter，不取消 Run；HTTP 断开也是如此。兄弟 Run 可以并发，浏览器必须选择明确父节点，服务端不推断 head。幂等恢复、成功节点创建条件及旧 Session 只读规则见 [Session](../sessions/session.md) 与 [Run](../execution/run.md)。
 

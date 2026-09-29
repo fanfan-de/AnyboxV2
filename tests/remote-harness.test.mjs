@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, rm, readFile, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, mkdir, writeFile, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@nya/core'
@@ -95,7 +95,7 @@ async function execution(dir) {
   await root.installComponent(createLocalSqliteComponent(join(dir, 'harness.sqlite')))
   const auth = await access(root), token = await auth.issue('Browser device')
   await root.installComponent(createImageAssetsComponent({ directory: join(dir, 'images') }))
-  const harness = await createHarness(root, { agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }] })
+  const harness = await createHarness(root, { projectDirectoryHome: dir, agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }] })
   await root.installComponent(createHarnessApiComponent(harness.listAgents(), 0, { authenticated: true }))
   const server = root.get(harnessApiServiceKey)
   return { root, llm, auth, token, harness, server, async close() { for (const call of llm.calls) { call.result.resolve('done'); call.done.resolve() } await harness.close() } }
@@ -162,6 +162,11 @@ test('authenticated gateway preserves accepted Runs across client disconnect and
 test('gateway whitelist omits control-plane internals and encoded traversal', () => {
   for (const path of ['/shutdown', '/sessions/a/records', '/sessions/a/images/%2e%2e/content', '/runs/a%2fb', '/runs/%00']) assert.equal(allowedProxyPath('GET', path), false)
   for (const [method, path] of [['POST', '/projects'], ['POST', '/sessions/a/project-files/preview'], ['GET', '/sessions/archived'], ['GET', '/models/configurations/a/history'], ['POST', '/access/tokens/a/revoke']]) assert.equal(allowedProxyPath(method, path), true)
+  for (const path of ['/projects/directories/browse', '/projects/directories/close']) {
+    assert.equal(allowedProxyPath('POST', path), true)
+    assert.equal(allowedProxyPath('GET', path), false)
+  }
+  for (const path of ['/projects/directories/read', '/projects/directories/browse/extra', '/projects/directories/%62rowse', '/projects/directories/../browse']) assert.equal(allowedProxyPath('POST', path), false)
 })
 
 test('offline connection checks do not hold other devices; close aborts and joins the handshake', async () => {
@@ -191,4 +196,152 @@ test('pairing rejects incompatible API versions, unbounded identity and invalid 
   await assert.rejects(inspectInstance('https://a.test', 'token', signal, async () => Response.json({ apiVersion: 2 })), { code: 'version-incompatible' })
   await assert.rejects(inspectInstance('https://a.test', 'token', signal, async () => new Response('denied', { status: 401 })), { code: 'authentication-failed' })
   await assert.rejects(inspectInstance('https://a.test', 'token', signal, async () => new Response('a'.repeat(65537))), { code: 'invalid-instance' })
+})
+
+test('directory browsing authenticates, remains read only, and scopes reservations and registration to the chosen instance', { timeout: 20000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'anybox-directory-remote-')), hosts = []; let c, gateway
+  const browse = '/projects/directories/browse', close = '/projects/directories/close'
+  try {
+    for (const name of ['a', 'b']) hosts.push(await execution(join(dir, name)))
+    await mkdir(join(dir, 'a', 'Visible')); await mkdir(join(dir, 'a', '.hidden')); await mkdir(join(dir, 'a', 'Empty'))
+    c = await client(join(dir, 'client.sqlite'), memoryKeys())
+    const connections = []
+    for (const h of hosts) connections.push(await c.connections.save({ name: h.auth.instance.instanceId, endpoint: h.server.url, token: h.token.token }))
+    gateway = await startClientGateway(c.connections)
+    const base = index => `/api/connections/${connections[index].id}/v1`
+    const pinned = index => ({ 'X-Anybox-Expected-Instance-Id': connections[index].instanceId, 'X-Anybox-Connection-Revision': String(connections[index].revision) })
+    const a = hosts[0], authorization = { Authorization: `Bearer ${a.token.token}`, 'X-Anybox-Instance-Id': a.auth.instance.instanceId }
+    assert.equal((await call(a.server.url, '/api/v1' + browse, { action: 'open' })).status, 401)
+    assert.equal((await call(a.server.url, '/api/v1' + browse, { action: 'open' }, { ...authorization, 'X-Anybox-Instance-Id': hosts[1].auth.instance.instanceId })).status, 409)
+    const info = await call(gateway.url, base(0) + '/instance', undefined, pinned(0))
+    assert.equal(info.data.apiVersion, 1); assert.ok(info.data.capabilities.includes('projects.browse'))
+    const opened = await call(gateway.url, base(0) + browse, { action: 'open' }, pinned(0))
+    assert.equal(opened.status, 200); assert.equal(opened.data.homePath, join(dir, 'a'))
+    const page = await call(gateway.url, base(0) + browse, { action: 'page', browseId: opened.data.browseId, page: 0 }, pinned(0))
+    assert.equal(page.status, 200); assert.equal(page.data.path, await realpath(opened.data.homePath))
+    assert.ok(page.data.entries.some(entry => entry.name === 'Visible'))
+    assert.ok(!page.data.entries.some(entry => entry.name === '.hidden'))
+    assert.equal((await call(gateway.url, base(1) + browse, { action: 'page', browseId: opened.data.browseId, page: 0 }, pinned(1))).status, 409)
+    const otherToken = await a.auth.issue('Other reader')
+    assert.equal((await call(a.server.url, '/api/v1' + browse, { action: 'page', browseId: opened.data.browseId, page: 0 }, { ...authorization, Authorization: `Bearer ${otherToken.token}` })).status, 409)
+    const hidden = await call(gateway.url, base(0) + browse, { action: 'open', query: '.hidden', showHidden: true }, pinned(0))
+    const hiddenPage = await call(gateway.url, base(0) + browse, { action: 'page', browseId: hidden.data.browseId, page: 0 }, pinned(0))
+    assert.deepEqual(hiddenPage.data.entries.map(entry => entry.name), ['.hidden'])
+    const empty = await call(gateway.url, base(0) + browse, { action: 'open', path: join(dir, 'a', 'Empty') }, pinned(0))
+    const emptyPage = await call(gateway.url, base(0) + browse, { action: 'page', browseId: empty.data.browseId, page: 0 }, pinned(0))
+    assert.deepEqual(emptyPage.data.entries, []); assert.equal(emptyPage.data.nextPage, null)
+    for (const id of [opened.data.browseId, hidden.data.browseId, empty.data.browseId]) assert.equal((await call(gateway.url, base(0) + close, { browseId: id }, pinned(0))).status, 200)
+    for (const index of [0, 1]) assert.deepEqual((await call(gateway.url, base(index) + '/projects')).data, [])
+    const project = await call(gateway.url, base(0) + '/projects', { path: page.data.path }, pinned(0))
+    assert.equal(project.status, 200)
+    assert.equal((await call(gateway.url, base(0) + '/projects', { path: page.data.path }, pinned(0))).data.id, project.data.id)
+    assert.deepEqual((await call(gateway.url, base(1) + '/projects')).data, [])
+    const samePath = await call(gateway.url, base(1) + '/projects', { path: page.data.path }, pinned(1))
+    assert.equal(samePath.status, 200); assert.equal(samePath.data.path, project.data.path); assert.notEqual(samePath.data.id, project.data.id)
+    assert.equal((await call(gateway.url, base(0) + '/projects', { path: page.data.path }, pinned(1))).status, 409)
+    assert.equal((await call(gateway.url, base(0) + browse, { action: 'open' }, { 'X-Anybox-Connection-Revision': '1' })).status, 400)
+    await c.connections.save({ ...connections[0], name: 'Changed', expectedRevision: connections[0].revision })
+    for (const [path, body] of [[browse, { action: 'open' }], ['/projects', { path: page.data.path }]]) {
+      const stale = await call(gateway.url, base(0) + path, body, pinned(0))
+      assert.equal(stale.status, 409); assert.equal(stale.data.error.code, 'connection-changed')
+    }
+  } finally { await gateway?.close(); await c?.root.fiber.dispose(); for (const h of hosts) await h.close(); await rm(dir, { recursive: true, force: true }) }
+})
+
+test('native directory shortcut requires launcher identity and rejects changed connection revisions', async () => {
+  const instance = '11111111-1111-4111-8111-111111111111', other = '22222222-2222-4222-8222-222222222222'
+  let revision = 1, picks = 0, release, entered
+  const selected = new Promise(resolve => { release = resolve }), started = new Promise(resolve => { entered = resolve })
+  const connection = id => ({ id, name: id, endpoint: 'https://same.example', instanceId: id === 'local' ? instance : other, revision, credentialConfigured: true })
+  const connections = { list: async () => [connection('local'), connection('remote')] }
+  const picker = { supported: true, async pick() { picks++; entered(); return selected } }
+  const gateway = await startClientGateway(connections, { localInstanceId: instance, picker })
+  const pinned = { 'X-Anybox-Expected-Instance-Id': instance, 'X-Anybox-Connection-Revision': '1' }
+  try {
+    assert.equal((await call(gateway.url, '/api/client/v1/connections/remote/pick', {})).status, 403); assert.equal(picks, 0)
+    assert.equal((await call(gateway.url, '/api/client/v1/connections/local/pick', {}, { ...pinned, 'X-Anybox-Connection-Revision': '2' })).status, 409); assert.equal(picks, 0)
+    const pending = call(gateway.url, '/api/client/v1/connections/local/pick', {}, pinned)
+    await started; revision = 2; release('/client/path')
+    const changed = await pending; assert.equal(changed.status, 409); assert.equal(changed.data.error.code, 'connection-changed'); assert.equal(picks, 1)
+  } finally { release(null); await gateway.close() }
+})
+
+test('old Harness capability metadata remains API v1 and never advertises unavailable directory browsing', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'anybox-directory-old-')); let root, server
+  try {
+    root = await storage(join(dir, 'db')); const a = await access(root), issued = await a.issue('Browser')
+    server = await startHarnessApiServer({ listProjects: () => [] }, 0, { access: a })
+    const headers = { Authorization: `Bearer ${issued.token}`, 'X-Anybox-Instance-Id': a.instance.instanceId }
+    const info = await call(server.url, '/api/v1/instance', undefined, headers)
+    assert.equal(info.status, 200); assert.equal(info.data.apiVersion, 1); assert.ok(!info.data.capabilities.includes('projects.browse'))
+    const unsupported = await call(server.url, '/api/v1/projects/directories/browse', { action: 'open' }, headers)
+    assert.equal(unsupported.status, 503); assert.equal(unsupported.data.error.code, 'directory-browse-unsupported')
+  } finally { await server?.close(); await root?.fiber.dispose(); await rm(dir, { recursive: true, force: true }) }
+})
+
+for (const stop of ['disconnect', 'shutdown']) test(`directory HTTP ${stop} joins cancelled page work and cursor cleanup before closing`, async () => {
+  const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b }); return { promise, resolve, reject } }
+  const started = deferred(), cancelled = deferred(), done = deferred(), result = deferred(), closingCursor = deferred(), cursorClosed = deferred()
+  let closed = false, owner, cancelCount = 0, retire
+  const commands = {
+    directoryBrowsingSupported: () => true,
+    onDirectoryBrowseRetired(listener) { retire = listener; return () => { retire = undefined } },
+    openDirectoryBrowse(value) {
+      owner = value
+      return { result: Promise.resolve({ browseId: 'reserved', homePath: '/target/home' }), done: Promise.resolve(), cancel() {} }
+    },
+    readDirectoryPage(value, id, page) {
+      assert.equal(value, owner); assert.equal(id, 'reserved'); assert.equal(page, 0); started.resolve()
+      return { result: result.promise, done: done.promise, cancel() {
+        cancelCount++; cancelled.resolve(); result.reject(Object.assign(new Error('cancelled'), { name: 'DirectoryBrowseFailure', code: 'directory-browse-cancelled' }))
+      } }
+    },
+    async closeDirectoryBrowse(value, id) { assert.equal(value, owner); assert.equal(id, 'reserved'); closingCursor.resolve(); await cursorClosed.promise; retire?.(id) },
+  }
+  const server = await startHarnessApiServer(commands), abort = new AbortController()
+  try {
+    assert.equal((await call(server.url, '/api/v1/projects/directories/browse', { action: 'open' })).status, 200)
+    const reading = fetch(server.url + '/api/v1/projects/directories/browse', { method: 'POST', headers: { Origin: server.url, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'page', browseId: 'reserved', page: 0 }), signal: abort.signal }).then(async response => ({ status: response.status, data: await response.json() }), error => ({ error }))
+    await started.promise
+    if (stop === 'disconnect') { abort.abort(); await cancelled.promise }
+    const shutdown = server.close().then(() => { closed = true })
+    await cancelled.promise; await new Promise(resolve => setImmediate(resolve)); assert.equal(closed, false)
+    done.resolve(); await closingCursor.promise; assert.equal(closed, false)
+    cursorClosed.resolve(); await shutdown; assert.equal(closed, true); assert.ok(cancelCount > 0)
+    const response = await reading
+    if (stop === 'shutdown') { assert.equal(response.status, 503); assert.equal(response.data.error.code, 'directory-browse-cancelled') }
+    else assert.ok(response.error)
+  } finally { abort.abort(); done.resolve(); cursorClosed.resolve(); result.reject(new Error('cleanup')); await server.close() }
+})
+
+test('directory HTTP observes cleanup failure even when a replaced provider never settles result', async () => {
+  let cancellations = 0
+  const server = await startHarnessApiServer({ directoryBrowsingSupported: () => true,
+    readDirectoryPage() { return { result: new Promise(() => {}), done: Promise.reject(new Error('private filesystem failure')), cancel() { cancellations++ } } },
+  })
+  try {
+    const response = await call(server.url, '/api/v1/projects/directories/browse', { action: 'page', browseId: 'reserved', page: 0 })
+    assert.equal(response.status, 503); assert.equal(response.data.error.code, 'directory-browse-cleanup-failed'); assert.ok(cancellations > 0)
+    assert.ok(!JSON.stringify(response.data).includes('private filesystem'))
+  } finally { await server.close() }
+})
+
+test('directory reservation retirement removes API cleanup ownership and unsubscribes after shutdown', async () => {
+  let retire, counter = 0, unsubscribed = false
+  const closed = []
+  const server = await startHarnessApiServer({
+    directoryBrowsingSupported: () => true,
+    onDirectoryBrowseRetired(listener) { retire = listener; return () => { unsubscribed = true; retire = undefined } },
+    openDirectoryBrowse() { return { result: Promise.resolve({ browseId: String(++counter), homePath: '/home' }), done: Promise.resolve(), cancel() {} } },
+    async closeDirectoryBrowse(_owner, id) { closed.push(id); retire?.(id) },
+  })
+  try {
+    for (let index = 0; index < 32; index++) {
+      const response = await call(server.url, '/api/v1/projects/directories/browse', { action: 'open' })
+      assert.equal(response.status, 200); retire(response.data.browseId)
+    }
+    const active = await call(server.url, '/api/v1/projects/directories/browse', { action: 'open' })
+    await server.close(); assert.deepEqual(closed, [active.data.browseId]); assert.equal(unsubscribed, true)
+  } finally { await server.close() }
 })

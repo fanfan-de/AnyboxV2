@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-Directory Picker 让本机用户通过系统对话框选一个项目目录。它独占对话框进程，返回绝对路径；路径登记、项目身份及可用性校验归 [Projects](../sessions/projects.md)，不是选择器职责。
+Directory Picker 提供应用内目录选择器的“使用系统目录窗口”快捷入口。默认浏览由 Projects 负责，应用内视图及协议见[项目目录选择](../../project-directory-picker.md)，不新增 Nya 组件。它独占对话框进程，返回绝对路径；路径登记、项目身份及可用性校验归 [Projects](../sessions/projects.md)，不是选择器职责。
 
 | 项目 | 定义 |
 | --- | --- |
@@ -36,7 +36,7 @@ Directory Picker 让本机用户通过系统对话框选一个项目目录。它
 
 ## 与客户端网关、Projects 的协作
 
-仅安装在客户端根。组合启动器通过子进程就绪消息确认 localInstanceId；网关 `/api/client/v1/local` 返回身份和支持状态，`POST /api/client/v1/connections/:id/pick {}` 必须匹配此身份。目录窗口只返回路径，浏览器通过目标连接的 `POST /api/v1/projects {path}` 登记。其他设备和无桌面环境使用绝对路径输入，不按 hostname 推断本机。
+仅安装在客户端根。组合启动器通过子进程就绪消息确认 localInstanceId；网关 `/api/client/v1/local` 返回身份和支持状态，`POST /api/client/v1/connections/:id/pick {}` 必须匹配此身份。目录窗口只返回路径，浏览器回到应用内对话框，确认后才通过固定目标连接的 `POST /api/v1/projects {path}` 登记；网关同时核对预期连接版本。所有设备和无桌面环境默认使用应用内浏览，远程实例不显示原生快捷入口，不按 hostname 推断本机。只有缺少 projects.browse 的旧 Harness 使用应用内手动绝对路径入口，不再使用 window.prompt。
 
 ## 取消、实际退出与失败
 

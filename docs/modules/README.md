@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | [models/](./models/README.md) | 可复用模型配置、凭据、原生驱动及可选公开目录 | 11 |
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 8 |
-| [sessions/](./sessions/README.md) | 项目身份、文件快照、会话树、归档、Run 持久事实及恢复 | 3 |
+| [sessions/](./sessions/README.md) | 项目身份与目录浏览、文件快照、会话树、归档、Run 持久事实及恢复 | 3 |
 | [images/](./images/README.md) | 图片导入、不可变字节、草稿续期与事务保留 | 1 |
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
 | [tools/](./tools/README.md) | 本地进程和文本文件变更 | 2 |

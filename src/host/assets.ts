@@ -8,6 +8,8 @@ export const assets = new Map([
   ['/models-directory-client.js', { file: fileURLToPath(new URL('../client/models-directory-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/archive-client.js', { file: fileURLToPath(new URL('../client/archive-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-client.js', { file: fileURLToPath(new URL('../client/workspace-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/project-directory-client.js', { file: fileURLToPath(new URL('../client/project-directory-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/project-directory-view.js', { file: fileURLToPath(new URL('../client/project-directory-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-layout.js', { file: fileURLToPath(new URL('../client/workspace-layout.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/protocols/view.js', { file: fileURLToPath(new URL('../client/protocols/view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/protocols/modules.js', { file: fileURLToPath(new URL('../client/protocols/modules.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
@@ -27,4 +29,3 @@ export const assets = new Map([
   ['/harness-client.js', { file: fileURLToPath(new URL('../client/harness-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/connections-view.js', { file: fileURLToPath(new URL('../client/connections-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
 ])
-

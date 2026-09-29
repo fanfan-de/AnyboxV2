@@ -84,7 +84,9 @@ const helpDialog = required<HTMLDialogElement>('help-dialog')
 required('close-help').addEventListener('click', () => helpDialog.close())
 required('open-help').addEventListener('click', () => { closeSidebar(); helpDialog.showModal() })
 sidebar.addEventListener('click', event => {
-  const action = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.session-open, #new-session, [data-create-project-session]') : null
+  const action = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.session-open, #new-session, [data-create-project-session], #add-project') : null
+  // Release the narrow-screen drawer's focus trap before the selector opens its modal.
+  if (action?.id === 'add-project' && !action.disabled) { closeSidebar(); return }
   // The accepted new-session click disables its button synchronously; inspect it before its handler runs.
   if (action && !action.disabled) queueMicrotask(closeSidebar)
 }, { capture: true })
@@ -148,6 +150,7 @@ function messageFor(error: unknown): string {
     'authentication-failed': '访问令牌无效或已撤销，请更新连接凭据。',
     'credential-unavailable': '系统凭据库不可用；连接配置仍保留。',
     'instance-mismatch': '此地址对应的实例已改变，已阻止请求。请为新实例添加连接。',
+    'connection-changed': '此连接已被修改，请刷新页面后重新选择目录。',
     'version-incompatible': '该 Harness 的 API 版本不兼容。',
     'instance-already-connected': '此 Harness 已有连接。',
     'invalid-endpoint': '远端地址需要 HTTPS；回环地址可以使用 HTTP。',

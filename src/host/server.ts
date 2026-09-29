@@ -20,6 +20,7 @@ import { isModelFailure } from '../harness/run/model.js'
 import type { ModelsSettingsService, ModelsCatalogService, RunnableModelSummary, ProviderTemplate } from '@anybox/models'
 import { isProjectUnavailableError } from '../harness/project/component.js'
 import type { Project } from '../harness/project/component.js'
+import type { DirectoryBrowseOptions, DirectoryBrowseOpened, DirectoryPage } from '../harness/project/directories.js'
 import { DirectoryPickerFailure } from './directory-picker.js'
 import { openRunChangeStream } from './run-change-stream.js'
 import type { RunChangeStream } from './run-change-stream.js'
@@ -31,6 +32,11 @@ import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
 export interface HarnessApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles'> {
   listAgents(): readonly { readonly id: string }[]
   directoryPickerSupported(): boolean
+  directoryBrowsingSupported(): boolean
+  openDirectoryBrowse(owner: string, input: DirectoryBrowseOptions, signal?: AbortSignal): OwnedCall<DirectoryBrowseOpened>
+  readDirectoryPage(owner: string, browseId: string, page: number, signal?: AbortSignal): OwnedCall<DirectoryPage>
+  closeDirectoryBrowse(owner: string, browseId: string): Promise<void>
+  onDirectoryBrowseRetired(listener: (browseId: string) => void): () => void
   pickProject(signal: AbortSignal): Promise<Project | null>
   openProject?(path: string): Promise<Project>
   listProjects(): Promise<readonly Project[]>
@@ -107,6 +113,12 @@ function knownFailure(error: unknown): HttpFailure {
     return failure(503, 'picker-unavailable')
   }
   if (error instanceof Error) {
+    if (error.name === 'DirectoryBrowseFailure' && 'code' in error) {
+      const code = String(error.code)
+      return failure(code === 'directory-permission-denied' ? 403 : code === 'directory-missing' ? 404
+        : ['directory-browse-expired', 'directory-browse-conflict'].includes(code) ? 409
+        : ['directory-browse-invalid', 'directory-not-directory', 'directory-link-loop'].includes(code) ? 400 : 503, code)
+    }
     if (error.name === 'ProjectFileError' && 'code' in error) {
       const code = String(error.code)
       return failure(code === 'file-too-large' ? 413 : code === 'file-missing' ? 404
@@ -234,7 +246,18 @@ export async function startHarnessApiServer(commands: HarnessApiCommands, port =
   const pickerRequests = new Set<AbortController>()
   const modelRequests = new Map<AbortController, Promise<unknown>>()
   const imageRequests = new Map<AbortController, Promise<unknown>>()
-  const imageRequest = async <T>(request: IncomingMessage, response: ServerResponse, work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+  const directoryRequests = new Map<AbortController, Promise<unknown>>()
+  const directoryBrowses = new Map<string, string>()
+  const unsubscribeDirectories = commands.onDirectoryBrowseRetired?.(browseId => { directoryBrowses.delete(browseId) })
+  const directoryCleanups = new Set<Promise<void>>()
+  const closeDirectoryBrowse = (owner: string, browseId: string): Promise<void> => {
+    const task = commands.closeDirectoryBrowse(owner, browseId)
+    directoryCleanups.add(task)
+    void task.then(() => { if (directoryBrowses.get(browseId) === owner) directoryBrowses.delete(browseId) }, () => {})
+      .finally(() => directoryCleanups.delete(task))
+    return task
+  }
+  const imageRequest = async <T>(request: IncomingMessage, response: ServerResponse, work: (signal: AbortSignal) => Promise<T>, requests = imageRequests): Promise<T> => {
     if (closing) throw failure(503, 'service-unavailable')
     const abort = new AbortController()
     const disconnected = () => { if (!response.writableEnded) abort.abort() }
@@ -243,17 +266,17 @@ export async function startHarnessApiServer(commands: HarnessApiCommands, port =
     abort.signal.addEventListener('abort', stopReading, { once: true })
     if (response.destroyed) abort.abort()
     const task = Promise.resolve().then(() => work(abort.signal))
-    imageRequests.set(abort, task)
+    requests.set(abort, task)
     try { return await task }
-    finally { imageRequests.delete(abort); response.off('close', disconnected); abort.signal.removeEventListener('abort', stopReading) }
+    finally { requests.delete(abort); response.off('close', disconnected); abort.signal.removeEventListener('abort', stopReading) }
   }
-  const joinImageCall = async <T>(call: OwnedCall<T>, signal: AbortSignal, kind: 'image' | 'file' = 'image'): Promise<T> => {
+  const joinImageCall = async <T>(call: OwnedCall<T>, signal: AbortSignal, kind: 'image' | 'file' | 'directory' = 'image'): Promise<T> => {
     const cancel = () => call.cancel('Web resource request cancelled')
     signal.addEventListener('abort', cancel, { once: true })
     if (signal.aborted) cancel()
     // A replacement service may fail during exit without ever settling result.
     // Observe both promises now; a done failure must not leave HTTP shutdown waiting forever.
-    const exited = call.done.then(() => undefined, () => ({ error: failure(503, kind === 'file' ? 'file-cleanup-failed' : 'asset-cleanup-failed') }))
+    const exited = call.done.then(() => undefined, () => ({ error: failure(503, kind === 'directory' ? 'directory-browse-cleanup-failed' : kind === 'file' ? 'file-cleanup-failed' : 'asset-cleanup-failed') }))
     const exitFailure = exited.then(exit => {
       if (exit) { call.cancel('image resource cleanup failed'); throw exit.error }
       return new Promise<never>(() => {})
@@ -283,6 +306,7 @@ export async function startHarnessApiServer(commands: HarnessApiCommands, port =
   const authorizedResponses = new Map<ServerResponse, string>()
   const unsubscribe = options.access?.onRevoked(id => {
     for (const [response, token] of authorizedResponses) if (token === id) response.destroy()
+    for (const [browseId, owner] of directoryBrowses) if (owner === id) void closeDirectoryBrowse(owner, browseId).catch(() => {})
   })
   const handlers = new Set<Promise<void>>(), bodies = new Set<IncomingMessage>()
   const server = createServer((request, response) => {
@@ -299,10 +323,16 @@ export async function startHarnessApiServer(commands: HarnessApiCommands, port =
       const url = new URL(request.url ?? '/', origin)
       if (url.origin !== origin) throw failure(403, 'forbidden-host')
       const path = url.pathname
+      let directoryOwner = 'local-web-user'
       if (options.access) {
         const tokenId = options.access.authenticate(request.headers.authorization)
+        directoryOwner = tokenId
         response.setHeader('X-Anybox-Instance-Id', options.access.instance.instanceId)
-        if (method === 'GET' && path === '/api/v1/instance') { json(response, 200, options.access.instance); return }
+        if (method === 'GET' && path === '/api/v1/instance') {
+          const instance = options.access.instance
+          const capabilities = [...instance.capabilities.filter(value => value !== 'projects.browse'), ...(commands.directoryBrowsingSupported?.() ? ['projects.browse'] : [])]
+          json(response, 200, { ...instance, capabilities }); return
+        }
         if (request.headers['x-anybox-instance-id'] !== options.access.instance.instanceId) throw failure(409, 'instance-mismatch')
         if (path === '/api/v1/access/tokens') {
           if (method === 'GET') { json(response, 200, await options.access.list()); return }
@@ -312,6 +342,43 @@ export async function startHarnessApiServer(commands: HarnessApiCommands, port =
         if (method === 'POST' && revoke) { await requestObject(request, []); await options.access.revoke(decodeURIComponent(revoke[1])); json(response, 200, { ok: true }); return }
         authorizedResponses.set(response, tokenId)
         response.once('close', () => authorizedResponses.delete(response))
+      }
+      if (method === 'POST' && path === '/api/v1/projects/directories/browse') {
+        if (!commands.directoryBrowsingSupported?.()) throw failure(503, 'directory-browse-unsupported')
+        if (url.search) throw failure(400, 'invalid-input')
+        const body = await requestObject(request, ['action', 'path', 'query', 'showHidden', 'browseId', 'page'])
+        const result = await imageRequest(request, response, async signal => {
+          if (body.action === 'open') {
+            if (body.browseId !== undefined || body.page !== undefined ||
+                body.path !== undefined && typeof body.path !== 'string' || body.query !== undefined && typeof body.query !== 'string' ||
+                body.showHidden !== undefined && typeof body.showHidden !== 'boolean') throw failure(400, 'invalid-input')
+            const input: DirectoryBrowseOptions = {
+              ...(body.path === undefined ? {} : { path: body.path as string }),
+              ...(body.query === undefined ? {} : { query: body.query as string }),
+              ...(body.showHidden === undefined ? {} : { showHidden: body.showHidden as boolean }),
+            }
+            const opened = await joinImageCall(commands.openDirectoryBrowse(directoryOwner, input, signal), signal, 'directory')
+            directoryBrowses.set(opened.browseId, directoryOwner)
+            if (closing || signal.aborted) {
+              await closeDirectoryBrowse(directoryOwner, opened.browseId)
+              throw failure(503, 'directory-browse-cancelled')
+            }
+            return opened
+          }
+          if (body.action !== 'page' || body.path !== undefined || body.query !== undefined || body.showHidden !== undefined ||
+              typeof body.browseId !== 'string' || !body.browseId || body.browseId.length > 200 ||
+              typeof body.page !== 'number' || !Number.isSafeInteger(body.page) || body.page < 0) throw failure(400, 'invalid-input')
+          return joinImageCall(commands.readDirectoryPage(directoryOwner, body.browseId, body.page, signal), signal, 'directory')
+        }, directoryRequests)
+        json(response, 200, result); return
+      }
+      if (method === 'POST' && path === '/api/v1/projects/directories/close') {
+        if (!commands.directoryBrowsingSupported?.()) throw failure(503, 'directory-browse-unsupported')
+        if (url.search) throw failure(400, 'invalid-input')
+        const body = await requestObject(request, ['browseId'])
+        if (typeof body.browseId !== 'string' || !body.browseId || body.browseId.length > 200) throw failure(400, 'invalid-input')
+        await imageRequest(request, response, () => closeDirectoryBrowse(directoryOwner, body.browseId as string), directoryRequests)
+        json(response, 200, { ok: true }); return
       }
       if (method === 'POST' && path === '/api/v1/projects') {
         const body = await requestObject(request, ['path'])
@@ -638,6 +705,7 @@ export async function startHarnessApiServer(commands: HarnessApiCommands, port =
     })
   } catch (error) {
     unsubscribe?.()
+    unsubscribeDirectories?.()
     server.close()
     throw error
   }
@@ -662,6 +730,7 @@ export async function startHarnessApiServer(commands: HarnessApiCommands, port =
       for (const controller of pickerRequests) controller.abort()
       for (const controller of modelRequests.keys()) controller.abort()
       for (const controller of imageRequests.keys()) controller.abort()
+      for (const controller of directoryRequests.keys()) controller.abort()
       for (const finish of waitRequests) finish()
       const streams = [...changeStreams]
       for (const stream of streams) stream.close()
@@ -670,8 +739,12 @@ export async function startHarnessApiServer(commands: HarnessApiCommands, port =
         ...streams.map(stream => stream.done),
         ...[...modelRequests.values()].map(task => task.then(() => {}, () => {})),
         ...[...imageRequests.values()].map(task => task.then(() => {}, () => {})),
+        ...[...directoryRequests.values()].map(task => task.then(() => {}, () => {})),
         new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
-      ]).then(() => {})
+      ]).then(async () => {
+        const cleanup = [...directoryBrowses].map(([browseId, owner]) => closeDirectoryBrowse(owner, browseId))
+        await Promise.all([...directoryCleanups, ...cleanup])
+      }).finally(() => { unsubscribeDirectories?.() })
       return shutdown
     },
   }
