@@ -1,8 +1,11 @@
 import { modelsError } from '../errors.js';
+import { assert } from '../domain.js';
 import type { NativeObject, NativeProtocol } from '../native-types.js';
 import type { JsonValue } from '../types.js';
 import { array, captureOptions, connectionFields, conversation, effectiveCapabilities, effortOption, index, native, nonempty, numberOption, object, optionKeys, parseJson, protocolComponent, reasoningEfforts, requireLocalTools, restoreRecords, string, validateProvider, type ProtocolOptions } from './shared.js';
 import { check, discover, request } from './transport.js';
+import { parseNativeImageResourceUri } from '../resources.js';
+import { chatImageIds, withChatImages } from './chat-images.js';
 export interface ChatCompletionsRequestPolicy {
   readonly protocolId: string;
   readonly name: string;
@@ -11,8 +14,21 @@ export interface ChatCompletionsRequestPolicy {
   readonly allowDeveloper?: boolean;
   readonly sourceMappings?: import('../types.js').ProtocolDescriptor['sourceMappings'];
 }
-function validateIntent(intent: NativeObject): void {
-  for (const value of array(intent.messages)) { const item = object(value); if (!['system', 'developer', 'user', 'tool'].includes(string(item.role))) throw modelsError('capability-unsupported'); string(item.content); if (item.role === 'tool') nonempty(item.tool_call_id); }
+function validateIntent(intent: NativeObject, images = true): void {
+  for (const value of array(intent.messages)) {
+    const item = object(value); if (!['system', 'developer', 'user', 'tool'].includes(string(item.role))) throw modelsError('capability-unsupported');
+    if (typeof item.content === 'string') { if (item.role === 'tool') nonempty(item.tool_call_id); continue; }
+    if (item.role !== 'user' || !images) throw modelsError('capability-unsupported');
+    const blocks = array(item.content); assert(blocks.length > 0);
+    for (const value of blocks) {
+      const block = object(value);
+      if (block.type === 'text') { optionKeys(block, ['type', 'text']); string(block.text); }
+      else if (block.type === 'image_url' && images) {
+        optionKeys(block, ['type', 'image_url']); const image = object(block.image_url); optionKeys(image, ['url']);
+        if (!parseNativeImageResourceUri(string(image.url))) throw modelsError('capability-unsupported');
+      } else throw modelsError('capability-unsupported');
+    }
+  }
 }
 function validateResponse(raw: unknown): NativeObject {
   const response = native(raw);
@@ -42,16 +58,23 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}, pol
   options = captureOptions(options); policy = Object.freeze({ ...policy });
   const protocolId = policy.protocolId, tokenField = policy.maxTokensField ?? 'max_completion_tokens';
   return {
-    descriptor: { id: protocolId, version: '2.0.0', name: policy.name, connectionFields,
+    descriptor: { id: protocolId, version: '2.1.0', name: policy.name, connectionFields,
       modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 }, { key: tokenField, label: 'Maximum output tokens', type: 'number', min: 1, integer: true },
         ...(!policy.disableThinking ? [{ key: 'reasoning_effort', label: 'Reasoning effort', type: 'enum' as const, values: reasoningEfforts }] : [])],
       supportsDiscovery: true, supportsCheck: true, ...(policy.sourceMappings ? { sourceMappings: policy.sourceMappings } : {}) },
     validateProvider: provider => validateProvider(provider, protocolId),
     validateParameters(options, declared) { optionKeys(options, ['temperature', tokenField, ...(!policy.disableThinking ? ['reasoning_effort'] : [])]); numberOption(options.temperature, 0, 2); numberOption(options[tokenField], 1, Number.MAX_SAFE_INTEGER, true); effortOption(options.reasoning_effort, declared, reasoningEfforts); },
-    effectiveCapabilities: (declared, options) => effectiveCapabilities(declared, policy.disableThinking || options.reasoning_effort === 'none'),
-    restore: records => restoreRecords(protocolId, records, commit),
+    recordFormatVersion: 2,
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    resourceIds: chatImageIds,
+    effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, policy.disableThinking || options.reasoning_effort === 'none'), imageInput: declared.imageInput.support === 'supported' }),
+    restore: records => {
+      for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
+      return restoreRecords(protocolId, records, commit, [1, 2]);
+    },
     prepare(input) {
       validateIntent(input.intent); requireLocalTools(input.intent.tools, input.capabilities.tools);
+      if (chatImageIds(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
       const next = conversation(input.state, input.intent, 'messages', ['tools']);
       if (policy.allowDeveloper === false && array(next.messages).some(item => object(item).role === 'developer')) throw modelsError('invalid-config');
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(object(tool.function).parameters); }
@@ -59,7 +82,7 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}, pol
         ...(input.capabilities.streaming ? { stream_options: { include_usage: true } } : {}), ...(policy.disableThinking ? { thinking: { type: 'disabled' } } : {}) });
     },
     exchange(input) {
-      return request(options, input, 'chat/completions', input.request, async reader => {
+      return withChatImages(input, (wire, signal) => request(options, { ...input, signal }, 'chat/completions', wire, async reader => {
         if (!input.request.stream) return validateResponse(await reader.json());
         let message: Record<string, JsonValue> = { role: 'assistant', content: '' }, finish: JsonValue | undefined, usage: JsonValue | undefined, completed = false;
         const calls = new Map<number, Record<string, JsonValue>>(); let envelope: Record<string, JsonValue> = {};
@@ -90,7 +113,7 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}, pol
         if (!completed) throw modelsError('invalid-response');
         if (calls.size) message = { ...message, tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, value]) => value) };
         return validateResponse({ ...envelope, choices: [{ index: 0, message, finish_reason: finish }], ...(usage === undefined ? {} : { usage }) });
-      });
+      }));
     },
     commit: input => commit(input.state, input.intent, input.response),
     discover: input => discover(options, input), check: input => check(options, input),

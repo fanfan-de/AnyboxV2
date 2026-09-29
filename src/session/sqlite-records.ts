@@ -1,5 +1,8 @@
 /** SQLite implementation owned by the Session component; no runtime model plans or Nya services. */
 import type { RuntimeInputs } from '../contracts.js'
+import { isDeepStrictEqual } from 'node:util'
+import type { ImageAssetsPort, ImageRef } from '../image/port.js'
+import { inputImages } from '../run/program.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
 import type { NativeHistory, NativeInitialization, NativeRunInput, ProtocolBindingSnapshot, ProtocolRecord, StoredProtocolRecord } from '../run/program.js'
@@ -13,7 +16,7 @@ import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent
 import type { RunEventData } from '../run/execution.js'
 import type { SessionPort, SessionRunPort } from './port.js'
 
-type SessionRecords = Omit<SessionPort, 'createSession'> & SessionRunPort & {
+type SessionRecords = Omit<SessionPort, 'createSession' | 'importImage' | 'getImage' | 'renewImages'> & Omit<SessionRunPort, 'describeImages'> & {
   createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string | null): Promise<Session>
 }
 
@@ -178,6 +181,9 @@ const migrations: readonly StorageMigration[] = [{
         BEGIN SELECT RAISE(ABORT, 'native records are retained'); END`)
     }
   },
+}, {
+  version: 6,
+  up(tx) { tx.execute('ALTER TABLE harness_native_records ADD COLUMN resource_refs_json TEXT') },
 }]
 
 function required(row: StorageRow, key: string): string {
@@ -223,6 +229,7 @@ function protocolRecords(reader: StorageReader, runId: string): readonly StoredP
     kind: required(row, 'kind') as ProtocolRecord['kind'], formatVersion: Number(row.format_version),
     ...(optional(row, 'exchange_id') ? { exchangeId: required(row, 'exchange_id') } : {}),
     payload: JSON.parse(required(row, 'payload_json')) as JsonValue,
+    ...(optional(row, 'resource_refs_json') ? { resourceRefs: JSON.parse(required(row, 'resource_refs_json')) } : {}),
   })))
 }
 
@@ -232,15 +239,26 @@ function insertRecords(tx: StorageTransaction, run: Run, records: readonly Proto
     if (!record || typeof record.id !== 'string' || !record.id || !['request', 'response', 'checkpoint', 'diagnostic'].includes(record.kind) ||
       !Number.isSafeInteger(record.formatVersion) || record.formatVersion < 1 || (record.exchangeId !== undefined && (typeof record.exchangeId !== 'string' || !record.exchangeId))) throw treeError('invalid-history')
     const payload = serialize(record.payload)
+    if (record.resourceRefs !== undefined && (record.formatVersion !== 2 || record.kind !== 'request' || !Array.isArray(record.resourceRefs))) throw treeError('invalid-history')
+    const resourceIds = new Set<string>()
+    for (const ref of record.resourceRefs ?? []) {
+      const image = run.images.find(image => image.assetId === ref.id)
+      if (!image || resourceIds.has(ref.id) || !isDeepStrictEqual(ref, {
+        id: image.assetId, sha256: image.sha256, byteLength: image.byteLength, mimeType: image.mediaType,
+      })) throw treeError('invalid-history')
+      resourceIds.add(ref.id)
+    }
+    const resources = record.resourceRefs === undefined ? null : serialize(record.resourceRefs)
     const previous = tx.get('SELECT * FROM harness_native_records WHERE id = ?', [record.id])
     if (previous) {
       if (required(previous, 'run_id') !== run.id || required(previous, 'protocol_id') !== run.protocolBinding!.protocolId ||
         required(previous, 'kind') !== record.kind || Number(previous.format_version) !== record.formatVersion ||
-        (optional(previous, 'exchange_id') ?? undefined) !== record.exchangeId || required(previous, 'payload_json') !== payload) throw treeError('invalid-history')
+        (optional(previous, 'exchange_id') ?? undefined) !== record.exchangeId || required(previous, 'payload_json') !== payload ||
+        (optional(previous, 'resource_refs_json') ?? null) !== resources) throw treeError('invalid-history')
       continue
     }
-    tx.execute('INSERT INTO harness_native_records (id, run_id, protocol_id, exchange_id, kind, format_version, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [record.id, run.id, run.protocolBinding!.protocolId, record.exchangeId ?? null, record.kind, record.formatVersion, payload])
+    tx.execute('INSERT INTO harness_native_records (id, run_id, protocol_id, exchange_id, kind, format_version, payload_json, resource_refs_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [record.id, run.id, run.protocolBinding!.protocolId, record.exchangeId ?? null, record.kind, record.formatVersion, payload, resources])
   }
 }
 
@@ -297,9 +315,12 @@ function sessionFromRow(row: StorageRow): Session {
   })
 }
 
-function nodeFromRow(row: StorageRow): ConversationNode {
+function nodeFromRow(row: StorageRow, reader: StorageReader): ConversationNode {
+  const runId = optional(row, 'source_run_id')
+  const run = runId ? reader.get('SELECT native_input_json FROM harness_runs WHERE id = ?', [runId]) : undefined
+  const images = storedImages(run ? optional(run, 'native_input_json') : undefined)
   return Object.freeze({ id: required(row, 'id'), sessionId: required(row, 'session_id'),
-    parentId: optional(row, 'parent_id') ?? null, input: required(row, 'input'), output: required(row, 'output'),
+    parentId: optional(row, 'parent_id') ?? null, input: required(row, 'input'), images, output: required(row, 'output'),
     sourceRunId: optional(row, 'source_run_id') ?? null })
 }
 
@@ -317,7 +338,7 @@ function nodePath(reader: StorageReader, sessionId: string, id: string | null): 
     seen.add(current)
     const row = reader.get('SELECT * FROM harness_nodes WHERE session_id = ? AND id = ?', [sessionId, current])
     if (!row) throw treeError(ancestors.length ? 'invalid-history' : 'node-not-found')
-    const node = nodeFromRow(row)
+    const node = nodeFromRow(row, reader)
     ancestors.push(node)
     current = node.parentId
   }
@@ -332,6 +353,15 @@ function promptsFromRow(row: StorageRow): readonly PromptSnapshot[] {
     throw new Error('invalid stored Run prompts')
   }
   return Object.freeze(prompts.map(item => Object.freeze({ ...item }))) as readonly PromptSnapshot[]
+}
+
+function storedImages(json: string | undefined): readonly ImageRef[] {
+  if (!json) return Object.freeze([])
+  const input = JSON.parse(json) as NativeRunInput
+  if (input.schemaVersion !== 1 && input.schemaVersion !== 2) throw treeError('invalid-history')
+  const images = inputImages(input)
+  if (!Array.isArray(images)) throw treeError('invalid-history')
+  return Object.freeze(images.map(image => Object.freeze({ ...image })))
 }
 
 function runFromRow(row: StorageRow): Run {
@@ -370,6 +400,7 @@ function runFromRow(row: StorageRow): Run {
   return Object.freeze({
     id: required(row, 'id'), sessionId: required(row, 'session_id'),
     input: required(row, 'input'), idempotencyKey: required(row, 'idempotency_key'),
+    images: storedImages(optional(row, 'native_input_json')),
     status: required(row, 'status') as Run['status'],
     history: required(row, 'history_kind') === 'tree'
       ? Object.freeze({ kind: 'tree' as const, parentNodeId: optional(row, 'parent_node_id') ?? null })
@@ -402,7 +433,8 @@ function accepted(reader: StorageReader, input: RunInput): Run | undefined {
     [input.sessionId, input.idempotencyKey])
   if (prior) {
     const run = runFromRow(prior)
-    if (run.input !== input.input || run.history.kind !== 'tree' || run.history.parentNodeId !== input.parentNodeId || run.requestedModelId !== (input.modelId ?? null)) throw treeError('idempotency-conflict')
+    if (run.input !== input.input || run.history.kind !== 'tree' || run.history.parentNodeId !== input.parentNodeId || run.requestedModelId !== (input.modelId ?? null) ||
+      !isDeepStrictEqual(run.images.map(image => image.assetId), (input.images ?? []).map(image => image.assetId))) throw treeError('idempotency-conflict')
     return run
   }
   return undefined
@@ -413,6 +445,7 @@ export async function openSqliteSessionRecords(
   db: LocalStoragePort,
   inputs: RuntimeInputs,
   notify: (run: Pick<Run, 'id' | 'sessionId' | 'revision'>) => Promise<void>,
+  images: ImageAssetsPort,
 ): Promise<SessionRecords> {
   await db.migrate('run-state', migrations)
   // A previous process cannot own an in-flight call. Never replay its side effects.
@@ -467,7 +500,7 @@ export async function openSqliteSessionRecords(
       return db.read(reader => {
         requireSession(reader, sessionId)
         const row = reader.get('SELECT * FROM harness_nodes WHERE session_id = ? AND id = ?', [sessionId, id])
-        return row ? nodeFromRow(row) : undefined
+        return row ? nodeFromRow(row, reader) : undefined
       })
     },
     getNodePath(sessionId, id) { return db.read(reader => nodePath(reader, sessionId, id)) },
@@ -485,7 +518,7 @@ export async function openSqliteSessionRecords(
         }
         const rows = reader.all('SELECT * FROM harness_nodes WHERE session_id = ? AND parent_id IS ? AND seq > ? ORDER BY seq LIMIT ?',
           [sessionId, parentId, after, limit + 1])
-        const nodes = Object.freeze(rows.slice(0, limit).map(nodeFromRow))
+        const nodes = Object.freeze(rows.slice(0, limit).map(row => nodeFromRow(row, reader)))
         return Object.freeze({ nodes, ...(rows.length > limit ? { nextCursor: nodes.at(-1)!.id } : {}) })
       })
     },
@@ -527,7 +560,9 @@ export async function openSqliteSessionRecords(
             [initializationId, input.sessionId, binding.protocolId, serialize(native.initialization)])
         }
         if (savedInitialization && (required(savedInitialization, 'protocol_id') !== binding.protocolId || required(savedInitialization, 'payload_json') !== serialize(native.initialization))) throw treeError('history-incompatible')
-        if (native.input.raw !== input.input || native.input.schemaVersion !== 1) throw treeError('invalid-history')
+        if (native.input.raw !== input.input || ![1, 2].includes(native.input.schemaVersion) ||
+          !isDeepStrictEqual(inputImages(native.input).map(image => image.assetId), (input.images ?? []).map(image => image.assetId))) throw treeError('invalid-history')
+        if (inputImages(native.input).length) images.retainIn(tx, input.sessionId, `run-input:${id}`, inputImages(native.input))
         const execution = { ...initialRunExecution, phase: 'active' }
         tx.execute('UPDATE harness_sessions SET protocol_id = ? WHERE id = ? AND protocol_id IS NULL', [binding.protocolId, input.sessionId])
         tx.execute(`INSERT INTO harness_runs (

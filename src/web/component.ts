@@ -75,6 +75,9 @@ export function createWebFrontendComponent(agents: readonly Readonly<{ id: strin
         getRunByKey: (id, key) => deps[sessionServiceKey].getRunByKey(id, key),
         waitRun: (id, signal) => deps[runServiceKey].waitRun(id, signal),
         startRun: input => deps[runServiceKey].startRun(input),
+        importImage: (sessionId, bytes, signal) => deps[sessionServiceKey].importImage(sessionId, bytes, signal),
+        getImage: (sessionId, assetId, signal) => deps[sessionServiceKey].getImage(sessionId, assetId, signal),
+        renewImages: (sessionId, assetIds) => deps[sessionServiceKey].renewImages(sessionId, assetIds),
         getRun: id => deps[sessionServiceKey].getRun(id),
         async getRunView(id) {
           const run = await deps[sessionServiceKey].getRun(id)

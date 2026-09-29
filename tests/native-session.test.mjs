@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,6 +17,7 @@ async function host(t, executing = false) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-native-session-'))), root = new Context()
   const inputs = { now: () => 'now', newId: ids() }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   let harness, llm
   if (executing) {
     llm = controlledModels()

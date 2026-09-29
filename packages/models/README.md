@@ -133,7 +133,7 @@ User definition writes always produce `user` source records; source definitions 
 | Installed protocol forms | `protocols()` |
 | Explicit remote requests | `discoverModels(connectionId, signal?)`, `checkConnection(connectionId, signal?)` |
 
-User saves create immutable revisions; stale edits return `conflict`. Neutral configuration can be saved before a protocol is installed; synchronization stays pending and execution stays unavailable until registration validates the saved parameters. Discovery returns candidates without writing definitions/configurations. `available` means local configuration readiness and does not establish remote account authorization. Effective image input is always false. Native options remain explicit; omitted optional parameters use server defaults, while unsupported options are rejected. Configurations and Keys affect new executions only.
+User saves create immutable revisions; stale edits return `conflict`. Neutral configuration can be saved before a protocol is installed; synchronization stays pending and execution stays unavailable until registration validates the saved parameters. Discovery returns candidates without writing definitions/configurations. `available` means local configuration readiness and does not establish remote account authorization. Effective image input is enabled only by implemented Chat drivers and an explicit `imageInput: supported` configuration. Native options remain explicit; omitted optional parameters use server defaults, while unsupported options are rejected. Configurations and Keys affect new executions only.
 
 | Protocol | Native endpoint and saved parameter fields |
 |---|---|
@@ -144,7 +144,7 @@ User saves create immutable revisions; stale edits return `conflict`. Neutral co
 
 Parameters use `{ protocolId, formatVersion: 1, value }`; fields in `value` are native API fields. Protocol schemas allow only implemented parameters. Authentication, address, model identity, messages/history and transport controls cannot be overridden by parameter JSON. Native function declarations belong to the initial execution intent; configured server-search tools are validated separately and merged by the driver. `webSearch` is an explicit capability declaration: absence is unknown, and directory/provider names never establish support.
 
-Responses and Chat accept only declared reasoning efforts, including `none`. Anthropic validates declared modes, budgets and efforts: enabled thinking requires a budget of at least 1024 below `max_tokens`; adaptive/enabled thinking requires omitted or default (`1`) temperature. Omitted parameters remain omitted. Anthropic sends `x-api-key` and `anthropic-version: 2023-06-01`, using workspace-scoped keys. Gemini sends `x-goog-api-key`; no server conversation, background agent or media input is enabled. Effective image input remains false.
+Responses and Chat accept only declared reasoning efforts, including `none`. Anthropic validates declared modes, budgets and efforts: enabled thinking requires a budget of at least 1024 below `max_tokens`; adaptive/enabled thinking requires omitted or default (`1`) temperature. Omitted parameters remain omitted. Anthropic sends `x-api-key` and `anthropic-version: 2023-06-01`, using workspace-scoped keys. Gemini sends `x-goog-api-key`; no server conversation, background agent or media input is enabled. Responses, Anthropic and Gemini still report effective image input as false.
 
 Native results retain their protocol status, ordered content and unknown JSON fields. Responses preserves reasoning/encrypted content, phase, search activity and citations. Anthropic preserves thinking/signatures/redaction, client and server tool blocks, and `pause_turn`. Gemini preserves chronological native steps and signatures. A host protocol Loop decides how to handle tool requests, pauses, incomplete output and refusal; Models does not translate these into a shared result status or execute tools.
 
@@ -210,6 +210,32 @@ try {
 `close()` is idempotent, synchronously stops new operations, cancels active work and waits for exit. It returns `{ records, restoreState?, cleanup }` even on cleanup failure, then releases private credential/context references. Diagnostics cannot create a successful history node. Responses failed/cancelled terminals and Anthropic error events retain terminal identity, error type/code and received native blocks; provider error messages, authentication fields and captured credential values are excluded. Any failed exchange makes that execution’s record chain ineligible for restore, including after an explicit successful retry. A late result after failed `done` cannot alter the frozen report. JavaScript strings cannot be securely zeroed; references are released.
 
 For the next Run, the host resolves the selected immutable parent chain and supplies `restore: { ...parentMetadata, records: orderedRecords }` to `openNative`. Each protocol codec validates and reconstructs native state in memory. The host stores each Run's incremental records and small `restoreState` metadata, not the expanded historical array on every node. Native tool IDs, signatures, encrypted reasoning, root instructions and fixed tool declarations survive serialization and reopening. No text projection or browser stream cache is used for recovery.
+
+## Image resources and recovery
+
+Chat Completions 2.1.0 and its DeepSeek extension accept ordered user text/image blocks. Images use `image_url.url = nativeImageResourceUri(id)`; this reserved internal URI is never sent to the provider. External URLs, inline data URLs, provider file IDs, image detail controls, and images in system/developer/tool messages remain unsupported. Existing string messages remain unchanged.
+
+Pass a trusted `resources: NativeResourceResolver` to `openNative`. Its `read(ref, { signal })` synchronously returns `ProtocolOperation<Uint8Array>`; callers may implement memory, file or object storage without depending on Harness. `NativeImageResourceRef` contains only `{ id, sha256, byteLength, mimeType }`, with JPEG/PNG/GIF/WebP MIME types. Resource bytes must already have been admitted by the host's image validation policy. Models checks the byte count and SHA-256; it never opens a host path or interprets Session ownership. The host pins resource lifetime through accepted Run settlement and maintains durable resource ownership.
+
+```ts
+const image = { type: 'image_url', image_url: { url: nativeImageResourceUri(ref.id) } }
+const execution = await models.openNative({ modelId, lease, resources,
+  requirements: { imageInput: true } })
+const prepared = execution.prepareExchange({ messages: [{ role: 'user',
+  content: [{ type: 'text', text: 'Describe this image' }, image] }] },
+  { resourceRefs: [ref] })
+// Persist prepared.record/recipe before starting, just as with text.
+const reply = await prepared.start().result
+const exit = await execution.close()
+```
+
+`prepareExchange` captures the exact resource reference set used by the incremental intent, with no resource I/O. References cannot be duplicated, omitted or associated with conflicting metadata. Request records/recipes carry top-level `resourceRefs`; payload remains the native intent. An execution privately reconstructs the resource directory from restored records and restricts driver reads to resources in its current request.
+
+After `start`, the Chat operation joins each resource read's result and actual exit before generating private data URLs and starting HTTP. Cancellation, missing bytes, checksum mismatch and cleanup failure never silently remove an image. The 32 MiB serialized request limit counts base64 expansion and repeated historical images, is checked before resource reads and again after materialization, and is separate from response limits. Model result/done and unregister wait for resource reads and HTTP cleanup. Wire image strings are temporary and never enter snapshots or request records. Public resource failures use fixed `resource-unavailable`, `invalid-resource` or `request-too-large` codes.
+
+Chat writes native record format 2 and reads formats 1/2; each new Run writes one format while the selected parent chain may contain both. Its explicit reader supports driver versions 2.0.0/2.1.0. Format 1 remains text-only and is never rewritten. The execution exposes `recordFormatVersion` so a host can bind its matching writer. Unchanged protocols continue writing format 1. Only a text-only parent's effective `imageInput: false` may upgrade to true; tools/streaming/search/reasoning, native parameters and account/model identity still require compatibility. Downgrading image capability is rejected. Catalog refresh never rewrites saved configuration capabilities.
+
+`NativeProtocol` may declare `recordFormatVersion`, `canRestoreVersion(version)` and `resourceIds(intentOrRequest)`. Without these, the writer is format 1, reader version compatibility is strict, and resource references are unavailable. The protocol owns its native image mapping; Models owns reference validation and execution lifetime. [native-images.test.mjs](tests/native-images.test.mjs) covers JSON/SSE, the DeepSeek policy, tools, recovery, capability admission, resource failures, read cancellation/cleanup and wire limits.
 
 ## Events and protocol registration
 

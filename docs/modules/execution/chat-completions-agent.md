@@ -38,6 +38,6 @@ Effect 等待 unregister 撤销本代并加入所有已接受 program 的释放�
 
 ## 兼容限制与验证
 
-这里只实现标准 Chat 原生语义；供应商差异必须显式适配，不能按 URL 推断成 DeepSeek。恢复使用同协议、兼容参数和记录格式 1；旧 dialogue-v1 不执行；图片能力为 false。工具能力未声明时不提供本地工具，纯文本仍可执行。没有多 choice 合并、动态工具或任意输出块转换。
+这里只实现标准 Chat 原生语义；供应商差异必须显式适配，不能按 URL 推断成 DeepSeek。恢复使用同协议与兼容参数，新记录格式为 2，双读旧文本格式 1；旧 dialogue-v1 不执行。已声明图片能力的配置接受 user 文本/图片块，持久资源引用在受管调用内编码为 data URL，工具结果仍为文本。工具能力未声明时不提供本地工具，纯文本仍可执行。没有多 choice 合并、动态工具或任意输出块转换。
 
 [原生协议测试](../../../tests/native-protocol-agents.test.mjs) 验证标准 Chat 的工具轨迹、跨 Run/重启恢复、分支隔离和范围变更拒绝；[工具循环测试](../../../tests/tool-loop.test.mjs) 验证工具批次与实际退出；[Models 协议测试](../../../packages/models/tests/protocols.test.mjs) 和[原生边界测试](../../../packages/models/tests/native-boundaries.test.mjs) 验证传输与原生结果边界。统一执行 `npm run check`。

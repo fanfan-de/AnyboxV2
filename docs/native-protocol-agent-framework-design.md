@@ -1,6 +1,6 @@
 # 原生协议 Agent 框架设计与迁移验收
 
-日期：2026-09-28。正式组合根已切换原生框架；本文说明本次交付范围、固定契约和验收方式。最终检查结果见文末。先前草案中尚未采用的交互等待、文本导入和直接 exchange 接口不属于现行契约。
+日期：2026-09-29（原生框架验收保留于文末；图片增量见[图片输入设计](./multimodal-image-input-design.md)）。正式组合根已切换原生框架；本文说明本次交付范围、固定契约和验收方式。最终检查结果见文末。先前草案中尚未采用的交互等待、文本导入和直接 exchange 接口不属于现行契约。
 
 ## 1. 范围与约束
 
@@ -8,7 +8,7 @@
 
 Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResult 与统一消息执行路径。保留配置、Vault、目录和驱动注册，提供 openNative、原生参数、版本化记录和恢复 codec。旧 dialogue-v1 Session 只读，不导入文本，不提供跨协议或跨账户转换。新 Session 使用 native-local-v1，在第一次接受事务中固定协议，失败和取消不解除绑定。
 
-继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、已知 Bash/Apply Patch 判别联合、实际退出后结算和 interrupted 不重放规则。本期不包含图片、音频、远端后台任务、并行工具调度、动态工具注册中心或用户交互等待机制。
+继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、已知 Bash/Apply Patch 判别联合、实际退出后结算和 interrupted 不重放规则。Chat/DeepSeek 已增加静态本地图片输入；其余协议图片能力保持关闭。本期不包含图片输出、工具返回图片、音频、远端后台任务、并行工具调度、动态工具注册中心或用户交互等待机制。
 
 ## 2. 已实现模块与职责
 
@@ -20,6 +20,7 @@ Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResu
 | 五协议 Loop | `src/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案；DeepSeek复用Chat工厂 |
 | Run | `src/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
 | RunRuntime | `src/run/runtime-component.ts` | 全部受管操作、取消、真实退出、持久屏障、视图与结算 |
+| 图片资源 | `src/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
 | Session | `src/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
 | 服务端展示 | `src/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
 | 协议 Web | `src/web/protocols/` | 安全 decoder/reducer、输入编码和稳定 Turn 生命周期 |
@@ -76,7 +77,7 @@ Session 首次接受 Run 固定 instruction、context 和工具声明；所有�
 
 ## 6. 持久化与迁移
 
-Models独占配置库从v2升级v3；Session沿用run-state账本新增v5。迁移阶段与行为测试仅使用临时库，未升级用户实际业务数据。三套库不建立跨库事务；任何组件迁移或初始化失败阻止Run准入并清理已安装资源。
+Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原生历史，v6 增加通用资源引用列；图片组件用独立迁移域登记自身表。迁移阶段与行为测试仅使用临时库，未升级用户实际业务数据。三套库不建立跨库事务；任何组件迁移或初始化失败阻止Run准入并清理已安装资源。
 
 ### Models v3
 
@@ -154,8 +155,8 @@ SSE仍由最多四Session共用，同Run未发送快照可合并，保留256KiB�
 ## 10. 真实数据切换与回退
 
 1. 通过旧 `harness.close()` 停止并等待全部execution、工具、凭据及写入退出。
-2. 在无占用状态备份Models配置库和业务库，保留目录缓存及凭据命名空间信息。
-3. 启动新组合根，配置v3与业务v5分别事务迁移；任一失败则不接受Run，修复后可重复启动。
+2. 在无占用状态备份Models配置库、业务库与图片目录，保留目录缓存及凭据命名空间信息。
+3. 启动新组合根，配置v3与业务v6分别事务迁移；任一失败则不接受Run，修复后可重复启动。
 4. 核对新会话原生运行、旧会话只读、配置参数和Key状态，再开放正常使用。
 5. 代码回退必须配合升级前数据库备份；禁止旧代码直接打开升级数据库，不回退Vault为明文。
 
@@ -171,7 +172,7 @@ ANYBOX_NATIVE_API_TESTS=1 ANYBOX_NATIVE_API_PROTOCOLS=responses node --test test
 
 运行前另提供每个选中协议的 `ANYBOX_NATIVE_API_<ID>_ENDPOINT`、`_MODEL`、`_KEY` 和 `_PARAMETERS`；ID转大写并将连字符替换为下划线，例如 `ANTHROPIC_MESSAGES`。地址和模型ID由验证者明确指定；参数是原生JSON对象，必须显式包含正整数输出上限（Responses `max_output_tokens`、Chat `max_completion_tokens`、Anthropic/DeepSeek `max_tokens`、Gemini `generation_config.max_output_tokens`）。不从现有配置或业务库推断任何值。
 
-该入口使用临时SQLite、内存Vault与实际协议传输，验证首轮文本、关闭重开、指定成功父节点的文本续接及原记录不变。它不构成工具、搜索、流式或跨平台凭据验收。系统凭据仍独立使用 `ANYBOX_KEYRING_TESTS=1` 门控。本次没有启用这两类真实验证。
+该入口使用临时SQLite、内存Vault与实际协议传输，验证首轮文本、关闭重开、指定成功父节点的文本续接及原记录不变。对显式选中的 Chat/DeepSeek 再设置 `ANYBOX_NATIVE_API_IMAGES=1`，会增加图片颜色识别及重启后沿图片父节点继续的验收；无需访问已保存 Key 或实际业务数据。它不构成工具、搜索、流式或跨平台凭据验收。系统凭据仍独立使用 `ANYBOX_KEYRING_TESTS=1` 门控。本次没有启用这两类真实验证。
 
 ## 12. 最终验收记录（2026-09-28）
 

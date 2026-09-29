@@ -5,6 +5,7 @@ export type ModelFailureCategory =
   | 'model-unavailable' | 'dependency-unavailable' | 'unsupported-request' | 'timeout'
   | 'provider-failure' | 'invalid-response' | 'cleanup-failure'
   | 'credential-missing' | 'credential-unavailable' | 'incomplete-response' | 'refused-response'
+  | 'resource-unavailable' | 'invalid-resource' | 'request-too-large'
 
 export interface ModelFailure extends Error { readonly category: ModelFailureCategory }
 
@@ -20,6 +21,9 @@ const messages: Record<ModelFailureCategory, string> = {
   'credential-unavailable': 'model API key could not be read',
   'incomplete-response': 'model response was incomplete',
   'refused-response': 'model refused the request',
+  'resource-unavailable': 'input image is unavailable',
+  'invalid-resource': 'input image failed integrity validation',
+  'request-too-large': 'conversation images exceed the request size limit',
 }
 
 export function modelFailure(category: ModelFailureCategory): ModelFailure {
@@ -37,6 +41,7 @@ export function normalizeModelFailure(error: unknown): ModelFailure {
   switch (error.code) {
     case 'credential-missing': case 'credential-unavailable': case 'timeout':
     case 'invalid-response': case 'cleanup-failure': case 'provider-failure': return modelFailure(error.code)
+    case 'resource-unavailable': case 'invalid-resource': case 'request-too-large': return modelFailure(error.code)
     case 'invalid-config': case 'capability-unsupported': return modelFailure('unsupported-request')
     case 'cancelled': case 'closed': case 'protocol-unavailable': return modelFailure('dependency-unavailable')
     default: return modelFailure('model-unavailable')

@@ -6,19 +6,21 @@ export type { MountedProtocolTurn } from './view.js'
 /** A protocol owns the browser input/view boundary; the shared Session owns requests and layout. */
 export interface ProtocolWebModule {
   readonly protocolId: string
-  encodeInput(text: string): string
+  readonly imageInput: boolean
+  encodeInput(text: string, imageCount?: number): string
   decode(value: unknown): ProtocolViewSnapshot | undefined
   reduce(current: ProtocolViewSnapshot | undefined, next: ProtocolViewSnapshot): ProtocolViewSnapshot | undefined
   mount(initial: ProtocolViewSnapshot): MountedProtocolTurn
 }
 
 /** Text is sent unchanged. Prompt/template expansion belongs exclusively to the server. */
-function encodeTextInput(text: string): string {
-  if (typeof text !== 'string' || !text.trim()) throw new TypeError('请输入消息。')
+function encodeTextInput(text: string, imageCount = 0): string {
+  if (typeof text !== 'string' || (!text.trim() && !imageCount)) throw new TypeError('请输入消息或添加图片。')
   return text
 }
 
 function bindTextProtocol(protocolId: string, name: string): ProtocolWebModule {
+  const imageInput = protocolId === 'chat-completions' || protocolId === 'deepseek-chat-completions'
   const decode = (value: unknown): ProtocolViewSnapshot | undefined => {
     const snapshot = decodeProtocolView(value)
     return snapshot?.protocolId === protocolId ? snapshot : undefined
@@ -27,7 +29,10 @@ function bindTextProtocol(protocolId: string, name: string): ProtocolWebModule {
     if (next.protocolId !== protocolId || (current && current.protocolId !== protocolId)) return current
     return reduceProtocolView(current, next)
   }
-  return Object.freeze({ protocolId, encodeInput: encodeTextInput, decode, reduce,
+  return Object.freeze({ protocolId, imageInput, encodeInput(text: string, imageCount = 0) {
+    if (imageCount && !imageInput) throw new TypeError('此协议暂不支持图片输入。')
+    return encodeTextInput(text, imageCount)
+  }, decode, reduce,
     mount(initial: ProtocolViewSnapshot) {
       const snapshot = decode(initial)
       if (!snapshot) throw new TypeError('此协议的视图不兼容。')

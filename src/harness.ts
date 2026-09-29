@@ -23,7 +23,7 @@ import type { ProjectPort } from './project/component.js'
 import { createBashComponent } from './tool/bash-component.js'
 import { createApplyPatchComponent } from './tool/apply-patch-component.js'
 
-/** The application root must provide Models and local storage services before the Harness starts. */
+/** The application root must provide Models, local storage and image assets before the Harness starts. */
 export interface HarnessOptions extends Partial<RuntimeInputs> {
   readonly agents: readonly AgentDefinition[]
   /** Optional one-time import of the previous Prompt JSON store. The source is left untouched. */
@@ -145,6 +145,9 @@ export async function createHarness(context: Context, options: HarnessOptions): 
       return currentSessions().selectSessionModel(sessionId, modelId, protocolId)
     },
     getSession: id => currentSessions().getSession(id),
+    importImage: (sessionId, bytes, signal) => currentSessions().importImage(sessionId, bytes, signal),
+    getImage: (sessionId, assetId, signal) => currentSessions().getImage(sessionId, assetId, signal),
+    renewImages: (sessionId, assetIds) => currentSessions().renewImages(sessionId, assetIds),
     getNode: (sessionId, id) => currentSessions().getNode(sessionId, id),
     getNodePath: (sessionId, id) => currentSessions().getNodePath(sessionId, id),
     listNodes: (sessionId, parentId, query) => currentSessions().listNodes(sessionId, parentId, query),

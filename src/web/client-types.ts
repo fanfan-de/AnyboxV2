@@ -1,6 +1,8 @@
 import type { Model, Provider, NativeModelSnapshot, ProviderTemplate } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
+import type { ImageRef } from '../image/port.js'
+export type { ImageRef } from '../image/port.js'
 
 export interface AgentView { readonly id: string }
 export interface SessionView {
@@ -27,6 +29,7 @@ export interface RunView {
   readonly id: string
   readonly sessionId: string
   readonly input: string
+  readonly images?: readonly ImageRef[]
   readonly status: RunStatus
   readonly resultNodeId?: string
   readonly history: { readonly kind: 'tree'; readonly parentNodeId: string | null } | { readonly kind: 'legacy-unknown' }
@@ -75,10 +78,13 @@ export interface ApplyPatchTrace extends ToolTraceBase {
 export type ToolTrace = BashTrace | ApplyPatchTrace
 export interface PendingSubmission {
   /** Missing on old pending inputs, which must be confirmed again. */
-  readonly schemaVersion?: 1
+  readonly schemaVersion?: number
   readonly modelId?: string
   readonly sessionId: string
   readonly input: string
+  readonly images?: readonly ImageRef[]
+  /** Unknown image data must never be silently submitted as text only. */
+  readonly invalidImages?: boolean
   readonly idempotencyKey: string
   readonly parentNodeId?: string | null
   readonly runId?: string
@@ -95,6 +101,7 @@ export interface NodeView {
   readonly sessionId: string
   readonly parentId: string | null
   readonly input: string
+  readonly images?: readonly ImageRef[]
   readonly output: string
   readonly sourceRunId: string | null
 }

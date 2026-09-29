@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Component } from '@nya/core'
-import { modelsServiceKey, modelsProtocolsServiceKey } from '@anybox/models'
-import type { JsonValue, ModelsService, ModelsProtocolsService, NativeExecution, NativeObject, NativeProtocolLease, NativeRestoreState } from '@anybox/models'
-import { protocolAgentServiceKey } from '../run/program.js'
+import { modelsServiceKey, modelsProtocolsServiceKey, nativeImageResourceUri, modelsError } from '@anybox/models'
+import type { JsonValue, ModelsService, ModelsProtocolsService, NativeExecution, NativeObject, NativeProtocolLease, NativeRestoreState, NativeImageResourceRef, NativeResourceResolver } from '@anybox/models'
+import { protocolAgentServiceKey, inputImages } from '../run/program.js'
+import { imageAssetsServiceKey } from '../image/port.js'
+import type { ImageAssetsPort } from '../image/port.js'
 import type { NativeInitialization, PreparedRunProgram, PrepareRunInput, ProgramExitReport, ProtocolAgentPort, ProtocolBindingSnapshot } from '../run/program.js'
 import { modelFailure, normalizeModelFailure } from '../run/model.js'
 import { RunFailure } from '../run/domain.js'
@@ -39,6 +41,8 @@ function validateInitialization(initialization: NativeInitialization): void {
 }
 
 function encodeInitial(protocolId: string, input: PrepareRunInput): NativeObject {
+  const images = inputImages(input.input)
+  if (images.length && protocolId !== 'chat-completions' && protocolId !== 'deepseek-chat-completions') throw modelFailure('unsupported-request')
   const prompts = input.history ? [] : initialMessages(input.initialization)
   const tools = input.initialization.tools
   const withTools = (encoded: readonly NativeObject[]): NativeObject => input.history ? {} : { tools: encoded }
@@ -48,7 +52,9 @@ function encodeInitial(protocolId: string, input: PrepareRunInput): NativeObject
     ...withTools(tools.map(tool => ({ type: 'function', ...declaration(tool), strict: false }))) }
   if (protocolId === 'chat-completions' || protocolId === 'deepseek-chat-completions') {
     if (protocolId === 'deepseek-chat-completions' && prompts.some(prompt => prompt.role === 'developer')) throw modelFailure('unsupported-request')
-    return { messages: [...prompts, { role: 'user', content: input.input.text }],
+    const content = images.length ? [...(input.input.text ? [{ type: 'text', text: input.input.text }] : []),
+      ...images.map(image => ({ type: 'image_url', image_url: { url: nativeImageResourceUri(image.assetId) } }))] : input.input.text
+    return { messages: [...prompts, { role: 'user', content }],
       ...withTools(tools.map(tool => ({ type: 'function', function: declaration(tool) }))) }
   }
   const instructions = prompts.filter(prompt => prompt.role === 'system' || prompt.role === 'developer').map(prompt => String(prompt.content))
@@ -69,9 +75,9 @@ function encodeInitial(protocolId: string, input: PrepareRunInput): NativeObject
 
 /** Stable registry. Entries own only preparation/Run leases, never a second execution context. */
 export function createProtocolAgentsComponent(): Component.Object<void, {
-  [modelsServiceKey]: ModelsService; [modelsProtocolsServiceKey]: ModelsProtocolsService
+  [modelsServiceKey]: ModelsService; [modelsProtocolsServiceKey]: ModelsProtocolsService; [imageAssetsServiceKey]: ImageAssetsPort
 }> {
-  return { name: 'harness-protocol-agents', inject: [modelsServiceKey, modelsProtocolsServiceKey], apply(ctx, _config, deps) {
+  return { name: 'harness-protocol-agents', inject: [modelsServiceKey, modelsProtocolsServiceKey, imageAssetsServiceKey], apply(ctx, _config, deps) {
     const entries = new Map<string, Entry>(), retired = new Set<Entry>()
     let accepting = true
     const stop = (entry: Entry): void => {
@@ -114,13 +120,16 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         const protocolId = service.protocolForModel(input.modelId), entry = entries.get(protocolId)
         if (!accepting || !entry?.accepting) throw modelFailure('dependency-unavailable')
         validateInitialization(input.initialization)
-        if (input.history && (input.history.binding.protocolId !== protocolId || input.history.binding.loopVersion !== '1.0.0' ||
-          input.history.binding.recordFormatVersion !== 1 || input.history.initialization.toolContractVersion !== 'known-tools-v1')) throw modelFailure('unsupported-request')
+        const imageProtocol = protocolId === 'chat-completions' || protocolId === 'deepseek-chat-completions'
+        if (input.history && (input.history.binding.protocolId !== protocolId ||
+          !(imageProtocol ? ['1.0.0', '1.1.0'] : ['1.0.0']).includes(input.history.binding.loopVersion) ||
+          !(imageProtocol ? [1, 2] : [1]).includes(input.history.binding.recordFormatVersion) || input.history.initialization.toolContractVersion !== 'known-tools-v1')) throw modelFailure('unsupported-request')
         if (input.history) {
           const checkpoint = input.history.checkpoint
           if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) throw modelFailure('unsupported-request')
           const metadata = checkpoint as NativeObject
-          if (metadata.protocolId !== protocolId || metadata.recordFormatVersion !== 1 ||
+          if (metadata.protocolId !== protocolId || metadata.recordFormatVersion !== input.history.binding.recordFormatVersion ||
+            input.history.binding.driverVersion !== input.history.modelSnapshot.protocolVersion ||
             !isDeepStrictEqual(metadata.modelSnapshot, input.history.modelSnapshot)) throw modelFailure('unsupported-request')
         }
         const driver = deps[modelsProtocolsServiceKey].acquire(protocolId)
@@ -135,21 +144,44 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         let execution: NativeExecution | undefined
         try {
           signal.throwIfAborted()
-          const restore: NativeRestoreState | undefined = input.history ? { protocolId, recordFormatVersion: 1,
+          const restore: NativeRestoreState | undefined = input.history ? { protocolId, recordFormatVersion: input.history.binding.recordFormatVersion as 1 | 2,
             modelSnapshot: input.history.modelSnapshot, records: input.history.records.map(record => toNativeRecord(protocolId, record)) } : undefined
-          execution = await deps[modelsServiceKey].openNative({ modelId: input.modelId, lease: driver, signal, ...(restore ? { restore } : {}) })
+          const currentImages = new Map<string, NativeImageResourceRef>()
+          for (const image of inputImages(input.input)) {
+            const ref = { id: image.assetId, sha256: image.sha256, byteLength: image.byteLength, mimeType: image.mediaType }
+            const previous = currentImages.get(ref.id)
+            if (previous && !isDeepStrictEqual(previous, ref)) throw modelFailure('invalid-resource')
+            currentImages.set(ref.id, ref)
+          }
+          const imageRefs = [...currentImages.values()]
+          const permitted = new Map<string, NativeImageResourceRef>()
+          for (const resource of [...(restore?.records.flatMap(record => record.resourceRefs ?? []) ?? []), ...imageRefs]) {
+            const previous = permitted.get(resource.id)
+            if (previous && !isDeepStrictEqual(previous, resource)) throw modelFailure('invalid-resource')
+            permitted.set(resource.id, resource)
+          }
+          const resources: NativeResourceResolver = { read(resource, { signal }) {
+            if (!isDeepStrictEqual(permitted.get(resource.id), resource)) throw modelsError('resource-unavailable')
+            const call = deps[imageAssetsServiceKey].readImage(input.sessionId, resource.id, signal)
+            const result = call.result.catch(() => { throw modelsError('resource-unavailable') })
+            const done = call.done.catch(() => { throw modelsError('cleanup-failure') })
+            void result.catch(() => {}); void done.catch(() => {})
+            return { result, done, cancel: () => call.cancel('model-resource-cancelled') }
+          } }
+          execution = await deps[modelsServiceKey].openNative({ modelId: input.modelId, lease: driver, signal,
+            ...(permitted.size ? { resources, requirements: { imageInput: true } } : {}), ...(restore ? { restore } : {}) })
           signal.throwIfAborted()
           if (input.initialization.tools.length && !execution.capabilities.tools) throw modelFailure('unsupported-request')
           const initial = encodeInitial(protocolId, input), owned = execution
           const binding: ProtocolBindingSnapshot = { protocolId, generationId: entry.id + ':' + driver.generationId,
-            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.0.0', recordFormatVersion: 1, viewSchemaVersion: 1 }
+            driverVersion: owned.snapshot.protocolVersion, loopVersion: imageProtocol ? '1.1.0' : '1.0.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 1 }
           let closing: Promise<ProgramExitReport> | undefined, executed = false
           const program: PreparedRunProgram = { binding, modelSnapshot: owned.snapshot, initialization: input.initialization, input: input.input,
             signal,
             async execute(host) {
               if (executed) throw modelFailure('invalid-response')
               executed = true
-              try { return await entry.loop(createExchangeRunner(owned, host, { sessionId: input.sessionId, runId: input.runId }), initial) }
+              try { return await entry.loop(createExchangeRunner(owned, host, { sessionId: input.sessionId, runId: input.runId }, imageRefs), initial) }
               catch (error) {
                 if (host.signal.aborted || program.signal.aborted) throw error
                 const failure = error instanceof RunFailure ? error : normalizeModelFailure(error)

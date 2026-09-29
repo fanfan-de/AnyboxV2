@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
@@ -25,6 +26,8 @@ async function createHostHarness({ llm, databasePath, ...options }) {
   try {
     const provider = root.installComponent(llm.component())
     const database = root.installComponent(createLocalSqliteComponent(databasePath))
+    await database
+    await root.installComponent(createImageAssetsComponent({ directory: (databasePath) + ".images" }))
     await provider
     await database
     return await createHarness(root, options)
@@ -271,6 +274,8 @@ test('Prompt stays available when Agent Prompt is removed and accepted binding w
   const directory = mkdtempSync(join(tmpdir(), 'anybox-prompts-'))
   const inputs = { newId: ids(), now: () => 'now' }
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
+  await databaseFiber
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
   const promptFiber = root.installComponent(createPromptComponent(inputs))
   const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   let release
@@ -319,6 +324,8 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   root.installComponent(createApplyPatchComponent())
   const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
+  await databaseFiber
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
   const promptFiber = root.installComponent(createPromptComponent(inputs))
   const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const llmFiber = root.installComponent(llm.component())

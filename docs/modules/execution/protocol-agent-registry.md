@@ -8,7 +8,7 @@
 
 - 源码：[注册与准备](../../../src/protocol-agents/registry.ts)、[公共契约](../../../src/run/program.ts)、[共享交换管道](../../../src/protocol-agents/shared.ts)、[展示投影](../../../src/protocol-agents/projection.ts)。
 - 工厂：`createProtocolAgentsComponent()`；组件名：`harness-protocol-agents`；配置类型：`void`。
-- 注入 `models` 和 `models.protocols`；提供 `harness.protocol-agents`，其运行接口为 `ProtocolAgentPort`，受信绑定接口为 `ProtocolAgentRegistry`。
+- 注入 `models`、`models.protocols` 和 `harness.image-assets`；提供 `harness.protocol-agents`，其运行接口为 `ProtocolAgentPort`，受信绑定接口为 `ProtocolAgentRegistry`。
 
 ## 接口与固定版本
 
@@ -20,9 +20,9 @@
 
 支持的协议为 `responses`、`anthropic-messages`、`chat-completions`、`gemini-interactions`、`deepseek-chat-completions`。DeepSeek 使用 `runChat`；其他分别使用自己的循环函数。注册表不是任意脚本或 SDK 的动态加载器。
 
-`PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input 和可选 history。initialization 固定 `schemaVersion: 1`、`known-tools-v1`、Prompt 快照与工具定义；只接受当前完整 Bash/Apply Patch 定义且不允许重名。input 保存 schemaVersion、raw、text、template。
+`PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input 和可选 history。initialization 固定 `schemaVersion: 1`、`known-tools-v1`、Prompt 快照与工具定义；只接受当前完整 Bash/Apply Patch 定义且不允许重名。input v2 保存 schemaVersion、raw、text、template 和有序图片描述，旧 v1 输入按无图片读取。
 
-`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、`loopVersion: '1.0.0'`、`recordFormatVersion: 1` 和 `viewSchemaVersion: 1`。这些值是历史兼容判断依据。
+`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（Chat/DeepSeek 为 1.1.0，其他为 1.0.0）、execution 实际记录格式（Chat/DeepSeek 为 2，其他为 1） 和 `viewSchemaVersion: 1`。这些值是历史兼容判断依据。
 
 ## 准备与执行
 
@@ -47,3 +47,9 @@ program 的 `close()` 缓存关闭 Promise，等待 execution 退出，返回原
 [原生协议测试](../../../tests/native-protocol-agents.test.mjs) 对五协议验证历史恢复、重启和独立分支，并拒绝错误 checkpoint；[原生投影测试](../../../tests/native-projection.test.mjs) 验证有界展示不修改恢复记录；[Harness 测试](../../../tests/harness.test.mjs) 验证依赖撤销和实际退出等待。Models 的[运行期测试](../../../packages/models/tests/runtime.test.mjs) 与[生命周期测试](../../../packages/models/tests/lifecycle-review.test.mjs) 验证驱动代、凭据初始化和注销等待。
 
 旧文本统一执行路径和 `dialogue-v1` 不通过这里迁入执行。不支持跨协议、任意记录格式或任意参数转换。统一执行 `npm run check`。
+
+## 图片资源与版本兼容
+
+Chat/DeepSeek 把模板文本与图片资源 URI 编码为同一个 user content 数组；首个 exchange 携带本轮 resourceRefs，工具续轮不重复声明祖先资源。注册表为每个 execution 提供限定本轮与所选成功父路径资源的读取端口，作用域固定为当前 Session。Models 在受管 start 后读取字节并生成实际请求。Session 不解释协议 URI，Runtime 不解释图片块。
+
+Chat/DeepSeek 接受 Loop 1.0.0/1.1.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。

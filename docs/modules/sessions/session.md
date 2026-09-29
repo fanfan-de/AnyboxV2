@@ -9,7 +9,7 @@ Session 是会话、不可变对话节点、Run 状态、事件和原生恢复�
 - 源码：[组件](../../../src/session/component.ts)、[完整端口](../../../src/session/port.ts)、[领域值与路径校验](../../../src/session/domain.ts)、[SQLite 记录实现](../../../src/session/sqlite-records.ts)、[Run 事件读写](../../../src/run/execution.ts)。
 - 工厂：`createSessionComponent(inputs, agents)`；组件名：`harness-sessions`；配置类型：`void`。
 - `inputs` 注入 now/newId；`agents` 是组合根启动时校验的只读定义，用于创建校验与默认模型。
-- 注入 `local-storage` 和 `harness.projects`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。
+- 注入 `local-storage`、`harness.projects` 和 `harness.image-assets`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。
 
 ## 公开查询与会话接口
 
@@ -26,7 +26,7 @@ Session 是会话、不可变对话节点、Run 状态、事件和原生恢复�
 | `getRunEvents(id, afterSeq?)` | 按递增 seq 读取事件，游标默认 0、必须为非负安全整数；未知 Run 返回 undefined |
 | `getRunRecords(id)` | 读取该 Run 的不可变受信原生记录；未知 Run 抛错 |
 
-Session 保存 id、projectId、agentId、可空 modelId、historyMode、可空 protocolId、createdAt。ConversationNode 保存 id、sessionId、parentId、原始 input、output、sourceRunId。节点不承载当前选中位置或全局 head。Harness 门面在显式选模时先通过 Models 验证配置，并传入真实协议 ID；Session 本身不注入 Models，也不查凭据。
+Session 保存 id、projectId、agentId、可空 modelId、historyMode、可空 protocolId、createdAt。ConversationNode 保存 id、sessionId、parentId、原始 input、output、sourceRunId，并从来源 Run 的 v2 nativeInput 投影 images；旧节点图片为空。节点不承载当前选中位置或全局 head。Harness 门面在显式选模时先通过 Models 验证配置，并传入真实协议 ID；Session 本身不注入 Models，也不查凭据。
 
 ## 受信执行记录端口
 
@@ -55,13 +55,13 @@ Session 保存 id、projectId、agentId、可空 modelId、historyMode、可空 
 
 ## 表、通知与资源归属
 
-迁移继续使用历史 `run-state` 账本，当前版本 5。该组件拥有 `harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
+迁移继续使用历史 `run-state` 账本，当前版本 6（v6 只增加原生记录 resource_refs_json；旧 JSON 原样保留）。该组件拥有 `harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
 
 每次 Run 变更提交后发送 `harness.run.changed`，载荷为 sessionId、runId、revision。监听失败只记录警告，不回滚已提交事实。原生记录可能含签名、加密续接和工具原生 ID，属于受信恢复面；浏览器必须使用白名单投影。Key、认证头、凭据引用和运行句柄不得写入历史。
 
 ## 关闭、恢复与兼容
 
-Effect 先停止新调用，再等待已经接受的所有记录操作，包括尚在项目检查中的 Session 创建。组件不负责取消模型或工具；Nya 的依赖关系让执行消费者先退出。
+Effect 先停止新调用，再等待已经接受的所有记录操作，包括尚在项目检查中的 Session 创建。图片导入/读取的委托句柄单独受管，关闭先取消并等待 result/done 退出，再允许图片组件清理。组件不负责取消模型或工具；Nya 的依赖关系让执行消费者先退出。
 
 打开记录实现时，在事务内把遗留 running/cancelling Run 标为 interrupted，追加中断事件和 revision，不重新执行任何副作用，也不生成成功节点。清理失败或状态写入故障不能被普通取消覆盖；失败、取消、interrupted 的原生诊断可读但不能作为继续节点。
 
@@ -70,3 +70,9 @@ Effect 先停止新调用，再等待已经接受的所有记录操作，包括�
 ## 验证
 
 [Session 生命周期](../../../tests/session.test.mjs) 验证关闭等待与替换后事实保留；[原生 Session](../../../tests/native-session.test.mjs) 验证协议固定、父引用复核、原生记录不可变和事务回滚；[会话树](../../../tests/conversation-tree.test.mjs) 验证并发兄弟、路径隔离、结算与取消竞争；[迁移](../../../tests/conversation-migration.test.mjs)、[多项目](../../../tests/multi-project.test.mjs) 与[Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 验证旧数据、重启和不重放副作用。统一执行 `npm run check`。
+
+## 图片输入与引用
+
+`importImage(sessionId, bytes, signal?)` 和 `getImage(sessionId, assetId, signal?)` 返回 OwnedCall；`renewImages(sessionId, assetIds)` 续期草稿，所有入口先验证 Session。受信 `describeImages` 在准备时取得服务端元数据；Run 接受事务调用图片组件 `retainIn`，核对不可变元数据并写入不透明 Run 保留凭证。已接受失败/取消 Run 同样保留输入。图片字节、读取与 GC 归[图片组件](../images/image-assets.md)。
+
+原生 v2 请求的顶层 resourceRefs 保存到独立列，Session 校验其与本 Run 已接受图片一致；不解释 payload 中的协议图片块。幂等比较包含图片 ID 和顺序，重复接纳不会重复保留或重新检查已接受输入的草稿期限。

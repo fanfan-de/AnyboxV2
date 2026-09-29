@@ -1,5 +1,6 @@
 import { canUseModel, modelAvailability, type ModelsCatalog } from './models-client.js'
-import type { ToolTrace, RunView, RunEventView } from './client-types.js'
+import type { ToolTrace, RunView, RunEventView, ImageRef } from './client-types.js'
+import { imageURL } from './image-client.js'
 import type { SessionController } from './session-client.js'
 import { isActive } from './session-client.js'
 import type { Pane } from './workspace-layout.js'
@@ -44,11 +45,14 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     <form class="composer">
       <div class="composer-model-row"><select class="composer-model" aria-label="本会话使用的模型"></select><button class="configure-models" type="button">配置模型</button></div>
       <p class="composer-model-hint" role="status" hidden></p>
+      <div class="composer-images" aria-label="待发送图片" aria-live="polite" hidden></div>
       <textarea rows="2" placeholder="随心输入" aria-label="消息"></textarea>
+      <input class="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
       <div class="composer-footer"><div class="composer-meta">
         <span class="composer-agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3Z"/></svg><span>Agent</span></span>
         <span class="compose-position"></span>
       </div><div class="actions">
+        <button class="attach-images" type="button" title="添加图片，也可粘贴或拖入 · 最多 8 张，每张 10 MiB">添加图片</button>
         <span class="composer-hint">↵ 发送</span>
         <button class="cancel-button" type="button" aria-label="取消运行" title="取消运行" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
         <button class="send-button" type="submit" aria-label="发送消息" title="发送消息 · Enter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
@@ -82,6 +86,34 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     const model = models?.snapshot().models.find(value => value.id === session?.modelId)
     return Boolean(getProtocolWebModule(model?.parameters.protocolId ?? session?.protocolId)) && (!models || canUseModel(model))
   }
+  const imageModelReady = () => {
+    const session = controller.snapshot().session
+    const model = models?.snapshot().models.find(value => value.id === session?.modelId)
+    return Boolean(getProtocolWebModule(model?.parameters.protocolId ?? session?.protocolId)?.imageInput) && (!models || Boolean(model?.effectiveCapabilities?.imageInput))
+  }
+  const imagePicker = get<HTMLInputElement>('.image-picker'), imageList = get<HTMLElement>('.composer-images')
+  const attachImages = get<HTMLButtonElement>('.attach-images')
+  let imageListKey = ''
+  attachImages.addEventListener('click', () => imagePicker.click(), options)
+  imagePicker.addEventListener('change', () => { controller.addImages(Array.from(imagePicker.files ?? [])); imagePicker.value = '' }, options)
+  compose.addEventListener('paste', event => {
+    const files = Array.from(event.clipboardData?.items ?? []).filter(item => item.kind === 'file').flatMap(item => { const file = item.getAsFile(); return file ? [file] : [] })
+    if (files.length && !attachImages.disabled) { event.preventDefault(); controller.addImages(files) }
+  }, options)
+  compose.addEventListener('dragover', event => {
+    if (event.dataTransfer?.types.includes('Files')) { event.preventDefault(); event.stopPropagation(); compose.classList.add('is-image-drop') }
+  }, options)
+  compose.addEventListener('dragleave', event => { if (!compose.contains(event.relatedTarget as Node | null)) compose.classList.remove('is-image-drop') }, options)
+  compose.addEventListener('drop', event => {
+    if (!event.dataTransfer?.types.includes('Files')) return
+    event.preventDefault(); event.stopPropagation(); compose.classList.remove('is-image-drop')
+    if (!attachImages.disabled) controller.addImages(Array.from(event.dataTransfer.files))
+  }, options)
+  imageList.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button')
+    if (button?.dataset.removeImage) controller.removeImage(button.dataset.removeImage)
+    if (button?.dataset.retryImage) controller.retryImage(button.dataset.retryImage)
+  }, options)
   const branchSelect = get<HTMLSelectElement>('.branch-navigation select')
   get('[data-go-root]').addEventListener('click', () => { void controller.navigate(null) }, options)
   get('[data-go-parent]').addEventListener('click', () => { void controller.navigate(controller.snapshot().path.at(-1)?.parentId ?? null) }, options)
@@ -97,7 +129,8 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   }
   const updateSend = (): void => {
     const state = controller.snapshot()
-    send.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || (!state.pending && (!modelReady() || !messageInput.value.trim()))
+    const imagesReady = !state.images.length || (imageModelReady() && state.images.every(image => image.status === 'ready'))
+    send.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || (!state.pending && (!modelReady() || !imagesReady || (!messageInput.value.trim() && !state.images.length)))
   }
   messageInput.addEventListener('input', () => { controller.setDraft(messageInput.value); resizeInput(); updateSend() }, options)
   messageInput.addEventListener('keydown', event => {
@@ -118,10 +151,20 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     if (data.cancelRun) void controller.cancel(data.cancelRun)
     if (data.viewNode) void controller.navigate(data.viewNode)
     const node = controller.snapshot().path.find(item => item.id === (data.editNode ?? data.regenerateNode))
-    if (node && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input).then(() => messageInput.focus())
+    if (node && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images).then(() => messageInput.focus())
     if (node && data.regenerateNode) void controller.regenerate(node)
   }, options)
-function addMessage(role: 'user' | 'assistant', content: string, isPending = false): void {
+function imagePreview(image: ImageRef, index: number): HTMLAnchorElement {
+  const link = document.createElement('a')
+  link.href = imageURL(pane.sessionId, image.assetId); link.target = '_blank'; link.rel = 'noopener noreferrer'
+  link.className = 'message-image-link'; link.title = `查看图片 ${index + 1} · ${image.width} × ${image.height}`
+  const preview = document.createElement('img')
+  preview.src = link.href; preview.alt = `图片 ${index + 1}`; preview.loading = 'lazy'
+  preview.width = image.width; preview.height = image.height
+  link.append(preview)
+  return link
+}
+function addMessage(role: 'user' | 'assistant', content: string, isPending = false, images: readonly ImageRef[] = []): void {
   const item = document.createElement('div')
   item.className = `message ${role}${isPending ? ' pending' : ''}`
   const label = document.createElement('span')
@@ -131,6 +174,11 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   text.className = 'message-content'
   text.textContent = content
   item.append(label, text)
+  if (images.length) {
+    const gallery = document.createElement('div'); gallery.className = 'message-images'
+    images.forEach((image, index) => gallery.append(imagePreview(image, index)))
+    item.append(gallery)
+  }
   renderNodes.push(item)
 }
 
@@ -181,7 +229,10 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       eventCache = state.events
       expandedTraces = state.expanded
       const activeCount = state.runs.filter(active).length
-      if (!state.loading && !conversationTitle) conversationTitle = state.path[0]?.input ?? state.children[0]?.input ?? state.runs.at(-1)?.input
+      if (!state.loading && !conversationTitle) {
+        const first = state.path[0] ?? state.children[0] ?? state.runs.at(-1)
+        conversationTitle = first?.input || (first?.images?.length ? `${first.images.length} 张图片` : undefined)
+      }
       if (conversationTitle) {
         get('.pane-title strong').textContent = conversationTitle
         get('.pane-title strong').title = conversationTitle
@@ -190,6 +241,23 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       notice.hidden = !state.notice
       notice.textContent = state.notice
       messageInput.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading
+      attachImages.disabled = messageInput.disabled || Boolean(state.pending)
+      const nextImagesKey = JSON.stringify([state.images, attachImages.disabled])
+      if (nextImagesKey !== imageListKey) {
+        imageListKey = nextImagesKey
+        imageList.replaceChildren(...state.images.map((item, index) => {
+          const card = document.createElement('div'); card.className = 'draft-image'; card.dataset.status = item.status
+          if (item.image && item.status === 'ready') card.append(imagePreview(item.image, index))
+          const label = document.createElement('span'); label.className = 'draft-image-name'; label.textContent = `${index + 1}. ${item.name}`; label.title = item.name; card.append(label)
+          const status = document.createElement('span'); status.className = 'draft-image-status'
+          status.textContent = item.status === 'queued' ? '等待上传' : item.status === 'uploading' ? '正在上传…' : item.status === 'ready' ? `${item.image!.width} × ${item.image!.height}` : item.error ?? '图片已失效，请重新添加'
+          card.append(status)
+          if (item.status === 'failed') { const retry = document.createElement('button'); retry.type = 'button'; retry.dataset.retryImage = item.id; retry.textContent = '重试'; retry.disabled = attachImages.disabled; card.append(retry) }
+          const remove = document.createElement('button'); remove.type = 'button'; remove.dataset.removeImage = item.id; remove.textContent = '移除'; remove.setAttribute('aria-label', `移除图片 ${index + 1}`); remove.disabled = attachImages.disabled; card.append(remove)
+          return card
+        }))
+      }
+      imageList.hidden = state.images.length === 0
       send.setAttribute('aria-label', state.pending ? '重试提交' : '发送消息')
       send.title = state.pending ? '重试提交 · Enter' : '发送消息 · Enter'
       cancel.hidden = !active(state.run)
@@ -198,7 +266,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       get('.composer-agent > span').textContent = state.session?.agentId ?? 'Agent'
       if (models) {
         const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
-        const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.connectionId, value.available, value.effectiveCapabilities?.tools, value.parameters.protocolId]), catalog.providers.map(value => [value.id, value.name]), selected, state.session?.protocolId])
+        const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.connectionId, value.available, value.effectiveCapabilities?.tools, value.effectiveCapabilities?.imageInput, value.parameters.protocolId]), catalog.providers.map(value => [value.id, value.name]), selected, state.session?.protocolId])
         if (modelSelect.dataset.choices !== key) {
           modelSelect.dataset.choices = key
           const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = '选择模型'
@@ -225,6 +293,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         const hint = get<HTMLElement>('.composer-model-hint')
         hint.textContent = state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请打开“配置模型”，选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
         hint.hidden = !hint.textContent
+        if (state.images.length && !imageModelReady()) { hint.textContent = '当前模型不支持图片，请切换支持图片的模型，或移除图片后发送。'; hint.hidden = false }
       }
       get('.compose-position').textContent = readOnly ? '只读历史' : state.position.viewNodeId ? '继续此分支' : '新分支'
       get('.compose-position').title = readOnly ? '旧版文本会话仅供查看' : state.position.viewNodeId ? `从节点 ${state.position.viewNodeId} 继续` : '从会话起点发送'
@@ -233,7 +302,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       get<HTMLButtonElement>('[data-go-root]').disabled = state.loading || !state.position.viewNodeId
       get<HTMLButtonElement>('[data-go-parent]').disabled = state.loading || !state.position.viewNodeId
       get('[data-more-children]').hidden = !state.moreChildren
-      const choices = JSON.stringify(state.children.map(node => [node.id, node.input]))
+      const choices = JSON.stringify(state.children.map(node => [node.id, node.input, node.images?.length]))
       if (branchSelect.dataset.choices !== choices) {
         branchSelect.dataset.choices = choices
         const placeholder = document.createElement('option')
@@ -242,15 +311,15 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         branchSelect.replaceChildren(placeholder, ...state.children.map(node => {
           const option = document.createElement('option')
           option.value = node.id
-          option.textContent = node.input.slice(0, 45)
+          option.textContent = node.input.slice(0, 45) || `${node.images?.length ?? 0} 张图片`
           return option
         }))
         emptyBranches.replaceChildren(...state.children.slice(0, 3).map(node => {
           const button = document.createElement('button')
           button.type = 'button'
           button.dataset.viewNode = node.id
-          button.textContent = node.input
-          button.title = `${readOnly ? '查看历史' : '继续对话'}：${node.input}`
+          button.textContent = node.input || `${node.images?.length ?? 0} 张图片`
+          button.title = `${readOnly ? '查看历史' : '继续对话'}：${button.textContent}`
           return button
         }))
       }
@@ -299,7 +368,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         return button
       }
       for (const node of state.path) {
-        addMessage('user', node.input)
+        addMessage('user', node.input, false, node.images)
         if (!appendTurn(node.sourceRunId)) addMessage('assistant', node.output)
         const actions = document.createElement('div')
         actions.className = 'node-actions'
@@ -322,7 +391,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         label.textContent = `${statuses[item.status]} · ${item.history.kind === 'legacy-unknown' ? '旧版运行，起点未知' : item.history.parentNodeId ? `起点 ${item.history.parentNodeId.slice(0, 8)}` : '会话起点'}`
         const input = document.createElement('p')
         input.className = 'run-input'
-        input.textContent = item.input
+        input.textContent = item.input || (item.images?.length ? `${item.images.length} 张图片` : '')
         const actions = document.createElement('div')
         actions.className = 'node-actions'
         actions.append(action('关注过程', 'focusRun', item.id))
@@ -342,12 +411,12 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         renderNodes.push(card)
       }
       for (const run of progressRuns) {
-        addMessage('user', run.input)
+        addMessage('user', run.input, false, run.images)
         appendTurn(run.id)
         const label = document.createElement('p'); label.className = 'streaming-label'; label.textContent = '正在生成 · 临时输出'
         renderNodes.push(label)
       }
-      if (state.pending && !state.runs.some(item => item.id === state.pending?.runId)) addMessage('user', state.pending.input, true)
+      if (state.pending && !state.runs.some(item => item.id === state.pending?.runId)) addMessage('user', state.pending.input, true, state.pending.images)
       // Move only changed siblings; protocol components retain their DOM and local state.
       let cursor: ChildNode | null = transcript.firstChild
       for (const node of renderNodes) {

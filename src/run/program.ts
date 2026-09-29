@@ -1,4 +1,5 @@
-import type { JsonValue, NativeModelSnapshot } from '@anybox/models'
+import type { JsonValue, NativeModelSnapshot, NativeImageResourceRef } from '@anybox/models'
+import type { ImageRef } from '../image/port.js'
 import type { ToolDefinition } from '../tool/definition.js'
 export type { NativeModelSnapshot } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
@@ -23,11 +24,21 @@ export interface NativeInitialization {
 }
 
 /** The template is applied exactly once before protocol encoding. */
-export interface NativeRunInput {
+export type NativeRunInput = {
   readonly schemaVersion: 1
   readonly raw: string
   readonly text: string
   readonly template: PromptSnapshot | null
+} | {
+  readonly schemaVersion: 2
+  readonly raw: string
+  readonly text: string
+  readonly images: readonly ImageRef[]
+  readonly template: PromptSnapshot | null
+}
+
+export function inputImages(input: NativeRunInput | undefined): readonly ImageRef[] {
+  return input?.schemaVersion === 2 ? input.images : []
 }
 
 export interface ProtocolRecord {
@@ -36,6 +47,7 @@ export interface ProtocolRecord {
   readonly exchangeId?: string
   readonly formatVersion: number
   readonly payload: JsonValue
+  readonly resourceRefs?: readonly NativeImageResourceRef[]
 }
 
 export interface StoredProtocolRecord extends ProtocolRecord {

@@ -1,5 +1,6 @@
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../storage/sqlite.js'
+import { createImageAssetsComponent } from '../image/component.js'
 import { createHarness } from '../harness.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from './component.js'
 import { createDirectoryPickerComponent } from './directory-picker.js'
@@ -13,6 +14,7 @@ async function main(): Promise<void> {
   try {
     const { defaultModelId } = await installWebModels(root, config)
     await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
+    await root.installComponent(createImageAssetsComponent({ directory: config.imageAssetsDirectory }))
     const harness = await createHarness(root, {
       agents: [{ id: 'assistant', instructions: 'You are a helpful assistant.', ...(defaultModelId ? { modelId: defaultModelId } : {}) }],
     })

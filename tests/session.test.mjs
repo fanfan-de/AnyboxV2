@@ -1,3 +1,5 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
+import { imageAssetsServiceKey } from '../dist/image/port.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -21,13 +23,15 @@ import { controlledModels, deferred, ids } from './helpers/controlled-models.mjs
 
 const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Answer briefly.' }]
 
-async function fixture(execution = false) {
+async function fixture(execution = false, imagePort) {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-session-'))
   const root = new Context()
   const inputs = { newId: ids(), now: () => '2026-09-27T00:00:00Z' }
   const llm = controlledModels()
   try {
     await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
+    await root.installComponent(imagePort ? { name: 'test-session-images', apply(ctx) { ctx.provide(imageAssetsServiceKey, imagePort) } }
+      : createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
     await sessionFiber
@@ -63,6 +67,55 @@ async function ready(root, service) {
   await started.promise
   await probe.dispose()
 }
+
+test('Session image done failure terminates a permanently pending result and never hangs shutdown', { timeout: 5000 }, async () => {
+  const entered = deferred(), exited = deferred(), cancelled = deferred()
+  let cancellations = 0
+  const f = await fixture(false, { importImage() {
+    entered.resolve()
+    return { result: new Promise(() => {}), done: exited.promise, cancel() { cancellations++; cancelled.resolve() } }
+  } })
+  try {
+    const sessions = f.root.get(sessionServiceKey)
+    const session = await sessions.createSession(f.project.id, 'assistant')
+    const call = sessions.importImage(session.id, { async *[Symbol.asyncIterator]() {} })
+    await entered.promise
+    const result = assert.rejects(call.result, { code: 'asset-cleanup-failed' })
+    const done = assert.rejects(call.done, { code: 'asset-cleanup-failed' })
+    exited.reject(new Error('reader failed during cleanup'))
+    await cancelled.promise
+    await Promise.all([result, done])
+    assert.equal(cancellations, 1)
+    await f.sessionFiber.dispose()
+    await assert.rejects(sessions.getSession(session.id), /closing/)
+  } finally { exited.resolve(); await f.close() }
+})
+
+test('Session image result failure cancels once and waits for actual done before result and shutdown', { timeout: 5000 }, async () => {
+  const entered = deferred(), output = deferred(), exited = deferred(), cancelled = deferred()
+  let cancellations = 0
+  const f = await fixture(false, { importImage() {
+    entered.resolve()
+    return { result: output.promise, done: exited.promise, cancel() { cancellations++; cancelled.resolve() } }
+  } })
+  try {
+    const sessions = f.root.get(sessionServiceKey)
+    const session = await sessions.createSession(f.project.id, 'assistant')
+    const call = sessions.importImage(session.id, { async *[Symbol.asyncIterator]() {} })
+    await entered.promise
+    const failure = new Error('image import failed')
+    let settled = false, stopped = false
+    const result = assert.rejects(call.result, error => error === failure).then(() => { settled = true })
+    output.reject(failure)
+    await cancelled.promise
+    const stopping = f.sessionFiber.dispose().then(() => { stopped = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(settled, false); assert.equal(stopped, false); assert.equal(cancellations, 1)
+    exited.resolve()
+    await Promise.all([result, call.done, stopping])
+    assert.equal(settled, true); assert.equal(stopped, true); assert.equal(cancellations, 1)
+  } finally { output.resolve(); exited.resolve(); await f.close() }
+})
 
 test('Session shutdown joins accepted creation through project validation and restores its facts', { timeout: 5000 }, async () => {
   const f = await fixture()

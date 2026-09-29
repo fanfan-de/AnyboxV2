@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
@@ -17,6 +18,7 @@ async function host(file) {
   try {
     await root.installComponent(llm.component())
     await root.installComponent(createLocalSqliteComponent(file))
+    await root.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
     const harness = await createHarness(root, { agents })
     return { harness, llm }
   } catch (error) { await root.fiber.dispose(); throw error }
@@ -105,10 +107,12 @@ test('a new process settles an abandoned Run as interrupted without replaying it
     import { Context } from '@nya/core'
     import { createHarness } from './dist/harness.js'
     import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
+    import { createImageAssetsComponent } from './dist/image/component.js'
     import { controlledModels } from './tests/helpers/controlled-models.mjs'
     const root = new Context()
     await root.installComponent(controlledModels().component())
     await root.installComponent(createLocalSqliteComponent(process.argv[1]))
+    await root.installComponent(createImageAssetsComponent({ directory: (process.argv[1]) + ".images" }))
     const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Shared instructions.', modelId: 'default' }] })
     const project = await harness.openProject(process.cwd())
     const session = await harness.createSession(project.id, 'assistant')

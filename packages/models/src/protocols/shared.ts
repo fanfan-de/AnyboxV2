@@ -71,10 +71,10 @@ export function mergeTools(local: JsonValue | undefined, server: JsonValue | und
   for (const tool of tools) { const item = object(tool); const fn = item.function === undefined ? item : object(item.function); const name = nonempty(fn.name); if (names.has(name)) throw modelsError('invalid-config'); names.add(name); }
   return [...tools, ...(server === undefined ? [] : array(server))];
 }
-export function restoreRecords(protocolId: string, records: readonly NativeRecordDraft[], commit: (state: NativeObject, intent: NativeObject, response: NativeObject) => NativeObject): NativeObject {
+export function restoreRecords(protocolId: string, records: readonly NativeRecordDraft[], commit: (state: NativeObject, intent: NativeObject, response: NativeObject) => NativeObject, versions: readonly number[] = [1]): NativeObject {
   let state: NativeObject = {}, pending: NativeRecordDraft | undefined; const ids = new Set<string>();
   for (const record of records) {
-    if (record.protocolId !== protocolId || record.recordFormatVersion !== 1 || ids.has(record.id)) throw modelsError('invalid-response'); ids.add(record.id);
+    if (record.protocolId !== protocolId || !versions.includes(record.recordFormatVersion) || ids.has(record.id)) throw modelsError('invalid-response'); ids.add(record.id);
     if (record.kind === 'request') { if (pending) throw modelsError('invalid-response'); pending = record; }
     else if (record.kind === 'response' && pending?.exchangeId === record.exchangeId) { state = commit(state, native(pending.payload), native(record.payload)); pending = undefined; }
     else throw modelsError('invalid-response');

@@ -45,3 +45,5 @@ Effect 先停止接收，再取消并等待所有活跃 Run，清空临时视图
 ## 验证
 
 [Harness 测试](../../../tests/harness.test.mjs) 覆盖早期取消、结果/退出分离、清理异常、Runtime 替换；[工具循环](../../../tests/tool-loop.test.mjs) 覆盖串行批次、输出限额、退出等待；[Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 覆盖部分变更与取消；[会话树](../../../tests/conversation-tree.test.mjs) 覆盖状态故障、结算原子性和等待者语义。统一执行 `npm run check`。
+
+图片读取和 data URL 编码属于模型 operation 的内部工作，与网络请求共享取消和实际退出屏障。Runtime 仍只保存序列化资源引用，不接触原图字节；图片读取/校验失败阻止发出模型请求，清理失败不创建成功节点。

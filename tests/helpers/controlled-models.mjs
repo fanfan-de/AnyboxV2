@@ -49,7 +49,8 @@ export function controlledModels({ version = 'v1', modelIds = ['default'], call,
   const api = { calls, events, opens, call, open,
     protocol(executionRef) {
       const base = createChatCompletionsProtocol()
-      return { ...base, descriptor: { ...base.descriptor, version },
+      return { ...base, descriptor: { ...base.descriptor, version }, recordFormatVersion: 1,
+        canRestoreVersion: previous => previous === version,
         exchange(input) {
           const messages = input.request.messages.map(fixtureMessage)
           let lastAssistant = -1
@@ -88,7 +89,7 @@ export function controlledModels({ version = 'v1', modelIds = ['default'], call,
           if (api.open) await api.open(input)
           if (input.signal?.aborted) throw modelsError('cancelled')
           const snapshot = modelSnapshot(input.modelId, version)
-          if (input.restore) validateRestore(input.restore, snapshot)
+          if (input.restore) validateRestore(input.restore, snapshot, protocol)
           const abort = new AbortController()
           const stop = () => abort.abort()
           input.signal?.addEventListener('abort', stop, { once: true }); controller.signal.addEventListener('abort', stop, { once: true })

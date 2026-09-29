@@ -17,7 +17,8 @@
     "@anybox/api-key-manager": "file:packages/api-key-manager",
     "@anybox/models": "file:packages/models",
     "@napi-rs/keyring": "2.1.0",
-    "@nya/core": "file:../NyaCore/packages/core"
+    "@nya/core": "file:../NyaCore/packages/core",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
     "@types/node": "22.20.1",

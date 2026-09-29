@@ -21,17 +21,17 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 | `waitRun(id, signal?)` | 等待准入交接及实际结束，返回 Run；中止 signal 只退出此次等待 |
 | `getView(id)` | 获取当前有界临时展示快照；结束后通常为 undefined |
 
-`RunInput` 必须包含非空 `sessionId`、`input`、`idempotencyKey`，以及显式的 `parentNodeId: string | null`；可选非空 `modelId` 是 Models 执行配置 ID。旧 `modelProfileId`、`model`、`selection`、`llmPlan` 参数被拒绝。
+`RunInput` 必须包含非空 `sessionId`、`idempotencyKey`，以及显式的 `parentNodeId: string | null`；可选非空 `modelId` 是 Models 执行配置 ID。`input` 是文本字符串，`images?: { assetId }[]` 为有序图片引用；二者至少一个非空。旧 `modelProfileId`、`model`、`selection`、`llmPlan` 参数被拒绝。
 
 ## 准入流程
 
-同一个 Session 和幂等键的并发调用共享一个准备 Promise。相同键但原始输入、父节点或显式模型不同会抛出 `idempotency-conflict`。数据库中的已接受 Run 在读取当前 Agent、模型和 Prompt 前返回，因此配置更新不会让重复请求重新执行。
+同一个 Session 和幂等键的并发调用共享一个准备 Promise。相同键但原始输入、图片身份/顺序、父节点或显式模型不同会抛出 `idempotency-conflict`。数据库中的已接受 Run 在读取当前 Agent、模型和 Prompt 前返回，因此配置更新不会让重复请求重新执行。
 
 首次请求按以下顺序处理：读取 Session，拒绝旧历史模式；检查项目目录可用；解析 Agent；以 `input.modelId ?? session.modelId ?? agent.modelId` 选模；检查 Session 固定协议；加载父路径历史和 Session 固定初始化。固定工具声明必须与当前 Bash/Apply Patch 定义精确匹配，否则拒绝续接。
 
-没有固定初始化时，[Agent Prompt](../prompts/agent-prompts.md) 提供 instruction/context；模型有效 tools 能力为 true 时声明 Bash 和 Apply Patch，否则为空。task-template 每次重新解析，但只把 `{{input}}` 替换为本次原始输入一次，并保存 raw/text/template 快照。历史不重新套用模板。
+没有固定初始化时，[Agent Prompt](../prompts/agent-prompts.md) 提供 instruction/context；模型有效 tools 能力为 true 时声明 Bash 和 Apply Patch，否则为空。task-template 每次重新解析，但只把 `{{input}}` 替换为本次原始输入一次，并保存 v2 raw/text/template/images 快照，图片不参与模板替换。历史不重新套用模板。
 
-[协议注册表](protocol-agent-registry.md) 为这些输入创建 `PreparedRunProgram`。Session 的 `registerRun` 事务复核父上下文引用、协议和初始化，再保存接受结果。只有 `created: true` 的 Run 会交给 Runtime。事务返回已有幂等结果时，当前多余 program 仍需关闭和释放。
+[协议注册表](protocol-agent-registry.md) 为这些输入创建 `PreparedRunProgram`。Session 的 `registerRun` 事务复核父上下文引用、协议和初始化，并通过图片组件的同步 retainIn 固定图片引用，再保存接受结果；引用与 Run 一起提交或回滚。只有 `created: true` 的 Run 会交给 Runtime。事务返回已有幂等结果时，当前多余 program 仍需关闭和释放。
 
 ## 所有权、取消和关闭
 

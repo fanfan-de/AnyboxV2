@@ -2,6 +2,8 @@ import type { ModelsCatalog } from './models-client.js'
 import type { Api, ProjectView, SessionView, SessionPosition } from './client-types.js'
 import { createPendingStore, createSessionController } from './session-client.js'
 import type { BrowserStorage, SessionController } from './session-client.js'
+import { createDraftStore, createImageLeaseKeeper } from './image-client.js'
+import type { ImageRef } from './client-types.js'
 import { createRunChangeClient } from './run-change-client.js'
 import { createSessionPanel } from './session-view.js'
 import type { SessionPanel } from './session-view.js'
@@ -21,6 +23,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   const addProject = get<HTMLButtonElement>('add-project'), newSession = get<HTMLButtonElement>('new-session')
   const pickerStatus = get<HTMLElement>('project-picker-status')
   const pending = createPendingStore(storage)
+  const drafts = createDraftStore(storage)
   const positions = new Map<string, SessionPosition>()
   try {
     const saved = JSON.parse(storage.getItem('anybox.web.positions.v1') ?? '{}')
@@ -62,6 +65,19 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   const splitElements = new Map<string, { node: Split; element: HTMLElement; separator: HTMLElement }>()
   const listeners = new AbortController(), options = { signal: listeners.signal }
   const showNotice = (message = '') => { notice.textContent = message; notice.hidden = !message }
+  const imageLeases = createImageLeaseKeeper({ api, drafts, pending,
+    schedule: (callback, ms) => window.setTimeout(callback, ms), clear: timer => window.clearTimeout(timer as number),
+    changed: () => { for (const bundle of bundles.values()) bundle.controller.imagesChanged() },
+    error: error => showNotice(messageFor(error)),
+  })
+  const uploadImage = async (sessionId: string, file: File, signal: AbortSignal): Promise<ImageRef> => {
+    const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/images`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file, signal, cache: 'no-store',
+    })
+    const value = await response.json()
+    if (!response.ok) throw new Error(messageFor(Object.assign(new Error('image upload failed'), { status: response.status, code: value?.error?.code ?? 'internal-error' })))
+    return value as ImageRef
+  }
   try { state = restoreWorkspace(JSON.parse(storage.getItem(workspaceKey) ?? 'null')) }
   catch { showNotice('无法读取工作区布局，将打开当前链接中的会话。') }
   const persist = () => {
@@ -110,7 +126,8 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       button.classList.toggle('selected', button.dataset.sessionId === active?.sessionId)
       button.classList.toggle('opened', panes(state.root).some(item => item.sessionId === button.dataset.sessionId))
       const known = bundles.get(button.dataset.sessionId!)?.controller.snapshot()
-      const firstInput = known?.path[0]?.input ?? known?.children[0]?.input ?? known?.runs.at(-1)?.input
+      const first = known?.path[0] ?? known?.children[0] ?? known?.runs.at(-1)
+      const firstInput = first?.input || (first?.images?.length ? `${first.images.length} 张图片` : undefined)
       if (!known?.loading && firstInput && !sessionLabels.has(button.dataset.sessionId!)) sessionLabels.set(button.dataset.sessionId!, firstInput)
       const label = sessionLabels.get(button.dataset.sessionId!)
       if (label) {
@@ -157,7 +174,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     let bundle = bundles.get(pane.sessionId)
     if (!bundle) {
       const controller = createSessionController(pane, {
-        api, pending, messageFor, ...(models ? { models: () => models.snapshot().models } : {}), newId: () => crypto.randomUUID(), hidden: () => document.hidden,
+        api, pending, drafts, uploadImage, messageFor, ...(models ? { models: () => models.snapshot().models } : {}), newId: () => crypto.randomUUID(), hidden: () => document.hidden,
         position: positions.get(pane.sessionId),
         savePosition(position) {
           positions.set(pane.sessionId, position)
@@ -576,6 +593,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   window.addEventListener('hashchange', route, options)
   window.addEventListener('popstate', route, options)
   document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void imageLeases.refresh()
     if (document.hidden) { dragCleanup?.(); resizeCleanup?.() }
     for (const bundle of bundles.values()) if (bundle.view) void bundle.controller.refresh()
   }, options)
@@ -624,13 +642,14 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     dispose() {
       disposed = true
       changes.dispose()
+      imageLeases.dispose()
       unsubscribeModels?.()
       listeners.abort()
       sessionIndex.dispose()
       observer.disconnect()
       resizeCleanup?.()
       dragCleanup?.()
-      for (const bundle of bundles.values()) { bundle.controller.detach(); bundle.view?.dispose() }
+      for (const bundle of bundles.values()) { bundle.controller.dispose(); bundle.view?.dispose() }
     },
   }
 }

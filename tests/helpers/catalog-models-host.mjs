@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createHarness } from '../../dist/harness.js'
 import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
+import { createImageAssetsComponent } from '../../dist/image/component.js'
 import { installWebModels } from '../../dist/web/models-startup.js'
 import { parseWebStartupConfig } from '../../dist/web/startup-config.js'
 import { createDirectoryPickerComponent } from '../../dist/web/directory-picker.js'
@@ -135,6 +136,7 @@ export async function startCatalogModelsHost(options = {}) {
       }
     }
     await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
+  await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
     harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Answer briefly. Use Bash when the user asks for a tool.' }] })
     const project = await harness.openProject(projectPath)
     await root.installComponent(createDirectoryPickerComponent({ platform: 'darwin', runDialog: async () => projectPath }))

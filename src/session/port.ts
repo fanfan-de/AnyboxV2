@@ -5,12 +5,17 @@ import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
 import type { ProtocolBindingSnapshot, NativeInitialization, NativeRunInput, NativeHistory, StoredProtocolRecord, ProtocolRecord } from '../run/program.js'
 import type { ValidatedToolRequest, ToolObservation, RunFailureCategory } from '../run/domain.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
+import type { OwnedCall } from '../contracts.js'
+import type { ImageRef, ImageRenewal } from '../image/port.js'
 
 export const sessionServiceKey = 'harness.sessions'
 export const sessionRunServiceKey = 'harness.session-runs'
 
 /** Public session facts. Run commands and in-flight resources belong to the execution components. */
 export interface SessionPort {
+  importImage(sessionId: string, bytes: AsyncIterable<Uint8Array>, signal?: AbortSignal): OwnedCall<ImageRef>
+  getImage(sessionId: string, assetId: string, signal?: AbortSignal): OwnedCall<{ readonly image: ImageRef; readonly bytes: Uint8Array }>
+  renewImages(sessionId: string, assetIds: readonly string[]): Promise<ImageRenewal>
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
   selectSessionModel(sessionId: string, modelId: string, protocolId?: string): Promise<Session>
   getSession(id: string): Promise<Session | undefined>
@@ -33,6 +38,7 @@ export interface RunContext {
 
 /** Trusted execution-facing operations on the same Session owner, not an access boundary. */
 export interface SessionRunPort {
+  describeImages(sessionId: string, assetIds: readonly string[]): Promise<readonly ImageRef[]>
   findAcceptedRun(input: RunInput): Promise<Run | undefined>
   registerRun(id: string, input: RunInput, now: string,
     prompts: readonly PromptSnapshot[], model: NativeModelSnapshot, native: NativeRunRegistration): Promise<{ readonly run: Run; readonly created: boolean }>

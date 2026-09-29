@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -17,6 +18,7 @@ async function host(directory, controlled) {
   if (transport) await root.installComponent(transport.component())
   else transport = (await installManagedModels(root, directory)).controlled
   await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
   const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Answer briefly.' }] })
   const project = await harness.openProject(directory)
   return { root, harness, project, transport, async close() {

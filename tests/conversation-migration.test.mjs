@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
 import assert from 'node:assert/strict'
@@ -19,6 +20,7 @@ async function legacyFixture(t, turns = sample.turns) {
   const root = new Context(), inputs = { newId: ids(), now: () => 'now' }
   t.after(async () => { await root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) })
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   await root.installComponent(createProjectComponent(inputs))
   const project = await root.get(projectServiceKey).openProject(directory)
   const db = root.get(localStorageServiceKey)
@@ -99,7 +101,7 @@ test('legacy turns migrate in array order; ambiguous Run associations remain exp
   assert.equal((await sessions.getNodePath('legacy', third.id)).length, 3)
   const schema = await f.db.read(reader => reader.all('PRAGMA table_info(harness_sessions)'))
   assert.equal(schema.some(column => column.name === 'turns_json'), false)
-  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 5)
+  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 6)
 })
 
 test('invalid legacy data rolls back the entire tree migration and its version record', async t => {

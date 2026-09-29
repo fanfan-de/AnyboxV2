@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -12,8 +13,9 @@ import { createDeepSeekProtocol } from '../dist/web/deepseek-protocol.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createHarness } from '../dist/harness.js'
 import { projectProtocolRecords } from '../dist/protocol-agents/projection.js'
+import sharp from 'sharp'
 
-// Live text/restart smoke only; this is not live tool, search, streaming or OS Keyring acceptance.
+// Live text/image/restart smoke; this is not live tool, search, streaming or OS Keyring acceptance.
 // Nothing runs unless BOTH gates are explicit:
 //   ANYBOX_NATIVE_API_TESTS=1
 //   ANYBOX_NATIVE_API_PROTOCOLS=responses,chat-completions,anthropic-messages,gemini-interactions,deepseek-chat-completions
@@ -25,6 +27,7 @@ import { projectProtocolRecords } from '../dist/protocol-agents/projection.js'
 // Limit paths: Responses max_output_tokens; Chat max_completion_tokens; Anthropic/DeepSeek max_tokens;
 // Gemini generation_config.max_output_tokens. No tools or reasoning controls are enabled by this smoke.
 // After npm run build: node --test tests/native-live-api.test.mjs
+// Additionally set ANYBOX_NATIVE_API_IMAGES=1 to exercise images for selected Chat/DeepSeek models.
 const factories = {
   responses: createResponsesProtocol,
   'chat-completions': createChatCompletionsProtocol,
@@ -91,12 +94,13 @@ async function host(directory, protocolId, config, secrets) {
       const connection = await settings.createConnection({ id: 'live-connection', providerDefinitionId: provider.id, name: 'Live smoke connection', enabled: true,
         protocolId, baseUrl: config.endpoint, auth: 'api-key', apiKey: config.key, timeoutMs: 60_000 })
       const definition = await settings.createModel({ name: 'Live smoke model', providerId: provider.id, remoteModelId: config.model,
-        capabilities: config.capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [protocolId] } })
+        capabilities: config.capabilities, controls: { temperature: 'unknown' }, modalities: { input: config.capabilities.imageInput.support === 'supported' ? ['text', 'image'] : ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [protocolId] } })
       await settings.createConfiguration({ id: 'live-model', name: 'Live smoke configuration', enabled: true, connectionId: connection.id,
         modelDefinitionId: definition.id, capabilities: config.capabilities, baseline: true,
         parameters: { protocolId, formatVersion: 1, value: config.parameters } })
     }
     await install(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
+    await install(createImageAssetsComponent({ directory: (join(directory, 'sessions.sqlite')) + ".images" }))
     const harness = await createHarness(root, { agents: [{ id: 'live-assistant', modelId: 'live-model', instructions: 'Follow the user exactly. Reply with the single requested word only, without punctuation or explanations.' }] })
     const project = await harness.openProject(directory)
     return { harness, project }
@@ -106,12 +110,12 @@ async function host(directory, protocolId, config, secrets) {
   }
 }
 
-async function completedRun(current, protocolId, config, sessionId, parentNodeId, input, expected, idempotencyKey) {
-  const accepted = await current.harness.startRun({ sessionId, parentNodeId, input, idempotencyKey })
+async function completedRun(current, protocolId, config, sessionId, parentNodeId, input, expected, idempotencyKey, images = []) {
+  const accepted = await current.harness.startRun({ sessionId, parentNodeId, input, idempotencyKey, images })
   const settled = await current.harness.waitRun(accepted.id)
-  assert.ok(settled.status === 'completed' && typeof settled.resultNodeId === 'string', 'Live text Run must complete and create a resumable node.')
+  assert.ok(settled.status === 'completed' && typeof settled.resultNodeId === 'string', 'Live Run must complete and create a resumable node.')
   const records = await current.harness.getRunRecords(accepted.id)
-  assert.ok(records.some(record => record.kind === 'response'), 'Live text Run must persist a native response.')
+  assert.ok(records.some(record => record.kind === 'response'), 'Live Run must persist a native response.')
   assert.ok(!JSON.stringify(records).includes(config.key), 'Native records must exclude the API credential.')
   const text = projectProtocolRecords(protocolId, records).flatMap(exchange => exchange.blocks).filter(block => block.kind === 'text').map(block => block.text).join('')
   // Do not include actual provider output or raw errors in test assertions/logs.
@@ -145,6 +149,39 @@ for (const protocolId of Object.keys(factories)) test(`${protocolId}: opt-in liv
   } catch {
     throw new Error(`Live native text/restart smoke failed during ${stage}; provider details and credentials are intentionally omitted.`)
   } finally {
+    t.signal.removeEventListener('abort', stop)
+    try { await current?.harness.close() } finally { secrets.clear(); rmSync(directory, { recursive: true, force: true }) }
+  }
+})
+
+for (const protocolId of ['chat-completions', 'deepseek-chat-completions']) test(`${protocolId}: opt-in live image and restart continuation smoke`, {
+  skip: !selected.has(protocolId) || process.env.ANYBOX_NATIVE_API_IMAGES !== '1', timeout: 150_000,
+}, async t => {
+  const base = configuration(protocolId), config = { ...base, capabilities: { ...base.capabilities, imageInput: { support: 'supported' } } }
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-native-live-image-')), secrets = new Map()
+  let current, stage = 'initialization'
+  const stop = () => { void current?.harness.close().catch(() => {}) }
+  t.signal.addEventListener('abort', stop, { once: true })
+  try {
+    current = await host(directory, protocolId, config, secrets)
+    const session = await current.harness.createSession(current.project.id, 'live-assistant', 'live-model')
+    const bytes = await sharp({ create: { width: 128, height: 128, channels: 3, background: '#ff0000' } }).png().toBuffer()
+    const upload = current.harness.importImage(session.id, (async function* () { yield bytes })())
+    const image = await upload.result; await upload.done
+    stage = 'image recognition'
+    const first = await completedRun(current, protocolId, config, session.id, null,
+      'What is the dominant color of this image? Reply with the uppercase English color name only.', 'RED', 'live-image', [{ assetId: image.assetId }])
+    const original = JSON.stringify(await current.harness.getRunRecords(first.id))
+    assert.ok(!original.includes('base64') && !original.includes('data:image'), 'Image records must contain references, not wire bytes.')
+    stage = 'restart'
+    await current.harness.close(); current = undefined
+    current = await host(directory, protocolId, config, secrets)
+    stage = 'image history continuation'
+    await completedRun(current, protocolId, config, session.id, first.resultNodeId,
+      'What was the dominant color of the image in the first user message? Reply with the uppercase English color name only.', 'RED', 'live-image-restored')
+    assert.ok(JSON.stringify(await current.harness.getRunRecords(first.id)) === original, 'Image history must remain immutable.')
+  } catch { throw new Error(`Live image smoke failed during ${stage}; provider details and credentials are intentionally omitted.`) }
+  finally {
     t.signal.removeEventListener('abort', stop)
     try { await current?.harness.close() } finally { secrets.clear(); rmSync(directory, { recursive: true, force: true }) }
   }

@@ -126,7 +126,7 @@ flowchart LR
 
 Responses 私有保存 reasoning、加密内容和 phase；Anthropic 保存完整有序内容块、thinking 签名与 redacted thinking；Gemini 保存原生步骤、thought 摘要与签名。两套新协议把原生工具 ID 留在续轮上下文，公共 ID 在增量与最终结果中保持一致。新增消息只在实际退出成功后写入私有上下文；Session 只保存文本契约与模型选择，重开 execution 不恢复进程内原生状态。
 
-当前执行契约仅包含文本和用户定义函数工具，所有内建协议的有效图片能力为 false。参数省略保留原生 API 默认值；描述符的 `defaultValue` 用于初始化表单和自动基础配置，保存的值才进入执行快照。Anthropic 必须显式保存 `maxOutputTokens`（默认 `4096`，受模型输出上限约束），使用固定版本头与通过 `x-api-key` 传入的 workspace-scoped API key；Gemini 使用原生 Interactions、`x-goog-api-key` 和 `store: false`。各协议支持的推理控制与约束见模块 README。
+当前执行契约包含文本、用户定义函数工具，以及 Chat/DeepSeek 显式声明的本地图片输入；Responses、Anthropic、Gemini 的有效图片能力仍为 false。图片读取端口按 execution 固定，原生记录只保存资源引用，实际请求在 start 后编码。完整设计见 [图片输入链路](../multimodal-image-input-design.md)。参数省略保留原生 API 默认值；描述符的 `defaultValue` 用于初始化表单和自动基础配置，保存的值才进入执行快照。Anthropic 必须显式保存 `max_tokens`（默认 `4096`，受模型输出上限约束），使用固定版本头与通过 `x-api-key` 传入的 workspace-scoped API key；Gemini 使用原生 Interactions、`x-goog-api-key` 和 `store: false`。各协议支持的推理控制与约束见模块 README。
 
 源码入口：[公共契约](../../packages/models/src/types.ts)、[目录契约](../../packages/models/src/catalog-types.ts)、[目录服务](../../packages/models/src/catalog.ts)、[目录来源](../../packages/models/src/catalog-source.ts)、[目录缓存](../../packages/models/src/catalog-cache.ts)、[模型服务](../../packages/models/src/component.ts)、[执行上下文](../../packages/models/src/execution.ts)、[配置存储](../../packages/models/src/store.ts)、[系统凭据](../../packages/models/src/vault.ts)、[协议组件注册](../../packages/models/src/protocols/shared.ts)。独立宿主的根组件装配示例见 [模块 README](../../packages/models/README.md)。
 

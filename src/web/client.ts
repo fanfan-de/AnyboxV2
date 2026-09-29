@@ -137,6 +137,16 @@ function messageFor(error: unknown): string {
   if (!apiError(error)) return '无法连接本机服务。请检查服务是否仍在运行，然后重试。'
   return {
     'invalid-input': '输入无效，请检查内容后重试。',
+    'image-required': '请上传 PNG、JPEG 或 WebP 图片。',
+    'asset-invalid': '图片信息无效，请重新添加。',
+    'asset-too-large': '每张图片最多 10 MiB，每条消息最多 8 张、合计 20 MiB，图片宽高不能超过 4096 像素。',
+    'asset-unsupported': '只支持静态 PNG、JPEG 和 WebP 图片。',
+    'asset-expired': '草稿图片已过期，请重新添加。',
+    'asset-missing': '图片不存在或不属于此会话，请重新添加。',
+    'asset-corrupt': '图片无法读取，请重新添加有效图片。',
+    'asset-unavailable': '本地图片存储暂不可用，请稍后重试。',
+    'asset-cancelled': '图片上传已取消。',
+    'asset-cleanup-failed': '图片资源未能正常清理，请重新启动服务。',
     'invalid-config': '模型配置无效，请检查地址、参数范围与能力声明。',
     'capability-unsupported': '所选模型的能力或推理档位不满足请求，请检查能力声明与参数。',
     'model-required': '请先选择一个可用模型。',

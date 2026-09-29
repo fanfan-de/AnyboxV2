@@ -1,4 +1,4 @@
-import type { JsonValue, NativeExecution, NativeObject, NativeRecordDraft, NativeReply } from '@anybox/models'
+import type { JsonValue, NativeExecution, NativeObject, NativeRecordDraft, NativeReply, NativeImageResourceRef } from '@anybox/models'
 import type { NativeInitialization, ProtocolConclusion, ProtocolRecord, RunHost } from '../run/program.js'
 import { modelFailure } from '../run/model.js'
 import { validateToolBatch } from '../run/domain.js'
@@ -27,12 +27,14 @@ export function jsonArguments(value: unknown): NativeObject {
   try { return nativeObject(JSON.parse(nativeString(value))) } catch { throw modelFailure('invalid-response') }
 }
 export function toProtocolRecord(record: NativeRecordDraft): ProtocolRecord {
-  return { id: record.id, exchangeId: record.exchangeId, kind: record.kind, formatVersion: record.recordFormatVersion, payload: record.payload }
+  return { id: record.id, exchangeId: record.exchangeId, kind: record.kind, formatVersion: record.recordFormatVersion, payload: record.payload,
+    ...(record.resourceRefs === undefined ? {} : { resourceRefs: record.resourceRefs }) }
 }
 export function toNativeRecord(protocolId: string, record: ProtocolRecord): NativeRecordDraft {
-  if (!record.exchangeId || record.formatVersion !== 1 || !['request', 'response', 'diagnostic'].includes(record.kind)) throw modelFailure('unsupported-request')
-  return { id: record.id, exchangeId: record.exchangeId, protocolId, recordFormatVersion: 1,
-    kind: record.kind as NativeRecordDraft['kind'], payload: record.payload }
+  if (!record.exchangeId || (record.formatVersion !== 1 && record.formatVersion !== 2) || !['request', 'response', 'diagnostic'].includes(record.kind)) throw modelFailure('unsupported-request')
+  return { id: record.id, exchangeId: record.exchangeId, protocolId, recordFormatVersion: record.formatVersion,
+    kind: record.kind as NativeRecordDraft['kind'], payload: record.payload,
+    ...(record.resourceRefs === undefined ? {} : { resourceRefs: record.resourceRefs }) }
 }
 export function serializable(value: unknown): JsonValue { return JSON.parse(JSON.stringify(value)) as JsonValue }
 
@@ -42,7 +44,8 @@ export interface ExchangeRunner {
 }
 
 /** Common resource plumbing contains no protocol flow decisions. */
-export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string }): ExchangeRunner {
+export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string }, initialResources: readonly NativeImageResourceRef[] = []): ExchangeRunner {
+  let initial = true
   let exchanges: readonly ProtocolViewExchange[] = []
   let revision = 0, toolExchange = 0
   const update = (exchange: ProtocolViewExchange) => {
@@ -59,7 +62,8 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
   return {
     async call(intent) {
       host.signal.throwIfAborted()
-      const prepared = execution.prepareExchange(intent)
+      const prepared = execution.prepareExchange(intent, initial && initialResources.length ? { resourceRefs: initialResources } : undefined)
+      initial = false
       update({ id: prepared.exchangeId, blocks: [] })
       const reply = await host.perform({ id: prepared.exchangeId, kind: 'model', intent: serializable(prepared.request),
         records: [toProtocolRecord(prepared.record)], observe: reply => ({ records: reply.records.map(toProtocolRecord) }) },

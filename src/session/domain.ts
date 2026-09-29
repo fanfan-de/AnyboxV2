@@ -1,4 +1,5 @@
 /** Immutable conversation facts, independent of persistence and execution. */
+import type { ImageRef } from '../image/port.js'
 export interface Session {
   readonly id: string
   readonly projectId: string
@@ -14,6 +15,7 @@ export interface ConversationNode {
   readonly sessionId: string
   readonly parentId: string | null
   readonly input: string
+  readonly images: readonly ImageRef[]
   readonly output: string
   readonly sourceRunId: string | null
 }

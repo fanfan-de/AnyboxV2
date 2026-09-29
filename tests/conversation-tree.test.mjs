@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import { registerNativeRun, completeNativeRun, completedOutcome } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
@@ -22,6 +23,7 @@ const now = () => '2026-09-26T00:00:00.000Z'
 async function host(directory) {
   const root = new Context(), llm = controlledModels()
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   await root.installComponent(llm.component())
   const harness = await createHarness(root, { agents, now })
   const project = await harness.openProject(directory)
@@ -372,6 +374,7 @@ test('restart interrupts multiple active Runs independently while retaining thei
   let restarted
   try {
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+    await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, agents))
     const project = await root.get(projectServiceKey).openProject(directory)

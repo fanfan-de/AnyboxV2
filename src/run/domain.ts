@@ -6,6 +6,8 @@ import type { ModelFailureCategory } from './model.js'
 import type { BashResult } from '../tool/bash-component.js'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 import { nonEmpty } from '../validation.js'
+import type { ImageRef } from '../image/port.js'
+import { imageLimits } from '../image/limits.js'
 
 export type RunHistory =
   | { readonly kind: 'tree'; readonly parentNodeId: string | null }
@@ -79,6 +81,7 @@ export interface Run {
   readonly id: string
   readonly sessionId: string
   readonly input: string
+  readonly images: readonly ImageRef[]
   readonly idempotencyKey: string
   readonly status: RunStatus
   readonly history: RunHistory
@@ -107,6 +110,7 @@ export interface RunInput {
   readonly sessionId: string
   readonly parentNodeId: string | null
   readonly input: string
+  readonly images?: readonly { readonly assetId: string }[]
   readonly idempotencyKey: string
 }
 
@@ -121,13 +125,25 @@ export function validateRunInput(input: RunInput): RunInput {
   if (input && ('modelProfileId' in input || 'model' in input || 'selection' in input || 'llmPlan' in input)) {
     throw new TypeError('RunInput accepts only a modelId for model selection')
   }
+  const images = input?.images ?? []
+  if (!Array.isArray(images) || images.length > imageLimits.maxImages || images.some(image => !image || typeof image !== 'object' ||
+    Array.isArray(image) || Object.keys(image).some(key => key !== 'assetId') || typeof image.assetId !== 'string' || !image.assetId.trim())) {
+    throw new TypeError('invalid input images')
+  }
+  if (typeof input?.input !== 'string' || (!input.input.trim() && !images.length)) throw new TypeError('input must contain text or images')
   return Object.freeze({
     sessionId: nonEmpty(input?.sessionId, 'sessionId'),
     ...(input?.modelId === undefined ? {} : { modelId: nonEmpty(input.modelId, 'modelId') }),
     parentNodeId: input?.parentNodeId === null ? null : nonEmpty(input?.parentNodeId, 'parentNodeId'),
-    input: nonEmpty(input?.input, 'input'),
+    input: input.input.trim(),
+    images: Object.freeze(images.map(image => Object.freeze({ assetId: nonEmpty(image.assetId, 'assetId') }))),
     idempotencyKey: nonEmpty(input?.idempotencyKey, 'idempotencyKey'),
   })
+}
+
+export function sameRunInput(left: RunInput, right: RunInput): boolean {
+  return left.input === right.input && left.parentNodeId === right.parentNodeId && left.modelId === right.modelId &&
+    JSON.stringify((left.images ?? []).map(image => image.assetId)) === JSON.stringify((right.images ?? []).map(image => image.assetId))
 }
 
 export function requestCancellation(run: Run, now: string): Run {

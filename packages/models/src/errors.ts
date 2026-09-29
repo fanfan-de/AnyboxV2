@@ -1,5 +1,5 @@
 import { nativeDiagnostic, withNativeDiagnostic } from './diagnostics.js';
-export type ModelsErrorCode = 'invalid-config' | 'conflict' | 'not-found' | 'unavailable' | 'protocol-unavailable' | 'capability-unsupported' | 'credential-missing' | 'credential-unavailable' | 'cancelled' | 'timeout' | 'provider-failure' | 'invalid-response' | 'cleanup-failure' | 'closed' | 'busy' | 'storage-unavailable';
+export type ModelsErrorCode = 'invalid-config' | 'conflict' | 'not-found' | 'unavailable' | 'protocol-unavailable' | 'capability-unsupported' | 'credential-missing' | 'credential-unavailable' | 'cancelled' | 'timeout' | 'provider-failure' | 'invalid-response' | 'cleanup-failure' | 'closed' | 'busy' | 'storage-unavailable' | 'resource-unavailable' | 'invalid-resource' | 'request-too-large';
 export interface ModelsError extends Error { readonly code: ModelsErrorCode }
 const messages: Record<ModelsErrorCode, string> = {
   'invalid-config': 'Invalid model configuration or input.', conflict: 'Configuration revision conflict.',
@@ -11,6 +11,7 @@ const messages: Record<ModelsErrorCode, string> = {
   'provider-failure': 'The model provider request failed.', 'invalid-response': 'The model provider returned an invalid response.',
   'cleanup-failure': 'Model resources could not be released.', closed: 'Model service or execution is closed.',
   busy: 'An execution already has an active call.', 'storage-unavailable': 'Model configuration storage is unavailable.',
+  'resource-unavailable': 'An input resource is unavailable.', 'invalid-resource': 'An input resource failed validation.', 'request-too-large': 'The model request exceeds the wire size limit.',
 };
 export function modelsError(code: ModelsErrorCode): ModelsError { return Object.assign(new Error(messages[code]), { name: 'ModelsError', code }); }
 export function isModelsError(error: unknown): error is ModelsError {

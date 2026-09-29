@@ -20,7 +20,7 @@ export interface EffectiveCapabilities {
   readonly webSearch: boolean;
   readonly tools: boolean;
   readonly streaming: boolean;
-  readonly imageInput: false;
+  readonly imageInput: boolean;
   readonly reasoning: ReasoningCapability;
 }
 export interface Versioned { readonly id: string; readonly revision: number; readonly versionId: string; readonly createdAt: string; readonly updatedAt: string }

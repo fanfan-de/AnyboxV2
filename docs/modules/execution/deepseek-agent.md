@@ -32,6 +32,6 @@ Effect 先 unregister 本代，停止新准备、撤销其所有 program，再�
 
 ## 兼容与验证
 
-Session 一旦固定 deepseek-chat-completions 就不能改成标准 chat-completions 继续历史。恢复要求 Loop 1.0.0、记录格式 1、有效 checkpoint，以及 Models 校验通过的连接/历史作用域/参数；旧 dialogue-v1 只读。当前范围为非推理文本和本地工具，有效图片能力为 false。
+Session 一旦固定 deepseek-chat-completions 就不能改成标准 chat-completions 继续历史。恢复接受 Loop 1.0.0/1.1.0、记录格式 1/2、有效 checkpoint，以及 Models 校验通过的连接/历史作用域/参数；旧 dialogue-v1 只读。当前范围为非推理文本、显式声明的图片输入和本地工具；图片沿共享 Chat 资源引用及请求编码路径执行。
 
 [DeepSeek 驱动测试](../../../tests/deepseek-protocol.test.mjs) 验证 max_tokens/非推理映射、碎片流和工具解析、拒绝 reasoning/developer；[五协议原生测试](../../../tests/native-protocol-agents.test.mjs) 验证该独立协议的工具历史、跨 Run/重启恢复和分支隔离；[工具循环测试](../../../tests/tool-loop.test.mjs) 验证共享执行的取消和退出屏障。统一执行 `npm run check`。

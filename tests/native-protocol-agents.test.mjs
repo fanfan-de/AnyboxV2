@@ -1,6 +1,8 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import sharp from 'sharp'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
@@ -36,7 +38,7 @@ function toolResponse(protocolId) {
   return { choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: 'Thinking',
     tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'bash', arguments: JSON.stringify(args) } }] } }] }
 }
-async function host(directory, protocolId, state, { search = false } = {}) {
+async function host(directory, protocolId, state, { search = false, images = false, legacy = false } = {}) {
   const root = new Context()
   await root.installComponent(createModelsStoreComponent({ path: join(directory, 'models.sqlite'),
     legacyParameterConverters: { 'deepseek-chat-completions': convertLegacyDeepSeekParameters } }))
@@ -44,14 +46,19 @@ async function host(directory, protocolId, state, { search = false } = {}) {
     return { async getPassword() { return state.secrets.get(id) }, async setPassword(value) { state.secrets.set(id, value) }, async deleteCredential() { return state.secrets.delete(id) } }
   } }))
   await root.installComponent(createModelsComponent())
-  root.get('models.protocols').register(factories[protocolId]({ fetch: async (_url, init) => {
+  const protocol = factories[protocolId]({ fetch: async (_url, init) => {
     state.requests.push(JSON.parse(init.body))
     assert.ok(state.responses.length, 'unexpected provider request')
-    return json(state.responses.shift())
-  } }))
+    const response = state.responses.shift()
+    await state.beforeResponse?.()
+    return json(response)
+  } })
+  root.get('models.protocols').register(legacy ? { ...protocol, descriptor: { ...protocol.descriptor, version: '2.0.0' }, recordFormatVersion: 1,
+    effectiveCapabilities: (...args) => ({ ...protocol.effectiveCapabilities(...args), imageInput: false }) } : protocol)
   const settings = root.get('models.settings')
   if (!settings.connections().length) {
-    const capabilities = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: 'unsupported' }, webSearch: { support: search ? 'supported' : 'unknown' } }
+    const capabilities = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: 'unsupported' },
+      imageInput: { support: images ? 'supported' : 'unsupported' }, webSearch: { support: search ? 'supported' : 'unknown' } }
     const provider = await settings.createProvider({ name: 'Native provider', connectionHints: { protocolIds: [protocolId] } })
     const connection = await settings.createConnection({ id: 'connection', providerDefinitionId: provider.id, name: 'Native connection', enabled: true,
       protocolId, baseUrl: 'https://native.invalid/v1', auth: 'api-key', apiKey: 'private-api-key', timeoutMs: 5000 })
@@ -63,7 +70,15 @@ async function host(directory, protocolId, state, { search = false } = {}) {
       capabilities, baseline: true, parameters: { protocolId, formatVersion: 1, value } })
   }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'sessions.sqlite')) + ".images" }))
   const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Root instructions', modelId: 'default' }] })
+  if (legacy) {
+    const registry = root.get('harness.protocol-agents'), prepare = registry.prepare.bind(registry)
+    registry.prepare = async input => {
+      const program = await prepare(input)
+      return { ...program, binding: { ...program.binding, loopVersion: '1.0.0' } }
+    }
+  }
   const project = await harness.openProject(directory)
   return { root, harness, project, settings, close: () => harness.close() }
 }
@@ -93,6 +108,9 @@ for (const protocolId of Object.keys(factories)) test(`${protocolId}: native too
         signal: new AbortController().signal, initialization: history.initialization, input: { schemaVersion: 1, raw: 'never', text: 'never', template: null },
         history: { ...history, checkpoint } }), { category: 'unsupported-request' })
     }
+    await assert.rejects(f.root.get('harness.protocol-agents').prepare({ runId: 'invalid-driver-binding', sessionId: session.id, modelId: 'default',
+      signal: new AbortController().signal, initialization: history.initialization, input: { schemaVersion: 1, raw: 'never', text: 'never', template: null },
+      history: { ...history, binding: { ...history.binding, driverVersion: 'unknown-version' } } }), { category: 'unsupported-request' })
     state.responses.push(answer(protocolId, 'CHILD-ANSWER'))
     const child = await run(f, session.id, first.resultNodeId, 'CHILD-INPUT')
     assert.equal((JSON.stringify(state.requests.at(-1)).match(/CHILD-INPUT/g) ?? []).length, 1)
@@ -190,4 +208,124 @@ test('native refusal and truncation are recorded without creating resumable node
       assert.equal(state.requests.length, 1)
     } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
   }
+})
+
+async function importPicture(f, sessionId, color = 'red') {
+  const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: color } }).png().toBuffer()
+  const call = f.harness.importImage(sessionId, (async function* () { yield bytes })())
+  const image = await call.result; await call.done
+  return { image, bytes, wire: `data:image/png;base64,${bytes.toString('base64')}` }
+}
+const imageUrls = request => request.messages.flatMap(message => Array.isArray(message.content)
+  ? message.content.filter(part => part.type === 'image_url').map(part => part.image_url.url) : [])
+
+for (const protocolId of ['chat-completions', 'deepseek-chat-completions']) test(`${protocolId}: images persist through tools, restart, regeneration and isolated branches`, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-images-history-'))
+  const state = { secrets: new Map(), requests: [], responses: [toolResponse(protocolId), answer(protocolId, 'ROOT')] }
+  let f = await host(directory, protocolId, state, { images: true })
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant', 'default')
+    const red = await importPicture(f, session.id), blue = await importPicture(f, session.id, 'blue')
+    const template = await f.harness.createPrompt('owner', { name: 'Image task', kind: 'task-template', role: 'user', content: 'Inspect:{{input}}' })
+    const published = await f.harness.publishPrompt('owner', template.id)
+    await f.harness.bindPrompt('owner', 'assistant', published.id)
+    const input = { sessionId: session.id, parentNodeId: null, input: '$&{{input}}', images: [{ assetId: red.image.assetId }], idempotencyKey: 'root' }
+    const accepted = await f.harness.startRun(input), first = await f.harness.waitRun(accepted.id)
+    assert.equal(first.status, 'completed')
+    assert.deepEqual(imageUrls(state.requests[0]), [red.wire])
+    assert.deepEqual(imageUrls(state.requests[1]), [red.wire])
+    assert.equal(state.requests[0].messages.at(-1).content[0].text, 'Inspect:$&{{input}}')
+    if (protocolId.startsWith('deepseek')) assert.deepEqual(state.requests[0].thinking, { type: 'disabled' })
+    const node = await f.harness.getNode(session.id, first.resultNodeId)
+    assert.deepEqual(node.images.map(image => image.assetId), [red.image.assetId])
+    assert.equal(node.images[0].expiresAt, undefined)
+    const originalRecords = await f.harness.getRunRecords(first.id)
+    assert.equal(originalRecords[0].formatVersion, 2)
+    assert.equal(originalRecords[0].resourceRefs[0].id, red.image.assetId)
+    assert.doesNotMatch(JSON.stringify(originalRecords), /data:image|base64/)
+    const rows = await f.root.get('local-storage').read(reader => reader.all('SELECT intent_json FROM harness_run_operations'))
+    assert.doesNotMatch(JSON.stringify(rows), /data:image|base64/)
+    assert.equal((await f.harness.startRun(input)).id, first.id)
+    await assert.rejects(f.harness.startRun({ ...input, images: [{ assetId: blue.image.assetId }] }), { code: 'idempotency-conflict' })
+    const other = await f.harness.createSession(f.project.id, 'assistant', 'default')
+    await assert.rejects(f.harness.startRun({ ...input, sessionId: other.id, idempotencyKey: 'foreign' }), { code: 'asset-missing' })
+    state.responses.push(answer(protocolId, 'BLUE-CHILD'))
+    const childInput = { ...input, parentNodeId: first.resultNodeId, input: '', images: [{ assetId: blue.image.assetId }], idempotencyKey: 'child' }
+    const child = await f.harness.startRun(childInput)
+    assert.equal((await f.harness.waitRun(child.id)).status, 'completed')
+    assert.deepEqual(imageUrls(state.requests.at(-1)), [red.wire, blue.wire])
+    await f.close(); f = await host(directory, protocolId, state)
+    state.responses.push(answer(protocolId, 'SIBLING'))
+    await run(f, session.id, first.resultNodeId, 'Continue original')
+    assert.deepEqual(imageUrls(state.requests.at(-1)), [red.wire])
+    state.responses.push(answer(protocolId, 'REGENERATED'))
+    const regenerated = await f.harness.startRun({ ...input, idempotencyKey: 'regenerate' })
+    assert.equal((await f.harness.waitRun(regenerated.id)).status, 'completed')
+    assert.deepEqual(imageUrls(state.requests.at(-1)), [red.wire])
+    const ordered = { ...input, images: [{ assetId: red.image.assetId }, { assetId: blue.image.assetId }], idempotencyKey: 'ordered' }
+    state.responses.push(answer(protocolId, 'ORDERED'))
+    const pair = await f.harness.startRun(ordered); await f.harness.waitRun(pair.id)
+    await assert.rejects(f.harness.startRun({ ...ordered, images: [...ordered.images].reverse() }), { code: 'idempotency-conflict' })
+    // Hold both transports open to prove concurrent siblings keep independent image paths.
+    let release, arrivals = 0
+    const gate = new Promise(resolve => { release = resolve }), start = state.requests.length
+    state.beforeResponse = () => { if (++arrivals === 2) release(); return gate }
+    state.responses.push(answer(protocolId, 'PARALLEL-RED'), answer(protocolId, 'PARALLEL-BLUE'))
+    try {
+      const siblings = await Promise.all([red, blue].map((picture, index) => f.harness.startRun({
+        ...input, parentNodeId: first.resultNodeId, input: `parallel-${index}`, images: [{ assetId: picture.image.assetId }], idempotencyKey: `parallel-${index}`,
+      })))
+      const outcomes = await Promise.all(siblings.map(sibling => f.harness.waitRun(sibling.id)))
+      assert.ok(outcomes.every(outcome => outcome.status === 'completed'))
+      assert.equal(arrivals, 2)
+      for (const [index, picture] of [red, blue].entries()) {
+        const request = state.requests.slice(start).find(request => request.messages.at(-1).content[0].text === `Inspect:parallel-${index}`)
+        assert.deepEqual(imageUrls(request), [red.wire, picture.wire])
+        const node = await f.harness.getNode(session.id, outcomes[index].resultNodeId)
+        assert.equal(node.parentId, first.resultNodeId)
+        assert.deepEqual(node.images.map(image => image.assetId), [picture.image.assetId])
+      }
+    } finally { release(); delete state.beforeResponse }
+    assert.deepEqual(await f.harness.getRunRecords(first.id), originalRecords)
+    writeFileSync(join(directory, 'sessions.sqlite.images', `${red.image.assetId}.image`), Buffer.alloc(red.bytes.length))
+    const before = state.requests.length
+    const corrupt = await f.harness.startRun({ ...input, idempotencyKey: 'corrupt' })
+    const failed = await f.harness.waitRun(corrupt.id)
+    assert.equal(failed.status, 'failed'); assert.equal(failed.resultNodeId, undefined)
+    assert.equal(failed.errorCategory, 'resource-unavailable'); assert.equal(state.requests.length, before)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('a v1 text history gains image input after driver upgrade without rewriting prior records', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-images-upgrade-')), protocolId = 'chat-completions'
+  const state = { secrets: new Map(), requests: [], responses: [answer(protocolId, 'BEFORE')] }
+  let f = await host(directory, protocolId, state, { images: true, legacy: true })
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant', 'default')
+    const first = await run(f, session.id, null, 'Old text')
+    assert.equal(first.modelSnapshot.capabilities.imageInput, false)
+    assert.equal(first.protocolBinding.loopVersion, '1.0.0')
+    assert.equal(first.protocolBinding.driverVersion, '2.0.0')
+    const original = await f.harness.getRunRecords(first.id)
+    assert.ok(original.every(record => record.formatVersion === 1))
+    await f.close(); f = await host(directory, protocolId, state)
+    const picture = await importPicture(f, session.id)
+    state.responses.push(answer(protocolId, 'AFTER'))
+    const next = await f.harness.startRun({ sessionId: session.id, parentNodeId: first.resultNodeId, input: '', images: [{ assetId: picture.image.assetId }], idempotencyKey: 'after' })
+    assert.equal((await f.harness.waitRun(next.id)).status, 'completed')
+    assert.deepEqual(imageUrls(state.requests.at(-1)), [picture.wire])
+    assert.deepEqual(await f.harness.getRunRecords(first.id), original)
+    const history = await f.root.get('harness.session-runs').loadNativeHistory(session.id, (await f.harness.getRun(next.id)).resultNodeId)
+    assert.deepEqual([...new Set(history.records.map(record => record.formatVersion))], [1, 2])
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('image capability is required before model requests or Run acceptance', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-images-capability-')), state = { secrets: new Map(), requests: [], responses: [] }
+  const f = await host(directory, 'chat-completions', state)
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant', 'default'), picture = await importPicture(f, session.id)
+    await assert.rejects(f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: '', images: [{ assetId: picture.image.assetId }], idempotencyKey: 'image' }), { category: 'unsupported-request' })
+    assert.equal(state.requests.length, 0); assert.deepEqual(await f.harness.listRuns(session.id), [])
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })

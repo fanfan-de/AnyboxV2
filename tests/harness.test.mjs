@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
@@ -28,6 +29,8 @@ async function createHostHarness({ llm, databasePath, ...options }) {
   try {
     const api = root.installComponent(llm.component())
     const database = root.installComponent(createLocalSqliteComponent(databasePath))
+    await database
+    await root.installComponent(createImageAssetsComponent({ directory: (databasePath) + ".images" }))
     await api
     await database
     const harness = await createHarness(root, options)
@@ -249,6 +252,8 @@ test('removing the Models component waits for the run consumer and its call', as
   root.installComponent(createApplyPatchComponent())
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
+  await database
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
   const prompts = root.installComponent(createPromptComponent(inputs))
   const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const api = root.installComponent(llm.component())
@@ -340,6 +345,8 @@ test('RunRuntime owns in-flight calls while Session and Run state survive its re
   root.installComponent(createApplyPatchComponent())
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
+  await database
+  await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
   const prompts = root.installComponent(createPromptComponent(inputs))
   const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const api = root.installComponent(llm.component())
@@ -465,7 +472,7 @@ test('Harness startup names missing services and failed startups release the app
     const noStorage = controlledModels()
     try {
       await noStorageRoot.installComponent(noStorage.component())
-      await assert.rejects(createHarness(noStorageRoot, { agents }), /waiting for local-storage/)
+      await assert.rejects(createHarness(noStorageRoot, { agents }), /waiting for harness.image-assets/)
       assert.deepEqual(noStorage.events, ['disposed'])
       assert.equal(noStorageRoot.get(modelsServiceKey), undefined)
     } finally { await noStorageRoot.fiber.dispose() }
@@ -473,6 +480,7 @@ test('Harness startup names missing services and failed startups release the app
     const noApiRoot = new Context()
     try {
       await noApiRoot.installComponent(createLocalSqliteComponent(file))
+      await noApiRoot.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
       await assert.rejects(createHarness(noApiRoot, { agents }), /waiting for models/)
       assert.equal(noApiRoot.get(localStorageServiceKey), undefined)
     } finally { await noApiRoot.fiber.dispose() }
@@ -481,6 +489,7 @@ test('Harness startup names missing services and failed startups release the app
     const invalid = controlledModels()
     try {
       await invalidRoot.installComponent(createLocalSqliteComponent(file))
+      await invalidRoot.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
       await invalidRoot.installComponent(invalid.component())
       await assert.rejects(createHarness(invalidRoot, { agents: [] }), /agents/)
       assert.deepEqual(invalid.events, ['disposed'])

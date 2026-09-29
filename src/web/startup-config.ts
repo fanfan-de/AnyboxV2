@@ -10,6 +10,7 @@ export interface LegacyModelImport {
 export interface WebStartupConfig {
   readonly port: number
   readonly harnessDatabasePath: string
+  readonly imageAssetsDirectory: string
   readonly modelsDatabasePath: string
   readonly modelsCatalogDatabasePath: string
   readonly credentialNamespace: string
@@ -51,6 +52,7 @@ export function parseWebStartupConfig(env: Environment): WebStartupConfig {
   const port = rawPort === undefined ? 0 : Number(rawPort)
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new TypeError('ANYBOX_WEB_PORT must be a TCP port')
   const harnessDatabasePath = optionalValue(env, 'ANYBOX_HARNESS_DATABASE') ?? './data/harness.sqlite'
+  const imageAssetsDirectory = optionalValue(env, 'ANYBOX_IMAGE_ASSETS_DIRECTORY') ?? `${harnessDatabasePath}.images`
   const modelsDatabasePath = optionalValue(env, 'ANYBOX_MODELS_DATABASE') ?? './data/models.sqlite'
   if (resolve(harnessDatabasePath) === resolve(modelsDatabasePath)) throw new TypeError('ANYBOX_MODELS_DATABASE and ANYBOX_HARNESS_DATABASE must be different files')
   const modelsCatalogDatabasePath = optionalValue(env, 'ANYBOX_MODELS_CATALOG_DATABASE') ?? join(dirname(modelsDatabasePath), 'models-catalog.sqlite')
@@ -59,7 +61,7 @@ export function parseWebStartupConfig(env: Environment): WebStartupConfig {
   }
   const credentialNamespace = optionalValue(env, 'ANYBOX_MODELS_NAMESPACE') ?? 'anybox.models'
   return Object.freeze({
-    port, harnessDatabasePath, modelsDatabasePath, modelsCatalogDatabasePath, credentialNamespace,
+    port, harnessDatabasePath, imageAssetsDirectory, modelsDatabasePath, modelsCatalogDatabasePath, credentialNamespace,
     legacy: Object.freeze({
       provider: Object.freeze({ name: api === 'openai-responses' ? 'OpenAI（迁入）' : 'DeepSeek（迁入）', enabled: true,
         protocolId: api === 'openai-responses' ? 'responses' : 'deepseek-chat-completions', baseUrl, auth: 'api-key' as const, timeoutMs }),

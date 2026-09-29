@@ -4,6 +4,7 @@ import type { Component } from '@nya/core';
 import { assert, identifier, immutable, keys, nonempty, connectionInput, configurationInput, modelInput, providerInput, validateConfiguration, validateConnection, validateModel, validateParameters, validateProvider, validateSignal } from './domain.js';
 import { modelsError, normalizeError } from './errors.js';
 import { createExecution, validateRestore } from './execution.js';
+import { captureResourceResolver } from './resources.js';
 import { abortLink, deferred, joinOperation, throwAborted } from './lifecycle.js';
 import { modelsProtocolsServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsStoreServiceKey, modelsVaultServiceKey, modelsSourceDataServiceKey } from './types.js';
 import type { ConnectionModel, ConnectionSyncState, CredentialIntent, EffectiveCapabilities, Model, ModelConfiguration, ModelConfigurationInput, ModelInput, ModelsProtocolsService, ModelsService, ModelsSettingsService, ModelsSourceDataService, ModelsStore, ModelsVault, RunnableModelSummary, ProtocolConnection, ProtocolOperation, Provider, ProviderConnectionInput, ProviderConnectionRecord, ProviderConnection, ProviderInput, SourceSnapshot, Versioned } from './types.js';
@@ -116,7 +117,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     return immutable({
       tools: declared.tools.support === 'supported' && value.tools === true,
       streaming: declared.streaming.support === 'supported' && value.streaming === true,
-      imageInput: false, webSearch: declared.webSearch?.support === 'supported' && value.webSearch === true,
+      imageInput: declared.imageInput.support === 'supported' && value.imageInput === true, webSearch: declared.webSearch?.support === 'supported' && value.webSearch === true,
       reasoning: declared.reasoning.support === 'supported' ? value.reasoning : { support: declared.reasoning.support },
     });
   };
@@ -175,11 +176,12 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     },
     get(id) { requireOpen(); identifier(id); const model = store.configuration(id); return model ? summary(model) : undefined; },
     async openNative<I extends NativeObject, R extends NativeObject, E extends NativeObject>(input: OpenNativeModelInput<I, R, E>): Promise<NativeExecution<I, R, E>> {
-      requireOpen(); keys(input, ['modelId', 'lease', 'restore', 'requirements', 'signal']); identifier(input.modelId); validateSignal(input.signal);
+      requireOpen(); keys(input, ['modelId', 'lease', 'restore', 'requirements', 'resources', 'signal']); identifier(input.modelId); validateSignal(input.signal);
+      const resources = captureResourceResolver(input.resources);
       const held = input.lease && leases.get(input.lease); if (!held || held.released || !held.generation.accepting) throw modelsError('protocol-unavailable');
       const generation = held.generation;
       const captured = immutable({ modelId: input.modelId, ...(input.restore ? { restore: input.restore } : {}), requirements: input.requirements ?? {} });
-      keys(captured.requirements, ['tools', 'streaming', 'reasoning']); assert(Object.values(captured.requirements).every(value => typeof value === 'boolean'));
+      keys(captured.requirements, ['tools', 'streaming', 'reasoning', 'imageInput']); assert(Object.values(captured.requirements).every(value => typeof value === 'boolean'));
       const providerId = getConfiguration(input.modelId).connectionId, owned = lease(input.signal); owned.attach(generation);
       let transferred = false;
       try {
@@ -191,13 +193,13 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
           if (provider.protocolId !== input.lease.protocolId) throw modelsError('conflict');
           generation.protocol.validateProvider(connectionInput(provider));
           const parameters = nativeParameters(model, provider.protocolId), capabilities = effective(generation, model, parameters), requirements = captured.requirements;
-          if (requirements.tools && !capabilities.tools || requirements.streaming && !capabilities.streaming || requirements.reasoning && capabilities.reasoning.support !== 'supported') throw modelsError('capability-unsupported');
+          if (requirements.tools && !capabilities.tools || requirements.streaming && !capabilities.streaming || requirements.reasoning && capabilities.reasoning.support !== 'supported' || requirements.imageInput && !capabilities.imageInput) throw modelsError('capability-unsupported');
           const snapshot = immutable({ schemaVersion: 3 as const, modelDefinitionId: model.modelDefinitionId, providerDefinitionId: provider.providerDefinitionId, modelDefinitionVersionId: model.modelDefinitionVersionId, modelId: model.id, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.id, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, registrationGenerationId: generation.id, historyScopeEpoch: provider.historyScopeEpoch, parameters, capabilities });
-          if (captured.restore) validateRestore(captured.restore, snapshot);
+          if (captured.restore) validateRestore(captured.restore, snapshot, generation.protocol);
           const credential = await readCredential(provider, owned.controller.signal);
           throwAborted(owned.controller.signal);
           if (!accepting || !generation.accepting || held.released) throw modelsError('closed');
-          const execution = createExecution({ protocol: generation.protocol, provider: immutable(connectionInput(provider)), credential, snapshot, capabilities, restore: captured.restore, controller: owned.controller,
+          const execution = createExecution({ protocol: generation.protocol, provider: immutable(connectionInput(provider)), credential, snapshot, capabilities, resources, restore: captured.restore, controller: owned.controller,
             onRelease: failed => { generation.executions.delete(execution); owned.unlink(); if (failed) { generation.cleanupFailed = true; cleanupFailed = true; } } });
           generation.executions.add(execution); transferred = true; return execution as NativeExecution<I, R, E>;
         });
@@ -433,9 +435,11 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     acquire(id) { identifier(id); return acquire(getGeneration(id)); },
     register<I extends NativeObject, R extends NativeObject, E extends NativeObject>(protocol: NativeProtocol<I, R, E>) {
       requireOpen(); identifier(protocol.descriptor.id); assert(nonempty(protocol.descriptor.version));
+      assert(protocol.recordFormatVersion === undefined || protocol.recordFormatVersion === 1 || protocol.recordFormatVersion === 2);
       if (generations.has(protocol.descriptor.id)) throw modelsError('conflict');
       const stable: NativeProtocol = Object.freeze({
         descriptor: immutable(protocol.descriptor), validateProvider: protocol.validateProvider.bind(protocol),
+        recordFormatVersion: protocol.recordFormatVersion, canRestoreVersion: protocol.canRestoreVersion?.bind(protocol), resourceIds: protocol.resourceIds?.bind(protocol),
         validateParameters: protocol.validateParameters.bind(protocol), effectiveCapabilities: protocol.effectiveCapabilities.bind(protocol),
         initialParameters: protocol.initialParameters?.bind(protocol), restore: protocol.restore.bind(protocol), prepare: protocol.prepare.bind(protocol),
         exchange: protocol.exchange.bind(protocol), commit: protocol.commit.bind(protocol), discover: protocol.discover?.bind(protocol), check: protocol.check?.bind(protocol),

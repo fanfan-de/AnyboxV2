@@ -1,3 +1,4 @@
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
@@ -29,6 +30,7 @@ async function fixture() {
   try {
     await root.installComponent(llm.component())
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+    await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     const harness = await createHarness(root, { agents })
     const project = await harness.openProject(directory)
     const session = await harness.createSession(project.id, 'assistant')
@@ -296,6 +298,7 @@ async function stateHost(file) {
   const inputs = { now: () => '2026-09-26T00:00:00.000Z', newId: () => 'project-1' }
   try {
     await root.installComponent(createLocalSqliteComponent(file))
+    await root.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, agents))
     return { root, records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey), projects: root.get(projectServiceKey) }
@@ -342,6 +345,7 @@ test('the Run state migration preserves legacy completed Runs and interrupts old
   const inputs = { now: () => '2026-09-26T00:00:00.000Z', newId: () => 'project-1' }
   try {
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+    await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     const project = await root.get(projectServiceKey).openProject(directory)
     const db = root.get(localStorageServiceKey)
@@ -387,6 +391,7 @@ test('revoking Bash waits for its done and prevents another model step', async (
   const inputs = { now: () => 'now', newId: (() => { let id = 0; return () => `id-${++id}` })() }
   try {
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+    await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, agents))
     await root.installComponent(createPromptComponent(inputs))

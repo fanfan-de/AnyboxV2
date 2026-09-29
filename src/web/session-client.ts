@@ -4,12 +4,17 @@ import type { Api, ApiError, PendingSubmission, RunEventView, RunView, SessionVi
 import type { SessionRef } from './workspace-layout.js'
 import type { ProtocolViewSnapshot } from './protocols/types.js'
 import { getProtocolWebModule } from './protocols/modules.js'
+import type { ImageRef } from './client-types.js'
+import { applyImageRenewal, createDraftStore, createImageUploads, draftFromInput, isImageRef } from './image-client.js'
+import type { DraftImage, DraftStore, ImageRenewal, MessageDraft } from './image-client.js'
+import { validateImageBatch } from '../image/limits.js'
 
 export interface BrowserStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export const pendingKey = 'anybox.web.v2.pending'
 export interface PendingStore {
   get(id: string): PendingSubmission | undefined
   set(id: string, value: PendingSubmission | undefined): void
+  entries(): readonly PendingSubmission[]
 }
 export function createPendingStore(storage: BrowserStorage): PendingStore {
   const entries = new Map<string, PendingSubmission>()
@@ -20,16 +25,19 @@ export function createPendingStore(storage: BrowserStorage): PendingStore {
         if (!raw || typeof raw !== 'object') continue
         const value = raw as Record<string, unknown>
         if (value.sessionId !== id || typeof value.input !== 'string' || typeof value.idempotencyKey !== 'string' ||
-            (value.schemaVersion !== undefined && value.schemaVersion !== 1) ||
+            (value.schemaVersion !== undefined && !Number.isSafeInteger(value.schemaVersion)) ||
             (value.runId !== undefined && typeof value.runId !== 'string') ||
             (value.modelId !== undefined && typeof value.modelId !== 'string') ||
             (value.parentNodeId !== undefined && value.parentNodeId !== null && typeof value.parentNodeId !== 'string')) continue
-        entries.set(id, value as unknown as PendingSubmission)
+        const images = Array.isArray(value.images) ? value.images.filter(isImageRef) : []
+        const invalidImages = value.invalidImages === true || (value.images !== undefined && (!Array.isArray(value.images) || images.length !== value.images.length)) || (value.schemaVersion !== 2 && images.length > 0)
+        entries.set(id, { ...value, images, ...(invalidImages ? { invalidImages: true } : {}) } as unknown as PendingSubmission)
       }
     }
   } catch { /* A new submission still must be saved successfully before it is sent. */ }
   return {
     get: id => entries.get(id),
+    entries: () => [...entries.values()],
     set(id, value) {
       const next = new Map(entries)
       if (value) next.set(id, value)
@@ -57,6 +65,7 @@ export interface SessionSnapshot {
   readonly loading: boolean
   readonly notice: string
   readonly draft: string
+  readonly images: readonly DraftImage[]
   readonly events: ReadonlyMap<string, readonly RunEventView[]>
   readonly expanded: ReadonlySet<string>
   readonly views: ReadonlyMap<string, ProtocolViewSnapshot>
@@ -71,10 +80,15 @@ export interface SessionController {
   setModel(modelId: string): Promise<void>
   protocolView(snapshot: ProtocolViewSnapshot): void
   setDraft(value: string): void
+  addImages(files: readonly File[]): void
+  removeImage(id: string): void
+  retryImage(id: string): void
+  imagesChanged(): void
+  dispose(): void
   submit(): Promise<void>
   cancel(id: string): Promise<void>
   toggleTrace(id: string): void
-  navigate(id: string | null, draft?: string): Promise<void>
+  navigate(id: string | null, draft?: string, images?: readonly ImageRef[]): Promise<void>
   focusRun(id: string): void
   moreChildren(): Promise<void>
   regenerate(node: NodeView): Promise<void>
@@ -82,6 +96,8 @@ export interface SessionController {
 export interface SessionEnvironment {
   readonly api: Api
   readonly pending: PendingStore
+  readonly drafts?: DraftStore
+  readonly uploadImage?: (sessionId: string, file: File, signal: AbortSignal) => Promise<ImageRef>
   readonly messageFor: (error: unknown) => string
   readonly newId: () => string
   readonly hidden: () => boolean
@@ -101,7 +117,12 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   let notice = '', busy = false, loading = true, locationVersion = 0
   let listener: (() => void) | undefined, generation = 0, timer: unknown, refreshJob: Promise<void> | undefined
   let refreshAgain = false, locationAgain = false, live = false, locationJob: Promise<void> | undefined
-  const drafts = new Map<string | null, string>()
+  const drafts = env.drafts ?? createDraftStore()
+  const draftAt = (parent: string | null) => drafts.get(ref.sessionId, parent)
+  const setDraftAt = (parent: string | null, draft: MessageDraft) => {
+    try { drafts.set(ref.sessionId, parent, draft) }
+    catch { notice = '浏览器无法保存草稿；请保持页面打开，发送前会再次保存待提交信息。' }
+  }
   const reads = new Set<AbortController>()
   const views = new Map<string, ProtocolViewSnapshot>()
   const events = new Map<string, readonly RunEventView[]>(), expanded = new Set<string>(), eventJobs = new Map<string, Promise<void>>()
@@ -109,6 +130,13 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   const pending = () => env.pending.get(ref.sessionId)
   const attached = () => listener !== undefined
   const emit = () => listener?.()
+  const uploads = createImageUploads({ sessionId: ref.sessionId, drafts, newId: env.newId, changed: emit,
+    upload: (file, signal) => env.uploadImage ? env.uploadImage(ref.sessionId, file, signal) : Promise.reject(new Error('图片上传暂不可用。')),
+    error: error => {
+      notice = error instanceof Error && error.name === 'ImageAssetError' ? '最多添加 8 张图片，每张最多 10 MiB、总计 20 MiB。'
+        : error instanceof Error ? error.message : env.messageFor(error)
+    },
+  })
   const remember = () => env.savePosition?.(position)
   const clearTimer = () => { if (timer !== undefined) env.clear(timer); timer = undefined }
   const invalidate = () => {
@@ -140,7 +168,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try { env.pending.set(ref.sessionId, value); return true }
     catch { notice = '浏览器无法保存待提交信息，请启用此页面的会话存储后重试。'; emit(); return false }
   }
-  const encodeInput = (text: string, modelId = session?.modelId): string | undefined => {
+  const encodeInput = (text: string, modelId = session?.modelId, images: readonly ImageRef[] = []): string | undefined => {
+    try { validateImageBatch(images) }
+    catch { notice = '每次最多发送 8 张图片，每张最多 10 MiB、总计 20 MiB。请删减图片后重试。'; emit(); return undefined }
     const model = env.models?.().find(value => value.id === modelId)
     const protocolId = model?.parameters.protocolId ?? session?.protocolId
     if (session?.protocolId && protocolId !== session.protocolId) {
@@ -148,8 +178,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     }
     const module = getProtocolWebModule(protocolId)
     if (!module) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return undefined }
-    try { return module.encodeInput(text) }
-    catch (error) { notice = env.messageFor(error); emit(); return undefined }
+    if (images.length && model && !model.effectiveCapabilities?.imageInput) { notice = '当前模型不支持图片，请切换模型或移除图片。'; emit(); return undefined }
+    try { return module.encodeInput(text, images.length) }
+    catch (error) { notice = error instanceof Error ? error.message : env.messageFor(error); emit(); return undefined }
   }
   const decodeView = (run: RunView, value: unknown): ProtocolViewSnapshot | undefined => {
     const module = getProtocolWebModule(run.protocolBinding?.protocolId)
@@ -223,17 +254,44 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     locationJob = undefined
     if (locationAgain) { locationAgain = false; void controller.refresh() }
   }
+  const restoreUnaccepted = (submission: PendingSubmission) => {
+    const parent = submission.parentNodeId ?? null
+    const current = draftAt(parent), restored = draftFromInput(submission.input, submission.images)
+    // A user may have typed another draft while the uncertain submission was retained.
+    const text = !current.text || current.text === restored.text ? restored.text
+      : !restored.text ? current.text : `${restored.text}\n\n${current.text}`
+    const originalIds = new Set(restored.images.map(image => image.image!.assetId))
+    const images = [...restored.images.map(image => current.images.find(value => value.image?.assetId === image.image!.assetId) ?? image),
+      ...current.images.filter(image => !image.image || !originalIds.has(image.image.assetId))]
+    setDraftAt(parent, { text, images })
+    if (pending()?.idempotencyKey === submission.idempotencyKey) save(undefined)
+    return Boolean(current.text && current.text !== restored.text) || images.length > restored.images.length
+  }
   const submitStored = async (submission: PendingSubmission, followVersion?: number) => {
     if (busy) return
-    const input = encodeInput(submission.input, submission.modelId)
-    if (input === undefined) return
+    if (submission.invalidImages) { notice = '待提交图片信息不兼容，请移除后重新添加。'; emit(); return }
+    const input = encodeInput(submission.input, submission.modelId, submission.images)
+    if (input === undefined) {
+      // Existing submissions reach here only after their key was confirmed unaccepted.
+      const combined = restoreUnaccepted(submission)
+      notice += ' 待提交内容已恢复到原对话位置的草稿。'
+      if (combined) notice += ' 该位置的新草稿也已同时保留，请确认内容后发送。'
+      emit()
+      return
+    }
     busy = true
     invalidate()
     notice = ''
     emit()
     try {
+      if (submission.images?.length) {
+        const renewed = await env.api<ImageRenewal>(`${path}/images/renew`, { assetIds: submission.images.map(image => image.assetId) })
+        applyImageRenewal(drafts, ref.sessionId, renewed)
+        if (renewed.invalid.length) throw Object.assign(new Error('图片已失效，请重新添加。'), { status: 409, code: 'asset-expired' })
+      }
       const accepted = await env.api<RunView>(`${path}/runs`, {
         input, idempotencyKey: submission.idempotencyKey, parentNodeId: submission.parentNodeId,
+        ...(submission.images?.length ? { images: submission.images.map(image => ({ assetId: image.assetId })) } : {}),
         ...(submission.modelId !== undefined ? { modelId: submission.modelId } : {}),
       })
       if (accepted.sessionId !== ref.sessionId) throw new Error('session mismatch')
@@ -249,7 +307,10 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       notice = env.messageFor(error)
       if (isApiError(error) && error.status < 500 && error.code !== 'project-unavailable') {
         const parent = submission.parentNodeId ?? null
-        if (!drafts.get(parent)) drafts.set(parent, submission.input)
+        if (!draftAt(parent).text && !draftAt(parent).images.length) {
+          const restored = draftFromInput(submission.input, submission.images)
+          setDraftAt(parent, error.code === 'asset-expired' ? { ...restored, images: restored.images.map(image => ({ ...image, status: 'expired', error: '图片已失效，请移除后重新添加。' })) } : restored)
+        }
         if (pending()?.idempotencyKey === submission.idempotencyKey) save(undefined)
       }
     } finally { finishWrite() }
@@ -261,16 +322,19 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try { existing = await read<RunView>(`${path}/runs/by-key/${encodeURIComponent(submission.idempotencyKey)}`, version) }
     catch (error) { if (!isApiError(error) || error.status !== 404) throw error }
     if (existing) { adopt(existing); save(undefined) }
-    else if (session?.historyMode === 'dialogue-v1' || submission.schemaVersion !== 1 || submission.parentNodeId === undefined || (env.models && submission.modelId === undefined)) {
+    else if (session?.historyMode === 'dialogue-v1' || ![1, 2].includes(submission.schemaVersion ?? 0) || submission.invalidImages || submission.parentNodeId === undefined || (env.models && submission.modelId === undefined)) {
       notice = session?.historyMode === 'dialogue-v1' ? '旧版会话仅供查看。待提交消息已恢复为草稿；请新建原生会话。' : '旧版待提交消息尚未被接受，已保留输入。请选定对话位置与模型后确认发送。'
-      if (!drafts.get(position.viewNodeId)) drafts.set(position.viewNodeId, submission.input)
+      if (!draftAt(position.viewNodeId).text && !draftAt(position.viewNodeId).images.length) {
+        const restored = draftFromInput(submission.input, submission.images)
+        setDraftAt(position.viewNodeId, submission.invalidImages ? { ...restored, images: [...restored.images, { id: 'invalid-pending-image', name: '待恢复图片', status: 'failed', byteLength: 0, error: '图片信息不兼容，请移除后重新添加。' }] } : restored)
+      }
       save(undefined)
     } else await submitStored(submission)
   }
   const controller: SessionController = {
     snapshot: () => ({ session, runs, run: runs.find(item => item.id === position.focusedRunId), position,
       path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice,
-      draft: drafts.get(position.viewNodeId) ?? '', events, expanded, views }),
+      draft: draftAt(position.viewNodeId).text, images: draftAt(position.viewNodeId).images, events, expanded, views }),
     attach(value) { listener = value; session = undefined; loading = true; invalidate(); void controller.refresh() },
     detach() {
       listener = undefined
@@ -327,13 +391,18 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       emit()
     },
     setDraft(value) {
-      drafts.set(position.viewNodeId, value)
+      setDraftAt(position.viewNodeId, { ...draftAt(position.viewNodeId), text: value })
       if (position.follow) { position = { ...position, follow: undefined }; remember() }
     },
-    async navigate(id, draft) {
+    addImages(files) { if (!busy && !pending() && session?.historyMode !== 'dialogue-v1') uploads.add(position.viewNodeId, files) },
+    removeImage(id) { if (!busy && !pending()) uploads.remove(position.viewNodeId, id) },
+    retryImage(id) { if (!busy && !pending()) uploads.retry(position.viewNodeId, id) },
+    imagesChanged: emit,
+    dispose() { controller.detach(); uploads.dispose() },
+    async navigate(id, draft, images) {
       locationVersion++
       position = { viewNodeId: id }
-      if (draft !== undefined) drafts.set(id, draft)
+      if (draft !== undefined) setDraftAt(id, draftFromInput(draft, images))
       pathNodes = []; children = []; childCursor = undefined
       loading = true
       notice = ''
@@ -406,11 +475,19 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
           notice = '请先选择一个可用模型；没有可用模型时，请打开设置配置提供方和模型。'; emit(); return
         }
-        const input = encodeInput((drafts.get(position.viewNodeId) ?? '').trim())
+        const draft = draftAt(position.viewNodeId)
+        if (draft.images.some(image => image.status !== 'ready' || !image.image)) { notice = '请等待图片上传完成，或移除无法使用的图片。'; emit(); return }
+        const images = draft.images.map(image => image.image!)
+        const input = encodeInput(draft.text.trim(), session.modelId, images)
         if (input === undefined) return
-        submission = { schemaVersion: 1, sessionId: ref.sessionId, input, idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
+        submission = { schemaVersion: 2, sessionId: ref.sessionId, input, images, idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
         if (!save(submission)) return
-        drafts.set(position.viewNodeId, '')
+        setDraftAt(position.viewNodeId, draftFromInput(''))
+      }
+      else {
+        // Resolve a possibly accepted request before current capabilities or image TTL are consulted.
+        try { const accepted = await env.api<RunView>(`${path}/runs/by-key/${encodeURIComponent(submission.idempotencyKey)}`); adopt(accepted); save(undefined); emit(); return }
+        catch (error) { if (!isApiError(error) || error.status !== 404) { notice = env.messageFor(error); emit(); return } }
       }
       await submitStored(submission, locationVersion)
     },
@@ -420,9 +497,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
         notice = '请先选择一个可用模型。'; emit(); return
       }
-      const input = encodeInput(node.input)
+      const input = encodeInput(node.input, session?.modelId, node.images)
       if (input === undefined) return
-      const submission: PendingSubmission = { schemaVersion: 1, sessionId: ref.sessionId, input, parentNodeId: node.parentId, idempotencyKey: env.newId(), ...(session?.modelId ? { modelId: session.modelId } : {}) }
+      const submission: PendingSubmission = { schemaVersion: 2, sessionId: ref.sessionId, input, images: node.images ?? [], parentNodeId: node.parentId, idempotencyKey: env.newId(), ...(session?.modelId ? { modelId: session.modelId } : {}) }
       if (!save(submission)) return
       await controller.navigate(node.parentId)
       await submitStored(submission, locationVersion)

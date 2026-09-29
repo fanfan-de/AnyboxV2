@@ -1,6 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { OwnedCall } from '../contracts.js'
+import type { ImageRef } from '../image/port.js'
+import { imageLimits } from '../image/limits.js'
 import { fileURLToPath } from 'node:url'
 import type { Run } from '../run/domain.js'
 import type { Session } from '../session/domain.js'
@@ -36,6 +39,9 @@ export interface WebCommands {
   getRunByKey(sessionId: string, key: string): Promise<Run | undefined>
   waitRun(id: string, signal?: AbortSignal): Promise<Run | undefined>
   startRun(input: RunInput): Promise<Run>
+  importImage(sessionId: string, bytes: AsyncIterable<Uint8Array>, signal?: AbortSignal): OwnedCall<ImageRef>
+  getImage(sessionId: string, assetId: string, signal?: AbortSignal): OwnedCall<{ readonly image: ImageRef; readonly bytes: Uint8Array }>
+  renewImages(sessionId: string, assetIds: readonly string[]): Promise<{ readonly valid: readonly ImageRef[]; readonly invalid: readonly string[] }>
   getRun(id: string): Promise<Run | undefined>
   getRunView(id: string): Promise<ProtocolViewSnapshot | undefined>
   listRuns(sessionId: string, query?: RunQuery): Promise<readonly Run[]>
@@ -95,6 +101,11 @@ function knownFailure(error: unknown): HttpFailure {
     return failure(503, 'picker-unavailable')
   }
   if (error instanceof Error) {
+    if (error.name === 'ImageAssetError' && 'code' in error) {
+      const code = String(error.code)
+      return failure(code === 'asset-too-large' ? 413 : code === 'asset-missing' ? 404 : code === 'asset-expired' ? 409
+        : ['asset-invalid', 'asset-unsupported', 'asset-corrupt'].includes(code) ? 400 : 503, code)
+    }
     if (/^unknown (agent|session|project|prompt) /.test(error.message)) return failure(404, 'not-found')
     if (error.message === 'prompt draft revision conflict') return failure(409, 'prompt-conflict')
     if (error.message === 'prompt draft has no unpublished changes') return failure(409, 'prompt-publication-conflict')
@@ -129,7 +140,7 @@ function sessionView(session: Session): object {
 
 function runView(run: Run): object {
   return {
-    id: run.id, sessionId: run.sessionId, input: run.input, status: run.status,
+    id: run.id, sessionId: run.sessionId, input: run.input, images: run.images ?? [], status: run.status,
     createdAt: run.createdAt, updatedAt: run.updatedAt, revision: run.revision, history: run.history,
     modelId: run.modelId, requestedModelId: run.requestedModelId, modelSnapshot: run.modelSnapshot,
     ...(run.protocolBinding ? { protocolBinding: run.protocolBinding } : {}),
@@ -242,6 +253,9 @@ const assets = new Map([
   ['/run-change-client.js', { file: fileURLToPath(new URL('./run-change-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/tool-trace.js', { file: fileURLToPath(new URL('./tool-trace.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/session-view.js', { file: fileURLToPath(new URL('./session-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/image-client.js', { file: fileURLToPath(new URL('./image-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/image/limits.js', { file: fileURLToPath(new URL('../image/limits.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/image/port.js', { file: fileURLToPath(new URL('../image/port.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
 ])
 
 /** Hosts model management DTOs and Harness commands; secret reads remain private to Models. */
@@ -250,6 +264,39 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
   let closing = false
   const pickerRequests = new Set<AbortController>()
   const modelRequests = new Map<AbortController, Promise<unknown>>()
+  const imageRequests = new Map<AbortController, Promise<unknown>>()
+  const imageRequest = async <T>(request: IncomingMessage, response: ServerResponse, work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    if (closing) throw failure(503, 'service-unavailable')
+    const abort = new AbortController()
+    const disconnected = () => { if (!response.writableEnded) abort.abort() }
+    const stopReading = () => { if (!request.complete) request.destroy() }
+    response.once('close', disconnected)
+    abort.signal.addEventListener('abort', stopReading, { once: true })
+    if (response.destroyed) abort.abort()
+    const task = Promise.resolve().then(() => work(abort.signal))
+    imageRequests.set(abort, task)
+    try { return await task }
+    finally { imageRequests.delete(abort); response.off('close', disconnected); abort.signal.removeEventListener('abort', stopReading) }
+  }
+  const joinImageCall = async <T>(call: OwnedCall<T>, signal: AbortSignal): Promise<T> => {
+    const cancel = () => call.cancel('Web image request cancelled')
+    signal.addEventListener('abort', cancel, { once: true })
+    if (signal.aborted) cancel()
+    // A replacement service may fail during exit without ever settling result.
+    // Observe both promises now; a done failure must not leave HTTP shutdown waiting forever.
+    const exited = call.done.then(() => undefined, () => ({ error: failure(503, 'asset-cleanup-failed') }))
+    const exitFailure = exited.then(exit => {
+      if (exit) { call.cancel('image resource cleanup failed'); throw exit.error }
+      return new Promise<never>(() => {})
+    })
+    try { return await Promise.race([call.result, exitFailure]) }
+    catch (error) { call.cancel('image request failed'); throw error }
+    finally {
+      const failure = await exited
+      signal.removeEventListener('abort', cancel)
+      if (failure) throw failure.error
+    }
+  }
   const modelRequest = async <T>(response: ServerResponse, work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     if (closing) throw failure(503, 'service-unavailable')
     const controller = new AbortController()
@@ -552,13 +599,52 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
         json(response, 200, sessionView(session))
         return
       }
+      const imagesMatch = /^\/api\/v1\/sessions\/([^/]+)\/images(?:\/(renew)|\/([^/]+)\/content)?$/.exec(path)
+      if (imagesMatch) {
+        const sessionId = decodeURIComponent(imagesMatch[1])
+        if (method === 'POST' && imagesMatch[2] === 'renew') {
+          const body = await requestObject(request, ['assetIds'])
+          if (!Array.isArray(body.assetIds) || body.assetIds.length > imageLimits.maxImages || body.assetIds.some(id => typeof id !== 'string' || !id || id.length > 1024)) throw failure(400, 'invalid-input')
+          const renewal = await imageRequest(request, response, () => commands.renewImages(sessionId, body.assetIds as string[]))
+          json(response, 200, renewal); return
+        }
+        if (method === 'POST' && !imagesMatch[2] && !imagesMatch[3]) {
+          const contentType = request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase()
+          if (contentType !== 'application/octet-stream' && !imageLimits.acceptedMediaTypes.includes(contentType as ImageRef['mediaType'])) throw failure(415, 'image-required')
+          if (Number(request.headers['content-length']) > imageLimits.maxBytes) throw failure(413, 'asset-too-large')
+          const image = await imageRequest(request, response, async signal => {
+            async function* bytes() {
+              let length = 0
+              for await (const chunk of request) {
+                if (signal.aborted) throw failure(503, 'asset-cancelled')
+                const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+                length += data.byteLength
+                if (length > imageLimits.maxBytes) throw failure(413, 'asset-too-large')
+                yield data
+              }
+            }
+            return joinImageCall(commands.importImage(sessionId, bytes(), signal), signal)
+          })
+          json(response, 201, image); return
+        }
+        if (method === 'GET' && imagesMatch[3]) {
+          if ((request.headers.origin !== undefined && request.headers.origin !== origin) ||
+              (request.headers['sec-fetch-site'] !== undefined && !['same-origin', 'none'].includes(String(request.headers['sec-fetch-site'])))) throw failure(403, 'forbidden-origin')
+          const asset = await imageRequest(request, response, signal => joinImageCall(commands.getImage(sessionId, decodeURIComponent(imagesMatch[3]), signal), signal))
+          response.writeHead(200, { 'Content-Type': asset.image.mediaType, 'Content-Length': asset.bytes.byteLength, 'Cross-Origin-Resource-Policy': 'same-origin' })
+          response.end(asset.bytes); return
+        }
+      }
       const createRunMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs$/.exec(path)
       if (method === 'POST' && createRunMatch) {
-        const body = await requestObject(request, ['parentNodeId', 'input', 'idempotencyKey', 'modelId'])
+        const body = await requestObject(request, ['parentNodeId', 'input', 'images', 'idempotencyKey', 'modelId'])
+        if (body.images !== undefined && (!Array.isArray(body.images) || body.images.length > imageLimits.maxImages || body.images.some(image =>
+          !image || typeof image !== 'object' || Array.isArray(image) || Object.keys(image).some(key => key !== 'assetId') || typeof image.assetId !== 'string' || !image.assetId || image.assetId.length > 1024))) throw failure(400, 'invalid-input')
         const run = await commands.startRun({
           sessionId: decodeURIComponent(createRunMatch[1]),
           parentNodeId: body.parentNodeId as string | null,
           input: body.input as string,
+          ...(body.images === undefined ? {} : { images: body.images as { assetId: string }[] }),
           idempotencyKey: body.idempotencyKey as string,
           ...(body.modelId === undefined ? {} : { modelId: body.modelId as string }),
         })
@@ -658,12 +744,14 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
       closing = true
       for (const controller of pickerRequests) controller.abort()
       for (const controller of modelRequests.keys()) controller.abort()
+      for (const controller of imageRequests.keys()) controller.abort()
       for (const finish of waitRequests) finish()
       const streams = [...changeStreams]
       for (const stream of streams) stream.close()
       shutdown = Promise.all([
         ...streams.map(stream => stream.done),
         ...[...modelRequests.values()].map(task => task.then(() => {}, () => {})),
+        ...[...imageRequests.values()].map(task => task.then(() => {}, () => {})),
         new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())),
       ]).then(() => {})
       return shutdown

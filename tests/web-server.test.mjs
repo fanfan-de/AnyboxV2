@@ -9,6 +9,7 @@ import { Context } from '@nya/core'
 import { createHarness } from '../dist/harness.js'
 import { modelsError } from '@anybox/models'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
+import { createImageAssetsComponent } from '../dist/image/component.js'
 import { createWebFrontendComponent, webFrontendServiceKey } from '../dist/web/component.js'
 import { startWebServer } from '../dist/web/server.js'
 import { createDirectoryPickerComponent } from '../dist/web/directory-picker.js'
@@ -18,6 +19,7 @@ import { installManagedModels } from './helpers/managed-models.mjs'
 import { installWebModels } from '../dist/web/models-startup.js'
 import { parseWebStartupConfig } from '../dist/web/startup-config.js'
 import { runChangedEvent } from '../dist/run/notifications.js'
+import sharp from 'sharp'
 
 async function fixture(directory, pickerOptions = {}, startup) {
   const root = new Context()
@@ -36,6 +38,7 @@ async function fixture(directory, pickerOptions = {}, startup) {
       apiFiber = installed.apiFiber; keyFiber = installed.vaultFiber; reinstall = installed.installRuntime
     }
     await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
+    await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
     const harness = await createHarness(root, {
       agents: [{ id: 'assistant', modelId: 'default', instructions: 'Private instructions.' }],
     })
@@ -481,7 +484,7 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     assert.equal(first.response.status, 200)
     assert.equal(replay.data.id, first.data.id)
     assert.equal(f.llm.calls.length, 1)
-    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'history', 'id', 'input', 'modelId', 'modelSnapshot', 'protocolBinding', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
+    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'history', 'id', 'images', 'input', 'modelId', 'modelSnapshot', 'protocolBinding', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
     assert.doesNotMatch(JSON.stringify(first.data), /Private instructions|llmSnapshot|promptVersionIds|idempotencyKey/)
     const inFlight = await request(f.web, 'GET', `/runs/${first.data.id}`)
     assert.equal(inFlight.data.status, 'running')
@@ -1093,4 +1096,76 @@ test('SSE protocol-view is provisional and the Run result remains authoritative'
     for (const call of f.llm.calls) { call.result.resolve('Cleanup'); call.done.resolve() }
     await f.close(); rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test('Web imports immutable images, serves scoped content and validates small Run image references', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-images-')), f = await fixture(directory)
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const other = await f.harness.createSession(f.project.id, 'assistant')
+    const bytes = await sharp({ create: { width: 2, height: 3, channels: 3, background: '#aabbcc' } }).png().toBuffer()
+    const url = `${f.web.url}/api/v1/sessions/${session.id}/images`
+    const imported = await fetch(url, { method: 'POST', headers: { Origin: f.web.url, 'Content-Type': 'application/octet-stream' }, body: bytes })
+    assert.equal(imported.status, 201)
+    const image = await imported.json()
+    assert.deepEqual([image.width, image.height, image.mediaType, image.byteLength], [2, 3, 'image/png', bytes.length])
+    assert.equal(image.sha256.length, 64)
+    assert.ok(image.expiresAt)
+    assert.doesNotMatch(JSON.stringify(image), /directory|path|base64/)
+    const content = await fetch(`${url}/${image.assetId}/content`)
+    assert.equal(content.status, 200)
+    assert.equal(content.headers.get('content-type'), 'image/png')
+    assert.equal(content.headers.get('x-content-type-options'), 'nosniff')
+    assert.deepEqual(Buffer.from(await content.arrayBuffer()), bytes)
+    const foreign = await fetch(`${f.web.url}/api/v1/sessions/${other.id}/images/${image.assetId}/content`)
+    assert.equal(foreign.status, 404)
+    assert.equal((await fetch(`${url}/${image.assetId}/content`, { headers: { Origin: 'https://foreign.invalid' } })).status, 403)
+    assert.equal((await fetch(url, { method: 'POST', headers: { Origin: 'https://foreign.invalid', 'Content-Type': 'image/png' }, body: bytes })).status, 403)
+    const renewal = await request(f.web, 'POST', `/sessions/${session.id}/images/renew`, { assetIds: [image.assetId, 'missing'] })
+    assert.equal(renewal.response.status, 200)
+    assert.deepEqual(renewal.data.invalid, ['missing'])
+    assert.equal(renewal.data.valid[0].assetId, image.assetId)
+    for (const images of [[{ assetId: image.assetId, url: 'https://outside.invalid/image' }], [{ url: 'data:image/png;base64,x' }], new Array(9).fill({ assetId: image.assetId })]) {
+      const result = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { input: '', parentNodeId: null, idempotencyKey: 'invalid-images', images })
+      assert.equal(result.response.status, 400)
+    }
+    const invalid = await fetch(url, { method: 'POST', headers: { Origin: f.web.url, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('not an image') })
+    assert.equal(invalid.status, 400)
+    for (const path of ['/image-client.js', '/image/limits.js', '/image/port.js']) assert.equal((await fetch(`${f.web.url}${path}`)).status, 200)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('Web waits for image call exit after result and on request cancellation before closing', async () => {
+  const result = deferred(), done = deferred(), started = deferred(), cancelled = deferred()
+  const image = { assetId: 'asset', sha256: 'a'.repeat(64), mediaType: 'image/png', byteLength: 1, width: 1, height: 1 }
+  const server = await startWebServer({ importImage(_session, bytes, signal) {
+    void (async () => { for await (const _chunk of bytes) {} started.resolve() })()
+    return { result: result.promise, done: done.promise, cancel: reason => cancelled.resolve(reason) }
+  } })
+  let received = false, closed = false
+  const abort = new AbortController()
+  const upload = fetch(`${server.url}/api/v1/sessions/s/images`, { method: 'POST', headers: { Origin: server.url, 'Content-Type': 'application/octet-stream' }, body: 'x', signal: abort.signal }).then(value => { received = true; return value }, () => undefined)
+  try {
+    await started.promise; result.resolve(image)
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(received, false, 'HTTP success must wait for actual resource exit')
+    abort.abort(); await cancelled.promise
+    const close = server.close().then(() => { closed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(closed, false)
+    done.resolve(); await close; await upload
+  } finally { done.resolve(); result.resolve(image); await server.close(); await upload }
+})
+
+test('a failed image done rejects the HTTP request even when replacement result never settles', async () => {
+  let cancellations = 0
+  const server = await startWebServer({ getImage() {
+    return { result: new Promise(() => {}), done: Promise.reject(new Error('untrusted cleanup details')), cancel() { cancellations++ } }
+  } })
+  try {
+    const response = await fetch(`${server.url}/api/v1/sessions/s/images/a/content`)
+    assert.equal(response.status, 503)
+    assert.deepEqual(await response.json(), { error: { code: 'asset-cleanup-failed' } })
+    assert.ok(cancellations > 0)
+  } finally { await server.close() }
 })

@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './native-types.js';
+export { nativeImageResourceUri, parseNativeImageResourceUri } from './resources.js';
 export { migrateLegacyParameters, builtinLegacyParameterConverters } from './legacy-parameters.js';
 export { modelsError, isModelsError } from './errors.js';
 export type { ModelsError, ModelsErrorCode } from './errors.js';

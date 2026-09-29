@@ -10,7 +10,8 @@ import { bashToolDefinition } from '../tool/bash-component.js'
 import { applyPatchToolDefinition } from '../tool/apply-patch-component.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
-import { validateRunInput } from './domain.js'
+import { validateRunInput, sameRunInput } from './domain.js'
+import { validateImageBatch } from '../image/limits.js'
 import { treeError } from '../session/domain.js'
 import type { Run, RunInput } from './domain.js'
 import { runRuntimeServiceKey } from './runtime-component.js'
@@ -73,7 +74,7 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
           const input = validateRunInput(raw), key = JSON.stringify([input.sessionId, input.idempotencyKey])
           const pending = requests.get(key)
           if (pending) {
-            if (pending.input.input !== input.input || pending.input.parentNodeId !== input.parentNodeId || pending.input.modelId !== input.modelId) return Promise.reject(treeError('idempotency-conflict'))
+            if (!sameRunInput(pending.input, input)) return Promise.reject(treeError('idempotency-conflict'))
             return pending.result
           }
           const controller = new AbortController()
@@ -101,8 +102,11 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
               tools: Object.freeze(models.get(modelId)?.effectiveCapabilities?.tools === true ? availableTools : []),
               toolContractVersion: 'known-tools-v1' })
             const template = prompts.resolveTaskTemplate(session.agentId) ?? null
-            const nativeInput: NativeRunInput = Object.freeze({ schemaVersion: 1, raw: input.input,
-              text: template ? template.content.replace('{{input}}', () => input.input) : input.input, template })
+            const images = (input.images?.length ? await records.describeImages(session.id, input.images.map(image => image.assetId)) : [])
+              .map(({ expiresAt: _expiresAt, ...image }) => Object.freeze(image))
+            validateImageBatch(images)
+            const nativeInput: NativeRunInput = Object.freeze({ schemaVersion: 2, raw: input.input,
+              text: template ? template.content.replace('{{input}}', () => input.input) : input.input, images: Object.freeze(images), template })
             const id = inputs.newId()
             let program: PreparedRunProgram
             try { program = await protocols.prepare({ runId: id, sessionId: session.id, modelId, signal: controller.signal, initialization, input: nativeInput, ...(history ? { history } : {}) }) }

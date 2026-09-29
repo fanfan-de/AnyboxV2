@@ -4,7 +4,7 @@
 
 ## 定位与源码
 
-该组件协调模型定义、账户配置、凭据变更、协议注册代和原生 execution。入口是 [component.ts](../../../packages/models/src/component.ts)，execution 状态机在 [execution.ts](../../../packages/models/src/execution.ts)，公共契约见 [types.ts](../../../packages/models/src/types.ts) 与 [native-types.ts](../../../packages/models/src/native-types.ts)。
+该组件协调模型定义、账户配置、凭据变更、协议注册代和原生 execution。入口是 [component.ts](../../../packages/models/src/component.ts)，execution 状态机在 [execution.ts](../../../packages/models/src/execution.ts)，公共契约见 [types.ts](../../../packages/models/src/types.ts) 与 [native-types.ts](../../../packages/models/src/native-types.ts)。内部 [resources.ts](../../../packages/models/src/resources.ts) 提供资源 URI、引用校验/合并和受信读取的摘要校验，不注册独立组件。
 
 工厂 `createModelsComponent()` 无配置参数；组件名 `models`，注入 `models.store` 与 `models.vault`，一次提供四个服务。它不依赖目录组件、Session、Run、工具或浏览器。
 
@@ -51,12 +51,12 @@ Settings 的完整操作分组：
 ## 原生 execution 流程
 
 1. `models.protocols.acquire(id)` 或注册返回值的 `acquire()` 固定协议版本、代 ID 与撤销信号。外来、已释放、已撤销租约不可用于新准入。
-2. `openNative({ modelId, lease, restore?, requirements?, signal? })` 在连接队列内检查启停、协议、原生参数及必需的工具/流式/推理能力，构造 schema 3 快照，校验恢复身份，然后读取凭据。
-3. `prepareExchange(intent)` 只准备 immutable 增量意图、请求记录 ID、前驱记录 ID 和私有请求体，不发网络请求。同一 execution 只允许一个待启动或在途交换。
+2. `openNative({ modelId, lease, restore?, requirements?, resources?, signal? })` 在连接队列内检查启停、协议、原生参数及必需的工具/流式/推理/图片能力，构造 schema 3 快照，校验恢复身份，然后读取凭据。
+3. `prepareExchange(intent, { resourceRefs }?)` 校验并捕获本轮精确资源引用集合，只准备 immutable 增量意图、请求记录 ID、前驱记录 ID 和私有请求体，不发网络请求。同一 execution 只允许一个待启动或在途交换。
 4. 单次 `start(onEvent?)` 返回 `{ result, done, cancel }`。Models 同时观察驱动结果和退出，只有资源实际退出、候选结果校验和上下文提交完成后，公共 `result` 才成功。
 5. `close()` 幂等停止准入、取消在途操作并等待实际退出，返回仅本 execution 新增的 `records`、可选 `restoreState` 与 `cleanup`，随后释放私有凭据和上下文引用。
 
-每次请求记录只保存本轮增量 intent，响应保存原生结果。宿主按所选成功父路径提供展开的恢复记录；Models 验证协议、格式、配置 ID、连接、模型定义版本、远端 ID、epoch、参数和有效能力，再由协议 codec 重建内存上下文。名称与对象键顺序不影响恢复，跨账户、跨协议及任意参数转换不受支持。
+每次请求记录只保存本轮增量 intent，v2 的 request 顶层附本轮 resourceRefs，响应保存原生结果。NativeImageResourceRef 只含 id、sha256、byteLength、mimeType；NativeResourceResolver 是每个 execution 的受信端口，不持久化 reader、图片 bytes 或路径。Models 私有重建父链资源目录，驱动只可读取当前请求使用的引用。宿主按所选成功父路径提供展开的恢复记录；Models 验证协议、格式、配置 ID、连接、模型定义版本、远端 ID、epoch、参数和有效能力，再由协议 codec 重建内存上下文。名称与对象键顺序不影响恢复，跨账户、跨协议及任意参数转换不受支持。Chat/DeepSeek writer 为 2.1.0/v2，reader 明确支持 2.0.0/v1 文本及 v1/v2 混合链；execution.recordFormatVersion 向宿主暴露当前 writer。仅旧文本历史允许 imageInput false→true，其他能力仍严格匹配；旧 JSON 不重写。
 
 ## 生命周期、取消与失败
 
@@ -64,16 +64,18 @@ Settings 的完整操作分组：
 
 `unregister()` 同步撤销该代准入和租约，关闭该代 execution，并等待该代的凭据初始化、发现和检查退出。旧代不会删除替代代或取消其他协议。该保障只覆盖 Models 拥有的资源，宿主仍需等待 Run 工具与结算。
 
-取消不是退出，超时后仍等待 transport 清理。驱动 `done` 失败时记录 `cleanup-failure` 并终止损坏的待决结果；迟到输出不能改写冻结退出报告。任何交换失败都使该 execution 的完整记录链不可恢复，即使随后重试成功。失败诊断保留可用原生终态与已收内容，但清除认证字段和捕获凭据值；诊断不能生成成功节点。事件观察者抛错或异步拒绝只使该观察者脱离，不改变执行结果。
+取消不是退出，超时后仍等待资源 reader 与 transport 清理。Chat 的资源读取、摘要/长度验证和 wire 物化都在 start 之后，done 包含两类资源退出。图片缺失/损坏分别报告固定 resource-unavailable/invalid-resource，32 MiB 序列化请求上限报告 request-too-large；不能忽略图片继续发网。驱动 `done` 失败时记录 `cleanup-failure` 并终止损坏的待决结果；迟到输出不能改写冻结退出报告。任何交换失败都使该 execution 的完整记录链不可恢复，即使随后重试成功。失败诊断保留可用原生终态与已收内容，但清除认证字段和捕获凭据值；诊断不能生成成功节点。事件观察者抛错或异步拒绝只使该观察者脱离，不改变执行结果。
 
 ## 限制与扩展
 
-有效图片输入始终为 `false`。能力必须显式声明，缺失推理模式不猜测。配置和 Key 修改只影响新 execution。公共错误使用固定 `ModelsError.code`；非秘密查询不因系统凭据不可用而被全部关闭。原生记录和原生事件均属于受信边界，不能原样推送浏览器。
+有效图片能力是配置声明与已实现驱动的交集；当前仅 Chat/DeepSeek 开启，Responses、Anthropic、Gemini 仍为 false。能力必须显式声明，缺失推理模式不猜测。配置和 Key 修改只影响新 execution。公共错误使用固定 `ModelsError.code`；非秘密查询不因系统凭据不可用而被全部关闭。原生记录和原生事件均属于受信边界，不能原样推送浏览器。
 
 可替换 [Store](store.md)、[Vault](vault.md) 或注册其他 `NativeProtocol`；协调层保持与协议停止语义无关。`createNativeEventQueue` 是可选有界订阅帮助函数，不是新组件，也不是恢复存储。
 
 ## 测试与关联文档
 
 [runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 验证独立执行、实际退出、恢复身份和 epoch；[lifecycle-review.test.mjs](../../../packages/models/tests/lifecycle-review.test.mjs) 验证注销、清理失败与迟到结果；[unified-models.test.mjs](../../../packages/models/tests/unified-models.test.mjs) 和 [source-definitions.test.mjs](../../../packages/models/tests/source-definitions.test.mjs) 验证补齐与来源并发；[connection-deletion.test.mjs](../../../packages/models/tests/connection-deletion.test.mjs) 验证删除及恢复日志；[boundary.test.mjs](../../../packages/models/tests/boundary.test.mjs) 验证输入边界。
+
+[native-images.test.mjs](../../../packages/models/tests/native-images.test.mjs) 验证资源引用、单 execution reader、v1 加法恢复、取消与实际清理和请求体积边界。
 
 参见 [原生框架设计](../../native-protocol-agent-framework-design.md) 与 [Models 包使用说明](../../../packages/models/README.md)。

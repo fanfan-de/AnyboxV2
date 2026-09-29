@@ -31,7 +31,7 @@
 | `POST /api/v1/sessions/:id/model` | 用 `{modelId}` 保存会话选择；只影响后续 Run |
 | `GET /api/v1/sessions/:id` | 读取 Session 元数据、`projectId`、`modelId`、`historyMode` 与 `protocolId`，不返回 turns |
 | `GET /api/v1/sessions/:id/runs` | 列出会话的 Run，支持 `status=active` 和 `parentNodeId` 过滤（`root` 表示虚拟根） |
-| `POST /api/v1/sessions/:id/runs` | 用 `{parentNodeId: string|null,input,idempotencyKey,modelId?}` 接受 Run；父节点必填，显式模型参与幂等比较 |
+| `POST /api/v1/sessions/:id/runs` | 用 `{parentNodeId: string|null,input,images?: {assetId}[],idempotencyKey,modelId?}` 接受 Run；父节点必填，显式模型与有序图片引用参与幂等比较 |
 | `GET /api/v1/runs/:id` | 读取公开 Run 的 `history`、`revision`、状态、模型 ID/快照与 `resultNodeId`/结果 |
 | `GET /api/v1/runs/:id/view` | 读取安全、可替换的完整协议视图；运行中取 Runtime 快照，终态从原生记录重建；旧 Run 返回 null |
 | `GET /api/v1/runs/:id/events` | 支持 `afterSeq` 增量读取 Run 的过程事件；按工具名返回 `tool-*` 事件；Bash 的 stdout、stderr 和 Apply Patch 补丁预览分别最多 2048 UTF-8 字节；补丁结果保留变更、未完成项和诊断，不返回内部快照 |
@@ -94,7 +94,7 @@ Web 组件用 `ctx.on()` 订阅，监听器只向 SSE 发送队列入队。监�
 
 每次 `ready`、恢复可见或校准读取后，控制器为活动 Run、当前路径及展开对象查询 `/view`。运行中查询优先读 Runtime；终态查询从 Session 原生记录投影，并使用 `committed` 状态。reducer 按 Session/Run/协议隔离，忽略同状态下重复或倒退的 `viewRevision`，允许终态覆盖临时态，拒绝终态之后的迟到临时帧。完整替换使漏帧、乱序和断线重连不会拼接错误文本；终态仍以持久 Run 与成功节点为准。控制器缓存按 Run 隔离并回收非可见历史，最多保留 64 个非当前视图缓存项。
 
-共享线程通过 `protocols/modules.ts` 的静态 `getProtocolWebModule` 选择协议模块，不解释原生语义。Responses、标准 Chat Completions、DeepSeek、Anthropic 与 Gemini 各自绑定 `encodeInput/decode/reduce/mount`，共用文本编码器和安全 Turn 基元；模块解码与挂载拒绝其他协议或未知版本，未知协议没有通用回退，输入也不能提交。文本编码保留原文，模板只在服务端处理一次。Turn 按 Run 固定挂载，内部按 exchange/block 身份更新，保留未变化的 DOM；显示安全文本和块、工具状态、Responses 引用与搜索，以及 Anthropic 服务端工具暂停状态。输入仍是文本 composer，没有新增交互控件表或让浏览器执行工具。运行退出和清理全部完成后才结算，最终历史展示由持久记录重建。
+共享线程通过 `protocols/modules.ts` 的静态 `getProtocolWebModule` 选择协议模块，不解释原生语义。Responses、标准 Chat Completions、DeepSeek、Anthropic 与 Gemini 各自绑定 `encodeInput/decode/reduce/mount`，共用文本编码器和安全 Turn 基元；模块解码与挂载拒绝其他协议或未知版本，未知协议没有通用回退，输入也不能提交。文本编码保留原文，模板只在服务端处理一次。Turn 按 Run 固定挂载，内部按 exchange/block 身份更新，保留未变化的 DOM；显示安全文本和块、工具状态、Responses 引用与搜索，以及 Anthropic 服务端工具暂停状态。composer 现在支持一段文本加有序图片：文件选择、粘贴和拖入共用保序上传队列；仅 Chat Completions/DeepSeek 且配置具备有效图片能力时可提交图片。图片使用 Session 归属的不可变引用，浏览器不生成原生 image_url，也不执行工具。运行退出和清理全部完成后才结算，最终历史展示由持久记录重建。
 
 Prompt 操作者由 Web 宿主固定为持久身份 `local-web-user`，浏览器不能提交 `actorId` 或所有者字段。组件仍检查文档所有权和 Agent 管理权限；其他宿主身份创建的文档不会自动归属本机用户。修订冲突返回 `409 prompt-conflict`，发布冲突返回 `409 prompt-publication-conflict`，权限拒绝返回 `403 prompt-forbidden`。创建和编辑请求允许最多 1 MiB JSON，随后由 Prompt 领域校验 100000 字符的内容限制；其他请求继续采用 64 KiB 上限。
 
@@ -199,3 +199,11 @@ Web 相关 115 项测试通过，覆盖原生参数与启动转换、Session 选
 实际 Chrome 验收运行 `CATALOG_BROWSER_SEED=1 node tests/helpers/catalog-browser-host.mjs`，使用真实 Models/Harness/Web、临时 SQLite、内存凭据与模拟原生 HTTP：发送 Anthropic 文本并刷新恢复答案及选模；运行本地 Bash 并查看完成卡片和 stdout；编辑已完成节点生成同父兄弟分支，确认仅渲染选中路径；提交含 `<script>` 的普通消息后确认 DOM 没有注入脚本，原文按文本显示。模型表单保留 `max_tokens:4096` 与原生嵌套字段；搜索能力未知时开关禁用，显式改为支持后启用。
 
 另以 `CATALOG_BROWSER_LEGACY=1` 在测试库插入旧文本历史，验证原始输入和答案仍可读、分支导航可用，模型选择、发送、编辑和重新生成禁用，并显示“只读历史”。浏览器验收发现并修复首次绑定后模型选择缓存未刷新，以及旧会话输入禁用状态被覆盖的问题。测试标签页和两个临时宿主均已关闭并等待退出；没有使用真实凭据、外部模型或现有工作区数据库。
+
+### 图片输入的客户端状态
+
+`image-client.ts` 持有可测试的草稿存储、两路上传队列和工作区续期器；这些是 Web Frontend 的内部函数，不注册额外组件。图片字节由 Session/图片组件导入和保管。`session-client.ts` 仍负责选定父节点、幂等提交和导航，草稿包含原文及有序图片。pending v2 把引用持久保存后才发送，丢失响应先按幂等键校准；v1 文本兼容，未知图片记录只恢复为显式待确认草稿。图片-only、编辑重发和重新生成均复用同一引用，不从预览反推输入。
+
+图片上传中或失败会阻止发送；移除取消该上传，排队并发槽位在请求实际退出后才释放。刷新页面不保留 File/base64，未完成上传显示为失败占位。预览使用同源图片 URL，不放宽 CSP。草稿每 5 分钟续期，覆盖所有 Session/父节点和已关闭面板的 pending；页面重新可见及提交前再校准。未接受图片 24 小时后过期不能复活，已接受 Run 的保留不依赖浏览器。协议/能力不支持时保留草稿并提示切换模型或移除图片。限制与接口见 [Web Frontend](modules/web/web-frontend.md)。
+
+2026-09-29 使用 `ANYBOX_TEST_IMAGE_INPUT=1 node tests/helpers/workspace-browser-host.mjs`、临时数据库、内存凭据、原生 Chat HTTP 替身和生成的 320×180 PNG，在原生 Chrome 中验证文件选择上传、同源预览、刷新保留纯图片草稿、纯图片运行成功、编辑重发保留原图、刷新保留修改后的文本与图片、重新生成创建另一成功分支且图片引用不变。截图已在验收时目视检查；临时宿主和新建标签页随后关闭。此验收不调用真实远端模型，后端重启恢复和图片分支隔离由原生协议集成测试覆盖。

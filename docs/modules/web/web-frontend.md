@@ -38,7 +38,7 @@ Prompt 操作始终使用宿主固定身份 `local-web-user`，浏览器不能�
 
 监听固定为 `127.0.0.1`，返回 origin 为 `http://127.0.0.1:<port>`。每个请求必须匹配实际 `Host` 和 URL origin；所有 POST 还要求 `Origin` 精确等于监听 origin。SSE GET 另外拒绝外部 Origin 和不属于 `same-origin` / `none` 的 `Sec-Fetch-Site`。
 
-这是单用户本机宿主，没有提供远程监听、登录或多用户认证。POST 要求 `Content-Type: application/json`、非数组 JSON 对象和字段白名单。普通请求体上限 65536 字节，Prompt 创建/编辑上限 1048576 字节。未知字段、非法路径编码或数值查询被拒绝；空对象操作也必须发送 `{}`。
+这是单用户本机宿主，没有提供远程监听、登录或多用户认证。除单图导入接口外，POST 要求 `Content-Type: application/json`、非数组 JSON 对象和字段白名单。普通请求体上限 65536 字节，Prompt 创建/编辑上限 1048576 字节；单图导入接收 `application/octet-stream` 或允许的图片 MIME，流式计数并限制到 10 MiB。未知字段、非法路径编码或数值查询被拒绝；空对象操作也必须发送 `{}`。
 
 响应统一设置 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff` 和限制到同源的 CSP。静态文件通过固定映射读取，包括 `/`、`/style.css` 及已编译浏览器模块；没有任意路径文件读取接口。
 
@@ -63,7 +63,10 @@ Prompt 操作始终使用宿主固定身份 `local-web-user`，浏览器不能�
 | `GET /sessions/:id/nodes/:nodeId/path` | 查询该节点成功祖先路径，`nodeId=root` 表示空路径 |
 | `GET /sessions/:id/runs` | 可选 `status=active`、`parentNodeId`（根用 `root`） |
 | `GET /sessions/:id/runs/by-key/:key` | 按已接受幂等键只读查询 |
-| `POST /sessions/:id/runs` | `{ parentNodeId, input, idempotencyKey, modelId? }`；`parentNodeId` 必须显式为节点 ID 或 `null` |
+| `POST /sessions/:id/runs` | `{ parentNodeId, input, images?: [{ assetId }], idempotencyKey, modelId? }`；`parentNodeId` 必须显式为节点 ID 或 `null`；图片由 Session 校验和保留 |
+| `POST /sessions/:id/images` | 单图二进制流；返回 201 与受信 `ImageRef`，不接受远端 URL 或本地路径 |
+| `GET /sessions/:id/images/:assetId/content` | 核对会话归属后读取原字节，返回真实 MIME，拒绝跨 origin / cross-site 请求 |
+| `POST /sessions/:id/images/renew` | `{ assetIds }`（最多 8 项）；返回 `{ valid, invalid }`，不复活已过期图片 |
 | `GET /runs/:id` | 已提交 Run 状态 DTO |
 | `GET /runs/:id/view` | 原生白名单视图；运行中可为 provisional，结束后为 committed |
 | `GET /runs/:id/events` | 可选非负安全整数 `afterSeq`，默认 0 |
@@ -113,7 +116,19 @@ Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返
 | `GET /agents/:id/prompts` | 已绑定 Prompt 快照 |
 | `POST /agents/:id/prompts` | `{ versionId }`，绑定已发布版本 |
 
-发布前校验浏览器所见草稿 revision；权限由宿主固定身份对应的领域访问规则执行。Prompt 内容展开与首次 Run 固定 instruction/context 的行为分别由 [Prompts](../prompts/prompts.md)、[Agent Prompts](../prompts/agent-prompts.md)、Session 和 Run 决定。浏览器发送原始本次文本，不提前扩展 task-template。
+发布前校验浏览器所见草稿 revision；权限由宿主固定身份对应的领域访问规则执行。Prompt 内容展开与首次 Run 固定 instruction/context 的行为分别由 [Prompts](../prompts/prompts.md)、[Agent Prompts](../prompts/agent-prompts.md)、Session 和 Run 决定。浏览器发送原始本次文本和有序图片引用，不提前扩展 task-template。仅 Chat Completions 和 DeepSeek 允许图片；一段文本加有序图片，不支持文本图片交错。模板仅对文本替换 `{{input}}` 一次，原生请求顺序为模板后的可选文本，再依次排列图片。纯图片消息合法；其他协议仍保留文本路径。
+
+## 图片草稿与保留
+
+图片字节归根上的 `harness.image-assets` 组件，Web 仅经 `harness.sessions` 导入、读取和续期，不直接操作图片目录或资源表。宿主在业务存储之后、Harness 之前安装图片组件；`ANYBOX_IMAGE_ASSETS_DIRECTORY` 默认是 `${ANYBOX_HARNESS_DATABASE}.images`。应用关闭由 Harness 统一卸载根组件。Web 不提供通用文件管理、远端 URL 抓取、格式转换、缩略图持久缓存或删除已接受历史的入口。
+
+`image-client.ts` 统一处理文件选择、粘贴文件与拖入文件，最多同时上传两张，先分配槽位再上传以固定顺序。图片限制与宿主共享 `image/limits.ts`：静态 JPEG/PNG/WebP，每张 10 MiB、宽高各不超过 4096 像素；一条消息最多 8 张、合计 20 MiB。真正格式和完整解码由图片组件验证，不能相信扩展名、浏览器 MIME 或客户端尺寸。预览使用同源内容 URL，CSP 不开放远端图片或 data/blob URL。
+
+草稿按 Session 与显式父节点保存文本、图片引用和状态到 `sessionStorage`，没有字节/base64；未完成上传刷新后保留失败占位，不能静默丢图后发送。`PendingSubmission` v2 保存同一批完整图片引用，发往 Run 的 JSON 仅含 `assetId`；v1 文本记录可恢复，未知或破损图片格式只恢复为待确认草稿。幂等恢复先查询已接受键，再检查当前模型与图片有效性。编辑重发与重新生成保留原图和顺序；图片未就绪、过期或模型不支持时禁止发送，纯图片可以发送。
+
+幂等键确认未接受后，若当前能力或协议校验失败，pending 恢复到原父节点草稿并解除提交锁定。原位置已有新草稿时保留双方文字及有序图片并明确提示确认；合并草稿即使超过图片上限也可刷新恢复，但发送前必须删减到数量和字节限制以内。
+
+未接受图片有 24 小时 TTL；工作区每 5 分钟及页面重新可见时续期所有父节点草稿和 pending 图片，每批最多 8 个，不依赖面板是否挂载或可见。提交前再续期；失效图片保留明确占位，要求用户重新添加。关闭面板只移除视图；整个工作区销毁才取消上传与保活。已接受 Run 的永久引用由 Session 事务固定，Web 移除草稿图片只停止续期，不能删掉历史资源。
 
 ## SSE 与原生视图
 
@@ -127,7 +142,7 @@ Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返
 
 `apply` 在启动监听后返回。它预先登记 server 清理 Effect，并用 `ctx.on` 注册本轮事件监听；Nya 停止本轮组件时取消监听并等待 HTTP 关闭。整个应用根关闭时，依赖提供方在 Web 等消费者退出后再清理；单独卸载 Web 不负责关闭其依赖组件。同一组件依赖重启后在原端口重新监听，不复用旧服务引用。
 
-`WebServer.close()` 幂等：先停止准入，中止目录选择和正在等待远端的 Models 请求，释放所有 Run waiters，关闭 SSE，然后等待 SSE 退出、已登记 Models 任务实际结束和 HTTP listener 的在途请求排空。普通已接受的 Prompt/配置写入由所属服务完成，HTTP 关闭等待对应请求结束。
+`WebServer.close()` 幂等：先停止准入，中止目录选择、图片上传/读取和正在等待远端的 Models 请求，释放所有 Run waiters，关闭 SSE，然后等待 SSE 退出、已登记 Models 与图片任务实际结束和 HTTP listener 的在途请求排空。普通已接受的 Prompt/配置写入及图片续期由所属服务完成，HTTP 关闭等待对应请求结束。图片请求断开会显式取消 `OwnedCall`；HTTP 成功响应和关闭都等待 `result` 与 `done`，不能以结果已就绪代替真实退出。
 
 单独替换/卸载 Web 不取消已经接受的 Run；完整宿主通过 `harness.close()` 关闭时，Run 组件才关闭准入并取消/等待执行。模型发现、连通性检查和目录刷新因请求断开而取消；普通等待断开只释放 waiter。目录选择的具体退出保证见 [Directory Picker](directory-picker.md)。
 
@@ -135,6 +150,8 @@ HTTP 只返回安全 `{ error: { code } }`：非法输入 400，JSON 类型 415�
 
 ## 测试与替换边界
 
+- [image-client.test.mjs](../../../tests/image-client.test.mjs)：上传保序、并发、取消、草稿恢复、跨父节点续期与批量上限。
+- [session-client.test.mjs](../../../tests/session-client.test.mjs)：纯图片提交、pending v2、编辑/重新生成、过期引用及已接受幂等键恢复。
 - [web-server.test.mjs](../../../tests/web-server.test.mjs)：HTTP 约束、Prompt 固定身份、秘密过滤、会话树、等待与取消、SSE、依赖重启、前端替换和关闭等待。
 - [run-change-stream.test.mjs](../../../tests/run-change-stream.test.mjs)、[run-change-client.test.mjs](../../../tests/run-change-client.test.mjs)：背压、有界帧、断开、重连和计时器清理。
 - [models-directory-web.test.mjs](../../../tests/models-directory-web.test.mjs)：目录建议、自动基础配置、多协议执行、刷新断开及真实读流退出等待。

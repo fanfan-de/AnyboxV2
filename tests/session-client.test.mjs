@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createPendingStore, createSessionController, pendingKey } from '../dist/web/session-client.js'
+import { createDraftStore, draftFromInput } from '../dist/web/image-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 function fixture() {
@@ -44,11 +45,11 @@ function fixture() {
     }
     throw new Error(url)
   }
-  const make = id => createSessionController({ sessionId: id, projectId: `p-${id}` }, {
+  const make = (id, extra = {}) => createSessionController({ sessionId: id, projectId: `p-${id}` }, {
     api, pending, messageFor: e => e.message, newId: () => `key-${++next}`,
     hidden: () => hidden, schedule: (callback, ms) => { const id = ++next; timers.set(id, { callback, ms }); return id },
     clear: id => timers.delete(id), missing: () => assert.fail('unexpected missing'),
-    savePosition: p => positions.set(id, p),
+    savePosition: p => positions.set(id, p), ...extra,
   })
   const load = async controller => { controller.attach(() => {}); await controller.refresh(); await Promise.resolve() }
   const finish = (id, status = 'completed') => {
@@ -309,4 +310,117 @@ test('typing while a followed run is active stops automatic navigation when it c
   assert.equal(a.snapshot().draft, 'new unsent input')
   assert.equal(a.snapshot().position.follow, undefined)
   a.detach()
+})
+
+const imageRef = id => ({ assetId: id, sha256: 'a'.repeat(64), mediaType: 'image/png', byteLength: 4, width: 2, height: 2, expiresAt: '2030-01-01T00:00:00.000Z' })
+
+test('image-only submission persists pending v2 and sends only ordered asset IDs', async () => {
+  const f = fixture(), drafts = createDraftStore(f.store), images = [imageRef('second'), imageRef('first')]
+  drafts.set('a', null, draftFromInput('', images))
+  let persisted
+  f.intercept((url, body) => {
+    if (url.endsWith('/images/renew')) { persisted = f.pending.get('a'); return { valid: images, invalid: [] } }
+  })
+  const a = f.make('a', { drafts }); await f.load(a); await a.submit()
+  assert.equal(persisted.schemaVersion, 2)
+  assert.deepEqual(persisted.images, images)
+  const submitted = f.calls.find(call => call.url === '/sessions/a/runs' && call.body)
+  assert.equal(submitted.body.input, '')
+  assert.deepEqual(submitted.body.images, [{ assetId: 'second' }, { assetId: 'first' }])
+  assert.equal(a.snapshot().images.length, 0)
+  a.dispose()
+})
+
+test('edited siblings and regenerated nodes preserve images and reject expired refs without a Run POST', async () => {
+  const f = fixture(), drafts = createDraftStore(), images = [imageRef('photo')]
+  const a = f.make('a', { drafts }); await f.load(a)
+  await a.navigate(null, 'edited', images)
+  assert.equal(a.snapshot().images[0].image.assetId, 'photo')
+  f.intercept(url => url.endsWith('/images/renew') ? { valid: [], invalid: ['photo'] } : undefined)
+  await a.submit()
+  assert.equal(f.calls.some(call => call.url === '/sessions/a/runs' && call.body), false)
+  assert.equal(a.snapshot().images[0].status, 'expired')
+  assert.equal(a.snapshot().draft, 'edited')
+  f.intercept(url => url.endsWith('/images/renew') ? { valid: images, invalid: [] } : undefined)
+  await a.regenerate({ id: 'old', sessionId: 'a', parentId: null, input: 'original', images, output: 'answer', sourceRunId: 'old-run' })
+  const posted = f.calls.find(call => call.url === '/sessions/a/runs' && call.body)
+  assert.equal(posted.body.input, 'original')
+  assert.deepEqual(posted.body.images, [{ assetId: 'photo' }])
+  a.dispose()
+})
+
+test('unknown or malformed pending image schemas restore visibly and never post automatically', async () => {
+  for (const input of [
+    { schemaVersion: 99, images: [imageRef('photo')] },
+    { schemaVersion: 2, images: [{ assetId: 'lost-metadata' }] },
+  ]) {
+    const f = fixture()
+    f.storage.set(pendingKey, JSON.stringify({ a: { sessionId: 'a', input: 'keep text', idempotencyKey: 'key', parentNodeId: null, ...input } }))
+    const a = f.make('a', { pending: createPendingStore(f.store) }); await f.load(a)
+    assert.equal(a.snapshot().draft, 'keep text')
+    assert.ok(a.snapshot().images.length)
+    assert.equal(f.calls.some(call => call.url === '/sessions/a/runs' && call.body), false)
+    a.dispose()
+  }
+})
+
+test('accepted image pending is recovered before changed model capabilities or expired draft checks', async () => {
+  const f = fixture(), image = { ...imageRef('expired'), expiresAt: '2000-01-01T00:00:00.000Z' }
+  f.pending.set('a', { schemaVersion: 2, sessionId: 'a', parentNodeId: null, input: '', images: [image], idempotencyKey: 'accepted-key', modelId: 'deleted' })
+  f.rows.set('accepted', { id: 'accepted', sessionId: 'a', key: 'accepted-key', history: { kind: 'tree', parentNodeId: null }, input: '', images: [image], status: 'failed', revision: 2, createdAt: '0' })
+  const a = f.make('a', { models: () => [] }); await f.load(a)
+  assert.equal(a.snapshot().runs[0].id, 'accepted')
+  assert.equal(f.pending.get('a'), undefined)
+  assert.equal(f.calls.some(call => call.body), false)
+  a.dispose()
+})
+
+test('unaccepted image pending with changed capabilities or protocol restores its original parent draft and unlocks edits', async () => {
+  for (const model of [
+    { parameters: { protocolId: 'chat-completions' }, effectiveCapabilities: { imageInput: false } },
+    { parameters: { protocolId: 'anthropic-messages' }, effectiveCapabilities: { imageInput: true } },
+  ]) {
+    const f = fixture(), drafts = createDraftStore(), images = [imageRef('pending-photo')]
+    drafts.set('a', 'original-parent', draftFromInput('new unsent text', [imageRef('new-photo')]))
+    drafts.set('a', null, draftFromInput('other branch'))
+    f.pending.set('a', { schemaVersion: 2, sessionId: 'a', parentNodeId: 'original-parent', input: 'original text', images, idempotencyKey: 'unaccepted', modelId: 'model' })
+    const a = f.make('a', { drafts, models: () => [{ id: 'model', ...model }] }); await f.load(a)
+    assert.equal(f.pending.get('a'), undefined)
+    assert.equal(a.snapshot().draft, 'other branch')
+    assert.deepEqual(drafts.get('a', 'original-parent').images.map(value => value.image.assetId), ['pending-photo', 'new-photo'])
+    assert.equal(drafts.get('a', 'original-parent').text, 'original text\n\nnew unsent text')
+    assert.equal(f.calls.some(call => call.body), false)
+    assert.ok(f.calls.some(call => call.url.endsWith('/runs/by-key/unaccepted')))
+    assert.match(a.snapshot().notice, /恢复到原对话位置/)
+    assert.match(a.snapshot().notice, /新草稿也已同时保留/)
+    await a.navigate('original-parent')
+    a.removeImage('pending-photo')
+    assert.deepEqual(a.snapshot().images.map(value => value.image.assetId), ['new-photo'])
+    a.dispose()
+  }
+})
+
+test('merged pending drafts retain more than eight images across reload and block oversized sends', async () => {
+  const f = fixture(), drafts = createDraftStore(f.store)
+  const images = Array.from({ length: 8 }, (_, index) => imageRef(`pending-${index}`))
+  drafts.set('a', null, draftFromInput('new text', [imageRef('new-photo')]))
+  f.pending.set('a', { schemaVersion: 2, sessionId: 'a', parentNodeId: null, input: 'original text', images, idempotencyKey: 'unaccepted', modelId: 'model' })
+  const a = f.make('a', { drafts, models: () => [{ id: 'model', parameters: { protocolId: 'chat-completions' }, effectiveCapabilities: { imageInput: false } }] })
+  await f.load(a)
+  assert.equal(a.snapshot().images.length, 9)
+  assert.equal(f.pending.get('a'), undefined)
+  a.dispose()
+  const restored = f.make('a', { drafts: createDraftStore(f.store) }); await f.load(restored)
+  assert.equal(restored.snapshot().images.length, 9)
+  assert.equal(restored.snapshot().draft, 'original text\n\nnew text')
+  await restored.submit()
+  assert.equal(f.calls.some(call => call.body), false)
+  assert.match(restored.snapshot().notice, /删减图片/)
+  assert.equal(restored.snapshot().images.length, 9)
+  // Total bytes are checked independently of the image count.
+  await restored.navigate(null, 'large originals', [0, 1, 2].map(index => ({ ...imageRef(`large-${index}`), byteLength: 8 * 1024 * 1024 })))
+  await restored.submit()
+  assert.equal(f.calls.some(call => call.body), false)
+  assert.match(restored.snapshot().notice, /删减图片/)
+  restored.dispose()
 })

@@ -11,6 +11,7 @@ test('Web startup separates persistent Models storage from the one-time legacy i
   const config = parseWebStartupConfig({})
   assert.equal(config.port, 0)
   assert.equal(config.harnessDatabasePath, './data/harness.sqlite')
+  assert.equal(config.imageAssetsDirectory, './data/harness.sqlite.images')
   assert.equal(config.modelsDatabasePath, './data/models.sqlite')
   assert.equal(config.modelsCatalogDatabasePath, 'data/models-catalog.sqlite')
   assert.equal(config.credentialNamespace, 'anybox.models')
@@ -51,7 +52,7 @@ test('Web validates startup configuration before installing resources', () => {
     ANYBOX_LLM_TIMEOUT_MS: ['', '0', '-1', '1.5', 'Infinity', 'NaN', '2147483648'],
     ANYBOX_LLM_MAX_OUTPUT_TOKENS: ['', '0', '-1', '1.5', 'Infinity', 'NaN', '9007199254740992'],
     ANYBOX_LLM_TEMPERATURE: ['', '-0.1', '2.1', 'Infinity', 'NaN'], ANYBOX_WEB_PORT: ['', '-1', '65536', '1.5', 'NaN'],
-    ANYBOX_MODELS_DATABASE: ['', ' '], ANYBOX_MODELS_CATALOG_DATABASE: ['', ' '], ANYBOX_MODELS_NAMESPACE: ['', '\0'], ANYBOX_HARNESS_DATABASE: ['', ' '],
+    ANYBOX_IMAGE_ASSETS_DIRECTORY: ['', ' ', '\0'], ANYBOX_MODELS_DATABASE: ['', ' '], ANYBOX_MODELS_CATALOG_DATABASE: ['', ' '], ANYBOX_MODELS_NAMESPACE: ['', '\0'], ANYBOX_HARNESS_DATABASE: ['', ' '],
   }
   for (const [name, values] of Object.entries(invalid)) for (const value of values) assert.throws(() => parseWebStartupConfig({ [name]: value }), new RegExp(name))
   assert.throws(() => parseWebStartupConfig({ ANYBOX_MODELS_DATABASE: './same.sqlite', ANYBOX_HARNESS_DATABASE: './same.sqlite' }), /different files/)
