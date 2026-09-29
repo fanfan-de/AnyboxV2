@@ -16,7 +16,7 @@ const storage: BrowserStorage = {
   getItem: key => sessionStorage.getItem(key), setItem: (key, value) => sessionStorage.setItem(key, value),
 }
 
-export function setupWorkspace(api: Api, messageFor: (error: unknown) => string, selectedAgent: () => string, models?: ModelsCatalog, configureModels?: () => void) {
+export function setupWorkspace(api: Api, messageFor: (error: unknown) => string, selectedAgent: () => string, models?: ModelsCatalog) {
   const get = <T extends HTMLElement>(id: string) => document.getElementById(id)! as T
   const host = get<HTMLElement>('pane-host'), tabs = get<HTMLElement>('pane-tabs'), notice = get<HTMLElement>('workspace-notice')
   const projectList = get<HTMLElement>('project-list')
@@ -192,7 +192,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     }
     if (!bundle.view) {
       bundle.view = createSessionPanel(pane, projects.find(item => item.id === pane.projectId)?.name ?? pane.projectId,
-        bundle.controller, () => focusPane(pane.id), () => close(pane.id), bundle.scroll, models, configureModels)
+        bundle.controller, () => focusPane(pane.id), () => close(pane.id), bundle.scroll, models)
     }
     return bundle.view
   }

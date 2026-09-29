@@ -1,3 +1,4 @@
+import { anthropicImages, withImages } from './images.js';
 import { modelsError } from '../errors.js';
 import { assert } from '../domain.js';
 import { terminalDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
@@ -10,11 +11,11 @@ const requestOptions = { headers: { 'anthropic-version': '2023-06-01' }, authHea
 const modes = ['disabled', 'adaptive', 'enabled'] as const, efforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 function integer(value: unknown): number { return index(value); }
 function supported(value: unknown): boolean { const raw = object(value); if (typeof raw.supported !== 'boolean') throw modelsError('invalid-response'); return raw.supported; }
-function validateIntent(intent: NativeObject): void {
+function validateIntent(intent: NativeObject, images = true): void {
   if (intent.system !== undefined) textBlocks(intent.system);
   for (const value of array(intent.messages)) { const message = object(value); if (message.role !== 'user') throw modelsError('capability-unsupported');
     if (typeof message.content === 'string') continue;
-    for (const value of array(message.content)) { const block = object(value); if (block.type === 'text') string(block.text); else if (block.type === 'tool_result') { nonempty(block.tool_use_id); textBlocks(block.content); } else throw modelsError('capability-unsupported'); }
+    for (const value of array(message.content)) { const block = object(value); if (block.type === 'text') string(block.text); else if (block.type === 'tool_result') { nonempty(block.tool_use_id); textBlocks(block.content); } else if (!images || anthropicImages.id(block) === undefined) throw modelsError('capability-unsupported'); }
   }
 }
 function validateResponse(raw: unknown): NativeObject {
@@ -79,7 +80,7 @@ function parsePage(raw: unknown): { models: readonly DiscoveredModel[]; nextPath
 export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): NativeProtocol {
   options = captureOptions(options);
   return {
-    descriptor: { id: protocolId, version: '2.0.0', name: 'Anthropic Messages', connectionFields,
+    descriptor: { id: protocolId, version: '2.1.0', name: 'Anthropic Messages', connectionFields,
       modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 1 }, { key: 'max_tokens', label: 'Maximum output tokens', type: 'number', min: 1, integer: true, required: true, defaultValue: 4096 },
         { key: 'thinking.type', label: 'Thinking mode', type: 'enum', values: modes }, { key: 'thinking.budget_tokens', label: 'Thinking token budget', type: 'number', min: 1024, integer: true },
         { key: 'thinking.display', label: 'Thinking display', type: 'enum', values: ['summarized', 'omitted'] }, { key: 'output_config.effort', label: 'Reasoning effort', type: 'enum', values: efforts }], supportsDiscovery: true, supportsCheck: true },
@@ -97,10 +98,18 @@ export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): 
       const output = options.output_config === undefined ? {} : object(options.output_config); optionKeys(output, ['effort']); effortOption(output.effort, declared, efforts);
       validateServerTools(options.tools, declared, protocolId);
     },
-    effectiveCapabilities: (declared, options) => effectiveCapabilities(declared, options.thinking !== undefined && object(options.thinking).type === 'disabled', true),
-    restore: records => restoreRecords(protocolId, records, commit),
+    effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, options.thinking !== undefined && object(options.thinking).type === 'disabled', true), imageInput: declared.imageInput.support === 'supported' }),
+    recordFormatVersion: 2,
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    resourceIds: anthropicImages.ids,
+    restore: records => {
+      for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
+      return restoreRecords(protocolId, records, commit, [1, 2]);
+    },
     prepare(input) {
-      validateIntent(input.intent); requireLocalTools(input.intent.tools, input.capabilities.tools);
+      validateIntent(input.intent);
+      if (anthropicImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
+      requireLocalTools(input.intent.tools, input.capabilities.tools);
       const next = conversation(input.state, input.intent, 'messages', ['system', 'tools']);
       for (const value of array(next.messages)) { const message = object(value); if (!['user', 'assistant'].includes(string(message.role))) throw modelsError('invalid-config'); if (typeof message.content !== 'string') array(message.content); }
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== undefined) throw modelsError('invalid-config'); nonempty(tool.name); object(tool.input_schema); }
@@ -108,7 +117,7 @@ export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): 
       return native({ ...input.parameters, messages: next.messages, ...(next.system === undefined ? {} : { system: next.system }), ...(tools.length ? { tools } : {}), model: input.remoteModelId, stream: input.capabilities.streaming });
     },
     exchange(input) {
-      return request(options, input, 'messages', input.request, async reader => {
+      return withImages(anthropicImages, input, (wire, signal) => request(options, { ...input, signal }, 'messages', wire, async reader => {
         if (!input.request.stream) return validateResponse(await reader.json());
         let message: Record<string, JsonValue> | undefined, finished = false, stopped = false;
         const blocks = new Map<number, { value: Record<string, JsonValue>; stopped: boolean; arguments?: string }>();
@@ -145,7 +154,7 @@ export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): 
           input.onEvent(event);
         });
         if (!finished || !message) throw modelsError('invalid-response'); return validateResponse(message);
-      }, requestOptions);
+      }, requestOptions));
     },
     commit: input => commit(input.state, input.intent, input.response),
     discover: input => pagedDiscover(options, input, 'models?limit=1000', parsePage, requestOptions),

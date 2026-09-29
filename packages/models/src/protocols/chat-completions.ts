@@ -5,7 +5,7 @@ import type { JsonValue } from '../types.js';
 import { array, captureOptions, connectionFields, conversation, effectiveCapabilities, effortOption, index, native, nonempty, numberOption, object, optionKeys, parseJson, protocolComponent, reasoningEfforts, requireLocalTools, restoreRecords, string, validateProvider, type ProtocolOptions } from './shared.js';
 import { check, discover, request } from './transport.js';
 import { parseNativeImageResourceUri } from '../resources.js';
-import { chatImageIds, withChatImages } from './chat-images.js';
+import { chatImages, withImages } from './images.js';
 export interface ChatCompletionsRequestPolicy {
   readonly protocolId: string;
   readonly name: string;
@@ -66,7 +66,7 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}, pol
     validateParameters(options, declared) { optionKeys(options, ['temperature', tokenField, ...(!policy.disableThinking ? ['reasoning_effort'] : [])]); numberOption(options.temperature, 0, 2); numberOption(options[tokenField], 1, Number.MAX_SAFE_INTEGER, true); effortOption(options.reasoning_effort, declared, reasoningEfforts); },
     recordFormatVersion: 2,
     canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
-    resourceIds: chatImageIds,
+    resourceIds: chatImages.ids,
     effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, policy.disableThinking || options.reasoning_effort === 'none'), imageInput: declared.imageInput.support === 'supported' }),
     restore: records => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
@@ -74,7 +74,7 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}, pol
     },
     prepare(input) {
       validateIntent(input.intent); requireLocalTools(input.intent.tools, input.capabilities.tools);
-      if (chatImageIds(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
+      if (chatImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
       const next = conversation(input.state, input.intent, 'messages', ['tools']);
       if (policy.allowDeveloper === false && array(next.messages).some(item => object(item).role === 'developer')) throw modelsError('invalid-config');
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(object(tool.function).parameters); }
@@ -82,7 +82,7 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}, pol
         ...(input.capabilities.streaming ? { stream_options: { include_usage: true } } : {}), ...(policy.disableThinking ? { thinking: { type: 'disabled' } } : {}) });
     },
     exchange(input) {
-      return withChatImages(input, (wire, signal) => request(options, { ...input, signal }, 'chat/completions', wire, async reader => {
+      return withImages(chatImages, input, (wire, signal) => request(options, { ...input, signal }, 'chat/completions', wire, async reader => {
         if (!input.request.stream) return validateResponse(await reader.json());
         let message: Record<string, JsonValue> = { role: 'assistant', content: '' }, finish: JsonValue | undefined, usage: JsonValue | undefined, completed = false;
         const calls = new Map<number, Record<string, JsonValue>>(); let envelope: Record<string, JsonValue> = {};

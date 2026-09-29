@@ -208,9 +208,7 @@ settingsDialog.addEventListener('close', () => {
 
 const models = createModelsCatalog(api, messageFor)
 setupModelsSettings(api, messageFor, models)
-const workspace = setupWorkspace(api, messageFor, () => agentSelect.value, models, () => {
-  closeSidebar(); selectSettingsSection('models'); settingsDialog.showModal()
-})
+const workspace = setupWorkspace(api, messageFor, () => agentSelect.value, models)
 void api<readonly AgentView[]>('/agents').then(agents => {
   agentSelect.replaceChildren(...agents.map(agent => {
     const option = document.createElement('option')

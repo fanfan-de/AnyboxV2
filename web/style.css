@@ -431,8 +431,6 @@ button { touch-action: manipulation; }
 .composer-model-row { display: flex; gap: 8px; align-items: center; padding-bottom: 8px; }
 .composer-model-row[hidden] { display: none; }
 .composer-model { min-width: 0; max-width: min(72%, 320px); background: transparent; border: 0; color: var(--secondary); font: inherit; font-size: 11px; padding: 4px 2px; text-overflow: ellipsis; }
-.composer .configure-models { border: 0; background: transparent; color: var(--secondary); font-size: 11px; padding: 4px; white-space: nowrap; }
-.composer .configure-models:hover { color: var(--text); }
 .composer-model-hint { font-size: 11px; line-height: 1.5; margin: 0 0 8px; color: var(--secondary); }
 .streaming-label { font-size: 11px; color: var(--secondary); margin: -12px 0 20px 44px; }
 .protocol-turn { min-width: 0; margin: 12px 0 24px; }

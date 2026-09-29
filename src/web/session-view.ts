@@ -17,7 +17,7 @@ export interface SessionPanel {
 }
 
 export function createSessionPanel(pane: Pane, projectName: string, controller: SessionController,
-  focus: () => void, close: () => void, initialScroll = 0, models?: ModelsCatalog, configureModels?: () => void): SessionPanel {
+  focus: () => void, close: () => void, initialScroll = 0, models?: ModelsCatalog): SessionPanel {
   const element = document.createElement('section')
   element.className = 'conversation session-pane'
   element.dataset.paneId = pane.id
@@ -43,7 +43,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
       <div class="empty-branches" aria-label="选择已有对话分支" hidden></div>
     </div>
     <form class="composer">
-      <div class="composer-model-row"><select class="composer-model" aria-label="本会话使用的模型"></select><button class="configure-models" type="button">配置模型</button></div>
+      <div class="composer-model-row"><select class="composer-model" aria-label="本会话使用的模型"></select></div>
       <p class="composer-model-hint" role="status" hidden></p>
       <div class="composer-images" aria-label="待发送图片" aria-live="polite" hidden></div>
       <textarea rows="2" placeholder="随心输入" aria-label="消息"></textarea>
@@ -80,7 +80,6 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   const modelSelect = get<HTMLSelectElement>('.composer-model')
   get<HTMLElement>('.composer-model-row').hidden = !models
   modelSelect.addEventListener('change', () => { if (modelSelect.value) void controller.setModel(modelSelect.value) }, options)
-  get('.configure-models').addEventListener('click', () => configureModels?.(), options)
   const modelReady = () => {
     const session = controller.snapshot().session
     const model = models?.snapshot().models.find(value => value.id === session?.modelId)
@@ -291,7 +290,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         modelSelect.value = selected
         modelSelect.disabled = state.session?.historyMode === 'dialogue-v1' || state.busy || state.loading || Boolean(state.pending) || catalog.loading
         const hint = get<HTMLElement>('.composer-model-hint')
-        hint.textContent = state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请打开“配置模型”，选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
+        hint.textContent = state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“设置 → 模型”中选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
         hint.hidden = !hint.textContent
         if (state.images.length && !imageModelReady()) { hint.textContent = '当前模型不支持图片，请切换支持图片的模型，或移除图片后发送。'; hint.hidden = false }
       }

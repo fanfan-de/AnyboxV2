@@ -1,3 +1,4 @@
+import { geminiImages, imageContent, withImages } from './images.js';
 import { modelsError } from '../errors.js';
 import { assert } from '../domain.js';
 import type { DiscoveredModel, JsonValue } from '../types.js';
@@ -6,9 +7,9 @@ import { array, captureOptions, connectionFields, conversation, effectiveCapabil
 import { pagedDiscover, request } from './transport.js';
 const protocolId = 'gemini-interactions', levels = ['minimal', 'low', 'medium', 'high'] as const;
 const authentication = { authHeader: 'google-api-key' } as const;
-function validateIntent(intent: NativeObject): void {
+function validateIntent(intent: NativeObject, images = true): void {
   if (intent.system_instruction !== undefined) string(intent.system_instruction);
-  for (const value of array(intent.input)) { const item = object(value); if (item.type === 'user_input') textBlocks(item.content); else if (item.type === 'function_result') { nonempty(item.call_id); nonempty(item.name); textBlocks(item.result); } else throw modelsError('capability-unsupported'); }
+  for (const value of array(intent.input)) { const item = object(value); if (item.type === 'user_input') imageContent(item.content, geminiImages, images); else if (item.type === 'function_result') { nonempty(item.call_id); nonempty(item.name); textBlocks(item.result); } else throw modelsError('capability-unsupported'); }
 }
 function validateResponse(raw: unknown): NativeObject {
   const response = native(raw);
@@ -46,7 +47,7 @@ function discoverPage(raw: unknown): { models: readonly DiscoveredModel[]; nextP
 export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}): NativeProtocol {
   options = captureOptions(options);
   return {
-    descriptor: { id: protocolId, version: '2.0.0', name: 'Gemini Interactions', connectionFields,
+    descriptor: { id: protocolId, version: '2.1.0', name: 'Gemini Interactions', connectionFields,
       modelFields: [{ key: 'generation_config.max_output_tokens', label: 'Maximum output tokens', type: 'number', min: 1, max: 2_147_483_647, integer: true },
         { key: 'generation_config.thinking_level', label: 'Thinking level', type: 'enum', values: levels }, { key: 'generation_config.thinking_summaries', label: 'Thinking summaries', type: 'enum', values: ['auto', 'none'] }], supportsDiscovery: true, supportsCheck: true },
     validateProvider: provider => validateProvider(provider, protocolId),
@@ -55,16 +56,24 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
       numberOption(generation.max_output_tokens, 1, 2_147_483_647, true); effortOption(generation.thinking_level, declared, levels);
       if (generation.thinking_summaries !== undefined) { assert(['auto', 'none'].includes(string(generation.thinking_summaries))); if (declared.reasoning.support !== 'supported') throw modelsError('capability-unsupported'); }
     },
-    effectiveCapabilities: declared => effectiveCapabilities(declared),
-    restore: records => restoreRecords(protocolId, records, commit),
+    effectiveCapabilities: declared => ({ ...effectiveCapabilities(declared), imageInput: declared.imageInput.support === 'supported' }),
+    recordFormatVersion: 2,
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    resourceIds: geminiImages.ids,
+    restore: records => {
+      for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
+      return restoreRecords(protocolId, records, commit, [1, 2]);
+    },
     prepare(input) {
-      validateIntent(input.intent); requireLocalTools(input.intent.tools, input.capabilities.tools);
+      validateIntent(input.intent);
+      if (geminiImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
+      requireLocalTools(input.intent.tools, input.capabilities.tools);
       const next = conversation(input.state, input.intent, 'input', ['system_instruction', 'tools']);
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(tool.parameters); }
       return native({ ...input.parameters, ...next, model: input.remoteModelId, store: false, stream: input.capabilities.streaming });
     },
     exchange(input) {
-      return request(options, input, 'interactions', input.request, async reader => {
+      return withImages(geminiImages, input, (wire, signal) => request(options, { ...input, signal }, 'interactions', wire, async reader => {
         if (!input.request.stream) return validateResponse(await reader.json());
         const steps = new Map<number, { step: Record<string, JsonValue>; stopped: boolean; arguments?: string }>(); let terminal: NativeObject | undefined;
         await reader.sse(data => {
@@ -99,7 +108,7 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
           input.onEvent(event);
         });
         if (!terminal) throw modelsError('invalid-response'); return terminal;
-      }, authentication);
+      }, authentication));
     },
     commit: input => commit(input.state, input.intent, input.response),
     discover: input => pagedDiscover(options, input, 'models?pageSize=1000', discoverPage, authentication),

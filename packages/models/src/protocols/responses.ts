@@ -1,17 +1,18 @@
+import { responsesImages, imageContent, withImages } from './images.js';
 import { modelsError } from '../errors.js';
 import { assert } from '../domain.js';
 import { terminalDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
 import type { JsonValue } from '../types.js';
 import type { NativeObject, NativeProtocol } from '../native-types.js';
-import { array, captureOptions, connectionFields, conversation, effectiveCapabilities, effortOption, index, mergeTools, native, nonempty, numberOption, object, optionKeys, parseJson, protocolComponent, reasoningEfforts, requireLocalTools, restoreRecords, string, textBlocks, validateProvider, validateServerTools, type ProtocolOptions } from './shared.js';
+import { array, captureOptions, connectionFields, conversation, effectiveCapabilities, effortOption, index, mergeTools, native, nonempty, numberOption, object, optionKeys, parseJson, protocolComponent, reasoningEfforts, requireLocalTools, restoreRecords, string, validateProvider, validateServerTools, type ProtocolOptions } from './shared.js';
 import { check, discover, request } from './transport.js';
 export type ResponsesIntent = NativeObject;
 export type ResponsesResponse = NativeObject;
 export type ResponsesEvent = NativeObject;
-function validateIntent(intent: NativeObject): void {
+function validateIntent(intent: NativeObject, images = true): void {
   for (const value of array(intent.input)) { const item = object(value);
     if (item.type === 'function_call_output') { nonempty(item.call_id); string(item.output); }
-    else { if (!['system', 'developer', 'user'].includes(string(item.role))) throw modelsError('capability-unsupported'); textBlocks(item.content, 'input_text'); }
+    else { if (!['system', 'developer', 'user'].includes(string(item.role))) throw modelsError('capability-unsupported'); imageContent(item.content, responsesImages, images && item.role === 'user', 'input_text'); }
   }
   if (intent.instructions !== undefined) string(intent.instructions);
 }
@@ -40,7 +41,7 @@ function commit(state: NativeObject, intent: NativeObject, response: NativeObjec
 export function createResponsesProtocol(options: ProtocolOptions = {}): NativeProtocol {
   options = captureOptions(options);
   return {
-    descriptor: { id: 'responses', version: '2.0.0', name: 'Responses', connectionFields,
+    descriptor: { id: 'responses', version: '2.1.0', name: 'Responses', connectionFields,
       modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 },
         { key: 'max_output_tokens', label: 'Maximum output tokens', type: 'number', min: 1, integer: true },
         { key: 'reasoning.effort', label: 'Reasoning effort', type: 'enum', values: reasoningEfforts },
@@ -52,10 +53,18 @@ export function createResponsesProtocol(options: ProtocolOptions = {}): NativePr
       if (reasoning.summary !== undefined) { assert(['auto', 'concise', 'detailed'].includes(string(reasoning.summary))); if (declared.reasoning.support !== 'supported' || reasoning.effort === 'none') throw modelsError('capability-unsupported'); }
       validateServerTools(options.tools, declared, 'responses');
     },
-    effectiveCapabilities: (declared, options) => effectiveCapabilities(declared, options.reasoning !== undefined && object(options.reasoning).effort === 'none', true),
-    restore: records => restoreRecords('responses', records, commit),
+    effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, options.reasoning !== undefined && object(options.reasoning).effort === 'none', true), imageInput: declared.imageInput.support === 'supported' }),
+    recordFormatVersion: 2,
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    resourceIds: responsesImages.ids,
+    restore: records => {
+      for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
+      return restoreRecords('responses', records, commit, [1, 2]);
+    },
     prepare(input) {
-      validateIntent(input.intent); requireLocalTools(input.intent.tools, input.capabilities.tools);
+      validateIntent(input.intent);
+      if (responsesImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
+      requireLocalTools(input.intent.tools, input.capabilities.tools);
       const next = conversation(input.state, input.intent, 'input', ['tools', 'instructions']);
       const tools = mergeTools(next.tools, input.parameters.tools);
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(tool.parameters); }
@@ -63,7 +72,7 @@ export function createResponsesProtocol(options: ProtocolOptions = {}): NativePr
         include: ['reasoning.encrypted_content'], ...(next.instructions === undefined ? {} : { instructions: next.instructions }), ...(tools.length ? { tools } : {}) });
     },
     exchange(input) {
-      return request(options, input, 'responses', input.request, async reader => {
+      return withImages(responsesImages, input, (wire, signal) => request(options, { ...input, signal }, 'responses', wire, async reader => {
         if (!input.request.stream) return validateResponse(await reader.json());
         let terminal: NativeObject | undefined;
         const received = new Map<number, Record<string, JsonValue>>();
@@ -95,7 +104,7 @@ export function createResponsesProtocol(options: ProtocolOptions = {}): NativePr
           input.onEvent(event);
         });
         if (!terminal) throw modelsError('invalid-response'); return terminal;
-      });
+      }));
     },
     commit: input => commit(input.state, input.intent, input.response),
     discover: input => discover(options, input), check: input => check(options, input),
