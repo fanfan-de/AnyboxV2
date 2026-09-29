@@ -1,0 +1,88 @@
+flowchart TB
+    browser["浏览器客户端：工作区、会话、模型设置、Prompt 与草稿"]
+    startup["宿主入口：src/web/serve.ts；配置、AgentDefinition、根装配与信号"]
+    subgraph root["本机 Node 进程：唯一 Nya 根 Context"]
+        web["web-frontend：静态页面、HTTP API、SSE"]
+        picker["host-directory-picker：本机目录对话框"]
+        subgraph harness["Harness 逻辑边界：16 个现有组件，尚未抽包"]
+            run["Run：准入、幂等、模型选择"]
+            registry["协议注册与五种绑定：Loop、PreparedRunProgram"]
+            runtime["RunRuntime：操作、取消、退出、结算"]
+            session["Session：会话树、Run 事实、原生记录与恢复"]
+            prompts["Prompt 与 Agent Prompt：草稿、版本、绑定与快照"]
+            projects["Projects：项目目录身份"]
+            images["Image Assets：原字节、草稿续期与事务保留"]
+            files["Project Files：搜索、读取、快照与事务保留"]
+            bash["Bash：子进程与实际退出"]
+            patch["Apply Patch：串行队列、提交与清理"]
+        end
+        subgraph modelsGroup["Models 独立模块与 DeepSeek 宿主扩展：11 个组件"]
+            models["Models：配置、凭据协调、协议注册与原生 execution"]
+            drivers["四种通用原生驱动与 DeepSeek 宿主驱动"]
+            store["Models Store：配置、历史与凭据日志"]
+            vault["Models Vault：系统凭据操作"]
+            catalog["Catalog：Source、Cache、调度与来源接纳"]
+        end
+        storage["local-sqlite：独占业务连接、事务与迁移机制"]
+    end
+    businessDb[("harness.sqlite：会话、Run、Prompt、项目、资源引用与文件快照")]
+    modelDb[("models.sqlite：模型配置与非秘密引用")]
+    catalogDb[("models-catalog.sqlite：公开目录缓存")]
+    osVault["操作系统凭据库"]
+    imageDirectory["图片组件独占目录"]
+    projectDirectory["宿主项目目录与进程"]
+    provider["外部 Provider 原生 API"]
+    source["外部 models.dev 目录"]
+    startup -.->|"创建并装配"| root
+    browser <-->|"同源 HTTP / SSE；127.0.0.1"| web
+    web -->|"执行与取消"| run
+    web -->|"历史与附件查询"| session
+    web -->|"项目管理"| projects
+    web -->|"提示词管理"| prompts
+    web -->|"模型配置与 Key 管理"| models
+    web -->|"目录状态与刷新"| catalog
+    web -->|"选择本机目录"| picker
+    run -->|"历史与接受事务"| session
+    run -->|"解析提示词"| prompts
+    run -->|"检查项目"| projects
+    run -->|"选模"| models
+    run -->|"准备 program"| registry
+    run -->|"交接 program"| runtime
+    registry -->|"openNative 与驱动代租约"| models
+    registry -->|"作用域资源读取"| images
+    runtime -->|"账本与结算"| session
+    runtime -->|"受管调用"| bash
+    runtime -->|"受管调用"| patch
+    session -->|"查询与保留"| images
+    session -->|"准备、读取与保留"| files
+    session -->|"项目归属"| projects
+    files -->|"解析目录"| projects
+    bash -->|"工作目录"| projects
+    patch -->|"路径基准"| projects
+    session -->|"领域事务"| storage
+    prompts -->|"领域表与版本"| storage
+    projects -->|"项目记录"| storage
+    images -->|"元数据与引用"| storage
+    files -->|"快照与保留"| storage
+    storage -->|"独占连接"| businessDb
+    images -->|"原字节"| imageDirectory
+    files -->|"搜索与读取"| projectDirectory
+    bash -->|"执行进程"| projectDirectory
+    patch -->|"修改文件"| projectDirectory
+    models -->|"原生调用"| drivers
+    drivers -.->|"原生 HTTP / 流式"| provider
+    models -->|"配置与日志"| store
+    store -->|"独占连接"| modelDb
+    models -->|"私有凭据操作"| vault
+    vault -->|"系统存储"| osVault
+    catalog -->|"source-data 原子接纳"| models
+    catalog -->|"缓存独占连接"| catalogDb
+    catalog -.->|"公开来源刷新"| source
+    classDef harnessNode fill:#ecf9f3,stroke:#489677,color:#18372b;
+    classDef modelsNode fill:#edf3ff,stroke:#6289c7,color:#1e365d;
+    classDef hostNode fill:#fff6e8,stroke:#cc9b50,color:#65481e;
+    classDef infraNode fill:#f1f3f6,stroke:#8d99a9,color:#344052;
+    class run,registry,runtime,session,prompts,projects,images,files,bash,patch harnessNode;
+    class models,drivers,store,vault,catalog modelsNode;
+    class startup,web,picker hostNode;
+    class storage,businessDb,modelDb,catalogDb,osVault,imageDirectory,projectDirectory infraNode;

@@ -2,7 +2,7 @@
 
 [返回模块导航](../README.md)
 
-Web 模块把本机应用服务提供给浏览器，包括项目选择、会话与分支、多 Run 状态、模型目录及配置、Prompt 管理和临时原生输出展示。HTTP 服务只监听本机回环地址，浏览器不是持久状态或运行期资源的所有者。
+Web 模块把本机应用服务提供给浏览器，包括项目选择、会话与分支、归档恢复、图片与项目文件附件、多 Run 状态、模型目录及配置、Prompt 管理和临时原生输出展示。HTTP 服务只监听本机回环地址，浏览器不是持久状态或运行期资源的所有者。
 
 ## 组件与内部单元
 
@@ -25,13 +25,16 @@ Web 模块把本机应用服务提供给浏览器，包括项目选择、会话�
 | [client.ts](../../../src/web/client.ts) | 页面启动与 API 客户端装配 |
 | [workspace-client.ts](../../../src/web/workspace-client.ts)、[workspace-layout.ts](../../../src/web/workspace-layout.ts) | 项目列表、工作区和最多四个跨项目会话分屏，布局纯转换 |
 | [session-client.ts](../../../src/web/session-client.ts)、[run-change-client.ts](../../../src/web/run-change-client.ts) | 每个会话的提交/恢复/读请求管理及 SSE 重连 |
+| [archive-client.ts](../../../src/web/archive-client.ts) | 跨项目归档列表、恢复、读请求取消和过期响应隔离 |
+| [draft-client.ts](../../../src/web/draft-client.ts)、[image-client.ts](../../../src/web/image-client.ts)、[file-client.ts](../../../src/web/file-client.ts) | 分支草稿、图片上传、文件准备状态与附件续期 |
+| [file-view.ts](../../../src/web/file-view.ts) | 面板内 @ 搜索、文件预览、范围选择及历史快照查看 |
 | [models-client.ts](../../../src/web/models-client.ts)、[models-directory-client.ts](../../../src/web/models-directory-client.ts)、[prompt-client.ts](../../../src/web/prompt-client.ts) | 模型、目录与 Prompt 设置界面 |
 | [protocols/modules.ts](../../../src/web/protocols/modules.ts)、[protocols/view.ts](../../../src/web/protocols/view.ts) | 五种协议的输入、白名单视图解码、合并和 DOM 挂载 |
 | [tool-trace.ts](../../../src/web/tool-trace.ts)、[session-view.ts](../../../src/web/session-view.ts) | 工具过程卡片与会话展示派生数据 |
 
 ## 启动与关闭
 
-从仓库根目录运行 `npm run web`，先构建 Models 和应用 TypeScript，再运行 `dist/web/serve.js`。启动先校验配置，创建唯一根 `Context`，随后安装 Models、业务 Local SQLite、Harness、Directory Picker 与 Web Frontend；没有 Web 专属或项目专属子 Context。默认注册 `assistant` Agent，存在迁入的 `default` 模型配置时把它作为 Agent 默认模型。
+从仓库根目录运行 `npm run web`，先构建 Models 和应用 TypeScript，再运行 `dist/web/serve.js`。启动先校验配置，创建唯一根 `Context`，随后安装 Models、业务 Local SQLite、Image Assets、Harness、Directory Picker 与 Web Frontend；Harness 内安装 Projects 和 Project Files 等业务组件，没有 Web 专属或项目专属子 Context。默认注册 `assistant` Agent，存在迁入的 `default` 模型配置时把它作为 Agent 默认模型。
 
 成功后标准输出为 `Anybox Web: http://127.0.0.1:<port>`。SIGINT/SIGTERM 调用 `harness.close()`，停止准入并让 Nya 卸载根上全部组件，等待请求、Run、工具、Models 和数据库退出。启动失败会尝试 dispose 根后报告原启动错误；关闭失败设置进程退出码 1。仅替换 Web Frontend 的行为见其组件文档。
 
@@ -41,6 +44,7 @@ Web 模块把本机应用服务提供给浏览器，包括项目选择、会话�
 | --- | --- |
 | `ANYBOX_WEB_PORT` | `0`，由系统分配；允许 `0..65535` |
 | `ANYBOX_HARNESS_DATABASE` | `./data/harness.sqlite` |
+| `ANYBOX_IMAGE_ASSETS_DIRECTORY` | 业务数据库路径加 `.images`，默认 `./data/harness.sqlite.images` |
 | `ANYBOX_MODELS_DATABASE` | `./data/models.sqlite` |
 | `ANYBOX_MODELS_CATALOG_DATABASE` | Models 文件旁的 `models-catalog.sqlite` |
 | `ANYBOX_MODELS_NAMESPACE` | `anybox.models`，新 Vault 的系统凭据命名空间 |
@@ -71,6 +75,8 @@ Web 模块把本机应用服务提供给浏览器，包括项目选择、会话�
 工作区保存面板布局和选中位置，Session 控制器保存待确认提交及各父节点草稿。浏览器位置不构成服务端全局 head；提交始终包含显式 `parentNodeId`。关闭面板或切换项目停止自身读请求与计时器，不取消已接受 Run；取消必须发专门的 Run 取消请求。
 
 待提交记录先写浏览器存储再 POST，响应丢失后按幂等键只读查询恢复；无法确认的旧记录恢复输入等待用户决定，不自动重放副作用。SSE 只是刷新提示和有界临时视图，权威记录始终来自 Session/Run 查询。
+
+文件在发送时捕获快照，pending v3 分阶段保存准备键和快照 ID；重试、编辑与重新生成默认复用原快照。图片及文件草稿由工作区统一续期，关闭面板不丢弃草稿。归档关闭对应面板并保留位置，归档列表可显式打开只读历史；恢复刷新列表和已打开面板，不主动打开未显示会话。
 
 ## 相关验证
 

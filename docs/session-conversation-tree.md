@@ -4,7 +4,7 @@
 
 ## 会话、节点与模型选择
 
-Session 保存项目、Agent、可空 `modelId`、`historyMode`、可空 `protocolId` 和创建时间，没有全局 head。`modelId` 始终是 ModelConfiguration ID。新空 Session 可以调整默认模型；首次 Run 的接受事务原子固定协议。两个协议并发提交首个 Run 时，只有符合已提交绑定的一方被接受。已接受 Run 随后失败、取消或中断也不解除绑定。
+Session 保存项目、Agent、可空 `modelId`、`historyMode`、可空 `protocolId` 、可空 `archivedAt` 和创建时间，没有全局 head。`modelId` 始终是 ModelConfiguration ID。新空 Session 可以调整默认模型；首次 Run 的接受事务原子固定协议。两个协议并发提交首个 Run 时，只有符合已提交绑定的一方被接受。已接受 Run 随后失败、取消或中断也不解除绑定。
 
 后续默认模型选择和显式 `RunInput.modelId` 都检查协议。父节点恢复额外校验协议格式、驱动／Loop 版本、模型及有效参数、工具契约和 Models 的 `historyScopeEpoch`。Key、连接地址等语义变更使旧历史无法继续时明确拒绝，不按 hostname 或相同连接 ID 猜测账户兼容性。配置显示名变化不改写原生历史。切换协议或应用不兼容配置时新建 Session。
 
@@ -95,3 +95,7 @@ Chat/DeepSeek 的 v2 原生记录可以与旧 v1 文本记录混合恢复；v1 �
 上线前停止旧宿主、备份数据库及图片目录并确认排他所有权。正常构建和测试不修改工作区数据库。
 
 验证覆盖 `conversation-tree` 的并发／竞态／事务故障，`conversation-migration` 的旧样本不重写与迁移回滚，`native-session` 的首次协议绑定、不可变增量引用、Prompt 固定与模板一次应用、持久启动屏障，以及工具／Harness 测试的取消、实际退出、清理失败与无副作用重放。五协议端到端及 Web 展示验收另由原生协议集成测试和 Web 测试覆盖。
+
+## 会话归档
+
+run-state v7 增加可空 archived_at；既有会话默认未归档，历史 JSON 不重写。归档仅调整会话管理状态，不影响树、固定初始化或资源引用。项目列表隐藏归档会话，跨项目归档列表集中查询，按 ID 仍可查看全部历史。存在 running/cancelling Run 时拒绝归档；Run 准备前及接受事务内检查归档，已接受幂等查询保持优先。恢复后可继续原成功父路径，旧 dialogue-v1 恢复后仍只读。归档不自动取消、不删除、不批量处理。

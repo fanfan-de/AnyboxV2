@@ -33,6 +33,9 @@ export interface WebCommands extends Pick<SessionPort, 'searchProjectFiles' | 'p
   listProjects(): Promise<readonly Project[]>
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
   selectSessionModel(sessionId: string, modelId: string): Promise<Session>
+  archiveSession(id: string): Promise<Session>
+  restoreSession(id: string): Promise<Session>
+  listArchivedSessions(): Promise<readonly Session[]>
   getSession(id: string): Promise<Session | undefined>
   listSessions(projectId: string): Promise<readonly Session[]>
   getNode(sessionId: string, id: string): Promise<ConversationNode | undefined>
@@ -122,7 +125,7 @@ function knownFailure(error: unknown): HttpFailure {
     }
     if ('code' in error && error.code === 'node-not-found') return failure(404, 'node-not-found')
     if ('code' in error && error.code === 'invalid-history') return failure(409, 'invalid-history')
-    if ('code' in error && ['legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable'].includes(String(error.code))) return failure(409, String(error.code))
+    if ('code' in error && ['session-archived', 'session-has-active-runs', 'legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable'].includes(String(error.code))) return failure(409, String(error.code))
     if (/idempotency key already used/.test(error.message)) {
       return failure(409, 'conflict')
     }
@@ -141,7 +144,7 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 function sessionView(session: Session): object {
   return {
     id: session.id, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
-    modelId: session.modelId,
+    modelId: session.modelId, archivedAt: session.archivedAt,
     protocolId: session.protocolId, historyMode: session.historyMode,
   }
 }
@@ -253,6 +256,7 @@ const assets = new Map([
   ['/prompt-client.js', { file: fileURLToPath(new URL('./prompt-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/models-client.js', { file: fileURLToPath(new URL('./models-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/models-directory-client.js', { file: fileURLToPath(new URL('./models-directory-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
+  ['/archive-client.js', { file: fileURLToPath(new URL('./archive-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-client.js', { file: fileURLToPath(new URL('./workspace-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/workspace-layout.js', { file: fileURLToPath(new URL('./workspace-layout.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
   ['/protocols/view.js', { file: fileURLToPath(new URL('./protocols/view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' }],
@@ -554,6 +558,15 @@ export async function startWebServer(commands: WebCommands, port = 0): Promise<W
           const body = await requestObject(request, ['patch', 'expectedRevision'])
           json(response, 200, await commands.modelsSettings.updateConfiguration(id, body.patch as Partial<ModelConfigurationInput>, promptRevision(body.expectedRevision))); return
         }
+      }
+      if (method === 'GET' && path === '/api/v1/sessions/archived') {
+        json(response, 200, (await commands.listArchivedSessions()).map(sessionView)); return
+      }
+      const sessionArchiveMatch = /^\/api\/v1\/sessions\/([^/]+)\/(archive|restore)$/.exec(path)
+      if (method === 'POST' && sessionArchiveMatch) {
+        const id = decodeURIComponent(sessionArchiveMatch[1])
+        const session = await (sessionArchiveMatch[2] === 'archive' ? commands.archiveSession(id) : commands.restoreSession(id))
+        json(response, 200, sessionView(session)); return
       }
       if (method === 'POST' && path === '/api/v1/sessions') {
         const body = await requestObject(request, ['projectId', 'agentId', 'modelId'])

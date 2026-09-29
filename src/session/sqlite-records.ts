@@ -187,6 +187,12 @@ const migrations: readonly StorageMigration[] = [{
 }, {
   version: 6,
   up(tx) { tx.execute('ALTER TABLE harness_native_records ADD COLUMN resource_refs_json TEXT') },
+}, {
+  version: 7,
+  up(tx) {
+    tx.execute('ALTER TABLE harness_sessions ADD COLUMN archived_at TEXT')
+    tx.execute('CREATE INDEX harness_sessions_archived ON harness_sessions(archived_at DESC, id) WHERE archived_at IS NOT NULL')
+  },
 }]
 
 function required(row: StorageRow, key: string): string {
@@ -313,6 +319,7 @@ function nativeHistory(reader: StorageReader, sessionId: string, parentNodeId: s
 function sessionFromRow(row: StorageRow): Session {
   return Object.freeze({
     id: required(row, 'id'), projectId: required(row, 'project_id'),
+    archivedAt: optional(row, 'archived_at') ?? null,
     agentId: required(row, 'agent_id'), modelId: optional(row, 'model_id') ?? null, createdAt: required(row, 'created_at'),
     historyMode: required(row, 'history_mode') as Session['historyMode'], protocolId: optional(row, 'protocol_id') ?? null,
   })
@@ -495,11 +502,36 @@ export async function openSqliteSessionRecords(
       return db.transaction(tx => {
         requireSession(tx, sessionId)
         const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!)
+        if (session.archivedAt !== null) throw treeError('session-archived')
         if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
         if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
         tx.execute('UPDATE harness_sessions SET model_id = ? WHERE id = ?', [modelId, sessionId])
         return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!)
       })
+    },
+    archiveSession(id) {
+      return db.transaction(tx => {
+        requireSession(tx, id)
+        const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!)
+        if (session.archivedAt !== null) return session
+        if (tx.get("SELECT id FROM harness_runs WHERE session_id = ? AND status IN ('running', 'cancelling') LIMIT 1", [id])) {
+          throw treeError('session-has-active-runs')
+        }
+        tx.execute('UPDATE harness_sessions SET archived_at = ? WHERE id = ?', [inputs.now(), id])
+        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!)
+      })
+    },
+    restoreSession(id) {
+      return db.transaction(tx => {
+        requireSession(tx, id)
+        tx.execute('UPDATE harness_sessions SET archived_at = NULL WHERE id = ?', [id])
+        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!)
+      })
+    },
+    listArchivedSessions() {
+      return db.read(reader => Object.freeze(reader.all(
+        'SELECT * FROM harness_sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id',
+      ).map(sessionFromRow)))
     },
     getSession(id) {
       return db.read(reader => {
@@ -509,7 +541,7 @@ export async function openSqliteSessionRecords(
     },
     listSessions(projectId) {
       return db.read(reader => Object.freeze(reader.all(
-        'SELECT * FROM harness_sessions WHERE project_id = ? ORDER BY created_at, id', [projectId],
+        'SELECT * FROM harness_sessions WHERE project_id = ? AND archived_at IS NULL ORDER BY created_at, id', [projectId],
       ).map(sessionFromRow)))
     },
     getNode(sessionId, id) {
@@ -554,6 +586,7 @@ export async function openSqliteSessionRecords(
         const prior = accepted(tx, input)
         if (prior) return { run: prior, created: false }
         const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [input.sessionId])!)
+        if (session.archivedAt !== null) throw treeError('session-archived')
         if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
         if (!native || model.schemaVersion !== 3) throw treeError('invalid-history')
         const binding = checkedBinding(native.binding)

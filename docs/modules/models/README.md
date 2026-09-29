@@ -15,12 +15,14 @@ Models 负责统一模型定义、账户连接、可执行配置、系统凭据�
 | [目录缓存](catalog-cache.md) | `models.catalog-cache` | 独立 SQLite 缓存与可观察的内存后备 |
 | [目录调度](catalog.md) | `models.catalog` | 启动来源选择、ETag 刷新、接纳及连接同步 |
 | [Responses](responses.md) | 注册 `responses` | 原生请求、事件、结果与恢复编解码 |
-| [Chat Completions](chat-completions.md) | 注册 `chat-completions` | 标准 Chat 文本和函数工具协议 |
+| [Chat Completions](chat-completions.md) | 注册 `chat-completions` | 标准 Chat 文本、用户图片和函数工具协议 |
 | [Anthropic Messages](anthropic-messages.md) | 注册 `anthropic-messages` | thinking、签名、工具与服务端搜索块 |
 | [Gemini Interactions](gemini-interactions.md) | 注册 `gemini-interactions` | 原生步骤、thought、函数调用和结果 |
 | [DeepSeek 扩展](deepseek.md) | 注册 `deepseek-chat-completions` | 宿主显式非推理策略，复用 Chat 驱动 |
 
 协议驱动负责原生数据与 HTTP 生命周期；[执行模块](../execution/README.md)的协议 Agent Loop 决定如何响应工具调用、停止原因、拒绝和续轮。Models 不运行 Bash/Apply Patch，不决定 Run 成败，不存 Session 对话树，也不把原生结果转换成统一文本结果。
+
+五种驱动均支持显式声明能力的 JPEG/PNG/WebP 用户图片：资源引用留在原生记录，字节只在受管 start 后读取并编码到临时 HTTP 请求。当前驱动为 2.1.0、记录为 v2，双读旧文本 v1；各协议的编码与兼容细节见独立文档。项目文件资料由宿主绑定编码为普通用户文本，Models 不新增文件读取服务或记录格式。Session 的归档状态也由宿主负责。
 
 ## 依赖与资源
 

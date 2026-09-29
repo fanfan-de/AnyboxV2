@@ -520,3 +520,21 @@ button { touch-action: manipulation; }
 .file-preview button, .file-preview input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; }
 .attach-files { font-size: 12px; white-space: nowrap; }
 .file-range[hidden], .composer-files[hidden], .file-picker[hidden] { display: none; }
+
+/* Session archival shares the existing dialog and workspace surfaces. */
+#open-archive { margin-bottom: 12px; }
+.archive-dialog { width: min(720px, calc(100% - 32px)); }
+.archive-list { display: flex; flex-direction: column; gap: 12px; }
+.archive-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.archive-copy { min-width: 0; }
+.archive-copy strong, .archive-copy time { display: block; overflow-wrap: anywhere; }
+.archive-copy strong { font-size: 13px; }
+.archive-copy time { margin-top: 5px; font-size: 11px; color: var(--secondary); }
+.archive-banner { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px; font-size: 12px; background: #e1e9e0; }
+.archive-banner[hidden] { display: none; }
+.archive-banner button { border: 1px solid var(--line-strong); border-radius: 5px; padding: 5px 10px; background: var(--panel); }
+
+@media (max-width: 560px) {
+  .archive-row { grid-template-columns: auto auto 1fr; }
+  .archive-copy { grid-column: 1 / -1; }
+}

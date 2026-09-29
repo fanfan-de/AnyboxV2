@@ -14,7 +14,7 @@
 
 ## 输入与主要契约
 
-固定 initialization 提供 Prompt 快照和已知工具定义，当前输入为只应用一次 task-template 的 text。首次请求将 Prompt 编为 `{ role, content }`，追加 user 消息至 `input`；本地工具声明使用 `{ type: 'function', name, description?, parameters, strict: false }`。有父历史时只发送新增 user input，不重复声明初始化工具。
+固定 initialization 提供 Prompt 快照和已知工具定义。当前用户文本由应用一次 task-template 的 text 与其后的文件快照资料组成；首次请求将 Prompt 编为 `{ role, content }`，追加 user 消息至 `input`。有图片时 user.content 为可选 input_text 加有序 input_image 块，image_url 保存内部资源 URI；原字节由驱动在受管 start 后编码，不进入持久输入。本地工具声明使用 `{ type: 'function', name, description?, parameters, strict: false }`。有父历史时只发送本轮 user input，不重复祖先文件资料或初始化工具。
 
 循环签名为 `runResponses(runner: ExchangeRunner, initial: NativeObject): Promise<ProtocolConclusion>`。runner.call 返回实际退出且已提交原生上下文的 NativeReply；runner.tools 经 Runtime 校验并串行运行本地工具。成功 conclusion 包含 output 和本轮 response 记录 ID，不包含 SDK 对象。
 

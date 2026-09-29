@@ -165,6 +165,8 @@ function messageFor(error: unknown): string {
     'model-required': '请先选择一个可用模型。',
     'model-unavailable': '所选模型不可用，请检查提供方、密钥与模型配置。',
     'protocol-unavailable': '该协议当前不可用，请检查提供方配置。',
+    'session-archived': '会话已归档，请先恢复后再继续。',
+    'session-has-active-runs': '会话仍有运行未结束，请等待完成，或取消并等待清理后再归档。',
     'legacy-session-readonly': '旧版文本会话仅供查看，请新建原生会话。',
     'protocol-mismatch': '此会话已固定协议，请新建会话使用其他协议。',
     'history-incompatible': '所选模型、连接或参数无法完整恢复此分支的原生历史，请使用原配置或新建会话。',

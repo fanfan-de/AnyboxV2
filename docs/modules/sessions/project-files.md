@@ -31,6 +31,8 @@
 
 Session 传入经验证的 sessionId 作为 scopeId，ownerKey 对本组件不透明。FileRef 保存 snapshotId、projectId、相对 path、可选 range、actualRange、byteLength、sha256、createdAt 和草稿 expiresAt。正文只经受管 read 获取，不向浏览器提供源绝对路径。服务名与随机 ID 本身不是权限边界。
 
+会话归档限制由 Session 包装入口负责：归档后拒绝新的 prepare，历史快照读取和草稿续期继续可用；已开始的准备按原生命周期完成或取消。Project Files 不读取 archivedAt，也不复制会话状态机。
+
 ## 持久归属、幂等与回收
 
 组件在 apply 登记 `project-files` v1，拥有 `harness_file_snapshots`、`harness_file_retentions` 和 `harness_file_preparations`。字节为业务库 BLOB，快照元数据不变。Session 只拥有 Run 引用和顺序，不能直接写这些表。

@@ -1131,6 +1131,13 @@ test('Web imports immutable images, serves scoped content and validates small Ru
     }
     const invalid = await fetch(url, { method: 'POST', headers: { Origin: f.web.url, 'Content-Type': 'application/octet-stream' }, body: Buffer.from('not an image') })
     assert.equal(invalid.status, 400)
+    await f.harness.archiveSession(session.id)
+    const archivedContent = await fetch(`${url}/${image.assetId}/content`)
+    assert.deepEqual(Buffer.from(await archivedContent.arrayBuffer()), bytes)
+    const blockedUpload = await fetch(url, { method: 'POST', headers: { Origin: f.web.url, 'Content-Type': 'application/octet-stream' }, body: bytes })
+    assert.equal(blockedUpload.status, 409)
+    assert.equal((await blockedUpload.json()).error.code, 'session-archived')
+    assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/images/renew`, { assetIds: [image.assetId] })).data.valid[0].assetId, image.assetId)
     for (const path of ['/image-client.js', '/image/limits.js', '/image/port.js']) assert.equal((await fetch(`${f.web.url}${path}`)).status, 200)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
@@ -1200,6 +1207,43 @@ test('Web project references prepare atomically, preserve history and expose saf
     assert.equal((await request(f.web, 'POST', `${base}/preview`, { path: '../escape' })).response.status, 400)
     const response = await fetch(`${f.web.url}/api/v1${base}/snapshots/${ref.snapshotId}`, { headers: { Origin: 'https://different.invalid' } })
     assert.equal(response.status, 403)
+    await f.harness.archiveSession(session.id)
+    assert.equal((await request(f.web, 'GET', `${base}/snapshots/${ref.snapshotId}`)).data.text, 'first\nsecond\n')
+    assert.equal((await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'after-archive', selections: [{ kind: 'snapshot', snapshotId: ref.snapshotId }] })).data.error.code, 'session-archived')
+    assert.equal((await request(f.web, 'POST', `${base}/renew`, { snapshotIds: [ref.snapshotId] })).response.status, 200)
     for (const asset of ['/draft-client.js', '/file-client.js', '/file-view.js', '/project-files/domain.js']) assert.equal((await fetch(`${f.web.url}${asset}`)).status, 200)
   } finally { for (const call of f.llm.calls) { call.result.resolve('cleanup'); call.done.resolve() } await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('Web archive routes enforce read-only state, active conflict, static route precedence and restoration', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-archive-'))
+  const f = await fixture(directory)
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const base = `/sessions/${session.id}`
+    const run = await f.harness.startRun({ sessionId: session.id, input: 'active', parentNodeId: null, idempotencyKey: 'active' })
+    const conflict = await request(f.web, 'POST', `${base}/archive`, {})
+    assert.equal(conflict.response.status, 409); assert.equal(conflict.data.error.code, 'session-has-active-runs')
+    f.llm.calls[0].result.resolve('done'); f.llm.calls[0].done.resolve(); await f.harness.waitRun(run.id)
+    const archived = await request(f.web, 'POST', `${base}/archive`, {})
+    assert.equal(archived.response.status, 200); assert.ok(archived.data.archivedAt)
+    assert.deepEqual((await request(f.web, 'GET', `/projects/${f.project.id}/sessions`)).data, [])
+    assert.deepEqual((await request(f.web, 'GET', '/sessions/archived')).data, [archived.data])
+    assert.deepEqual((await request(f.web, 'GET', base)).data, archived.data)
+    for (const [path, body] of [[`${base}/model`, { modelId: 'default' }], [`${base}/runs`, { input: 'new', parentNodeId: null, idempotencyKey: 'new' }]]) {
+      const rejected = await request(f.web, 'POST', path, body)
+      assert.equal(rejected.response.status, 409); assert.equal(rejected.data.error.code, 'session-archived')
+    }
+    const replay = await request(f.web, 'POST', `${base}/runs`, { input: 'active', parentNodeId: null, idempotencyKey: 'active' })
+    assert.equal(replay.data.id, run.id)
+    for (const action of ['archive', 'restore']) assert.equal((await request(f.web, 'POST', `/sessions/missing/${action}`, {})).response.status, 404)
+    const restored = await request(f.web, 'POST', `${base}/restore`, {})
+    assert.equal(restored.response.status, 200); assert.equal(restored.data.archivedAt, null)
+    assert.deepEqual((await request(f.web, 'GET', '/sessions/archived')).data, [])
+    assert.equal((await request(f.web, 'GET', `/projects/${f.project.id}/sessions`)).data[0].id, session.id)
+    assert.equal((await fetch(`${f.web.url}/archive-client.js`)).status, 200)
+  } finally {
+    for (const call of f.llm.calls) { call.result.resolve('cleanup'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
 })

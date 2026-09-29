@@ -1,3 +1,4 @@
+import { setupArchivePanel } from './archive-client.js'
 import { createFileLeaseKeeper } from './file-client.js'
 import type { ModelsCatalog } from './models-client.js'
 import type { Api, ProjectView, SessionView, SessionPosition } from './client-types.js'
@@ -77,6 +78,33 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     changed: () => { for (const bundle of bundles.values()) bundle.controller.imagesChanged() },
     error: error => showNotice(messageFor(error)),
   })
+  const archiveWrites = new Set<string>()
+  const archivePanel = setupArchivePanel(api, messageFor, {
+    projects: () => projects,
+    view: session => {
+      selectProject(session.projectId); open({ projectId: session.projectId, sessionId: session.id })
+      bundles.get(session.id)?.view?.element.focus({ preventScroll: true })
+    },
+    restore: session => changeArchive(session.id, session.projectId, false),
+  })
+  async function changeArchive(id: string, projectId: string, archive: boolean): Promise<void> {
+    if (archiveWrites.has(id)) return
+    archiveWrites.add(id); refreshControls()
+    try {
+      await api<SessionView>(`/sessions/${encodeURIComponent(id)}/${archive ? 'archive' : 'restore'}`, {})
+      if (disposed) return
+      if (archive) {
+        const pane = panes(state.root).find(item => item.sessionId === id)
+        if (pane) close(pane.id)
+        showNotice('会话已归档，可从“已归档会话”查看或恢复。')
+      } else {
+        await bundles.get(id)?.controller.refresh()
+        showNotice('会话已恢复。')
+      }
+      await sessionIndex.load(projectId)
+      archivePanel.refresh()
+    } finally { archiveWrites.delete(id); if (!disposed) refreshControls() }
+  }
   const uploadImage = async (sessionId: string, file: File, signal: AbortSignal): Promise<ImageRef> => {
     const response = await fetch(`/api/v1/sessions/${encodeURIComponent(sessionId)}/images`, {
       method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file, signal, cache: 'no-store',
@@ -145,6 +173,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     for (const button of projectList.querySelectorAll<HTMLButtonElement>('button[data-split-edge]')) {
       button.disabled = !active || !candidate({ projectId: button.dataset.projectId!, sessionId: button.dataset.sessionId! }, active.id, button.dataset.splitEdge as Edge)
     }
+    for (const button of projectList.querySelectorAll<HTMLButtonElement>('[data-archive-session]')) button.disabled = archiveWrites.has(button.dataset.archiveSession!)
     for (const button of tabs.querySelectorAll<HTMLButtonElement>('button')) {
       button.setAttribute('aria-pressed', String(button.dataset.paneId === state.activePaneId))
     }
@@ -174,7 +203,9 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   function close(id: string): void {
     setWorkspace(closePane(state, id))
     const pane = activePane()
-    if (pane) bundles.get(pane.sessionId)?.view?.element.querySelector<HTMLTextAreaElement>('textarea')?.focus()
+    const element = pane ? bundles.get(pane.sessionId)?.view?.element : undefined
+    const input = element?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)')
+    ;(input ?? element ?? get('open-archive')).focus({ preventScroll: true })
   }
 
   function getView(pane: Pane): SessionPanel {
@@ -189,6 +220,13 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
           catch { showNotice('浏览器无法保存查看位置，刷新后需要重新选择分支。') }
         },
         schedule: (callback, ms) => window.setTimeout(callback, ms), clear: timer => window.clearTimeout(timer as number),
+        archived(ref) {
+          const pane = panes(state.root).find(item => item.sessionId === ref.sessionId)
+          if (pane) close(pane.id)
+          showNotice('会话已在其他页面归档，已关闭对应面板。')
+          void sessionIndex.load(ref.projectId)
+          archivePanel.refresh()
+        },
         missing(ref) {
           const item = panes(state.root).find(value => value.sessionId === ref.sessionId)
           if (item) { showNotice('会话不存在或不属于该项目，已从工作区移除。'); setWorkspace(closePane(state, item.id)) }
@@ -199,7 +237,14 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     }
     if (!bundle.view) {
       bundle.view = createSessionPanel(pane, projects.find(item => item.id === pane.projectId)?.name ?? pane.projectId,
-        bundle.controller, () => focusPane(pane.id), () => close(pane.id), bundle.scroll, models)
+        bundle.controller, () => focusPane(pane.id), () => close(pane.id), bundle.scroll, models, async () => {
+          try {
+            await changeArchive(pane.sessionId, pane.projectId, false)
+            const element = bundles.get(pane.sessionId)?.view?.element
+            ;(element?.querySelector<HTMLElement>('textarea:not(:disabled)') ?? element)?.focus({ preventScroll: true })
+          }
+          catch (error) { if (!disposed) showNotice(messageFor(error)) }
+        })
     }
     return bundle.view
   }
@@ -352,6 +397,10 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         action.dataset.sessionId = item.id
         menu.append(action)
       }
+      const archive = document.createElement('button')
+      archive.type = 'button'; archive.textContent = '归档'
+      archive.dataset.archiveSession = item.id; archive.dataset.projectId = item.projectId
+      menu.append(archive)
       row.append(button, menu)
       return row
     }))
@@ -462,7 +511,9 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button') : null
     if (!button || button.disabled) return
     const data = button.dataset
-    if (data.toggleProject) {
+    if (data.archiveSession && data.projectId) {
+      void changeArchive(data.archiveSession, data.projectId, true).catch(error => { if (!disposed) showNotice(messageFor(error)) })
+    } else if (data.toggleProject) {
       if (collapsedProjects.has(data.toggleProject)) collapsedProjects.delete(data.toggleProject)
       else collapsedProjects.add(data.toggleProject)
       updateProjectExpansion(data.toggleProject)
@@ -600,7 +651,10 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   window.addEventListener('hashchange', route, options)
   window.addEventListener('popstate', route, options)
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) { void imageLeases.refresh(); void fileLeases.refresh() }
+    if (!document.hidden) {
+      void imageLeases.refresh(); void fileLeases.refresh(); archivePanel.refresh()
+      for (const project of projects) void sessionIndex.load(project.id)
+    }
     if (document.hidden) { dragCleanup?.(); resizeCleanup?.() }
     for (const bundle of bundles.values()) if (bundle.view) void bundle.controller.refresh()
   }, options)
@@ -654,6 +708,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       unsubscribeModels?.()
       listeners.abort()
       sessionIndex.dispose()
+      archivePanel.dispose()
       observer.disconnect()
       resizeCleanup?.()
       dragCleanup?.()

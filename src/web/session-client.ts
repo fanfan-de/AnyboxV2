@@ -115,6 +115,7 @@ export interface SessionEnvironment {
   readonly schedule: (callback: () => void, ms: number) => unknown
   readonly clear: (timer: unknown) => void
   readonly missing: (ref: SessionRef) => void
+  readonly archived?: (ref: SessionRef) => void
   readonly models?: () => readonly RunnableModelSummary[]
   readonly position?: SessionPosition
   readonly savePosition?: (value: SessionPosition) => void
@@ -139,6 +140,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   const events = new Map<string, readonly RunEventView[]>(), expanded = new Set<string>(), eventJobs = new Map<string, Promise<void>>()
   const path = `/sessions/${encodeURIComponent(ref.sessionId)}`
   const pending = () => env.pending.get(ref.sessionId)
+  const readOnly = () => !session || Boolean(session.archivedAt) || session.historyMode === 'dialogue-v1'
   const attached = () => listener !== undefined
   const emit = () => listener?.()
   const uploads = createImageUploads({ sessionId: ref.sessionId, drafts, newId: env.newId, changed: emit,
@@ -274,6 +276,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     const originalIds = new Set(restored.images.map(image => image.image!.assetId))
     const images = [...restored.images.map(image => current.images.find(value => value.image?.assetId === image.image!.assetId) ?? image),
       ...current.images.filter(image => !image.image || !originalIds.has(image.image.assetId))]
+    if (submission.invalidImages && !images.some(image => image.id === 'invalid-pending-image')) {
+      images.push({ id: 'invalid-pending-image', name: '待恢复图片', status: 'failed', byteLength: 0, error: '图片信息不兼容，请移除后重新添加。' })
+    }
     const fileIds = new Set(restored.files.map(file => file.id))
     const files = [...restored.files, ...current.files.filter(file => !fileIds.has(file.id))]
     setDraftAt(parent, { text, images, files })
@@ -282,6 +287,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   }
   const submitStored = async (submission: PendingSubmission, followVersion?: number) => {
     if (busy) return
+    if (session?.archivedAt) { notice = '会话已归档，请先恢复后再继续。'; emit(); return }
     if (submission.invalidFiles || !pendingFilesValid(submission)) { notice = '待提交文件引用无效，请移除后重新添加。'; emit(); return }
     if (submission.invalidImages) { notice = '待提交图片信息不兼容，请移除后重新添加。'; emit(); return }
     const input = encodeInput(submission.input, submission.modelId, submission.images, submission.files?.length || submission.fileSelections?.length || 0)
@@ -333,7 +339,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (pending()?.idempotencyKey === submission.idempotencyKey) save(undefined)
     } catch (error) {
       notice = env.messageFor(error)
-      if (isApiError(error) && error.status < 500 && error.code !== 'project-unavailable') {
+      if (isApiError(error) && error.code === 'session-archived') {
+        restoreUnaccepted(submission); refreshAgain = true
+      } else if (isApiError(error) && error.status < 500 && error.code !== 'project-unavailable') {
         const parent = submission.parentNodeId ?? null
         if (!draftAt(parent).text && !draftAt(parent).images.length && !draftAt(parent).files.length) {
           const restored = { ...draftFromInput(submission.input, submission.images), files: pendingFileDrafts(submission).map((file, index) =>
@@ -351,6 +359,10 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try { existing = await read<RunView>(`${path}/runs/by-key/${encodeURIComponent(submission.idempotencyKey)}`, version) }
     catch (error) { if (!isApiError(error) || error.status !== 404) throw error }
     if (existing) { adopt(existing); save(undefined) }
+    else if (session?.archivedAt) {
+      restoreUnaccepted(submission)
+      notice = '会话已归档，未接受的消息已保留为草稿。恢复后可继续。'
+    }
     else if (session?.historyMode === 'dialogue-v1' || ![1, 2, 3].includes(submission.schemaVersion ?? 0) || submission.invalidImages || submission.invalidFiles || submission.parentNodeId === undefined || (env.models && submission.modelId === undefined)) {
       notice = session?.historyMode === 'dialogue-v1' ? '旧版会话仅供查看。待提交消息已恢复为草稿；请新建原生会话。' : '旧版待提交消息尚未被接受，已保留输入。请选定对话位置与模型后确认发送。'
       if (!draftAt(position.viewNodeId).text && !draftAt(position.viewNodeId).images.length && !draftAt(position.viewNodeId).files.length) {
@@ -386,7 +398,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (!refreshJob) schedule()
     },
     async setModel(modelId) {
-      if (!session || busy || pending() || !modelId) return
+      if (readOnly() || !session || busy || pending() || !modelId) return
       if (session.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       if (env.models && !canUseModel(env.models().find(value => value.id === modelId))) {
         notice = '此模型暂不可用，请检查提供方与模型配置。'; emit(); return
@@ -420,15 +432,16 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       emit()
     },
     setDraft(value) {
+      if (readOnly()) return
       setDraftAt(position.viewNodeId, { ...draftAt(position.viewNodeId), text: value })
       if (position.follow) { position = { ...position, follow: undefined }; remember() }
     },
-    addImages(files) { if (!busy && !pending() && session?.historyMode !== 'dialogue-v1') uploads.add(position.viewNodeId, files) },
-    removeImage(id) { if (!busy && !pending()) uploads.remove(position.viewNodeId, id) },
-    retryImage(id) { if (!busy && !pending()) uploads.retry(position.viewNodeId, id) },
+    addImages(files) { if (!readOnly() && !busy && !pending()) uploads.add(position.viewNodeId, files) },
+    removeImage(id) { if (!readOnly() && !busy && !pending()) uploads.remove(position.viewNodeId, id) },
+    retryImage(id) { if (!readOnly() && !busy && !pending()) uploads.retry(position.viewNodeId, id) },
     imagesChanged: emit,
     setFiles(files) {
-      if (busy || pending() || session?.historyMode === 'dialogue-v1') return
+      if (readOnly() || busy || pending()) return
       if (files.length > fileLimits.maxFiles) { notice = '每次最多引用 8 个文件。'; emit(); return }
       setDraftAt(position.viewNodeId, { ...draftAt(position.viewNodeId), files }); emit()
     },
@@ -438,6 +451,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     fileMessage: env.messageFor,
     dispose() { controller.detach(); uploads.dispose() },
     async navigate(id, draft, images, files) {
+      if (draft !== undefined && readOnly()) return
       locationVersion++
       position = { viewNodeId: id }
       if (draft !== undefined) setDraftAt(id, draftFromInput(draft, images, files))
@@ -477,7 +491,14 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
           try {
             const currentSession = await read<SessionView>(path, version)
             if (currentSession.projectId !== ref.projectId) { env.missing(ref); return }
+            const becameArchived = Boolean(session && !session.archivedAt && currentSession.archivedAt)
             session = currentSession
+            if (becameArchived && env.archived) {
+              // Reconcile uncertainty before closing; a failed read leaves pending input intact.
+              try { await recover(version) }
+              finally { if (version === generation && attached()) env.archived(ref) }
+              return
+            }
             // Discover every run, including work started through another tab or host.
             const loaded = await read<readonly RunView[]>(`${path}/runs`, version)
             for (const value of loaded) adopt(value)
@@ -507,6 +528,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     },
     async submit() {
       if (!session || busy || loading) return
+      if (session.archivedAt) { await recover(generation); notice = '会话已归档，请先恢复后再继续。'; emit(); return }
       if (session.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       let submission = pending()
       if (!submission) {
@@ -532,7 +554,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       await submitStored(submission, locationVersion)
     },
     async regenerate(node) {
-      if (busy || pending() || node.sessionId !== ref.sessionId) return
+      if (readOnly() || busy || pending() || node.sessionId !== ref.sessionId) return
       if (session?.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
         notice = '请先选择一个可用模型。'; emit(); return

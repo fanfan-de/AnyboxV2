@@ -13,6 +13,7 @@ export interface SessionView {
   readonly modelId: string | null
   readonly protocolId: string | null
   readonly historyMode: 'dialogue-v1' | 'native-local-v1'
+  readonly archivedAt: string | null
   readonly createdAt: string
 }
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'

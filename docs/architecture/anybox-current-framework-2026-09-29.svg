@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1270" viewBox="0 0 1600 1270" role="img" aria-labelledby="title description">
+<title id="title">AnyboxV2 当前框架：单根组件与 Harness 逻辑边界</title>
+<desc id="description">以 2026 年 9 月 29 日当前源码为准。浏览器通过本机 Web 接口操作同一个 Nya 根中的 Harness、Models 与存储组件。Harness 尚未抽包，远程连接尚未实现。图展示分组与主要交互，详细关系见 Mermaid 源码。</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6c8197"/></marker></defs>
+<g font-family="PingFang SC, Noto Sans CJK SC, Microsoft YaHei, sans-serif">
+<rect width="1600" height="1270" fill="#f6f8fb"/>
+<text x="48" y="50" font-size="32" fill="#172d45" font-weight="700">AnyboxV2 · 当前框架</text>
+<text x="48" y="82" font-size="18" fill="#617287" font-weight="400">2026-09-29  /  当前源码  /  单机单用户  /  色块表示职责分组，不是子 Context 或独立进程</text>
+<rect x="48" y="112" width="750" height="91" rx="16" fill="#ffffff" stroke="#c8d7ec"/>
+<text x="68" y="145" font-size="22" fill="#294c7b" font-weight="650">浏览器客户端</text>
+<text x="68" y="177" font-size="17" fill="#536982" font-weight="400">工作区与四分屏 · 会话树 · 模型 / Prompt 表单 · 草稿与附件交互</text>
+<rect x="834" y="112" width="718" height="91" rx="16" fill="#fff8ec" stroke="#e5cba1"/>
+<text x="854" y="145" font-size="22" fill="#75501f" font-weight="650">宿主入口  src/web/serve.ts</text>
+<text x="854" y="177" font-size="17" fill="#806849" font-weight="400">配置 · AgentDefinition · 根装配 · 信号与关闭</text>
+<rect x="32" y="250" width="1536" height="880" rx="22" fill="#ffffff" stroke="#b5c5d7"/>
+<text x="56" y="284" font-size="22" fill="#233d59" font-weight="700">本机 Node 进程  ·  唯一 Nya 根 Context  ·  30 个运行期组件</text>
+<text x="1024" y="284" font-size="17" fill="#697f94" font-weight="400">Nya 管理依赖就绪、重启和清理</text>
+<path d="M 420 203 L 420 232 L 16 232 L 16 353 L 56 353" fill="none" stroke="#6c8197" stroke-width="2"  marker-end="url(#arrow)"/>
+<rect x="263" y="221" width="315" height="28" rx="6" fill="#f6f8fb" stroke="#f6f8fb"/>
+<text x="275" y="242" font-size="16" fill="#47617e" font-weight="400">127.0.0.1  ·  同源 HTTP / SSE</text>
+<path d="M 1200 203 L 1200 250" fill="none" stroke="#6c8197" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+<rect x="56" y="310" width="1050" height="86" rx="14" fill="#fff7e8" stroke="#e4c896"/>
+<text x="76" y="342" font-size="22" fill="#735022" font-weight="650">Web Frontend  ·  web-frontend</text>
+<text x="76" y="373" font-size="17" fill="#806b4c" font-weight="400">静态页面 + HTTP API + SSE；直接注入 Harness、Models、目录选择与 Prompt 服务</text>
+<rect x="1140" y="310" width="404" height="86" rx="14" fill="#fff7e8" stroke="#e4c896"/>
+<text x="1160" y="342" font-size="21" fill="#735022" font-weight="650">本机目录选择器</text>
+<text x="1160" y="373" font-size="16" fill="#806b4c" font-weight="400">host-directory-picker · macOS 对话框</text>
+<path d="M 1106 353 L 1140 353" fill="none" stroke="#6c8197" stroke-width="2"  marker-end="url(#arrow)"/>
+<path d="M 496 396 L 496 449" fill="none" stroke="#6c8197" stroke-width="2"  marker-end="url(#arrow)"/>
+<text x="520" y="426" font-size="16" fill="#627a71" font-weight="400">会话 / Run / 项目 / Prompt</text>
+<path d="M 1010 396 L 1296 396 L 1296 449" fill="none" stroke="#6c8197" stroke-width="2"  marker-end="url(#arrow)"/>
+<text x="1110" y="426" font-size="16" fill="#617d9e" font-weight="400">模型配置 / Key / 目录</text>
+<rect x="56" y="450" width="936" height="487" rx="18" fill="#f0faf5" stroke="#81baa1"/>
+<text x="80" y="484" font-size="25" fill="#1e674a" font-weight="700">Harness 业务范围</text>
+<text x="555" y="484" font-size="16" fill="#557e6c" font-weight="400">逻辑分组 · 16 个组件 · 尚未抽包</text>
+<rect x="80" y="513" width="278" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="96" y="542" font-size="20" fill="#183c30" font-weight="650">Run</text>
+<text x="96" y="569" font-size="16" fill="#516778" font-weight="400">准入 · 幂等 · 模型选择</text>
+<text x="96" y="592" font-size="16" fill="#516778" font-weight="400">harness.runs</text>
+<rect x="386" y="513" width="278" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="402" y="542" font-size="20" fill="#183c30" font-weight="650">协议注册与五种绑定</text>
+<text x="402" y="569" font-size="16" fill="#516778" font-weight="400">独立原生 Loop</text>
+<text x="402" y="592" font-size="16" fill="#516778" font-weight="400">准备 PreparedRunProgram</text>
+<rect x="692" y="513" width="276" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="708" y="542" font-size="20" fill="#183c30" font-weight="650">RunRuntime</text>
+<text x="708" y="569" font-size="16" fill="#516778" font-weight="400">操作 · 取消 · 实际退出 · 结算</text>
+<text x="708" y="592" font-size="16" fill="#516778" font-weight="400">harness.run-runtime</text>
+<rect x="80" y="655" width="278" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="96" y="684" font-size="20" fill="#183c30" font-weight="650">Session</text>
+<text x="96" y="711" font-size="16" fill="#516778" font-weight="400">会话树 · 归档 · Run 与原生记录</text>
+<text x="96" y="734" font-size="16" fill="#516778" font-weight="400">接受 / 恢复 / 终态事务</text>
+<rect x="386" y="655" width="278" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="402" y="684" font-size="20" fill="#183c30" font-weight="650">Prompt + Agent Prompt</text>
+<text x="402" y="711" font-size="16" fill="#516778" font-weight="400">草稿 · 发布版本 · Agent 绑定</text>
+<text x="402" y="734" font-size="16" fill="#516778" font-weight="400">指令与模板快照</text>
+<rect x="692" y="655" width="276" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="708" y="684" font-size="20" fill="#183c30" font-weight="650">Projects</text>
+<text x="708" y="711" font-size="16" fill="#516778" font-weight="400">项目目录身份与可用性</text>
+<text x="708" y="734" font-size="16" fill="#516778" font-weight="400">执行目录基准，不是沙箱</text>
+<rect x="80" y="797" width="278" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="96" y="826" font-size="20" fill="#183c30" font-weight="650">Image Assets</text>
+<text x="96" y="853" font-size="16" fill="#516778" font-weight="400">图片原字节 · 草稿续期</text>
+<text x="96" y="876" font-size="16" fill="#516778" font-weight="400">Run 接受事务固定引用</text>
+<rect x="386" y="797" width="278" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="402" y="826" font-size="20" fill="#183c30" font-weight="650">Project Files</text>
+<text x="402" y="853" font-size="16" fill="#516778" font-weight="400">项目文件搜索与读取</text>
+<text x="402" y="876" font-size="16" fill="#516778" font-weight="400">不可变快照 · 事务保留</text>
+<rect x="692" y="797" width="276" height="108" rx="12" fill="#ffffff" stroke="#bfdfd0"/>
+<text x="708" y="826" font-size="20" fill="#183c30" font-weight="650">Bash + Apply Patch</text>
+<text x="708" y="853" font-size="16" fill="#516778" font-weight="400">子进程 / 文件提交队列</text>
+<text x="708" y="876" font-size="16" fill="#516778" font-weight="400">取消并等待实际退出</text>
+<text x="82" y="641" font-size="15" fill="#6f9382" font-weight="400">状态与配置</text>
+<text x="82" y="782" font-size="15" fill="#6f9382" font-weight="400">输入资源与工具</text>
+<path d="M 992 572 L 1050 572" fill="none" stroke="#6c8197" stroke-width="2"  marker-end="url(#arrow)"/>
+<text x="997" y="549" font-size="15" fill="#5c728c" font-weight="400">调用</text>
+<rect x="1050" y="450" width="494" height="568" rx="18" fill="#f0f5ff" stroke="#8eaee0"/>
+<text x="1074" y="484" font-size="24" fill="#315e9a" font-weight="700">Models + 宿主协议扩展</text>
+<rect x="1074" y="513" width="446" height="87" rx="12" fill="#ffffff" stroke="#c7d8ef"/>
+<text x="1090" y="542" font-size="20" fill="#315e9a" font-weight="650">Models 协调服务</text>
+<text x="1090" y="569" font-size="16" fill="#516778" font-weight="400">配置 · 原生 execution · 驱动注册 · 凭据协调</text>
+<rect x="1074" y="620" width="446" height="109" rx="12" fill="#ffffff" stroke="#c7d8ef"/>
+<text x="1090" y="649" font-size="20" fill="#315e9a" font-weight="650">五种原生协议驱动</text>
+<text x="1090" y="676" font-size="16" fill="#516778" font-weight="400">Responses / Chat / Anthropic / Gemini</text>
+<text x="1090" y="699" font-size="16" fill="#516778" font-weight="400">以及 DeepSeek 宿主扩展</text>
+<rect x="1074" y="750" width="211" height="110" rx="12" fill="#ffffff" stroke="#c7d8ef"/>
+<text x="1090" y="779" font-size="20" fill="#315e9a" font-weight="650">Store</text>
+<text x="1090" y="806" font-size="16" fill="#516778" font-weight="400">models.sqlite</text>
+<text x="1090" y="829" font-size="16" fill="#516778" font-weight="400">配置 · 版本 · 日志</text>
+<rect x="1307" y="750" width="213" height="110" rx="12" fill="#ffffff" stroke="#c7d8ef"/>
+<text x="1323" y="779" font-size="20" fill="#315e9a" font-weight="650">Vault</text>
+<text x="1323" y="806" font-size="16" fill="#516778" font-weight="400">系统凭据库</text>
+<text x="1323" y="829" font-size="16" fill="#516778" font-weight="400">Key 不进历史</text>
+<rect x="1074" y="881" width="446" height="110" rx="12" fill="#ffffff" stroke="#c7d8ef"/>
+<text x="1090" y="910" font-size="20" fill="#315e9a" font-weight="650">Catalog / Source / Cache</text>
+<text x="1090" y="937" font-size="16" fill="#516778" font-weight="400">公开目录刷新与原子接纳</text>
+<text x="1090" y="960" font-size="16" fill="#516778" font-weight="400">独占 models-catalog.sqlite</text>
+<path d="M 492 937 L 492 978" fill="none" stroke="#6c8197" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+<text x="511" y="964" font-size="16" fill="#667b8e" font-weight="400">领域表与同一业务事务</text>
+<rect x="56" y="979" width="936" height="118" rx="16" fill="#f2f5f8" stroke="#b7c5d2"/>
+<text x="80" y="1011" font-size="22" fill="#43576b" font-weight="650">基础设施  ·  local-sqlite / local-storage</text>
+<text x="80" y="1042" font-size="17" fill="#5b6e81" font-weight="400">独占 harness.sqlite：Session / Run / Prompt / Projects / 图片引用 / 文件快照</text>
+<text x="80" y="1072" font-size="16" fill="#5b6e81" font-weight="400">领域组件各自登记迁移。图片原字节由图片组件独占目录保存，工具操作宿主项目文件。</text>
+<text x="1052" y="1049" font-size="16" fill="#667d98" font-weight="400">Models 为独立包；DeepSeek 扩展仍在宿主。</text>
+<text x="1052" y="1075" font-size="16" fill="#667d98" font-weight="400">三套 SQLite 独占连接，文件路径互不共用。</text>
+<text x="56" y="1119" font-size="16" fill="#62748b" font-weight="400">关闭入口：harness.close() → 停止准入 → Nya 卸载根上组件 → 取消并等待实际退出与清理</text>
+<path d="M 1544 676 L 1556 676 L 1556 1177 L 1500 1177" fill="none" stroke="#6c8197" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow)"/>
+<rect x="48" y="1152" width="1452" height="70" rx="14" fill="#ffffff" stroke="#d0dbe5"/>
+<text x="68" y="1181" font-size="19" fill="#3d536e" font-weight="650">外部服务</text>
+<text x="185" y="1181" font-size="18" fill="#546b84" font-weight="400">Provider 原生 API ← 协议驱动     |     models.dev ← Catalog Source</text>
+<text x="68" y="1208" font-size="16" fill="#64798e" font-weight="400">系统资源：系统凭据库、项目目录与子进程、图片原字节目录；客户端仅接收允许展示的投影。</text>
+<text x="48" y="1251" font-size="16" fill="#6b7f93" font-weight="400">实线：主要调用入口    虚线：装配、持久化或外部边界    组内以职责归属为主；详细关系见随附 Mermaid。</text>
+</g></svg>

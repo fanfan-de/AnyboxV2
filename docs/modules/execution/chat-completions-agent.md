@@ -14,7 +14,7 @@
 
 ## 输入与接口
 
-通过[协议注册表](protocol-agent-registry.md)的 prepare 接收当前 input、固定 initialization 和可选历史。首次编码为 `messages: [...prompts, { role: 'user', content: text }]`，工具声明为 `{ type: 'function', function: { name, description?, parameters } }`。父历史恢复时只提供新增消息。
+通过[协议注册表](protocol-agent-registry.md)的 prepare 接收当前 input、固定 initialization、文件正文和可选历史。文本由本次模板输出与其后的文件快照资料组成；无图片时编码为 `messages: [...prompts, { role: 'user', content: text }]`。有图片时 content 为可选 text 块加有序 image_url 块，url 保存内部资源 URI，驱动在受管 start 后转成 data URL。工具声明为 `{ type: 'function', function: { name, description?, parameters } }`。父历史恢复时只提供本轮新增消息，不重复祖先文件资料。
 
 Loop 的签名为 `runChat(runner: ExchangeRunner, initial: NativeObject): Promise<ProtocolConclusion>`；runner.call 执行原生交换，runner.tools 执行应用已知工具，返回 conclusion 给 Runtime。模型参数不是 Loop 选项，由 Models 配置快照固定。
 

@@ -21,12 +21,12 @@ const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Original i
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const now = () => '2026-09-26T00:00:00.000Z'
 
-async function host(directory) {
+async function host(directory, clock = now) {
   const root = new Context(), llm = controlledModels()
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   await root.installComponent(llm.component())
-  const harness = await createHarness(root, { agents, now })
+  const harness = await createHarness(root, { agents, now: clock })
   const project = await harness.openProject(directory)
   const plans = new Map(), loop = root.get(runRuntimeServiceKey), start = loop.start.bind(loop)
   loop.start = request => { plans.set(request.runId, request.program); return start(request) }
@@ -560,4 +560,103 @@ test('a transient terminal write failure remains visible after user cancellation
   assert.equal(terminal.status, 'failed')
   assert.equal(terminal.errorCategory, 'state-write-failure')
   assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes, [])
+})
+
+test('archive preserves native history, hides default lists, blocks writes and restores continuation', async t => {
+  const f = await fixture(t)
+  const completed = await f.finish(await f.start('Seed'))
+  const before = await f.harness.getNodePath(f.session.id, completed.resultNodeId)
+  const records = await f.harness.getRunRecords(completed.id)
+  const archived = await f.harness.archiveSession(f.session.id)
+  assert.equal(archived.archivedAt, now())
+  assert.deepEqual(await f.harness.archiveSession(f.session.id), archived)
+  assert.deepEqual(await f.harness.listSessions(f.project.id), [])
+  assert.deepEqual(await f.harness.listArchivedSessions(), [archived])
+  assert.deepEqual(await f.harness.getNodePath(f.session.id, completed.resultNodeId), before)
+  assert.deepEqual(await f.harness.getRunRecords(completed.id), records)
+  const opens = f.llm.opens.length
+  await assert.rejects(f.start('New'), { code: 'session-archived' })
+  await assert.rejects(f.harness.selectSessionModel(f.session.id, 'default'), { code: 'session-archived' })
+  await assert.rejects(accepted(f, 'direct'), { code: 'session-archived' })
+  const image = f.harness.importImage(f.session.id, { async *[Symbol.asyncIterator]() { assert.fail('must not consume image') } })
+  await assert.rejects(image.result, { code: 'session-archived' }); await image.done
+  const files = f.harness.prepareProjectFiles(f.session.id, 'files', [{ kind: 'project-file', path: 'missing' }])
+  await assert.rejects(files.result, { code: 'session-archived' }); await files.done
+  assert.equal((await f.start('Seed')).id, completed.id)
+  await assert.rejects(f.start('Changed', null, 'Seed'), /idempotency key/)
+  assert.equal(f.llm.opens.length, opens)
+  const restored = await f.harness.restoreSession(f.session.id)
+  assert.equal(restored.archivedAt, null)
+  assert.deepEqual(await f.harness.restoreSession(f.session.id), restored)
+  assert.deepEqual(await f.harness.listArchivedSessions(), [])
+  const next = await f.finish(await f.start('Continued', completed.resultNodeId))
+  assert.equal(next.status, 'completed')
+  assert.equal((await f.harness.getNodePath(f.session.id, next.resultNodeId)).length, 2)
+  await assert.rejects(f.harness.archiveSession('missing'), /unknown session/)
+  await assert.rejects(f.harness.restoreSession('missing'), /unknown session/)
+})
+
+test('archive rejects running and cancelling Runs until actual model exit and settlement', async t => {
+  const f = await fixture(t), run = await f.start('Active')
+  await assert.rejects(f.harness.archiveSession(f.session.id), { code: 'session-has-active-runs' })
+  await f.harness.cancelRun(run.id)
+  await f.call(run).cancelled.promise
+  await assert.rejects(f.harness.archiveSession(f.session.id), { code: 'session-has-active-runs' })
+  assert.equal((await f.harness.getSession(f.session.id)).archivedAt, null)
+  f.call(run).done.resolve()
+  assert.equal((await f.harness.waitRun(run.id)).status, 'cancelled')
+  assert.equal((await f.harness.archiveSession(f.session.id)).archivedAt, now())
+})
+
+test('archive winning during preparation rejects acceptance and joins untransferred program cleanup', async t => {
+  const f = await fixture(t), entered = deferred(), proceed = deferred(), closing = deferred(), exited = deferred()
+  const protocols = f.root.get('harness.protocol-agents'), prepare = protocols.prepare.bind(protocols)
+  let released = false, settled = false
+  protocols.prepare = async input => {
+    const program = await prepare(input)
+    entered.resolve()
+    await proceed.promise
+    return { ...program, async close() { closing.resolve(); await exited.promise; return program.close() }, release() { released = true; program.release() } }
+  }
+  const starting = f.start('Racing')
+  const rejected = assert.rejects(starting, { code: 'session-archived' }).then(() => { settled = true })
+  try {
+    await entered.promise
+    await f.harness.archiveSession(f.session.id)
+    proceed.resolve()
+    await closing.promise
+    await tick()
+    assert.equal(settled, false); assert.equal(released, false)
+    assert.equal(f.llm.calls.length, 0)
+    assert.deepEqual(await f.harness.listRuns(f.session.id), [])
+    exited.resolve(); await rejected
+    assert.equal(released, true)
+    assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes, [])
+    const facts = await f.db.read(reader => ['harness_native_initializations', 'harness_native_records', 'harness_native_contexts'].map(table => reader.get(`SELECT count(*) AS n FROM ${table}`).n))
+    assert.deepEqual(facts, [0, 0, 0])
+  } finally { proceed.resolve(); exited.resolve() }
+})
+
+test('archive and restore survive restart and work across unavailable project directories', async t => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-archives-')))
+  const { mkdirSync } = await import('node:fs')
+  let time = now(), f = await host(directory, () => time)
+  t.after(async () => { await f.harness.close(); rmSync(directory, { recursive: true, force: true }) })
+  const otherPath = join(directory, 'other'); mkdirSync(otherPath)
+  const otherProject = await f.harness.openProject(otherPath)
+  const a = await f.harness.createSession(f.project.id, 'assistant'), b = await f.harness.createSession(otherProject.id, 'assistant')
+  await f.harness.archiveSession(a.id); await f.harness.archiveSession(b.id)
+  const expected = [a.id, b.id].sort()
+  assert.deepEqual((await f.harness.listArchivedSessions()).map(item => item.id), expected)
+  await f.harness.close()
+  rmSync(otherPath, { recursive: true })
+  f = await host(directory, () => time)
+  assert.deepEqual((await f.harness.listArchivedSessions()).map(item => item.id), expected)
+  assert.equal((await f.harness.getSession(a.id)).archivedAt, now())
+  assert.deepEqual(await f.harness.listSessions(otherProject.id), [])
+  await f.harness.restoreSession(b.id)
+  assert.equal((await f.harness.listSessions(otherProject.id))[0].id, b.id)
+  time = '2026-09-29T00:00:00.000Z'
+  await f.harness.archiveSession(b.id)
+  assert.deepEqual((await f.harness.listArchivedSessions()).map(item => item.id), [b.id, a.id])
 })

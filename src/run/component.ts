@@ -86,6 +86,7 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             if (prior) return prior
             const session = await sessions.getSession(input.sessionId)
             if (!session) throw new Error(`unknown session ${input.sessionId}`)
+            if (session.archivedAt !== null) throw treeError('session-archived')
             if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
             await projects.requireAvailable(session.projectId)
             const agent = agents.find(value => value.id === session.agentId)

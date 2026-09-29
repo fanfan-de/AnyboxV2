@@ -13,7 +13,7 @@
 
 ## 输入和主要接口
 
-Run 通过[注册表](protocol-agent-registry.md) prepare 建立 program。首次编码把 system/developer Prompt 合成顶层 system 文本块，将 context/user Prompt 与当前输入编码为 messages 中的 user text blocks；工具声明使用 name、description?、input_schema。父历史恢复时仅加入本次 user 消息，固定初始化从原生恢复状态取得。
+Run 通过[注册表](protocol-agent-registry.md) prepare 建立 program。首次编码把 system/developer Prompt 合成顶层 system 文本块，将 context/user Prompt 与当前输入编码为 messages 中的 user content。当前输入先放模板文本及其后的文件快照资料，再放有序 image 块；其 source 为内部资源 URI，驱动在受管 start 后物化成 base64 source。纯图片输入不添加空 text 块。工具声明使用 name、description?、input_schema。父历史恢复时仅加入本轮 user 消息，不重新读取或附加祖先文件，固定初始化从原生恢复状态取得。
 
 `runAnthropic(runner, initial)` 使用 `ExchangeRunner.call` 和 `.tools`，最终返回带 response 记录 ID 的 ProtocolConclusion。`max_tokens`、thinking、output_config 和原生搜索工具来自已保存模型参数，不由 Loop 临时补默认值。`max_tokens` 在配置中必填，新基础配置初始化默认值为 4096。
 

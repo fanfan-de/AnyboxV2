@@ -13,7 +13,7 @@
 
 ## 输入与主要接口
 
-[注册表](protocol-agent-registry.md) prepare 接收 initialization、当前 input 和可选 history。首次请求把 system/developer Prompt 用两个换行合成 `system_instruction`；context/user Prompt 与当前输入编为 `input` 的 user_input/text 块。工具声明使用 `{ type: 'function', name, description?, parameters }`。恢复时仅编码新增 input。
+[注册表](protocol-agent-registry.md) prepare 接收 initialization、当前 input、文件正文和可选 history。首次请求把 system/developer Prompt 用两个换行合成 `system_instruction`；context/user Prompt 编为 `input` 的 user_input/text 块。本轮 user_input.content 先放模板文本及文件快照资料，再放有序 image 块，uri 保存内部资源引用；驱动在受管 start 后生成 data/mime_type。纯图片不添加空 text 块。工具声明使用 `{ type: 'function', name, description?, parameters }`。恢复时仅编码本轮 input，不重复祖先附件资料。
 
 `runGemini(runner: ExchangeRunner, initial: NativeObject)` 返回 ProtocolConclusion。runner.call 提供原生 NativeReply，runner.tools 经 Runtime 串行执行本地工具。generation_config 等执行参数由 Models 保存并快照固定，Loop 不猜测 reasoning 模式或预算。
 

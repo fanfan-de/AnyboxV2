@@ -24,6 +24,9 @@ export interface SessionPort {
   renewImages(sessionId: string, assetIds: readonly string[]): Promise<ImageRenewal>
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
   selectSessionModel(sessionId: string, modelId: string, protocolId?: string): Promise<Session>
+  archiveSession(id: string): Promise<Session>
+  restoreSession(id: string): Promise<Session>
+  listArchivedSessions(): Promise<readonly Session[]>
   getSession(id: string): Promise<Session | undefined>
   listSessions(projectId: string): Promise<readonly Session[]>
   getNode(sessionId: string, id: string): Promise<ConversationNode | undefined>

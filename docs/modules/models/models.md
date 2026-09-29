@@ -76,6 +76,6 @@ Settings 的完整操作分组：
 
 [runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 验证独立执行、实际退出、恢复身份和 epoch；[lifecycle-review.test.mjs](../../../packages/models/tests/lifecycle-review.test.mjs) 验证注销、清理失败与迟到结果；[unified-models.test.mjs](../../../packages/models/tests/unified-models.test.mjs) 和 [source-definitions.test.mjs](../../../packages/models/tests/source-definitions.test.mjs) 验证补齐与来源并发；[connection-deletion.test.mjs](../../../packages/models/tests/connection-deletion.test.mjs) 验证删除及恢复日志；[boundary.test.mjs](../../../packages/models/tests/boundary.test.mjs) 验证输入边界。
 
-[native-images.test.mjs](../../../packages/models/tests/native-images.test.mjs) 验证资源引用、单 execution reader、v1 加法恢复、取消与实际清理和请求体积边界。
+[native-images.test.mjs](../../../packages/models/tests/native-images.test.mjs) 验证资源引用、单 execution reader、v1 加法恢复、取消与实际清理和请求体积边界；[multimodal-protocols.test.mjs](../../../packages/models/tests/multimodal-protocols.test.mjs) 覆盖 Responses、Anthropic 和 Gemini 的图片物化、JSON/SSE、混合版本恢复与失败清理。
 
 参见 [原生框架设计](../../native-protocol-agent-framework-design.md) 与 [Models 包使用说明](../../../packages/models/README.md)。

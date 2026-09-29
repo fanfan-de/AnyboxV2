@@ -103,7 +103,7 @@ test('legacy turns migrate in array order; ambiguous Run associations remain exp
   assert.equal((await sessions.getNodePath('legacy', third.id)).length, 3)
   const schema = await f.db.read(reader => reader.all('PRAGMA table_info(harness_sessions)'))
   assert.equal(schema.some(column => column.name === 'turns_json'), false)
-  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 6)
+  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 7)
 })
 
 test('invalid legacy data rolls back the entire tree migration and its version record', async t => {
@@ -141,4 +141,19 @@ test('Session reads historical and version 2 snapshots without rewriting stored 
     const after = await f.db.read(reader => reader.get('SELECT model_snapshot_json FROM harness_runs WHERE id = ?', [id]))
     assert.equal(after.model_snapshot_json, before.model_snapshot_json)
   }
+})
+
+test('legacy migration adds nullable archive state and preserves read-only history through restore', async t => {
+  const f = await legacyFixture(t)
+  await f.root.installComponent(createSessionComponent(f.inputs, agents))
+  const sessions = f.root.get(sessionServiceKey)
+  const before = await sessions.listNodes('legacy', null)
+  const runs = await sessions.listRuns('legacy')
+  assert.equal((await sessions.getSession('legacy')).archivedAt, null)
+  assert.ok((await sessions.archiveSession('legacy')).archivedAt)
+  assert.equal((await sessions.listSessions((await sessions.getSession('legacy')).projectId)).some(session => session.id === 'legacy'), false)
+  assert.deepEqual(await sessions.listNodes('legacy', null), before)
+  assert.deepEqual(await sessions.listRuns('legacy'), runs)
+  assert.equal((await sessions.restoreSession('legacy')).historyMode, 'dialogue-v1')
+  await assert.rejects(sessions.selectSessionModel('legacy', 'default'), { code: 'legacy-session-readonly' })
 })

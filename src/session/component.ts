@@ -1,7 +1,7 @@
 import { projectFilesServiceKey } from '../project-files/port.js'
 import type { ProjectFilesPort } from '../project-files/port.js'
 import { fileError } from '../project-files/domain.js'
-import type { Session } from './domain.js'
+import { treeError, type Session } from './domain.js'
 import type { Component } from '@nya/core'
 import type { RuntimeInputs, OwnedCall } from '../contracts.js'
 import { imageAssetsServiceKey, imageAssetError } from '../image/port.js'
@@ -38,7 +38,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
       const pending = new Set<Promise<unknown>>()
       const resourceCalls = new Set<OwnedCall<unknown>>()
       const resourceCall = <T>(sessionId: string, signal: AbortSignal | undefined,
-        start: (signal: AbortSignal, session: Session) => Promise<OwnedCall<T>>, kind: 'image' | 'file' = 'image'): OwnedCall<T> => {
+        start: (signal: AbortSignal, session: Session) => Promise<OwnedCall<T>>, kind: 'image' | 'file' = 'image', writable = false): OwnedCall<T> => {
         if (!accepting) throw new Error('session is closing')
         const abort = new AbortController(), combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal
         let cleanupFailed = false
@@ -46,6 +46,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           combined.throwIfAborted()
           const session = await records.getSession(nonEmpty(sessionId, 'sessionId'))
           if (!session) throw new Error(`unknown session ${sessionId}`)
+          if (writable && session.archivedAt !== null) throw treeError('session-archived')
           if (session.historyMode !== 'native-local-v1') throw new Error('legacy-session-readonly')
           combined.throwIfAborted()
           const call = await start(combined, session)
@@ -95,7 +96,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
       const sessions: SessionPort = {
         searchProjectFiles: (id, query, signal) => resourceCall(id, signal, async (signal, session) => files.search(session.projectId, query, signal), 'file'),
         previewProjectFile: (id, selection, signal) => resourceCall(id, signal, async (signal, session) => files.preview(session.projectId, selection, signal), 'file'),
-        prepareProjectFiles: (id, key, selections, signal) => resourceCall(id, signal, async (signal, session) => files.prepare(id, session.projectId, key, selections, signal), 'file'),
+        prepareProjectFiles: (id, key, selections, signal) => resourceCall(id, signal, async (signal, session) => files.prepare(id, session.projectId, key, selections, signal), 'file', true),
         getFileSnapshot: (id, snapshotId, signal) => resourceCall(id, signal, async signal => {
           const call = files.read(id, [snapshotId], signal)
           return { ...call, result: call.result.then(values => values[0]) }
@@ -105,7 +106,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           return files.renew(id, ids)
         }),
         importImage: (sessionId, bytes, signal) => resourceCall(sessionId, signal,
-          async signal => images.importImage({ scopeId: sessionId, bytes }, signal)),
+          async signal => images.importImage({ scopeId: sessionId, bytes }, signal), 'image', true),
         getImage: (sessionId, assetId, signal) => resourceCall(sessionId, signal, async signal => {
           const [image] = await images.describe(sessionId, [assetId])
           signal.throwIfAborted()
@@ -132,6 +133,9 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
             return records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId, protocolId)
           })
         },
+        archiveSession: id => track(() => records.archiveSession(nonEmpty(id, 'sessionId'))),
+        restoreSession: id => track(() => records.restoreSession(nonEmpty(id, 'sessionId'))),
+        listArchivedSessions: () => track(() => records.listArchivedSessions()),
         getSession: id => track(() => records.getSession(id)),
         listSessions: projectId => track(async () => {
           if (!await projects.getProject(projectId)) throw new Error(`unknown project ${projectId}`)

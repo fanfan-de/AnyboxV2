@@ -20,7 +20,7 @@
 
 支持的协议为 `responses`、`anthropic-messages`、`chat-completions`、`gemini-interactions`、`deepseek-chat-completions`。DeepSeek 使用 `runChat`；其他分别使用自己的循环函数。注册表不是任意脚本或 SDK 的动态加载器。
 
-`PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input 和可选 history。initialization 固定 `schemaVersion: 1`、`known-tools-v1`、Prompt 快照与工具定义；只接受当前完整 Bash/Apply Patch 定义且不允许重名。input v2 保存 schemaVersion、raw、text、template 和有序图片描述，旧 v1 输入按无图片读取。
+`PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input，以及可选 history 和 fileContents。initialization 固定 `schemaVersion: 1`、`known-tools-v1`、Prompt 快照与工具定义；只接受当前完整 Bash/Apply Patch 定义且不允许重名。新 input v3 保存 raw、text、template、有序 images 和 files 引用；旧 v1 无附件，v2 按 files=[] 读取。fileContents 是受管读取的本轮文件正文，编码前核对其引用与 input.files 一致，仅忽略会变化的 expiresAt。
 
 `ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（五种协议均为 1.1.0）、execution 实际记录格式（五种协议均为 2） 和 `viewSchemaVersion: 1`。这些值是历史兼容判断依据。
 

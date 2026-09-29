@@ -68,6 +68,9 @@ export function createWebFrontendComponent(agents: readonly Readonly<{ id: strin
           return deps[sessionServiceKey].selectSessionModel(sessionId, modelId, model.parameters.protocolId)
         },
         getSession: id => deps[sessionServiceKey].getSession(id),
+        archiveSession: id => deps[sessionServiceKey].archiveSession(id),
+        restoreSession: id => deps[sessionServiceKey].restoreSession(id),
+        listArchivedSessions: () => deps[sessionServiceKey].listArchivedSessions(),
         listSessions: id => deps[sessionServiceKey].listSessions(id),
         getNode: (sessionId, id) => deps[sessionServiceKey].getNode(sessionId, id),
         getNodePath: (sessionId, id) => deps[sessionServiceKey].getNodePath(sessionId, id),

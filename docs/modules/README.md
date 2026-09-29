@@ -4,13 +4,19 @@
 
 本手册按当前源码的实际组件边界组织。模块是职责与协作边界，不是 Nya 子 Context；本机应用的所有组件安装在同一个根上。完整本机装配有 30 个运行期组件，另保留 1 个不参与正式执行的 H0 探针。按本机默认安装的五种协议统计；定制宿主可只安装需要的协议与应用绑定。
 
+本轮核对日期：2026-09-29。当前手册覆盖五种协议的图片输入、项目文件快照引用和 Session 归档/恢复；归档控制器、文件视图与协议图片编码器均为所属组件的内部实现。
+
+## Harness 大模块的目标归属
+
+[Harness 模块边界与目标目录结构](../harness-module-boundary.md) 将本手册的执行、项目与会话、图片资源、Prompt 和内置工具归入目标 Harness 模块；Models 保持独立，通用 SQLite 属于基础设施，Web 按 API 接入、宿主和客户端职责拆分。该归属是后续源码整理方向，不增加组件或 Context；目录迁移尚未实施，以下导航和组件索引仍对应当前实现。
+
 ## 模块目录
 
 | 目录 | 内聚职责 | 独立组件文档数 |
 | --- | --- | --- |
 | [models/](./models/README.md) | 可复用模型配置、凭据、原生驱动及可选公开目录 | 11 |
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 8 |
-| [sessions/](./sessions/README.md) | 项目身份、文件快照、会话树、Run 持久事实及恢复 | 3 |
+| [sessions/](./sessions/README.md) | 项目身份、文件快照、会话树、归档、Run 持久事实及恢复 | 3 |
 | [images/](./images/README.md) | 图片导入、不可变字节、草稿续期与事务保留 | 1 |
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
 | [tools/](./tools/README.md) | 本地进程和文本文件变更 | 2 |
@@ -59,12 +65,25 @@
 ## 从一次请求理解模块协作
 
 1. [Web](./web/web-frontend.md) 或 [Harness 门面](../../src/harness.ts) 接收请求，通过当前服务进行调用。
-2. [Run](./execution/run.md) 先检查已接受幂等键，再读取 [Session/Projects](./sessions/README.md)、[Prompt 绑定](./prompts/agent-prompts.md) 和模型选择。
-3. [协议应用注册](./execution/protocol-agent-registry.md) 固定驱动代与对应 Loop，通过 [Models](./models/models.md) 准备独立 execution/program；Session 在接受事务复核协议及父恢复引用。
+2. [Run](./execution/run.md) 先检查已接受幂等键，再检查 [Session](./sessions/session.md) 的归档状态、项目、Prompt 与模型选择；新请求经 Session 受管读取已准备的[文件快照](./sessions/project-files.md)。
+3. [协议应用注册](./execution/protocol-agent-registry.md) 在模板后附加文件资料并编码图片引用，固定驱动代与对应 Loop，通过 [Models](./models/models.md) 准备独立 execution/program；Session 在接受事务复核归档状态、协议及父恢复引用，同时永久保留图片与文件引用。
 4. [RunRuntime](./execution/run-runtime.md) 同步接管 program，管理操作意图、实际启动、取消、退出和观察提交。对应协议 Loop 消费原生结果，经 Runtime 使用 [本地工具](./tools/README.md)。
 5. program 与工具退出后，Session 原子提交成功节点、记录、结果引用和终态。Web 通过安全投影及持久查询呈现结果。
 
 Models 配置库、目录缓存库和业务 SQLite 是三套独立连接，不共享文件。系统凭据留在 Vault，原生恢复记录留在受信 Session，浏览器只接收允许展示的投影。生命周期细节见 [Harness 协作总览](../harness-components.md)。
+
+## 当前持久格式
+
+这些版本属于不同边界，不能互相替代：
+
+| 边界 | 当前写入 | 读取与兼容 |
+| --- | --- | --- |
+| Models 配置库 / 原生参数 | 配置库 v3；参数 `{ protocolId, formatVersion: 1, value }` | 未知扩展保留待迁移状态；历史 JSON 不改写 |
+| Session 迁移账本 | `run-state` v7 | v5 原生记录、v6 图片资源引用、v7 `archivedAt`；旧 `dialogue-v1` 只读 |
+| Run 原始输入 | `NativeRunInput` v3，保存 raw/text/template/images/files | v1 无附件，v2 只有图片；文件正文另存快照并进入本轮原生请求 |
+| 五协议驱动 / 应用绑定 | 驱动 2.1.0、Loop 1.1.0、原生记录 v2 | 双读旧文本 v1 与混合父链，仍检查账户、模型和执行语义兼容 |
+| 资源迁移域 | `image-assets` v1、`project-files` v1 | 使用既有业务连接，与接受 Run 同事务保留；失败和取消不释放已接受引用 |
+| 浏览器待提交记录 | `PendingSubmission` v3 | 兼容 v1/v2；先查已接受幂等结果，不自动重放未确认的旧提交 |
 
 ## 组件之外的代码
 

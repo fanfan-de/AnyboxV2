@@ -14,7 +14,7 @@
 
 ## 输入、参数与接口
 
-Run 通过[协议注册表](protocol-agent-registry.md) prepare 创建 program。首次请求使用 messages 和 function 工具声明，与标准 Chat 相同；若初始化 Prompt 包含 developer 角色，在创建网络交换前拒绝。恢复时仅提供本次新增消息。
+Run 通过[协议注册表](protocol-agent-registry.md) prepare 创建 program。首次请求使用 messages 和 function 工具声明，与标准 Chat 相同：本轮文本先应用模板再附加文件快照资料，有图片时编码为 text/image_url 数组，图片 URI 由驱动在受管 start 后物化。若初始化 Prompt 包含 developer 角色，在创建网络交换前拒绝。恢复时仅提供本次新增消息，不重读或重复附加祖先文件。
 
 Loop 接口为 `runChat(runner, initial)`，通过 runner.call 与 runner.tools 返回 ProtocolConclusion。DeepSeek 原生策略明确固定 protocolId、`maxTokensField: 'max_tokens'`、`disableThinking: true`、`allowDeveloper: false`。这些策略由驱动适配器配置，绑定和 Runtime 不依据 hostname 推断。模型执行参数必须是本协议的已保存原生参数；不接受需要 reasoning 的配置。
 

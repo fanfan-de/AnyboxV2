@@ -38,7 +38,7 @@ export function createFileView(compose: HTMLFormElement, input: HTMLTextAreaElem
     input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant')
   }
   const closePreview = () => { previewAbort?.abort(); previewAbort = undefined; if (dialog.open) dialog.close(); activeItem = undefined }
-  const locked = () => { const state = controller.snapshot(); return state.busy || Boolean(state.pending) || state.session?.historyMode === 'dialogue-v1' }
+  const locked = () => { const state = controller.snapshot(); return state.busy || Boolean(state.pending) || Boolean(state.session?.archivedAt) || state.session?.historyMode === 'dialogue-v1' }
   const paintResults = () => {
     results.replaceChildren(...paths.map((path, index) => {
       const button = document.createElement('button'); button.type = 'button'; button.textContent = path

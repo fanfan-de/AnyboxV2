@@ -17,7 +17,9 @@ Session 是会话、不可变对话节点、Run 状态、事件和原生恢复�
 | --- | --- |
 | `createSession(projectId, agentId, modelId?)` | 检查 Agent 和可用项目，创建原生 Session；省略模型时使用 Agent 默认或 null |
 | `selectSessionModel(sessionId, modelId, protocolId?)` | 保存后续 Run 默认模型；已绑定协议时必须匹配，旧 Session 不可修改 |
-| `getSession(id)` / `listSessions(projectId)` | 查询会话；列表要求项目存在，但目录可暂时不可用 |
+| `getSession(id)` / `listSessions(projectId)` | 按 ID 查询包含归档会话；项目列表只返回未归档会话，要求项目存在但目录可暂时不可用 |
+| `archiveSession(id)` / `restoreSession(id)` | 幂等归档与恢复，返回 Session；归档时间使用注入时钟，不依赖项目目录、模型或凭据 |
+| `listArchivedSessions()` | 跨项目归档列表，按 archivedAt 倒序、id 升序 |
 | `getNode(sessionId, id)` | 查询指定 Session 内节点；不存在返回 undefined |
 | `getNodePath(sessionId, id)` | 返回从根到指定节点的完整路径；null 返回空路径 |
 | `listNodes(sessionId, parentId, query?)` | 查询同父直接子节点；limit 默认 50，范围 1–100；cursor 必须是同 Session 同父的节点 ID |
@@ -26,13 +28,15 @@ Session 是会话、不可变对话节点、Run 状态、事件和原生恢复�
 | `getRunEvents(id, afterSeq?)` | 按递增 seq 读取事件，游标默认 0、必须为非负安全整数；未知 Run 返回 undefined |
 | `getRunRecords(id)` | 读取该 Run 的不可变受信原生记录；未知 Run 抛错 |
 
-Session 保存 id、projectId、agentId、可空 modelId、historyMode、可空 protocolId、createdAt。ConversationNode 保存 id、sessionId、parentId、原始 input、output、sourceRunId，并从来源 Run 的 v2 nativeInput 投影 images；旧节点图片为空。节点不承载当前选中位置或全局 head。Harness 门面在显式选模时先通过 Models 验证配置，并传入真实协议 ID；Session 本身不注入 Models，也不查凭据。
+Session 保存 id、projectId、agentId、可空 modelId、historyMode、可空 protocolId、可空 archivedAt、createdAt。ConversationNode 保存 id、sessionId、parentId、原始 input、output、sourceRunId，并从来源 Run 的 nativeInput 投影 images 和 files：v1 两者为空，v2 只有图片，v3 包含图片和文件引用。节点不承载当前选中位置或全局 head。Harness 门面在显式选模时先通过 Models 验证配置，并传入真实协议 ID；Session 本身不注入 Models，也不查凭据。
 
 ## 受信执行记录端口
 
 | 方法 | 职责 |
 | --- | --- |
-| `findAcceptedRun(input)` | 在解析当前配置之前查已接受幂等键，同时验证原始输入、父节点和显式模型一致 |
+| `findAcceptedRun(input)` | 在解析当前配置之前查已接受幂等键，同时验证原始输入、附件 ID 与顺序、父节点和显式模型一致 |
+| `describeImages(sessionId, assetIds)` | 准备阶段读取受信图片元数据 |
+| `readFileSnapshots(sessionId, ids, signal?)` | 返回受管文件正文读取；只读取保存的快照，不重新打开项目源文件 |
 | `registerRun(id, input, now, prompts, model, native)` | 原子复核并接受 Run，返回 `{ run, created }` |
 | `loadNativeInitialization(sessionId)` | 读取首次接受后固定的 instruction/context 与工具声明 |
 | `loadNativeHistory(sessionId, parentNodeId)` | 校验所选成功路径，临时物化其原生记录、绑定、快照和 checkpoint |
@@ -47,7 +51,7 @@ Session 保存 id、projectId、agentId、可空 modelId、historyMode、可空 
 
 ## 接受、分支与成功结算
 
-新 Session 使用 `native-local-v1`。registerRun 在事务内再次检查幂等键、Session 模式、schemaVersion 3 模型快照、模型/绑定协议、父节点路径以及精确的 parentContextRef。首次接受原子固定 Session 协议和 initialization；后续根分支和后代必须使用同一初始化，竞争提交不同初始化会拒绝。即使首次 Run 最终失败，已经固定的协议也不撤销。
+新 Session 使用 `native-local-v1`。registerRun 在事务内先检查已接受幂等键，再检查归档状态、Session 模式、schemaVersion 3 模型快照、模型/绑定协议、父节点路径以及精确的 parentContextRef，并通过附件组件的 retainIn 保留引用。首次接受原子固定 Session 协议和 initialization；后续根分支和后代必须使用同一初始化，竞争提交不同初始化会拒绝。即使首次 Run 最终失败，已经固定的协议也不撤销。
 
 父路径校验拒绝不存在、跨 Session、断链和循环节点。原生恢复还要求每个节点来自 completed 原生 Run，context 的 Session、协议、父引用、initialization 和记录版本一致。只在准备时拼接所选路径记录；数据库保存每个 Run 自己的增量请求/响应和不可变链节，避免每轮复制全部历史。
 
@@ -55,13 +59,13 @@ Session 保存 id、projectId、agentId、可空 modelId、historyMode、可空 
 
 ## 表、通知与资源归属
 
-迁移继续使用历史 `run-state` 账本，当前版本 6（v6 只增加原生记录 resource_refs_json；旧 JSON 原样保留）。该组件拥有 `harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
+迁移继续使用历史 `run-state` 账本，当前版本 7（v6 增加原生记录 resource_refs_json，v7 增加 Session archived_at 和归档列表索引；旧 JSON 原样保留）。该组件拥有 `harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
 
 每次 Run 变更提交后发送 `harness.run.changed`，载荷为 sessionId、runId、revision。监听失败只记录警告，不回滚已提交事实。原生记录可能含签名、加密续接和工具原生 ID，属于受信恢复面；浏览器必须使用白名单投影。Key、认证头、凭据引用和运行句柄不得写入历史。
 
 ## 关闭、恢复与兼容
 
-Effect 先停止新调用，再等待已经接受的所有记录操作，包括尚在项目检查中的 Session 创建。图片导入/读取的委托句柄单独受管，关闭先取消并等待 result/done 退出，再允许图片组件清理。组件不负责取消模型或工具；Nya 的依赖关系让执行消费者先退出。
+Effect 先停止新调用，取消并等待图片及文件搜索/预览/准备/读取的包装调用退出，再等待已接受的记录操作，包括尚在项目检查中的 Session 创建、归档/恢复及附件续期。包装调用同时观察 result/done；done 清理失败必须上报，不能因底层结果悬空而无限等待。图片与文件组件在 Session 之后清理。组件不负责取消模型或工具；Nya 的依赖关系让执行消费者先退出。
 
 打开记录实现时，在事务内把遗留 running/cancelling Run 标为 interrupted，追加中断事件和 revision，不重新执行任何副作用，也不生成成功节点。清理失败或状态写入故障不能被普通取消覆盖；失败、取消、interrupted 的原生诊断可读但不能作为继续节点。
 
@@ -81,4 +85,12 @@ Effect 先停止新调用，再等待已经接受的所有记录操作，包括�
 
 Session 对外提供 searchProjectFiles、previewProjectFile、prepareProjectFiles、getFileSnapshot、renewProjectFiles，先验证会话，再调用 [Project Files](project-files.md)。受信 session-runs 提供 readFileSnapshots，Run 准入等待读取和实际退出。文件搜索/读取句柄归 Project Files，Session 跟踪并在关闭时取消、等待包装调用。
 
-NativeRunInput v3 保存文件引用及顺序，v1/v2 读取时 files=[]，旧 JSON 不改写。Run 和节点投影返回 files 元数据；正文经单独的会话作用域接口读取。接受事务复核引用 ID、项目及元数据，并调用同步 retainIn，与图片及 Run 一起提交。已接受失败/取消/interrupted 仍永久保留。新表归 project-files 迁移域，run-state 保持 v6。
+NativeRunInput v3 保存文件引用及顺序，v1/v2 读取时 files=[]，旧 JSON 不改写。Run 和节点投影返回 files 元数据；正文经单独的会话作用域接口读取。接受事务复核引用 ID、项目及元数据，并调用同步 retainIn，与图片及 Run 一起提交。已接受失败/取消/interrupted 仍永久保留。新表归 project-files 迁移域，文件引用不增加 run-state 迁移；当前 v7 来自会话归档。
+
+## 归档与恢复
+
+归档事务检查 running/cancelling Run；存在活动记录返回 `session-has-active-runs`，不主动取消。Run 接受事务在幂等检查后复核 archivedAt，与归档串行裁决；已接受幂等请求仍返回原 Run，冲突仍报错。准备后拒绝的 program 由 Run 清理并等待退出，不发布节点或保留资源。重复归档保留原时间，恢复清空时间。归档后选模和新 Run 返回 `session-archived`；旧 dialogue-v1 也可归档/恢复，但恢复不解除旧格式只读限制。
+
+归档不改历史、协议绑定、节点、原生记录、图片和文件快照。图片导入/文件准备在准入时拒绝归档会话，已开始的草稿操作继续按原生命周期退出；历史查询、附件读取和草稿续期保持可用。归档/恢复通过现有 track 操作管理，组件关闭等待已接受写入。
+
+[会话树测试](../../../tests/conversation-tree.test.mjs) 覆盖幂等、并发裁决、取消实际退出、准备清理和重启；[Session 生命周期测试](../../../tests/session.test.mjs) 覆盖归档写入关闭等待；[迁移测试](../../../tests/conversation-migration.test.mjs) 验证旧数据保持只读。

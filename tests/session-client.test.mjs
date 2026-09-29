@@ -498,3 +498,66 @@ test('malformed persisted file references remain visible and cannot become text-
   await controller.submit(); assert.equal(f.calls.filter(call => call.url.endsWith('/runs') && call.body).length, 0)
   controller.dispose()
 })
+
+test('archived controllers preserve drafts, reject edits, and recover unaccepted pending without posting', async () => {
+  const f = fixture(), drafts = createDraftStore(), seen = []
+  const a = f.make('a', { drafts, archived: ref => seen.push(ref) })
+  await f.load(a)
+  a.setDraft('newer draft')
+  f.pending.set('a', { schemaVersion: 3, sessionId: 'a', input: 'uncertain input', parentNodeId: null, idempotencyKey: 'unknown' })
+  let archivedAt = '2026-09-29T00:00:00Z'
+  f.intercept(url => url === '/sessions/a' ? { id: 'a', projectId: 'p-a', modelId: null, protocolId: 'chat-completions', historyMode: 'native-local-v1', archivedAt } : undefined)
+  await a.refresh()
+  assert.equal(seen.length, 1)
+  assert.equal(f.pending.get('a'), undefined)
+  assert.equal(a.snapshot().draft, 'uncertain input\n\nnewer draft')
+  const before = a.snapshot().draft
+  a.setDraft('overwrite'); a.setFiles([{ id: 'file', selection: { kind: 'project-file', path: 'secret' } }])
+  await a.navigate(null, 'edit')
+  await a.regenerate({ id: 'old', sessionId: 'a', parentId: null, input: 'regenerate' })
+  await a.submit(); await a.setModel('default')
+  assert.equal(a.snapshot().draft, before)
+  assert.deepEqual(a.snapshot().files, [])
+  assert.equal(f.calls.filter(call => call.body).length, 0)
+  await a.refresh(); assert.equal(seen.length, 1)
+  a.detach(); await f.load(a); assert.equal(seen.length, 1) // explicit opening of archive stays open
+  archivedAt = null
+  await a.refresh(); a.setDraft('after restore'); await a.submit()
+  assert.equal(f.calls.filter(call => call.body).length, 1)
+  a.dispose()
+})
+
+test('archived refresh reconciles an accepted unknown submission before closing its pane', async () => {
+  const f = fixture(), a = f.make('a')
+  await f.load(a); a.setDraft('accepted'); await a.submit()
+  const run = a.snapshot().runs[0]; f.finish(run.id)
+  f.pending.set('a', { schemaVersion: 3, sessionId: 'a', input: 'accepted', parentNodeId: null, idempotencyKey: f.rows.get(run.id).key })
+  f.intercept(url => url === '/sessions/a' ? { id: 'a', projectId: 'p-a', protocolId: 'chat-completions', historyMode: 'native-local-v1', archivedAt: 'now' } : undefined)
+  const posts = f.calls.filter(call => call.body).length
+  await a.refresh()
+  assert.equal(f.pending.get('a'), undefined)
+  assert.equal(a.snapshot().draft, '')
+  assert.equal(a.snapshot().runs[0].status, 'completed')
+  assert.equal(f.calls.filter(call => call.body).length, posts)
+  a.dispose()
+})
+
+test('archive pending recovery keeps invalid attachment markers and leaves uncertainty on lookup failure', async () => {
+  const f = fixture(), a = f.make('a')
+  const submission = { schemaVersion: 3, sessionId: 'a', input: 'uncertain', parentNodeId: null, idempotencyKey: 'k', invalidImages: true, invalidFiles: true }
+  f.pending.set('a', submission)
+  let offline = true
+  f.intercept(url => {
+    if (url === '/sessions/a') return { id: 'a', projectId: 'p-a', archivedAt: 'now', historyMode: 'native-local-v1' }
+    if (offline && url.includes('/by-key/')) return Promise.reject(new Error('offline'))
+  })
+  await f.load(a)
+  assert.equal(f.pending.get('a'), submission)
+  assert.equal(f.calls.some(call => call.body), false)
+  offline = false; await a.refresh()
+  assert.equal(f.pending.get('a'), undefined)
+  assert.equal(a.snapshot().draft, 'uncertain')
+  assert.equal(a.snapshot().images[0].status, 'failed')
+  assert.ok(a.snapshot().files[0].error)
+  a.dispose()
+})

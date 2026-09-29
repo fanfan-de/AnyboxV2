@@ -42,6 +42,8 @@ Agent Prompt 保存 Agent 对已发布 Prompt 版本的选择，并为 Run 解�
 
 [Run](../execution/run.md) 将当前 task-template 用于本次原始输入；[Session](../sessions/session.md) 则持有首次接受时固定的 instruction/context 和工具声明。已固定初始化的 Session 的其他根分支也复用其初始记录，不在每次 Run 重新套用新 instruction。更换绑定不会改写已接受 Run 或历史节点；要对这类会话应用新初始指令，需要新建 Session。尚未接受过 Run 的 Session 在首次接受时采用当前绑定。
 
+图片与项目文件不参与模板替换。Run 保存 v3 原始输入及附件引用，协议注册表在模板结果之后追加文件快照资料，再编码图片；文件内容始终属于用户资料，不成为 instruction/context。编辑与重新生成仍只对原始文本套用当前 task-template 一次，默认复用已有附件快照。
+
 ## 数据、并发与恢复
 
 组件在 `apply` 登记 `agent-prompt` 迁移，拥有 `agent_prompt_bindings` 和 `agent_prompt_json_import`；物理连接由 [local-storage](../infrastructure/local-sqlite.md) 持有。写入通过私有 Promise 队列串行执行，在事务前复核发布版本，使用 `(agent_id, kind)` UPSERT；提交成功后才替换内存绑定投影。

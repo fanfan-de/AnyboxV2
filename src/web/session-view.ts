@@ -19,9 +19,10 @@ export interface SessionPanel {
 }
 
 export function createSessionPanel(pane: Pane, projectName: string, controller: SessionController,
-  focus: () => void, close: () => void, initialScroll = 0, models?: ModelsCatalog): SessionPanel {
+  focus: () => void, close: () => void, initialScroll = 0, models?: ModelsCatalog, restore?: () => Promise<void>): SessionPanel {
   const element = document.createElement('section')
   element.className = 'conversation session-pane'
+  element.tabIndex = -1
   element.dataset.paneId = pane.id
   element.setAttribute('aria-label', `${projectName} · 会话 ${pane.sessionId.slice(0, 8)}`)
   element.innerHTML = `
@@ -37,6 +38,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
       <span class="branch-position"></span>
       <select aria-label="选择后续分支"></select><button type="button" data-more-children title="加载更多后续分支" hidden>更多</button>
     </div>
+    <div class="archive-banner" hidden><span>此会话已归档，仅供查看。</span><button type="button" data-restore-session>恢复会话</button></div>
     <div class="pane-notice notice" role="alert" hidden></div>
     <div class="transcript" role="log" aria-label="对话内容" aria-live="polite" tabindex="0" hidden></div>
     <div class="empty-state">
@@ -79,6 +81,13 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   let conversationTitle: string | undefined
   const active = isActive
   const listeners = new AbortController(), options = { signal: listeners.signal }
+  const restoreButton = get<HTMLButtonElement>('[data-restore-session]')
+  let restoring = false
+  restoreButton.addEventListener('click', () => {
+    if (!restore || restoring) return
+    restoring = true; restoreButton.disabled = true
+    void restore().finally(() => { restoring = false; restoreButton.disabled = false })
+  }, options)
   const modelSelect = get<HTMLSelectElement>('.composer-model')
   get<HTMLElement>('.composer-model-row').hidden = !models
   modelSelect.addEventListener('change', () => { if (modelSelect.value) void controller.setModel(modelSelect.value) }, options)
@@ -132,7 +141,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   const updateSend = (): void => {
     const state = controller.snapshot()
     const imagesReady = !state.images.length || (imageModelReady() && state.images.every(image => image.status === 'ready'))
-    send.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || (!state.pending && (!modelReady() || !imagesReady || state.files.some(file => !file.selection || Boolean(file.error)) || (!messageInput.value.trim() && !state.images.length && !state.files.length)))
+    send.disabled = !state.session || Boolean(state.session.archivedAt) || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || (!state.pending && (!modelReady() || !imagesReady || state.files.some(file => !file.selection || Boolean(file.error)) || (!messageInput.value.trim() && !state.images.length && !state.files.length)))
   }
   messageInput.addEventListener('input', () => { controller.setDraft(messageInput.value); resizeInput(); updateSend() }, options)
   messageInput.addEventListener('keydown', event => {
@@ -154,7 +163,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     if (data.cancelRun) void controller.cancel(data.cancelRun)
     if (data.viewNode) void controller.navigate(data.viewNode)
     const node = controller.snapshot().path.find(item => item.id === (data.editNode ?? data.regenerateNode))
-    if (node && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images, node.files).then(() => messageInput.focus())
+    if (node && !controller.snapshot().session?.archivedAt && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images, node.files).then(() => messageInput.focus())
     if (node && data.regenerateNode) void controller.regenerate(node)
   }, options)
 function imagePreview(image: ImageRef, index: number): HTMLAnchorElement {
@@ -230,7 +239,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
     render() {
       const state = controller.snapshot()
       fileView.render(state)
-      const readOnly = state.session?.historyMode === 'dialogue-v1'
+      const readOnly = (Boolean(state.session?.archivedAt) || state.session?.historyMode === 'dialogue-v1')
       eventCache = state.events
       expandedTraces = state.expanded
       const activeCount = state.runs.filter(active).length
@@ -242,10 +251,13 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         get('.pane-title strong').textContent = conversationTitle
         get('.pane-title strong').title = conversationTitle
       }
-      status.textContent = state.loading ? '正在加载' : state.busy ? '正在处理' : activeCount ? `${activeCount} 个运行中` : '准备就绪'
+      get('.archive-banner').hidden = !state.session?.archivedAt
+      restoreButton.hidden = !restore
+      restoreButton.disabled = restoring
+      status.textContent = state.loading ? '正在加载' : state.busy ? '正在处理' : activeCount ? `${activeCount} 个运行中` : state.session?.archivedAt ? '已归档' : '准备就绪'
       notice.hidden = !state.notice
       notice.textContent = state.notice
-      messageInput.disabled = !state.session || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading
+      messageInput.disabled = !state.session || Boolean(state.session.archivedAt) || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading
       attachImages.disabled = messageInput.disabled || Boolean(state.pending)
       const nextImagesKey = JSON.stringify([state.images, attachImages.disabled])
       if (nextImagesKey !== imageListKey) {
@@ -294,20 +306,20 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
           }
         }
         modelSelect.value = selected
-        modelSelect.disabled = state.session?.historyMode === 'dialogue-v1' || state.busy || state.loading || Boolean(state.pending) || catalog.loading
+        modelSelect.disabled = (Boolean(state.session?.archivedAt) || state.session?.historyMode === 'dialogue-v1') || state.busy || state.loading || Boolean(state.pending) || catalog.loading
         const hint = get<HTMLElement>('.composer-model-hint')
-        hint.textContent = state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“设置 → 模型”中选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
+        hint.textContent = state.session?.archivedAt ? '恢复会话后可继续使用。' : state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“设置 → 模型”中选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
         hint.hidden = !hint.textContent
         if (state.images.length && !imageModelReady()) { hint.textContent = '当前模型不支持图片，请切换支持图片的模型，或移除图片后发送。'; hint.hidden = false }
       }
       get('.compose-position').textContent = readOnly ? '只读历史' : state.position.viewNodeId ? '继续此分支' : '新分支'
-      get('.compose-position').title = readOnly ? '旧版文本会话仅供查看' : state.position.viewNodeId ? `从节点 ${state.position.viewNodeId} 继续` : '从会话起点发送'
+      get('.compose-position').title = readOnly ? state.session?.archivedAt ? '恢复会话后可继续' : '旧版文本会话仅供查看' : state.position.viewNodeId ? `从节点 ${state.position.viewNodeId} 继续` : '从会话起点发送'
       get('.composer-hint').hidden = readOnly
       get('.branch-position').textContent = state.position.viewNodeId ? `第 ${state.path.length} 轮` : '会话起点'
       get<HTMLButtonElement>('[data-go-root]').disabled = state.loading || !state.position.viewNodeId
       get<HTMLButtonElement>('[data-go-parent]').disabled = state.loading || !state.position.viewNodeId
       get('[data-more-children]').hidden = !state.moreChildren
-      const choices = JSON.stringify(state.children.map(node => [node.id, node.input, node.images?.length]))
+      const choices = JSON.stringify([readOnly, state.children.map(node => [node.id, node.input, node.images?.length])])
       if (branchSelect.dataset.choices !== choices) {
         branchSelect.dataset.choices = choices
         const placeholder = document.createElement('option')
@@ -341,8 +353,8 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       emptyBranches.hidden = state.loading || !state.children.length
       for (const button of emptyBranches.querySelectorAll('button')) button.disabled = state.loading || state.busy
       empty.classList.toggle('has-branches', !emptyBranches.hidden)
-      get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : readOnly ? '旧版会话历史' : state.children.length ? '从这里，继续你的想法' : activeCount ? 'Agent 正在思考…' : state.runs.length ? '你正在会话起点' : '有什么想法？'
-      get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : readOnly ? state.children.length ? '选择已有分支，查看保存的对话。' : '此会话仅供查看；请新建会话继续使用。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Anybox 一起完成。'
+      get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : readOnly ? state.session?.archivedAt ? '已归档会话' : '旧版会话历史' : state.children.length ? '从这里，继续你的想法' : activeCount ? 'Agent 正在思考…' : state.runs.length ? '你正在会话起点' : '有什么想法？'
+      get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : readOnly ? state.children.length ? '选择已有分支，查看保存的对话。' : state.session?.archivedAt ? '恢复此会话后可继续使用。' : '此会话仅供查看；请新建会话继续使用。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Anybox 一起完成。'
       const key = JSON.stringify([state.path, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.busy, readOnly, [...state.views]])
       if (key === contentKey) return
       contentKey = key

@@ -2,11 +2,13 @@
 
 本文保留跨组件协作总览；逐个组件的完整说明见 [模块与组件手册](./modules/README.md)，按 Models、执行、项目与会话、图片、Prompt、工具、存储、Web 和资源验证分目录。新增组件或调整接口、依赖和清理行为时，同步更新相应独立文档。
 
-状态：2026-09-29，原生协议框架与 Chat/DeepSeek 图片输入。源码行为以本文与 [会话树](./session-conversation-tree.md)、[Models 模块](../packages/models/README.md) 为准。迁移决策和验收矩阵见 [原生协议设计](./native-protocol-agent-framework-design.md)。
+状态：2026-09-29，已按五种协议图片输入、项目文件快照引用及会话归档/恢复核对。组件契约见本文与 [会话树](./session-conversation-tree.md)、[Models 模块](../packages/models/README.md)，具体行为以当前源码及行为测试为依据。迁移决策和验收矩阵见 [原生协议设计](./native-protocol-agent-framework-design.md)。
+
+独立 Harness 模块的目标归属、目录结构及当前路径映射见 [Harness 模块边界与目标目录结构](./harness-module-boundary.md)。该规划区分 Harness 业务组件、Models／存储依赖、宿主与客户端；本文继续记录当前单根装配和实际生命周期，不将规划中的目录或 API 适配计作已完成组件。
 
 ## 根、服务与资源归属
 
-应用只使用一个 Nya 根 Context。Models、业务 SQLite、图片资源、Projects、Prompt、Session、协议应用绑定、RunRuntime、Run 和 Web 直接安装在根上；Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/harness.ts` 是受信组合根，Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
+应用只使用一个 Nya 根 Context。Models、业务 SQLite、图片资源、Projects、Project Files、Prompt、Session、协议应用绑定、RunRuntime、Run 和 Web 直接安装在根上；Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/harness.ts` 是受信组合根，Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
 
 | 组件 | 服务 / 主要依赖 | 独占资源与关闭行为 |
 | --- | --- | --- |
@@ -20,10 +22,11 @@
 | 业务 SQLite | `local-storage` | 排他连接、串行事务和领域迁移；等所有下游退出 |
 | 图片资源 | `harness.image-assets`；注入 local-storage | 排他图片目录、校验队列、临时文件、读取与 GC；取消并等待实际退出 |
 | Projects | `harness.projects`；注入 local-storage | 项目目录身份、目录检查与记录 |
+| Project Files | `harness.project-files`；注入 local-storage/projects | 文件搜索、读取、SQLite 快照、准备批次与保留凭证；取消并等待文件和数据库操作 |
 | Bash / Apply Patch | `tools.bash` / `tools.apply-patch`；注入 projects | 子进程 / 跨项目文件队列与临时资源；取消后等实际退出 |
 | Prompt | `harness.prompts`；注入 local-storage | 草稿、不可变发布版本及已接纳写入 |
 | Agent Prompt | `harness.agent-prompts`；注入 prompts/local-storage | Agent 绑定及 Prompt 快照解析 |
-| Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets | 会话、Run、节点、原生记录、操作账本与事务；等已接受写入与通知 |
+| Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets/project-files | 会话及归档状态、Run、节点、原生记录与事务；取消并等待附件调用，等已接受写入与通知 |
 | 协议应用注册 | `harness.protocol-agents`；注入 models/models.protocols/image-assets | 固定驱动与 Loop 组合、准备中的资源、Run 租约；撤销后等 program 释放 |
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
 | RunRuntime | `harness.run-runtime`；注入 session-runs/bash/apply-patch | 活动 program、所有受管操作、取消/等待者和临时视图；退出后结算 |
@@ -31,9 +34,9 @@
 | 本机目录选择器 | `host.directory-picker` | 单个原生对话框与进程；取消并等待 |
 | Web | `web.frontend`；注入业务与 Models 管理服务 | HTTP、共用 SSE、读取消与背压；停止监听并等连接退出 |
 
-源码入口分别位于 `packages/models/src/`、`src/{project,prompt,session,image,run,protocol-agents,tool,web}/`。Session 的 `sqlite-records.ts` 是内部提供方，不额外注册组件。H0 的 `src/resource-probe.ts` 仅用于资源归属验证，不是正式执行路径。
+源码入口分别位于 `packages/models/src/`、`src/{project,project-files,prompt,session,image,run,protocol-agents,tool,web}/`。Session 的 `sqlite-records.ts` 是内部提供方，不额外注册组件。H0 的 `src/resource-probe.ts` 仅用于资源归属验证，不是正式执行路径。
 
-三套数据库路径不能相同。配置库持有定义、连接、版本化原生参数、`historyScopeEpoch` 和 Vault 意图；目录缓存只存公开来源；业务库持有 Session/Run/Prompt/Projects 和图片元数据/保留凭证。系统凭据始终由 macOS Keychain、Windows Credential Manager 或 Linux Secret Service 保存。各领域组件在 `apply` 中调用 `migrate(domain, migrations)`，通用 SQLite 不接收业务迁移列表。
+三套数据库路径不能相同。配置库持有定义、连接、版本化原生参数、`historyScopeEpoch` 和 Vault 意图；目录缓存只存公开来源；业务库持有 Session/Run/Prompt/Projects、图片元数据/保留凭证及文件快照正文/准备批次/保留凭证。图片原字节另存图片组件独占目录，文本快照不新增目录。系统凭据始终由 macOS Keychain、Windows Credential Manager 或 Linux Secret Service 保存。各领域组件在 `apply` 中调用 `migrate(domain, migrations)`，通用 SQLite 不接收业务迁移列表。
 
 ## Models 原生边界
 
@@ -59,17 +62,17 @@ Models 配置库 v3 将当前旧参数纯函数转换为 `{ protocolId, formatVe
 | Gemini Interactions | 按时间顺序保留 steps、thought signature、函数身份与结果 | generation_config；`store:false`；不用 previous_interaction_id 或后台任务 |
 | DeepSeek 非推理 | 独立 ID，复用 Chat transport/codec/Loop 工厂 | `max_tokens`、固定 disabled thinking、拒绝 developer；转换器仅在宿主 |
 
-五种协议均支持 JSON、流式消费、客户端工具往返、持久记录、跨 Run/重启恢复和安全 Turn 展示。Chat/DeepSeek 已接通显式声明能力的静态 JPEG/PNG/WebP 本地输入；Responses、Anthropic、Gemini 图片能力继续关闭。音频、图片输出、工具返回图片、用户交互等待、远端后台任务及并行工具调度不在本期范围。搜索默认关闭，配置能力明确支持后才允许原生工具参数，不按协议 ID 推断模型能力。
+五种协议均支持 JSON、流式消费、客户端工具往返、持久记录、跨 Run/重启恢复和安全 Turn 展示，也均支持显式声明能力的静态 JPEG/PNG/WebP 本地图片输入和项目文本文件资料。音频、图片输出、工具返回图片、用户交互等待、远端后台任务及并行工具调度不在本期范围。图片及搜索能力必须由配置明确声明，不按协议 ID 推断模型能力。
 
 原生恢复记录可包含签名与加密 continuation，但不含密钥、认证头、Vault 引用或句柄。它们是受信服务端数据。浏览器从白名单投影读取文本、摘要、工具状态和安全 http(s) 引用，不能下载任意原生记录。
 
 ## Run 准入与资源交接
 
 1. 校验请求形状，先按 Session 和幂等键查已接受 Run；重试不重新读取当前配置、Prompt 或打开模型。
-2. 检查项目、Session 模式、选模与协议。`dialogue-v1` 会话只读；新 Run 必须显式给出可空 `parentNodeId`。
+2. 检查项目、Session 模式、归档状态、选模与协议。`dialogue-v1` 和归档会话只读；新 Run 必须显式给出可空 `parentNodeId`。
 3. 只读取指定成功父链。根固定初始 instruction/context 和工具声明；后代继承。每个新 Run 固定当前 task-template，只替换本次原始输入一次。
-4. 准备独立 program/execution，检查连接、模型、语义参数、历史格式和工具契约兼容。地址、认证方式或成功 Key 变更改变 epoch；失败写 Key、改名、超时、启停和目录刷新不改变。
-5. Session 接受事务复核绑定与父恢复引用，原子固定首次协议，并通过图片组件 retainIn 在同一事务验证及永久保留有序图片引用。不同协议并发首次准入只接受符合已提交绑定的一方；失败准备由 Run 关闭并等待。
+4. 经 Session 受管读取本轮文件快照并等待退出，在模板文本后附加用户文件资料、编码图片引用，再准备独立 program/execution；检查连接、模型、语义参数、历史格式和工具契约兼容。地址、认证方式或成功 Key 变更改变 epoch；失败写 Key、改名、超时、启停和目录刷新不改变。
+5. Session 接受事务复核归档状态、绑定与父恢复引用，原子固定首次协议，并通过图片与文件组件 retainIn 在同一事务验证及永久保留有序引用。不同协议并发首次准入只接受符合已提交绑定的一方；失败准备由 Run 关闭并等待。
 6. `RunRuntime.start({ runId, program })` 在第一次异步读取前同步登记所有权。同步拒绝表示未接管，由 Run 清理；之后均由 Runtime 清理和结算。
 
 `waitRun()` 覆盖已接受但尚未交接的窗口。取消 waiter 只停止等待，不取消 Run。关闭门面先阻止新调用，随后 Nya 卸载根全部组件，等待准备、模型、工具、记录、Vault 与数据库退出；关闭后的 Harness 不可复用。
@@ -86,19 +89,23 @@ Session 独占 Run 终态事务；Runtime 仅提议完成、失败或取消。`P
 
 `harness.sessions` 提供会话、节点、Run、事件与记录查询。`harness.session-runs` 提供幂等查找、原子接受、父链恢复、启动/观察账本、取消与结算。Session 不持有模型 execution、模型/工具调用句柄或凭据，也不按协议停止原因驱动执行。
 
-`run-state` v6 保存（v5 原生结构加通用资源引用列）：Session 历史模式和协议绑定；版本化原始输入、根初始化与 schemaVersion 3 模型快照；增量请求/响应记录；公共操作账本；不可变上下文链节；节点结果引用。请求配方引用前驱和本次增量；链节引用父链与本 Run 记录，不存从根开始的 ID 数组或重复完整历史。恢复时 codec 才在内存中重建原生请求。
+`run-state` v7 保存（v5 原生结构、v6 通用资源引用列、v7 会话归档状态及索引）：Session 历史模式和协议绑定；版本化原始输入、根初始化与 schemaVersion 3 模型快照；增量请求/响应记录；公共操作账本；不可变上下文链节；节点结果引用。请求配方引用前驱和本次增量；链节引用父链与本 Run 记录，不存从根开始的 ID 数组或重复完整历史。恢复时 codec 才在内存中重建原生请求。
 
 成功终态、最终记录、恢复引用、完整节点、结果引用和终态事件在同一事务提交。失败、取消、清理失败只能归档事实与诊断，不发布可继续节点。重启将遗留活动 Run 标为 interrupted，不重放网络或工具。只恢复所选父链；同父并发、编辑和重新生成均不包含兄弟或被替换节点。
 
 旧 Session、节点、事件和 schemaVersion 1/2 或 profile 快照保留读取兼容，旧 JSON 不重写，不保留旧写入器。编辑/重新生成取原始输入与原节点父引用，不能将已套模板的文本再次套模板。首次绑定后取消或失败不会解除 Session 协议。
 
+`archiveSession` / `restoreSession` 幂等修改可空 archivedAt。项目列表默认排除归档会话，`listArchivedSessions` 跨项目按归档时间倒序查询。归档与接受 Run 在业务事务中串行裁决：存在 running/cancelling Run 时拒绝归档，归档先提交则新 Run 被拒绝，已经接受的幂等结果仍优先返回。归档不删除节点、原生记录、图片或文件引用；历史查询和附件读取、草稿续期继续可用，恢复旧 dialogue-v1 仍不能继续执行。
+
 ## Web 展示与重连
 
 共享工作区负责四面板、分支导航、Run 控制、滚动、订阅和重连；协议模块负责输入、原生参数表单、展示 decoder/reducer 和 Turn。Turn 按 Run/节点稳定挂载，更新调用 update，移除调用 dispose，不在每个 delta 重建整段历史。
 
-`GET /api/runs/:id/view` 返回白名单快照：活动视图来自 Runtime，历史视图由已提交记录投影。信封包括 Session、Run、协议、展示版本、exchange、块 ID 和独立 viewRevision。当前实现发送有界全量替换快照；旧帧忽略，断号、重连、首次发现活动 Run 与终态触发校准，最终持久投影覆盖临时内容。工具最终观察由持久 Run trace 展示。
+`GET /api/v1/runs/:id/view` 返回白名单快照：活动视图来自 Runtime，历史视图由已提交记录投影。信封包括 Session、Run、协议、展示版本、exchange、块 ID 和独立 viewRevision。当前实现发送有界全量替换快照；旧帧忽略，断号、重连、首次发现活动 Run 与终态触发校准，最终持久投影覆盖临时内容。工具最终观察由持久 Run trace 展示。
 
 四 Session 共用 SSE；未发送的同 Run 快照可合并，背压预算和慢连接清理仍有效。显示裁剪只影响投影，不影响原生历史。旧会话显示只读及新建空会话入口。旧浏览器待提交键先查询已接受 Run，未接受内容不自动转换或重新提交。图片选择、粘贴和拖拽共用有序上传队列；草稿及 pending 只保存文本与引用，覆盖所有分支续期，失效图片保留占位并阻止发送。
+
+项目文件通过 @ 搜索或附件入口选择，发送时准备快照；pending v3 先保存准备键，再保存快照 ID，最后提交 Run。历史编辑和重新生成默认复用快照，只有显式更新才读取当前文件。归档成功关闭对应面板并保留草稿、位置；统一归档列表支持只读查看与恢复，归档状态通过查询校准，不增加 SSE 事件。
 
 ## 工具、目录与恢复的独立边界
 
@@ -110,15 +117,15 @@ Bash 组件拥有子进程、输出缓冲、超时与终止计时器。Apply Pat
 
 ## 本地升级与验证
 
-配置库 v3 与业务库 v6 各自在独占事务内迁移，不建立跨库事务；任一启动失败均阻止 Run 准入。升级真实数据前先 `harness.close()` 等资源退出，备份配置与业务库，再启动新组合根。代码回退须同时恢复备份，旧代码不能直接打开升级库。
+Models 配置库 v3 与业务库中的各领域迁移独立提交；业务库当前包含 `run-state` v7、`image-assets` v1 和 `project-files` v1，不能用 Session 的迁移版本代表通用存储版本。不建立跨库事务；任一必需组件启动失败均阻止 Run 准入。升级真实数据前先 `harness.close()` 等资源退出，备份配置库、业务库及图片原字节目录，再启动新组合根。代码回退须同时恢复备份，旧代码不能直接打开升级库。
 
 根 `npm run check` 覆盖 Models 与应用行为测试。测试使用临时 SQLite、内存凭据和模拟 HTTP；真实模型 API 与各平台系统凭据仍需分别门控验收，本地模拟不能替代这些结论。
 
 ## 图片资源与原生请求
 
-完整契约见[图片输入设计](./multimodal-image-input-design.md)。图片组件保存原始字节，并在与 Run 共用的业务事务中保留引用；Session v2 输入及原生 v2 请求只存元数据。Chat/DeepSeek 的 execution 固定作用域读取端口，只有操作意图持久化且 start 登记后才读取、校验、生成临时 data URL 和发送请求。工具续轮和重启从所选父路径恢复引用。读失败、摘要不符和超限都明确失败；不退回纯文本。
+完整契约见[图片输入设计](./multimodal-image-input-design.md)。图片组件保存原始字节，并在与 Run 共用的业务事务中保留引用；当前 NativeRunInput v3 与原生 v2 请求只存图片元数据和引用，不含 base64。五种协议的 execution 固定作用域读取端口，只有操作意图持久化且 start 登记后才读取、校验并编码请求：Responses 与 Chat/DeepSeek 使用 data URL，Anthropic 使用 base64 source，Gemini 使用 data/mime_type。工具续轮和重启从所选父路径恢复引用。读失败、摘要不符和超限都明确失败；不退回纯文本。
 
-Chat/DeepSeek 驱动为 2.1.0、Loop 为 1.1.0、新记录为 v2，兼容旧 2.0.0/1.0.0 的 v1 文本历史及混合父链。只有验证整条父路径无图片时允许有效 imageInput 从 false 变 true；账户 epoch、模型定义版本、参数和其他能力仍严格比较。
+五种协议驱动均为 2.1.0、Loop 为 1.1.0、新记录为 v2，兼容旧 2.0.0/1.0.0 的 v1 文本历史及混合父链。只有验证整条父路径无图片时允许有效 imageInput 从 false 变 true；账户 epoch、模型定义版本、参数和其他能力仍严格比较。
 
 ## 项目文件引用
 

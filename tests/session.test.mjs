@@ -203,3 +203,25 @@ test('Session revocation joins executing consumers and a new owner preserves con
     assert.equal((await f.root.get(runServiceKey).waitRun(next.id)).status, 'completed')
   } finally { await f.close() }
 })
+
+test('Session shutdown waits for accepted archive writes and replacement sees committed state', { timeout: 5000 }, async () => {
+  const f = await fixture(), entered = deferred(), release = deferred()
+  const db = f.root.get(localStorageServiceKey), transaction = db.transaction.bind(db)
+  try {
+    const sessions = f.root.get(sessionServiceKey)
+    const session = await sessions.createSession(f.project.id, 'assistant')
+    db.transaction = async work => { entered.resolve(); await release.promise; return transaction(work) }
+    const archiving = sessions.archiveSession(session.id)
+    await entered.promise
+    let stopped = false
+    const stopping = f.sessionFiber.dispose().then(() => { stopped = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(stopped, false)
+    await assert.rejects(sessions.restoreSession(session.id), /closing/)
+    release.resolve()
+    const archived = await archiving; await stopping
+    db.transaction = transaction
+    await f.root.installComponent(createSessionComponent(f.inputs, agents))
+    assert.deepEqual(await f.root.get(sessionServiceKey).listArchivedSessions(), [archived])
+  } finally { release.resolve(); db.transaction = transaction; await f.close() }
+})
