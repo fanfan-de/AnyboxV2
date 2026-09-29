@@ -6,7 +6,7 @@
 
 ## 实现与装配
 
-- 源码：[绑定工厂及请求编码](../../../src/protocol-agents/registry.ts)、[共享 Chat Loop](../../../src/protocol-agents/chat.ts)、[宿主 DeepSeek 协议适配器](../../../src/web/deepseek-protocol.ts)。
+- 源码：[绑定工厂及请求编码](../../../src/harness/protocol-agents/registry.ts)、[共享 Chat Loop](../../../src/harness/protocol-agents/chat.ts)、[宿主 DeepSeek 协议适配器](../../../src/host/deepseek-protocol.ts)。
 - 工厂实例：`createProtocolAgentBindingComponent('deepseek-chat-completions')`。
 - 组件名：`harness-protocol-agent-deepseek-chat-completions`；配置类型：`void`；不单独提供服务或选项。
 - 注入 `harness.protocol-agents` 与 `models.protocols`；apply 获取 DeepSeek 对应驱动代租约，再注册同 ID 的配对。

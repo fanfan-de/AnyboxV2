@@ -6,7 +6,7 @@
 
 ## 实现与装配
 
-- 源码：[绑定工厂和首次编码](../../../src/protocol-agents/registry.ts)、[Chat Loop](../../../src/protocol-agents/chat.ts)、[共享交换管道](../../../src/protocol-agents/shared.ts)。
+- 源码：[绑定工厂和首次编码](../../../src/harness/protocol-agents/registry.ts)、[Chat Loop](../../../src/harness/protocol-agents/chat.ts)、[共享交换管道](../../../src/harness/protocol-agents/shared.ts)。
 - 工厂实例：`createProtocolAgentBindingComponent('chat-completions')`。
 - 组件名：`harness-protocol-agent-chat-completions`；配置类型：`void`；没有独立公开服务或额外配置。
 - 注入 `harness.protocol-agents` 和 `models.protocols`；apply 获取标准 Chat 的固定驱动代租约并注册配对。

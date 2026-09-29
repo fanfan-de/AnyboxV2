@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { toolTrace } from '../dist/web/tool-trace.js'
-import { createToolCallCard } from '../dist/web/session-view.js'
+import { toolTrace } from '../dist/client/tool-trace.js'
+import { createToolCallCard } from '../dist/client/session-view.js'
 
 const bash = (id = 'bash') => ({ id, name: 'bash', command: 'printf hello' })
 const patch = (id = 'patch') => ({ id, name: 'apply_patch', patch: '*** Begin Patch\n*** End Patch', patchTruncated: false })

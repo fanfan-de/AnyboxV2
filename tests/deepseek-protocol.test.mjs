@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createDeepSeekProtocol, convertLegacyDeepSeekParameters } from '../dist/web/deepseek-protocol.js'
+import { createDeepSeekProtocol, convertLegacyDeepSeekParameters } from '../dist/host/deepseek-protocol.js'
 import { fixture, capabilities } from '../packages/models/tests/helpers.mjs'
 
 const json = value => new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } })

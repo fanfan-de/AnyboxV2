@@ -4,7 +4,7 @@
 
 基于相邻的 NyaCore 构建 Agent Harness。[通用 Models 模块](packages/models/README.md) 已接入 Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Harness、业务 Session 或前端框架；[架构图](docs/architecture/models-module.md)说明其资源与扩展边界。
 
-应用只使用一个 Nya 根 Context。Models 配置存储、系统凭据、模型服务、协议和目录组件，与 Harness 的 SQLite、Prompt、Projects、Session、Run、RunRuntime、协议应用绑定、Bash、Apply Patch 直接安装在同一根。Nya 管理依赖、重启和清理顺序；Provider、Model、项目和会话都是数据记录。
+每个执行实例使用一个 Nya 根 Context，本机客户端另有独立根。Models 配置存储、系统凭据、模型服务、协议和目录组件，与 Harness 的 SQLite、Prompt、Projects、Session、Run、RunRuntime、协议应用绑定、Bash、Apply Patch 直接安装在同一根。Nya 管理依赖、重启和清理顺序；Provider、Model、项目和会话都是数据记录。
 
 当前原生协议框架见[组件说明](docs/harness-components.md)与[原生协议迁移设计](docs/native-protocol-agent-framework-design.md)。`docs/architecture/` 中的图保留迁移前架构记录，不作为当前执行契约。
 
@@ -15,7 +15,7 @@ Session 持有完整轮次对话树，允许同一父节点启动多个 Run。�
 先按 [Models 安装示例](packages/models/README.md#install-in-an-application)在根上安装配置存储、凭据、模型服务和需要的协议，通过 `models.settings` 选择 Provider 定义并创建连接；有 Key 的适用模型自动形成执行配置。自定义模型另建用户定义和配置。随后装配 Harness：
 
 ```js
-import { createHarness } from './dist/harness.js'
+import { createHarness } from './dist/harness/index.js'
 import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
 
 // root 已提供 models；assistant 是保存过的 ModelConfiguration ID。
@@ -67,7 +67,7 @@ Harness 在应用根安装 `tools.apply-patch`，向模型提供 `apply_patch({ 
 
 ## 本机 Web 界面
 
-运行 `npm run web`，打开终端打印的 `http://127.0.0.1:<port>` 地址。在“设置 → 模型服务”中：
+先运行 `npm run harness:init` 生成一次性显示的设备访问令牌，再运行 `npm run web`。在客户端连接管理中添加 `http://127.0.0.1:3001` 并填入令牌。执行端与客户端是两个进程，也可分别使用 `npm run harness` / `npm run client`。云端与其他设备使用 HTTPS 配对。详见[独立部署、发行与恢复](docs/harness-deployment.md)。打开终端打印的 `http://127.0.0.1:<port>` 地址。在“设置 → 模型服务”中：
 
 1. 在公共目录中选择提供方和连接方案，点击“填写新提供方”；也可选择模板或手动填写。调整账号名称、代理地址、认证和 API Key 后保存。
 2. 选择目录模型并点击“填写模型配置”，或获取连接返回的远端候选、手动填写模型标识；确认能力与默认参数并保存。
@@ -81,7 +81,7 @@ Harness 在应用根安装 `tools.apply-patch`，向模型提供 `apply_patch({ 
 
 | 环境变量 | 默认值与用途 |
 | --- | --- |
-| `ANYBOX_WEB_PORT` | `0`，由系统分配本机端口 |
+| `ANYBOX_WEB_PORT` | `3000`，客户端本机端口 |
 | `ANYBOX_HARNESS_DATABASE` | `./data/harness.sqlite`，业务数据 |
 | `ANYBOX_MODELS_DATABASE` | `./data/models.sqlite`，模型配置，不能与业务数据库相同 |
 | `ANYBOX_MODELS_CATALOG_DATABASE` | 默认在配置库旁的 `models-catalog.sqlite`，不能与配置库或业务库共用文件及文件别名 |
@@ -97,7 +97,7 @@ Harness 在应用根安装 `tools.apply-patch`，向模型提供 `apply_patch({ 
 
 “设置 → Prompt 管理”可编辑、发布、预览并绑定版本。“模型服务”配置与会话选择通过薄 HTTP 入口调用 Nya 服务。`/api/v1/changes` 同时提供提交后的 Run 变更提示和临时模型进展；慢连接受有界队列限制，只影响展示订阅。最终内容以持久 Run 和节点查询为准，刷新不会恢复半截流式输出。工具过程、取消与失败仍由 Run 状态展示。
 
-宿主只监听 `127.0.0.1`，暂不提供远程访问和账号体系；SIGINT/SIGTERM 通过 `harness.close()` 停止接收并等待整个应用根清理。异常退出的在途 Run 重启后结算 `interrupted`，不重放工具。详见 [Web 客户端设计](docs/web-client-design.md)。
+执行端默认监听 `127.0.0.1:3001`，远端通过 HTTPS 反向代理和拥有者设备令牌接入。SIGINT/SIGTERM 通过 `harness.close()` 停止准入并等待整个执行根清理；单独客户端关闭只断开观察。异常退出的在途 Run 重启后结算 `interrupted`，不重放工具。详见 [Web 客户端设计](docs/web-client-design.md)。
 
 ## 本地验证
 
@@ -117,13 +117,14 @@ npm run check
 | 路径 | 用途 |
 | --- | --- |
 | `packages/models/` | 通用 Models 服务、配置与凭据存储、协议实现及测试 |
-| `src/agent/`、`src/prompt/` | Agent 定义、Prompt 草稿、版本与绑定 |
-| `src/project/`、`src/session/` | 项目身份、会话树、Run 记录与恢复 |
-| `src/run/` | Run 准入、PreparedRunProgram 交接、RunRuntime 与操作事实 |
-| `src/tool/` | Bash 与 Apply Patch 资源组件 |
+| `src/harness/agent/`、`src/harness/prompt/` | Agent 定义、Prompt 草稿、版本与绑定 |
+| `src/harness/project/`、`src/harness/session/` | 项目身份、会话树、Run 记录与恢复 |
+| `src/harness/run/` | Run 准入、PreparedRunProgram 交接、RunRuntime 与操作事实 |
+| `src/harness/tool/` | Bash 与 Apply Patch 资源组件 |
 | `src/storage/` | Harness SQLite 事务、领域迁移与排他所有权 |
-| `src/harness.ts` | 受信组合根与服务转发 |
-| `src/web/`、`web/` | 本机宿主、Models 装配、DeepSeek 扩展与浏览器界面 |
+| `src/harness/index.ts` | 受信组合根与服务转发 |
+| `src/host/` | 独立进程装配、访问管理、Models 初始化、执行 API 与客户端网关 |
+| `src/client/`、`web/` | 多实例浏览器工作区、连接与设置界面 |
 | `tests/helpers/controlled-models.mjs` | 可控 Models 契约替身 |
 | `tests/helpers/managed-models.mjs` | 实际 Models 模块与可控协议的测试装配 |
 | `docs/harness-components.md` | 组件职责、依赖、状态归属与清理 |

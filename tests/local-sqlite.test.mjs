@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { Context, FiberState } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/storage/port.js'
+import { localStorageServiceKey } from '../dist/harness/storage/port.js'
 
 const v1 = { version: 1, up(tx) { tx.execute('CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL)') } }
 const v2 = { version: 2, up(tx) { tx.execute('ALTER TABLE notes ADD COLUMN category TEXT') } }
@@ -41,7 +41,7 @@ test('SQLite storage restores data and applies each new migration on reopen', as
       reader.get('SELECT body, category FROM notes WHERE id = ?', ['1']))
     assert.deepEqual({ ...row }, { body: 'hello', category: null })
     assert.equal(await domainVersion(second.store, 'notes'), 2)
-    assert.equal(existsSync(`${file}.lock`), true)
+    assert.equal(existsSync(`${file}.lock`), false)
   } finally {
     await second?.context.fiber.dispose()
     await first?.context.fiber.dispose()

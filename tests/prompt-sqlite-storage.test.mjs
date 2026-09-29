@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createPromptComponent, promptServiceKey } from '../dist/prompt/component.js'
+import { createPromptComponent, promptServiceKey } from '../dist/harness/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/storage/port.js'
+import { localStorageServiceKey } from '../dist/harness/storage/port.js'
 
 test('removing Prompt waits for accepted writes before releasing its service', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-prompts-'))

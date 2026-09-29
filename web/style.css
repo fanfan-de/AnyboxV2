@@ -538,3 +538,15 @@ button { touch-action: manipulation; }
   .archive-row { grid-template-columns: auto auto 1fr; }
   .archive-copy { grid-column: 1 / -1; }
 }
+
+.harness-controls { display: grid; gap: 8px; padding: 8px 16px; }
+.harness-controls label { font-size: 11px; color: var(--muted); }
+.harness-controls select { width: 100%; min-width: 0; }
+.connections-dialog { padding: 24px; width: min(680px, 92vw); max-height: 90vh; overflow: auto; }
+.connections-dialog label { display: grid; gap: 6px; margin: 12px 0; }
+.connections-dialog input { min-width: 0; width: 100%; }
+.connection-row { padding: 14px; margin-bottom: 10px; overflow-wrap: anywhere; }
+.connection-row button { margin-right: 8px; }
+.harness-group-title { font-size: 12px; margin: 14px 8px 6px; color: var(--muted); }
+.harness-heading { margin: 20px 12px 8px; font-size: 12px; color: var(--text-secondary, #707780); }
+.token-once { overflow-wrap: anywhere; user-select: all; }

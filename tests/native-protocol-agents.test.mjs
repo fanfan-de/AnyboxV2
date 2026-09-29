@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/image/component.js'
+import { createImageAssetsComponent } from '../dist/harness/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,10 +8,10 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createAnthropicMessagesProtocol, createChatCompletionsProtocol, createGeminiInteractionsProtocol } from '@anybox/models'
-import { createDeepSeekProtocol, convertLegacyDeepSeekParameters } from '../dist/web/deepseek-protocol.js'
+import { createDeepSeekProtocol, convertLegacyDeepSeekParameters } from '../dist/host/deepseek-protocol.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHarness } from '../dist/harness.js'
-import { projectProtocolRecords } from '../dist/protocol-agents/projection.js'
+import { createHarness } from '../dist/harness/index.js'
+import { projectProtocolRecords } from '../dist/harness/protocol-agents/projection.js'
 
 const factories = { responses: createResponsesProtocol, 'anthropic-messages': createAnthropicMessagesProtocol,
   'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol,

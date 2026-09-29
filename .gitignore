@@ -15,3 +15,6 @@ data/
 *.sqlite.images/
 
 .DS_Store
+
+# Standalone application artifacts.
+artifacts/

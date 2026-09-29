@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createPendingStore, createSessionController, pendingKey } from '../dist/web/session-client.js'
-import { createDraftStore, draftFromInput } from '../dist/web/draft-client.js'
+import { createPendingStore, createSessionController, pendingKey } from '../dist/client/session-client.js'
+import { createDraftStore, draftFromInput } from '../dist/client/draft-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 function fixture() {

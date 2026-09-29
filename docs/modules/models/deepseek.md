@@ -4,7 +4,7 @@
 
 ## 定位与装配
 
-源码：[src/web/deepseek-protocol.ts](../../../src/web/deepseek-protocol.ts)。工厂 `createDeepSeekProtocolComponent(options?)`，组件名 `models-protocol-deepseek`，注入 `models.protocols`，注册 `deepseek-chat-completions`（复用版本 `2.1.0`）。该文件处于 Web 宿主，按职责归入模型接入模块；通用 `packages/models` 不反向依赖它。
+源码：[src/host/deepseek-protocol.ts](../../../src/host/deepseek-protocol.ts)。工厂 `createDeepSeekProtocolComponent(options?)`，组件名 `models-protocol-deepseek`，注入 `models.protocols`，注册 `deepseek-chat-completions`（复用版本 `2.1.0`）。该文件处于 Web 宿主，按职责归入模型接入模块；通用 `packages/models` 不反向依赖它。
 
 独立工厂 `createDeepSeekProtocol(options?)` 调用通用 `createChatCompletionsProtocol`，不包装第二套 HTTP 或流解析器。它只确定明确的线上参数差异。工具循环由 [DeepSeek Agent](../execution/deepseek-agent.md)绑定到相同协议 ID，驱动本身不执行工具。
 
@@ -35,7 +35,7 @@ JSON/SSE 解析、分片 UTF-8、多个工具调用 arguments 合并、finish_re
 
 `convertLegacyDeepSeekParameters(value)` 是纯读取/迁移函数：只接受旧 `temperature`、`maxOutputTokens` 和可选空对象 `protocol`，映射 `maxOutputTokens → max_tokens`，保留省略项，不暗补默认。未知字段或非空 protocol 扩展拒绝转换，不能静默丢弃。
 
-宿主 [installWebModels](../../../src/web/models-startup.ts) 把该转换器传给 `createModelsStoreComponent` 的 `legacyParameterConverters`。这是旧配置兼容边界，不保留旧统一执行 API 或旧格式写入路径。
+宿主 [installWebModels](../../../src/host/models-startup.ts) 把该转换器传给 `createModelsStoreComponent` 的 `legacyParameterConverters`。这是旧配置兼容边界，不保留旧统一执行 API 或旧格式写入路径。
 
 ## 生命周期、资源与限制
 

@@ -1,5 +1,7 @@
 # AnyboxV2 当前框架图
 
+> 多实例部署实现后，最新进程与接入边界见 [Harness 模块边界](../harness-module-boundary.md)。此处保留当日原单进程组件图的历史记录。
+
 [返回文档首页](../README.md) · [Harness 模块边界与目标目录结构](../harness-module-boundary.md)
 
 核对日期：2026-09-29。图对应当前源码的实际装配，使用已初步认可的 Harness 归属进行逻辑分组。当前所有服务端组件仍在同一个 Nya 根中，尚未完成 Harness 抽包或远程连接；分组不表示新增 Context、服务进程或已经迁移的目录。
@@ -27,10 +29,10 @@
 
 ## 源码依据与维护
 
-- [当前进程入口](../../src/web/serve.ts)与 [Harness 装配](../../src/harness.ts)：根、组件安装与关闭入口。
-- [Web 组件](../../src/web/component.ts)：API、静态客户端、SSE 和直接注入的服务。
-- [Models 装配](../../src/web/models-startup.ts)：独立包、目录组件与 DeepSeek 宿主扩展。
-- [Run](../../src/run/component.ts)、[RunRuntime](../../src/run/runtime-component.ts)与[协议应用绑定](../../src/protocol-agents/registry.ts)：准入、program 交接、运行与协议边界。
+- [当前进程入口](../../src/host/serve.ts)与 [Harness 装配](../../src/harness/index.ts)：根、组件安装与关闭入口。
+- [Web 组件](../../src/host/component.ts)：API、静态客户端、SSE 和直接注入的服务。
+- [Models 装配](../../src/host/models-startup.ts)：独立包、目录组件与 DeepSeek 宿主扩展。
+- [Run](../../src/harness/run/component.ts)、[RunRuntime](../../src/harness/run/runtime-component.ts)与[协议应用绑定](../../src/harness/protocol-agents/registry.ts)：准入、program 交接、运行与协议边界。
 - [组件清单](../modules/README.md)与[协作总览](../harness-components.md)：资源、存储和清理规则。
 
 本图是当前实现的记录；目标目录见独立的边界文档。组件或关键关系改变时，同步核对 SVG、PNG、Mermaid 和本文，不能仅修改图中标签。较早架构图保留各自历史语义，不覆盖其文件。

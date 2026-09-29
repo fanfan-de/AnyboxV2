@@ -1,5 +1,7 @@
 # Harness 组件说明
 
+多实例部署已实现，当前目录与 HTTP/客户端边界见 [Harness 模块边界](harness-module-boundary.md)；独立启动和凭据/恢复见[部署说明](harness-deployment.md)。每个执行进程保留以下单根组件关系，客户端使用独立根。
+
 本文保留跨组件协作总览；逐个组件的完整说明见 [模块与组件手册](./modules/README.md)，按 Models、执行、项目与会话、图片、Prompt、工具、存储、Web 和资源验证分目录。新增组件或调整接口、依赖和清理行为时，同步更新相应独立文档。
 
 状态：2026-09-29，已按五种协议图片输入、项目文件快照引用及会话归档/恢复核对。组件契约见本文与 [会话树](./session-conversation-tree.md)、[Models 模块](../packages/models/README.md)，具体行为以当前源码及行为测试为依据。迁移决策和验收矩阵见 [原生协议设计](./native-protocol-agent-framework-design.md)。
@@ -8,7 +10,7 @@
 
 ## 根、服务与资源归属
 
-应用只使用一个 Nya 根 Context。Models、业务 SQLite、图片资源、Projects、Project Files、Prompt、Session、协议应用绑定、RunRuntime、Run 和 Web 直接安装在根上；Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/harness.ts` 是受信组合根，Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
+应用只使用一个 Nya 根 Context。Models、业务 SQLite、图片资源、Projects、Project Files、Prompt、Session、协议应用绑定、RunRuntime、Run 和 Web 直接安装在根上；Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/harness/index.ts` 是受信组合根，Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
 
 | 组件 | 服务 / 主要依赖 | 独占资源与关闭行为 |
 | --- | --- | --- |
@@ -31,8 +33,11 @@
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
 | RunRuntime | `harness.run-runtime`；注入 session-runs/bash/apply-patch | 活动 program、所有受管操作、取消/等待者和临时视图；退出后结算 |
 | Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime | 准入、幂等和交接前资源；停止准入并等交接与在途 Run |
-| 本机目录选择器 | `host.directory-picker` | 单个原生对话框与进程；取消并等待 |
-| Web | `web.frontend`；注入业务与 Models 管理服务 | HTTP、共用 SSE、读取消与背压；停止监听并等连接退出 |
+| 执行访问管理 | `host.access` | 既有业务库中的实例身份与令牌摘要；撤销观察连接 |
+| 客户端连接 | `client.connections` | 独立 client.sqlite 与系统凭据意图日志 |
+| 客户端网关 | `client.gateway` | 独立监听器、静态页面、JSON/上传/SSE 转发与退出等待 |
+| 本机目录选择器 | `host.directory-picker` | 客户端根中的原生对话框；仅匹配启动确认的本机实例 |
+| Web | `host.harness-api`；注入业务与 Models 管理服务 | HTTP、共用 SSE、读取消与背压；停止监听并等连接退出 |
 
 源码入口分别位于 `packages/models/src/`、`src/{project,project-files,prompt,session,image,run,protocol-agents,tool,web}/`。Session 的 `sqlite-records.ts` 是内部提供方，不额外注册组件。H0 的 `src/resource-probe.ts` 仅用于资源归属验证，不是正式执行路径。
 
@@ -52,7 +57,7 @@ Models 配置库 v3 将当前旧参数纯函数转换为 `{ protocolId, formatVe
 
 ## 协议应用绑定与独立 Loop
 
-`src/protocol-agents/registry.ts` 将具体驱动代、Loop、输入编码、历史策略和展示投影闭包绑定为 `PreparedRunProgram`。公共 Run 只准备并交接 program；Runtime 只调用 `execute(host)` 和 `close()`，不解释停止原因。初始化声明只允许已知 Bash 与 Apply Patch；不存在动态工具注册中心。
+`src/harness/protocol-agents/registry.ts` 将具体驱动代、Loop、输入编码、历史策略和展示投影闭包绑定为 `PreparedRunProgram`。公共 Run 只准备并交接 program；Runtime 只调用 `execute(host)` 和 `close()`，不解释停止原因。初始化声明只允许已知 Bash 与 Apply Patch；不存在动态工具注册中心。
 
 | 协议 | 原生历史与 Loop 决策 | 参数与专属能力 |
 | --- | --- | --- |

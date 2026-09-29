@@ -6,7 +6,7 @@
 
 Run 服务负责准入、快照和取消入口；AgentLoop 独占执行期间的模型与工具调用；Session 组件持有 Run、执行阶段和事件。AgentLoop 从已固定的 Prompt、Session 历史和本次 Run 的工具轨迹组装模型消息。模型返回最终文本或一批工具请求，整批参数校验通过后才逐项执行。Bash 接收项目 ID 与命令，Apply Patch 接收项目 ID 与补丁；两者均通过 Projects 取得路径基准，项目目录不构成文件系统沙箱。
 
-`src/run/execution.ts` 的 `advanceExecution(current, event)` 是纯函数。它根据已提交的事件推进阶段、调用次数、当前批次索引和修订号。Session 组件在一个 SQLite 事务中提交新阶段与事件；模型和工具的启动事件必须先提交，外部调用才可开始。调用退出后再提交工具观察或固定类别的失败。终态事件、Run 状态和成功时新增的完整轮次节点也在一个事务中提交。
+`src/harness/run/execution.ts` 的 `advanceExecution(current, event)` 是纯函数。它根据已提交的事件推进阶段、调用次数、当前批次索引和修订号。Session 组件在一个 SQLite 事务中提交新阶段与事件；模型和工具的启动事件必须先提交，外部调用才可开始。调用退出后再提交工具观察或固定类别的失败。终态事件、Run 状态和成功时新增的完整轮次节点也在一个事务中提交。
 
 | 内部阶段 | 含义 |
 | --- | --- |

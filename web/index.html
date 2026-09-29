@@ -27,8 +27,9 @@
         <div class="sidebar-brand">
           <div class="brand"><strong>Anybox</strong><span>Agent</span></div>
           <button id="close-sidebar" class="icon-button sidebar-close" type="button" aria-label="关闭项目与会话"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-close"/></svg></button>
-          <button id="add-project" class="icon-button" type="button" aria-label="添加项目" title="添加本地项目" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-folder"/></svg></button>
+          <button id="add-project" class="icon-button" type="button" aria-label="添加项目" title="添加执行设备上的项目" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-folder"/></svg></button>
         </div>
+        <div class="harness-controls"><label for="harness-select">设置与新项目的执行设备</label><select id="harness-select"></select><button id="manage-harnesses" type="button">管理连接</button></div>
         <div class="session-create">
           <button id="new-session" class="new-session" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-compose"/></svg><span>新建会话</span><span class="shortcut" aria-hidden="true">＋</span></button>
         </div>
@@ -41,14 +42,14 @@
         </div>
         <footer class="sidebar-footer">
           <button id="open-archive" class="new-session" type="button" aria-haspopup="dialog" aria-controls="archive-dialog">已归档会话</button>
-          <div class="sidebar-note"><span class="agent-avatar" aria-hidden="true">A</span><div><strong id="current-agent">Anybox Agent</strong><span id="session-id" class="session-id">选择一个项目开始</span></div><span class="status-dot" title="本机工作区"></span></div>
+          <div class="sidebar-note"><span class="agent-avatar" aria-hidden="true">A</span><div><strong id="current-agent">Anybox Agent</strong><span id="session-id" class="session-id">选择一个项目开始</span></div><span class="status-dot" title="多设备工作区"></span></div>
         </footer>
       </aside>
       <button id="sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭项目与会话" tabindex="-1" hidden></button>
       <section id="session-workspace" class="session-workspace" aria-label="会话工作区">
         <header class="topbar">
           <div class="workspace-heading"><span class="workspace-overline">工作区</span><span class="breadcrumb-divider">/</span><h1 id="workspace-title">Anybox</h1></div>
-          <div class="local-badge"><span aria-hidden="true"></span>本地</div>
+          <div class="local-badge"><span aria-hidden="true"></span>多设备工作区</div>
         </header>
         <div id="workspace-notice" class="notice workspace-notice" role="alert" hidden></div>
         <div id="pane-tabs" class="pane-tabs" role="group" aria-label="切换会话面板" hidden></div>
@@ -57,12 +58,12 @@
     </main>
   </div>
   <dialog id="archive-dialog" class="settings-dialog archive-dialog" aria-labelledby="archive-title">
-    <div class="settings-heading"><h2 id="archive-title">已归档会话</h2><form method="dialog"><button class="close-settings" aria-label="关闭已归档会话" autofocus>×</button></form></div>
+    <div class="settings-heading"><h2 id="archive-title">已归档会话</h2><button type="button" class="close-settings" data-archive-close aria-label="关闭已归档会话" autofocus>×</button></div>
     <div class="settings-content"><p>归档会话仅供查看，恢复后可继续。历史内容和附件会保留。</p><button type="button" class="secondary-button" data-archive-refresh>刷新列表</button><p data-archive-status role="status" aria-live="polite"></p><div class="archive-list" aria-label="所有项目的已归档会话"></div></div>
   </dialog>
   <dialog id="help-dialog" class="settings-dialog help-dialog" aria-labelledby="help-title">
-    <div class="settings-heading"><h2 id="help-title">在 Anybox 中工作</h2><form method="dialog"><button class="close-settings" aria-label="关闭使用说明">×</button></form></div>
-    <div class="settings-content"><p>添加本地项目，然后新建会话，和 Agent 一起完成工作。</p><dl class="help-list"><dt>分屏工作</dt><dd>拖动会话或面板标题到另一面板边缘，最多同时打开四个面板。也可以使用会话旁的“···”菜单。</dd><dt>继续一个分支</dt><dd>从顶部选择后续分支，或从回答下方继续、编辑重发。查看位置由每个面板独立保存。</dd><dt>发送与换行</dt><dd>Enter 发送，Shift + Enter 换行。运行中可以继续发送，也可以单独停止运行。</dd><dt>本地保存</dt><dd>项目、会话和运行历史保存在本机。关闭面板不会停止运行。</dd></dl></div>
+    <div class="settings-heading"><h2 id="help-title">在 Anybox 中工作</h2><button type="button" id="close-help" class="close-settings" aria-label="关闭使用说明">×</button></div>
+    <div class="settings-content"><p>连接 Harness，登记对应设备上的项目，然后新建会话，和 Agent 一起完成工作。</p><dl class="help-list"><dt>分屏工作</dt><dd>拖动会话或面板标题到另一面板边缘，最多同时打开四个面板。也可以使用会话旁的“···”菜单。</dd><dt>继续一个分支</dt><dd>从顶部选择后续分支，或从回答下方继续、编辑重发。查看位置由每个面板独立保存。</dd><dt>发送与换行</dt><dd>Enter 发送，Shift + Enter 换行。运行中可以继续发送，也可以单独停止运行。</dd><dt>数据归属</dt><dd>项目、会话和运行历史保存在各自的 Harness。草稿和布局保存在当前浏览器。关闭面板或客户端不会停止已接受的运行。</dd></dl></div>
   </dialog>
   <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
     <div class="settings-heading"><h2 id="settings-title">设置</h2><button id="close-settings" class="close-settings" type="button" aria-label="关闭设置" autofocus><svg aria-hidden="true"><use href="#icon-close"/></svg></button></div>

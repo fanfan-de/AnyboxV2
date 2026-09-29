@@ -4,6 +4,8 @@
 
 Harness 独立模块的目标边界与源码目录约定见 [Harness 模块边界与目标目录结构](./harness-module-boundary.md)。该文档记录已初步认可的整理方向，尚不代表源码迁移或远程部署已经完成；下方组件手册继续描述当前实现。
 
+- [Harness 独立部署与多设备接入](harness-deployment.md)：启动、配对、发行物、HTTPS、服务与恢复。
+
 ## 按模块阅读
 
 | 模块 | 文档入口 | 主要问题 |

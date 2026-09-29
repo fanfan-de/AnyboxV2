@@ -9,11 +9,11 @@ import { syncBuiltinESMExports } from 'node:module'
 import sharp from 'sharp'
 import { Context, FiberState } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/storage/port.js'
-import { createImageAssetsComponent } from '../dist/image/component.js'
-import { imageAssetsServiceKey } from '../dist/image/port.js'
-import { imageLimits, validateImageBatch } from '../dist/image/limits.js'
-import { acquireImageDirectoryLock } from '../dist/image/directory-lock.js'
+import { localStorageServiceKey } from '../dist/harness/storage/port.js'
+import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { imageAssetsServiceKey } from '../dist/harness/image/port.js'
+import { imageLimits, validateImageBatch } from '../dist/harness/image/limits.js'
+import { acquireImageDirectoryLock } from '../dist/harness/image/directory-lock.js'
 
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes }); return { promise, resolve } }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -276,7 +276,7 @@ test('only two imports consume input concurrently, and a cancelled queued import
 
 test('a dead process directory lock is recovered and competing reclaimers never remove the winner', async t => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-image-lock-')), assets = join(directory, 'images')
-  const lockModule = new URL('../dist/image/directory-lock.js', import.meta.url).href
+  const lockModule = new URL('../dist/harness/image/directory-lock.js', import.meta.url).href
   const script = `import { acquireImageDirectoryLock } from ${JSON.stringify(lockModule)}; await acquireImageDirectoryLock(process.argv[1]); process.stdout.write('ready\\n'); setInterval(() => {}, 1000)`
   const child = spawn(process.execPath, ['--input-type=module', '-e', script, assets], { stdio: ['ignore', 'pipe', 'pipe'] })
   const exited = new Promise(resolve => child.once('exit', resolve))

@@ -6,7 +6,7 @@ Projects 为本机目录建立稳定项目身份，查询目录当前是否仍�
 
 ## 实现与装配
 
-- 源码：[Projects 组件](../../../src/project/component.ts)、[RuntimeInputs](../../../src/contracts.ts)。
+- 源码：[Projects 组件](../../../src/harness/project/component.ts)、[RuntimeInputs](../../../src/harness/contracts.ts)。
 - 工厂：`createProjectComponent(inputs)`；组件名：`harness-projects`；配置类型：`void`。
 - `inputs.now()` 和 `inputs.newId()` 由组合根注入，默认时间与 ID 生成不写死在领域动作里。
 - 注入 [本地存储](../infrastructure/local-sqlite.md) 的 `local-storage`；提供 `harness.projects: ProjectPort`。

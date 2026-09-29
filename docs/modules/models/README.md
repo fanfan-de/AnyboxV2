@@ -49,7 +49,7 @@ flowchart TD
 
 ## 装配与使用
 
-包要求 Node.js 22.13+。当前宿主入口是 [installWebModels](../../../src/web/models-startup.ts)，一般装配关系为：
+包要求 Node.js 22.13+。当前宿主入口是 [installWebModels](../../../src/host/models-startup.ts)，一般装配关系为：
 
 1. 安装 `createModelsStoreComponent({ path })`、`createModelsVaultComponent({ namespace })` 和 `createModelsComponent()`，等待 Nya 激活。
 2. 安装需要的协议组件。没有驱动时仍可查看和保存非秘密配置，执行保持不可用。

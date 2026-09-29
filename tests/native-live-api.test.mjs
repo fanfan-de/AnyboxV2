@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/image/component.js'
+import { createImageAssetsComponent } from '../dist/harness/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -9,10 +9,10 @@ import {
   createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createChatCompletionsProtocol, createAnthropicMessagesProtocol, createGeminiInteractionsProtocol,
 } from '@anybox/models'
-import { createDeepSeekProtocol } from '../dist/web/deepseek-protocol.js'
+import { createDeepSeekProtocol } from '../dist/host/deepseek-protocol.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHarness } from '../dist/harness.js'
-import { projectProtocolRecords } from '../dist/protocol-agents/projection.js'
+import { createHarness } from '../dist/harness/index.js'
+import { projectProtocolRecords } from '../dist/harness/protocol-agents/projection.js'
 import sharp from 'sharp'
 
 // Live text/image/restart smoke; this is not live tool, search, streaming or OS Keyring acceptance.

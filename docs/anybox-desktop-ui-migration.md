@@ -56,4 +56,4 @@ Web 使用明确背景色表达区域层次，避免把 Electron 的透明窗口
 
 不移植 Electron 窗口控制、透明材质、桌面 IPC、旧版插件/MCP/Skills 管理、日历与自动化、文件浏览器、终端、代码审查、外部编辑器或模型切换。它们不作为失效的装饰按钮出现在本次 Web 界面中。没有增加 Nya Context、组件、数据库字段、HTTP 业务接口或服务端执行生命周期；功能事实仍由当前 Harness、Session 与 Run 提供。
 
-实现入口为 `web/index.html`、`web/style.css`、`src/web/client.ts`、`src/web/workspace-client.ts` 与 `src/web/session-view.ts`。浏览器行为、协议和资源归属详见[薄 Web 客户端设计](./web-client-design.md)。
+实现入口为 `web/index.html`、`web/style.css`、`src/client/client.ts`、`src/client/workspace-client.ts` 与 `src/client/session-view.ts`。浏览器行为、协议和资源归属详见[薄 Web 客户端设计](./web-client-design.md)。

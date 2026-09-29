@@ -9,11 +9,11 @@
 | 项目 | 定义 |
 | --- | --- |
 | 工厂 | `createImageAssetsComponent({ directory, now?, newId?, collectionIntervalMs? })` |
-| 源码 / 契约 | [component.ts](../../../src/image/component.ts) / [port.ts](../../../src/image/port.ts) |
+| 源码 / 契约 | [component.ts](../../../src/harness/image/component.ts) / [port.ts](../../../src/harness/image/port.ts) |
 | Nya 名称 / 服务 | `harness-image-assets` / `harness.image-assets: ImageAssetsPort` |
 | 注入依赖 | `local-storage: LocalStoragePort` |
-| 私有适配器 | [validation.ts](../../../src/image/validation.ts)、[directory-lock.ts](../../../src/image/directory-lock.ts) |
-| 共享限制 | [limits.ts](../../../src/image/limits.ts) |
+| 私有适配器 | [validation.ts](../../../src/harness/image/validation.ts)、[directory-lock.ts](../../../src/harness/image/directory-lock.ts) |
+| 共享限制 | [limits.ts](../../../src/harness/image/limits.ts) |
 
 所有元数据与保留凭证通过既有业务 SQLite 连接读写，不另开数据库连接。组件在 `apply` 中登记 `image-assets` 领域迁移、恢复遗留上传和删除，再提供服务；长期回收定时器不阻塞启动。
 

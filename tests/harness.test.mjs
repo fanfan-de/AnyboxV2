@@ -1,25 +1,25 @@
-import { createProjectFilesComponent } from '../dist/project-files/component.js'
-import { createImageAssetsComponent } from '../dist/image/component.js'
+import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
+import { createImageAssetsComponent } from '../dist/harness/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
-import { createSessionComponent } from '../dist/session/component.js'
-import { sessionServiceKey, sessionRunServiceKey } from '../dist/session/port.js'
-import { createApplyPatchComponent } from '../dist/tool/apply-patch-component.js'
+import { createSessionComponent } from '../dist/harness/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/harness/session/port.js'
+import { createApplyPatchComponent } from '../dist/harness/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context, FiberState } from '@nya/core'
-import { createHarness } from '../dist/harness.js'
-import { createAgentPromptComponent } from '../dist/agent/prompt-binding-component.js'
+import { createHarness } from '../dist/harness/index.js'
+import { createAgentPromptComponent } from '../dist/harness/agent/prompt-binding-component.js'
 import { modelsServiceKey } from '@anybox/models'
-import { createRunComponent, runServiceKey } from '../dist/run/component.js'
-import { createRunRuntimeComponent, runRuntimeServiceKey } from '../dist/run/runtime-component.js'
-import { createProjectComponent, projectServiceKey } from '../dist/project/component.js'
-import { createBashComponent } from '../dist/tool/bash-component.js'
-import { createPromptComponent } from '../dist/prompt/component.js'
+import { createRunComponent, runServiceKey } from '../dist/harness/run/component.js'
+import { createRunRuntimeComponent, runRuntimeServiceKey } from '../dist/harness/run/runtime-component.js'
+import { createProjectComponent, projectServiceKey } from '../dist/harness/project/component.js'
+import { createBashComponent } from '../dist/harness/tool/bash-component.js'
+import { createPromptComponent } from '../dist/harness/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/storage/port.js'
+import { localStorageServiceKey } from '../dist/harness/storage/port.js'
 import { controlledModels, modelSnapshot, deferred, ids } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Answer briefly.' }]
@@ -210,8 +210,10 @@ test('closing Harness joins its call, releases the Models service and storage, a
   try {
     const run = await start(harness)
     const waiting = harness.waitRun(run.id)
+    const directRuns = f.root.get(runServiceKey)
     let closed = false
     const closing = harness.close().then(() => { closed = true })
+    assert.throws(() => directRuns.startRun({ sessionId: run.sessionId, parentNodeId: null, input: 'late', idempotencyKey: 'late' }), /closing/)
     await new Promise(resolve => setImmediate(resolve))
     assert.equal(closed, false)
     assert.ok(llm.calls[0].cancellations.length > 0)
@@ -539,4 +541,21 @@ test('an execution that differs from the accepted snapshot cannot start executio
     assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
     assert.deepEqual((await f.harness.getRunEvents(run.id)).map(event => event.kind), ['terminal'])
   } finally { await f.close() }
+})
+
+test('host close aborts preparation before a dependent request owner waits for its request to exit', { timeout: 5000 }, async () => {
+  const entered = deferred(), released = deferred()
+  const llm = controlledModels({ open: async input => { entered.resolve(); input.signal.addEventListener('abort', () => released.resolve(), { once: true }); await released.promise } })
+  const f = await createTestHarness({ llm, agents }); let request
+  try {
+    await f.root.installComponent({ name: 'test-request-owner', inject: [runServiceKey], apply(ctx) {
+      ctx.effect(() => async () => { await request?.catch(() => {}) }, 'join HTTP-like admission')
+    } })
+    const session = await createSession(f.harness)
+    request = f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'preparing', idempotencyKey: 'preparing' })
+    const rejected = assert.rejects(request)
+    await entered.promise
+    await f.harness.close(); await rejected
+    assert.equal(llm.calls.length, 0)
+  } finally { released.resolve(); await f.close() }
 })

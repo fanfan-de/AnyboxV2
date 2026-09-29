@@ -1,10 +1,12 @@
 # 薄 Web 客户端第一版
 
+> 多实例版本使用 `src/client/` 浏览器与独立 `src/host/client/` 网关，所有正式请求经连接 ID 路由。以下原有业务 API、对话树和展示语义沿用；旧本机直连与单进程启动描述已由[模块边界](harness-module-boundary.md)、[部署说明](harness-deployment.md)取代。
+
 状态：本机单用户参考实现，2026-09-28。已接入公共模型目录、五种原生协议、原生参数配置、按会话绑定协议与安全 Turn 视图；保留最多四个跨项目会话面板、拖拽分屏、标签页内布局恢复、会话树显式查看位置、多 Run 状态和 Nya Event → SSE 变更通知。旧文本会话仅供查看。验证使用临时数据库与受控模型，不访问真实凭据或工作区数据库。
 
 ## 边界
 
-浏览器只通过同源 `/api/v1` 与本机 Web 组件交互。应用宿主在同一个 Nya 根上安装 `packages/models` 的配置存储、系统凭据、模型服务、公开目录来源/缓存/服务、Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions，以及宿主的 DeepSeek 非推理扩展，再装配业务 SQLite、Harness、目录选择器和 `web-frontend`。统一 Provider/Model 定义带 user/external 来源，多个 ProviderConnection 同时可用，实际执行使用 ModelConfiguration；这些都是数据记录，不为每条连接创建 Context 或组件。Models 配置使用独立的 `data/models.sqlite`，公开目录使用 `data/models-catalog.sqlite`，业务会话保留在 `data/harness.sqlite`；三库不能共用文件或文件别名。路径和凭据命名空间可由启动配置指定。配置数据库只保存凭据引用，密钥值仅存入系统凭据库。
+浏览器只通过同源 `/api/v1` 与本机 Web 组件交互。应用宿主在同一个 Nya 根上安装 `packages/models` 的配置存储、系统凭据、模型服务、公开目录来源/缓存/服务、Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions，以及宿主的 DeepSeek 非推理扩展，再装配业务 SQLite、Harness、目录选择器和 `host-harness-api`。统一 Provider/Model 定义带 user/external 来源，多个 ProviderConnection 同时可用，实际执行使用 ModelConfiguration；这些都是数据记录，不为每条连接创建 Context 或组件。Models 配置使用独立的 `data/models.sqlite`，公开目录使用 `data/models-catalog.sqlite`，业务会话保留在 `data/harness.sqlite`；三库不能共用文件或文件别名。路径和凭据命名空间可由启动配置指定。配置数据库只保存凭据引用，密钥值仅存入系统凭据库。
 
 `ANYBOX_LLM_*` 保留为新 Models 数据库的初次迁入参数；已有连接/配置不会被环境变量覆盖。初次启动建立显式用户定义、迁入连接和稳定 `default` 配置，将旧参数转换为对应协议的 `parameters`，并尝试把旧凭据复制到 Models 管理的系统凭据条目；旧密钥缺失或系统凭据库暂不可访问时仍允许进入设置。后续连接、模型、参数及 Key 均通过 `models.settings` 修改，不需要重启应用。变量详情见 [README](../README.md#本机-web-界面)。Web 组件拥有 HTTP 监听器与静态页面；进程信号由入口处理，经 `harness.close()` 关闭整个根。Harness 负责项目、Session、Run 准入、幂等、工具执行、取消和结算；协议 Driver/Loop 通过 Runtime 执行并生成安全视图，Models 提供原生 execution、凭据和传输边界。
 
@@ -12,7 +14,7 @@
 
 模型服务主页面展示“我的连接”；添加连接流程以可搜索、可滚动的列表同时展示多个 Provider 定义，按定义 ID 显示来源、已有连接数量及当前选中项。点击提供方后在右侧填写连接配置，连接方案、模型目录预览和自定义连接入口沿用原流程。列表选择仅填写草稿，不创建连接或修改会话选模；目录状态更新保留列表按钮焦点。
 
-`src/web/component.ts` 接收 Harness 校验后的 Agent ID 列表，通过 Nya 注入 Projects、Session、Run、Prompt、Agent Prompt、目录选择器、`models`、`models.settings` 与 `models.catalog`；`server.ts` 映射同源 HTTP 接口。业务查询取自 `harness.sessions`，执行控制取自 `harness.runs`，已保存模型查询取自 `models`，配置和 Key 操作取自 `models.settings`，统一目录定义也取自 `models.settings`；`models.catalog` 仅提供来源状态和刷新。Web 不依赖旧 `credentials.settings`，也不向前端提供凭据读取服务或协议注册服务。
+`src/host/component.ts` 接收 Harness 校验后的 Agent ID 列表，通过 Nya 注入 Projects、Session、Run、Prompt、Agent Prompt、目录选择器、`models`、`models.settings` 与 `models.catalog`；`server.ts` 映射同源 HTTP 接口。业务查询取自 `harness.sessions`，执行控制取自 `harness.runs`，已保存模型查询取自 `models`，配置和 Key 操作取自 `models.settings`，统一目录定义也取自 `models.settings`；`models.catalog` 仅提供来源状态和刷新。Web 不依赖旧 `credentials.settings`，也不向前端提供凭据读取服务或协议注册服务。
 
 公开 Session 包含选定的 `modelId`、`historyMode` 和首次原生 Run 固定的 `protocolId`；公开 Run 包含实际 `modelId`、调用者显式指定的 `requestedModelId`、`protocolBinding` 和不含秘密的 `modelSnapshot`（新写入 schemaVersion 3，含原生参数；旧快照只读且不重写）。Agent 指令、Prompt 内容快照、execution 句柄、原生续轮记录与密钥不进入普通 Session/Run DTO。Bash 命令和输出摘要、Apply Patch 预览和结果仍可展示；Prompt 管理单独返回可管理文档和版本。模型管理接口仅返回 Key 是否已配置，绝不回传密钥值或内部凭据引用。
 

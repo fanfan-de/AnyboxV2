@@ -36,6 +36,6 @@ SQLite 使用 `catalog_cache(cache_key, record)` 和自身 `user_version=1`，�
 
 ## 测试与关联文档
 
-[catalog.test.mjs](../../../packages/models/tests/catalog.test.mjs) 覆盖持久化重开、来源隔离、排他释放、初始化后备、保留路径及链接别名、旧记录转换与损坏缓存启动。当前宿主的 [installWebModels](../../../src/web/models-startup.ts) 将 Models 配置和业务数据库传入 `reservedPaths`。
+[catalog.test.mjs](../../../packages/models/tests/catalog.test.mjs) 覆盖持久化重开、来源隔离、排他释放、初始化后备、保留路径及链接别名、旧记录转换与损坏缓存启动。当前宿主的 [installWebModels](../../../src/host/models-startup.ts) 将 Models 配置和业务数据库传入 `reservedPaths`。
 
 替换缓存只需实现 `ModelsCatalogCache`，保持原子替换和可观察存储状态。参见 [目录调度](catalog.md) 与 [配置存储](store.md)。

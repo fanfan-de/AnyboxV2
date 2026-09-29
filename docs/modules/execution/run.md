@@ -6,7 +6,7 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 
 ## 实现与装配
 
-- 源码：[组件](../../../src/run/component.ts)、[输入和状态转换](../../../src/run/domain.ts)、[程序契约](../../../src/run/program.ts)、[等待者](../../../src/run/waiters.ts)。
+- 源码：[组件](../../../src/harness/run/component.ts)、[输入和状态转换](../../../src/harness/run/domain.ts)、[程序契约](../../../src/harness/run/program.ts)、[等待者](../../../src/harness/run/waiters.ts)。
 - 工厂：`createRunComponent(inputs, agents, isHarnessClosing?)`；组件名：`harness-runs`；配置类型：`void`。
 - `inputs` 提供 `now()`、`newId()`；`agents` 是已验证的只读 Agent 定义；可选 `isHarnessClosing()` 默认为 false，用于区分整个应用关闭与依赖失效。
 - 提供 `harness.runs: RunPort`。
@@ -54,3 +54,5 @@ Effect 清理先关闭新准入、中止正在准备的 execution，取消已接
 ## 归档准入
 
 已接受幂等结果优先于 Session 归档、模型和 Prompt 校验。新 Run 在准备前检查 archivedAt，Session 接受事务再复核，归档先提交时返回 `session-archived`。已准备 program 仍必须关闭、等待实际退出并释放绑定租约；Run 先接受时，Session 归档返回 `session-has-active-runs`，直到取消/完成及资源清理后的终态提交。详见 [Session 组件](../sessions/session.md) 与 [并发行为测试](../../../tests/conversation-tree.test.mjs)。
+
+整根关闭窗口：组合根同步标记 closing 并广播仅用于准入的 AbortSignal。Run 直接入口检查 closing；信号取消尚未完成的 program 准备，使 HTTP 等依赖消费者能够等待请求真实退出，随后 Nya 才卸载 Run 与其依赖。已接受运行的取消、退出和结算仍由 Run/Runtime 清理负责，不在组合根复制依赖图。测试见 `tests/harness.test.mjs` 的 request-owner 关闭场景。

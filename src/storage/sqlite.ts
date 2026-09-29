@@ -1,12 +1,12 @@
-import { existsSync, mkdirSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { Component } from '@nya/core'
-import { localStorageError, localStorageServiceKey } from './port.js'
+import { localStorageError, localStorageServiceKey } from '../harness/storage/port.js'
 import type {
   LocalStoragePort, StorageMigration, StorageReader, StorageRow,
   StorageTransaction, StorageValue,
-} from './port.js'
+} from '../harness/storage/port.js'
 
 function failure(error: unknown, code: 'open-failed' | 'operation-failed' | 'migration-failed') {
   if (error instanceof Error && error.name === 'LocalStorageError') return error
@@ -155,25 +155,19 @@ export function createLocalSqliteComponent(file: string): Component.Object<void>
     apply(ctx) {
       const path = databasePath(file)
       const lockPath = `${path}.lock`
-      ctx.effect(() => {
-        try { mkdirSync(lockPath, { mode: 0o700 }) } catch (error) {
-          if (error !== null && typeof error === 'object' && 'code' in error && error.code === 'EEXIST') {
-            throw localStorageError('occupied', `local database is already owned: ${path}`)
-          }
-          throw failure(error, 'open-failed')
-        }
-        return () => {
-          try { rmSync(lockPath, { recursive: true, force: true }) } catch {
-            throw localStorageError('close-failed', 'cannot release local database ownership')
-          }
-        }
-      }, 'exclusive local database')
-
+      if (existsSync(lockPath)) throw localStorageError('occupied', `legacy database lock requires offline inspection: ${lockPath}`)
       let db!: DatabaseSync
       ctx.effect(() => {
-        try { db = new DatabaseSync(path) } catch (error) { throw failure(error, 'open-failed') }
+        try {
+          db = new DatabaseSync(path)
+          db.exec('PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT')
+        } catch (error) {
+          try { db?.close() } catch { /* Preserve acquisition failure. */ }
+          if (error instanceof Error && /locked|busy/i.test(error.message)) throw localStorageError('occupied', `local database is already owned: ${path}`)
+          throw failure(error, 'open-failed')
+        }
         return () => { try { db.close() } catch { throw localStorageError('close-failed', 'cannot close local database') } }
-      }, 'SQLite connection')
+      }, 'exclusive SQLite connection')
       initializeLayout(db)
 
       let accepting = true

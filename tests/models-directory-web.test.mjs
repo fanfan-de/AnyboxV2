@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { runViewEvent } from '../dist/run/notifications.js'
+import { runViewEvent } from '../dist/harness/run/notifications.js'
 import { catalogModelsData, startCatalogModelsHost } from './helpers/catalog-models-host.mjs'
 import { deferred } from './helpers/controlled-models.mjs'
 

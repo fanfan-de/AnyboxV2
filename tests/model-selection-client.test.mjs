@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createPendingStore, createSessionController } from '../dist/web/session-client.js'
+import { createPendingStore, createSessionController } from '../dist/client/session-client.js'
 
 function fixture() {
   const storage = new Map(), writes = [], timers = new Map(), runs = [], views = new Map()

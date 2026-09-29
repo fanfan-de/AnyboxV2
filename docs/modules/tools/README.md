@@ -15,9 +15,9 @@
 
 ## 共同契约与执行关系
 
-[definition.ts](../../../src/tool/definition.ts) 的 `ToolDefinition` 只包含名称、说明和 JSON 参数定义；各[协议 Agent Loop](../execution/README.md) 负责把它编码为协议原生工具声明。工具只接收已经解析好的项目 ID 与工具输入，不读取模型的可变原生状态，不持有凭据，也不自行写入 Session。
+[definition.ts](../../../src/harness/tool/definition.ts) 的 `ToolDefinition` 只包含名称、说明和 JSON 参数定义；各[协议 Agent Loop](../execution/README.md) 负责把它编码为协议原生工具声明。工具只接收已经解析好的项目 ID 与工具输入，不读取模型的可变原生状态，不持有凭据，也不自行写入 Session。
 
-两个 `execute()` 均同步返回 [contracts.ts](../../../src/contracts.ts) 中的 `OwnedCall<Result>`：
+两个 `execute()` 均同步返回 [contracts.ts](../../../src/harness/contracts.ts) 中的 `OwnedCall<Result>`：
 
 - `result` 表示可以观察的业务结果；它可能先于底层资源退出完成。
 - `cancel(reason: string)` 请求停止；不能用其返回时间判断资源已释放。

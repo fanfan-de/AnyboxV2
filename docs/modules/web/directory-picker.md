@@ -8,12 +8,12 @@ Directory Picker 让本机用户通过系统对话框选一个项目目录。它
 
 | 项目 | 定义 |
 | --- | --- |
-| 源码 | [directory-picker.ts](../../../src/web/directory-picker.ts) |
+| 源码 | [directory-picker.ts](../../../src/host/directory-picker.ts) |
 | 工厂 / Nya 名称 | `createDirectoryPickerComponent(options?)` / `host-directory-picker` |
 | 服务 | `host.directory-picker: DirectoryPickerPort` |
 | `inject` | 无 |
 | 原生适配函数 | `runMacOSDirectoryDialog(signal)` |
-| 消费方 | [Web Frontend](web-frontend.md) |
+| 消费方 | [Client Gateway](client-gateway.md) |
 
 ## 配置与接口
 
@@ -24,7 +24,7 @@ Directory Picker 让本机用户通过系统对话框选一个项目目录。它
 
 服务有只读 `supported: boolean` 与 `pick(signal?): Promise<string | undefined>`。`undefined` 表示用户在对话框点取消；显式 signal 取消则拒绝 `DirectoryPickerFailure('cancelled')`。两者含义不同。
 
-每次调用先检查组件准入、平台支持、是否已有活动对话框和上游取消状态。只允许一个活动调用，没有等待队列；占用期间的第二次调用立即以 `busy` 拒绝。组件安装在非 macOS 仍然成功并提供 `supported: false`，使 Web 的其他功能继续可用。
+每次调用先检查组件准入、平台支持、是否已有活动对话框和上游取消状态。只允许一个活动调用，没有等待队列；占用期间的第二次调用立即以 `busy` 拒绝。组件安装在非 macOS 仍然成功并提供 `supported: false`，使路径输入与远程连接继续可用。
 
 ## 原生流程与所有权
 
@@ -34,14 +34,9 @@ Directory Picker 让本机用户通过系统对话框选一个项目目录。它
 
 组件同步登记活动 controller 和 Promise，再异步启动对话框，因此在启动前取消或卸载也不会漏掉待执行任务。Promise 的 finally 释放占用和上游 abort 监听器；用户选择完成之前不会接纳第二个对话框。
 
-## 与 HTTP、Projects 的协作
+## 与客户端网关、Projects 的协作
 
-- `GET /api/v1/projects/picker` 返回 `{ supported }`。
-- `POST /api/v1/projects/pick` 接受空 JSON 对象，经同源校验后调用 `pick(signal)`。
-- 用户点取消时返回 JSON `null`；成功路径交给 `projects.openProject(path)` 登记，返回项目 DTO。
-- HTTP 响应断开或 Web 关闭时中止该请求 controller；若已经取消，Web 适配层不会继续登记所选路径。
-
-浏览器不能通过该端点直接提交任意 `path`：请求字段白名单为空。选择器只负责由宿主交互取得路径，不提供对项目的后续授权或文件系统沙箱。
+仅安装在客户端根。组合启动器通过子进程就绪消息确认 localInstanceId；网关 `/api/client/v1/local` 返回身份和支持状态，`POST /api/client/v1/connections/:id/pick {}` 必须匹配此身份。目录窗口只返回路径，浏览器通过目标连接的 `POST /api/v1/projects {path}` 登记。其他设备和无桌面环境使用绝对路径输入，不按 hostname 推断本机。
 
 ## 取消、实际退出与失败
 

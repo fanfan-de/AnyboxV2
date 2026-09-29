@@ -12,8 +12,8 @@ Prompt 管理用户拥有的提示词文档、可编辑草稿和不可变发布�
 | Nya 组件名 | `harness-prompts` |
 | 提供服务 | `harness.prompts`，接口 `PromptPort` |
 | 注入依赖 | `local-storage` |
-| 入口 | [component.ts](../../../src/prompt/component.ts) |
-| 领域与存储 | [domain.ts](../../../src/prompt/domain.ts)、[sqlite-storage.ts](../../../src/prompt/sqlite-storage.ts) |
+| 入口 | [component.ts](../../../src/harness/prompt/component.ts) |
+| 领域与存储 | [domain.ts](../../../src/harness/prompt/domain.ts)、[sqlite-storage.ts](../../../src/harness/prompt/sqlite-storage.ts) |
 
 `inputs.now()` 和 `inputs.newId()` 由宿主注入，分别产生审计时间和文档/版本 ID，便于测试固定输入。可选 `legacyJsonPath` 仅用于一次性读取旧 Prompt JSON；正常写入全部进入业务 SQLite。
 
@@ -55,7 +55,7 @@ Prompt 管理用户拥有的提示词文档、可编辑草稿和不可变发布�
 
 组件初始化登记 `prompt` 领域迁移，拥有 `prompt_documents`、`prompt_versions`、`prompt_json_import`。SQLite 连接、文件锁和事务队列归 [业务存储组件](../infrastructure/local-sqlite.md)，Prompt 仅拥有领域状态与已接受写入。
 
-旧 JSON 导入要求 Prompt 数据为空，在事务内写入文档、版本及导入路径标记，保留原文件。同一路径重启不重复导入；换用其他路径或在已有文档后首次导入会失败。初始化从数据库重建投影并校验版本归属、顺序及发布状态；无效存储内容使初始化失败。兼容读取实现见 [legacy-json-import.ts](../../../src/prompt/legacy-json-import.ts)。
+旧 JSON 导入要求 Prompt 数据为空，在事务内写入文档、版本及导入路径标记，保留原文件。同一路径重启不重复导入；换用其他路径或在已有文档后首次导入会失败。初始化从数据库重建投影并校验版本归属、顺序及发布状态；无效存储内容使初始化失败。兼容读取实现见 [legacy-json-import.ts](../../../src/harness/prompt/legacy-json-import.ts)。
 
 ## 生命周期、错误与边界
 

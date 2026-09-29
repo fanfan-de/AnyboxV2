@@ -8,7 +8,7 @@ Local SQLite 为业务领域提供独占的文件数据库，集中管理连接�
 
 | 项目 | 定义 |
 | --- | --- |
-| 实现 / 端口 | [sqlite.ts](../../../src/storage/sqlite.ts) / [port.ts](../../../src/storage/port.ts) |
+| 实现 / 端口 | [sqlite.ts](../../../src/storage/sqlite.ts) / [port.ts](../../../src/harness/storage/port.ts) |
 | 工厂 | `createLocalSqliteComponent(file: string)` |
 | Nya 名称 / 服务 | `local-sqlite` / `local-storage: LocalStoragePort` |
 | `inject` | 无 |
@@ -18,9 +18,9 @@ Local SQLite 为业务领域提供独占的文件数据库，集中管理连接�
 
 `file` 必须是非空文件路径，禁止 `:memory:`。组件解析绝对路径，按需创建父目录（创建时权限 `0700`）；既存文件用 realpath 规范化，新文件用真实父路径与 basename 组合。
 
-组件在规范文件路径旁创建 `<path>.lock` 目录作为排他所有权标记。同一路径已被占用时返回 `occupied`。随后打开一个 SQLite 连接；初始化或后续组件启动失败时由 Nya 已登记的 Effect 负责释放资源。
+组件打开数据库前拒绝已有 `<path>.lock`，报告离线迁移要求且不删除旧目录。随后设置 `locking_mode=EXCLUSIVE` 并实际执行 `BEGIN EXCLUSIVE; COMMIT`，在整个连接生命周期跨事务保持 OS 锁。同文件（含文件别名）竞争返回 `occupied`；异常退出无需手工清理新锁。不得让外部连接同时读取此业务库。
 
-锁目录不含自动租约续期或陈旧锁恢复逻辑，非正常进程退出后可能残留；不能在未确认原持有者已经退出时移除它。数据库文件、锁目录和连接归本组件，Session 等消费者不自行打开第二条业务连接。Models 配置和目录缓存使用独立组件与文件，见 [Models 模块](../models/README.md)。
+数据库与连接归本组件；客户端在自己的根以同一提供方拥有独立 client.sqlite。Models 配置和目录缓存仍由各自组件拥有。初始化失败或关闭通过 Effect 释放连接与锁，文件不删除。
 
 ## 公开存储接口
 
@@ -50,7 +50,7 @@ reader/transaction 仅在回调生命周期内有效，即使回调异步等待�
 
 这是一种合作式取消：它不会强制打断已经开始的同步 SQLite 调用，也不会中断回调自行创建且不结束的 Promise。调用方须让自己的异步工作可退出。迁移没有独立 signal 参数。
 
-三个 Effect 按资源顺序登记，清理时先禁止新操作并等待已接受队列尾完成，再关闭连接，最后移除锁目录。存储关闭不会丢弃已接受操作，也不会提前释放文件所有权；新操作以 `closed` 拒绝。领域消费者应先依 Nya 依赖顺序停止并退出自身操作。
+Effect 按资源顺序登记，清理时先禁止新操作并等待已接受队列尾完成，再关闭连接并释放 OS 锁。存储关闭不会丢弃已接受操作，也不会提前释放文件所有权；新操作以 `closed` 拒绝。领域消费者应先依 Nya 依赖顺序停止并退出自身操作。
 
 ## 错误与替换边界
 

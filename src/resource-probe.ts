@@ -1,5 +1,5 @@
 import type { Component } from '@nya/core'
-import type { OwnedCall } from './contracts.js'
+import type { OwnedCall } from './harness/contracts.js'
 
 export const modelServiceKey = 'h0.model'
 export const runServiceKey = 'h0.runs'

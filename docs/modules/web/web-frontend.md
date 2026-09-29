@@ -1,48 +1,18 @@
-# Web Frontend 组件
+# Harness API 组件
 
-[Web 模块](README.md) · [模块导航](../README.md)
+[宿主与客户端模块](README.md) · [部署](../../harness-deployment.md)
 
-## 职责与入口
+`src/host/component.ts` 的 `createHarnessApiComponent(agents, port, {authenticated,host})` 创建 `host-harness-api` 并提供 `host.harness-api: HarnessApiPort`。生产执行入口启用认证；该组件不提供静态页面。内部 `startHarnessApiServer` 拥有唯一监听器、HTTP 请求与 SSE；`models-api.ts` 是内部 Models 路由函数，不新增组件。默认无认证选项仅用于受信的进程内行为测试，生产组合根始终注入访问管理。
 
-Web Frontend 拥有静态客户端、本地 HTTP 监听、API 映射和 SSE 订阅。它把业务服务结果投影为浏览器 DTO，不持有模型 execution、不存储会话历史，也不替代各领域的校验与资源清理。
+inject `harness.sessions`、`harness.runs`、`harness.projects`、`harness.prompts`、`harness.agent-prompts`、`models`、`models.settings`、`models.catalog` 与 `host.access`。通过本轮 deps 快照调用服务；依赖重启先关闭旧监听器再重新安装。Agent 列表是只读启动配置。
 
-| 项目 | 定义 |
-| --- | --- |
-| 组件入口 | [component.ts](../../../src/web/component.ts) |
-| HTTP 适配器 | [server.ts](../../../src/web/server.ts)：`startWebServer(commands, port?)` |
-| 工厂 / Nya 名称 | `createWebFrontendComponent(agents, port = 0)` / `web-frontend` |
-| 服务 | `web.frontend: WebFrontendPort`，只读 `url` |
-| 内部服务契约 | `WebCommands` 适配领域方法；`WebServer` 提供 `url`、两种通知方法和 `close()` |
+所有生产请求需要 Bearer。实例信息接口认证后返回 instanceId/名称/API 版本/能力，其他业务先检查期望实例头。身份始终映射 `local-web-user`，设备令牌不是业务用户，代理头不影响授权。默认监听回环，远端 TLS 由反向代理终止。客户端网关另外执行 Host/Origin/CSRF 约束。令牌发行、元数据与撤销见 [Host Access](host-access.md)。
 
-`agents` 是只读 `{ id }` 列表，工厂冻结 ID 投影；Agent 的运行定义仍由 Harness 持有。`port` 默认 0，由操作系统分配。启动后保存实际端口，同一组件工厂因依赖重启时再次使用该端口。
+浏览器只接收安全 DTO；私有原生记录由组件内部读取并白名单投影，不公开原生恢复句柄、凭据引用或 execution。JSON 字段与大小、图片 MIME/字节以及原有业务校验保持不变。终态由 Session 持久事实决定，流式展示是临时提示。
 
-## 依赖与领域边界
+Effect 先停止监听准入，取消并等待尚未完成的请求体、目录/Models/资源操作，结束等待响应与 SSE，等待所有请求处理完成并释放监听器。关闭 API 或撤销令牌只结束观察，已经被 Runtime 接管的 Run 由执行域负责。整根退出由 `harness.close()` 先同步禁止新 Run，再交给 Nya 依赖清理；不存在远程关闭入口。
 
-`inject` 声明以下服务，`apply` 仅使用本轮 `deps` 快照：
-
-| 服务 | 用途 |
-| --- | --- |
-| `harness.sessions` | 会话、节点、Run 状态/事件/原生记录查询，创建、选模、归档/恢复及图片和文件入口 |
-| `harness.runs` | 启动、取消、等待 Run 与临时原生视图 |
-| `models` | 可执行配置列表、配置存在性校验 |
-| `models.settings` | Provider/Model 定义、连接、Key、执行配置管理 |
-| `models.catalog` | 目录状态与刷新 |
-| `harness.projects` | 项目列表、所选路径登记和项目下会话查询的协作 |
-| `host.directory-picker` | 原生目录选择 |
-| `harness.prompts` | Prompt 草稿、版本、发布 |
-| `harness.agent-prompts` | Agent 与已发布 Prompt 版本绑定 |
-
-Prompt 操作始终使用宿主固定身份 `local-web-user`，浏览器不能提供 actor ID。创建会话或选模先确认配置存在；选择模型把协议 ID 交给 Session 校验已固定的会话协议。组件不绕过 Models Key 管理或 Session 的历史兼容约束。
-
-## HTTP 约束与展示投影
-
-监听固定为 `127.0.0.1`，返回 origin 为 `http://127.0.0.1:<port>`。每个请求必须匹配实际 `Host` 和 URL origin；所有 POST 还要求 `Origin` 精确等于监听 origin。SSE GET 另外拒绝外部 Origin 和不属于 `same-origin` / `none` 的 `Sec-Fetch-Site`。
-
-这是单用户本机宿主，没有提供远程监听、登录或多用户认证。除单图导入接口外，POST 要求 `Content-Type: application/json`、非数组 JSON 对象和字段白名单。普通请求体上限 65536 字节，Prompt 创建/编辑上限 1048576 字节；单图导入接收 `application/octet-stream` 或允许的图片 MIME，流式计数并限制到 10 MiB。未知字段、非法路径编码或数值查询被拒绝；空对象操作也必须发送 `{}`。
-
-响应统一设置 `Cache-Control: no-store`、`X-Content-Type-Options: nosniff` 和限制到同源的 CSP。静态文件通过固定映射读取，包括 `/`、`/style.css` 及已编译浏览器模块；没有任意路径文件读取接口。
-
-浏览器得到 Session、Run、Prompt 和模型管理 DTO，不提供凭据读取、可变原生 execution 或原始受信原生记录端点。Run 视图使用协议白名单投影。事件中的 Bash stdout/stderr 和补丁文本预览分别限 2048 UTF-8 字节，并保留截断标志；Apply Patch 的已完成变更、pending 和诊断保持为结构化结果。
+测试使用 `tests/web-server.test.mjs` 保持既有路由行为，`tests/remote-harness.test.mjs` 验证认证、实例、网关和撤销，`tests/deployment-boundaries.test.mjs` 验证根与启动清理。运行 `npm run check`。
 
 ## API：项目、会话与 Run
 
@@ -52,7 +22,7 @@ Prompt 操作始终使用宿主固定身份 `local-web-user`，浏览器不能�
 | --- | --- |
 | `GET /agents` | 可选 Agent ID 列表 |
 | `GET /projects` | 项目列表 |
-| `GET /projects/picker` | `{ supported }` |
+| `POST /projects` | `{path}`，目标端绝对目录，经 Projects 校验、规范化和登记 |
 | `POST /projects/pick` | `{}`；选择目录并登记项目，用户取消返回 `null` |
 | `GET /projects/:id/sessions` | 项目下未归档会话 |
 | `POST /sessions` | `{ projectId, agentId, modelId? }` |
@@ -116,7 +86,7 @@ selection 为 `{ kind: 'project-file', path, range? }` 或 `{ kind: 'snapshot', 
 | `POST /models/configurations/:id` | `{ patch, expectedRevision }` |
 | `GET /models/configurations/:id/history` | 执行配置历史 |
 
-定义查询接受 `sourceId`、`providerId`、`search` 和字符串布尔值 `includeDeprecated`、`includeMissing`、`textOnly`。写操作的主字段白名单与完整类型以 [server.ts](../../../src/web/server.ts) 及 [Models 模块](../models/README.md) 为准。`expectedRevision` 必须为大于零的安全整数，并交由领域服务执行版本冲突检查。
+定义查询接受 `sourceId`、`providerId`、`search` 和字符串布尔值 `includeDeprecated`、`includeMissing`、`textOnly`。写操作的主字段白名单与完整类型以 [server.ts](../../../src/host/server.ts) 及 [Models 模块](../models/README.md) 为准。`expectedRevision` 必须为大于零的安全整数，并交由领域服务执行版本冲突检查。
 
 Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返回 Key 内容的 GET 接口。目录建议来自定义与显式 sourceMappings，不按 hostname 猜协议。保存连接/Key 后适用模型的基础配置补齐、失败重试和来源删除保留既有配置均由 Models 负责。
 
@@ -158,9 +128,9 @@ Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返
 
 `apply` 在启动监听后返回。它预先登记 server 清理 Effect，并用 `ctx.on` 注册本轮事件监听；Nya 停止本轮组件时取消监听并等待 HTTP 关闭。整个应用根关闭时，依赖提供方在 Web 等消费者退出后再清理；单独卸载 Web 不负责关闭其依赖组件。同一组件依赖重启后在原端口重新监听，不复用旧服务引用。
 
-`WebServer.close()` 幂等：先停止准入，中止目录选择、图片上传/读取、项目文件搜索/预览/准备/读取和正在等待远端的 Models 请求，释放所有 Run waiters，关闭 SSE，然后等待 SSE 退出、已登记 Models 与附件任务实际结束和 HTTP listener 的在途请求排空。文件操作复用附件请求的取消与等待包装。普通已接受的 Prompt/配置写入、归档/恢复及附件续期由所属服务完成，HTTP 关闭等待对应请求结束。附件请求断开会显式取消 `OwnedCall`；HTTP 成功响应和关闭都等待 `result` 与 `done`，不能以结果已就绪代替真实退出。
+`HarnessApiServer.close()` 幂等：先停止准入，中止目录选择、图片上传/读取、项目文件搜索/预览/准备/读取和正在等待远端的 Models 请求，释放所有 Run waiters，关闭 SSE，然后等待 SSE 退出、已登记 Models 与附件任务实际结束和 HTTP listener 的在途请求排空。文件操作复用附件请求的取消与等待包装。普通已接受的 Prompt/配置写入、归档/恢复及附件续期由所属服务完成，HTTP 关闭等待对应请求结束。附件请求断开会显式取消 `OwnedCall`；HTTP 成功响应和关闭都等待 `result` 与 `done`，不能以结果已就绪代替真实退出。
 
-单独替换/卸载 Web 不取消已经接受的 Run；完整宿主通过 `harness.close()` 关闭时，Run 组件才关闭准入并取消/等待执行。模型发现、连通性检查和目录刷新因请求断开而取消；普通等待断开只释放 waiter。目录选择的具体退出保证见 [Directory Picker](directory-picker.md)。
+单独替换/卸载 Web 不取消已经接受的 Run；完整宿主 `harness.close()` 先同步关闭准入并取消准备，再由 Nya 卸载 Run 组件、取消并等待执行。模型发现、连通性检查和目录刷新因请求断开而取消；普通等待断开只释放 waiter。目录选择的具体退出保证见 [Directory Picker](directory-picker.md)。
 
 HTTP 只返回安全 `{ error: { code, fileIndex? } }`，fileIndex 仅在有效文件位置错误时返回：非法输入 400，JSON 类型 415，体积上限 413，不存在 404，revision/幂等/协议/历史冲突及归档限制通常 409，超时 504，不可用 503，未知异常 500 `internal-error`。已发头后的异常直接关闭响应，避免追加不匹配的 JSON。原始内部异常不直接发送到浏览器。
 
@@ -174,13 +144,13 @@ HTTP 只返回安全 `{ error: { code, fileIndex? } }`，fileIndex 仅在有效�
 - [models-directory-web.test.mjs](../../../tests/models-directory-web.test.mjs)：目录建议、自动基础配置、多协议执行、刷新断开及真实读流退出等待。
 - [protocol-web-modules.test.mjs](../../../tests/protocol-web-modules.test.mjs)、[protocol-view-client.test.mjs](../../../tests/protocol-view-client.test.mjs)：协议隔离、白名单、替换视图顺序与不兼容拒绝。
 
-`startWebServer` 可通过 `WebCommands` 测试替身独立验证；替换浏览器或 HTTP 实现时保持显式父节点、幂等键、临时/持久状态区分和清理语义。完整验收运行 `npm run check`。
+`startHarnessApiServer` 可通过 `HarnessApiCommands` 测试替身独立验证；替换浏览器或 HTTP 实现时保持显式父节点、幂等键、临时/持久状态区分和清理语义。完整验收运行 `npm run check`。
 
 ## 项目文件引用
 
 输入框支持 @ 搜索或“引用项目文件”，默认整文件，预览可选择闭区间行范围。搜索包含点文件及 ignore 文件，仅排除元数据和依赖目录。发送时通过 Session 准备不可变快照，再以 ID 提交 Run。pending v3 先保存准备键，取得快照后先保存 ID，再发送；重试和重新生成默认复用快照。历史预览读取快照，编辑可显式更新为当前文件。
 
-HTTP 路由见上方接口表，跨组件恢复规则见[文件引用设计](../../project-file-references-design.md)。文件操作使用既有请求取消/实际退出包装，错误只暴露固定 code 及可选 fileIndex。[draft-client](../../../src/web/draft-client.ts) 是通用草稿存储，[file-client](../../../src/web/file-client.ts) 管理文件待提交和 5 分钟租期，[file-view](../../../src/web/file-view.ts) 拥有各面板的候选查询与预览；组件关闭/面板卸载取消对应操作。
+HTTP 路由见上方接口表，跨组件恢复规则见[文件引用设计](../../project-file-references-design.md)。文件操作使用既有请求取消/实际退出包装，错误只暴露固定 code 及可选 fileIndex。[draft-client](../../../src/client/draft-client.ts) 是通用草稿存储，[file-client](../../../src/client/file-client.ts) 管理文件待提交和 5 分钟租期，[file-view](../../../src/client/file-view.ts) 拥有各面板的候选查询与预览；组件关闭/面板卸载取消对应操作。
 
 ## 会话归档
 

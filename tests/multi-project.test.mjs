@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/image/component.js'
+import { createImageAssetsComponent } from '../dist/harness/image/component.js'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createHarness } from '../dist/harness.js'
+import { createHarness } from '../dist/harness/index.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { controlledModels } from './helpers/controlled-models.mjs'
 
@@ -105,9 +105,9 @@ test('a new process settles an abandoned Run as interrupted without replaying it
   const file = join(directory, 'state.sqlite')
   const script = `
     import { Context } from '@nya/core'
-    import { createHarness } from './dist/harness.js'
+    import { createHarness } from './dist/harness/index.js'
     import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
-    import { createImageAssetsComponent } from './dist/image/component.js'
+    import { createImageAssetsComponent } from './dist/harness/image/component.js'
     import { controlledModels } from './tests/helpers/controlled-models.mjs'
     const root = new Context()
     await root.installComponent(controlledModels().component())
@@ -126,8 +126,6 @@ test('a new process settles an abandoned Run as interrupted without replaying it
     })
     assert.equal(child.status, 17, child.stderr)
     const ids = JSON.parse(child.stdout)
-    // The child has exited; its file lock is stale rather than owned by a live process.
-    rmSync(`${file}.lock`, { recursive: true, force: true })
     const f = await host(file)
     try {
       assert.equal((await f.harness.getRun(ids.runId))?.status, 'interrupted')

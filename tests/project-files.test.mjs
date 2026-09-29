@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createProjectComponent } from '../dist/project/component.js'
-import { createProjectFilesComponent } from '../dist/project-files/component.js'
-import { fileLimits } from '../dist/project-files/domain.js'
+import { createProjectComponent } from '../dist/harness/project/component.js'
+import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
+import { fileLimits } from '../dist/harness/project-files/domain.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 async function joinCall(call) { try { return await call.result } finally { await call.done } }

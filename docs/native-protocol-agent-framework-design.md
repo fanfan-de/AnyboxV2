@@ -16,16 +16,16 @@ Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResu
 | --- | --- | --- |
 | Models 原生内核 | `packages/models/src/native-types.ts`、`execution.ts`、`component.ts` | 固定配置与凭据、驱动代租约、prepare/start、实际退出屏障、记录与恢复 |
 | 协议驱动 | `packages/models/src/protocols/` | 原生参数、请求构建、JSON/SSE 消费、私有候选状态、restore/commit |
-| 协议应用绑定 | `src/protocol-agents/registry.ts` | 固定驱动代、Loop、根输入/工具编码、历史策略与 program 闭包 |
-| 五协议 Loop | `src/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案；DeepSeek复用Chat工厂 |
-| Run | `src/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
-| RunRuntime | `src/run/runtime-component.ts` | 全部受管操作、取消、真实退出、持久屏障、视图与结算 |
-| 图片资源 | `src/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
-| Session | `src/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
-| 服务端展示 | `src/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
+| 协议应用绑定 | `src/harness/protocol-agents/registry.ts` | 固定驱动代、Loop、根输入/工具编码、历史策略与 program 闭包 |
+| 五协议 Loop | `src/harness/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案；DeepSeek复用Chat工厂 |
+| Run | `src/harness/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
+| RunRuntime | `src/harness/run/runtime-component.ts` | 全部受管操作、取消、真实退出、持久屏障、视图与结算 |
+| 图片资源 | `src/harness/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
+| Session | `src/harness/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
+| 服务端展示 | `src/harness/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
 | 协议 Web | `src/web/protocols/` | 安全 decoder/reducer、输入编码和稳定 Turn 生命周期 |
 | 共享 Web | `src/web/session-*`、`workspace-client.ts`、`run-change-*` | 分支、控制、订阅、重连、滚动与四面板 |
-| DeepSeek 扩展 | `src/web/deepseek-protocol.ts` | 独立协议ID、max_tokens、禁用thinking、developer限制和旧参数转换器 |
+| DeepSeek 扩展 | `src/host/deepseek-protocol.ts` | 独立协议ID、max_tokens、禁用thinking、developer限制和旧参数转换器 |
 
 Models 不导入应用源码、Session、数据库业务表或工具实现。Session 只理解公共信封、归属与引用，不解释协议块。RunRuntime 不识别 finish_reason、stop_reason 或任何协议的停止条件。
 
