@@ -6,7 +6,7 @@
 
 每个执行实例使用一个 Nya 根 Context，本机客户端另有独立根。Models 配置存储、系统凭据、模型服务、协议和目录组件，与 Harness 的 SQLite、Prompt、Projects、Session、Run、RunRuntime、协议应用绑定、Bash、Apply Patch 直接安装在同一根。Nya 管理依赖、重启和清理顺序；Provider、Model、项目和会话都是数据记录。
 
-当前原生协议框架见[组件说明](docs/harness-components.md)与[原生协议迁移设计](docs/native-protocol-agent-framework-design.md)。`docs/architecture/` 中的图保留迁移前架构记录，不作为当前执行契约。
+当前原生协议框架见[组件说明](docs/harness-components.md)与[原生协议迁移设计](docs/native-protocol-agent-framework-design.md)。当前进程、组件注入与 Run 时序见[多实例架构图](docs/architecture/anybox-architecture-2026-09-29-multi-instance.md)；`docs/architecture/` 中较早的图保留历史记录，不作为当前执行契约。
 
 Session 持有完整轮次对话树，允许同一父节点启动多个 Run。新请求必须提供 `parentNodeId`（空会话用 `null`）；成功节点只继承祖先路径，并在资源退出后原子提交。Web 支持节点查看、分支选择、多 Run 状态及最多四个跨项目拖拽分屏，布局与查看位置在当前标签页内恢复。详见[对话树设计](docs/session-conversation-tree.md)。
 

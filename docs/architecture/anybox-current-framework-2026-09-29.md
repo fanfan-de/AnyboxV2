@@ -1,6 +1,6 @@
 # AnyboxV2 当前框架图
 
-> 多实例部署实现后，最新进程与接入边界见 [Harness 模块边界](../harness-module-boundary.md)。此处保留当日原单进程组件图的历史记录。
+> 多实例部署实现后，最新进程与接入边界见 [Harness 模块边界](../harness-module-boundary.md)与[多实例架构图](./anybox-architecture-2026-09-29-multi-instance.md)。此处保留当日原单进程组件图的历史记录。
 
 [返回文档首页](../README.md) · [Harness 模块边界与目标目录结构](../harness-module-boundary.md)
 

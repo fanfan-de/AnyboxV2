@@ -24,7 +24,8 @@ Harness 独立模块的目标边界与源码目录约定见 [Harness 模块边�
 
 | 文档 | 内容 |
 | --- | --- |
-| [当前框架图（2026-09-29）](./architecture/anybox-current-framework-2026-09-29.md) | 当前单根装配、Harness 逻辑边界、Models、宿主与数据资源；含 SVG、PNG 和 Mermaid |
+| [多实例架构图（2026-09-29）](./architecture/anybox-architecture-2026-09-29-multi-instance.md) | 当前进程与外部资源、执行根全部组件注入关系、一次 Run 的执行时序；Mermaid |
+| [单进程框架图（2026-09-29）](./architecture/anybox-current-framework-2026-09-29.md) | 多实例拆分前的单根装配历史记录；含 SVG、PNG 和 Mermaid |
 | [Harness 模块边界与目标目录结构](./harness-module-boundary.md) | 模块归属、易混淆边界、目标文件夹与当前路径映射、迁移约束 |
 | [Harness 组件协作总览](./harness-components.md) | 单根装配、资源所有权与关键调用路径 |
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
