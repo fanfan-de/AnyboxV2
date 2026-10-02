@@ -25,9 +25,6 @@ const closeSettingsButton = required<HTMLButtonElement>('agent--close-settings')
 const sidebar = required<HTMLElement>('agent--workspace-sidebar')
 const sidebarToggle = required<HTMLButtonElement>('agent--toggle-sidebar')
 function closeSidebar(): void { workspace.closeSidebar() }
-const helpDialog = required<HTMLDialogElement>('agent--help-dialog')
-required('agent--close-help').addEventListener('click', () => helpDialog.close())
-required('agent--open-help').addEventListener('click', () => { closeSidebar(); helpDialog.showModal() })
 sidebar.addEventListener('click', event => {
   const action = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.session-open, [data-create-project-session], #agent--add-project') : null
   // Release a drawer's focus trap before the project selector opens its modal.
@@ -117,7 +114,7 @@ void api<readonly AgentView[]>('/agents').then(receiveAgents).catch(error => {
 agentSelect.addEventListener('change', workspace.refreshControls)
 return {
   setActive(active) {
-    if (!active) { settingsDialog.close(); helpDialog.close() }
+    if (!active) settingsDialog.close()
     workspace.setActive(active)
   },
   canLeave,

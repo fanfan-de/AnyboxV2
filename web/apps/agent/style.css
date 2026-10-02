@@ -14,6 +14,8 @@
 .sidebar-close { display: none; }
 .sidebar-archive-button { display: flex; align-items: center; gap: 9px; width: 100%; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; background: #ffffff40; font-size: 13px; text-align: left; }
 .sidebar-archive-button:hover:not(:disabled) { background: #ffffff80; }
+.sidebar-settings-button { display: flex; align-items: center; gap: 9px; width: 100%; margin-top: 12px; padding: 8px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); font-size: 13px; text-align: left; }
+.sidebar-settings-button:hover { background: var(--hover); color: var(--text); }
 .picker-status { flex-shrink: 0; margin: 0 16px 12px; color: var(--secondary); font-size: 11px; line-height: 1.5; }
 .sidebar-navigation { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 12px 12px 0; overflow: hidden; }
 .navigation-section { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
@@ -73,10 +75,8 @@
 .file-sidebar-heading strong { font-size: 12px; font-weight: 500; }
 .file-sidebar-content { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
 .session-workspace { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); overflow: hidden; }
-.topbar { height: 40px; flex-shrink: 0; padding: 0 18px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); gap: 16px; }
-.workspace-heading { min-width: 0; display: flex; align-items: center; gap: 10px; }
-.workspace-overline, .breadcrumb-divider { flex-shrink: 0; font-size: 11px; color: var(--muted); white-space: nowrap; }
-.workspace-heading h1 { font-size: 12px; font-weight: 500; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.workspace-controls { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.session-workspace>.workspace-controls { align-self: flex-end; height: 40px; padding: 0 14px; }
 .local-badge { display: flex; align-items: center; gap: 7px; font-size: 10px; color: var(--secondary); white-space: nowrap; }
 .pane-host { flex: 1; min-width: 0; min-height: 0; overflow: hidden; position: relative; }
 .pane-host>.session-pane, .pane-host>.workspace-split, .workspace-empty { width: 100%; height: 100%; }
@@ -192,9 +192,6 @@
 .settings-dialog .close-settings { border: 0; padding: 4px; width: 28px; height: 28px; background: transparent; color: var(--secondary); font-size: 18px; }
 .settings-dialog #delete-key, .settings-dialog .secondary-button { background: transparent; color: var(--secondary); border-color: var(--line-strong); }
 .settings-dialog #key-notice { color: #815728; }
-.help-list { margin: 24px 0 0; font-size: 12px; line-height: 1.8; }
-.help-list dt { margin-top: 18px; font-weight: 600; }
-.help-list dd { margin: 5px 0 0; color: var(--secondary); }
 .prompt-dialog { width: min(980px, calc(100% - 32px)); height: min(850px, calc(100dvh - 40px)); }
 .prompt-workspace { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; flex: 1; }
 .prompt-library { display: flex; flex-direction: column; gap: 12px; min-height: 0; padding: 20px 16px; border-right: 1px solid var(--line); background: var(--sidebar); }
@@ -246,7 +243,6 @@
   .composer textarea { min-height: 48px; }
 }
 @media (max-width: 760px) {
-  .topbar { padding: 0 12px; }
   .pane-heading { padding: 0 12px; gap: 6px; }
   .pane-title small { display: none; }
   .branch-navigation { padding: 6px 8px; gap: 2px; }
@@ -598,13 +594,12 @@
 }
 
 /* Harness keeps one workspace; model and Prompt management stay in its settings. */
-.agent-toolbar { display: flex; align-items: center; gap: 7px; }
 #agent--prompt-settings { width: 100%; height: auto; }
 #agent--prompt-settings .prompt-workspace { grid-template-columns: 180px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 #agent--prompt-settings .prompt-editor { overflow: visible; }
 #agent--prompt-settings .prompt-notice { margin: 12px 0; }
 @media (max-width: 760px) {
- .workspace,  #agent--prompt-settings .prompt-workspace { display: flex; flex-direction: column; }
+ #agent--prompt-settings .prompt-workspace { display: flex; flex-direction: column; }
  #agent--prompt-settings .prompt-library { max-height: 200px; border-right: 0; border-bottom: 1px solid var(--line); }
  #agent--prompt-settings .prompt-editor { padding: 20px 16px; }
 }

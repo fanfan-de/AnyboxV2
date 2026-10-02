@@ -4,7 +4,7 @@
 
 `src/applications/harness/client/connections.ts` 的 `createConnectionsComponent({namespace?,openEntry?,fetch?})` 创建 `client-connections`，提供 `client.connections: ConnectionsPort`。inject 客户端根的 `local-storage`，此根只打开独立 `client.sqlite`，不共用执行库。`namespace` 默认 `anybox.client`；`openEntry` 是测试/平台替身边界。
 
-连接是 Harness 内部功能。组件随客户端 Harness 打开安装、关闭卸载；通用外壳不管理本地/远程目标。工作区侧栏底部在“已归档会话”下方保留一处“执行设备”选择器与“管理连接”按钮，替代原 Agent 信息区域；所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。关闭仅释放句柄，已保存连接和凭据保留。
+连接是 Harness 内部功能。组件随客户端 Harness 打开安装、关闭卸载；通用外壳不管理本地/远程目标。工作区侧栏底部在“已归档会话”下方保留一处“执行设备”选择器与“管理连接”按钮，替代原 Agent 信息区域；“Harness 设置”入口紧接其下，位于项目栏最底部。所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。关闭仅释放句柄，已保存连接和凭据保留。
 
 设备切换先在应用路由中固定新选择，再重建本应用界面；旧工作区同步更新项目或会话查看位置时保留路由当前的设备选择，不能用重建前的连接覆盖它。查看项目与会话不自动改变设备选择，已有会话请求继续按自身 instanceId 路由。
 

@@ -122,7 +122,6 @@ export function setupSidebarLayout(root: HTMLElement, options: {
   left.tabIndex = -1; right.tabIndex = -1
   listen(leftToggle, 'click', () => toggle('left'))
   listen(rightToggle, 'click', () => toggle('right'))
-  listen(required('agent--show-workspace'), 'click', () => open('left', true))
   listen(required('agent--close-sidebar'), 'click', () => closeDrawers())
   listen(required('agent--close-files'), 'click', () => fit.rightDrawer ? closeDrawers() : toggle('right'))
   listen(backdrop, 'click', () => closeDrawers())

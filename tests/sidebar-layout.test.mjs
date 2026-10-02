@@ -88,7 +88,7 @@ function domFixture(initialWidth) {
   const document = new EventTarget(), root = new Element('root'), shell = new Element('workspace')
   root.ownerDocument = document; root.elements = new Map()
   for (const id of ['workspace-sidebar', 'file-sidebar', 'session-workspace', 'sidebar-backdrop', 'toggle-sidebar', 'toggle-files',
-    'sidebar-toggle-label', 'left-sidebar-separator', 'right-sidebar-separator', 'show-workspace', 'close-sidebar', 'close-files']) {
+    'sidebar-toggle-label', 'left-sidebar-separator', 'right-sidebar-separator', 'close-sidebar', 'close-files']) {
     root.elements.set(`agent--${id}`, new Element(`agent--${id}`, shell))
   }
   const element = id => root.elements.get(`agent--${id}`)

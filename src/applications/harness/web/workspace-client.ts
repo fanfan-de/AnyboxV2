@@ -42,6 +42,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   const routeHash = () => environment.route.read()
   const get = <T extends HTMLElement>(id: string) => root.querySelector(`#${id}`)! as T
   const host = get<HTMLElement>('agent--pane-host'), tabs = get<HTMLElement>('agent--pane-tabs'), notice = get<HTMLElement>('agent--workspace-notice')
+  const workspaceControls = get<HTMLElement>('agent--workspace-controls')
   const projectList = get<HTMLElement>('agent--project-list')
   const addProject = get<HTMLButtonElement>('agent--add-project')
   const pickerStatus = get<HTMLElement>('agent--project-picker-status')
@@ -206,8 +207,13 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       button.disabled = creating || !selectedAgent(state.sidebarProjectId ?? undefined) || !projects.find(item => item.id === button.dataset.createProjectSession)?.available
     }
     const active = activePane()
-    const activeProject = projects.find(item => item.id === active?.projectId)
-    get('agent--workspace-title').textContent = projectLabel(activeProject) ?? projectLabel(project()) ?? 'Anybox'
+    const heading = active && bundles.get(active.sessionId)?.view?.element.querySelector<HTMLElement>('.pane-heading')
+    if (heading) {
+      if (workspaceControls.parentElement !== heading) heading.insertBefore(workspaceControls, heading.querySelector('.pane-close'))
+    } else {
+      const center = get<HTMLElement>('agent--session-workspace')
+      if (workspaceControls.parentElement !== center) center.insertBefore(workspaceControls, notice)
+    }
     for (const button of host.querySelectorAll<HTMLButtonElement>('[data-create-session]')) button.disabled = !canCreateSession
     for (const button of host.querySelectorAll<HTMLButtonElement>('[data-add-project]')) button.disabled = addProject.disabled
     for (const pane of panes(state.root)) bundles.get(pane.sessionId)?.view?.element.classList.toggle('active-pane', pane.id === state.activePaneId)
@@ -355,6 +361,10 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     if (!ready) { host.textContent = '正在加载工作区…'; return }
     resizeCleanup?.()
     clearDrop()
+    const focused = document.activeElement instanceof HTMLElement &&
+      (host.contains(document.activeElement) || workspaceControls.contains(document.activeElement)) ? document.activeElement : undefined
+    // Preserve the shared controls and their listeners while rebuilding or disposing pane views.
+    if (host.contains(workspaceControls)) workspaceControls.remove()
     const all = panes(state.root), openIds = new Set(all.map(pane => pane.sessionId))
     for (const [id, bundle] of bundles) {
       if (bundle.view && !openIds.has(id)) {
@@ -363,7 +373,6 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         bundle.view = undefined
       }
     }
-    const focused = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement : undefined
     const scrolls = new Map([...bundles].filter(([, bundle]) => bundle.view).map(([id, bundle]) =>
       [id, bundle.view!.captureScroll()]))
     compact = root.clientWidth <= 760 || !fits(state.root, size())
@@ -408,9 +417,9 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       if (top !== undefined) bundle.view!.restoreScroll(top)
       bundle.view!.resizeInput()
     }
-    if (focused?.isConnected) focused.focus({ preventScroll: true })
     changes.update(all.map(pane => pane.sessionId))
     refreshControls()
+    if (focused?.isConnected) focused.focus({ preventScroll: true })
   }
 
   function renderProjectSessions(id: string): void {
@@ -619,7 +628,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   document.addEventListener('pointerdown', event => {
     if (!applicationActive || !(event.target instanceof Node) || !root.contains(event.target)) return
     const source = event.target instanceof Element ? event.target.closest<HTMLElement>('[data-drag-session]') : null
-    if (!source || event.button !== 0 || (event.target as HTMLElement).closest('.pane-close') || compact) return
+    if (!source || event.button !== 0 || (event.target as HTMLElement).closest('.pane-close, .workspace-controls') || compact) return
     const ref = { projectId: source.dataset.projectId!, sessionId: source.dataset.dragSession! }
     const startX = event.clientX, startY = event.clientY, abort = new AbortController()
     let dragging = false, emptyTarget = false
