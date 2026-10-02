@@ -1,4 +1,4 @@
-import type { FileSelection, FileContent, FileRef, FileSearch, FilePreview, FileRenewal } from '../project-files/domain.js'
+import type { FileSelection, FileContent, FileRef, FileSearch, FilePreview, FileRenewal, FileTreePage } from '../project-files/domain.js'
 import type { Session, ConversationNode, NodePage, NodeQuery } from './domain.js'
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
 import type { RunEvent, RunExecution } from '../run/execution.js'
@@ -14,6 +14,10 @@ export const sessionRunServiceKey = 'harness.session-runs'
 
 /** Public session facts. Run commands and in-flight resources belong to the execution components. */
 export interface SessionPort {
+  openProjectFileTree(sessionId: string, path: string, owner: string, signal?: AbortSignal): OwnedCall<FileTreePage>
+  readProjectFileTreePage(sessionId: string, owner: string, cursorId: string, page: number, signal?: AbortSignal): OwnedCall<FileTreePage>
+  closeProjectFileTree(sessionId: string, owner: string, cursorId: string): Promise<void>
+  onProjectFileTreeRetired(listener: (cursorId: string) => void): () => void
   searchProjectFiles(sessionId: string, query: string, signal?: AbortSignal): OwnedCall<FileSearch>
   previewProjectFile(sessionId: string, selection: Extract<FileSelection, { kind: 'project-file' }>, signal?: AbortSignal): OwnedCall<FilePreview>
   prepareProjectFiles(sessionId: string, key: string, selections: readonly FileSelection[], signal?: AbortSignal): OwnedCall<readonly FileRef[]>

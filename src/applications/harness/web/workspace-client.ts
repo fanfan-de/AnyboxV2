@@ -16,13 +16,25 @@ import type { SessionPanel } from './session-view.js'
 import { closePane, emptyWorkspace, fitRatios, fits, openSession, panes, parseRoute, ratioBounds,
   resizeSplit, restoreWorkspace, sessionHash, splitSession, separatorSize, waitForProjectSnapshot } from './workspace-layout.js'
 import type { Edge, LayoutNode, Pane, SessionRef, Size, Split, Workspace } from './workspace-layout.js'
+import { createSidebarStateStore } from './sidebar-layout.js'
+import { setupSidebarLayout } from './sidebar-client.js'
+import { createFileSidebar, restoreFileSidebarSessionState } from './file-sidebar.js'
+import type { FilePreviewRequest } from './file-sidebar.js'
 
 export const workspaceKey = 'anybox.web.workspace.v2'
 const storage: BrowserStorage = {
   getItem: key => sessionStorage.getItem(key), setItem: (key, value) => sessionStorage.setItem(key, value),
 }
 
-export function setupWorkspace(api: Api, messageFor: (error: unknown) => string, selectedAgent: (projectId?: string) => string, models: ModelsCatalog | undefined, environment: { root: HTMLElement; storageKey?: string; isActive(): boolean; route: { read(): string; write(hash: string, push: boolean): void; subscribe(listener: () => void): () => void } }) {
+/** Sidebar selection follows the device while the full project snapshot remains available to panes. */
+export function projectSidebar(projects: readonly ProjectView[], instanceId: string | undefined, preferredId: string | null | undefined, settled: boolean) {
+  const visible = projects.filter(project => instanceId === undefined || (project.instanceId ?? splitScopedId(project.id)?.instanceId) === instanceId)
+  const preferred = visible.find(project => project.id === preferredId)
+  const pending = preferredId && (instanceId === undefined || splitScopedId(preferredId)?.instanceId === instanceId) && waitForProjectSnapshot(preferredId, projects, settled)
+  return { projects: visible, selectedProjectId: preferred?.id ?? (pending && preferredId ? preferredId : visible[0]?.id ?? null) }
+}
+
+export function setupWorkspace(api: Api, messageFor: (error: unknown) => string, selectedAgent: (projectId?: string) => string, models: ModelsCatalog | undefined, environment: { root: HTMLElement; storageKey?: string; selectedInstanceId?: string; isActive(): boolean; route: { read(): string; write(hash: string, push: boolean): void; subscribe(listener: () => void): () => void } }) {
   const root = environment.root
   let applicationActive = environment.isActive?.() ?? true
   const layoutKey = environment.storageKey ?? workspaceKey
@@ -31,7 +43,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   const get = <T extends HTMLElement>(id: string) => root.querySelector(`#${id}`)! as T
   const host = get<HTMLElement>('agent--pane-host'), tabs = get<HTMLElement>('agent--pane-tabs'), notice = get<HTMLElement>('agent--workspace-notice')
   const projectList = get<HTMLElement>('agent--project-list')
-  const addProject = get<HTMLButtonElement>('agent--add-project'), newSession = get<HTMLButtonElement>('agent--new-session')
+  const addProject = get<HTMLButtonElement>('agent--add-project')
   const pickerStatus = get<HTMLElement>('agent--project-picker-status')
   const pending = createPendingStore(storage)
   const drafts = createDraftStore(storage)
@@ -137,7 +149,36 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   }
   const size = (): Size => ({ width: host.clientWidth, height: host.clientHeight })
   const activePane = () => panes(state.root).find(pane => pane.id === state.activePaneId)
-  const project = () => projects.find(item => item.id === state.sidebarProjectId)
+  const sidebarState = createSidebarStateStore(`${layoutKey}.sidebars.v1`, { storage,
+    onStorageError: () => showNotice('浏览器无法保存边栏与文件视图位置，当前工作区仍可使用。'),
+  })
+  const fileSidebar = createFileSidebar(get('agent--file-sidebar-content'), {
+    api, messageFor,
+    changed(sessionId, value) {
+      if (disposed) return
+      try { sidebarState.update(current => ({ ...current, perSession: { ...current.perSession, [sessionId]: value } })) }
+      catch { showNotice('浏览器无法保存文件视图位置，当前工作区仍可使用。') }
+    },
+  })
+  const sidebarLayout = setupSidebarLayout(root, {
+    storageKey: `${layoutKey}.sidebars.v1`, stateStore: sidebarState, isActive: () => applicationActive,
+  })
+  const unsubscribeSidebar = sidebarLayout.subscribe(visible => fileSidebar.setVisible(visible && !document.hidden))
+  const syncFileSidebar = () => {
+    const pane = activePane(), bundle = pane && bundles.get(pane.sessionId)
+    fileSidebar.setSession(pane && bundle?.view ? pane : undefined, bundle?.view ? bundle.controller : undefined,
+      pane ? restoreFileSidebarSessionState(sidebarState.read().perSession[pane.sessionId]) : undefined)
+  }
+  const openFile = (request: FilePreviewRequest) => {
+    const pane = panes(state.root).find(item => item.sessionId === request.ref.sessionId && item.projectId === request.ref.projectId)
+    if (!pane) return
+    focusPane(pane.id)
+    syncFileSidebar()
+    sidebarLayout.openRight()
+    fileSidebar.open(request)
+  }
+  const sidebar = () => projectSidebar(projects, environment.selectedInstanceId, state.sidebarProjectId, initialProjectsSettled)
+  const project = () => sidebar().projects.find(item => item.id === state.sidebarProjectId)
   const projectLabel = (value: ProjectView | undefined) => value ? [value.harnessName, value.name].filter(Boolean).join(' · ') : undefined
   const updateURL = (push = false) => {
     const pane = activePane()
@@ -152,9 +193,10 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   }
 
   function refreshControls(): void {
-    newSession.disabled = creating || !project()?.available || !selectedAgent(state.sidebarProjectId ?? undefined)
+    const navigation = sidebar()
+    state = { ...state, sidebarProjectId: navigation.selectedProjectId }
+    const canCreateSession = !creating && !!project()?.available && !!selectedAgent(state.sidebarProjectId ?? undefined)
     addProject.disabled = !pickerSupported
-    newSession.title = project() ? `在 ${project()!.name} 中新建会话` : '先选择一个项目'
     for (const button of projectList.querySelectorAll<HTMLButtonElement>('.project-button')) {
       const selected = button.dataset.projectId === state.sidebarProjectId
       button.classList.toggle('selected', selected)
@@ -164,14 +206,9 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       button.disabled = creating || !selectedAgent(state.sidebarProjectId ?? undefined) || !projects.find(item => item.id === button.dataset.createProjectSession)?.available
     }
     const active = activePane()
-    const snapshot = active ? bundles.get(active.sessionId)?.controller.snapshot() : undefined
     const activeProject = projects.find(item => item.id === active?.projectId)
-    get('agent--current-agent').textContent = (snapshot?.session?.agentId ? splitScopedId(snapshot.session.agentId)?.id ?? snapshot.session.agentId : 'Anybox Agent')
-    get('agent--session-id').textContent = projectLabel(activeProject) ?? projectLabel(project()) ?? '选择一个项目开始'
-    get('agent--session-id').title = active?.sessionId ?? ''
     get('agent--workspace-title').textContent = projectLabel(activeProject) ?? projectLabel(project()) ?? 'Anybox'
-    get('agent--project-count').textContent = String(projects.length)
-    for (const button of host.querySelectorAll<HTMLButtonElement>('[data-create-session]')) button.disabled = newSession.disabled
+    for (const button of host.querySelectorAll<HTMLButtonElement>('[data-create-session]')) button.disabled = !canCreateSession
     for (const button of host.querySelectorAll<HTMLButtonElement>('[data-add-project]')) button.disabled = addProject.disabled
     for (const pane of panes(state.root)) bundles.get(pane.sessionId)?.view?.element.classList.toggle('active-pane', pane.id === state.activePaneId)
     for (const button of projectList.querySelectorAll<HTMLButtonElement>('.session-open')) {
@@ -194,6 +231,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     for (const button of tabs.querySelectorAll<HTMLButtonElement>('button')) {
       button.setAttribute('aria-pressed', String(button.dataset.paneId === state.activePaneId))
     }
+    syncFileSidebar()
   }
 
   function focusPane(id: string): void {
@@ -264,7 +302,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
             if (applicationActive) (element?.querySelector<HTMLElement>('textarea:not(:disabled)') ?? element)?.focus({ preventScroll: true })
           }
           catch (error) { if (!disposed) showNotice(messageFor(error)) }
-        })
+        }, openFile)
     }
     bundle.view.setProjectName(projectLabel(projects.find(item => item.id === pane.projectId)) ?? pane.projectId)
     return bundle.view
@@ -328,7 +366,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     const focused = document.activeElement instanceof HTMLElement && host.contains(document.activeElement) ? document.activeElement : undefined
     const scrolls = new Map([...bundles].filter(([, bundle]) => bundle.view).map(([id, bundle]) =>
       [id, bundle.view!.captureScroll()]))
-    compact = window.innerWidth <= 760 || !fits(state.root, size())
+    compact = root.clientWidth <= 760 || !fits(state.root, size())
     tabs.hidden = !compact || all.length < 2
     tabs.replaceChildren(...all.map(pane => {
       const button = document.createElement('button')
@@ -445,13 +483,14 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   }
 
   function renderNavigation(): void {
+    const visible = sidebar().projects
     for (const [id, group] of projectGroups) {
-      if (!projects.some(item => item.id === id)) { group.remove(); projectGroups.delete(id) }
+      if (!visible.some(item => item.id === id)) { group.remove(); projectGroups.delete(id) }
     }
     projectList.querySelector(':scope > .navigation-empty')?.remove()
     projectList.querySelectorAll('.harness-heading').forEach(heading => heading.remove())
     let previousInstance: string | undefined
-    for (const item of projects) {
+    for (const item of visible) {
       let group = projectGroups.get(item.id)
       if (!group) {
         group = document.createElement('section')
@@ -496,10 +535,10 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       button.querySelector('small')!.textContent = item.available ? item.path : '目录不可访问'
       updateProjectExpansion(item.id)
     }
-    if (!projects.length) {
+    if (!visible.length) {
       const hint = document.createElement('p')
       hint.className = 'navigation-empty'
-      hint.textContent = '为执行设备添加项目，开始工作。'
+      hint.textContent = '为当前执行设备添加项目，开始工作。'
       projectList.append(hint)
     }
     refreshControls()
@@ -514,7 +553,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   }
 
   function selectProject(id: string, write = true): void {
-    if (!projects.some(item => item.id === id)) return
+    if (!sidebar().projects.some(item => item.id === id)) return
     state = { ...state, sidebarProjectId: id }
     collapsedProjects.delete(id)
     updateProjectExpansion(id)
@@ -570,7 +609,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   host.addEventListener('click', event => {
     const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('[data-create-session], [data-add-project]') : null
     if (!button || button.disabled) return
-    if (button.hasAttribute('data-create-session')) newSession.click()
+    if (button.hasAttribute('data-create-session') && state.sidebarProjectId) createSession(state.sidebarProjectId)
     else addProject.click()
   }, options)
   document.addEventListener('click', event => {
@@ -669,7 +708,6 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       void sessionIndex.load(created.projectId)
     }).catch(error => { if (!disposed) showNotice(messageFor(error)) }).finally(() => { creating = false; if (!disposed) refreshControls() })
   }
-  newSession.addEventListener('click', () => { if (state.sidebarProjectId) createSession(state.sidebarProjectId) }, options)
   const projectPicker = setupProjectDirectoryPicker(messageFor, opened => {
     if (disposed) return
     // Show the confirmed target immediately; an unrelated offline device must not delay it.
@@ -688,6 +726,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   }, options)
   const unsubscribeRoute = environment.route.subscribe(route)
   document.addEventListener('visibilitychange', () => {
+    fileSidebar.setVisible(!document.hidden && applicationActive && sidebarLayout.rightVisible())
     if (!document.hidden && applicationActive) {
       void imageLeases.refresh(); void fileLeases.refresh(); archivePanel.refresh()
       for (const project of projects) void sessionIndex.load(project.id)
@@ -699,10 +738,10 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   let observedSize = ''
   const observer = new ResizeObserver(() => {
     if (!applicationActive || host.clientWidth === 0 || host.clientHeight === 0) return
-    const value = `${host.clientWidth}:${host.clientHeight}:${window.innerWidth <= 760}`
+    const value = `${host.clientWidth}:${host.clientHeight}:${root.clientWidth <= 760}`
     if (value === observedSize) return
     observedSize = value
-    const shouldCompact = window.innerWidth <= 760 || !fits(state.root, size())
+    const shouldCompact = root.clientWidth <= 760 || !fits(state.root, size())
     if (shouldCompact !== compact) renderLayout()
     else if (!compact && state.root) updateRatios(fitRatios(state.root, size()))
     else for (const bundle of bundles.values()) bundle.view?.resizeInput()
@@ -711,7 +750,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   observer.observe(host)
   window.addEventListener('resize', () => {
     if (!applicationActive || host.clientWidth === 0 || host.clientHeight === 0) return
-    if ((window.innerWidth <= 760 || !fits(state.root, size())) !== compact) renderLayout()
+    if ((root.clientWidth <= 760 || !fits(state.root, size())) !== compact) renderLayout()
   }, options)
   renderLayout()
   pickerSupported = !!multi.directoryTarget?.()
@@ -734,22 +773,27 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     ready = true
     const parsed = parseRoute(routeHash())
     const waiting = waitForProjectSnapshot(parsed?.projectId ?? state.sidebarProjectId, value, initialProjectsSettled)
-    const selected = (parsed && !parsed.sessionId ? parsed.projectId : undefined) ??
-      projects.find(item => item.id === state.sidebarProjectId)?.id ?? parsed?.projectId ?? projects[0]?.id
+    const ownRoute = parsed && !parsed.sessionId && (environment.selectedInstanceId === undefined || splitScopedId(parsed.projectId)?.instanceId === environment.selectedInstanceId)
+    const navigation = projectSidebar(projects, environment.selectedInstanceId, ownRoute ? parsed.projectId : state.sidebarProjectId, initialProjectsSettled)
+    state = { ...state, sidebarProjectId: navigation.selectedProjectId }
     // Views are first mounted after projects load, so their titles use the project names.
     renderLayout()
     if (!waiting) route()
     renderNavigation()
-    if (!waiting && selected) selectProject(selected)
+    if (navigation.selectedProjectId) selectProject(navigation.selectedProjectId, false)
     for (const item of projects) void sessionIndex.load(item.id)
     if (!waiting) { persist(); updateURL() }
   }
   const unsubscribeProjects = multi.subscribeList?.('/projects', values => receiveProjects(values as readonly ProjectView[]))
   void api<readonly ProjectView[]>('/projects').then(values => { initialProjectsSettled = true; receiveProjects(values) }).catch(error => showNotice(messageFor(error)))
   return {
+    openSidebar: () => sidebarLayout.openLeft(),
+    closeSidebar: () => sidebarLayout.closeDrawers(),
     setActive(active: boolean) {
       applicationActive = active
-      if (!active) { dragCleanup?.(); resizeCleanup?.(); for (const menu of root.querySelectorAll<HTMLDetailsElement>('.session-menu[open]')) menu.open = false; return }
+      sidebarLayout.setActive(active)
+      fileSidebar.setVisible(active && !document.hidden && sidebarLayout.rightVisible())
+      if (!active) { void projectPicker.close(); dragCleanup?.(); resizeCleanup?.(); for (const menu of root.querySelectorAll<HTMLDetailsElement>('.session-menu[open]')) menu.open = false; return }
       if (disposed) return
       renderLayout()
       for (const bundle of bundles.values()) void bundle.controller.refresh()
@@ -758,6 +802,8 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     dispose() {
       unsubscribeRoute?.()
       disposed = true
+      unsubscribeSidebar()
+      sidebarLayout.dispose()
       changes.dispose()
       imageLeases.dispose()
       fileLeases.dispose()
@@ -766,11 +812,12 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       listeners.abort()
       sessionIndex.dispose()
       archivePanel.dispose()
-      projectPicker.dispose()
+      const pickerExit = projectPicker.dispose()
       observer.disconnect()
       resizeCleanup?.()
       dragCleanup?.()
       for (const bundle of bundles.values()) { bundle.controller.dispose(); bundle.view?.dispose() }
+      return Promise.all([pickerExit, fileSidebar.dispose()]).then(() => {})
     },
   }
 }

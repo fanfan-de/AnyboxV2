@@ -3,8 +3,8 @@ import { dirname, isAbsolute, join, parse, resolve, sep } from 'node:path'
 import type { OwnedCall } from '../contracts.js'
 import { createDirectoryAccessProvider, normalizeDirectoryFailure } from './directory-access.js'
 import type { DirectoryAccessCursor, DirectoryAccessProvider } from './directory-access.js'
-import { directoryBrowseFailure, isDirectoryBrowseFailure } from './directories.js'
-import type { DirectoryBrowseOpened, DirectoryBrowseOptions, DirectoryEntry, DirectoryPage } from './directories.js'
+import { directoryBrowseFailure, isDirectoryBrowseFailure, isDirectoryNameValid } from './directories.js'
+import type { DirectoryBrowseOpened, DirectoryBrowseOptions, DirectoryCreated, DirectoryEntry, DirectoryPage } from './directories.js'
 
 export interface DirectoryBrowserOptions {
   readonly homePath?: string
@@ -18,8 +18,10 @@ export interface DirectoryBrowserOptions {
 
 export interface DirectoryBrowser {
   readonly supported: boolean
+  readonly creationSupported: boolean
   open(owner: string, input: DirectoryBrowseOptions, signal?: AbortSignal): OwnedCall<DirectoryBrowseOpened>
   page(owner: string, browseId: string, page: number, signal?: AbortSignal): OwnedCall<DirectoryPage>
+  create(owner: string, browseId: string, name: string, signal?: AbortSignal): OwnedCall<DirectoryCreated>
   release(owner: string, browseId: string): Promise<void>
   onRetired(listener: (browseId: string) => void): () => void
   close(): Promise<void>
@@ -35,8 +37,9 @@ interface BrowseSession {
   closed: boolean
   busy: boolean
   cursor?: DirectoryAccessCursor
+  creationCursor?: DirectoryAccessCursor
   cached?: DirectoryPage
-  active?: OwnedCall<DirectoryPage>
+  active?: OwnedCall<unknown>
   retirement?: Promise<void>
 }
 
@@ -82,6 +85,7 @@ export function createDirectoryBrowser(options: DirectoryBrowserOptions = {}): D
   }
   const detach = (session: BrowseSession): void => {
     session.closed = true
+    session.creationCursor = undefined
     if (sessions.get(session.id) === session) sessions.delete(session.id)
   }
   const retired = (session: BrowseSession): void => {
@@ -148,6 +152,7 @@ export function createDirectoryBrowser(options: DirectoryBrowserOptions = {}): D
 
   return {
     supported: homePath !== undefined,
+    creationSupported: homePath !== undefined && access.creationSupported === true,
     open(owner, input, signal) {
       return owned(signal, () => {
         if (homePath === undefined) throw directoryBrowseFailure('directory-browse-unsupported')
@@ -213,6 +218,7 @@ export function createDirectoryBrowser(options: DirectoryBrowserOptions = {}): D
               parentPath: parent === cursor.path ? null : parent, breadcrumbs: breadcrumbs(cursor.path),
               entries: Object.freeze(entries.sort((a, b) => a.name.localeCompare(b.name))), nextPage: ended ? null : page + 1 })
             session.cached = result
+            session.creationCursor = cursor
             session.expiresAt = now() + idleMs
             return result
           })
@@ -236,6 +242,45 @@ export function createDirectoryBrowser(options: DirectoryBrowserOptions = {}): D
           outcome.reason.code === 'directory-browse-cleanup-failed') throw outcome.reason
       }).finally(() => { session.busy = false })
       const joined: OwnedCall<DirectoryPage> = { result, done, cancel: reason => call.cancel(reason) }
+      session.active = joined
+      void result.catch(() => {}); void done.catch(() => {})
+      return joined
+    },
+    create(owner, browseId, name, signal) {
+      expire()
+      const session = sessions.get(browseId)
+      if (!session || session.owner !== owner) return owned(signal, () => { throw directoryBrowseFailure('directory-browse-expired') })
+      if (session.busy) return owned(signal, () => { throw directoryBrowseFailure('directory-browse-busy') })
+      if (!access.creationSupported) return owned(signal, () => { throw directoryBrowseFailure('directory-create-unsupported') })
+      if (!isDirectoryNameValid(name, process.platform === 'win32')) {
+        return owned(signal, () => { throw directoryBrowseFailure('directory-name-invalid') })
+      }
+      const cursor = session.creationCursor
+      if (!session.cached || !cursor) return owned(signal, () => { throw directoryBrowseFailure('directory-browse-conflict') })
+      if (!cursor.create) return owned(signal, () => { throw directoryBrowseFailure('directory-create-unsupported') })
+      session.busy = true
+      const call = owned(signal, createSignal => slot(createSignal, async () => {
+        if (session.closed) throw directoryBrowseFailure('directory-browse-expired')
+        await cursor.verify?.(createSignal)
+        createSignal.throwIfAborted()
+        const path = await cursor.create!(name, createSignal)
+        createSignal.throwIfAborted()
+        session.expiresAt = now() + idleMs
+        return Object.freeze({ path })
+      }))
+      // Even pre-start cancellation retires the cursor before this call's done settles.
+      const result = call.result.catch(async error => {
+        if (isDirectoryBrowseFailure(error) && error.code === 'directory-browse-cancelled') {
+          if (!session.closed) detach(session)
+          try { await closeCursor(session) } finally { if (!session.retirement) retired(session) }
+        }
+        throw error
+      })
+      const done = Promise.allSettled([call.done, result]).then(outcomes => {
+        for (const outcome of outcomes) if (outcome.status === 'rejected' && isDirectoryBrowseFailure(outcome.reason) &&
+          outcome.reason.code === 'directory-browse-cleanup-failed') throw outcome.reason
+      }).finally(() => { session.busy = false })
+      const joined: OwnedCall<DirectoryCreated> = { result, done, cancel: reason => call.cancel(reason) }
       session.active = joined
       void result.catch(() => {}); void done.catch(() => {})
       return joined

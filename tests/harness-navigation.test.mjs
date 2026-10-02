@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { harnessHash, parseHarnessRoute, harnessTargetRoute } from '../dist/applications/harness/web/harness-navigation.js'
+import { harnessHash, parseHarnessRoute, harnessTargetRoute, harnessLocationRoute } from '../dist/applications/harness/web/harness-navigation.js'
 import { resolveLegacyRoute, restoreLegacyRoute } from '../dist/applications/harness/web/harness-app.js'
 
 test('Harness routes retain one workspace, its selected device and conversation location', () => {
@@ -36,6 +36,29 @@ test('selecting a device preserves the open conversation because the workspace s
   assert.deepEqual(harnessTargetRoute(local, 'local'), local)
   assert.deepEqual(harnessTargetRoute({ inner: local.inner }, 'remote'), { hostId: 'remote', inner: local.inner })
   assert.deepEqual(harnessTargetRoute(undefined, 'remote'), { hostId: 'remote', inner: '#' })
+})
+
+test('workspace location writes during a device switch preserve the newly selected device', () => {
+  for (const inner of ['#/projects/local-project', '#/projects/local-project/sessions/local-session']) {
+    let current = { hostId: 'remote', inner }
+    const navigate = next => {
+      current = parseHarnessRoute(harnessHash(next))
+      // The old workspace synchronously echoes its location before it is rebuilt.
+      current = parseHarnessRoute(harnessHash(harnessLocationRoute(current, inner, 'remote')))
+    }
+    navigate(harnessTargetRoute(current, 'local'))
+    assert.deepEqual(current, { hostId: 'local', inner })
+    current = harnessLocationRoute(current, '#/projects/other-project', 'remote')
+    assert.deepEqual(current, { hostId: 'local', inner: '#/projects/other-project' })
+    navigate(harnessTargetRoute(current, 'remote'))
+    assert.deepEqual(current, { hostId: 'remote', inner })
+  }
+})
+
+test('workspace location writes use the mounted device only when no device was selected in the route', () => {
+  assert.deepEqual(harnessLocationRoute({ inner: '#' }, '#/projects/p', 'local'), { hostId: 'local', inner: '#/projects/p' })
+  assert.deepEqual(harnessLocationRoute(undefined, '#/projects/p', 'local'), { hostId: 'local', inner: '#/projects/p' })
+  assert.deepEqual(harnessLocationRoute({ hostId: 'offline', inner: '#' }, '#/projects/p', 'local'), { hostId: 'offline', inner: '#/projects/p' })
 })
 
 test('stored legacy routes restore to the unified app route and unavailable storage is optional', () => {

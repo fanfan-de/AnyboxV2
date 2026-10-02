@@ -19,7 +19,8 @@ import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent
 import type { RunEventData } from '../run/execution.js'
 import type { SessionPort, SessionRunPort } from './port.js'
 
-type SessionRecords = Omit<SessionPort, 'createSession' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles'> & Omit<SessionRunPort, 'describeImages' | 'readFileSnapshots'> & {
+type SessionRecords = Omit<SessionPort, 'createSession' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
+  'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> & Omit<SessionRunPort, 'describeImages' | 'readFileSnapshots'> & {
   createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string | null): Promise<Session>
 }
 

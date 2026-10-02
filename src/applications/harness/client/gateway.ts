@@ -19,9 +19,9 @@ const paths: Record<string, readonly RegExp[]> = {
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
     new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|connections|configurations)(/${id}(/(history|models))?)?$`) ],
   POST: [ /^\/(projects|sessions|prompts|access\/tokens)$/, /^\/products\/[^/]+\/(open|stop|retry)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
-    /^\/projects\/directories\/(browse|close)$/,
+    /^\/projects\/directories\/(browse|close|create)$/,
     new RegExp(`^/agents/${id}/prompts$`), new RegExp(`^/prompts/${id}(/publish)?$`),
-    new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew))$`), new RegExp(`^/runs/${id}/cancel$`),
+    new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew|tree/(open|page|close)))$`), new RegExp(`^/runs/${id}/cancel$`),
     /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|connections|configurations)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`) ],
 }
 export function allowedProxyPath(method: string, path: string): boolean {

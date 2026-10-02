@@ -13,7 +13,8 @@ export interface HostAccessPort {
   issue(name: string): Promise<{ readonly token: string; readonly record: AccessToken }>
   revoke(id: string): Promise<void>
   resetIdentity(): Promise<InstanceInfo>
-  onRevoked(listener: (id: string) => void): () => void
+  /** Revocation is committed first; its result then joins every observer's resource cleanup. */
+  onRevoked(listener: (id: string) => void | Promise<void>): () => void
 }
 export function hostFailure(code: string, status = 400): Error & { code: string; status: number } {
   return Object.assign(new Error(code), { code, status })
@@ -33,7 +34,7 @@ export function createHostAccessComponent(name = 'Anybox'): Component.Object<voi
       const id = randomUUID(); tx.execute('INSERT INTO host_identity VALUES(1,?)', [id]); return id
     })
     const tokens = new Map((await db.read(r => r.all('SELECT id,digest FROM host_access_tokens WHERE revoked_at IS NULL'))).map(row => [String(row.id), String(row.digest)]))
-    const listeners = new Set<(id: string) => void>()
+    const listeners = new Set<(id: string) => void | Promise<void>>()
     const pending = new Set<Promise<unknown>>()
     let accepting = true
     const track = <T>(work: () => Promise<T>): Promise<T> => {
@@ -42,7 +43,15 @@ export function createHostAccessComponent(name = 'Anybox'): Component.Object<voi
       void result.finally(() => pending.delete(result)).catch(() => {})
       return result
     }
-    const revoked = (id: string) => { for (const listener of listeners) { try { listener(id) } catch { /* Observers cannot undo a committed revocation. */ } } }
+    const revoked = async (id: string) => {
+      // Invoke all observers synchronously before joining, including cancellation-only observers.
+      const observers = [...listeners].map(listener => {
+        try { return Promise.resolve(listener(id)) } catch (error) { return Promise.reject(error) }
+      })
+      const exits = await Promise.allSettled(observers)
+      if (exits.some(exit => exit.status === 'rejected')) ctx.logger.warn('Host revocation observer cleanup failed')
+      // An observer cannot roll back a committed revocation or revive its authentication index.
+    }
     const info = (): InstanceInfo => Object.freeze({ instanceId, name, apiVersion: 1, capabilities: Object.freeze(['tokens']) })
     const service: HostAccessPort = {
       get instance() { return info() },
@@ -66,12 +75,13 @@ export function createHostAccessComponent(name = 'Anybox'): Component.Object<voi
       },
       revoke(id) { return track(async () => {
         await db.transaction(tx => { tx.execute('UPDATE host_access_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL', [new Date().toISOString(), id]) })
-        tokens.delete(id); revoked(id)
+        tokens.delete(id); await revoked(id)
       }) },
       resetIdentity() { return track(async () => {
         const next = randomUUID()
         await db.transaction(tx => { tx.execute('UPDATE host_identity SET instance_id=? WHERE id=1', [next]); tx.execute('UPDATE host_access_tokens SET revoked_at=? WHERE revoked_at IS NULL', [new Date().toISOString()]) })
-        instanceId = next; const old = [...tokens.keys()]; tokens.clear(); old.forEach(revoked); return info()
+        instanceId = next; const old = [...tokens.keys()]; tokens.clear()
+        await Promise.all(old.map(revoked)); return info()
       }) },
       onRevoked(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
     }

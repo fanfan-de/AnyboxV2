@@ -2,6 +2,38 @@ import type { DirectoryPage, ProjectView } from './client-types.js'
 import type { ProjectDirectoryTarget } from './harness-client.js'
 
 export interface DirectoryPositions { get(instanceId: string): string | undefined; set(instanceId: string, path: string): void }
+/** Native confirmation registers on the captured device; other targets use the browser. */
+export function createProjectDirectoryLauncher() {
+  let disposed = false, active: { controller: AbortController; done: Promise<void> } | undefined
+  const close = () => { active?.controller.abort(); return active?.done ?? Promise.resolve() }
+  return {
+    open(target: ProjectDirectoryTarget, env: { browse(): void; selected(project: ProjectView): void; failed(error: unknown): void }): Promise<void> | undefined {
+      if (disposed || active) return undefined
+      const controller = new AbortController(), signal = controller.signal
+      const done = Promise.resolve().then(async () => {
+        signal.throwIfAborted()
+        let native = false
+        try { native = await target.nativeAvailable(signal) }
+        catch { signal.throwIfAborted() }
+        signal.throwIfAborted()
+        if (!native) { env.browse(); return }
+        const path = await target.pickNative(signal)
+        signal.throwIfAborted()
+        if (path === null) return
+        const project = await target.register(path, signal)
+        signal.throwIfAborted()
+        env.selected(project)
+      }).catch(error => { if (!signal.aborted) env.failed(error) }).finally(() => {
+        if (active?.done === done) active = undefined
+      })
+      active = { controller, done }
+      return done
+    },
+    close,
+    dispose() { disposed = true; return close() },
+  }
+}
+
 export function createDirectoryPositions(storage?: { getItem(key: string): string | null; setItem(key: string, value: string): void }): DirectoryPositions {
   const memory = new Map<string, string>(), prefix = 'anybox.project-directory.v1.'
   return {
@@ -17,7 +49,13 @@ export interface DirectorySnapshot {
   readonly mode: 'unknown' | 'browse' | 'manual'
   readonly loading: boolean
   readonly submitting: boolean
-  readonly nativeAvailable: boolean
+  readonly creating: boolean
+  readonly creationSupported?: boolean
+  readonly createFormOpen: boolean
+  readonly directoryName: string
+  readonly createPath?: string
+  readonly createError?: unknown
+  readonly createNeedsRead: boolean
   readonly pathInput: string
   readonly query: string
   readonly showHidden: boolean
@@ -26,6 +64,9 @@ export interface DirectorySnapshot {
   readonly error?: unknown
   readonly blocked: boolean
   readonly canSelect: boolean
+  readonly canStartCreate: boolean
+  readonly canCreate: boolean
+  readonly hasRetry: boolean
   readonly closed: boolean
 }
 const browsePath = '/projects/directories/browse'
@@ -38,7 +79,8 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
   changed(): void
   selected(project: ProjectView): void
 }) {
-  let mode: DirectorySnapshot['mode'] = 'unknown', loading = false, submitting = false, nativeAvailable = false
+  let mode: DirectorySnapshot['mode'] = 'unknown', loading = false, submitting = false, creating = false
+  let creationSupported: boolean | undefined, createFormOpen = false, directoryName = '', createPath: string | undefined, createError: unknown, createNeedsRead = false
   let pathInput = env.positions.get(target.connection.instanceId) ?? '', query = '', showHidden = false
   let homePath: string | undefined, page: DirectoryPage | undefined, error: unknown, blocked = false, closed = false
   let read: AbortController | undefined, generation = 0, inputRevision = 0, browseId: string | undefined
@@ -52,8 +94,11 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
   const fail = (failure: unknown, again: () => Promise<void>) => {
     error = failure; blocked ||= bindingFailure(failure); retry = again
   }
-  const canSelect = () => !closed && !loading && !submitting && !blocked && !error &&
+  const clearCreateForm = () => { createFormOpen = false; directoryName = ''; createPath = undefined; createError = undefined; createNeedsRead = false }
+  const canSelect = () => !closed && !loading && !submitting && !creating && !blocked && !error && !createError &&
     (mode === 'manual' ? !!pathInput.trim() : mode === 'browse' && !!page && pathInput === page.path)
+  const canStartCreate = () => creationSupported === true && mode === 'browse' && !!browseId && canSelect() && !createError && !createNeedsRead
+  const canCreate = () => createFormOpen && canStartCreate() && createPath === page?.path && !!directoryName.trim() && !createError
   async function readPage(id: string, number: number, token: number, signal: AbortSignal, input: number): Promise<void> {
     const value = await target.api<DirectoryPage>(browsePath, { action: 'page', browseId: id, page: number }, signal)
     if (!current(token)) return
@@ -63,7 +108,8 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
     env.positions.set(target.connection.instanceId, value.path)
   }
   async function navigate(path?: string): Promise<void> {
-    if (closed || blocked || submitting || mode !== 'browse') return
+    if (closed || blocked || submitting || creating || mode !== 'browse') return
+    clearCreateForm()
     const { controller, token } = startRead()
     release(browseId); browseId = undefined
     attemptedPath = path
@@ -78,7 +124,8 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
     finally { if (current(token)) { loading = false; notify() } }
   }
   async function loadPage(number: number): Promise<void> {
-    if (closed || blocked || loading || submitting || !browseId) return
+    if (closed || blocked || loading || submitting || creating || !browseId) return
+    clearCreateForm()
     const id = browseId, { controller, token } = startRead(), input = inputRevision
     loading = true; error = undefined; retry = undefined; notify()
     try { await readPage(id, number, token, controller.signal, input) }
@@ -88,39 +135,20 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
     finally { if (current(token)) { loading = false; notify() } }
   }
   async function initialize(): Promise<void> {
-    if (closed || blocked || submitting) return
+    if (closed || blocked || submitting || creating) return
     const { controller, token } = startRead()
     loading = true; error = undefined; retry = undefined; notify()
     try {
-      // A failed optional shortcut must not turn a healthy remote into an unavailable picker.
-      const [info, native] = await Promise.all([
-        target.api<{ instanceId: string; apiVersion: number; capabilities: readonly string[] }>('/instance', undefined, controller.signal),
-        target.nativeAvailable(controller.signal).catch(() => false),
-      ])
+      const info = await target.api<{ instanceId: string; apiVersion: number; capabilities: readonly string[] }>('/instance', undefined, controller.signal)
       if (!current(token)) return
-      nativeAvailable = native
       if (info.instanceId !== target.connection.instanceId) throw Object.assign(new Error('instance-mismatch'), { code: 'instance-mismatch' })
       if (info.apiVersion !== 1) throw Object.assign(new Error('version-incompatible'), { code: 'version-incompatible' })
       mode = info.capabilities.includes('projects.browse') ? 'browse' : 'manual'
+      creationSupported = info.capabilities.includes('projects.create-directory')
       loading = false
       if (mode === 'browse') await navigate(attemptedPath)
       else notify()
     } catch (failure) { if (current(token)) { fail(failure, initialize); loading = false; notify() } }
-  }
-  async function pickNative(): Promise<void> {
-    if (!nativeAvailable || closed || blocked || submitting || loading) return
-    const { controller, token } = startRead()
-    loading = true; error = undefined; notify()
-    try {
-      const path = await target.pickNative(controller.signal)
-      if (!current(token)) return
-      loading = false
-      if (path !== null) {
-        if (mode === 'browse') { await navigate(path); return }
-        pathInput = path; inputRevision++
-      }
-    } catch (failure) { if (current(token)) fail(failure, pickNative) }
-    finally { if (current(token)) { loading = false; notify() } }
   }
   async function submit(): Promise<void> {
     if (!canSelect()) return
@@ -138,12 +166,34 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
       })
     } finally { if (current(token)) { submitting = false; notify() } }
   }
+  async function createDirectory(): Promise<void> {
+    if (!canCreate()) return
+    // The remote reservation owns the parent; a draft path never enters this write.
+    const id = browseId!, name = directoryName, { controller, token } = startRead()
+    creating = true; createError = undefined; retry = undefined; notify()
+    let createdPath: string | undefined
+    try {
+      const result = await target.api<{ path: string }>('/projects/directories/create', { browseId: id, name }, controller.signal)
+      if (!current(token)) return
+      createdPath = result.path
+    } catch (failure) {
+      if (current(token)) {
+        createError = failure; blocked ||= bindingFailure(failure)
+        createNeedsRead = !['directory-exists', 'directory-name-invalid'].includes(errorCode(failure))
+      }
+    } finally { if (current(token)) { creating = false; notify() } }
+    // A subsequent listing failure may retry the read, never the completed mutation.
+    if (createdPath !== undefined && current(token)) await navigate(createdPath)
+  }
   return {
-    snapshot: (): DirectorySnapshot => ({ mode, loading, submitting, nativeAvailable, pathInput, query, showHidden, homePath, page, error, blocked, closed, canSelect: canSelect() }),
-    initialize, navigate, submit, pickNative,
-    setPath(value: string) { if (closed || submitting) return; pathInput = value; inputRevision++; if (mode === 'manual' && !blocked) error = undefined; notify() },
+    snapshot: (): DirectorySnapshot => ({ mode, loading, submitting, creating, creationSupported, createFormOpen, directoryName, createPath, createError, createNeedsRead, pathInput, query, showHidden, homePath, page, error, blocked, closed, canSelect: canSelect(), canStartCreate: canStartCreate(), canCreate: canCreate(), hasRetry: !!retry }),
+    initialize, navigate, submit, createDirectory,
+    beginCreate() { if (!canStartCreate() || createFormOpen) return; createFormOpen = true; createPath = page!.path; directoryName = ''; createError = undefined; notify() },
+    cancelCreate() { if (closed || creating) return; const needsRead = createNeedsRead; clearCreateForm(); createNeedsRead = needsRead; notify() },
+    setDirectoryName(value: string) { if (closed || creating || blocked || !createFormOpen) return; directoryName = value; if (!createNeedsRead) createError = undefined; notify() },
+    setPath(value: string) { if (closed || submitting || creating) return; pathInput = value; inputRevision++; if (mode === 'manual' && !blocked) error = undefined; notify() },
     filter(value: string, hidden: boolean) {
-      if (closed || blocked || submitting) return
+      if (closed || blocked || submitting || creating) return
       query = value; showHidden = hidden
       const draft = pathInput, preserveDraft = !!page && pathInput !== page.path
       void navigate(attemptedPath)
@@ -151,7 +201,7 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
     },
     next() { if (page?.nextPage !== null && page?.nextPage !== undefined) return loadPage(page.nextPage); return Promise.resolve() },
     restart() { return navigate(attemptedPath) },
-    retry() { return !closed && !blocked && !loading && !submitting ? retry?.() ?? Promise.resolve() : Promise.resolve() },
+    retry() { return !closed && !blocked && !loading && !submitting && !creating ? retry?.() ?? Promise.resolve() : Promise.resolve() },
     close() { if (closed) return; closed = true; cancelRead(); release(browseId); browseId = undefined },
   }
 }

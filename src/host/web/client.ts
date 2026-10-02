@@ -145,7 +145,8 @@ function disposeMounted(tab: ApplicationPanel): Promise<void> {
   tab.disposal = task; return task
 }
 async function ensureMounted(tab: ApplicationPanel, reason: ApplicationActivation) {
-  if (tab.disposing) return
+  if (tab.disposal) await tab.disposal
+  if (closed || views.get(tab.id) !== tab) return
   const app = product(tab.id)
   if (closed || app?.state !== 'running' || !app.definition.web) { clearUnmountedPanel(tab); return }
   if (reason === 'open') tab.openRequested = true
@@ -228,12 +229,12 @@ function selectApplication(id: string | null, reason: ApplicationActivation = 's
 async function closeApplicationPage(id: string) {
   const tab = views.get(id); if (!tab || tab.control) return
   if (tab.mounted && !tab.mounted.canClose()) { show('请先完成或保存当前应用中的编辑。'); return }
-  tab.control = true; renderWorkspace()
-  try { await disposeMounted(tab) } catch { show('应用界面清理失败，请刷新页面。'); tab.control = false; renderWorkspace(); return }
+  tab.control = true; renderList(); renderWorkspace()
+  try { await disposeMounted(tab) } catch { show('应用界面清理失败，请刷新页面。'); tab.control = false; renderList(); renderWorkspace(); return }
   // A different application may have become active while disposal was pending.
   const wasActive = activeId === id
   const next = closeApplicationView(snapshot(), id)
-  views.delete(id); tab.panel.remove(); renderNavigation()
+  views.delete(id); tab.panel.remove(); renderList()
   if (wasActive) {
     selectApplication(next.activeId)
     const focus = next.activeId ? document.getElementById(`app-shortcut-${next.activeId}`) : showApplications
@@ -242,7 +243,7 @@ async function closeApplicationPage(id: string) {
 }
 async function openApplication(id: string, retry = false) {
   const tab = addApplication(id), app = product(id); if (!app || tab.control) return
-  selectApplication(id); tab.control = true; renderWorkspace(); requestRevision++; show()
+  selectApplication(id); tab.control = true; renderList(); renderWorkspace(); requestRevision++; show()
   const managerRevision = managerInteractionRevision
   try {
     const value = await requestJSON<ProductView>(`/api/client/v1/products/${encodeURIComponent(id)}/${retry ? 'retry' : 'open'}`, {})
@@ -251,7 +252,7 @@ async function openApplication(id: string, retry = false) {
     if (value.state === 'running') { await ensureMounted(tab, 'open'); if (activeId === id && tab.mounted && managerRevision === managerInteractionRevision) hideManager() }
     else { clearUnmountedPanel(tab); show(value.error?.phase === 'cleanup' ? '应用清理失败，需要重启宿主。' : value.state === 'blocked' ? '应用正在等待依赖。' : '应用启动失败，可重试启动。') }
   } catch { show('应用操作未完成，正在核对当前状态。') }
-  finally { tab.control = false; renderWorkspace(); requestRevision++; void refresh(); save() }
+  finally { tab.control = false; renderList(); renderWorkspace(); requestRevision++; void refresh(); save() }
 }
 async function enterApplication(id: string) {
   const view = views.get(id)
@@ -263,7 +264,7 @@ async function stopApplication(id: string) {
   const tab = views.get(id)
   if (tab?.control || tab?.mounted && !tab.mounted.canClose()) { show('请先完成或保存当前应用中的编辑。'); return }
   if (tab) tab.control = true
-  renderWorkspace()
+  renderList(); renderWorkspace()
   requestRevision++; show()
   try {
     const app = await requestJSON<ProductView>(`/api/client/v1/products/${encodeURIComponent(id)}/stop`, {})
@@ -272,7 +273,7 @@ async function stopApplication(id: string) {
     if (tab) { tab.control = false; await closeApplicationPage(id) }
     renderList(); renderWorkspace()
   } catch (error) { show(error && typeof error === 'object' && 'code' in error && error.code === 'product-busy' ? '应用仍有任务或写入进行中，请稍后停止。' : '应用停止未完成，正在核对当前状态。') }
-  finally { if (tab) tab.control = false; renderWorkspace(); requestRevision++; void refresh() }
+  finally { if (tab) tab.control = false; renderList(); renderWorkspace(); requestRevision++; void refresh() }
 }
 function refresh(): Promise<void> {
   if (refreshTask) return refreshTask
@@ -281,11 +282,13 @@ function refresh(): Promise<void> {
     if (closed || revision !== requestRevision) return
     applications = values; renderList(); renderWorkspace()
     for (const tab of views.values()) {
+      if (closed || revision !== requestRevision) return
       if (tab.control) continue
       if (product(tab.id)?.state === 'running') { if (!tab.error && !tab.mounted) void ensureMounted(tab, 'restore') }
       else {
         const hadInterface = !!tab.mounted || !!tab.loading
         if (hadInterface) await disposeMounted(tab)
+        if (closed || revision !== requestRevision || views.get(tab.id) !== tab) return
         clearUnmountedPanel(tab)
         if (hadInterface && activeId === tab.id) showManager()
       }

@@ -5,7 +5,7 @@ import { handleModelsApi } from './models-api.js'
 import { failure, json, requestObject } from '../../../host/http-utils.js'
 import { promptRevision } from './validation.js'
 import type { SessionPort } from '../core/session/port.js'
-import { validateFileSelections, validateSnapshotIds, validId } from '../core/project-files/domain.js'
+import { validateFileSelections, validateSnapshotIds, validateFileTreePath, validId } from '../core/project-files/domain.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { OwnedCall } from '../core/contracts.js'
 import type { ImageRef } from '../core/image/port.js'
@@ -21,7 +21,7 @@ import { isModelFailure } from '../core/run/model.js'
 import type { ModelsSettingsService, ModelsCatalogService, RunnableModelSummary, ProviderTemplate } from '@anybox/models'
 import { isProjectUnavailableError } from '../core/project/component.js'
 import type { Project } from '../core/project/component.js'
-import type { DirectoryBrowseOptions, DirectoryBrowseOpened, DirectoryPage } from '../core/project/directories.js'
+import type { DirectoryBrowseOptions, DirectoryBrowseOpened, DirectoryCreated, DirectoryPage } from '../core/project/directories.js'
 import { DirectoryPickerFailure } from '../client/directory-picker.js'
 import { openRunChangeStream } from './run-change-stream.js'
 import type { RunChangeStream } from './run-change-stream.js'
@@ -30,12 +30,15 @@ import type { ProtocolViewFrame, ProtocolViewSnapshot } from '../core/view/types
 import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
   PromptSnapshot, PromptVersion } from '../core/prompt/domain.js'
 
-export interface HarnessApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles'> {
+export interface HarnessApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
+  'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> {
   listAgents(): readonly { readonly id: string }[]
   directoryPickerSupported(): boolean
   directoryBrowsingSupported(): boolean
+  directoryCreationSupported(): boolean
   openDirectoryBrowse(owner: string, input: DirectoryBrowseOptions, signal?: AbortSignal): OwnedCall<DirectoryBrowseOpened>
   readDirectoryPage(owner: string, browseId: string, page: number, signal?: AbortSignal): OwnedCall<DirectoryPage>
+  createDirectory(owner: string, browseId: string, name: string, signal?: AbortSignal): OwnedCall<DirectoryCreated>
   closeDirectoryBrowse(owner: string, browseId: string): Promise<void>
   onDirectoryBrowseRetired(listener: (browseId: string) => void): () => void
   pickProject(signal: AbortSignal): Promise<Project | null>
@@ -116,13 +119,13 @@ function knownFailure(error: unknown): HttpFailure {
     if (error.name === 'DirectoryBrowseFailure' && 'code' in error) {
       const code = String(error.code)
       return failure(code === 'directory-permission-denied' ? 403 : code === 'directory-missing' ? 404
-        : ['directory-browse-expired', 'directory-browse-conflict'].includes(code) ? 409
-        : ['directory-browse-invalid', 'directory-not-directory', 'directory-link-loop'].includes(code) ? 400 : 503, code)
+        : ['directory-browse-expired', 'directory-browse-conflict', 'directory-exists'].includes(code) ? 409
+        : ['directory-browse-invalid', 'directory-not-directory', 'directory-link-loop', 'directory-name-invalid'].includes(code) ? 400 : 503, code)
     }
     if (error.name === 'ProjectFileError' && 'code' in error) {
       const code = String(error.code)
       return failure(code === 'file-too-large' ? 413 : code === 'file-missing' ? 404
-        : ['file-expired', 'file-changed', 'file-preparation-conflict'].includes(code) ? 409
+        : ['file-expired', 'file-changed', 'file-preparation-conflict', 'file-tree-expired', 'file-tree-conflict', 'file-tree-busy'].includes(code) ? 409
         : ['file-invalid', 'file-range-invalid', 'file-unsupported', 'file-corrupt'].includes(code) ? 400 : 503, code)
     }
     if (error.name === 'ImageAssetError' && 'code' in error) {
@@ -243,7 +246,7 @@ function integerQuery(url: URL, key: string, fallback: number, min: number, max:
 export interface HarnessHttpOptions {
   readonly activity?: ProductActivityPort
   readonly currentCommands?: () => HarnessApiCommands
-  readonly onRevoked?: (listener: (id: string) => void) => (() => void)
+  readonly onRevoked?: (listener: (id: string) => void | Promise<void>) => (() => void)
 }
 export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, options: HarnessHttpOptions = {}): HarnessHttpHandler {
   const signals = new WeakMap<ServerResponse, AbortSignal>()
@@ -259,7 +262,24 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
   const modelRequests = new Map<AbortController, Promise<unknown>>()
   const imageRequests = new Map<AbortController, Promise<unknown>>()
   const directoryRequests = new Map<AbortController, Promise<unknown>>()
-  const directoryBrowses = new Map<string, { owner: string; close: () => Promise<void>; lease?: ActivityLease; unsubscribe?: () => void }>()
+  const treeRequests = new Map<AbortController, Promise<unknown>>()
+  const resourceRequestOwners = new Map<AbortController, string>()
+  const trees = new Map<string, { owner: string; sessionId: string;
+    page: (page: number, signal: AbortSignal) => ReturnType<SessionPort['readProjectFileTreePage']>;
+    close: () => Promise<void>; lease?: ActivityLease; unsubscribe?: () => void }>()
+  const treeCleanups = new Set<Promise<void>>()
+  const closeTree = (owner: string, sessionId: string, cursorId: string): Promise<void> => {
+    const tree = trees.get(cursorId), matches = tree?.owner === owner && tree.sessionId === sessionId
+    const task = matches ? tree.close() : (options.currentCommands?.() ?? commands).closeProjectFileTree(sessionId, owner, cursorId)
+    treeCleanups.add(task)
+    void task.then(() => {
+      if (matches && trees.get(cursorId) === tree) { trees.delete(cursorId); tree.unsubscribe?.(); tree.lease?.release() }
+    }, () => { if (matches) tree.lease?.release() }).finally(() => treeCleanups.delete(task)).catch(() => {})
+    return task
+  }
+  const directoryBrowses = new Map<string, { owner: string;
+    create: (name: string, signal: AbortSignal) => OwnedCall<DirectoryCreated>;
+    close: () => Promise<void>; lease?: ActivityLease; unsubscribe?: () => void }>()
   const directoryCleanups = new Set<Promise<void>>()
   const closeDirectoryBrowse = (owner: string, browseId: string): Promise<void> => {
     const browse = directoryBrowses.get(browseId)
@@ -269,7 +289,7 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
       .finally(() => directoryCleanups.delete(task))
     return task
   }
-  const imageRequest = async <T>(request: IncomingMessage, response: ServerResponse, work: (signal: AbortSignal) => Promise<T>, requests = imageRequests): Promise<T> => {
+  const imageRequest = async <T>(request: IncomingMessage, response: ServerResponse, work: (signal: AbortSignal) => Promise<T>, requests = imageRequests, owner?: string): Promise<T> => {
     if (closing) throw failure(503, 'service-unavailable')
     const abort = new AbortController()
     const disconnected = () => { if (!response.writableEnded) abort.abort() }
@@ -280,8 +300,9 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
     if (response.destroyed) abort.abort()
     const task = Promise.resolve().then(() => work(abort.signal))
     requests.set(abort, task)
+    if (owner !== undefined) resourceRequestOwners.set(abort, owner)
     try { return await task }
-    finally { unsubscribe(); requests.delete(abort); response.off('close', disconnected); abort.signal.removeEventListener('abort', stopReading) }
+    finally { unsubscribe(); requests.delete(abort); resourceRequestOwners.delete(abort); response.off('close', disconnected); abort.signal.removeEventListener('abort', stopReading) }
   }
   const joinImageCall = async <T>(call: OwnedCall<T>, signal: AbortSignal, kind: 'image' | 'file' | 'directory' = 'image'): Promise<T> => {
     const cancel = () => call.cancel('Web resource request cancelled')
@@ -317,8 +338,20 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
   }
   const waitRequests = new Set<() => void>()
   const changeStreams = new Set<RunChangeStream>()
-  const unsubscribe = options.onRevoked?.(id => {
-    for (const [browseId, browse] of directoryBrowses) if (browse.owner === id) void closeDirectoryBrowse(browse.owner, browseId).catch(() => {})
+  const unsubscribe = options.onRevoked?.(async id => {
+    const requests: Promise<unknown>[] = [], cleanups: Promise<void>[] = []
+    for (const [controller, owner] of resourceRequestOwners) if (owner === id) {
+      controller.abort('authentication revoked')
+      const request = treeRequests.get(controller) ?? directoryRequests.get(controller)
+      if (request) requests.push(request)
+    }
+    for (const [browseId, browse] of directoryBrowses) if (browse.owner === id) cleanups.push(closeDirectoryBrowse(browse.owner, browseId))
+    for (const [cursorId, tree] of trees) if (tree.owner === id) cleanups.push(closeTree(tree.owner, tree.sessionId, cursorId))
+    // Cancelled requests may publish a cursor only while their exit is being joined; their handlers close it.
+    await Promise.allSettled(requests)
+    const exits = await Promise.allSettled(cleanups)
+    const failures = exits.flatMap(exit => exit.status === 'rejected' ? [exit.reason] : [])
+    if (failures.length) throw new AggregateError(failures, 'revoked directory cleanup failed')
   })
   const handlers = new Set<Promise<void>>(), bodies = new Set<IncomingMessage>()
   const handle = (request: IncomingMessage, response: ServerResponse, relative: URL, context: ApplicationHttpContext): Promise<void> => {
@@ -348,7 +381,9 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
               ...(body.showHidden === undefined ? {} : { showHidden: body.showHidden as boolean }),
             }
             const opened = await joinImageCall(commands.openDirectoryBrowse(directoryOwner, input, signal), signal, 'directory')
-            const browse = { owner: directoryOwner, close: () => commands.closeDirectoryBrowse(directoryOwner, opened.browseId), lease: undefined as ActivityLease | undefined, unsubscribe: undefined as (() => void) | undefined }
+            const browse = { owner: directoryOwner,
+              create: (name: string, signal: AbortSignal) => commands.createDirectory(directoryOwner, opened.browseId, name, signal),
+              close: () => commands.closeDirectoryBrowse(directoryOwner, opened.browseId), lease: undefined as ActivityLease | undefined, unsubscribe: undefined as (() => void) | undefined }
             directoryBrowses.set(opened.browseId, browse)
             const unlisten = cancelledByHost(response, () => { void closeDirectoryBrowse(directoryOwner, opened.browseId).catch(() => {}) })
             browse.lease = options.activity?.enter(productId, { blocking: false, cancel: () => { void closeDirectoryBrowse(directoryOwner, opened.browseId).catch(() => {}) } })
@@ -366,7 +401,7 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
               typeof body.browseId !== 'string' || !body.browseId || body.browseId.length > 200 ||
               typeof body.page !== 'number' || !Number.isSafeInteger(body.page) || body.page < 0) throw failure(400, 'invalid-input')
           return joinImageCall(commands.readDirectoryPage(directoryOwner, body.browseId, body.page, signal), signal, 'directory')
-        }, directoryRequests)
+        }, directoryRequests, directoryOwner)
         json(response, 200, result); return
       }
       if (method === 'POST' && path === '/api/v1/projects/directories/close') {
@@ -374,8 +409,20 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
         if (url.search) throw failure(400, 'invalid-input')
         const body = await requestObject(request, ['browseId'])
         if (typeof body.browseId !== 'string' || !body.browseId || body.browseId.length > 200) throw failure(400, 'invalid-input')
-        await imageRequest(request, response, () => closeDirectoryBrowse(directoryOwner, body.browseId as string), directoryRequests)
+        await imageRequest(request, response, () => closeDirectoryBrowse(directoryOwner, body.browseId as string), directoryRequests, directoryOwner)
         json(response, 200, { ok: true }); return
+      }
+      if (method === 'POST' && path === '/api/v1/projects/directories/create') {
+        if (!commands.directoryCreationSupported?.()) throw failure(503, 'directory-create-unsupported')
+        if (url.search) throw failure(400, 'invalid-input')
+        const body = await requestObject(request, ['browseId', 'name'])
+        if (typeof body.browseId !== 'string' || !body.browseId || body.browseId.length > 200 ||
+            typeof body.name !== 'string') throw failure(400, 'invalid-input')
+        const browse = directoryBrowses.get(body.browseId)
+        if (!browse || browse.owner !== directoryOwner) throw failure(409, 'directory-browse-expired')
+        const result = await imageRequest(request, response,
+          signal => joinImageCall(browse.create(body.name as string, signal), signal, 'directory'), directoryRequests, directoryOwner)
+        json(response, 201, result); return
       }
       if (method === 'POST' && path === '/api/v1/projects') {
         const body = await requestObject(request, ['path'])
@@ -542,6 +589,48 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
         json(response, 200, sessionView(session))
         return
       }
+      const fileTreeMatch = /^\/api\/v1\/sessions\/([^/]+)\/project-files\/tree\/(open|page|close)$/.exec(path)
+      if (fileTreeMatch) {
+        if (method !== 'POST') throw failure(405, 'method-not-allowed')
+        if (url.search) throw failure(400, 'invalid-input')
+        const sessionId = decodeURIComponent(fileTreeMatch[1]), action = fileTreeMatch[2], owner = context.actorId
+        if (action === 'open') {
+          const body = await requestObject(request, ['path']), treePath = validateFileTreePath(body.path)
+          const opened = await imageRequest(request, response, async signal => {
+            const page = await joinImageCall(commands.openProjectFileTree(sessionId, treePath, owner, signal), signal, 'file')
+            if (page.nextPage === null) return page
+            const tree = { owner, sessionId,
+              page: (number: number, readSignal: AbortSignal) => commands.readProjectFileTreePage(sessionId, owner, page.cursorId, number, readSignal),
+              close: () => commands.closeProjectFileTree(sessionId, owner, page.cursorId),
+              lease: undefined as ActivityLease | undefined, unsubscribe: undefined as (() => void) | undefined }
+            trees.set(page.cursorId, tree)
+            const unlisten = cancelledByHost(response, () => { void closeTree(owner, sessionId, page.cursorId).catch(() => {}) })
+            const retired = commands.onProjectFileTreeRetired(id => {
+              if (id === page.cursorId && trees.get(id) === tree) { trees.delete(id); tree.unsubscribe?.(); tree.lease?.release() }
+            })
+            tree.unsubscribe = () => { unlisten(); retired() }
+            try {
+              tree.lease = options.activity?.enter(productId, { blocking: false, cancel: () => { void closeTree(owner, sessionId, page.cursorId).catch(() => {}) } })
+              if (closing || signal.aborted || context.signal.aborted) throw failure(503, 'file-cancelled')
+              return page
+            } catch (error) { await closeTree(owner, sessionId, page.cursorId); throw error }
+          }, treeRequests, owner)
+          json(response, 200, opened); return
+        }
+        const body = await requestObject(request, action === 'page' ? ['cursorId', 'page'] : ['cursorId'])
+        if (!validId(body.cursorId)) throw failure(400, 'invalid-input')
+        const cursorId = body.cursorId
+        if (action === 'close') {
+          await imageRequest(request, response, () => closeTree(owner, sessionId, cursorId), treeRequests, owner)
+          json(response, 200, { ok: true }); return
+        }
+        if (!Number.isSafeInteger(body.page) || (body.page as number) < 0) throw failure(400, 'invalid-input')
+        const number = body.page as number, tree = trees.get(cursorId)
+        const result = await imageRequest(request, response, signal => joinImageCall(
+          tree?.owner === owner && tree.sessionId === sessionId ? tree.page(number, signal)
+            : commands.readProjectFileTreePage(sessionId, owner, cursorId, number, signal), signal, 'file'), treeRequests, owner)
+        json(response, 200, result); return
+      }
       const projectFilesMatch = /^\/api\/v1\/sessions\/([^/]+)\/project-files\/(search|preview|prepare|renew|snapshots\/([^/]+))$/.exec(path)
       if (projectFilesMatch) {
         const sessionId = decodeURIComponent(projectFilesMatch[1]), action = projectFilesMatch[2]
@@ -698,7 +787,11 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
   let shutdown: Promise<void> | undefined
   return {
     handle,
-    capabilities: () => (options.currentCommands?.() ?? commands).directoryBrowsingSupported?.() ? ['projects.browse'] : [],
+    capabilities: () => {
+      const current = options.currentCommands?.() ?? commands
+      return [...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
+        ...(current.directoryCreationSupported?.() ? ['projects.create-directory'] : [])]
+    },
     notifyRunChange(change) {
       if (!closing) for (const stream of changeStreams) stream.publish(change)
     },
@@ -714,6 +807,7 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
       for (const controller of modelRequests.keys()) controller.abort()
       for (const controller of imageRequests.keys()) controller.abort()
       for (const controller of directoryRequests.keys()) controller.abort()
+      for (const controller of treeRequests.keys()) controller.abort()
       for (const finish of waitRequests) finish()
       const streams = [...changeStreams]
       for (const stream of streams) stream.close()
@@ -723,9 +817,11 @@ export function createHarnessHttpHandler(initialCommands: HarnessApiCommands, op
         ...[...modelRequests.values()].map(task => task.then(() => {}, () => {})),
         ...[...imageRequests.values()].map(task => task.then(() => {}, () => {})),
         ...[...directoryRequests.values()].map(task => task.then(() => {}, () => {})),
+        ...[...treeRequests.values()].map(task => task.then(() => {}, () => {})),
       ]).then(async () => {
         const cleanup = [...directoryBrowses].map(([browseId, browse]) => closeDirectoryBrowse(browse.owner, browseId))
-        await Promise.all([...directoryCleanups, ...cleanup])
+        const treeCleanup = [...trees].map(([cursorId, tree]) => closeTree(tree.owner, tree.sessionId, cursorId))
+        await Promise.all([...directoryCleanups, ...cleanup, ...treeCleanups, ...treeCleanup])
       })
       return shutdown
     },

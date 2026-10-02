@@ -14,6 +14,13 @@ export interface FileRef {
 }
 export interface FileContent { readonly file: FileRef; readonly text: string }
 export interface FileSearch { readonly paths: readonly string[]; readonly incomplete: boolean }
+export interface FileTreeEntry { readonly name: string; readonly path: string; readonly kind: 'directory' | 'file' }
+export interface FileTreePage {
+  readonly cursorId: string; readonly page: number; readonly path: string
+  readonly entries: readonly FileTreeEntry[]; readonly nextPage: number | null
+}
+export const fileTreeLimits = Object.freeze({ pageEntries: 100, scanEntries: 1_000, scanTimeMs: 200,
+  maxCursors: 16, idleMs: 60_000 })
 export interface FilePreview {
   readonly path: string; readonly text: string; readonly totalLines: number; readonly sourceByteLength: number
   readonly byteLength: number; readonly actualRange: FileRange | null; readonly canReference: boolean
@@ -22,7 +29,8 @@ export interface FilePreview {
 export interface FileRenewal { readonly valid: readonly FileRef[]; readonly invalid: readonly string[] }
 export type ProjectFileErrorCode = 'file-invalid' | 'file-missing' | 'file-unavailable' | 'file-unsupported' |
   'file-too-large' | 'file-range-invalid' | 'file-changed' | 'file-expired' | 'file-corrupt' |
-  'file-cancelled' | 'file-cleanup-failed' | 'file-preparation-conflict'
+  'file-cancelled' | 'file-cleanup-failed' | 'file-preparation-conflict' | 'file-tree-expired' |
+  'file-tree-conflict' | 'file-tree-busy'
 export function fileError(code: ProjectFileErrorCode): Error & { readonly code: ProjectFileErrorCode } {
   return Object.assign(new Error(code), { name: 'ProjectFileError', code })
 }
@@ -36,6 +44,7 @@ export function validateFilePath(value: unknown): string {
     value.startsWith('/') || /^[a-z]:/i.test(value) || value.split('/').some(part => !part || part === '.' || part === '..') || excludedPath(value)) throw fileError('file-invalid')
   return value
 }
+export function validateFileTreePath(value: unknown): string { return value === '' ? '' : validateFilePath(value) }
 export function validateFileRange(value: unknown): FileRange | undefined {
   if (value === undefined) return undefined
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).some(key => key !== 'start' && key !== 'end') ||

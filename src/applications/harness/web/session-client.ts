@@ -76,6 +76,18 @@ export interface SessionSnapshot {
   readonly expanded: ReadonlySet<string>
   readonly views: ReadonlyMap<string, ProtocolViewSnapshot>
 }
+export interface FileMention { readonly start: number; readonly end: number; readonly text: string }
+/** The target and original chip are captured before a sidebar action can outlive its composer. */
+export interface FileReferenceInput {
+  readonly sessionId: string
+  readonly parentNodeId: string | null
+  readonly item: DraftFile
+  readonly expectedItem?: DraftFile
+  readonly mention?: FileMention
+}
+export function sameFileReference(a: DraftFile | undefined, b: DraftFile): boolean {
+  return Boolean(a && a.id === b.id && JSON.stringify(a.selection) === JSON.stringify(b.selection) && a.file?.snapshotId === b.file?.snapshotId)
+}
 export interface SessionController {
   snapshot(): SessionSnapshot
   attach(listener: () => void): void
@@ -91,6 +103,7 @@ export interface SessionController {
   retryImage(id: string): void
   imagesChanged(): void
   setFiles(files: readonly DraftFile[]): void
+  applyFileReference(input: FileReferenceInput): boolean
   searchFiles(query: string, signal: AbortSignal): Promise<FileSearch>
   previewFile(selection: Extract<FileSelection, { kind: 'project-file' }>, signal: AbortSignal): Promise<FilePreview>
   readFile(id: string, signal: AbortSignal): Promise<FileContent>
@@ -444,6 +457,34 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (readOnly() || busy || pending()) return
       if (files.length > fileLimits.maxFiles) { notice = '每次最多引用 8 个文件。'; emit(); return }
       setDraftAt(position.viewNodeId, { ...draftAt(position.viewNodeId), files }); emit()
+    },
+    applyFileReference(input) {
+      if (readOnly() || busy || loading || pending()) return false
+      if (input.sessionId !== ref.sessionId || input.parentNodeId !== position.viewNodeId) {
+        notice = '对话位置已改变，请在当前分支重新引用文件。'; emit(); return false
+      }
+      const draft = draftAt(position.viewNodeId), previous = draft.files.find(item => item.id === input.item.id)
+      if (input.expectedItem && !sameFileReference(previous, input.expectedItem)) {
+        notice = '此文件引用已改变或移除，请重新打开。'; emit(); return false
+      }
+      try {
+        const [selection] = validateFileSelections([input.item.selection])
+        if (selection.kind === 'snapshot' && (!isFileRef(input.item.file) || input.item.file.snapshotId !== selection.snapshotId || input.item.file.projectId !== ref.projectId)) throw new Error()
+      } catch { notice = '文件引用信息无效，请重新打开文件。'; emit(); return false }
+      if (draft.files.some(item => item.id !== input.item.id && JSON.stringify(item.selection) === JSON.stringify(input.item.selection))) {
+        notice = '已添加相同文件与范围。'; emit(); return false
+      }
+      if (!previous && draft.files.length >= fileLimits.maxFiles) { notice = '每次最多引用 8 个文件。'; emit(); return false }
+      const mention = input.mention
+      const matchingMention = mention && Number.isSafeInteger(mention.start) && Number.isSafeInteger(mention.end) && mention.start >= 0 && mention.end >= mention.start &&
+        draft.text.slice(mention.start, mention.end) === mention.text && mention.text.length === mention.end - mention.start
+      const text = matchingMention ? draft.text.slice(0, mention.start) + draft.text.slice(mention.end) : draft.text
+      const files = previous ? draft.files.map(item => item.id === input.item.id ? input.item : item) : [...draft.files, input.item]
+      setDraftAt(position.viewNodeId, { ...draft, text, files })
+      if (position.follow) { position = { ...position, follow: undefined }; remember() }
+      notice = mention && !matchingMention ? '文件已引用；输入已变化，原 @ 文本已保留。' : ''
+      emit()
+      return true
     },
     searchFiles: (query, signal) => env.api(`${path}/project-files/search?q=${encodeURIComponent(query)}`, undefined, signal),
     previewFile: (selection, signal) => env.api(`${path}/project-files/preview`, { path: selection.path, ...(selection.range ? { range: selection.range } : {}) }, signal),

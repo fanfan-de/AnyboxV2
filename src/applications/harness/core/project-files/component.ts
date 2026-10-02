@@ -11,6 +11,7 @@ import type { ProjectFilesPort, ProjectFilesOptions } from './port.js'
 import { fileError, fileLimits, validId, isFileRef, validateFileSelections, validateSnapshotIds, validateFileBatch, encodeFileContents } from './domain.js'
 import type { FileContent, FileRef } from './domain.js'
 import { readProjectFile, searchProjectFiles } from './filesystem.js'
+import { createFileTreeBrowser } from './tree-browser.js'
 
 const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute(`CREATE TABLE harness_file_snapshots (id TEXT PRIMARY KEY, scope_id TEXT NOT NULL,
@@ -101,16 +102,28 @@ export function createProjectFilesComponent(options: ProjectFilesOptions = {}): 
         (SELECT 1 FROM harness_file_retentions r WHERE r.snapshot_id=harness_file_snapshots.id)`, [now()])
     }))
     await collect()
+    const trees = createFileTreeBrowser(async projectId => (await projects.requireAvailable(projectId)).path, slot, options.treeBrowser)
     const timer = setInterval(() => { void collect().catch(() => ctx.logger.warn('Project file snapshot collection failed')) }, options.collectionIntervalMs ?? 60 * 60 * 1000)
     timer.unref()
     ctx.effect(() => async () => {
       accepting = false; clearInterval(timer)
       for (const call of calls) call.cancel('project-files-closed')
-      await Promise.allSettled([...calls].map(call => call.done))
+      const exits = await Promise.allSettled([trees.close(), ...[...calls].map(call => call.done)])
       await Promise.allSettled([...pending])
-      if (failures.length) throw new AggregateError(failures, 'project file cleanup failed')
+      const treeFailure = exits[0].status === 'rejected' ? [exits[0].reason] : []
+      if (failures.length || treeFailure.length) throw new AggregateError([...failures, ...treeFailure], 'project file cleanup failed')
     }, 'cancel and join project file operations')
     const service: ProjectFilesPort = {
+      openTree(scope, project, path, owner, signal) {
+        if (!accepting) throw fileError('file-unavailable')
+        return trees.open(scope, project, path, owner, signal)
+      },
+      readTreePage(scope, owner, cursorId, page, signal) {
+        if (!accepting) throw fileError('file-unavailable')
+        return trees.page(scope, owner, cursorId, page, signal)
+      },
+      closeTree: (scope, owner, cursorId) => trees.release(scope, owner, cursorId),
+      onTreeRetired: listener => trees.onRetired(listener),
       search(projectId, query, signal) { return owned(signal, async signal => {
         if (typeof query !== 'string' || query.length > 4096 || query.includes('\0')) throw fileError('file-invalid')
         const project = await projects.requireAvailable(projectId)

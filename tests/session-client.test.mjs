@@ -428,6 +428,55 @@ test('merged pending drafts retain more than eight images across reload and bloc
 const fileRef = { snapshotId: 'snapshot', projectId: 'p-a', path: 'src/example.ts', actualRange: { start: 1, end: 1 }, byteLength: 4,
   sha256: 'a'.repeat(64), createdAt: '2026-09-29T00:00:00.000Z', expiresAt: '2026-09-30T00:00:00.000Z' }
 
+test('sidebar references commit text and files together and remove only the exact captured mention', async () => {
+  const f = fixture(), controller = f.make('a'); await f.load(controller)
+  controller.setDraft('read @src then explain')
+  const seen = []; controller.attach(() => seen.push([controller.snapshot().draft, controller.snapshot().files.length]))
+  await controller.refresh(); seen.length = 0
+  assert.equal(controller.applyFileReference({ sessionId: 'a', parentNodeId: null,
+    item: { id: 'one', selection: { kind: 'project-file', path: 'src/example.ts' } }, mention: { start: 5, end: 9, text: '@src' } }), true)
+  assert.deepEqual(seen, [['read  then explain', 1]])
+  controller.setDraft('a changed input')
+  assert.equal(controller.applyFileReference({ sessionId: 'a', parentNodeId: null,
+    item: { id: 'two', selection: { kind: 'project-file', path: 'other.ts' } }, mention: { start: 5, end: 9, text: '@src' } }), true)
+  assert.equal(controller.snapshot().draft, 'a changed input')
+  assert.match(controller.snapshot().notice, /原 @ 文本已保留/)
+  controller.dispose()
+})
+
+test('sidebar draft edits reject changed parent, removed chips and changed selections without replacing snapshots', async () => {
+  const f = fixture(), controller = f.make('a'); await f.load(controller)
+  const original = { id: 'original', selection: { kind: 'snapshot', snapshotId: 'snapshot' }, file: fileRef }
+  controller.setFiles([original])
+  const update = { sessionId: 'a', parentNodeId: null, expectedItem: original, item: { id: 'original', selection: { kind: 'project-file', path: 'src/example.ts' } } }
+  assert.equal(controller.applyFileReference({ ...update, sessionId: 'other' }), false)
+  assert.equal(controller.applyFileReference({ ...update, parentNodeId: 'other-parent' }), false)
+  assert.equal(controller.snapshot().files[0].selection.kind, 'snapshot')
+  controller.setFiles([]); assert.equal(controller.applyFileReference(update), false)
+  controller.setFiles([{ ...original, selection: { kind: 'project-file', path: 'changed.ts' }, file: undefined }])
+  assert.equal(controller.applyFileReference(update), false)
+  controller.setFiles([{ ...original, file: { ...fileRef, expiresAt: '2099-01-01T00:00:00.000Z' } }])
+  assert.equal(controller.applyFileReference(update), true, 'lease renewal does not change the original reference identity')
+  assert.deepEqual(controller.snapshot().files, [update.item])
+  controller.dispose()
+})
+
+test('sidebar references refuse loading, pending, duplicates, the file limit and read-only sessions', async () => {
+  const f = fixture(), controller = f.make('a'), input = { sessionId: 'a', parentNodeId: null, item: { id: 'new', selection: { kind: 'project-file', path: 'new.ts' } } }
+  assert.equal(controller.applyFileReference(input), false)
+  await f.load(controller)
+  controller.setFiles([{ ...input.item, id: 'existing' }]); assert.equal(controller.applyFileReference(input), false)
+  controller.setFiles(Array.from({ length: 8 }, (_, index) => ({ id: `file-${index}`, selection: { kind: 'project-file', path: `file-${index}.ts` } })))
+  assert.equal(controller.applyFileReference(input), false)
+  controller.setFiles([])
+  f.pending.set('a', { schemaVersion: 3, sessionId: 'a', parentNodeId: null, input: 'waiting', idempotencyKey: 'held' })
+  assert.equal(controller.applyFileReference(input), false); f.pending.set('a', undefined)
+  f.intercept(url => url === '/sessions/a' ? { id: 'a', projectId: 'p-a', historyMode: 'dialogue-v1', agentId: 'assistant', modelId: null } : undefined)
+  await controller.refresh(); assert.equal(controller.applyFileReference(input), false)
+  assert.deepEqual(controller.snapshot().files, [])
+  controller.dispose()
+})
+
 test('file-only input persists a preparation key before reading and retries a lost preparation response', async () => {
   const f = fixture(), controller = f.make('a'); await f.load(controller)
   let attempts = 0, key

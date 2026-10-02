@@ -8,14 +8,11 @@ import type { AgentView } from './client-types.js'
 import type { MountedPage } from './page-lifecycle.js'
 
 export function mountAgentPage(root: HTMLElement, api: HarnessClient, options: {
-  selectedId?: string; selectedName?: string; layoutKey?: string; isActive(): boolean;
+  selectedId?: string; selectedName?: string; selectedInstanceId?: string; layoutKey?: string; isActive(): boolean;
   route: { read(): string; write(hash: string, push: boolean): void; subscribe(listener: () => void): () => void };
 }): MountedPage {
   let closed = false
   const lifetime = new AbortController()
-  function listen<T extends keyof DocumentEventMap>(target: Document, type: T, listener: (event: DocumentEventMap[T]) => void): void
-  function listen(target: MediaQueryList, type: 'change', listener: (event: MediaQueryListEvent) => void): void
-  function listen(target: EventTarget, type: string, listener: ((event: KeyboardEvent) => void) | ((event: FocusEvent) => void) | ((event: MediaQueryListEvent) => void)): void { target.addEventListener(type, event => { if (options.isActive?.() === false) return; (listener as EventListener)(event) }, { signal: lifetime.signal }) }
 function required<T extends HTMLElement>(id: string): T {
   const found = root.querySelector<T>(`#${id}`)
   if (!found) throw new Error(`missing element ${id}`)
@@ -27,106 +24,17 @@ const openSettingsButton = required<HTMLButtonElement>('agent--open-settings')
 const closeSettingsButton = required<HTMLButtonElement>('agent--close-settings')
 const sidebar = required<HTMLElement>('agent--workspace-sidebar')
 const sidebarToggle = required<HTMLButtonElement>('agent--toggle-sidebar')
-const sidebarToggleLabel = required<HTMLElement>('agent--sidebar-toggle-label')
-const sidebarClose = required<HTMLButtonElement>('agent--close-sidebar')
-const sidebarBackdrop = required<HTMLButtonElement>('agent--sidebar-backdrop')
-const sessionWorkspace = required<HTMLElement>('agent--session-workspace')
-const workspaceShell = sidebar.closest<HTMLElement>('.workspace')!
-const narrowWindow = window.matchMedia('(max-width: 760px)')
-let sidebarCollapsed = false, sidebarOpen = false
-
-function renderSidebar(): void {
-  const drawerOpen = narrowWindow.matches && sidebarOpen
-  const visible = narrowWindow.matches ? sidebarOpen : !sidebarCollapsed
-  workspaceShell.classList.toggle('sidebar-collapsed', !narrowWindow.matches && sidebarCollapsed)
-  workspaceShell.classList.toggle('sidebar-open', drawerOpen)
-  sidebar.inert = !visible
-  sidebar.setAttribute('aria-hidden', String(!visible))
-  if (drawerOpen) {
-    sidebar.setAttribute('role', 'dialog')
-    sidebar.setAttribute('aria-modal', 'true')
-  } else {
-    sidebar.removeAttribute('role')
-    sidebar.removeAttribute('aria-modal')
-  }
-  sidebarBackdrop.hidden = !drawerOpen
-  sessionWorkspace.inert = drawerOpen
-  sidebarToggle.setAttribute('aria-expanded', String(visible))
-  sidebarToggleLabel.textContent = visible ? '收起侧栏' : '展开侧栏'
-  sidebarToggle.title = sidebarToggleLabel.textContent
-}
-
-function sidebarFocusTargets(): HTMLElement[] {
-  return [...sidebar.querySelectorAll<HTMLElement>('button, a[href], input, select, textarea, summary, [tabindex]')]
-    .filter(element => element.tabIndex >= 0 && !element.matches(':disabled') && element.getClientRects().length > 0)
-}
-
-function focusSidebar(): void {
-  const target = sidebarFocusTargets()[0] ?? sidebar
-  target.focus()
-}
-
-function closeSidebar(): void {
-  if (!narrowWindow.matches || !sidebarOpen) return
-  sidebarOpen = false
-  renderSidebar()
-  sidebarToggle.focus()
-}
-
-sidebar.tabIndex = -1
-sidebarToggle.addEventListener('click', () => {
-  if (narrowWindow.matches) sidebarOpen = !sidebarOpen
-  else sidebarCollapsed = !sidebarCollapsed
-  renderSidebar()
-  if (narrowWindow.matches && sidebarOpen) focusSidebar()
-})
-sidebarClose.addEventListener('click', closeSidebar)
-sidebarBackdrop.addEventListener('click', closeSidebar)
-required('agent--show-workspace').addEventListener('click', () => {
-  if (narrowWindow.matches) sidebarOpen = true
-  else sidebarCollapsed = false
-  renderSidebar()
-  focusSidebar()
-})
+function closeSidebar(): void { workspace.closeSidebar() }
 const helpDialog = required<HTMLDialogElement>('agent--help-dialog')
 required('agent--close-help').addEventListener('click', () => helpDialog.close())
 required('agent--open-help').addEventListener('click', () => { closeSidebar(); helpDialog.showModal() })
 sidebar.addEventListener('click', event => {
-  const action = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.session-open, #agent--new-session, [data-create-project-session], #agent--add-project') : null
-  // Release the narrow-screen drawer's focus trap before the selector opens its modal.
+  const action = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.session-open, [data-create-project-session], #agent--add-project') : null
+  // Release a drawer's focus trap before the project selector opens its modal.
   if (action?.id === 'agent--add-project' && !action.disabled) { closeSidebar(); return }
-  // The accepted new-session click disables its button synchronously; inspect it before its handler runs.
+  // Creating a project session disables its button synchronously; inspect it before its handler runs.
   if (action && !action.disabled) queueMicrotask(closeSidebar)
-}, { capture: true })
-listen(document, 'keydown', event => {
-  if (!narrowWindow.matches || !sidebarOpen) return
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    closeSidebar()
-  } else if (event.key === 'Tab') {
-    const targets = sidebarFocusTargets(), first = targets[0], last = targets.at(-1)
-    if (!first || !sidebar.contains(document.activeElement) ||
-        (event.shiftKey ? document.activeElement === first : document.activeElement === last)) {
-      event.preventDefault()
-      const target = event.shiftKey ? last ?? sidebar : first ?? sidebar
-      target.focus()
-    }
-  }
-})
-listen(document, 'focusin', event => {
-  if (narrowWindow.matches && sidebarOpen && event.target instanceof Node && !sidebar.contains(event.target)) focusSidebar()
-})
-listen(narrowWindow, 'change', () => {
-  const focused = document.activeElement
-  const hadSidebarFocus = sidebarOpen || sidebar.contains(focused)
-  sidebarOpen = false
-  renderSidebar()
-  if (hadSidebarFocus && (sidebar.inert || focused === document.body ||
-      !(focused instanceof HTMLElement) || !focused.getClientRects().length)) sidebarToggle.focus()
-})
-renderSidebar()
-
-
+}, { capture: true, signal: lifetime.signal })
 
 const selected = options.selectedId === undefined ? api.connections[0] : api.connections.find(item => item.id === options.selectedId)
 required('agent--settings-target').textContent = `执行设备：${options.selectedName ?? selected?.name ?? '未选择'}`
@@ -183,7 +91,7 @@ const workspace = setupWorkspace(api, messageFor, projectId => {
   const instance = projectId && splitScopedId(projectId)?.instanceId
   const candidates = knownAgents.filter(agent => splitScopedId(agent.id)?.instanceId === instance)
   return candidates.find(agent => splitScopedId(agent.id)?.id === splitScopedId(agentSelect.value)?.id)?.id ?? candidates[0]?.id ?? ''
-}, models, { root, storageKey: options.layoutKey, route: options.route, isActive: options.isActive })
+}, models, { root, storageKey: options.layoutKey, selectedInstanceId: options.selectedInstanceId ?? selected?.instanceId, route: options.route, isActive: options.isActive })
 const receiveAgents = (agents: readonly AgentView[]) => {
   if (closed) return
   knownAgents = agents
@@ -209,13 +117,13 @@ void api<readonly AgentView[]>('/agents').then(receiveAgents).catch(error => {
 agentSelect.addEventListener('change', workspace.refreshControls)
 return {
   setActive(active) {
-    if (!active) { sidebarOpen = false; renderSidebar(); settingsDialog.close(); helpDialog.close() }
+    if (!active) { settingsDialog.close(); helpDialog.close() }
     workspace.setActive(active)
   },
   canLeave,
   async dispose() {
-    closed = true; lifetime.abort(); unsubscribeAgents(); workspace.dispose(); models.dispose(); hostModels?.dispose()
-    await Promise.all([modelsSettings?.dispose(), promptSettings?.dispose()])
+    closed = true; lifetime.abort(); unsubscribeAgents(); const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
+    await Promise.all([workspaceExit, modelsSettings?.dispose(), promptSettings?.dispose()])
     await api.dispose()
   },
 }

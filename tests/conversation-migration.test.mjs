@@ -4,6 +4,7 @@ import { createSessionComponent } from '../dist/applications/harness/core/sessio
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, realpathSync, rmSync, readFileSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -62,8 +63,42 @@ async function legacyFixture(t, turns = sample.turns) {
       )])
     }
   })
-  return { root, inputs, db }
+  return { root, inputs, db, directory }
 }
+
+test('legacy and archived legacy Sessions can read their project tree/search/current files but cannot prepare or import resources', async t => {
+  const f = await legacyFixture(t)
+  await f.root.installComponent(createSessionComponent(f.inputs, agents))
+  const sessions = f.root.get(sessionServiceKey), state = f.root.get(sessionRunServiceKey), legacy = await sessions.getSession('legacy')
+  const native = await sessions.createSession(legacy.projectId, 'assistant')
+  await mkdir(join(f.directory, 'readable'))
+  await Promise.all(Array.from({ length: 110 }, (_, index) => writeFile(join(f.directory, 'readable', `file-${index}.txt`), 'first\nsecond\n')))
+  const joined = async call => { try { return await call.result } finally { await call.done } }
+  const collect = async id => {
+    let page = await joined(sessions.openProjectFileTree(id, 'readable', 'actor')), pages = 1
+    const entries = [...page.entries]
+    while (page.nextPage !== null) { page = await joined(sessions.readProjectFileTreePage(id, 'actor', page.cursorId, page.nextPage)); entries.push(...page.entries); pages++ }
+    assert.ok(pages > 1)
+    return entries.map(entry => entry.path).sort()
+  }
+  assert.equal(legacy.historyMode, 'dialogue-v1')
+  assert.deepEqual(await collect('legacy'), await collect(native.id))
+  assert.equal((await joined(sessions.searchProjectFiles('legacy', 'file-109'))).paths[0], 'readable/file-109.txt')
+  const selection = { kind: 'project-file', path: 'readable/file-109.txt', range: { start: 2, end: 2 } }
+  assert.equal((await joined(sessions.previewProjectFile('legacy', selection))).text, 'second\n')
+  for (const call of [sessions.prepareProjectFiles('legacy', 'legacy-prepare', [selection]),
+    sessions.getFileSnapshot('legacy', 'missing'), state.readFileSnapshots('legacy', ['missing']),
+    sessions.getImage('legacy', 'missing'), sessions.importImage('legacy', { async *[Symbol.asyncIterator]() {} })]) {
+    await assert.rejects(joined(call), { code: 'legacy-session-readonly' })
+  }
+  assert.equal(await f.db.read(reader => reader.get('SELECT COUNT(*) AS n FROM harness_file_snapshots').n), 0)
+  await sessions.archiveSession('legacy')
+  assert.equal((await collect('legacy')).length, 110)
+  assert.equal((await joined(sessions.previewProjectFile('legacy', selection))).text, 'second\n')
+  assert.equal((await joined(sessions.searchProjectFiles('legacy', 'file-109'))).paths[0], selection.path)
+  await assert.rejects(joined(sessions.prepareProjectFiles('legacy', 'archived-prepare', [selection])), { code: 'session-archived' })
+  assert.equal((await sessions.getSession('legacy')).historyMode, 'dialogue-v1')
+})
 
 test('legacy turns migrate in array order; ambiguous Run associations remain explicitly unknown', async t => {
   const f = await legacyFixture(t)

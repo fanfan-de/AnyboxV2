@@ -24,10 +24,15 @@ NativeRunInput v1/v2、旧节点和旧图片待提交继续读取，缺失 files
 
 ## Web 与接口
 
-Session/Harness 提供 searchProjectFiles、previewProjectFile、prepareProjectFiles、getFileSnapshot、renewProjectFiles；受信执行端口提供 readFileSnapshots。Web 只经过这些接口。
+Session/Harness 提供 openProjectFileTree、readProjectFileTreePage、closeProjectFileTree、onProjectFileTreeRetired，以及 searchProjectFiles、previewProjectFile、prepareProjectFiles、getFileSnapshot、renewProjectFiles；受信执行端口提供 readFileSnapshots。Web 只经过 Session 验证和包装后的 HTTP 接口；退休通知由 HTTP 管理观察租约。
+
+目录、搜索和当前文件预览在旧 `dialogue-v1` 或归档会话中仍可读取所属项目。旧会话不开放快照及图片资源入口；旧会话与归档会话均不能引用到草稿、准备新快照或发送。受限旧格式资源返回 `legacy-session-readonly`，不使用通用内部错误。
 
 | `/api/v1/sessions/:sessionId/project-files/` 下的路由 | 方法与输入 |
 | --- | --- |
+| `tree/open` | POST `{path}`，按层目录第一页，项目根为空路径 |
+| `tree/page` | POST `{cursorId,page}`，继续当前目录 |
+| `tree/close` | POST `{cursorId}`，幂等释放目录句柄 |
 | `search?q=...` | GET，相对路径候选及 incomplete |
 | `preview` | POST `{path,range?}`，当前内容及能否引用 |
 | `prepare` | POST `{preparationKey,selections}`，有序快照元数据 |
@@ -36,8 +41,12 @@ Session/Harness 提供 searchProjectFiles、previewProjectFile、prepareProjectF
 
 保留 textarea；行首/空白后的 @ 打开有 250 ms 防抖的候选框，支持方向键、Enter、Esc 和中文输入法。选择项通过预览确认后成为独立附件标签；每个面板拥有查询/预览 AbortController，过时响应不可覆盖其他节点。文件预览用文本节点，行范围和文件数限制由服务端复核。
 
-通用草稿数据由 draft-client 管理，image-client 只负责图片行为；file-client 管理文件选择、待提交恢复和租期，file-view 管理候选与快照预览。这些是 Web 内部模块，不注册 Nya 组件。
+通用草稿数据由 draft-client 管理，image-client 只负责图片行为；file-client 管理文件选择、待提交恢复和租期，file-view 管理候选与附件卡片，file-sidebar 和 file-tree-client 管理右侧标签、快照预览与目录游标。这些是 Web 内部模块，不注册 Nya 组件。
 
 ## 验收
 
 自动测试使用本地文件、内存凭据和受控协议；运行 `npm run check`。可用 `node tests/helpers/project-files-browser-host.mjs` 启动临时 Web 宿主，验证 @ 搜索、行范围、仅文件发送、源文件修改后历史预览、编辑与重新生成；退出会清理临时数据。边界和生命周期的测试入口见组件手册。
+
+## 右侧目录树与预览
+
+文件预览统一位于[三栏工作区](harness-three-column-workspace.md)右栏，不再创建每面板预览弹窗。右侧只有完整目录树，输入框 @ 搜索仍保留。目录按展开分页，不受搜索的 50 条限制。引用确认在控制器内同步更新草稿，验证来源父节点、附件身份及 pending/只读状态；用户继续输入后不按旧 @ 偏移删除文字。当前文件预览与不可变快照标签分别保留来源，不改变发送时捕获和准备幂等规则。

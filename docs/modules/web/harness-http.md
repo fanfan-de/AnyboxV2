@@ -6,7 +6,7 @@
 
 内部 `createHarnessHttpHandler`、`models-api.ts` 负责业务路由、DTO、图片/文件、Models 管理和通知 SSE，`validation.ts` 保留 Prompt revision 等业务输入转换；不创建额外组件。每次调用固定该代服务；重启不重放旧请求。Run 通知订阅由此组件持有，通用监听器不导入任何 Harness 服务。
 
-请求按注册归属获得 Activity 租约。已接受 Run 使用 retainUntil(waitRun) 延续租约到实际退出；关闭监听器不取消 Run。SSE/等待/目录/资源请求响应监听器 signal，OwnedCall 等待 result/done。目录浏览保留自己的观察租约，绑定认证令牌和创建它的服务代。业务 DTO 不暴露恢复句柄、凭据或 execution。
+请求按注册归属获得 Activity 租约。已接受 Run 使用 retainUntil(waitRun) 延续租约到实际退出；关闭监听器不取消 Run。SSE/等待/目录/资源请求响应监听器 signal，OwnedCall 等待 result/done。目录浏览保留自己的观察租约，绑定认证令牌和创建它的服务代；新建目录使用该会话捕获的创建端口，不跨组件重启转交写入。创建请求同样响应断开、令牌撤销和关闭，并等待文件系统操作及清理实际退出。业务 DTO 不暴露恢复句柄、凭据或 execution。
 
 Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录浏览句柄及通知订阅。普通已接受写入完成真实提交；整根退出仍由宿主先关闭准入与 HTTP，再交由 Nya 卸载领域资源。关闭失败保留诊断。
 
@@ -23,6 +23,7 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 | `POST /projects` | `{path}`，目标端绝对目录，经 Projects 校验、规范化和登记 |
 | `POST /projects/directories/browse` | `{action:"open",path?,query?,showHidden?}` 预留会话；`{action:"page",browseId,page}` 分页浏览 |
 | `POST /projects/directories/close` | `{browseId}`，幂等关闭并等待清理 |
+| `POST /projects/directories/create` | `{browseId,name}`，在已读取且属于当前认证调用方的目录下创建一个子目录，返回 201 与 `{path}`；不登记项目 |
 | `GET /projects/:id/sessions` | 项目下未归档会话 |
 | `POST /sessions` | `{ projectId, agentId, modelId? }` |
 | `GET /sessions/archived` | 跨项目归档列表，按归档时间倒序 |
@@ -55,6 +56,9 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 
 | 方法 / 路径 | 输入或行为 |
 | --- | --- |
+| `POST /sessions/:id/project-files/tree/open` | `{ path }`；空路径为项目根，返回目录第一页 |
+| `POST /sessions/:id/project-files/tree/page` | `{ cursorId, page }`；游标绑定会话及受信 actor |
+| `POST /sessions/:id/project-files/tree/close` | `{ cursorId }`；取消并等待游标退出 |
 | `GET /sessions/:id/project-files/search` | 可选 `q`，返回相对 paths 和 incomplete |
 | `POST /sessions/:id/project-files/preview` | `{ path, range?: { start, end } }`，有界当前内容预览；不保存快照 |
 | `POST /sessions/:id/project-files/prepare` | `{ preparationKey, selections }`，原子准备最多 8 个有序快照，返回 FileRef 数组 |
@@ -155,7 +159,7 @@ HTTP 只返回安全 `{ error: { code, fileIndex? } }`，fileIndex 仅在有效�
 
 输入框支持 @ 搜索或“引用项目文件”，默认整文件，预览可选择闭区间行范围。搜索包含点文件及 ignore 文件，仅排除元数据和依赖目录。发送时通过 Session 准备不可变快照，再以 ID 提交 Run。pending v3 先保存准备键，取得快照后先保存 ID，再发送；重试和重新生成默认复用快照。历史预览读取快照，编辑可显式更新为当前文件。
 
-HTTP 路由见上方接口表，跨组件恢复规则见[文件引用设计](../../project-file-references-design.md)。文件操作使用既有请求取消/实际退出包装，错误只暴露固定 code 及可选 fileIndex。[draft-client](../../../src/applications/harness/web/draft-client.ts) 是通用草稿存储，[file-client](../../../src/applications/harness/web/file-client.ts) 管理文件待提交和 5 分钟租期，[file-view](../../../src/applications/harness/web/file-view.ts) 拥有各面板的候选查询与预览；组件关闭/面板卸载取消对应操作。
+HTTP 路由见上方接口表，跨组件恢复规则见[文件引用设计](../../project-file-references-design.md)。文件操作使用既有请求取消/实际退出包装，错误只暴露固定 code 及可选 fileIndex。[draft-client](../../../src/applications/harness/web/draft-client.ts) 是通用草稿存储，[file-client](../../../src/applications/harness/web/file-client.ts) 管理文件待提交和 5 分钟租期，[file-view](../../../src/applications/harness/web/file-view.ts) 拥有各面板的候选查询与附件卡片；右栏文件标签拥有预览，内部树客户端拥有分页和游标关闭。组件关闭/面板卸载取消对应展示操作，不取消 Run。三栏状态、抽屉和文件引用规则见[工作区设计](../../harness-three-column-workspace.md)。
 
 ## 会话归档
 

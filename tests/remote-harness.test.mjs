@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, rm, readFile, mkdir, writeFile, realpath } from 'node:fs/promises'
+import { mkdtemp, rm, readFile, mkdir, writeFile, realpath, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@nya/core'
@@ -123,6 +123,9 @@ test('authenticated gateway preserves accepted Runs across client disconnect and
     await writeFile(join(dir, 'a', 'reference.txt'), 'host A file')
     await writeFile(join(dir, 'b', 'reference.txt'), 'host B file')
     const fileBase = base(connections[0].id) + `/sessions/${session.id}/project-files`
+    const tree = await call(gateway.url, fileBase + '/tree/open', { path: '' })
+    assert.equal(tree.status, 200); assert.ok(tree.data.entries.some(entry => entry.path === 'reference.txt' && entry.kind === 'file'))
+    assert.equal((await call(gateway.url, fileBase + '/tree/close', { cursorId: tree.data.cursorId })).status, 200)
     assert.equal((await call(gateway.url, fileBase + '/preview', { path: 'reference.txt' })).data.text, 'host A file')
     const prepared = await call(gateway.url, fileBase + '/prepare', { preparationKey: 'file', selections: [{ kind: 'project-file', path: 'reference.txt' }] })
     assert.equal(prepared.status, 200)
@@ -164,11 +167,16 @@ test('authenticated gateway preserves accepted Runs across client disconnect and
 test('gateway whitelist omits control-plane internals and encoded traversal', () => {
   for (const path of ['/shutdown', '/sessions/a/records', '/sessions/a/images/%2e%2e/content', '/runs/a%2fb', '/runs/%00']) assert.equal(allowedProxyPath('GET', path), false)
   for (const [method, path] of [['POST', '/projects'], ['POST', '/sessions/a/project-files/preview'], ['GET', '/sessions/archived'], ['GET', '/models/configurations/a/history'], ['POST', '/access/tokens/a/revoke']]) assert.equal(allowedProxyPath(method, path), true)
-  for (const path of ['/projects/directories/browse', '/projects/directories/close']) {
+  for (const path of ['/projects/directories/browse', '/projects/directories/close', '/projects/directories/create']) {
     assert.equal(allowedProxyPath('POST', path), true)
     assert.equal(allowedProxyPath('GET', path), false)
   }
-  for (const path of ['/projects/directories/read', '/projects/directories/browse/extra', '/projects/directories/%62rowse', '/projects/directories/../browse']) assert.equal(allowedProxyPath('POST', path), false)
+  for (const path of ['/sessions/a/project-files/tree/open', '/sessions/a/project-files/tree/page', '/sessions/a/project-files/tree/close']) {
+    assert.equal(allowedProxyPath('POST', path), true)
+    assert.equal(allowedProxyPath('GET', path), false)
+  }
+  for (const path of ['/sessions/a/project-files/tree/open/extra', '/sessions/a/project-files/tree/read', '/sessions/a/project-files/tree/%6fpen']) assert.equal(allowedProxyPath('POST', path), false)
+  for (const path of ['/projects/directories/read', '/projects/directories/browse/extra', '/projects/directories/create/extra', '/projects/directories/%63reate', '/projects/directories/%62rowse', '/projects/directories/../browse']) assert.equal(allowedProxyPath('POST', path), false)
 })
 
 test('offline connection checks do not hold other devices; close aborts and joins the handshake', async () => {
@@ -250,6 +258,71 @@ test('directory browsing authenticates, remains read only, and scopes reservatio
   } finally { await gateway?.close(); await c?.root.fiber.dispose(); for (const h of hosts) await h.close(); await rm(dir, { recursive: true, force: true }) }
 })
 
+test('new directories use the loaded parent and authenticated pinned device without registering a project', { timeout: 20000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'anybox-directory-create-')), hosts = []; let c, gateway
+  const browse = '/projects/directories/browse', create = '/projects/directories/create'
+  try {
+    for (const name of ['a', 'b']) hosts.push(await execution(join(dir, name)))
+    c = await client(join(dir, 'client.sqlite'), memoryKeys())
+    const connections = []
+    for (const host of hosts) connections.push(await c.connections.save({ name: 'Target', endpoint: host.server.url, token: host.token.token }))
+    gateway = await startClientGateway(c.connections)
+    const base = index => `/api/connections/${connections[index].id}/v1`
+    const pinned = index => ({ 'X-Anybox-Expected-Instance-Id': connections[index].instanceId, 'X-Anybox-Connection-Revision': String(connections[index].revision) })
+    const a = hosts[0], headers = { Authorization: `Bearer ${a.token.token}`, 'X-Anybox-Instance-Id': a.auth.instance.instanceId }
+    assert.ok((await call(gateway.url, base(0) + '/instance')).data.capabilities.includes('projects.create-directory'))
+    const opened = await call(gateway.url, base(0) + browse, { action: 'open' }, pinned(0))
+    const input = { browseId: opened.data.browseId, name: '新项目' }
+    assert.equal((await call(a.server.url, '/api/v1' + create, input)).status, 401)
+    assert.equal((await call(gateway.url, base(0) + create, input, pinned(1))).status, 409)
+    assert.equal((await call(gateway.url, base(1) + create, input, pinned(1))).status, 409)
+    const unread = await call(gateway.url, base(0) + create, input, pinned(0))
+    assert.equal(unread.status, 409); assert.equal(unread.data.error.code, 'directory-browse-conflict')
+    const page = await call(gateway.url, base(0) + browse, { action: 'page', browseId: input.browseId, page: 0 }, pinned(0))
+    const other = await a.auth.issue('Other owner')
+    assert.equal((await call(a.server.url, '/api/v1' + create, input, { ...headers, Authorization: `Bearer ${other.token}` })).status, 409)
+    assert.equal((await call(gateway.url, base(0) + create, { ...input, path: join(dir, 'b') }, pinned(0))).status, 400)
+    const invalid = await call(gateway.url, base(0) + create, { ...input, name: '../outside' }, pinned(0))
+    assert.equal(invalid.status, 400); assert.equal(invalid.data.error.code, 'directory-name-invalid')
+    const created = await call(gateway.url, base(0) + create, input, pinned(0))
+    assert.equal(created.status, 201); assert.deepEqual(created.data, { path: join(page.data.path, input.name) })
+    assert.ok((await stat(created.data.path)).isDirectory())
+    await assert.rejects(stat(join(dir, 'b', input.name)), { code: 'ENOENT' })
+    const conflict = await call(gateway.url, base(0) + create, input, pinned(0))
+    assert.equal(conflict.status, 409); assert.equal(conflict.data.error.code, 'directory-exists')
+    for (const index of [0, 1]) assert.deepEqual((await call(gateway.url, base(index) + '/projects')).data, [])
+    await c.connections.save({ ...connections[0], name: 'Changed', expectedRevision: connections[0].revision })
+    assert.equal((await call(gateway.url, base(0) + create, { ...input, name: 'stale' }, pinned(0))).data.error.code, 'connection-changed')
+    await assert.rejects(stat(join(page.data.path, 'stale')), { code: 'ENOENT' })
+  } finally { await gateway?.close(); await c?.root.fiber.dispose(); for (const host of hosts) await host.close(); await rm(dir, { recursive: true, force: true }) }
+})
+
+test('directory creation HTTP waits actual exit and retains the reservation service generation', async () => {
+  const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
+  const entered = deferred(), done = deferred(); let responded = false, createCalls = 0, switched = false
+  const commands = {
+    directoryBrowsingSupported: () => true, directoryCreationSupported: () => true,
+    openDirectoryBrowse() { return { result: Promise.resolve({ browseId: 'parent', homePath: '/home' }), done: Promise.resolve(), cancel() {} } },
+    createDirectory(owner, id, name) {
+      createCalls++; assert.equal(id, 'parent'); assert.equal(name, 'child'); assert.ok(owner)
+      entered.resolve()
+      return { result: Promise.resolve({ path: '/home/child' }), done: done.promise, cancel() {} }
+    },
+    async closeDirectoryBrowse() {},
+  }
+  const replacement = { ...commands, createDirectory() { throw new Error('wrong service generation') } }
+  const server = await startHarnessApiServer(commands, 0, { currentCommands: () => switched ? replacement : commands })
+  try {
+    await call(server.url, '/api/v1/projects/directories/browse', { action: 'open' })
+    switched = true
+    const response = call(server.url, '/api/v1/projects/directories/create', { browseId: 'parent', name: 'child' }).then(value => { responded = true; return value })
+    await entered.promise; await new Promise(resolve => setImmediate(resolve))
+    assert.equal(responded, false); assert.equal(createCalls, 1)
+    done.resolve()
+    assert.deepEqual(await response, { status: 201, data: { path: '/home/child' } })
+  } finally { done.resolve(); await server.close() }
+})
+
 test('native directory shortcut requires launcher identity and rejects changed connection revisions', async () => {
   const instance = '11111111-1111-4111-8111-111111111111', other = '22222222-2222-4222-8222-222222222222'
   let revision = 1, picks = 0, release, entered
@@ -276,8 +349,11 @@ test('old Harness capability metadata remains API v1 and never advertises unavai
     const headers = { Authorization: `Bearer ${issued.token}`, 'X-Anybox-Instance-Id': a.instance.instanceId }
     const info = await call(server.url, '/api/v1/instance', undefined, headers)
     assert.equal(info.status, 200); assert.equal(info.data.apiVersion, 1); assert.ok(!info.data.capabilities.includes('projects.browse'))
+    assert.ok(!info.data.capabilities.includes('projects.create-directory'))
     const unsupported = await call(server.url, '/api/v1/projects/directories/browse', { action: 'open' }, headers)
     assert.equal(unsupported.status, 503); assert.equal(unsupported.data.error.code, 'directory-browse-unsupported')
+    const create = await call(server.url, '/api/v1/projects/directories/create', { browseId: 'old', name: 'child' }, headers)
+    assert.equal(create.status, 503); assert.equal(create.data.error.code, 'directory-create-unsupported')
   } finally { await server?.close(); await root?.fiber.dispose(); await rm(dir, { recursive: true, force: true }) }
 })
 

@@ -9,6 +9,7 @@ import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
 import { createDirectoryBrowser } from '../dist/applications/harness/core/project/directory-browser.js'
 import { createDirectoryAccessProvider } from '../dist/applications/harness/core/project/directory-access.js'
+import { isDirectoryNameValid } from '../dist/applications/harness/core/project/directories.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 async function joined(call) { try { return await call.result } finally { await call.done } }
@@ -341,4 +342,144 @@ test('cancellation during pending opendir closes the subsequently acquired handl
   finishClose.resolve()
   await assert.rejects(joined(call), { code: 'directory-browse-cancelled' })
   assert.equal(done, true)
+})
+
+test('creation uses the successfully browsed canonical parent, preserves conflicts, and never registers a project', async t => {
+  const f = await fixture(t)
+  const parent = join(f.directory, 'parent')
+  await fs.mkdir(parent)
+  const alias = join(f.directory, 'alias')
+  await fs.symlink(parent, alias)
+  assert.equal(f.projects.directoryCreationSupported, true)
+  const opened = await joined(f.projects.openDirectoryBrowse('owner', { path: alias }))
+  const page = await joined(f.projects.readDirectoryPage('owner', opened.browseId, 0))
+  assert.deepEqual(page.entries, [])
+  assert.equal(page.nextPage, null)
+  const created = await joined(f.projects.createDirectory('owner', opened.browseId, '新文件夹'))
+  assert.deepEqual(created, { path: join(await fs.realpath(parent), '新文件夹') })
+  assert.equal((await fs.lstat(created.path)).isDirectory(), true)
+  await fs.writeFile(join(parent, 'file'), 'keep me')
+  await fs.symlink(created.path, join(parent, 'link'))
+  for (const name of ['新文件夹', 'file', 'link']) {
+    await assert.rejects(joined(f.projects.createDirectory('owner', opened.browseId, name)), { code: 'directory-exists' })
+  }
+  assert.equal(await fs.readFile(join(parent, 'file'), 'utf8'), 'keep me')
+  assert.equal((await fs.lstat(join(parent, 'link'))).isSymbolicLink(), true)
+  assert.equal((await joined(f.projects.createDirectory('owner', opened.browseId, 'after-conflict'))).path, join(await fs.realpath(parent), 'after-conflict'))
+  assert.deepEqual(await f.projects.listProjects(), [])
+})
+
+test('creation requires an owner-bound active browse with a successful page and validates a direct child name', async t => {
+  const f = await fixture(t)
+  const opened = await joined(f.projects.openDirectoryBrowse('owner', {}))
+  await assert.rejects(joined(f.projects.createDirectory('owner', opened.browseId, 'before-page')), { code: 'directory-browse-conflict' })
+  await joined(f.projects.readDirectoryPage('owner', opened.browseId, 0))
+  await assert.rejects(joined(f.projects.createDirectory('other-owner', opened.browseId, 'wrong-owner')), { code: 'directory-browse-expired' })
+  for (const name of ['', ' ', '.', '..', '../outside', 'parent/child', 'parent\\child', '\0bad', 'line\nbreak', '\u007f', '\u0085']) {
+    await assert.rejects(joined(f.projects.createDirectory('owner', opened.browseId, name)), { code: 'directory-name-invalid' })
+  }
+  assert.deepEqual((await fs.readdir(f.directory)).filter(name => ['before-page', 'wrong-owner', 'parent'].includes(name)), [])
+  await f.projects.closeDirectoryBrowse('owner', opened.browseId)
+  await assert.rejects(joined(f.projects.createDirectory('owner', opened.browseId, 'after-close')), { code: 'directory-browse-expired' })
+  const unsupported = createDirectoryBrowser({ homePath: f.directory, access: sequenceAccess(0).access })
+  t.after(() => unsupported.close())
+  assert.equal(unsupported.creationSupported, false)
+  const readOnly = await joined(unsupported.open('owner', {}))
+  await joined(unsupported.page('owner', readOnly.browseId, 0))
+  await assert.rejects(joined(unsupported.create('owner', readOnly.browseId, 'child')), { code: 'directory-create-unsupported' })
+})
+
+test('Windows child name validation rejects reserved device names and platform path aliases', () => {
+  for (const name of ['CON', 'nul.txt', 'COM9.log', 'LPT¹.txt', 'name.', 'name ', 'a:b', 'a?b', 'a|b', 'a"b', 'a<b']) {
+    assert.equal(isDirectoryNameValid(name, true), false, name)
+  }
+  for (const name of ['folder', '.hidden', 'COM10', 'conifer', '新文件夹']) assert.equal(isDirectoryNameValid(name, true), true, name)
+  assert.equal(isDirectoryNameValid('CON', false), true)
+  assert.equal(isDirectoryNameValid('name.', false), true)
+})
+
+test('creation verifies the original parent identity after an exhausted scan closes its handle', async t => {
+  const f = await fixture(t)
+  const parent = join(f.directory, 'parent')
+  await fs.mkdir(parent)
+  const opened = await joined(f.projects.openDirectoryBrowse('owner', { path: parent }))
+  assert.equal((await joined(f.projects.readDirectoryPage('owner', opened.browseId, 0))).nextPage, null)
+  await fs.rename(parent, join(f.directory, 'original'))
+  await fs.mkdir(parent)
+  await assert.rejects(joined(f.projects.createDirectory('owner', opened.browseId, 'child')), { code: 'directory-unavailable' })
+  assert.deepEqual(await fs.readdir(parent), [])
+  await fs.rm(parent, { recursive: true })
+  await fs.symlink(join(f.directory, 'original'), parent)
+  await assert.rejects(joined(f.projects.createDirectory('owner', opened.browseId, 'child')), { code: 'directory-not-directory' })
+  assert.deepEqual(await fs.readdir(join(f.directory, 'original')), [])
+})
+
+test('release and cancellation join a pending create and handle cleanup without rolling back its filesystem change', async t => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-directory-create-'))
+  t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const creating = deferred(), finishCreate = deferred(), closing = deferred(), finishClose = deferred()
+  const browser = createDirectoryBrowser({ homePath: directory, access: { creationSupported: true, async open(path) {
+    return { path, async read() { return { name: 'child', path: join(path, 'child'), kind: 'directory' } },
+      async create(name) { const created = join(path, name); await fs.mkdir(created); creating.resolve(); await finishCreate.promise; return created },
+      async close() { closing.resolve(); await finishClose.promise } }
+  } } })
+  t.after(() => { finishCreate.resolve(); finishClose.resolve(); return browser.close() })
+  const opened = await joined(browser.open('owner', {}))
+  await joined(browser.page('owner', opened.browseId, 0))
+  const call = browser.create('owner', opened.browseId, 'created')
+  await creating.promise
+  await assert.rejects(joined(browser.page('owner', opened.browseId, 1)), { code: 'directory-browse-busy' })
+  await assert.rejects(joined(browser.create('owner', opened.browseId, 'second')), { code: 'directory-browse-busy' })
+  let done = false, released = false
+  void call.done.then(() => { done = true })
+  const release = browser.release('owner', opened.browseId).then(() => { released = true })
+  await tick(); assert.equal(done, false); assert.equal(released, false)
+  finishCreate.resolve()
+  await closing.promise
+  await tick(); assert.equal(done, false); assert.equal(released, false)
+  finishClose.resolve()
+  await assert.rejects(call.result, { code: 'directory-browse-cancelled' })
+  await call.done; await release
+  assert.equal((await fs.lstat(join(directory, 'created'))).isDirectory(), true)
+  await assert.rejects(joined(browser.create('owner', opened.browseId, 'after-release')), { code: 'directory-browse-expired' })
+})
+
+test('shutdown joins creates in two shared filesystem slots and cancels queued creation before it starts', async t => {
+  const finishCreate = deferred(), started = []
+  const browser = createDirectoryBrowser({ homePath: tmpdir(), access: { creationSupported: true, async open(path) {
+    return { path, async read() { return null }, async create(name) { started.push(name); await finishCreate.promise; return join(path, name) }, async close() {} }
+  } } })
+  t.after(() => { finishCreate.resolve(); return browser.close() })
+  const reservations = await Promise.all(Array.from({ length: 3 }, () => joined(browser.open('owner', {}))))
+  await Promise.all(reservations.map(value => joined(browser.page('owner', value.browseId, 0))))
+  const calls = reservations.map((value, index) => browser.create('owner', value.browseId, `child-${index}`))
+  await tick(); assert.equal(started.length, 2)
+  let closed = false
+  const close = browser.close().then(() => { closed = true })
+  await tick(); assert.equal(closed, false)
+  finishCreate.resolve()
+  await close
+  assert.equal(started.length, 2)
+  for (const call of calls) await assert.rejects(joined(call), { code: 'directory-browse-cancelled' })
+  assert.throws(() => browser.create('owner', reservations[0].browseId, 'later'), { code: 'directory-unavailable' })
+})
+
+test('idle expiry and pre-start creation cancellation prevent delayed filesystem writes', async t => {
+  let time = 0, creates = 0
+  const browser = createDirectoryBrowser({ homePath: tmpdir(), now: () => time, access: { creationSupported: true, async open(path) {
+    return { path, async read() { return null }, async create(name) { creates++; return join(path, name) }, async close() {} }
+  } } })
+  t.after(() => browser.close())
+  const idle = await joined(browser.open('owner', {}))
+  await joined(browser.page('owner', idle.browseId, 0))
+  time = 60_001
+  await assert.rejects(joined(browser.create('owner', idle.browseId, 'after-expiry')), { code: 'directory-browse-expired' })
+  const opened = await joined(browser.open('owner', {}))
+  await joined(browser.page('owner', opened.browseId, 0))
+  const abort = new AbortController()
+  const call = browser.create('owner', opened.browseId, 'cancelled', abort.signal)
+  abort.abort()
+  await assert.rejects(joined(call), { code: 'directory-browse-cancelled' })
+  await assert.rejects(joined(browser.create('owner', opened.browseId, 'later')), { code: 'directory-browse-expired' })
+  assert.equal(creates, 0)
 })

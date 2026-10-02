@@ -37,8 +37,11 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
       let accepting = true
       const pending = new Set<Promise<unknown>>()
       const resourceCalls = new Set<OwnedCall<unknown>>()
+      const treeCursors = new Map<string, { scope: string; owner: string }>()
+      const stopTreeRetirement = files.onTreeRetired(id => treeCursors.delete(id))
       const resourceCall = <T>(sessionId: string, signal: AbortSignal | undefined,
-        start: (signal: AbortSignal, session: Session) => Promise<OwnedCall<T>>, kind: 'image' | 'file' = 'image', writable = false): OwnedCall<T> => {
+        start: (signal: AbortSignal, session: Session) => Promise<OwnedCall<T>>, kind: 'image' | 'file' = 'image', writable = false,
+        access: 'native' | 'project-read' = 'native'): OwnedCall<T> => {
         if (!accepting) throw new Error('session is closing')
         const abort = new AbortController(), combined = signal ? AbortSignal.any([signal, abort.signal]) : abort.signal
         let cleanupFailed = false
@@ -47,7 +50,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           const session = await records.getSession(nonEmpty(sessionId, 'sessionId'))
           if (!session) throw new Error(`unknown session ${sessionId}`)
           if (writable && session.archivedAt !== null) throw treeError('session-archived')
-          if (session.historyMode !== 'native-local-v1') throw new Error('legacy-session-readonly')
+          if (session.historyMode !== 'native-local-v1' && (access !== 'project-read' || writable)) throw treeError('legacy-session-readonly')
           combined.throwIfAborted()
           const call = await start(combined, session)
           let cancellationRequested = false, valueFailed = false, valueError: unknown, value!: T
@@ -88,14 +91,29 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         accepting = false
         for (const call of resourceCalls) call.cancel('session-closed')
         const exits = await Promise.allSettled([...resourceCalls].map(call => call.done))
+        // A cancelled open can publish its cursor while its actual exit is being joined.
+        const treeExits = await Promise.allSettled([...treeCursors].map(([id, cursor]) => files.closeTree(cursor.scope, cursor.owner, id)))
         await Promise.allSettled([...pending])
-        const failures = exits.flatMap(exit => exit.status === 'rejected' ? [exit.reason] : [])
+        stopTreeRetirement()
+        const failures = [...exits, ...treeExits].flatMap(exit => exit.status === 'rejected' ? [exit.reason] : [])
         if (failures.length) throw new AggregateError(failures, 'session resource calls failed to exit')
       }, 'join session record operations')
 
       const sessions: SessionPort = {
-        searchProjectFiles: (id, query, signal) => resourceCall(id, signal, async (signal, session) => files.search(session.projectId, query, signal), 'file'),
-        previewProjectFile: (id, selection, signal) => resourceCall(id, signal, async (signal, session) => files.preview(session.projectId, selection, signal), 'file'),
+        openProjectFileTree: (id, path, owner, signal) => resourceCall(id, signal, async (signal, session) => {
+          const call = files.openTree(id, session.projectId, path, owner, signal)
+          return { ...call, result: call.result.then(page => {
+            if (page.nextPage !== null) treeCursors.set(page.cursorId, { scope: id, owner })
+            return page
+          }) }
+        }, 'file', false, 'project-read'),
+        readProjectFileTreePage: (id, owner, cursorId, page, signal) => resourceCall(id, signal,
+          async signal => files.readTreePage(id, owner, cursorId, page, signal), 'file', false, 'project-read'),
+        // Close retains the captured provider generation and remains valid after Session shutdown.
+        closeProjectFileTree: (id, owner, cursorId) => files.closeTree(id, owner, cursorId),
+        onProjectFileTreeRetired: listener => files.onTreeRetired(listener),
+        searchProjectFiles: (id, query, signal) => resourceCall(id, signal, async (signal, session) => files.search(session.projectId, query, signal), 'file', false, 'project-read'),
+        previewProjectFile: (id, selection, signal) => resourceCall(id, signal, async (signal, session) => files.preview(session.projectId, selection, signal), 'file', false, 'project-read'),
         prepareProjectFiles: (id, key, selections, signal) => resourceCall(id, signal, async (signal, session) => files.prepare(id, session.projectId, key, selections, signal), 'file', true),
         getFileSnapshot: (id, snapshotId, signal) => resourceCall(id, signal, async signal => {
           const call = files.read(id, [snapshotId], signal)

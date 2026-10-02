@@ -45,8 +45,10 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
     listAgents: () => agentIds,
     directoryPickerSupported: () => deps[directoryPickerServiceKey]?.supported ?? false,
     directoryBrowsingSupported: () => deps[projectServiceKey].directoryBrowsingSupported,
+    directoryCreationSupported: () => deps[projectServiceKey].directoryCreationSupported,
     openDirectoryBrowse: (...args) => deps[projectServiceKey].openDirectoryBrowse(...args),
     readDirectoryPage: (...args) => deps[projectServiceKey].readDirectoryPage(...args),
+    createDirectory: (...args) => deps[projectServiceKey].createDirectory(...args),
     closeDirectoryBrowse: (...args) => deps[projectServiceKey].closeDirectoryBrowse(...args),
     onDirectoryBrowseRetired: listener => deps[projectServiceKey].onDirectoryBrowseRetired(listener),
     async pickProject(signal) {
@@ -76,6 +78,10 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
     getRunByKey: (id, key) => deps[sessionServiceKey].getRunByKey(id, key),
     waitRun: (id, signal) => deps[runServiceKey].waitRun(id, signal),
     startRun: input => deps[runServiceKey].startRun(input),
+    openProjectFileTree: (...args) => deps[sessionServiceKey].openProjectFileTree(...args),
+    readProjectFileTreePage: (...args) => deps[sessionServiceKey].readProjectFileTreePage(...args),
+    closeProjectFileTree: (...args) => deps[sessionServiceKey].closeProjectFileTree(...args),
+    onProjectFileTreeRetired: listener => deps[sessionServiceKey].onProjectFileTreeRetired(listener),
     searchProjectFiles: (...args) => deps[sessionServiceKey].searchProjectFiles(...args),
     previewProjectFile: (...args) => deps[sessionServiceKey].previewProjectFile(...args),
     prepareProjectFiles: (...args) => deps[sessionServiceKey].prepareProjectFiles(...args),
@@ -144,6 +150,7 @@ export function createHarnessHttpComponent(root: Context, agents: readonly Reado
     }
     const commands = createCommands(agentIds, services)
     commands.directoryBrowsingSupported = () => (snapshots.get(projectServiceKey) as ProjectPort | undefined)?.directoryBrowsingSupported ?? false
+    commands.directoryCreationSupported = () => (snapshots.get(projectServiceKey) as ProjectPort | undefined)?.directoryCreationSupported ?? false
     commands.directoryPickerSupported = () => (snapshots.get(directoryPickerServiceKey) as DirectoryPickerPort | undefined)?.supported ?? false
     return commands
   }

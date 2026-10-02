@@ -2,7 +2,7 @@ import { createHarnessClient, requestJSON, connectionHeaders } from './harness-c
 import type { HarnessClient, HarnessConnection } from './harness-client.js'
 import { setupConnections } from './connections-view.js'
 import { messageFor } from './client-errors.js'
-import { parseHarnessRoute, harnessHash, harnessTargetRoute } from './harness-navigation.js'
+import { parseHarnessRoute, harnessHash, harnessTargetRoute, harnessLocationRoute } from './harness-navigation.js'
 import type { HarnessRoute } from './harness-navigation.js'
 import type { MountedPage } from './page-lifecycle.js'
 import type { ProductView } from '../../../host/applications/contracts.js'
@@ -87,12 +87,13 @@ export async function mountHarnessPage(root: HTMLElement, options: { context: Ap
           try { const session = await api!.forConnection(localConnection.id)<{ id: string; projectId: string }>(`/sessions/${encodeURIComponent(id)}`); return session.id === id && (!project || project === session.projectId) } catch { return false }
         })
         const { mountAgentPage } = await import('./agent-client.js')
-        child = mountAgentPage(content, api, { selectedId, selectedName: connection?.name, isActive: options.isActive, route: {
+        child = mountAgentPage(content, api, { selectedId, selectedName: connection?.name, selectedInstanceId: connection?.instanceId, isActive: options.isActive, route: {
           read: () => route().inner,
           subscribe: listener => options.context.route.subscribe(listener),
           write(inner, push) {
             if (disposed) return
-            writeHash(harnessHash({ hostId: connection?.instanceId, inner }), !push); remember()
+            // Route listeners may write the location before a device switch rebuilds this workspace.
+            writeHash(harnessHash(harnessLocationRoute(route(), inner, connection?.instanceId)), !push); remember()
           },
         } })
         child.setActive?.(options.isActive()); connectionUI.setActive(options.isActive())

@@ -4,7 +4,7 @@ import type { Component } from '@nya/core'
 import type { OwnedCall, RuntimeInputs } from '../contracts.js'
 import { createDirectoryBrowser } from './directory-browser.js'
 import type { DirectoryBrowserOptions } from './directory-browser.js'
-import type { DirectoryBrowseOpened, DirectoryBrowseOptions, DirectoryPage } from './directories.js'
+import type { DirectoryBrowseOpened, DirectoryBrowseOptions, DirectoryCreated, DirectoryPage } from './directories.js'
 import { localStorageServiceKey } from '../../../../storage/port.js'
 import type { LocalStoragePort, StorageMigration, StorageRow } from '../../../../storage/port.js'
 
@@ -34,8 +34,10 @@ export function isProjectUnavailableError(error: unknown): error is ProjectUnava
 
 export interface ProjectPort {
   readonly directoryBrowsingSupported: boolean
+  readonly directoryCreationSupported: boolean
   openDirectoryBrowse(owner: string, input: DirectoryBrowseOptions, signal?: AbortSignal): OwnedCall<DirectoryBrowseOpened>
   readDirectoryPage(owner: string, browseId: string, page: number, signal?: AbortSignal): OwnedCall<DirectoryPage>
+  createDirectory(owner: string, browseId: string, name: string, signal?: AbortSignal): OwnedCall<DirectoryCreated>
   closeDirectoryBrowse(owner: string, browseId: string): Promise<void>
   onDirectoryBrowseRetired(listener: (browseId: string) => void): () => void
   openProject(path: string): Promise<Project>
@@ -106,8 +108,10 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
         'SELECT * FROM harness_projects WHERE id = ?', [id]))
       const service: ProjectPort = {
         directoryBrowsingSupported: directories.supported,
+        directoryCreationSupported: directories.creationSupported,
         openDirectoryBrowse: (owner, input, signal) => directories.open(owner, input, signal),
         readDirectoryPage: (owner, browseId, page, signal) => directories.page(owner, browseId, page, signal),
+        createDirectory: (owner, browseId, name, signal) => directories.create(owner, browseId, name, signal),
         closeDirectoryBrowse: (owner, browseId) => directories.release(owner, browseId),
         onDirectoryBrowseRetired: listener => directories.onRetired(listener),
         openProject(path) {

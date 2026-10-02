@@ -1,5 +1,6 @@
 import { splitScopedId } from './harness-client.js'
 import { createFileView } from './file-view.js'
+import type { FilePreviewRequest } from './file-sidebar.js'
 import type { FileRef } from '../core/project-files/domain.js'
 import { canUseModel, modelAvailability, type ModelsCatalog } from './models-client.js'
 import type { ToolTrace, RunView, RunEventView, ImageRef } from './client-types.js'
@@ -21,7 +22,8 @@ export interface SessionPanel {
 }
 
 export function createSessionPanel(pane: Pane, projectName: string, controller: SessionController,
-  focus: () => void, close: () => void, initialScroll = 0, models?: ModelsCatalog, restore?: () => Promise<void>): SessionPanel {
+  focus: () => void, close: () => void, initialScroll = 0, models?: ModelsCatalog, restore?: () => Promise<void>,
+  openFile?: (request: FilePreviewRequest) => void): SessionPanel {
   const element = document.createElement('section')
   element.className = 'conversation session-pane'
   element.tabIndex = -1
@@ -105,7 +107,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   }
   const imagePicker = get<HTMLInputElement>('.image-picker'), imageList = get<HTMLElement>('.composer-images')
   const attachImages = get<HTMLButtonElement>('.attach-images')
-  const fileView = createFileView(compose, messageInput, controller)
+  const fileView = createFileView(compose, messageInput, controller, pane, openFile)
   let imageListKey = ''
   attachImages.addEventListener('click', () => imagePicker.click(), options)
   imagePicker.addEventListener('change', () => { controller.addImages(Array.from(imagePicker.files ?? [])); imagePicker.value = '' }, options)

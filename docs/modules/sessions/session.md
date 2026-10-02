@@ -83,7 +83,9 @@ Effect 先停止新调用，取消并等待图片及文件搜索/预览/准备/�
 
 ## 项目文件引用
 
-Session 对外提供 searchProjectFiles、previewProjectFile、prepareProjectFiles、getFileSnapshot、renewProjectFiles，先验证会话，再调用 [Project Files](project-files.md)。受信 session-runs 提供 readFileSnapshots，Run 准入等待读取和实际退出。文件搜索/读取句柄归 Project Files，Session 跟踪并在关闭时取消、等待包装调用。
+Session 对外提供 openProjectFileTree、readProjectFileTreePage、closeProjectFileTree、onProjectFileTreeRetired，以及 searchProjectFiles、previewProjectFile、prepareProjectFiles、getFileSnapshot、renewProjectFiles，先验证会话，再调用 [Project Files](project-files.md)。受信 session-runs 提供 readFileSnapshots，Run 准入等待读取和实际退出。树游标和文件搜索/读取句柄归 Project Files；Session 固定项目，跟踪并在关闭时取消、等待包装调用与自己接纳的游标。关闭树入口幂等且不重新读取会话；HTTP actor 不能由请求体或头部改写。
+
+项目目录、搜索和当前文件预览只读取所属项目，允许旧 `dialogue-v1` 及归档会话使用。此例外不开放旧会话的快照、图片或原生恢复入口；文件准备、图片导入和 Run 继续遵守原生会话及归档只读限制。旧格式资源限制返回带 code 的 `legacy-session-readonly`，HTTP 映射为 409，不退为通用 500。
 
 NativeRunInput v3 保存文件引用及顺序，v1/v2 读取时 files=[]，旧 JSON 不改写。Run 和节点投影返回 files 元数据；正文经单独的会话作用域接口读取。接受事务复核引用 ID、项目及元数据，并调用同步 retainIn，与图片及 Run 一起提交。已接受失败/取消/interrupted 仍永久保留。新表归 project-files 迁移域，文件引用不增加 run-state 迁移；当前 v7 来自会话归档。
 

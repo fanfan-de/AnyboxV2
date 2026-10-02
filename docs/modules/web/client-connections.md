@@ -4,7 +4,11 @@
 
 `src/applications/harness/client/connections.ts` 的 `createConnectionsComponent({namespace?,openEntry?,fetch?})` 创建 `client-connections`，提供 `client.connections: ConnectionsPort`。inject 客户端根的 `local-storage`，此根只打开独立 `client.sqlite`，不共用执行库。`namespace` 默认 `anybox.client`；`openEntry` 是测试/平台替身边界。
 
-连接是 Harness 内部功能。组件随客户端 Harness 打开安装、关闭卸载；通用外壳不管理本地/远程目标。工作区侧栏保留一处“执行设备”选择器与“管理连接”按钮，所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。关闭仅释放句柄，已保存连接和凭据保留。
+连接是 Harness 内部功能。组件随客户端 Harness 打开安装、关闭卸载；通用外壳不管理本地/远程目标。工作区侧栏底部在“已归档会话”下方保留一处“执行设备”选择器与“管理连接”按钮，替代原 Agent 信息区域；所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。关闭仅释放句柄，已保存连接和凭据保留。
+
+设备切换先在应用路由中固定新选择，再重建本应用界面；旧工作区同步更新项目或会话查看位置时保留路由当前的设备选择，不能用重建前的连接覆盖它。查看项目与会话不自动改变设备选择，已有会话请求继续按自身 instanceId 路由。
+
+侧栏项目与会话树仅包含所选 instanceId 的项目，并直接接在品牌栏下方。项目行右侧按钮在该项目中新建会话，空工作区“新建会话”使用该设备的侧栏选中项目；原选择属于另一设备时重新选择当前设备的项目，无项目或所选项目不可用时禁用，不沿用隐藏设备的项目。所选设备离线或未启动时，不展示其他设备项目；所属设备的不可用占位项目可以保留，已有跨设备会话面板仍保留。工作区继续保存全量项目资源，供已打开面板的标题、模型与附件归属及跨设备全局归档查询使用，侧栏筛选不改变既有 Session 的设备。
 
 组件拥有 `client-connections` v1 的连接表和凭据意图日志，以及独立 system-keyring-store 句柄。公开 list/save/check/remove 不返回 token 或 credentialRef；只有受信网关 acquire 获得本次固定的配置版本与 token。连接包含本机 ID、名称、地址、固定 instanceId、revision；编辑使用 expectedRevision。相同 instanceId 不重复登记。
 

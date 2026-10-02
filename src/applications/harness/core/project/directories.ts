@@ -31,9 +31,22 @@ export interface DirectoryPage {
   readonly nextPage: number | null
 }
 
+export interface DirectoryCreated {
+  readonly path: string
+}
+
+/** A single child name, without interpreting it as a path or trimming user data. */
+export function isDirectoryNameValid(name: unknown, windows: boolean): name is string {
+  if (typeof name !== 'string' || !name.trim() || name === '.' || name === '..' ||
+    /[\\/\u0000-\u001f\u007f-\u009f]/u.test(name)) return false
+  return !windows || !/[<>:"|?*]/u.test(name) && !/[. ]$/u.test(name) &&
+    !/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(name)
+}
+
 export type DirectoryBrowseFailureCode = DirectoryEntryFailure | 'directory-browse-unsupported' |
   'directory-browse-invalid' | 'directory-browse-busy' | 'directory-browse-expired' |
-  'directory-browse-conflict' | 'directory-browse-cancelled' | 'directory-browse-cleanup-failed'
+  'directory-browse-conflict' | 'directory-browse-cancelled' | 'directory-browse-cleanup-failed' |
+  'directory-create-unsupported' | 'directory-name-invalid' | 'directory-exists'
 
 export interface DirectoryBrowseFailure extends Error {
   readonly code: DirectoryBrowseFailureCode

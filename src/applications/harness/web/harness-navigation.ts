@@ -2,6 +2,9 @@ export interface HarnessRoute { hostId?: string; inner: string }
 export function harnessTargetRoute(route: HarnessRoute | undefined, hostId: string): HarnessRoute {
   return { hostId, inner: route?.inner ?? '#' }
 }
+export function harnessLocationRoute(route: HarnessRoute | undefined, inner: string, fallbackHostId?: string): HarnessRoute {
+  return { hostId: route?.hostId ?? fallbackHostId, inner }
+}
 export function harnessHash(route: HarnessRoute): string {
   const query = new URLSearchParams()
   if (route.hostId) query.set('host', route.hostId)

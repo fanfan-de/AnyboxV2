@@ -9,32 +9,33 @@
           <button id="agent--close-sidebar" class="icon-button sidebar-close" type="button" aria-label="关闭项目与会话"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-close"/></svg></button>
           <button id="agent--add-project" class="icon-button" type="button" aria-label="添加项目" title="添加执行设备上的项目" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-folder"/></svg></button>
         </div>
-        <div class="harness-controls"><label for="agent--harness-select">执行设备</label><select id="agent--harness-select"></select><button id="agent--manage-harnesses" type="button">管理连接</button></div>
-        <div class="session-create">
-          <button id="agent--new-session" class="new-session" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-compose"/></svg><span>新建会话</span><span class="shortcut" aria-hidden="true">＋</span></button>
-        </div>
         <p id="agent--project-picker-status" class="picker-status" role="status">正在检查目录选择器…</p>
         <div class="sidebar-navigation">
-          <section class="navigation-section projects-section" aria-labelledby="agent--projects-title">
-            <div class="section-heading"><h2 id="agent--projects-title">项目</h2><span id="agent--project-count" class="section-count"></span></div>
+          <section class="navigation-section projects-section" aria-label="项目">
             <div id="agent--project-list" class="navigation-list project-tree" aria-label="项目与会话列表" tabindex="0"></div>
           </section>
         </div>
         <footer class="sidebar-footer">
-          <button id="agent--open-archive" class="new-session" type="button" aria-haspopup="dialog" aria-controls="agent--archive-dialog">已归档会话</button>
-          <div class="sidebar-note"><span class="agent-avatar" aria-hidden="true">A</span><div><strong id="agent--current-agent">Anybox Agent</strong><span id="agent--session-id" class="session-id">选择一个项目开始</span></div><span class="status-dot" title="多设备工作区"></span></div>
+          <button id="agent--open-archive" class="sidebar-archive-button" type="button" aria-haspopup="dialog" aria-controls="agent--archive-dialog">已归档会话</button>
+          <div class="harness-controls"><label for="agent--harness-select">执行设备</label><select id="agent--harness-select"></select><button id="agent--manage-harnesses" type="button">管理连接</button></div>
         </footer>
       </aside>
+      <div id="agent--left-sidebar-separator" class="sidebar-separator" role="separator" aria-label="调整项目侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
       <button id="agent--sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭项目与会话" tabindex="-1" hidden></button>
       <section id="agent--session-workspace" class="session-workspace" aria-label="会话工作区">
         <header class="topbar">
           <div class="workspace-heading"><span class="workspace-overline">工作区</span><span class="breadcrumb-divider">/</span><h1 id="agent--workspace-title">Anybox</h1></div>
-          <div class="agent-toolbar"><button id="agent--toggle-sidebar" class="icon-button" type="button" aria-controls="agent--workspace-sidebar" aria-expanded="true" title="收起侧栏"><svg class="icon"><use href="#agent--icon-sidebar"/></svg><span id="agent--sidebar-toggle-label" class="sr-only">收起侧栏</span></button><button id="agent--show-workspace" hidden type="button">项目与会话</button><button id="agent--open-help" class="icon-button" type="button" aria-label="工作区使用说明">?</button><button id="agent--open-settings" class="icon-button" type="button" aria-label="Harness 设置" title="Harness 设置">⚙</button></div>
+          <div class="agent-toolbar"><button id="agent--toggle-sidebar" class="icon-button" type="button" aria-controls="agent--workspace-sidebar" aria-expanded="true" title="收起侧栏"><svg class="icon"><use href="#agent--icon-sidebar"/></svg><span id="agent--sidebar-toggle-label" class="sr-only">收起侧栏</span></button><button id="agent--toggle-files" class="icon-button" type="button" aria-controls="agent--file-sidebar" aria-expanded="true" title="收起文件侧栏" aria-label="收起文件侧栏"><svg class="icon"><use href="#agent--icon-panels"/></svg></button><button id="agent--show-workspace" hidden type="button">项目与会话</button><button id="agent--open-help" class="icon-button" type="button" aria-label="工作区使用说明">?</button><button id="agent--open-settings" class="icon-button" type="button" aria-label="Harness 设置" title="Harness 设置">⚙</button></div>
         </header>
         <div id="agent--workspace-notice" class="notice workspace-notice" role="alert" hidden></div>
         <div id="agent--pane-tabs" class="pane-tabs" role="group" aria-label="切换会话面板" hidden></div>
         <div id="agent--pane-host" class="pane-host"></div>
       </section>
+      <div id="agent--right-sidebar-separator" class="sidebar-separator" role="separator" aria-label="调整文件侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
+      <aside id="agent--file-sidebar" class="file-sidebar" aria-label="项目文件" tabindex="-1">
+        <header class="file-sidebar-heading"><strong>项目文件</strong><button id="agent--close-files" class="icon-button" type="button" title="关闭文件侧栏" aria-label="关闭文件侧栏"><svg class="icon" aria-hidden="true"><use href="#agent--icon-close"/></svg></button></header>
+        <div id="agent--file-sidebar-content" class="file-sidebar-content"></div>
+      </aside>
     </main>
   </div>
   <dialog id="agent--archive-dialog" class="settings-dialog archive-dialog" aria-labelledby="agent--archive-title">

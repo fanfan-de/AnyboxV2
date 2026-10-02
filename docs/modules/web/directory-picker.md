@@ -4,7 +4,7 @@
 
 ## 职责与入口
 
-Directory Picker 提供应用内目录选择器的“使用系统目录窗口”快捷入口。默认浏览由 Projects 负责，应用内视图及协议见[项目目录选择](../../project-directory-picker.md)，不新增 Nya 组件。它独占对话框进程，返回绝对路径；路径登记、项目身份及可用性校验归 [Projects](../sessions/projects.md)，不是选择器职责。
+Directory Picker 为已确认本机身份且平台支持的“添加项目”流程提供系统目录窗口。远程设备、本机身份未确认或原生能力检查未确认可用时使用应用内目录选择器，其浏览由 Projects 负责；应用内视图及协议见[项目目录选择](../../project-directory-picker.md)，不新增 Nya 组件。它独占对话框进程，返回绝对路径；浏览器启动器在用户确认后调用固定目标登记路径，项目身份及可用性校验归 [Projects](../sessions/projects.md)，不是选择器职责。
 
 | 项目 | 定义 |
 | --- | --- |
@@ -36,7 +36,9 @@ Directory Picker 提供应用内目录选择器的“使用系统目录窗口”
 
 ## 与客户端网关、Projects 的协作
 
-仅安装在客户端根。组合启动器通过子进程就绪消息确认 localInstanceId；网关 `/api/client/v1/local` 返回身份和支持状态，`POST /api/client/v1/connections/:id/pick {}` 必须匹配此身份。目录窗口只返回路径，浏览器回到应用内对话框，确认后才通过固定目标连接的 `POST /api/v1/projects {path}` 登记；网关同时核对预期连接版本。所有设备和无桌面环境默认使用应用内浏览，远程实例不显示原生快捷入口，不按 hostname 推断本机。只有缺少 projects.browse 的旧 Harness 使用应用内手动绝对路径入口，不再使用 window.prompt。
+仅安装在客户端根。组合启动器通过子进程就绪消息确认 localInstanceId；网关 `/api/client/v1/local` 返回身份和支持状态，`POST /api/client/v1/connections/:id/pick {}` 必须匹配此身份。点击“添加项目”时，浏览器固定连接身份和版本；确认本机且平台支持时直接调用目录窗口。窗口只返回路径，用户确认后浏览器立即通过该固定目标的 `POST /api/v1/projects {path}` 登记，不再打开应用内对话框二次确认；网关同时核对预期连接版本。用户取消则结束流程。窗口启动或登记失败显示工作区通知，不自动回退或换设备登记。
+
+远程实例、本机身份未确认或原生能力检查未确认可用时使用应用内浏览，不按 hostname 推断本机。缺少 projects.browse 的旧 Harness 使用应用内手动绝对路径入口，不再使用 window.prompt。应用内目录对话框不再提供原生窗口快捷按钮。
 
 ## 取消、实际退出与失败
 
@@ -57,4 +59,4 @@ Directory Picker 提供应用内目录选择器的“使用系统目录窗口”
 
 [web-server.test.mjs](../../../tests/web-server.test.mjs) 覆盖项目登记、并发对话框拒绝、失败映射、不支持平台仍可使用 Web、关闭等待、HTTP 断开取消且不创建项目。这些生命周期测试通过替换 `runDialog` 控制退出时机，不等同于每个平台的真实 GUI 验收。完整验收运行 `npm run check`。
 
-原生窗口快捷入口属于 Harness 的本机连接功能，组件仅在客户端 Harness 打开时安装，关闭等待窗口操作退出。通用应用外壳不管理执行目标或目录窗口。
+浏览器启动器在界面停用或关闭时取消并等待本轮原生选择或登记操作退出，不发布迟到结果。原生窗口属于 Harness 的本机连接功能，组件仅在客户端 Harness 打开时安装，关闭等待窗口操作退出。通用应用外壳不管理执行目标或目录窗口。

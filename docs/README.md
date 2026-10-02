@@ -43,6 +43,7 @@ AnyBox 是 NyaCore 应用的宿主应用，Harness 是其中一个被托管的�
 | [Run 状态转换](./run-state-machine-design.md) | Run 状态与执行/持久化边界 |
 | [业务 SQLite 设计](./local-sqlite-storage.md) | 存储契约、领域迁移及已有表归属 |
 | [Web 客户端设计](./web-client-design.md) | 本机协议、分屏、变更通知与交互验收 |
+| [Harness 三栏工作区](./harness-three-column-workspace.md) | 项目导航、Thread View、目录树与文件预览、边栏恢复和清理 |
 | [函数式开发方法](./functional-agent-harness-development.md) | 纯函数、决策、操作意图与资源所有者的拆分 |
 | [Models 包 README](../packages/models/README.md) | 独立使用通用包的安装示例与公共契约 |
 

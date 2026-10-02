@@ -1188,6 +1188,12 @@ test('Web project references prepare atomically, preserve history and expose saf
     const session = await f.harness.createSession(f.project.id, 'assistant', 'default'), base = `/sessions/${session.id}/project-files`
     const search = await request(f.web, 'GET', `${base}/search?q=reference`)
     assert.equal(search.response.status, 200); assert.ok(search.data.paths.includes('.reference.txt'))
+    const tree = await request(f.web, 'POST', `${base}/tree/open`, { path: '' })
+    assert.equal(tree.response.status, 200); assert.ok(tree.data.entries.some(entry => entry.path === '.reference.txt' && entry.kind === 'file'))
+    assert.ok(!JSON.stringify(tree.data).includes(directory))
+    assert.equal((await request(f.web, 'POST', `${base}/tree/close`, { cursorId: tree.data.cursorId })).response.status, 200)
+    assert.equal((await request(f.web, 'POST', `${base}/tree/open`, { path: '../escape' })).response.status, 400)
+    assert.equal((await request(f.web, 'POST', `${base}/tree/open`, { path: '', owner: 'client-supplied' })).response.status, 400)
     const preview = await request(f.web, 'POST', `${base}/preview`, { path: '.reference.txt', range: { start: 2, end: 2 } })
     assert.equal(preview.data.text, 'second\n')
     const prepared = await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'key', selections: [{ kind: 'project-file', path: '.reference.txt' }] })
@@ -1213,8 +1219,42 @@ test('Web project references prepare atomically, preserve history and expose saf
     assert.equal((await request(f.web, 'GET', `${base}/snapshots/${ref.snapshotId}`)).data.text, 'first\nsecond\n')
     assert.equal((await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'after-archive', selections: [{ kind: 'snapshot', snapshotId: ref.snapshotId }] })).data.error.code, 'session-archived')
     assert.equal((await request(f.web, 'POST', `${base}/renew`, { snapshotIds: [ref.snapshotId] })).response.status, 200)
-    for (const asset of ['/applications/harness/web/draft-client.js', '/applications/harness/web/file-client.js', '/applications/harness/web/file-view.js', '/applications/harness/core/project-files/domain.js']) assert.equal((await fetch(`${f.assets.url}${asset}`)).status, 200)
+    for (const asset of ['/applications/harness/web/draft-client.js', '/applications/harness/web/file-client.js', '/applications/harness/web/file-view.js',
+      '/applications/harness/web/sidebar-layout.js', '/applications/harness/web/sidebar-client.js', '/applications/harness/web/file-sidebar.js',
+      '/applications/harness/web/file-tree-client.js', '/applications/harness/core/project-files/domain.js']) assert.equal((await fetch(`${f.assets.url}${asset}`)).status, 200)
+    for (const internal of ['tree-browser.js', 'tree-access.js']) assert.equal((await fetch(`${f.assets.url}/applications/harness/core/project-files/${internal}`)).status, 404)
   } finally { for (const call of f.llm.calls) { call.result.resolve('cleanup'); call.done.resolve() } await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('Web legacy Sessions browse and preview project files while preparation keeps the typed read-only boundary', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-legacy-files-')), f = await fixture(directory)
+  const { writeFile, mkdir } = await import('node:fs/promises')
+  try {
+    const legacyId = 'legacy-file-browser'
+    await f.root.get('local-storage').transaction(tx => tx.execute(`INSERT INTO harness_sessions
+      (id,project_id,agent_id,created_at,history_mode) VALUES (?,?,?,?,?)`, [legacyId, f.project.id, 'assistant', new Date().toISOString(), 'dialogue-v1']))
+    await mkdir(join(directory, 'readable'))
+    await Promise.all(Array.from({ length: 110 }, (_, index) => writeFile(join(directory, 'readable', `file-${index}.txt`), 'first\nsecond\n')))
+    const base = `/sessions/${legacyId}/project-files`
+    const first = await request(f.web, 'POST', `${base}/tree/open`, { path: 'readable' })
+    assert.equal(first.response.status, 200); assert.ok(first.data.entries.length <= 100); assert.notEqual(first.data.nextPage, null)
+    let page = first.data; const paths = page.entries.map(entry => entry.path)
+    while (page.nextPage !== null) {
+      const next = await request(f.web, 'POST', `${base}/tree/page`, { cursorId: first.data.cursorId, page: page.nextPage })
+      assert.equal(next.response.status, 200); assert.ok(next.data.entries.length <= 100)
+      page = next.data; paths.push(...page.entries.map(entry => entry.path))
+    }
+    assert.equal(paths.length, 110); assert.equal(new Set(paths).size, 110)
+    const preview = await request(f.web, 'POST', `${base}/preview`, { path: 'readable/file-109.txt', range: { start: 2, end: 2 } })
+    assert.equal(preview.response.status, 200); assert.equal(preview.data.text, 'second\n')
+    const refused = await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'legacy', selections: [{ kind: 'project-file', path: 'readable/file-109.txt' }] })
+    assert.equal(refused.response.status, 409); assert.deepEqual(refused.data, { error: { code: 'legacy-session-readonly' } })
+    await f.harness.archiveSession(legacyId)
+    assert.equal((await request(f.web, 'POST', `${base}/tree/open`, { path: 'readable' })).response.status, 200)
+    assert.equal((await request(f.web, 'POST', `${base}/preview`, { path: 'readable/file-109.txt' })).response.status, 200)
+    assert.equal((await request(f.web, 'GET', `${base}/search?q=file-109`)).data.paths[0], 'readable/file-109.txt')
+    assert.equal((await f.harness.getSession(legacyId)).historyMode, 'dialogue-v1')
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
 test('Web archive routes enforce read-only state, active conflict, static route precedence and restoration', async () => {
