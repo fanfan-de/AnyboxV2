@@ -6,7 +6,7 @@
 
 ## 实现与装配
 
-- 源码：[绑定工厂与初始化编码](../../../src/harness/protocol-agents/registry.ts)、[Anthropic Loop](../../../src/harness/protocol-agents/anthropic.ts)、[共享交换管道](../../../src/harness/protocol-agents/shared.ts)。
+- 源码：[绑定工厂与初始化编码](../../../src/applications/harness/core/protocol-agents/registry.ts)、[Anthropic Loop](../../../src/applications/harness/core/protocol-agents/anthropic.ts)、[共享交换管道](../../../src/applications/harness/core/protocol-agents/shared.ts)。
 - 工厂实例：`createProtocolAgentBindingComponent('anthropic-messages')`。
 - 组件名：`harness-protocol-agent-anthropic-messages`；配置类型：`void`；不提供额外服务。
 - 注入 `harness.protocol-agents` 和 `models.protocols`；初始化获取对应驱动代租约并向注册表注册。runAnthropic 是函数，不是独立组件。

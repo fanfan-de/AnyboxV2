@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createProjectSessionIndex } from '../dist/client/workspace-client.js'
+import { createProjectSessionIndex } from '../dist/applications/harness/web/workspace-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 function fixture() {

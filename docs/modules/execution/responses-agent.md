@@ -6,7 +6,7 @@
 
 ## 实现与装配
 
-- 源码：[绑定工厂与首次请求编码](../../../src/harness/protocol-agents/registry.ts)、[Responses Loop](../../../src/harness/protocol-agents/responses.ts)、[共享交换管道](../../../src/harness/protocol-agents/shared.ts)。
+- 源码：[绑定工厂与首次请求编码](../../../src/applications/harness/core/protocol-agents/registry.ts)、[Responses Loop](../../../src/applications/harness/core/protocol-agents/responses.ts)、[共享交换管道](../../../src/applications/harness/core/protocol-agents/shared.ts)。
 - 工厂实例：`createProtocolAgentBindingComponent('responses')`。
 - 组件名：`harness-protocol-agent-responses`；配置类型：`void`；没有额外组件选项和独立公开服务。
 - 注入 `harness.protocol-agents` 与 `models.protocols`。apply 从后者获取 `responses` 驱动代租约，再调用前者的 `register('responses', lease)`。

@@ -1,5 +1,6 @@
 /** Build an installable application, including the exact local Nya build and offline Models catalog. */
 import { spawn } from 'node:child_process'
+import { verifyDefaultWebAssets } from './verify-web-assets.mjs'
 import { mkdir, cp, readFile, writeFile, readdir } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { resolve, join } from 'node:path'
@@ -29,8 +30,9 @@ await cp(join(root, 'web'), join(output, 'web'), { recursive: true })
 await cp(join(root, 'deploy'), join(output, 'deploy'), { recursive: true })
 await cp(join(root, 'docs/harness-deployment.md'), join(output, 'README.md'))
 await writeFile(join(output, 'package.json'), JSON.stringify({ name: 'anybox-app', version: manifest.version, private: true, type: 'module', engines: manifest.engines,
-  scripts: { harness: 'node dist/host/harness-main.js', 'harness:init': 'node dist/host/harness-main.js init', client: 'node dist/host/client-main.js', web: 'node dist/host/serve.js' }, dependencies }, null, 2) + '\n')
+  scripts: { harness: 'node dist/entrypoints/harness-main.js', 'harness:init': 'node dist/entrypoints/harness-main.js init', client: 'node dist/entrypoints/client-main.js', web: 'node dist/entrypoints/serve.js' }, dependencies }, null, 2) + '\n')
 await run('npm', ['install', '--package-lock-only', '--ignore-scripts', '--no-audit', '--no-fund'], output)
+await verifyDefaultWebAssets(root, output)
 const lock = await readFile(join(output, 'package-lock.json'))
 await writeFile(join(output, 'release.json'), JSON.stringify({ version: manifest.version, artifacts, lockSha256: createHash('sha256').update(lock).digest('hex'), nativeDependencies: 'Install with npm ci --omit=dev on the target macOS/Linux platform.' }, null, 2) + '\n')
 process.stdout.write(`Application release: ${output}\nInstall on target: npm ci --omit=dev\n`)

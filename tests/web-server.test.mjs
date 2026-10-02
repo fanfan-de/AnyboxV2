@@ -1,4 +1,4 @@
-import { startClientGateway } from '../dist/host/client/gateway.js'
+import { startClientGateway } from './helpers/client-gateway.mjs'
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
@@ -7,19 +7,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createHarness } from '../dist/harness/index.js'
+import { createTestHarnessHost } from './helpers/harness-host.mjs'
 import { modelsError } from '@anybox/models'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
-import { createHarnessApiComponent, harnessApiServiceKey } from '../dist/host/component.js'
-import { startHarnessApiServer } from '../dist/host/server.js'
-import { createDirectoryPickerComponent } from '../dist/host/directory-picker.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
+import { hostHttpServiceKey } from '../dist/host/component.js'
+import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
+import { startHarnessApiServer } from './helpers/harness-api-server.mjs'
+import { createDirectoryPickerComponent } from '../dist/applications/harness/client/directory-picker.js'
 import { controlledModels, deferred } from './helpers/controlled-models.mjs'
-import { promptServiceKey } from '../dist/harness/prompt/component.js'
+import { promptServiceKey } from '../dist/applications/harness/core/prompt/component.js'
 import { installManagedModels } from './helpers/managed-models.mjs'
-import { installWebModels } from '../dist/host/models-startup.js'
-import { parseWebStartupConfig } from '../dist/host/startup-config.js'
-import { runChangedEvent } from '../dist/harness/run/notifications.js'
+import { installWebModels } from '../dist/applications/harness/models-startup.js'
+import { parseWebStartupConfig } from '../dist/applications/harness/startup-config.js'
+import { runChangedEvent } from '../dist/applications/harness/core/run/notifications.js'
 import sharp from 'sharp'
 
 async function fixture(directory, pickerOptions = {}, startup) {
@@ -41,7 +42,7 @@ async function fixture(directory, pickerOptions = {}, startup) {
     }
     await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
     await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
-    const harness = await createHarness(root, {
+    const harness = await createTestHarnessHost(root, {
       agents: [{ id: 'assistant', modelId: 'default', instructions: 'Private instructions.' }],
     })
     const project = await harness.openProject(directory)
@@ -49,9 +50,9 @@ async function fixture(directory, pickerOptions = {}, startup) {
       platform: 'darwin', runDialog: async () => undefined, ...pickerOptions,
     }))
     await pickerFiber
-    const webFiber = root.installComponent(createHarnessApiComponent(harness.listAgents()))
+    const webFiber = root.installComponent(createFixtureApplicationApiComponent(root, harness.listAgents()))
     await webFiber
-    const web = root.get(harnessApiServiceKey)
+    const web = root.get(hostHttpServiceKey)
     assert.ok(web)
     assets = await startClientGateway({ list: async () => [] })
     return { root, keyFiber, apiFiber, pickerFiber, webFiber, harness, project, llm, web, assets, secrets, reinstall, close: async () => { await assets.close(); await harness.close() } }
@@ -169,23 +170,17 @@ test('SSE validates sessions, limits subscriptions, rejects foreign origins and 
   } finally { gate.resolve(); await web.close() }
 })
 
-test('Web dependency restart closes streams and installs exactly one new Nya listener', async () => {
+test('optional dependency restart retains one stable HTTP listener and SSE observer', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-reconnect-')), f = await fixture(directory)
   let stream
   try {
     const session = await f.harness.createSession(f.project.id, 'assistant')
     stream = await changes(f.web, [session.id]); await stream.next()
-    const disconnected = stream.next().then(() => true, () => true)
     await f.apiFiber.dispose()
-    assert.equal(await disconnected, true)
-    await stream.close(); stream = undefined
+    assert.equal(f.root.get(hostHttpServiceKey).url, f.web.url)
     await f.reinstall()
-    await serviceReady(f.root, harnessApiServiceKey)
-    const current = f.root.get(harnessApiServiceKey)
-    assert.equal(current.url, f.web.url)
-    assert.equal(f.webFiber.inspect().effects.filter(label => label === `ctx.on("${runChangedEvent}")`).length, 1)
-    stream = await changes(current, [session.id])
-    assert.equal((await stream.next()).event, 'ready')
+    assert.equal(f.root.get(hostHttpServiceKey).url, f.web.url)
+    assert.ok(f.root.get('harness.http'), 'the application adapter owns notification subscriptions')
     await f.root.parallel(runChangedEvent, { sessionId: session.id, runId: 'probe', revision: 9 })
     assert.equal((await stream.next()).data.runId, 'probe')
     const stopped = stream.next().then(() => true, () => true)
@@ -461,13 +456,17 @@ test('Web client contract serves assets and completes one idempotent Harness Run
     const html = await fetch(f.assets.url)
     assert.equal(html.status, 200)
     assert.match(await html.text(), /Anybox/)
-    const client = await fetch(`${f.assets.url}/client.js`)
+    const client = await fetch(`${f.assets.url}/host/web/client.js`)
     assert.equal(client.status, 200)
     const clientSource = await client.text()
-    assert.match(clientSource, /\/api\/client\/v1\/connections/)
+    assert.match(clientSource, /\/api\/client\/v1\/products/)
+    assert.doesNotMatch(clientSource, /\/api\/client\/v1\/connections/)
+    const harnessSource = await (await fetch(`${f.assets.url}/applications/harness/web/harness-page-client.js`)).text()
+    assert.match(harnessSource, /context\.apiBase.*\/connections/)
+    assert.equal((await fetch(`${f.assets.url}/products-manager.js`)).status, 404)
     assert.doesNotMatch(clientSource, /@nya\/core|deepseek-chat-completions/)
     for (const asset of ['workspace-client', 'workspace-layout', 'session-client', 'session-view', 'tool-trace', 'prompt-client', 'protocols/modules', 'protocols/view']) {
-      const response = await fetch(`${f.assets.url}/${asset}.js`)
+      const response = await fetch(`${f.assets.url}/applications/harness/web/${asset}.js`)
       assert.equal(response.status, 200)
       assert.match(response.headers.get('content-type'), /javascript/)
       assert.doesNotMatch(await response.text(), /from ['"]@nya\/core/)
@@ -687,16 +686,16 @@ test('Web host shutdown cancels and joins an accepted Run before releasing Harne
   }
 })
 
-test('Nya stops and restarts the Web frontend with its Run dependency on the same port', async () => {
+test('the application HTTP listener stays available while an optional dependency restarts', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-'))
   const f = await fixture(directory)
   try {
     const originalUrl = f.web.url
     await f.apiFiber.dispose()
-    assert.equal(f.root.get(harnessApiServiceKey), undefined)
+    assert.equal(f.root.get(hostHttpServiceKey)?.url, originalUrl)
     await f.reinstall()
-    await serviceReady(f.root, harnessApiServiceKey)
-    const current = f.root.get(harnessApiServiceKey)
+    await serviceReady(f.root, hostHttpServiceKey)
+    const current = f.root.get(hostHttpServiceKey)
     assert.equal(current?.url, originalUrl)
     const agents = await request(current, 'GET', '/agents')
     assert.deepEqual(agents.data, [{ id: 'assistant' }])
@@ -712,11 +711,11 @@ test('the Web frontend can be replaced without closing Harness', async () => {
   try {
     const port = Number(new URL(f.web.url).port)
     await f.webFiber.dispose()
-    assert.equal(f.root.get(harnessApiServiceKey), undefined)
+    assert.equal(f.root.get(hostHttpServiceKey), undefined)
     const session = await f.harness.createSession(f.project.id, 'assistant')
     assert.equal(session.agentId, 'assistant')
-    await f.root.installComponent(createHarnessApiComponent(f.harness.listAgents(), port))
-    const replacement = f.root.get(harnessApiServiceKey)
+    await f.root.installComponent(createFixtureApplicationApiComponent(f.root, f.harness.listAgents(), port))
+    const replacement = f.root.get(hostHttpServiceKey)
     assert.equal(replacement?.url, f.web.url)
     const fetched = await request(replacement, 'GET', `/sessions/${session.id}`)
     assert.equal(fetched.response.status, 200)
@@ -740,8 +739,8 @@ test('active native views survive Web replacement and committed views survive ap
     const port = Number(new URL(f.web.url).port)
     await f.webFiber.dispose()
     assert.equal((await f.harness.getRun(run.id)).status, 'running')
-    await f.root.installComponent(createHarnessApiComponent(f.harness.listAgents(), port))
-    const replacement = f.root.get(harnessApiServiceKey)
+    await f.root.installComponent(createFixtureApplicationApiComponent(f.root, f.harness.listAgents(), port))
+    const replacement = f.root.get(hostHttpServiceKey)
     assert.deepEqual((await request(replacement, 'GET', `/runs/${run.id}/view`)).data, before.data)
     f.llm.calls[0].result.resolve('Persisted native answer'); f.llm.calls[0].done.resolve()
     await f.harness.waitRun(run.id)
@@ -992,7 +991,7 @@ test('disconnecting wait and closing Web release waiters without cancelling the 
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-wait-close-'))
   const f = await fixture(directory)
   try {
-    const { runServiceKey } = await import('../dist/harness/run/component.js')
+    const { runServiceKey } = await import('../dist/applications/harness/core/run/component.js')
     const port = f.root.get(runServiceKey)
     const original = port.waitRun.bind(port)
     const registrations = []
@@ -1141,7 +1140,7 @@ test('Web imports immutable images, serves scoped content and validates small Ru
     assert.equal(blockedUpload.status, 409)
     assert.equal((await blockedUpload.json()).error.code, 'session-archived')
     assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/images/renew`, { assetIds: [image.assetId] })).data.valid[0].assetId, image.assetId)
-    for (const path of ['/image-client.js', '/harness/image/limits.js', '/harness/image/port.js']) assert.equal((await fetch(`${f.assets.url}${path}`)).status, 200)
+    for (const path of ['/applications/harness/web/image-client.js', '/applications/harness/core/image/limits.js', '/applications/harness/core/image/port.js']) assert.equal((await fetch(`${f.assets.url}${path}`)).status, 200)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -1214,7 +1213,7 @@ test('Web project references prepare atomically, preserve history and expose saf
     assert.equal((await request(f.web, 'GET', `${base}/snapshots/${ref.snapshotId}`)).data.text, 'first\nsecond\n')
     assert.equal((await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'after-archive', selections: [{ kind: 'snapshot', snapshotId: ref.snapshotId }] })).data.error.code, 'session-archived')
     assert.equal((await request(f.web, 'POST', `${base}/renew`, { snapshotIds: [ref.snapshotId] })).response.status, 200)
-    for (const asset of ['/draft-client.js', '/file-client.js', '/file-view.js', '/harness/project-files/domain.js']) assert.equal((await fetch(`${f.assets.url}${asset}`)).status, 200)
+    for (const asset of ['/applications/harness/web/draft-client.js', '/applications/harness/web/file-client.js', '/applications/harness/web/file-view.js', '/applications/harness/core/project-files/domain.js']) assert.equal((await fetch(`${f.assets.url}${asset}`)).status, 200)
   } finally { for (const call of f.llm.calls) { call.result.resolve('cleanup'); call.done.resolve() } await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -1244,7 +1243,7 @@ test('Web archive routes enforce read-only state, active conflict, static route 
     assert.equal(restored.response.status, 200); assert.equal(restored.data.archivedAt, null)
     assert.deepEqual((await request(f.web, 'GET', '/sessions/archived')).data, [])
     assert.equal((await request(f.web, 'GET', `/projects/${f.project.id}/sessions`)).data[0].id, session.id)
-    assert.equal((await fetch(`${f.assets.url}/archive-client.js`)).status, 200)
+    assert.equal((await fetch(`${f.assets.url}/applications/harness/web/archive-client.js`)).status, 200)
   } finally {
     for (const call of f.llm.calls) { call.result.resolve('cleanup'); call.done.resolve() }
     await f.close(); rmSync(directory, { recursive: true, force: true })

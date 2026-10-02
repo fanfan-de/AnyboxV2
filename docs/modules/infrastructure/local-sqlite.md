@@ -8,7 +8,7 @@ Local SQLite 为业务领域提供独占的文件数据库，集中管理连接�
 
 | 项目 | 定义 |
 | --- | --- |
-| 实现 / 端口 | [sqlite.ts](../../../src/storage/sqlite.ts) / [port.ts](../../../src/harness/storage/port.ts) |
+| 实现 / 端口 | [sqlite.ts](../../../src/storage/sqlite.ts) / [port.ts](../../../src/storage/port.ts) |
 | 工厂 | `createLocalSqliteComponent(file: string)` |
 | Nya 名称 / 服务 | `local-sqlite` / `local-storage: LocalStoragePort` |
 | `inject` | 无 |

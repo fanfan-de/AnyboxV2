@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,10 +8,10 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createAnthropicMessagesProtocol, createChatCompletionsProtocol, createGeminiInteractionsProtocol } from '@anybox/models'
-import { createDeepSeekProtocol, convertLegacyDeepSeekParameters } from '../dist/host/deepseek-protocol.js'
+import { createDeepSeekProtocol, convertLegacyDeepSeekParameters } from '../dist/applications/harness/deepseek-protocol.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHarness } from '../dist/harness/index.js'
-import { projectProtocolRecords } from '../dist/harness/protocol-agents/projection.js'
+import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { projectProtocolRecords } from '../dist/applications/harness/core/protocol-agents/projection.js'
 
 const factories = { responses: createResponsesProtocol, 'anthropic-messages': createAnthropicMessagesProtocol,
   'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol,
@@ -71,7 +71,7 @@ async function host(directory, protocolId, state, { search = false, images = fal
   }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'sessions.sqlite')) + ".images" }))
-  const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Root instructions', modelId: 'default' }] })
+  const harness = await createTestHarnessHost(root, { agents: [{ id: 'assistant', instructions: 'Root instructions', modelId: 'default' }] })
   if (legacy) {
     const registry = root.get('harness.protocol-agents'), prepare = registry.prepare.bind(registry)
     registry.prepare = async input => {

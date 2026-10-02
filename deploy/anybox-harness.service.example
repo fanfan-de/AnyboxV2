@@ -6,7 +6,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/anybox-app
-ExecStart=/usr/bin/node %h/anybox-app/dist/host/harness-main.js
+ExecStart=/usr/bin/node %h/anybox-app/dist/entrypoints/harness-main.js
 Environment=ANYBOX_HARNESS_BIND=127.0.0.1
 Environment=ANYBOX_HARNESS_PORT=3001
 Environment=ANYBOX_HARNESS_DATABASE=%h/.local/share/anybox/harness.sqlite

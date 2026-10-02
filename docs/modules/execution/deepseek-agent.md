@@ -2,11 +2,11 @@
 
 [返回执行模块](README.md) · [返回组件文档](../README.md)
 
-该组件把宿主的 DeepSeek 非推理驱动代绑定到共享 `runChat`。它是独立的协议绑定实例，拥有自己的协议 ID 和取消代；[DeepSeek 驱动适配器](../models/deepseek.md) 负责线上的参数差异，Loop 复用标准 Chat 的原生 choices/tool_calls 流程。
+该组件把 Harness 的 DeepSeek 非推理驱动代绑定到共享 `runChat`。它是独立的协议绑定实例，拥有自己的协议 ID 和取消代；[DeepSeek 驱动适配器](../models/deepseek.md) 负责线上的参数差异，Loop 复用标准 Chat 的原生 choices/tool_calls 流程。
 
 ## 实现与装配
 
-- 源码：[绑定工厂及请求编码](../../../src/harness/protocol-agents/registry.ts)、[共享 Chat Loop](../../../src/harness/protocol-agents/chat.ts)、[宿主 DeepSeek 协议适配器](../../../src/host/deepseek-protocol.ts)。
+- 源码：[绑定工厂及请求编码](../../../src/applications/harness/core/protocol-agents/registry.ts)、[共享 Chat Loop](../../../src/applications/harness/core/protocol-agents/chat.ts)、[Harness DeepSeek 协议适配器](../../../src/applications/harness/deepseek-protocol.ts)。
 - 工厂实例：`createProtocolAgentBindingComponent('deepseek-chat-completions')`。
 - 组件名：`harness-protocol-agent-deepseek-chat-completions`；配置类型：`void`；不单独提供服务或选项。
 - 注入 `harness.protocol-agents` 与 `models.protocols`；apply 获取 DeepSeek 对应驱动代租约，再注册同 ID 的配对。

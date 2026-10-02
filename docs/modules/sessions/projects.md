@@ -6,9 +6,10 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 
 ## 实现与装配
 
-- 源码：[Projects 组件](../../../src/harness/project/component.ts)、[RuntimeInputs](../../../src/harness/contracts.ts)。
+- 源码：[Projects 组件](../../../src/applications/harness/core/project/component.ts)、[RuntimeInputs](../../../src/applications/harness/core/contracts.ts)。
 - 工厂：`createProjectComponent(inputs, options?)`；组件名：`harness-projects`；配置类型：`void`。
 - `options.directoryHome` 由宿主通过 `HarnessOptions.projectDirectoryHome` 传入，生产默认是执行端系统用户主目录；未配置只禁用浏览，不影响旧接口。
+- `options.initialProjects` 接收受信宿主预登记路径；每次依赖就绪后的激活先幂等登记，再提供服务，因此首次启用 Agent 或从 PENDING 恢复均会处理宿主配置。路径无效会使该次组件启动失败，先前成功登记的项目仍保留，显式重试继续幂等登记。
 - `inputs.now()` 和 `inputs.newId()` 由组合根注入，默认时间与 ID 生成不写死在领域动作里。
 - 注入 [本地存储](../infrastructure/local-sqlite.md) 的 `local-storage`；提供 `harness.projects: ProjectPort`。
 - `apply` 等待 `migrate('projects', migrations)` 后注册服务；当前迁移版本为 1。

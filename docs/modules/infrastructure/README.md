@@ -12,4 +12,4 @@
 
 Models 配置库与目录缓存库由 [Models 模块](../models/README.md) 中的组件分别独占，不借用 `local-storage` 连接。三套文件路径必须分离。系统凭据由 Models Vault 保管，不能以业务 SQLite 作为密钥后备。
 
-全部组件安装在应用唯一 Nya 根 Context 上。资源关闭顺序由真实依赖和 Effect 决定；`harness.close()` 是当前应用的关闭入口。具体业务存储逻辑、迁移兼容与领域恢复见各消费者文档。
+全部组件安装在应用唯一 Nya 根 Context 上。资源关闭顺序由真实依赖和 Effect 决定；应用宿主 `close()` 是整根关闭入口，产品停用保留常驻业务库。具体业务存储逻辑、迁移兼容与领域恢复见各消费者文档。

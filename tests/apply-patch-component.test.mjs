@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { projectServiceKey } from '../dist/harness/project/component.js'
-import { applyPatchServiceKey, createApplyPatchComponent, isApplyPatchFailure } from '../dist/harness/tool/apply-patch-component.js'
+import { projectServiceKey } from '../dist/applications/harness/core/project/component.js'
+import { applyPatchServiceKey, createApplyPatchComponent, isApplyPatchFailure } from '../dist/applications/harness/core/tool/apply-patch-component.js'
 
 function deferred() {
   let resolve

@@ -8,9 +8,9 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import sharp from 'sharp'
 import { createSystemKeyringStore } from '@anybox/api-key-manager'
-import { createHarnessHost } from '../dist/host/harness-main.js'
-import { parseWebStartupConfig } from '../dist/host/startup-config.js'
-import { createClientHost } from '../dist/host/client-main.js'
+import { createHarnessHost } from '../dist/entrypoints/harness-main.js'
+import { parseWebStartupConfig } from '../dist/applications/harness/startup-config.js'
+import { createClientHost } from '../dist/entrypoints/client-main.js'
 
 test('real deployment platform: native credentials, headless host, Bash, image bytes and clean shutdown', { skip: process.env.ANYBOX_DEPLOYMENT_TESTS !== '1' }, async () => {
   assert.ok(['darwin', 'linux'].includes(process.platform), 'execution hosts support macOS/Linux')
@@ -22,6 +22,7 @@ test('real deployment platform: native credentials, headless host, Bash, image b
     h = await createHarnessHost(config, { models: { catalogAutoRefresh: false, readLegacyCredential: async () => undefined } })
     const issued = await h.root.get('host.access').issue('platform client')
     c = await createClientHost({ path: join(dir, 'client.sqlite'), namespace: namespace + '.client' })
+    await c.products.open('agent'); await h.products.open('agent')
     const connection = await c.root.get('client.connections').save({ name: 'platform', endpoint: h.url, token: issued.token })
     assert.equal((await c.root.get('client.connections').check(connection.id)).instanceId, h.instance.instanceId)
     const project = await h.harness.openProject(dir), session = await h.harness.createSession(project.id, 'assistant')

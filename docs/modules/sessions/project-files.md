@@ -6,7 +6,7 @@
 
 `createProjectFilesComponent({ now?, newId?, collectionIntervalMs? })` 创建根上的 `harness-project-files`，提供 `harness.project-files: ProjectFilesPort`。组件注入 `local-storage` 和 `harness.projects`，从本轮 deps 使用服务；Harness 在 Projects 之后安装，Session 依赖它。没有项目 Context、额外 SQLite 连接、文件目录或工具注册。
 
-源码：[组件](../../../src/harness/project-files/component.ts)、[端口](../../../src/harness/project-files/port.ts)、[文件系统提供方](../../../src/harness/project-files/filesystem.ts)、[纯规则与浏览器共享类型](../../../src/harness/project-files/domain.ts)。文件系统提供方及规则不是独立组件。
+源码：[组件](../../../src/applications/harness/core/project-files/component.ts)、[端口](../../../src/applications/harness/core/project-files/port.ts)、[文件系统提供方](../../../src/applications/harness/core/project-files/filesystem.ts)、[纯规则与浏览器共享类型](../../../src/applications/harness/core/project-files/domain.ts)。文件系统提供方及规则不是独立组件。
 
 ## 功能与边界
 

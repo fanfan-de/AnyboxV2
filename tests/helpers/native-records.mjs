@@ -1,4 +1,4 @@
-import { createProtocolAgentsComponent, createProtocolAgentBindingComponent } from '../../dist/harness/protocol-agents/registry.js'
+import { createProtocolAgentsComponent, createProtocolAgentBindingComponent } from '../../dist/applications/harness/core/protocol-agents/registry.js'
 import { modelSnapshot } from './controlled-models.mjs'
 
 export async function installTestProtocolAgents(root) {

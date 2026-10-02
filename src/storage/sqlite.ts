@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { Component } from '@nya/core'
-import { localStorageError, localStorageServiceKey } from '../harness/storage/port.js'
+import { localStorageError, localStorageServiceKey } from './port.js'
 import type {
   LocalStoragePort, StorageMigration, StorageReader, StorageRow,
   StorageTransaction, StorageValue,
-} from '../harness/storage/port.js'
+} from './port.js'
 
 function failure(error: unknown, code: 'open-failed' | 'operation-failed' | 'migration-failed') {
   if (error instanceof Error && error.name === 'LocalStorageError') return error

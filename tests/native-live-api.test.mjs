@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -9,10 +9,10 @@ import {
   createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createChatCompletionsProtocol, createAnthropicMessagesProtocol, createGeminiInteractionsProtocol,
 } from '@anybox/models'
-import { createDeepSeekProtocol } from '../dist/host/deepseek-protocol.js'
+import { createDeepSeekProtocol } from '../dist/applications/harness/deepseek-protocol.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHarness } from '../dist/harness/index.js'
-import { projectProtocolRecords } from '../dist/harness/protocol-agents/projection.js'
+import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { projectProtocolRecords } from '../dist/applications/harness/core/protocol-agents/projection.js'
 import sharp from 'sharp'
 
 // Live text/image/restart smoke; this is not live tool, search, streaming or OS Keyring acceptance.
@@ -101,7 +101,7 @@ async function host(directory, protocolId, config, secrets) {
     }
     await install(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
     await install(createImageAssetsComponent({ directory: (join(directory, 'sessions.sqlite')) + ".images" }))
-    const harness = await createHarness(root, { agents: [{ id: 'live-assistant', modelId: 'live-model', instructions: 'Follow the user exactly. Reply with the single requested word only, without punctuation or explanations.' }] })
+    const harness = await createTestHarnessHost(root, { agents: [{ id: 'live-assistant', modelId: 'live-model', instructions: 'Follow the user exactly. Reply with the single requested word only, without punctuation or explanations.' }] })
     const project = await harness.openProject(directory)
     return { harness, project }
   } catch {

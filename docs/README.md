@@ -1,15 +1,17 @@
 # AnyboxV2 文档
 
-项目文档分为组件手册、跨组件设计和验收记录。开发时从 [模块与组件手册](./modules/README.md) 进入：每个实际 Nya 组件有独立 Markdown 文档，协作完成同一职责的组件归入同一模块目录。
+AnyBox 是 NyaCore 应用的宿主应用，Harness 是其中一个被托管的应用。项目文档分为组件手册、跨组件设计和验收记录。开发时从 [模块与组件手册](./modules/README.md) 进入：每个实际 Nya 组件有独立 Markdown 文档，协作完成同一职责的组件归入同一模块目录。
 
-Harness 独立模块的目标边界与源码目录约定见 [Harness 模块边界与目标目录结构](./harness-module-boundary.md)。该文档记录已初步认可的整理方向，尚不代表源码迁移或远程部署已经完成；下方组件手册继续描述当前实现。
+通用宿主、应用和默认组合入口分别位于 `src/host/`、`src/applications/` 与 `src/entrypoints/`；当前目录和依赖约定见 [AnyBox 宿主与 Harness 应用边界](./harness-module-boundary.md)。应用打开和运行时装配见 [应用宿主](products-v1.md)。
 
+- [AnyBox 产品设计草案](./anybox-product-design.md)：产品定位、跨领域应用、用户创作流程、首期范围与待决定事项；区分已明确方向、建议方案和当前实现。
 - [Harness 独立部署与多设备接入](harness-deployment.md)：启动、配对、发行物、HTTPS、服务与恢复。
 
 ## 按模块阅读
 
 | 模块 | 文档入口 | 主要问题 |
 | --- | --- | --- |
+| 应用生命周期 | [products](./modules/products/README.md) | 受信注册目录、按需打开和停止如何对应实际资源 |
 | Models | [models](./modules/models/README.md) | 定义、连接、配置、凭据、目录与原生协议如何协作 |
 | 执行 | [execution](./modules/execution/README.md) | Run 如何准入、选择协议 Loop、执行操作并等待资源退出 |
 | 项目与会话 | [sessions](./modules/sessions/README.md) | 项目身份、文件快照、对话树、归档与运行事实归谁所有 |
@@ -24,9 +26,13 @@ Harness 独立模块的目标边界与源码目录约定见 [Harness 模块边�
 
 | 文档 | 内容 |
 | --- | --- |
-| [多实例架构图（2026-09-29）](./architecture/anybox-architecture-2026-09-29-multi-instance.md) | 当前进程与外部资源、执行根全部组件注入关系、一次 Run 的执行时序；Mermaid |
+| [通用应用宿主](products-v1.md) | 应用与内部功能边界、本地/远程目标、按需打开和停止及兼容 |
+| [应用开发者接入](application-development.md) | 声明目录、安装运行时、HTTP/Web 入口与退出语义 |
+| [应用宿主验收](application-host-acceptance.md) | 多应用行为、实际浏览器验证与复验方法 |
+| [当前架构图（2026-10-01）](./architecture/anybox-architecture-2026-10-01.md) | 当前工作区的宿主/应用与多实例、Harness、Models、Run 执行退出；四页 draw.io、SVG 和 PNG |
+| [多实例架构图（2026-09-29）](./architecture/anybox-architecture-2026-09-29-multi-instance.md) | 多实例架构记录、组件注入关系与 Run 时序；Mermaid |
 | [单进程框架图（2026-09-29）](./architecture/anybox-current-framework-2026-09-29.md) | 多实例拆分前的单根装配历史记录；含 SVG、PNG 和 Mermaid |
-| [Harness 模块边界与目标目录结构](./harness-module-boundary.md) | 模块归属、易混淆边界、目标文件夹与当前路径映射、迁移约束 |
+| [AnyBox 宿主与 Harness 应用边界](./harness-module-boundary.md) | 当前目录、宿主与应用依赖方向、组合入口与资源归属 |
 | [Harness 组件协作总览](./harness-components.md) | 单根装配、资源所有权与关键调用路径 |
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
 | [多模态图片输入设计](./multimodal-image-input-design.md) | 五种原生协议图片输入的端到端链路、历史升级兼容与验收 |

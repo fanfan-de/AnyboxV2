@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createRunChangeClient } from '../dist/client/run-change-client.js'
+import { createRunChangeClient } from '../dist/applications/harness/web/run-change-client.js'
 
 test('one workspace connection serves four sessions and reconciles every reconnect', () => {
   const connections = [], refreshed = [], states = []

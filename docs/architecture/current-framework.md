@@ -30,4 +30,4 @@ Run 固定 Prompt 与 execution，把无秘密 snapshot 交给 Session，再将 
 
 ![Run 执行与资源结算](./anybox-current-run-flow.png)
 
-主要核对入口：[组合根](../../src/harness/index.ts)、[Web 宿主](../../src/host/serve.ts)、[Models 装配](../../src/host/models-startup.ts)、[组件职责清单](../harness-components.md)、[Models 独立模块](./models-module.md)、[Session 对话树](../session-conversation-tree.md)。H0 探针和旧凭据的兼容读取不属于图中正常执行链。
+主要核对入口：[组合根](../../src/applications/harness/core/index.ts)、[Web 宿主](../../src/entrypoints/serve.ts)、[Models 装配](../../src/applications/harness/models-startup.ts)、[组件职责清单](../harness-components.md)、[Models 独立模块](./models-module.md)、[Session 对话树](../session-conversation-tree.md)。H0 探针和旧凭据的兼容读取不属于图中正常执行链。

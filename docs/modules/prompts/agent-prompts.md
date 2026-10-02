@@ -12,12 +12,12 @@ Agent Prompt 保存 Agent 对已发布 Prompt 版本的选择，并为 Run 解�
 | Nya 组件名 | `harness-agent-prompts` |
 | 提供服务 | `harness.agent-prompts`，接口 `AgentPromptPort` |
 | 注入依赖 | `harness.prompts`、`local-storage` |
-| 入口 | [prompt-binding-component.ts](../../../src/harness/agent/prompt-binding-component.ts) |
-| 内部存储 | [prompt-binding-storage.ts](../../../src/harness/agent/prompt-binding-storage.ts) |
+| 入口 | [prompt-binding-component.ts](../../../src/applications/harness/core/agent/prompt-binding-component.ts) |
+| 内部存储 | [prompt-binding-storage.ts](../../../src/applications/harness/core/agent/prompt-binding-storage.ts) |
 
-`inputs` 提供时间与 ID 契约，本组件绑定使用其中的 `now()`；`agents` 是宿主传入的只读 `AgentDefinition[]`，不通过独立 Agent 组件查询。Agent ID、非空初始指令和可选默认 modelId 由 [validateAgents](../../../src/harness/agent/domain.ts) 在组合根启动时校验，修改定义需要重新装配。
+`inputs` 提供时间与 ID 契约，本组件绑定使用其中的 `now()`；`agents` 是宿主传入的只读 `AgentDefinition[]`，不通过独立 Agent 组件查询。Agent ID、非空初始指令和可选默认 modelId 由 [validateAgents](../../../src/applications/harness/core/agent/domain.ts) 在组合根启动时校验，修改定义需要重新装配。
 
-`canManageAgent(actorId, agentId)` 是宿主提供的授权判定。`createHarness` 未提供该选项时默认为允许，故嵌入具有用户隔离需求的宿主时应显式传入授权规则；该默认值不构成账号系统。
+`canManageAgent(actorId, agentId)` 是宿主提供的授权判定。`createHarnessPromptComponents` / `installHarness` 未提供该选项时默认为允许，故嵌入具有用户隔离需求的宿主时应显式传入授权规则；该默认值不构成账号系统。
 
 ## 服务接口与授权
 

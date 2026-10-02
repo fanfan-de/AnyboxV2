@@ -8,6 +8,6 @@
 
 认证拒绝返回 `authentication-failed`，实例校验在 API 边界；关闭后拒绝新操作。撤销提交后移除认证索引并通知监听者，API 关闭对应观察响应，但不取消已接受 Run。Effect 停止准入并等待在途数据库写入，最后清除索引和观察者。Nya 在 API 退出后才卸载该依赖。
 
-实例 HTTP DTO 继续使用 API v1；Harness API 根据实际 Projects 浏览支持动态添加 `projects.browse`，不由 Access 无条件宣称。浏览会话绑定认证令牌；设备拥有者权限仍受执行进程操作系统账户限制，不提供提权。
+实例 HTTP DTO 继续使用 API v1；Application API 对稳定产品控制入口宣告 `products.v2`，并根据实际 Projects 浏览支持动态添加 `projects.browse`；这两项由 HTTP 宿主判断，不由 Access 无条件宣称。浏览会话绑定认证令牌；设备拥有者权限仍受执行进程操作系统账户限制，不提供提权。
 
 业务数据迁移账本与已有 Session 格式不变。`init`、`recover-access`、`new-identity` 均须取得数据库锁；复制为独立实例使用后者。行为测试见 `tests/remote-harness.test.mjs`、`tests/deployment-boundaries.test.mjs`，执行 `npm run check`。

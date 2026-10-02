@@ -1,24 +1,24 @@
-import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
-import { createSessionComponent } from '../dist/harness/session/component.js'
-import { sessionServiceKey, sessionRunServiceKey } from '../dist/harness/session/port.js'
-import { createApplyPatchComponent } from '../dist/harness/tool/apply-patch-component.js'
+import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
+import { createApplyPatchComponent } from '../dist/applications/harness/core/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createHarness } from '../dist/harness/index.js'
-import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/harness/agent/prompt-binding-component.js'
-import { createRunComponent, runServiceKey } from '../dist/harness/run/component.js'
-import { createRunRuntimeComponent } from '../dist/harness/run/runtime-component.js'
-import { createBashComponent } from '../dist/harness/tool/bash-component.js'
-import { createProjectComponent, projectServiceKey } from '../dist/harness/project/component.js'
-import { createPromptComponent, promptServiceKey } from '../dist/harness/prompt/component.js'
+import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/applications/harness/core/agent/prompt-binding-component.js'
+import { createRunComponent, runServiceKey } from '../dist/applications/harness/core/run/component.js'
+import { createRunRuntimeComponent } from '../dist/applications/harness/core/run/runtime-component.js'
+import { createBashComponent } from '../dist/applications/harness/core/tool/bash-component.js'
+import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
+import { createPromptComponent, promptServiceKey } from '../dist/applications/harness/core/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/harness/storage/port.js'
+import { localStorageServiceKey } from '../dist/storage/port.js'
 import { controlledModels, ids } from './helpers/controlled-models.mjs'
 
 /** The application installs its LLM API component and SQLite before the Harness. */
@@ -31,7 +31,7 @@ async function createHostHarness({ llm, databasePath, ...options }) {
     await root.installComponent(createImageAssetsComponent({ directory: (databasePath) + ".images" }))
     await provider
     await database
-    return await createHarness(root, options)
+    return await createTestHarnessHost(root, options)
   } catch (error) { await root.fiber.dispose(); throw error }
 }
 

@@ -1,25 +1,25 @@
-import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
-import { createSessionComponent } from '../dist/harness/session/component.js'
-import { sessionServiceKey, sessionRunServiceKey } from '../dist/harness/session/port.js'
-import { createApplyPatchComponent } from '../dist/harness/tool/apply-patch-component.js'
+import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
+import { createApplyPatchComponent } from '../dist/applications/harness/core/tool/apply-patch-component.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context, FiberState } from '@nya/core'
-import { createHarness } from '../dist/harness/index.js'
-import { createAgentPromptComponent } from '../dist/harness/agent/prompt-binding-component.js'
+import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createAgentPromptComponent } from '../dist/applications/harness/core/agent/prompt-binding-component.js'
 import { modelsServiceKey } from '@anybox/models'
-import { createRunComponent, runServiceKey } from '../dist/harness/run/component.js'
-import { createRunRuntimeComponent, runRuntimeServiceKey } from '../dist/harness/run/runtime-component.js'
-import { createProjectComponent, projectServiceKey } from '../dist/harness/project/component.js'
-import { createBashComponent } from '../dist/harness/tool/bash-component.js'
-import { createPromptComponent } from '../dist/harness/prompt/component.js'
+import { createRunComponent, runServiceKey } from '../dist/applications/harness/core/run/component.js'
+import { createRunRuntimeComponent, runRuntimeServiceKey } from '../dist/applications/harness/core/run/runtime-component.js'
+import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
+import { createBashComponent } from '../dist/applications/harness/core/tool/bash-component.js'
+import { createPromptComponent } from '../dist/applications/harness/core/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/harness/storage/port.js'
+import { localStorageServiceKey } from '../dist/storage/port.js'
 import { controlledModels, modelSnapshot, deferred, ids } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Answer briefly.' }]
@@ -34,7 +34,7 @@ async function createHostHarness({ llm, databasePath, ...options }) {
     await root.installComponent(createImageAssetsComponent({ directory: (databasePath) + ".images" }))
     await api
     await database
-    const harness = await createHarness(root, options)
+    const harness = await createTestHarnessHost(root, options)
     return { root, api, harness }
   } catch (error) { await root.fiber.dispose(); throw error }
 }
@@ -204,7 +204,7 @@ test('cancellation and close wait until the model call actually exits', async ()
   assert.deepEqual(llm.events, ['disposed'])
 })
 
-test('closing Harness joins its call, releases the Models service and storage, and lets a fresh root reopen storage', async () => {
+test('closing the application host joins its call, releases Models and storage, and lets a fresh root reopen storage', async () => {
   const f = await createTestHarness({ agents })
   const { harness, llm } = f
   try {
@@ -469,7 +469,7 @@ test('cancellation exceptions wait for done and fail cleanup safely', async () =
   await assert.rejects(f.close())
 })
 
-test('Harness startup names missing services and failed startups release the application root', async () => {
+test('Harness startup names missing services and its host releases a failed application root', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-harness-start-'))
   const file = join(directory, 'db.sqlite')
   try {
@@ -477,7 +477,7 @@ test('Harness startup names missing services and failed startups release the app
     const noStorage = controlledModels()
     try {
       await noStorageRoot.installComponent(noStorage.component())
-      await assert.rejects(createHarness(noStorageRoot, { agents }), /waiting for harness.image-assets/)
+      await assert.rejects(createTestHarnessHost(noStorageRoot, { agents }), /waiting for (harness.image-assets|local-storage)/)
       assert.deepEqual(noStorage.events, ['disposed'])
       assert.equal(noStorageRoot.get(modelsServiceKey), undefined)
     } finally { await noStorageRoot.fiber.dispose() }
@@ -486,7 +486,7 @@ test('Harness startup names missing services and failed startups release the app
     try {
       await noApiRoot.installComponent(createLocalSqliteComponent(file))
       await noApiRoot.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
-      await assert.rejects(createHarness(noApiRoot, { agents }), /waiting for models/)
+      await assert.rejects(createTestHarnessHost(noApiRoot, { agents }), /waiting for models/)
       assert.equal(noApiRoot.get(localStorageServiceKey), undefined)
     } finally { await noApiRoot.fiber.dispose() }
 
@@ -496,7 +496,7 @@ test('Harness startup names missing services and failed startups release the app
       await invalidRoot.installComponent(createLocalSqliteComponent(file))
       await invalidRoot.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
       await invalidRoot.installComponent(invalid.component())
-      await assert.rejects(createHarness(invalidRoot, { agents: [] }), /agents/)
+      await assert.rejects(createTestHarnessHost(invalidRoot, { agents: [] }), /agents/)
       assert.deepEqual(invalid.events, ['disposed'])
       assert.equal(invalidRoot.get(localStorageServiceKey), undefined)
     } finally { await invalidRoot.fiber.dispose() }

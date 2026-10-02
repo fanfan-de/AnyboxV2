@@ -6,7 +6,7 @@
 
 ## 实现与装配
 
-- 源码：[绑定工厂与请求编码](../../../src/harness/protocol-agents/registry.ts)、[Gemini Loop](../../../src/harness/protocol-agents/gemini.ts)、[共享交换管道](../../../src/harness/protocol-agents/shared.ts)。
+- 源码：[绑定工厂与请求编码](../../../src/applications/harness/core/protocol-agents/registry.ts)、[Gemini Loop](../../../src/applications/harness/core/protocol-agents/gemini.ts)、[共享交换管道](../../../src/applications/harness/core/protocol-agents/shared.ts)。
 - 工厂实例：`createProtocolAgentBindingComponent('gemini-interactions')`。
 - 组件名：`harness-protocol-agent-gemini-interactions`；配置类型：`void`；无额外公开服务或配置。
 - 注入 `harness.protocol-agents` 与 `models.protocols`；apply 获取 Gemini 驱动代租约并注册。runGemini 是循环函数，不另注册 Nya 服务。

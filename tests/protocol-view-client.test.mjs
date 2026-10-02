@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { decodeProtocolView, reduceProtocolView, safeSourceUrl } from '../dist/client/protocols/view.js'
+import { decodeProtocolView, reduceProtocolView, safeSourceUrl } from '../dist/applications/harness/web/protocols/view.js'
 
 const snapshot = (patch = {}) => ({ envelopeVersion: 1, viewSchemaVersion: 1, protocolId: 'responses',
   sessionId: 'session', runId: 'run', viewRevision: 1, status: 'provisional',

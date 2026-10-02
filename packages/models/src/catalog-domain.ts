@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { immutable, validateCapabilities } from './domain.js';
+import { immutable, isImmutableJson, validateCapabilities } from './domain.js';
 import { modelsError } from './errors.js';
 import { externalModelId, externalProviderId } from './identity.js';
 import type { ConnectionHints, DeclaredCapabilities, Model, ModelCost, ModelInput, Provider, ProviderInput, ProtocolDescriptor, ReasoningControl, SourceRef, SourceSnapshot, Support } from './types.js';
@@ -182,8 +182,10 @@ function validateVersion(value: ObjectValue, sourceId: string, sourceVersion: st
   if (source.kind !== 'external' || source.sourceId !== sourceId || source.sourceVersion !== sourceVersion || !nonempty(source.providerId) || model !== (source.modelId !== undefined) || model && !nonempty(source.modelId)) invalid();
   return source;
 }
+const validatedSnapshots = new WeakSet<object>();
 /** Validate current source/cache data independently of the upstream JSON shape. */
 export function validateCatalogSnapshot(input: unknown): asserts input is SourceSnapshot {
+  if (isImmutableJson(input) && validatedSnapshots.has(input)) return;
   const value = allowed(input, ['schemaVersion', 'sourceId', 'fetchedAt', 'snapshotVersion', 'providers', 'models']);
   if (value.schemaVersion !== 2 || !nonempty(value.sourceId) || !number(value.fetchedAt) || !Number.isFinite(new Date(value.fetchedAt).getTime()) || !nonempty(value.snapshotVersion) || !Array.isArray(value.providers) || !Array.isArray(value.models) || value.providers.length > 5000 || value.models.length > 200_000) invalid();
   const sourceId = required(value.sourceId), snapshotVersion = required(value.snapshotVersion), ids = new Map<string, string>(), models = new Set<string>();
@@ -199,6 +201,7 @@ export function validateCatalogSnapshot(input: unknown): asserts input is Source
     models.add(id); required(model.remoteModelId); required(model.name); validateHints(model.connectionHints); validateMetadata(model, 'capabilities');
   }
   if (catalogSnapshotVersion(value.providers as Provider[], value.models as Model[]) !== value.snapshotVersion) invalid();
+  if (isImmutableJson(input)) validatedSnapshots.add(input);
 }
 
 /** The retired v1 format is accepted only on the persistent cache read boundary. */

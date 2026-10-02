@@ -306,13 +306,21 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
       try { db.close(); } catch { /* Already failed initialization. */ } throw modelsError('storage-unavailable');
     }
     let accepting = true, tail: Promise<void> = Promise.resolve();
+    // SQL shapes are fixed by this adapter. Reuse bytecode while keeping one
+    // synchronous transaction for the complete source/configuration change.
+    const statements = new Map<string, ReturnType<DatabaseSync['prepare']>>();
+    const prepare = (sql: string) => {
+      let statement = statements.get(sql);
+      if (!statement) { statement = db.prepare(sql); statements.set(sql, statement); }
+      return statement;
+    };
     const assertOpen = () => { if (!accepting) throw modelsError('closed'); };
     const one = <T>(sql: string, id: string): T | undefined => {
-      try { const row = db.prepare(sql).get(id); return row ? JSON.parse(String(row.record)) as T : undefined; }
+      try { const row = prepare(sql).get(id); return row ? JSON.parse(String(row.record)) as T : undefined; }
       catch { throw modelsError('storage-unavailable'); }
     };
     const many = <T>(sql: string, values: readonly string[] = []): readonly T[] => {
-      try { return db.prepare(sql).all(...values).map(row => JSON.parse(String(row.record)) as T); }
+      try { return prepare(sql).all(...values).map(row => JSON.parse(String(row.record)) as T); }
       catch { throw modelsError('storage-unavailable'); }
     };
     const provider = (id: string) => one<Provider>('SELECT record FROM provider_definitions WHERE id=?', id);
@@ -321,7 +329,7 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
     const configuration = (id: string) => one<ModelConfiguration>('SELECT record FROM configurations WHERE id=?', id);
     const synced = (id: string) => one<ConnectionSyncState>('SELECT record FROM connection_sync_states WHERE connection_id=?', id);
     const version = (table: string, key: string, record: Versioned, encoded: string) => {
-      db.prepare(`INSERT INTO ${table}(${key},revision,version_id,record) VALUES(?,?,?,?)`).run(record.id, record.revision, record.versionId, encoded);
+      prepare(`INSERT INTO ${table}(${key},revision,version_id,record) VALUES(?,?,?,?)`).run(record.id, record.revision, record.versionId, encoded);
     };
     const commit = (change: StoreChange) => {
       let begun = false;
@@ -335,11 +343,11 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
           if (current && sourceIdentity(current.source) !== sourceIdentity(record.source)) throw modelsError('invalid-config');
           const external = record.source.kind === 'external' ? record.source : undefined;
           if (external) {
-            const owner = db.prepare('SELECT id FROM provider_definitions WHERE source_id=? AND external_provider_id=?').get(external.sourceId, external.providerId);
+            const owner = prepare('SELECT id FROM provider_definitions WHERE source_id=? AND external_provider_id=?').get(external.sourceId, external.providerId);
             if (owner && owner.id !== record.id) throw modelsError('conflict');
           }
           const encoded = JSON.stringify(record); version('provider_definition_versions', 'provider_id', record, encoded);
-          db.prepare(`INSERT INTO provider_definitions(id,revision,source_id,external_provider_id,record) VALUES(?,?,?,?,?)
+          prepare(`INSERT INTO provider_definitions(id,revision,source_id,external_provider_id,record) VALUES(?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,record=excluded.record`)
             .run(record.id, record.revision, external?.sourceId ?? null, external?.providerId ?? null, encoded);
         }
@@ -351,28 +359,28 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
           const external = record.source.kind === 'external' ? record.source : undefined;
           if (external) {
             if (parent.source.kind !== 'external' || parent.source.sourceId !== external.sourceId || parent.source.providerId !== external.providerId) throw modelsError('invalid-config');
-            const owner = db.prepare('SELECT id FROM model_definitions WHERE source_id=? AND external_provider_id=? AND external_model_id=?')
+            const owner = prepare('SELECT id FROM model_definitions WHERE source_id=? AND external_provider_id=? AND external_model_id=?')
               .get(external.sourceId, external.providerId, external.modelId!);
             if (owner && owner.id !== record.id) throw modelsError('conflict');
           }
           const encoded = JSON.stringify(record); version('model_definition_versions', 'model_id', record, encoded);
-          db.prepare(`INSERT INTO model_definitions(id,provider_id,revision,source_id,external_provider_id,external_model_id,record) VALUES(?,?,?,?,?,?,?)
+          prepare(`INSERT INTO model_definitions(id,provider_id,revision,source_id,external_provider_id,external_model_id,record) VALUES(?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,record=excluded.record`)
             .run(record.id, record.providerId, record.revision, external?.sourceId ?? null, external?.providerId ?? null, external?.modelId ?? null, encoded);
         }
         if (change.connection) {
           const { record, expectedRevision } = change.connection, current = connection(record.id);
           validateVersion(record, current, expectedRevision);
-          if (!current && db.prepare('SELECT 1 FROM connection_versions WHERE connection_id=? LIMIT 1').get(record.id)) throw modelsError('conflict');
+          if (!current && prepare('SELECT 1 FROM connection_versions WHERE connection_id=? LIMIT 1').get(record.id)) throw modelsError('conflict');
           if (current && (record.protocolId !== current.protocolId || record.providerDefinitionId !== current.providerDefinitionId)) throw modelsError('invalid-config');
           if (!provider(record.providerDefinitionId)) throw modelsError('not-found');
           const encoded = JSON.stringify(record); version('connection_versions', 'connection_id', record, encoded);
-          db.prepare(`INSERT INTO connections(id,provider_definition_id,revision,record) VALUES(?,?,?,?)
+          prepare(`INSERT INTO connections(id,provider_definition_id,revision,record) VALUES(?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,record=excluded.record`).run(record.id, record.providerDefinitionId, record.revision, encoded);
         }
         for (const { record, expectedRevision } of change.configurations ?? []) {
           const current = configuration(record.id); validateVersion(record, current, expectedRevision);
-          if (!current && db.prepare('SELECT 1 FROM configuration_versions WHERE configuration_id=? LIMIT 1').get(record.id)) throw modelsError('conflict');
+          if (!current && prepare('SELECT 1 FROM configuration_versions WHERE configuration_id=? LIMIT 1').get(record.id)) throw modelsError('conflict');
           if (current && (record.connectionId !== current.connectionId || record.modelDefinitionId !== current.modelDefinitionId || record.baseline !== current.baseline)) throw modelsError('invalid-config');
           const owner = connection(record.connectionId), definition = model(record.modelDefinitionId);
           if (!owner || !definition) throw modelsError('not-found');
@@ -380,32 +388,32 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
           const pinned = one<Model>('SELECT record FROM model_definition_versions WHERE version_id=?', record.modelDefinitionVersionId);
           if (!pinned || pinned.id !== record.modelDefinitionId || pinned.remoteModelId !== record.remoteModelId) throw modelsError('invalid-config');
           if (record.baseline) {
-            const existing = db.prepare('SELECT id FROM configurations WHERE connection_id=? AND model_definition_id=? AND baseline=1')
+            const existing = prepare('SELECT id FROM configurations WHERE connection_id=? AND model_definition_id=? AND baseline=1')
               .get(record.connectionId, record.modelDefinitionId);
             if (existing && existing.id !== record.id) throw modelsError('conflict');
           }
           const encoded = JSON.stringify(record); version('configuration_versions', 'configuration_id', record, encoded);
-          db.prepare(`INSERT INTO configurations(id,connection_id,model_definition_id,baseline,revision,record) VALUES(?,?,?,?,?,?)
+          prepare(`INSERT INTO configurations(id,connection_id,model_definition_id,baseline,revision,record) VALUES(?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,record=excluded.record`)
             .run(record.id, record.connectionId, record.modelDefinitionId, record.baseline ? 1 : 0, record.revision, encoded);
         }
-        for (const record of change.sources ?? []) db.prepare('INSERT INTO sources(source_id,record) VALUES(?,?) ON CONFLICT(source_id) DO UPDATE SET record=excluded.record')
+        for (const record of change.sources ?? []) prepare('INSERT INTO sources(source_id,record) VALUES(?,?) ON CONFLICT(source_id) DO UPDATE SET record=excluded.record')
           .run(record.sourceId, JSON.stringify(record));
         for (const record of change.syncStates ?? []) {
           if (!connection(record.connectionId)) throw modelsError('not-found');
-          db.prepare('INSERT INTO connection_sync_states(connection_id,record) VALUES(?,?) ON CONFLICT(connection_id) DO UPDATE SET record=excluded.record')
+          prepare('INSERT INTO connection_sync_states(connection_id,record) VALUES(?,?) ON CONFLICT(connection_id) DO UPDATE SET record=excluded.record')
             .run(record.connectionId, JSON.stringify(record));
         }
-        for (const record of change.addIntents ?? []) db.prepare('INSERT INTO credential_intents(id,record) VALUES(?,?)').run(record.id, JSON.stringify(record));
-        for (const id of change.removeIntentIds ?? []) db.prepare('DELETE FROM credential_intents WHERE id=?').run(id);
+        for (const record of change.addIntents ?? []) prepare('INSERT INTO credential_intents(id,record) VALUES(?,?)').run(record.id, JSON.stringify(record));
+        for (const id of change.removeIntentIds ?? []) prepare('DELETE FROM credential_intents WHERE id=?').run(id);
         if (change.deleteConnection) {
           const { id, expectedRevision } = change.deleteConnection, current = connection(id);
           if (!current) throw modelsError('not-found');
           if (current.revision !== expectedRevision) throw modelsError('conflict');
           // Immutable versions remain available to historical snapshots; remove only current rows.
-          db.prepare('DELETE FROM configurations WHERE connection_id=?').run(id);
-          db.prepare('DELETE FROM connection_sync_states WHERE connection_id=?').run(id);
-          db.prepare('DELETE FROM connections WHERE id=?').run(id);
+          prepare('DELETE FROM configurations WHERE connection_id=?').run(id);
+          prepare('DELETE FROM connection_sync_states WHERE connection_id=?').run(id);
+          prepare('DELETE FROM connections WHERE id=?').run(id);
         }
         db.exec('COMMIT');
       } catch (error) {
@@ -455,7 +463,7 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
         const result = tail.then(() => commit(change)); tail = result.then(() => {}, () => {}); return result;
       },
     };
-    ctx.effect(() => async () => { accepting = false; await tail; try { db.close(); } catch { throw modelsError('cleanup-failure'); } },
+    ctx.effect(() => async () => { accepting = false; await tail; try { db.close(); } catch { throw modelsError('cleanup-failure'); } finally { statements.clear(); } },
       'join models storage and release SQLite ownership');
     ctx.provide(modelsStoreServiceKey, service);
   } };

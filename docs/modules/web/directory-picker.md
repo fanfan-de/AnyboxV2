@@ -8,7 +8,7 @@ Directory Picker 提供应用内目录选择器的“使用系统目录窗口”
 
 | 项目 | 定义 |
 | --- | --- |
-| 源码 | [directory-picker.ts](../../../src/host/directory-picker.ts) |
+| 源码 | [directory-picker.ts](../../../src/applications/harness/client/directory-picker.ts) |
 | 工厂 / Nya 名称 | `createDirectoryPickerComponent(options?)` / `host-directory-picker` |
 | 服务 | `host.directory-picker: DirectoryPickerPort` |
 | `inject` | 无 |
@@ -56,3 +56,5 @@ Directory Picker 提供应用内目录选择器的“使用系统目录窗口”
 ## 验证依据
 
 [web-server.test.mjs](../../../tests/web-server.test.mjs) 覆盖项目登记、并发对话框拒绝、失败映射、不支持平台仍可使用 Web、关闭等待、HTTP 断开取消且不创建项目。这些生命周期测试通过替换 `runDialog` 控制退出时机，不等同于每个平台的真实 GUI 验收。完整验收运行 `npm run check`。
+
+原生窗口快捷入口属于 Harness 的本机连接功能，组件仅在客户端 Harness 打开时安装，关闭等待窗口操作退出。通用应用外壳不管理执行目标或目录窗口。

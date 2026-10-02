@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { Context, FiberState } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/harness/storage/port.js'
+import { localStorageServiceKey } from '../dist/storage/port.js'
 
 const v1 = { version: 1, up(tx) { tx.execute('CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL)') } }
 const v2 = { version: 2, up(tx) { tx.execute('ALTER TABLE notes ADD COLUMN category TEXT') } }

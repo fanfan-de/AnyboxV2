@@ -1,4 +1,5 @@
 import type { Component } from '@nya/core';
+import { setImmediate as yieldToHost } from 'node:timers/promises';
 import { immutable } from './domain.js';
 import { modelsError, normalizeError } from './errors.js';
 import { abortLink, deferred, joinOperation, throwAborted } from './lifecycle.js';
@@ -78,6 +79,9 @@ function createCatalogRuntime(source: ModelsCatalogSource, cache: ModelsCatalogC
   const initialize = () => {
     if (initializing) return initializing;
     initializing = Promise.resolve().then(async () => {
+      // Source normalization/validation is finite CPU work. Let the resident host
+      // serve control requests before continuing the next preparation stage.
+      await yieldToHost();
       let cached: CatalogCacheRecord | undefined;
       try {
         cached = cache.read(source.cacheKey);
@@ -96,8 +100,10 @@ function createCatalogRuntime(source: ModelsCatalogSource, cache: ModelsCatalogC
       const same = stored?.snapshotVersion === candidate.snapshotVersion;
       if (newer || same) {
         try {
+          await yieldToHost();
           const outcome = await sourceData.accept(candidate);
           connections = immutable(outcome.connections);
+          await yieldToHost();
           publish(candidate);
           if (outcome.accepted || same) origin = candidateOrigin;
         } catch (error) {

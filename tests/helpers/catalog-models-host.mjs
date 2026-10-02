@@ -3,13 +3,14 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createHarness } from '../../dist/harness/index.js'
+import { createTestHarnessHost } from './harness-host.mjs'
 import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
-import { createImageAssetsComponent } from '../../dist/harness/image/component.js'
-import { installWebModels } from '../../dist/host/models-startup.js'
-import { parseWebStartupConfig } from '../../dist/host/startup-config.js'
-import { createDirectoryPickerComponent } from '../../dist/host/directory-picker.js'
-import { createHarnessApiComponent, harnessApiServiceKey } from '../../dist/host/component.js'
+import { createImageAssetsComponent } from '../../dist/applications/harness/core/image/component.js'
+import { installWebModels } from '../../dist/applications/harness/models-startup.js'
+import { parseWebStartupConfig } from '../../dist/applications/harness/startup-config.js'
+import { createDirectoryPickerComponent } from '../../dist/applications/harness/client/directory-picker.js'
+import { hostHttpServiceKey } from '../../dist/host/component.js'
+import { createFixtureApplicationApiComponent } from './application-api.mjs'
 
 export const catalogModelsData = Object.freeze({
   anthropic: { id: 'anthropic', name: 'Anthropic QA', api: 'https://api.anthropic.com/v1', npm: '@ai-sdk/anthropic', doc: 'https://docs.anthropic.com', models: {
@@ -137,11 +138,11 @@ export async function startCatalogModelsHost(options = {}) {
     }
     await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
-    harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Answer briefly. Use Bash when the user asks for a tool.' }] })
+    harness = await createTestHarnessHost(root, { agents: [{ id: 'assistant', instructions: 'Answer briefly. Use Bash when the user asks for a tool.' }] })
     const project = await harness.openProject(projectPath)
     await root.installComponent(createDirectoryPickerComponent({ platform: 'darwin', runDialog: async () => projectPath }))
-    await root.installComponent(createHarnessApiComponent(harness.listAgents(), config.port))
-    const web = root.get(harnessApiServiceKey)
+    await root.installComponent(createFixtureApplicationApiComponent(root, harness.listAgents(), config.port))
+    const web = root.get(hostHttpServiceKey)
     const session = options.seedSession ? await harness.createSession(project.id, 'assistant', seededModels[0]?.id) : undefined
     return {
       root, harness, web, project, directory, config, network, secrets, vaultOperations, seededModels, session,

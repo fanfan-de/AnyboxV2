@@ -5,9 +5,9 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createModelsStoreComponent, createModelsVaultComponent, createModelsComponent, createResponsesProtocolComponent } from '@anybox/models'
-import { createDeepSeekProtocolComponent } from '../dist/host/deepseek-protocol.js'
-import { installWebModels as installModels } from '../dist/host/models-startup.js'
-import { parseWebStartupConfig } from '../dist/host/startup-config.js'
+import { createDeepSeekProtocolComponent } from '../dist/applications/harness/deepseek-protocol.js'
+import { installWebModels as installModels } from '../dist/applications/harness/models-startup.js'
+import { parseWebStartupConfig } from '../dist/applications/harness/startup-config.js'
 
 
 async function openNative(root, modelId = 'default') {

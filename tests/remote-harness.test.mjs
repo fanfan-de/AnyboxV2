@@ -6,12 +6,14 @@ import { tmpdir } from 'node:os'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createHostAccessComponent, hostAccessServiceKey } from '../dist/host/access.js'
-import { createConnectionsComponent, connectionsServiceKey, connectionEndpoint, inspectInstance } from '../dist/host/client/connections.js'
-import { startClientGateway, allowedProxyPath } from '../dist/host/client/gateway.js'
-import { startHarnessApiServer } from '../dist/host/server.js'
-import { createHarness } from '../dist/harness/index.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
-import { createHarnessApiComponent, harnessApiServiceKey } from '../dist/host/component.js'
+import { createConnectionsComponent, connectionsServiceKey, connectionEndpoint, inspectInstance } from '../dist/applications/harness/client/connections.js'
+import { startClientGateway } from './helpers/client-gateway.mjs'
+import { allowedProxyPath } from '../dist/applications/harness/client/gateway.js'
+import { startHarnessApiServer } from './helpers/harness-api-server.mjs'
+import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
+import { hostHttpServiceKey } from '../dist/host/component.js'
+import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 import { installManagedModels } from './helpers/managed-models.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
 
@@ -95,9 +97,9 @@ async function execution(dir) {
   await root.installComponent(createLocalSqliteComponent(join(dir, 'harness.sqlite')))
   const auth = await access(root), token = await auth.issue('Browser device')
   await root.installComponent(createImageAssetsComponent({ directory: join(dir, 'images') }))
-  const harness = await createHarness(root, { projectDirectoryHome: dir, agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }] })
-  await root.installComponent(createHarnessApiComponent(harness.listAgents(), 0, { authenticated: true }))
-  const server = root.get(harnessApiServiceKey)
+  const harness = await createTestHarnessHost(root, { projectDirectoryHome: dir, agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }] })
+  await root.installComponent(createFixtureApplicationApiComponent(root, harness.listAgents(), 0, { authenticated: true }))
+  const server = root.get(hostHttpServiceKey)
   return { root, llm, auth, token, harness, server, async close() { for (const call of llm.calls) { call.result.resolve('done'); call.done.resolve() } await harness.close() } }
 }
 

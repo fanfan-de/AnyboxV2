@@ -2,13 +2,25 @@ import type { StoredParameters } from './native-types.js';
 import { modelsError } from './errors.js';
 import type { DeclaredCapabilities, ModelConfigurationInput, ModelInput, ProviderConnectionInput, ProviderInput } from './types.js';
 
+const immutableJson = new WeakSet<object>();
+/** Only copies frozen by this module are trusted; caller-frozen input is still copied. */
+export function isImmutableJson(value: unknown): value is object {
+  return value !== null && typeof value === 'object' && immutableJson.has(value);
+}
 export function immutable<T>(value: T): T {
+  if (isImmutableJson(value)) return value;
   try {
     const copy = structuredClone(value); const seen = new WeakSet<object>();
+    let jsonOnly = true;
     const freeze = (item: unknown): void => {
-      if (item && typeof item === 'object' && !seen.has(item)) { seen.add(item); Object.freeze(item); for (const part of Object.values(item)) freeze(part); }
+      if (item && typeof item === 'object' && !seen.has(item)) {
+        seen.add(item);
+        if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null) jsonOnly = false;
+        Object.freeze(item); for (const part of Object.values(item)) freeze(part);
+      }
     };
     freeze(copy);
+    if (jsonOnly && copy && typeof copy === 'object') immutableJson.add(copy);
     return copy;
   } catch { throw modelsError('invalid-config'); }
 }

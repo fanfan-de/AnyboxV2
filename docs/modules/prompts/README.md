@@ -20,8 +20,8 @@
 
 ## 依赖与替换
 
-先提供 [local-storage](../infrastructure/local-sqlite.md)，Prompt 通过 `migrate('prompt', ...)` 登记自己的表，Agent Prompt 通过 `migrate('agent-prompt', ...)` 登记绑定表。Nya 的注入关系保证 Agent Prompt 在 Prompt 就绪后初始化，卸载时消费者先退出；具体编排见 [组合根](../../../src/harness/index.ts)。
+先提供 [local-storage](../infrastructure/local-sqlite.md)，Prompt 通过 `migrate('prompt', ...)` 登记自己的表，Agent Prompt 通过 `migrate('agent-prompt', ...)` 登记绑定表。Nya 的注入关系保证 Agent Prompt 在 Prompt 就绪后初始化，卸载时消费者先退出；具体编排见 [组合根](../../../src/applications/harness/core/index.ts)。
 
-纯校验、草稿状态转换、发布和快照生成位于 [Prompt 领域函数](../../../src/harness/prompt/domain.ts)。运行协议的消息编码由 [协议应用绑定](../execution/protocol-agent-registry.md) 负责，本模块不依赖原生协议类型、密钥或网络。
+纯校验、草稿状态转换、发布和快照生成位于 [Prompt 领域函数](../../../src/applications/harness/core/prompt/domain.ts)。运行协议的消息编码由 [协议应用绑定](../execution/protocol-agent-registry.md) 负责，本模块不依赖原生协议类型、密钥或网络。
 
 详细设计及旧 JSON 导入约束见 [Prompt 管理设计](../../prompt-management-design.md)。

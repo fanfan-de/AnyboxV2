@@ -1,5 +1,6 @@
 import type { NativeExecution, NativeObject, NativeParameters, NativeProtocol, NativeProtocolLease, OpenNativeModelInput } from './native-types.js';
 import { randomUUID } from 'node:crypto';
+import { setImmediate as yieldToHost } from 'node:timers/promises';
 import type { Component } from '@nya/core';
 import { assert, identifier, immutable, keys, nonempty, connectionInput, configurationInput, modelInput, providerInput, validateConfiguration, validateConnection, validateModel, validateParameters, validateProvider, validateSignal } from './domain.js';
 import { modelsError, normalizeError } from './errors.js';
@@ -382,6 +383,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       requireOpen(); keys(options, ['confirmed']); assert(options.confirmed === undefined || typeof options.confirmed === 'boolean'); validateCatalogSnapshot(snapshot); const captured = immutable(snapshot); const confirmed = options.confirmed === true;
       return trackJob((async () => {
       const accepted = await enqueue('@definitions', async () => {
+        await yieldToHost();
         const previous = store.sources().find(value => value.sourceId === captured.sourceId);
         if (previous && captured.snapshotVersion !== previous.snapshotVersion && (captured.fetchedAt < previous.fetchedAt || captured.fetchedAt === previous.fetchedAt && !confirmed)) return false;
         if (previous?.snapshotVersion === captured.snapshotVersion) { if (captured.fetchedAt > previous.fetchedAt) await store.commit({ sources: [{ ...previous, fetchedAt: captured.fetchedAt }] }); return true; }
@@ -394,6 +396,8 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
         };
         const providerChanges = merge(captured.providers, store.providers()), modelChanges = merge(captured.models, store.models());
         const providerIds = new Set(providerChanges.map(value => value.record.id));
+        // Yield before opening the atomic store transaction, never inside it.
+        await yieldToHost();
         await store.commit({ providers: providerChanges, models: modelChanges, sources: [{ sourceId: captured.sourceId, fetchedAt: captured.fetchedAt, snapshotVersion: captured.snapshotVersion }], syncStates: store.connections().filter(value => providerIds.has(value.providerDefinitionId)).map(value => ({ connectionId: value.id, state: 'pending', targetSourceVersion: captured.snapshotVersion, syncedSourceVersion: store.syncState(value.id)?.syncedSourceVersion ?? null })) });
         return true;
       }, true);

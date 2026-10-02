@@ -2,7 +2,9 @@
 
 [宿主与客户端模块](README.md)
 
-`src/host/client/connections.ts` 的 `createConnectionsComponent({namespace?,openEntry?,fetch?})` 创建 `client-connections`，提供 `client.connections: ConnectionsPort`。inject 客户端根的 `local-storage`，此根只打开独立 `client.sqlite`，不共用执行库。`namespace` 默认 `anybox.client`；`openEntry` 是测试/平台替身边界。
+`src/applications/harness/client/connections.ts` 的 `createConnectionsComponent({namespace?,openEntry?,fetch?})` 创建 `client-connections`，提供 `client.connections: ConnectionsPort`。inject 客户端根的 `local-storage`，此根只打开独立 `client.sqlite`，不共用执行库。`namespace` 默认 `anybox.client`；`openEntry` 是测试/平台替身边界。
+
+连接是 Harness 内部功能。组件随客户端 Harness 打开安装、关闭卸载；通用外壳不管理本地/远程目标。工作区侧栏保留一处“执行设备”选择器与“管理连接”按钮，所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。关闭仅释放句柄，已保存连接和凭据保留。
 
 组件拥有 `client-connections` v1 的连接表和凭据意图日志，以及独立 system-keyring-store 句柄。公开 list/save/check/remove 不返回 token 或 credentialRef；只有受信网关 acquire 获得本次固定的配置版本与 token。连接包含本机 ID、名称、地址、固定 instanceId、revision；编辑使用 expectedRevision。相同 instanceId 不重复登记。
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createArchiveIndex } from '../dist/client/archive-client.js'
+import { createArchiveIndex } from '../dist/applications/harness/web/archive-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 test('archive refresh ignores stale responses, retains failures for retry, and joins disposal by aborting reads', async () => {

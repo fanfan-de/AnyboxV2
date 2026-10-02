@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
-import { openRunChangeStream } from '../dist/host/run-change-stream.js'
+import { openRunChangeStream } from '../dist/applications/harness/http/run-change-stream.js'
 
 function response() {
   return Object.assign(new EventEmitter(), {

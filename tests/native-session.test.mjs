@@ -1,14 +1,14 @@
-import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createHarness } from '../dist/harness/index.js'
-import { createSessionComponent } from '../dist/harness/session/component.js'
-import { createProjectComponent } from '../dist/harness/project/component.js'
+import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
+import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { controlledModels, modelSnapshot, ids } from './helpers/controlled-models.mjs'
 import { nativeRegistration, registerNativeRun, completedOutcome } from './helpers/native-records.mjs'
@@ -23,7 +23,7 @@ async function host(t, executing = false) {
   if (executing) {
     llm = controlledModels()
     await root.installComponent(llm.component())
-    harness = await createHarness(root, { agents })
+    harness = await createTestHarnessHost(root, { agents })
   } else {
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))

@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Component } from '@nya/core'
-import { localStorageServiceKey } from '../harness/storage/port.js'
-import type { LocalStoragePort, StorageMigration } from '../harness/storage/port.js'
+import { localStorageServiceKey } from '../storage/port.js'
+import type { LocalStoragePort, StorageMigration } from '../storage/port.js'
 
 export const hostAccessServiceKey = 'host.access'
 export interface InstanceInfo { readonly instanceId: string; readonly name: string; readonly apiVersion: 1; readonly capabilities: readonly string[] }
@@ -23,7 +23,7 @@ const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute('CREATE TABLE host_access_tokens (id TEXT PRIMARY KEY, name TEXT NOT NULL, digest TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT)')
 } }]
 const hash = (value: string) => createHash('sha256').update(value).digest()
-export function createHostAccessComponent(name = 'Anybox Harness'): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
+export function createHostAccessComponent(name = 'Anybox'): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
   return { name: 'host-access', inject: [localStorageServiceKey], async apply(ctx, _config, deps) {
     const db = deps[localStorageServiceKey]
     await db.migrate('host-access', migrations)
@@ -43,7 +43,7 @@ export function createHostAccessComponent(name = 'Anybox Harness'): Component.Ob
       return result
     }
     const revoked = (id: string) => { for (const listener of listeners) { try { listener(id) } catch { /* Observers cannot undo a committed revocation. */ } } }
-    const info = (): InstanceInfo => Object.freeze({ instanceId, name, apiVersion: 1, capabilities: Object.freeze(['projects.path', 'images', 'project-files', 'sse', 'tokens']) })
+    const info = (): InstanceInfo => Object.freeze({ instanceId, name, apiVersion: 1, capabilities: Object.freeze(['tokens']) })
     const service: HostAccessPort = {
       get instance() { return info() },
       authenticate(authorization) {

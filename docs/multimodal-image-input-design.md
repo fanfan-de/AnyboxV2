@@ -8,7 +8,7 @@
 
 图片以随机 assetId 命名，不跨上传去重。`sharp` 适配器识别真实格式、尺寸及动画状态，并实际解码验证；最终保存原始字节，SHA-256 校验完整性，不压缩或转码。状态为 staging → ready → deleting；只有 ready 可供提交。启动恢复未完成 staging/deleting，保留图片缺失或摘要错误会明确失败。
 
-应用限制集中在 `src/harness/image/limits.ts`，前后端共用：单图 10 MiB、每轮最多 8 张且合计 20 MiB、宽高各不超过 4096；上传/校验并发为 2。Models 独立包另设实际 HTTP 请求 32 MiB 上限，包含祖先历史、其他消息和 base64 膨胀。超过限制明确拒绝，不丢图或自动缩小。
+应用限制集中在 `src/applications/harness/core/image/limits.ts`，前后端共用：单图 10 MiB、每轮最多 8 张且合计 20 MiB、宽高各不超过 4096；上传/校验并发为 2。Models 独立包另设实际 HTTP 请求 32 MiB 上限，包含祖先历史、其他消息和 base64 膨胀。超过限制明确拒绝，不丢图或自动缩小。
 
 ## 输入、接纳与回收
 

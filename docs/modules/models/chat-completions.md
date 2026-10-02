@@ -18,7 +18,7 @@
 
 不补默认值，不允许模型、消息、认证、`n` 或任意扩展字段透传。工具与流式能力由配置显式声明，图片需配置明确声明 imageInput supported；服务端 webSearch 不支持。连接/参数被 execution 固定后，后续设置改动仅影响新 execution。
 
-`ChatCompletionsRequestPolicy` 可选定 `protocolId/name`、`maxTokensField`（`max_completion_tokens` 或 `max_tokens`）、`disableThinking`、`allowDeveloper` 和显式 `sourceMappings`。这是受信驱动构造策略，不是用户每轮的任意请求覆盖。当前 [DeepSeek](deepseek.md) 使用它复用解析、transport 和恢复，而不会在包中引用宿主代码。
+`ChatCompletionsRequestPolicy` 可选定 `protocolId/name`、`maxTokensField`（`max_completion_tokens` 或 `max_tokens`）、`disableThinking`、`allowDeveloper` 和显式 `sourceMappings`。这是受信驱动构造策略，不是用户每轮的任意请求覆盖。当前 [DeepSeek](deepseek.md) 使用它复用解析、transport 和恢复，而不会在包中引用应用代码。
 
 ## 输入与请求
 
@@ -46,4 +46,4 @@ intent 包含本轮 `messages` 和可选初始 `tools`。消息角色接受 syst
 
 `discover()`、`check()` 使用认证 GET `/models`；前者返回唯一模型 ID 候选，后者验证目录结构，均不创建配置、不发送生成参数。当前实现只增加静态图片输入，不支持任意多模态消息、多 choice 或旧 function_call 接口。
 
-[protocols.test.mjs](../../../packages/models/tests/protocols.test.mjs) 覆盖文本、并行函数调用、unknown fields、原生恢复、SSE 与策略差异；[runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 覆盖取消、关闭及配置捕获；宿主扩展测试见 [deepseek-protocol.test.mjs](../../../tests/deepseek-protocol.test.mjs)。[native-images.test.mjs](../../../packages/models/tests/native-images.test.mjs) 覆盖引用与 JSON/SSE 物化、工具续轮、混合版本恢复、实际资源退出、损坏与 32 MiB wire 上限。参见 [Models 协调服务](models.md) 与 [DeepSeek 驱动](deepseek.md)。
+[protocols.test.mjs](../../../packages/models/tests/protocols.test.mjs) 覆盖文本、并行函数调用、unknown fields、原生恢复、SSE 与策略差异；[runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 覆盖取消、关闭及配置捕获；Harness 扩展测试见 [deepseek-protocol.test.mjs](../../../tests/deepseek-protocol.test.mjs)。[native-images.test.mjs](../../../packages/models/tests/native-images.test.mjs) 覆盖引用与 JSON/SSE 物化、工具续轮、混合版本恢复、实际资源退出、损坏与 32 MiB wire 上限。参见 [Models 协调服务](models.md) 与 [DeepSeek 驱动](deepseek.md)。

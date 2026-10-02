@@ -2,11 +2,11 @@
 
 文档入口：[项目文档](docs/README.md) · [模块与组件手册](docs/modules/README.md)。组件按内聚职责分目录，每个组件有独立的接口、功能、数据归属、生命周期与测试说明。
 
-基于相邻的 NyaCore 构建 Agent Harness。[通用 Models 模块](packages/models/README.md) 已接入 Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Harness、业务 Session 或前端框架；[架构图](docs/architecture/models-module.md)说明其资源与扩展边界。
+AnyBox 是 NyaCore 应用的宿主应用，负责受信应用的注册、装配、启停、公共资源与界面承载。正式目录目前提供 Harness；Agent 工作区、模型管理、Prompt 管理和本地/远程 Agent 连接均属于 Harness 内部。源码中通用宿主位于 `src/host/`，Harness 完整应用位于 `src/applications/harness/`，默认目录与进程入口位于 `src/entrypoints/`；详见 [应用宿主](docs/products-v1.md)与[目录边界](docs/harness-module-boundary.md)。[通用 Models 模块](packages/models/README.md) 已接入 Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Harness、业务 Session 或前端框架；[架构图](docs/architecture/models-module.md)说明其资源与扩展边界。
 
 每个执行实例使用一个 Nya 根 Context，本机客户端另有独立根。Models 配置存储、系统凭据、模型服务、协议和目录组件，与 Harness 的 SQLite、Prompt、Projects、Session、Run、RunRuntime、协议应用绑定、Bash、Apply Patch 直接安装在同一根。Nya 管理依赖、重启和清理顺序；Provider、Model、项目和会话都是数据记录。
 
-当前原生协议框架见[组件说明](docs/harness-components.md)与[原生协议迁移设计](docs/native-protocol-agent-framework-design.md)。当前进程、组件注入与 Run 时序见[多实例架构图](docs/architecture/anybox-architecture-2026-09-29-multi-instance.md)；`docs/architecture/` 中较早的图保留历史记录，不作为当前执行契约。
+当前原生协议框架见[组件说明](docs/harness-components.md)与[原生协议迁移设计](docs/native-protocol-agent-framework-design.md)。改造前的进程、组件注入与 Run 时序见[多实例架构图](docs/architecture/anybox-architecture-2026-09-29-multi-instance.md)；`docs/architecture/` 中较早的图保留历史记录，不作为当前执行契约。
 
 Session 持有完整轮次对话树，允许同一父节点启动多个 Run。新请求必须提供 `parentNodeId`（空会话用 `null`）；成功节点只继承祖先路径，并在资源退出后原子提交。Web 支持节点查看、分支选择、多 Run 状态及最多四个跨项目拖拽分屏，布局与查看位置在当前标签页内恢复。详见[对话树设计](docs/session-conversation-tree.md)。
 
@@ -15,15 +15,18 @@ Session 持有完整轮次对话树，允许同一父节点启动多个 Run。�
 先按 [Models 安装示例](packages/models/README.md#install-in-an-application)在根上安装配置存储、凭据、模型服务和需要的协议，通过 `models.settings` 选择 Provider 定义并创建连接；有 Key 的适用模型自动形成执行配置。自定义模型另建用户定义和配置。随后装配 Harness：
 
 ```js
-import { createHarness } from './dist/harness/index.js'
+import { installHarness } from './dist/applications/harness/core/index.js'
 import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
+import { createImageAssetsComponent } from './dist/applications/harness/core/image/component.js'
 
 // root 已提供 models；assistant 是保存过的 ModelConfiguration ID。
 await root.installComponent(createLocalSqliteComponent('./data/harness.sqlite'))
-const harness = await createHarness(root, {
+await root.installComponent(createImageAssetsComponent({ directory: './data/harness.sqlite.images' }))
+const installation = await installHarness(root, {
   agents: [{ id: 'demo', instructions: 'Answer briefly.', modelId: 'assistant' }],
   canManageAgent: (actorId, agentId) => actorId === 'alice' && agentId === 'demo',
 })
+const { harness } = installation
 try {
   const project = await harness.openProject(process.cwd())
   const session = await harness.createSession(project.id, 'demo', 'assistant')
@@ -33,7 +36,7 @@ try {
   })
   console.log(await harness.waitRun(run.id))
 } finally {
-  await harness.close()
+  try { await installation.close() } finally { await root.fiber.dispose() }
 }
 ```
 
@@ -49,7 +52,7 @@ Prompt 支持草稿、不可变发布版本及 Agent 绑定，用途为 `agent-i
 
 Provider/Model 管统一服务商与模型定义，标记 user 或 external 来源。ProviderConnection 管账号连接、协议、地址、认证和超时；ModelConfiguration 关联定义和连接，固定远端标识/模型定义版本、能力和参数。保存连接与 Key 后自动准备适用模型，每个连接/模型定义只有一个基础配置，额外参数预设使用 baseline:false。每次保存生成不可变版本，`expectedRevision` 检查并发编辑；配置、停用或密钥变更只影响新 execution。模型能力区分支持、不支持和未知，前端分别显示声明与当前有效能力。未知能力不会被自动判定为支持。
 
-本机宿主同时安装 Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions 及 DeepSeek 非推理扩展。协议提供参数表单、范围、枚举和新建表单默认值；未设置的可选参数保持省略，模型发现只返回候选项，不覆盖本地配置。Anthropic 的 `max_tokens` 必填，新建表单预填 `4096`；Gemini Interactions 固定 `store: false`，当前参数不接受 temperature 或旧推理预算。保存不需要网络检查。当前调用契约接受文本、工具与流式事件，其他模态只作为目录参考信息。
+Harness 执行装配在 Models 启用后安装 Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions 及 DeepSeek 非推理扩展。协议提供参数表单、范围、枚举和新建表单默认值；未设置的可选参数保持省略，模型发现只返回候选项，不覆盖本地配置。Anthropic 的 `max_tokens` 必填，新建表单预填 `4096`；Gemini Interactions 固定 `store: false`，当前参数不接受 temperature 或旧推理预算。保存不需要网络检查。当前调用契约接受文本、工具与流式事件，其他模态只作为目录参考信息。
 
 DeepSeek 扩展复用通用 Chat Completions 传输与解析，只负责 `thinking: { type: 'disabled' }`、`max_tokens` 等原生差异；不支持推理参数或 `developer` 消息。接口依据见 [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/)。Responses 使用 `store: false`，原生 reasoning、phase 与函数续轮记录由 Session 受信持久化，执行时由私有 execution 恢复。Responses web_search 和 Anthropic web_search_20250305 默认关闭，显式声明能力后可在参数表单启用；Anthropic pause_turn 自动续轮。
 
@@ -67,7 +70,7 @@ Harness 在应用根安装 `tools.apply-patch`，向模型提供 `apply_patch({ 
 
 ## 本机 Web 界面
 
-先运行 `npm run harness:init` 生成一次性显示的设备访问令牌，再运行 `npm run web`。在客户端连接管理中添加 `http://127.0.0.1:3001` 并填入令牌。执行端与客户端是两个进程，也可分别使用 `npm run harness` / `npm run client`。云端与其他设备使用 HTTPS 配对。详见[独立部署、发行与恢复](docs/harness-deployment.md)。打开终端打印的 `http://127.0.0.1:<port>` 地址。在“设置 → 模型服务”中：
+先运行 `npm run harness:init` 生成一次性显示的设备访问令牌，再运行 `npm run web`。先打开 Harness，在其连接管理中添加 `http://127.0.0.1:3001` 并填入令牌。执行端与客户端是两个进程，也可分别使用 `npm run harness` / `npm run client`。云端与其他设备使用 HTTPS 配对。详见[独立部署、发行与恢复](docs/harness-deployment.md)。打开终端打印的 `http://127.0.0.1:<port>` 地址。新安装点击 Harness 后打开所选 Agent；已有业务库保留 Agent 打开目标。在 Harness 内进入“模型管理”：
 
 1. 在公共目录中选择提供方和连接方案，点击“填写新提供方”；也可选择模板或手动填写。调整账号名称、代理地址、认证和 API Key 后保存。
 2. 选择目录模型并点击“填写模型配置”，或获取连接返回的远端候选、手动填写模型标识；确认能力与默认参数并保存。
@@ -95,9 +98,9 @@ Harness 在应用根安装 `tools.apply-patch`，向模型提供 `apply_patch({ 
 
 环境变量仍在安装资源前校验，不加载 dotenv；已设置的空值会报错。API 地址只填基础地址，不附加 `/responses` 或 `/chat/completions`，不带用户名、密码、查询串或 fragment。
 
-“设置 → Prompt 管理”可编辑、发布、预览并绑定版本。“模型服务”配置与会话选择通过薄 HTTP 入口调用 Nya 服务。`/api/v1/changes` 同时提供提交后的 Run 变更提示和临时模型进展；慢连接受有界队列限制，只影响展示订阅。最终内容以持久 Run 和节点查询为准，刷新不会恢复半截流式输出。工具过程、取消与失败仍由 Run 状态展示。
+Harness 内的“Prompt 管理”可编辑、发布、预览并绑定版本。“模型服务”配置与会话选择通过薄 HTTP 入口调用 Nya 服务。`/api/v1/changes` 同时提供提交后的 Run 变更提示和临时模型进展；慢连接受有界队列限制，只影响展示订阅。最终内容以持久 Run 和节点查询为准，刷新不会恢复半截流式输出。工具过程、取消与失败仍由 Run 状态展示。
 
-执行端默认监听 `127.0.0.1:3001`，远端通过 HTTPS 反向代理和拥有者设备令牌接入。SIGINT/SIGTERM 通过 `harness.close()` 停止准入并等待整个执行根清理；单独客户端关闭只断开观察。异常退出的在途 Run 重启后结算 `interrupted`，不重放工具。详见 [Web 客户端设计](docs/web-client-design.md)。
+执行端默认监听 `127.0.0.1:3001`，远端通过 HTTPS 反向代理和拥有者设备令牌接入。SIGINT/SIGTERM 通过应用宿主 `close()` 停止准入并等待整个执行根清理；单独客户端关闭只断开观察。异常退出的在途 Run 重启后结算 `interrupted`，不重放工具。详见 [Web 客户端设计](docs/web-client-design.md)。
 
 ## 本地验证
 
@@ -117,15 +120,20 @@ npm run check
 | 路径 | 用途 |
 | --- | --- |
 | `packages/models/` | 通用 Models 服务、配置与凭据存储、协议实现及测试 |
-| `src/harness/agent/`、`src/harness/prompt/` | Agent 定义、Prompt 草稿、版本与绑定 |
-| `src/harness/project/`、`src/harness/session/` | 项目身份、会话树、Run 记录与恢复 |
-| `src/harness/run/` | Run 准入、PreparedRunProgram 交接、RunRuntime 与操作事实 |
-| `src/harness/tool/` | Bash 与 Apply Patch 资源组件 |
-| `src/storage/` | Harness SQLite 事务、领域迁移与排他所有权 |
-| `src/harness/index.ts` | 受信组合根与服务转发 |
-| `src/host/` | 独立进程装配、访问管理、Models 初始化、执行 API 与客户端网关 |
-| `src/client/`、`web/` | 多实例浏览器工作区、连接与设置界面 |
+| `src/applications/harness/core/agent/`、`src/applications/harness/core/prompt/` | Agent 定义、Prompt 草稿、版本与绑定 |
+| `src/applications/harness/core/project/`、`src/applications/harness/core/session/` | 项目身份、会话树、Run 记录与恢复 |
+| `src/applications/harness/core/run/` | Run 准入、PreparedRunProgram 交接、RunRuntime 与操作事实 |
+| `src/applications/harness/core/tool/` | Bash 与 Apply Patch 资源组件 |
+| `src/storage/` | 宿主公共 SQLite 事务、领域迁移与排他所有权 |
+| `src/applications/harness/core/index.ts` | 受信组合根与服务转发 |
+| `src/host/` | 通用应用注册、生命周期、访问管理、HTTP 分派与前端外壳 |
+| `src/applications/harness/` | Harness 注册、装配、领域组件、业务 API、客户端网关与界面 |
+| `src/entrypoints/` | 正式应用目录、默认配置、启动命令与进程信号 |
+| `src/host/web/`、`web/index.html`、`web/style.css` | AnyBox 应用列表、标签与全局路由 |
+| `src/applications/harness/web/`、`web/apps/agent/` | Harness 多实例工作区、连接与设置界面 |
 | `tests/helpers/controlled-models.mjs` | 可控 Models 契约替身 |
 | `tests/helpers/managed-models.mjs` | 实际 Models 模块与可控协议的测试装配 |
 | `docs/harness-components.md` | 组件职责、依赖、状态归属与清理 |
 | `docs/agent-harness-plan.md` | 阶段、边界与验收记录 |
+
+通用应用宿主支持按受信目录注册多个 NyaCore 应用，并在 Web 标签中独立打开、保留界面和停止。正式目录目前提供 Harness；开发入口见[应用接入说明](docs/application-development.md)，设计见[应用宿主](docs/products-v1.md)。

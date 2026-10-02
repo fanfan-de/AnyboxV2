@@ -4,8 +4,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@nya/core'
-import { parseWebStartupConfig } from '../dist/host/startup-config.js'
-import { installWebModels } from '../dist/host/models-startup.js'
+import { parseWebStartupConfig } from '../dist/applications/harness/startup-config.js'
+import { installWebModels } from '../dist/applications/harness/models-startup.js'
 
 test('Web startup separates persistent Models storage from the one-time legacy import', () => {
   const config = parseWebStartupConfig({})

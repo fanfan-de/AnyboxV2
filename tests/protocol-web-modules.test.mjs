@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getProtocolWebModule, decodeProtocolWebView } from '../dist/client/protocols/modules.js'
+import { getProtocolWebModule, decodeProtocolWebView } from '../dist/applications/harness/web/protocols/modules.js'
 
 const snapshot = protocolId => ({ envelopeVersion: 1, viewSchemaVersion: 1, protocolId,
   sessionId: 's', runId: 'r', viewRevision: 1, status: 'provisional',

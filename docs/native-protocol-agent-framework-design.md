@@ -16,16 +16,16 @@ Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResu
 | --- | --- | --- |
 | Models 原生内核 | `packages/models/src/native-types.ts`、`execution.ts`、`component.ts` | 固定配置与凭据、驱动代租约、prepare/start、实际退出屏障、记录与恢复 |
 | 协议驱动 | `packages/models/src/protocols/` | 原生参数、请求构建、JSON/SSE 消费、私有候选状态、restore/commit |
-| 协议应用绑定 | `src/harness/protocol-agents/registry.ts` | 固定驱动代、Loop、根输入/工具编码、历史策略与 program 闭包 |
-| 五协议 Loop | `src/harness/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案；DeepSeek复用Chat工厂 |
-| Run | `src/harness/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
-| RunRuntime | `src/harness/run/runtime-component.ts` | 全部受管操作、取消、真实退出、持久屏障、视图与结算 |
-| 图片资源 | `src/harness/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
-| Session | `src/harness/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
-| 服务端展示 | `src/harness/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
+| 协议应用绑定 | `src/applications/harness/core/protocol-agents/registry.ts` | 固定驱动代、Loop、根输入/工具编码、历史策略与 program 闭包 |
+| 五协议 Loop | `src/applications/harness/core/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案；DeepSeek复用Chat工厂 |
+| Run | `src/applications/harness/core/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
+| RunRuntime | `src/applications/harness/core/run/runtime-component.ts` | 全部受管操作、取消、真实退出、持久屏障、视图与结算 |
+| 图片资源 | `src/applications/harness/core/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
+| Session | `src/applications/harness/core/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
+| 服务端展示 | `src/applications/harness/core/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
 | 协议 Web | `src/web/protocols/` | 安全 decoder/reducer、输入编码和稳定 Turn 生命周期 |
 | 共享 Web | `src/web/session-*`、`workspace-client.ts`、`run-change-*` | 分支、控制、订阅、重连、滚动与四面板 |
-| DeepSeek 扩展 | `src/host/deepseek-protocol.ts` | 独立协议ID、max_tokens、禁用thinking、developer限制和旧参数转换器 |
+| DeepSeek 扩展 | `src/applications/harness/deepseek-protocol.ts` | 独立协议ID、max_tokens、禁用thinking、developer限制和旧参数转换器 |
 
 Models 不导入应用源码、Session、数据库业务表或工具实现。Session 只理解公共信封、归属与引用，不解释协议块。RunRuntime 不识别 finish_reason、stop_reason 或任何协议的停止条件。
 
@@ -89,7 +89,7 @@ Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原
 | Chat maxOutputTokens / 推理力度 | max_completion_tokens / reasoning_effort |
 | Anthropic maxOutputTokens / thinking / effort | max_tokens / thinking / output_config |
 | Gemini 输出上限和thinking | generation_config |
-| DeepSeek maxOutputTokens | max_tokens；宿主扩展固定thinking disabled |
+| DeepSeek maxOutputTokens | max_tokens；Harness 扩展固定 thinking disabled |
 
 新基础配置、预设、设置表单和旧环境变量初始化都写原生参数。Anthropic新配置显式保存max_tokens:4096；旧配置保留旧值。迁移可重复进入，失败回滚整个本库事务。
 
@@ -154,7 +154,7 @@ SSE仍由最多四Session共用，同Run未发送快照可合并，保留256KiB�
 
 ## 10. 真实数据切换与回退
 
-1. 通过旧 `harness.close()` 停止并等待全部execution、工具、凭据及写入退出。
+1. 通过应用宿主 `close()` 停止并等待全部execution、工具、凭据及写入退出。
 2. 在无占用状态备份Models配置库、业务库与图片目录，保留目录缓存及凭据命名空间信息。
 3. 启动新组合根，配置v3与业务v6分别事务迁移；任一失败则不接受Run，修复后可重复启动。
 4. 核对新会话原生运行、旧会话只读、配置参数和Key状态，再开放正常使用。

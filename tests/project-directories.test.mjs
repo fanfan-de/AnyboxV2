@@ -6,9 +6,9 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createProjectComponent } from '../dist/harness/project/component.js'
-import { createDirectoryBrowser } from '../dist/harness/project/directory-browser.js'
-import { createDirectoryAccessProvider } from '../dist/harness/project/directory-access.js'
+import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
+import { createDirectoryBrowser } from '../dist/applications/harness/core/project/directory-browser.js'
+import { createDirectoryAccessProvider } from '../dist/applications/harness/core/project/directory-access.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 async function joined(call) { try { return await call.result } finally { await call.done } }

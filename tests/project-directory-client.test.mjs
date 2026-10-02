@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createDirectoryPositions, createProjectDirectoryController } from '../dist/client/project-directory-client.js'
-import { directoryMessageFor } from '../dist/client/project-directory-view.js'
+import { createDirectoryPositions, createProjectDirectoryController } from '../dist/applications/harness/web/project-directory-client.js'
+import { directoryMessageFor } from '../dist/applications/harness/web/project-directory-view.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 const instance = '11111111-1111-4111-8111-111111111111'

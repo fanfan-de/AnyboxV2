@@ -1,5 +1,8 @@
 # AnyboxV2 多实例架构图
 
+> 此图记录 2026-09-29 的部署结构。通用应用注册、多标签、host.http 与 harness.http 的当前边界以[应用宿主设计](../products-v1.md)和[组件清单](../modules/README.md)为准。
+
+
 [返回文档首页](../README.md) · [Harness 模块边界](../harness-module-boundary.md) · [组件清单](../modules/README.md)
 
 核对日期：2026-09-29，对应提交 `fd53c6a` 的源码装配。三张图分别说明进程与外部资源、执行根内的组件注入关系，以及一次 Run 的执行时序。每个进程只有一个 Nya 根 Context；图中的子图只按职责分组，不表示子 Context、npm 包或独立服务。
@@ -12,7 +15,7 @@
 
 ```mermaid
 flowchart LR
-  subgraph Browser["浏览器 · web/ + src/client/"]
+  subgraph Browser["浏览器 · web/ + src/applications/harness/web/"]
     UI["工作区 UI<br/>项目 · 会话树 · 最多 4 面板<br/>设置：模型 / Prompt / 连接"]
   end
 
@@ -181,8 +184,8 @@ sequenceDiagram
 
 ## 源码依据
 
-- 进程装配：[执行端入口](../../src/host/harness-main.ts)、[客户端入口](../../src/host/client-main.ts)、[Models 装配](../../src/host/models-startup.ts)、[Harness 组合根](../../src/harness/index.ts)。
+- 进程装配：[执行端入口](../../src/entrypoints/harness-main.ts)、[客户端入口](../../src/entrypoints/client-main.ts)、[Models 装配](../../src/applications/harness/models-startup.ts)、[Harness 组合根](../../src/applications/harness/core/index.ts)。
 - 注入关系：各组件工厂的 `inject` 声明，入口见[组件清单](../modules/README.md)。
-- 执行时序：[Run](../../src/harness/run/component.ts)、[RunRuntime](../../src/harness/run/runtime-component.ts)、[程序契约](../../src/harness/run/program.ts)、[Loop 公共运行器](../../src/harness/protocol-agents/shared.ts)。
+- 执行时序：[Run](../../src/applications/harness/core/run/component.ts)、[RunRuntime](../../src/applications/harness/core/run/runtime-component.ts)、[程序契约](../../src/applications/harness/core/run/program.ts)、[Loop 公共运行器](../../src/applications/harness/core/protocol-agents/shared.ts)。
 
 组件、注入依赖或进程边界变化时，同步核对本文三张图。

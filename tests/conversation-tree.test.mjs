@@ -1,20 +1,20 @@
-import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { registerNativeRun, completeNativeRun, completedOutcome } from './helpers/native-records.mjs'
-import { createSessionComponent } from '../dist/harness/session/component.js'
-import { sessionServiceKey, sessionRunServiceKey } from '../dist/harness/session/port.js'
+import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, realpathSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createHarness } from '../dist/harness/index.js'
+import { createTestHarnessHost } from './helpers/harness-host.mjs'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/harness/storage/port.js'
-import { createProjectComponent, projectServiceKey } from '../dist/harness/project/component.js'
-import { runRuntimeServiceKey } from '../dist/harness/run/runtime-component.js'
-import { assemblePath } from '../dist/harness/session/domain.js'
+import { localStorageServiceKey } from '../dist/storage/port.js'
+import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
+import { runRuntimeServiceKey } from '../dist/applications/harness/core/run/runtime-component.js'
+import { assemblePath } from '../dist/applications/harness/core/session/domain.js'
 import { controlledModels, modelSnapshot, deferred, ids } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Original instructions.' }]
@@ -26,7 +26,7 @@ async function host(directory, clock = now) {
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   await root.installComponent(llm.component())
-  const harness = await createHarness(root, { agents, now: clock })
+  const harness = await createTestHarnessHost(root, { agents, now: clock })
   const project = await harness.openProject(directory)
   const plans = new Map(), loop = root.get(runRuntimeServiceKey), start = loop.start.bind(loop)
   loop.start = request => { plans.set(request.runId, request.program); return start(request) }

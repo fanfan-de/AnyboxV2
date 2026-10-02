@@ -6,11 +6,11 @@
 
 状态：2026-09-29，已按五种协议图片输入、项目文件快照引用及会话归档/恢复核对。组件契约见本文与 [会话树](./session-conversation-tree.md)、[Models 模块](../packages/models/README.md)，具体行为以当前源码及行为测试为依据。迁移决策和验收矩阵见 [原生协议设计](./native-protocol-agent-framework-design.md)。
 
-独立 Harness 模块的目标归属、目录结构及当前路径映射见 [Harness 模块边界与目标目录结构](./harness-module-boundary.md)。该规划区分 Harness 业务组件、Models／存储依赖、宿主与客户端；本文继续记录当前单根装配和实际生命周期，不将规划中的目录或 API 适配计作已完成组件。
+AnyBox 宿主与 Harness 应用的当前目录和依赖方向见 [目录边界](./harness-module-boundary.md)。通用宿主位于 `src/host/`，Harness 的注册、核心、HTTP、客户端和界面集中在 `src/applications/harness/`，默认组合在 `src/entrypoints/`。目录拆分不增加 Nya Context 或组件，本文记录现有单根装配和实际生命周期。
 
 ## 根、服务与资源归属
 
-应用只使用一个 Nya 根 Context。Models、业务 SQLite、图片资源、Projects、Project Files、Prompt、Session、协议应用绑定、RunRuntime、Run 和 Web 直接安装在根上；Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/harness/index.ts` 是受信组合根，Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
+应用只使用一个 Nya 根 Context。Models、业务 SQLite、图片资源、Projects、Project Files、Prompt、Session、协议应用绑定、RunRuntime、Run 和 Web 直接安装在根上；Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/applications/harness/core/index.ts` 提供 Prompt/Agent 组件分组和受信门面，`src/applications/harness/runtime.ts` 根据执行端 Harness 打开目标保留根级 Fiber 句柄；Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
 
 | 组件 | 服务 / 主要依赖 | 独占资源与关闭行为 |
 | --- | --- | --- |
@@ -35,11 +35,12 @@
 | Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime | 准入、幂等和交接前资源；停止准入并等交接与在途 Run |
 | 执行访问管理 | `host.access` | 既有业务库中的实例身份与令牌摘要；撤销观察连接 |
 | 客户端连接 | `client.connections` | 独立 client.sqlite 与系统凭据意图日志 |
-| 客户端网关 | `client.gateway` | 独立监听器、静态页面、JSON/上传/SSE 转发与退出等待 |
+| 客户端外壳 | `app.client-http` | 常驻回环监听器、静态页面与应用控制 |
+| Harness 客户端网关 | `client.gateway` | 随 Harness 安装的连接、JSON/上传/SSE 转发与退出等待 |
 | 本机目录选择器 | `host.directory-picker` | 客户端根中的原生对话框；仅匹配启动确认的本机实例 |
-| Web | `host.harness-api`；注入业务与 Models 管理服务 | HTTP、共用 SSE、读取消与背压；停止监听并等连接退出 |
+| Web | `host.http`；应用入口注入访问、产品与活动管理服务 | 通用监听与应用分派；停止监听并等待请求真实退出 |
 
-源码入口分别位于 `packages/models/src/`、`src/{project,project-files,prompt,session,image,run,protocol-agents,tool,web}/`。Session 的 `sqlite-records.ts` 是内部提供方，不额外注册组件。H0 的 `src/resource-probe.ts` 仅用于资源归属验证，不是正式执行路径。
+源码入口分别位于 `packages/models/src/`、`src/applications/harness/core/`、应用的 `http/` 与 `client/`，通用监听器和外壳位于 `src/host/`。Session 的 `sqlite-records.ts` 是内部提供方，不额外注册组件。H0 的 `src/resource-probe.ts` 仅用于资源归属验证，不是正式执行路径。
 
 三套数据库路径不能相同。配置库持有定义、连接、版本化原生参数、`historyScopeEpoch` 和 Vault 意图；目录缓存只存公开来源；业务库持有 Session/Run/Prompt/Projects、图片元数据/保留凭证及文件快照正文/准备批次/保留凭证。图片原字节另存图片组件独占目录，文本快照不新增目录。系统凭据始终由 macOS Keychain、Windows Credential Manager 或 Linux Secret Service 保存。各领域组件在 `apply` 中调用 `migrate(domain, migrations)`，通用 SQLite 不接收业务迁移列表。
 
@@ -53,11 +54,11 @@
 
 操作的 `result` 与 `done` 含义不同：底层结果可能早于退出，`done` 表示工作与清理已经结束（拒绝表示清理失败）。Models 在底层真实退出后才提交候选上下文并返回公共结果；`done` 失败不会无限等待悬空的 `result`。`close()` 同步关闭准入，幂等取消、等待和冻结退出报告，报告保留已确认记录、诊断、恢复元数据与清理状态，再释放凭据与可变上下文。即使关闭失败，已知事实不能被成功状态替代或丢弃。
 
-Models 配置库 v3 将当前旧参数纯函数转换为 `{ protocolId, formatVersion: 1, value }`，不访问网络或 Vault，不修改旧版本 JSON。未知扩展或不能无损转换的参数保留 formatVersion 0 可读状态，禁止执行并显示待迁移。DeepSeek 转换器留在宿主。Anthropic 新配置显式初始化 `max_tokens: 4096`，执行时不补隐藏默认值。
+Models 配置库 v3 将当前旧参数纯函数转换为 `{ protocolId, formatVersion: 1, value }`，不访问网络或 Vault，不修改旧版本 JSON。未知扩展或不能无损转换的参数保留 formatVersion 0 可读状态，禁止执行并显示待迁移。DeepSeek 转换器归 Harness 的 Models 接入，不进入通用宿主或 Models 包。Anthropic 新配置显式初始化 `max_tokens: 4096`，执行时不补隐藏默认值。
 
 ## 协议应用绑定与独立 Loop
 
-`src/harness/protocol-agents/registry.ts` 将具体驱动代、Loop、输入编码、历史策略和展示投影闭包绑定为 `PreparedRunProgram`。公共 Run 只准备并交接 program；Runtime 只调用 `execute(host)` 和 `close()`，不解释停止原因。初始化声明只允许已知 Bash 与 Apply Patch；不存在动态工具注册中心。
+`src/applications/harness/core/protocol-agents/registry.ts` 将具体驱动代、Loop、输入编码、历史策略和展示投影闭包绑定为 `PreparedRunProgram`。公共 Run 只准备并交接 program；Runtime 只调用 `execute(host)` 和 `close()`，不解释停止原因。初始化声明只允许已知 Bash 与 Apply Patch；不存在动态工具注册中心。
 
 | 协议 | 原生历史与 Loop 决策 | 参数与专属能力 |
 | --- | --- | --- |
@@ -65,7 +66,7 @@ Models 配置库 v3 将当前旧参数纯函数转换为 `{ protocolId, formatVe
 | Anthropic Messages | 完整 content、thinking/signature/redacted、tool_use 与 server_tool_use；只执行本地工具；pause_turn 自动继续 | 固定版本头与 x-api-key；`max_tokens`；基础 web_search_20250305；跨响应保留服务端 ID |
 | Chat Completions | 原生 messages、assistant/tool_calls、tool 消息与 finish_reason | `max_completion_tokens`、reasoning_effort；无统一消息恢复来源 |
 | Gemini Interactions | 按时间顺序保留 steps、thought signature、函数身份与结果 | generation_config；`store:false`；不用 previous_interaction_id 或后台任务 |
-| DeepSeek 非推理 | 独立 ID，复用 Chat transport/codec/Loop 工厂 | `max_tokens`、固定 disabled thinking、拒绝 developer；转换器仅在宿主 |
+| DeepSeek 非推理 | 独立 ID，复用 Chat transport/codec/Loop 工厂 | `max_tokens`、固定 disabled thinking、拒绝 developer；转换器归 Harness 接入 |
 
 五种协议均支持 JSON、流式消费、客户端工具往返、持久记录、跨 Run/重启恢复和安全 Turn 展示，也均支持显式声明能力的静态 JPEG/PNG/WebP 本地图片输入和项目文本文件资料。音频、图片输出、工具返回图片、用户交互等待、远端后台任务及并行工具调度不在本期范围。图片及搜索能力必须由配置明确声明，不按协议 ID 推断模型能力。
 
@@ -80,7 +81,7 @@ Models 配置库 v3 将当前旧参数纯函数转换为 `{ protocolId, formatVe
 5. Session 接受事务复核归档状态、绑定与父恢复引用，原子固定首次协议，并通过图片与文件组件 retainIn 在同一事务验证及永久保留有序引用。不同协议并发首次准入只接受符合已提交绑定的一方；失败准备由 Run 关闭并等待。
 6. `RunRuntime.start({ runId, program })` 在第一次异步读取前同步登记所有权。同步拒绝表示未接管，由 Run 清理；之后均由 Runtime 清理和结算。
 
-`waitRun()` 覆盖已接受但尚未交接的窗口。取消 waiter 只停止等待，不取消 Run。关闭门面先阻止新调用，随后 Nya 卸载根全部组件，等待准备、模型、工具、记录、Vault 与数据库退出；关闭后的 Harness 不可复用。
+`waitRun()` 覆盖已接受但尚未交接的窗口。取消 waiter 只停止等待，不取消 Run。关闭 `installHarness()` 安装句柄先阻止新调用，随后只卸载该次安装的 Harness 组件，等待准备、工具与记录实际退出；宿主提供的 Models、Vault、数据库和图片组件由宿主关闭。应用宿主总关闭先停止产品装配与业务准入，再卸载根全部组件；Harness 门面不暴露 `close()`；关闭后的门面不可复用。
 
 ## RunRuntime 与持久屏障
 
@@ -122,7 +123,7 @@ Bash 组件拥有子进程、输出缓冲、超时与终止计时器。Apply Pat
 
 ## 本地升级与验证
 
-Models 配置库 v3 与业务库中的各领域迁移独立提交；业务库当前包含 `run-state` v7、`image-assets` v1 和 `project-files` v1，不能用 Session 的迁移版本代表通用存储版本。不建立跨库事务；任一必需组件启动失败均阻止 Run 准入。升级真实数据前先 `harness.close()` 等资源退出，备份配置库、业务库及图片原字节目录，再启动新组合根。代码回退须同时恢复备份，旧代码不能直接打开升级库。
+Models 配置库 v3 与业务库中的各领域迁移独立提交；业务库当前包含 `run-state` v7、`image-assets` v1 和 `project-files` v1，不能用 Session 的迁移版本代表通用存储版本。不建立跨库事务；任一必需组件启动失败均阻止 Run 准入。升级真实数据前先调用应用宿主 `close()` 等全部资源退出，备份配置库、业务库及图片原字节目录，再启动新组合根。代码回退须同时恢复备份，旧代码不能直接打开升级库。
 
 根 `npm run check` 覆盖 Models 与应用行为测试。测试使用临时 SQLite、内存凭据和模拟 HTTP；真实模型 API 与各平台系统凭据仍需分别门控验收，本地模拟不能替代这些结论。
 
@@ -135,3 +136,5 @@ Models 配置库 v3 与业务库中的各领域迁移独立提交；业务库当
 ## 项目文件引用
 
 Harness 在应用根安装 [Project Files](modules/sessions/project-files.md)，注入 Projects 与业务存储，Session 通过依赖使用它。组件独占文本文件搜索、读取、SQLite 快照和回收，project-files v1 自行登记表。Session 接受事务同步保留文件引用，Run 准备时读取本轮内容并等待退出，协议注册表仅编码用户资料。没有新增数据库连接、文件目录、Context 或模型工具。详见[跨组件设计](project-file-references-design.md)。
+
+Harness 业务 HTTP/SSE 已归 [Harness HTTP](modules/web/harness-http.md)（harness-http / harness.http）；仅在执行端应用打开时安装。通用注册目录与运行时不是组件，详见[应用宿主设计](products-v1.md)。

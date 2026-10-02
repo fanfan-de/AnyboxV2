@@ -4,7 +4,7 @@
 
 ## 当前基线
 
-[通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderConnection 管连接和密钥引用，ModelConfiguration 管执行版本、能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、Anthropic Messages、标准 Chat Completions、Gemini Interactions 和宿主的 DeepSeek 非推理扩展可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
+[通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderConnection 管连接和密钥引用，ModelConfiguration 管执行版本、能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、Anthropic Messages、标准 Chat Completions、Gemini Interactions 和 Harness 的 DeepSeek 非推理扩展可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
 
 所有组件直接安装在一个 Nya 根 Context。Session 独占会话、Run、不可变节点、原生记录和恢复引用；Projects 管项目身份。Run 检查幂等、选模、指定父链和 Prompt，协议绑定准备固定驱动代的 PreparedRunProgram。RunRuntime 同步接管资源，管理意图/观察持久屏障、取消、退出与结算；协议独立 Loop 决定工具回填和续轮。旧 AgentLoop、统一消息和 `models.open()` 已删除。
 

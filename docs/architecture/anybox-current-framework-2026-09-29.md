@@ -29,10 +29,10 @@
 
 ## 源码依据与维护
 
-- [当前进程入口](../../src/host/serve.ts)与 [Harness 装配](../../src/harness/index.ts)：根、组件安装与关闭入口。
+- [当前进程入口](../../src/entrypoints/serve.ts)与 [Harness 装配](../../src/applications/harness/core/index.ts)：根、组件安装与关闭入口。
 - [Web 组件](../../src/host/component.ts)：API、静态客户端、SSE 和直接注入的服务。
-- [Models 装配](../../src/host/models-startup.ts)：独立包、目录组件与 DeepSeek 宿主扩展。
-- [Run](../../src/harness/run/component.ts)、[RunRuntime](../../src/harness/run/runtime-component.ts)与[协议应用绑定](../../src/harness/protocol-agents/registry.ts)：准入、program 交接、运行与协议边界。
+- [Models 装配](../../src/applications/harness/models-startup.ts)：独立包、目录组件与 DeepSeek 宿主扩展。
+- [Run](../../src/applications/harness/core/run/component.ts)、[RunRuntime](../../src/applications/harness/core/run/runtime-component.ts)与[协议应用绑定](../../src/applications/harness/core/protocol-agents/registry.ts)：准入、program 交接、运行与协议边界。
 - [组件清单](../modules/README.md)与[协作总览](../harness-components.md)：资源、存储和清理规则。
 
 本图是当前实现的记录；目标目录见独立的边界文档。组件或关键关系改变时，同步核对 SVG、PNG、Mermaid 和本文，不能仅修改图中标签。较早架构图保留各自历史语义，不覆盖其文件。

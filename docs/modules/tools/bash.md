@@ -8,7 +8,7 @@ Bash 组件在选定项目目录中执行本机命令，独占每次调用的子
 
 | 项目 | 定义 |
 | --- | --- |
-| 源码 | [bash-component.ts](../../../src/harness/tool/bash-component.ts) |
+| 源码 | [bash-component.ts](../../../src/applications/harness/core/tool/bash-component.ts) |
 | 工厂 | `createBashComponent(options?: BashOptions)` |
 | Nya 名称 | `bash-tool` |
 | 提供服务 | `tools.bash`，类型 `BashPort` |

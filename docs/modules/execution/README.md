@@ -21,7 +21,7 @@
 
 ## 依赖与装配
 
-[组合根](../../../src/harness/index.ts) 在应用唯一的根 Context 上安装组件；没有 Harness 子 Context，也没有项目或任务 Context。它在尚无 `harness.protocol-agents` 服务时安装注册表，并为 `models.settings.protocols()` 已配置且本项目支持的协议安装绑定。
+[组合根](../../../src/applications/harness/core/index.ts) 在应用唯一的根 Context 上安装组件；没有 Harness 子 Context，也没有项目或任务 Context。它在尚无 `harness.protocol-agents` 服务时安装注册表，并为 `models.settings.protocols()` 已配置且本项目支持的协议安装绑定。
 
 - Run 注入 Session 两个端口、[Agent Prompt](../prompts/agent-prompts.md)、`models`、协议 Agent 注册表、RunRuntime 和 [Projects](../sessions/projects.md)。
 - RunRuntime 注入 `harness.session-runs`、[Bash](../tools/bash.md) 与 [Apply Patch](../tools/apply-patch.md)。它不解释原生协议状态。

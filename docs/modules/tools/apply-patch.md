@@ -8,9 +8,9 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 
 | 项目 | 定义 |
 | --- | --- |
-| 组件入口 | [apply-patch-component.ts](../../../src/harness/tool/apply-patch-component.ts) |
-| 纯领域逻辑 | [apply-patch-domain.ts](../../../src/harness/tool/apply-patch-domain.ts)：`parsePatch`、`validatePatchText`、`applyPatchText` |
-| 项目自有类型 | [apply-patch-types.ts](../../../src/harness/tool/apply-patch-types.ts) |
+| 组件入口 | [apply-patch-component.ts](../../../src/applications/harness/core/tool/apply-patch-component.ts) |
+| 纯领域逻辑 | [apply-patch-domain.ts](../../../src/applications/harness/core/tool/apply-patch-domain.ts)：`parsePatch`、`validatePatchText`、`applyPatchText` |
+| 项目自有类型 | [apply-patch-types.ts](../../../src/applications/harness/core/tool/apply-patch-types.ts) |
 | 工厂 / Nya 名称 | `createApplyPatchComponent(options?)` / `apply-patch-tool` |
 | 服务 / `inject` | `tools.apply-patch: ApplyPatchPort` / `harness.projects` |
 | 工具名 / 消费方 | `apply_patch` / [RunRuntime](../execution/run-runtime.md) |
