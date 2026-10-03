@@ -1,5 +1,7 @@
 # AnyboxV2
 
+本仓库 [AnyboxV2](https://github.com/fanfan-de/AnyboxV2) 是 Anybox 后续开发的维护仓库。旧仓库 [anybox](https://github.com/fanfan-de/anybox) 已停止维护，保留历史代码与资料；新的开发、问题反馈和贡献请在本仓库进行。产品名称仍为 **Anybox**，Agent 产品名称为 **Anybox Harness**。
+
 文档入口：[项目文档](docs/README.md) · [模块与组件手册](docs/modules/README.md)。组件按内聚职责分目录，每个组件有独立的接口、功能、数据归属、生命周期与测试说明。
 
 基于相邻的 NyaCore 构建 Agent Harness。[通用 Models 模块](packages/models/README.md) 已接入 Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Harness、业务 Session 或前端框架；[架构图](docs/architecture/models-module.md)说明其资源与扩展边界。
