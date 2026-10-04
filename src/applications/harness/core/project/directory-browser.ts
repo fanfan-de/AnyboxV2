@@ -56,7 +56,7 @@ function breadcrumbs(path: string): readonly Readonly<{ name: string; path: stri
 
 /** Projects owns reservations, live cursors, in-flight calls and their actual cleanup. */
 export function createDirectoryBrowser(options: DirectoryBrowserOptions = {}): DirectoryBrowser {
-  // A bad host default must not block unrelated Harness services or explicit path recovery.
+  // A bad host default must not block unrelated harness server services or explicit path recovery.
   const homePath = options.homePath === undefined ? undefined
     : isAbsolute(options.homePath) && !options.homePath.includes('\0') ? resolve(options.homePath) : options.homePath
   const access = options.access ?? createDirectoryAccessProvider()

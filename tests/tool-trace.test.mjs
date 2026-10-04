@@ -73,9 +73,21 @@ test('cleanup failure preserves results carried by failure or already observed',
 
 // Only the DOM surface used by the renderer is needed to inspect its text safely.
 function element(tag) {
-  return { tag, className: '', textContent: '', children: [], append(...children) { this.children.push(...children) } }
+  let ownText = ''
+  const matches = (node, selector) => selector.startsWith('.') ? node.className.split(/\s+/).includes(selector.slice(1)) : node.tag === selector
+  const node = { tag, className: '', dataset: {}, attributes: {}, children: [], hidden: false, parentElement: undefined,
+    setAttribute(name, value) { this.attributes[name] = String(value) },
+    addEventListener(type, listener, options) { (this.listeners ??= []).push({ type, listener, signal: options?.signal }) },
+    append(...children) { for (const child of children) { child.remove(); child.parentElement = this; this.children.push(child) } },
+    remove() { if (this.parentElement) this.parentElement.children = this.parentElement.children.filter(child => child !== this); this.parentElement = undefined },
+    querySelectorAll(selector) { return this.children.flatMap(child => [...(matches(child, selector) ? [child] : []), ...child.querySelectorAll(selector)]) },
+    querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null },
+  }
+  Object.defineProperty(node, 'textContent', { get: () => ownText + node.children.map(child => child.textContent).join(''),
+    set(value) { ownText = String(value); for (const child of node.children) child.parentElement = undefined; node.children = [] } })
+  return node
 }
-function content(node) { return [node.textContent, ...node.children.map(content)].join('\n') }
+const field = (card, key) => card.querySelectorAll('.tool-copy').find(button => button.dataset.copyField === key)?.parentElement.parentElement
 
 test('Apply Patch cards render every outcome, preview truncation, actual changes and unfinished moves', () => {
   const previous = globalThis.document
@@ -85,20 +97,25 @@ test('Apply Patch cards render every outcome, preview truncation, actual changes
     for (const status of Object.keys(labels)) {
       const p = { ...patch(), patch: '<script>untrusted patch</script>', patchTruncated: true }
       const call = toolTrace({ status: 'cancelled' }, [batch(p), start(p), observed(p, status)])[0]
-      const card = createToolCallCard(call), text = content(card)
+      const card = createToolCallCard(call), text = card.textContent
       assert.match(text, /Apply Patch/)
       assert.ok(text.includes(labels[status]))
       assert.match(text, /补丁预览已截断/)
-      assert.equal(card.children.find(child => child.tag === 'pre').textContent, p.patch)
-      if (status !== 'rejected') assert.match(text, /实际文件变更\n创建 \/project\/created.txt/)
-      if (status !== 'applied') assert.match(text, /\/project\/old.txt → \/project\/new.txt/)
+      assert.equal(field(card, 'patch').querySelector('.tool-output').textContent, p.patch)
+      assert.equal(card.querySelectorAll('script').length, 0, 'literal patch HTML does not become executable DOM')
+      assert.equal(field(card, 'changes').hidden, status === 'rejected')
+      if (status !== 'rejected') assert.equal(field(card, 'changes').querySelector('.tool-output').textContent, '创建 /project/created.txt')
+      assert.equal(field(card, 'pending').hidden, status === 'applied')
+      if (status !== 'applied') assert.equal(field(card, 'pending').querySelector('.tool-output').textContent, '修改 /project/old.txt → /project/new.txt')
       if (status === 'partial' || status === 'rejected') assert.match(text, /conflict：File changed · \/project\/old.txt:3/)
     }
     const call = { ...patch(), state: 'failed', category: 'tool-cleanup-failure', result: result('partial') }
-    assert.match(content(createToolCallCard(call)), /失败类别：tool-cleanup-failure/)
-    assert.match(content(createToolCallCard(call)), /创建 \/project\/created.txt/)
-    assert.match(content(createToolCallCard({ ...bash(), state: 'completed', exitCode: 0, stdout: 'hello', truncated: true })),
-      /Bash[\s\S]*\$ printf hello[\s\S]*退出码：0[\s\S]*stdout[\s\S]*hello[\s\S]*输出摘要已截断/)
+    assert.match(createToolCallCard(call).textContent, /失败类别：tool-cleanup-failure/)
+    assert.match(createToolCallCard(call).textContent, /创建 \/project\/created.txt/)
+    const bashCard = createToolCallCard({ ...bash(), state: 'completed', exitCode: 0, stdout: 'hello', truncated: true })
+    assert.match(bashCard.textContent, /Bash[\s\S]*\$ printf hello[\s\S]*退出码：0[\s\S]*stdout[\s\S]*hello[\s\S]*输出摘要已截断/)
+    assert.equal(field(bashCard, 'stdout').querySelector('.tool-output').textContent, 'hello')
+    assert.equal(field(bashCard, 'patch').hidden, true); assert.equal(field(bashCard, 'changes').hidden, true)
   } finally {
     if (previous === undefined) delete globalThis.document
     else globalThis.document = previous

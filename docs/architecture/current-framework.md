@@ -1,8 +1,12 @@
 # 项目框架与历史图
 
-当前多实例边界以 [Harness 模块与进程图](../harness-module-boundary.md#进程与资源边界) 为准。客户端网关连接多个独立执行根，Models、Session、工具与数据库归各执行实例；client.sqlite 与连接凭据归客户端。
+> 本页为历史架构快照；文中链接指向当前入口，图源节点和已导出的 SVG/PNG 保留绘制时的命名及结构。当前三层命名以 [命名规范](../naming.md) 为准。
 
-> 下方图示保留原生协议迁移前的架构记录。当前调用接口、资源归属与持久化以 [Harness组件说明](../harness-components.md) 和 [原生协议设计](../native-protocol-agent-framework-design.md) 为准。
+> 当前装配已统一为 Responses、Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议。DeepSeek 使用标准 Chat，不保留旧驱动或协议别名；旧协议历史仅供查看，不能续接执行。下文及图中的独立 DeepSeek 驱动和五种绑定仅反映绘制当时结构。
+
+当前多实例边界以 [Anybox Harness 模块与进程图](../harness-module-boundary.md#进程与资源边界) 为准。客户端网关连接多个独立执行根，Models、Session、工具与数据库归各执行实例；client.sqlite 与连接凭据归客户端。
+
+> 下方图示保留原生协议迁移前的架构记录。当前调用接口、资源归属与持久化以 [harness server 组件说明](../harness-server-components.md) 和 [原生协议设计](../native-protocol-agent-framework-design.md) 为准。
 
 依据 2026-09-28 当前工作区源码绘制，包含当时未提交的改动。使用 draw.io 原生节点与连线，可独立编辑各组件、文本和连接；PNG 由本机 draw.io 导出。
 
@@ -30,4 +34,4 @@ Run 固定 Prompt 与 execution，把无秘密 snapshot 交给 Session，再将 
 
 ![Run 执行与资源结算](./anybox-current-run-flow.png)
 
-主要核对入口：[组合根](../../src/applications/harness/core/index.ts)、[Web 宿主](../../src/entrypoints/serve.ts)、[Models 装配](../../src/applications/harness/models-startup.ts)、[组件职责清单](../harness-components.md)、[Models 独立模块](./models-module.md)、[Session 对话树](../session-conversation-tree.md)。H0 探针和旧凭据的兼容读取不属于图中正常执行链。
+主要核对入口：[组合根](../../src/applications/harness/core/index.ts)、[Web 宿主](../../src/entrypoints/serve.ts)、[Models 装配](../../src/applications/harness/server-models.ts)、[组件职责清单](../harness-server-components.md)、[Models 独立模块](./models-module.md)、[Session 对话树](../session-conversation-tree.md)。H0 探针和旧凭据的兼容读取不属于图中正常执行链。

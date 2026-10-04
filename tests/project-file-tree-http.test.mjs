@@ -8,7 +8,7 @@ import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createHostAccessComponent } from '../dist/host/access.js'
 import { createFileTreeBrowser } from '../dist/applications/harness/core/project-files/tree-browser.js'
-import { startHarnessApiServer } from './helpers/harness-api-server.mjs'
+import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
 import { deferred } from './helpers/controlled-models.mjs'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -38,7 +38,7 @@ test('tree HTTP pins cursor commands to their original service generation, retir
     leases++; let active = true
     return { release() { if (active) { active = false; leases-- } } }
   } }
-  const server = await startHarnessApiServer(current, 0, { currentCommands: () => current, activity })
+  const server = await startHarnessServerHttp(current, 0, { currentCommands: () => current, activity })
   try {
     for (const [action, body] of [['open', { path: '', owner: 'untrusted' }], ['open', { path: '../private' }],
       ['page', { cursorId: 'id', page: -1 }], ['page', { cursorId: 'id', page: 0, path: '' }], ['close', { cursorId: 'id', page: 0 }]]) {
@@ -71,7 +71,7 @@ for (const stop of ['disconnect', 'shutdown', 'revoke']) test(`tree HTTP ${stop}
   const revoked = new Set(), instance = { instanceId: randomUUID(), name: 'device', apiVersion: 1, capabilities: [] }
   const access = { instance, authenticate() { return 'actor' }, onRevoked(listener) { revoked.add(listener); return () => revoked.delete(listener) } }
   const headers = { Authorization: 'Bearer trusted', 'X-Anybox-Instance-Id': instance.instanceId }
-  const server = await startHarnessApiServer(treeCommands(tree), 0, stop === 'revoke' ? { access } : {}), abort = new AbortController()
+  const server = await startHarnessServerHttp(treeCommands(tree), 0, stop === 'revoke' ? { access } : {}), abort = new AbortController()
   try {
     const first = await request(server, 'open', { path: '' }, { headers })
     const pending = request(server, 'page', { cursorId: first.data.cursorId, page: 1 }, { headers, signal: abort.signal }).catch(error => ({ error }))
@@ -91,7 +91,7 @@ for (const stop of ['disconnect', 'shutdown', 'revoke']) test(`tree HTTP ${stop}
 
 test('tree HTTP cleanup failure terminates a permanently pending provider result without exposing errors', async () => {
   let cancellations = 0
-  const server = await startHarnessApiServer({ readProjectFileTreePage() {
+  const server = await startHarnessServerHttp({ readProjectFileTreePage() {
     return { result: new Promise(() => {}), done: Promise.reject(new Error('/private/path failed to close')), cancel() { cancellations++ } }
   } })
   try {
@@ -114,7 +114,7 @@ test('committed token revocation awaits the tree HTTP observer through the actua
     await root.installComponent(createHostAccessComponent('device'))
     const access = root.get('host.access'), issued = await access.issue('owner')
     const headers = { Authorization: `Bearer ${issued.token}`, 'X-Anybox-Instance-Id': access.instance.instanceId }
-    server = await startHarnessApiServer(treeCommands(tree), 0, { access })
+    server = await startHarnessServerHttp(treeCommands(tree), 0, { access })
     const first = await request(server, 'open', { path: '' }, { headers }); assert.equal(first.status, 200)
     let revoked = false; const revoking = access.revoke(issued.record.id).then(() => revoked = true)
     await closing.promise

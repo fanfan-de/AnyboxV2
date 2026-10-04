@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createServer, request as httpRequest } from 'node:http'
 import { Context, FiberState } from '@nya/core'
-import { startHarnessApiServer } from './helpers/harness-api-server.mjs'
+import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
 import { hostHttpServiceKey } from '../dist/host/component.js'
 import { createProductActivity } from '../dist/host/applications/activity.js'
 import { productsServiceKey, productActivityServiceKey } from '../dist/host/applications/contracts.js'
@@ -55,7 +55,7 @@ test('application HTTP remains active with no products and across optional servi
 test('instance metadata advertises product management and registered Harness capabilities before optional services are installed', async () => {
   const instanceId = '11111111-1111-1111-1111-111111111111'
   const access = { instance: { instanceId, capabilities: [] }, authenticate: () => 'owner', onRevoked: () => () => {} }
-  const web = await startHarnessApiServer({}, 0, { access, products: productService() })
+  const web = await startHarnessServerHttp({}, 0, { access, products: productService() })
   try {
     const response = await fetch(web.url + '/api/v1/instance')
     assert.equal(response.status, 200)
@@ -66,7 +66,7 @@ test('instance metadata advertises product management and registered Harness cap
 test('business write admission precedes reading its body and survives browser disconnect until actual completion', async () => {
   const activity = createProductActivity(), admitted = deferred(), entered = deferred(), complete = deferred()
   const products = productService({ authorize(id) { assert.equal(id, 'agent'); admitted.resolve() } })
-  const web = await startHarnessApiServer({ createPrompt: async () => { entered.resolve(); await complete.promise; return prompt } }, 0, { products, activity })
+  const web = await startHarnessServerHttp({ createPrompt: async () => { entered.resolve(); await complete.promise; return prompt } }, 0, { products, activity })
   let upload
   try {
     upload = httpRequest(web.url + '/api/v1/prompts', { method: 'POST', headers: { Origin: web.url, 'Content-Type': 'application/json', 'X-Anybox-Product-Id': 'agent' } })
@@ -85,24 +85,28 @@ test('business write admission precedes reading its body and survives browser di
   } finally { upload?.destroy(); complete.resolve(); await web.close() }
 })
 
-test('accepted Run holds its product lease past the response and HTTP shutdown until native exit', async () => {
+test('accepted Run holds its product lease after the response and HTTP shutdown joins native exit', { timeout: 5_000 }, async () => {
   const activity = createProductActivity(), exited = deferred(), waiting = deferred()
   const run = { id: 'r', sessionId: 's', status: 'running', input: 'hi', history: [], revision: 1 }
-  const web = await startHarnessApiServer({ startRun: async () => run, waitRun: async () => { waiting.resolve(); await exited.promise; return { ...run, status: 'succeeded' } } }, 0, { products: productService(), activity })
+  const web = await startHarnessServerHttp({ startRun: async () => run, waitRun: async () => { waiting.resolve(); await exited.promise; return { ...run, status: 'succeeded' } } }, 0, { products: productService(), activity })
   try {
     assert.equal((await request(web, '/sessions/s/runs', { input: 'hi', parentNodeId: null, idempotencyKey: 'key' }, 'agent')).status, 200)
     await waiting.promise
     assert.throws(() => activity.freeze(['agent']), { code: 'product-busy' })
-    await web.close()
+    let closed = false
+    const closing = web.close().then(() => { closed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(closed, false)
     assert.throws(() => activity.freeze(['agent']), { code: 'product-busy' })
-    exited.resolve(); await activity.wait()
+    exited.resolve(); await closing; await activity.wait()
+    assert.equal(closed, true)
     const freeze = activity.freeze(['agent']); await freeze.drain(); freeze.release()
   } finally { exited.resolve(); await web.close() }
 })
 
 test('product stop closes SSE observers and joins their leases without making them busy writes', async () => {
   const activity = createProductActivity()
-  const web = await startHarnessApiServer({ getSession: async () => ({ id: 's' }) }, 0, { products: productService(), activity })
+  const web = await startHarnessServerHttp({ getSession: async () => ({ id: 's' }) }, 0, { products: productService(), activity })
   let reader
   try {
     const response = await fetch(web.url + '/api/v1/changes?sessionId=s', { headers: { 'X-Anybox-Product-Id': 'agent' } })
@@ -118,7 +122,7 @@ test('product mutations are not cancelled by a lost browser and management stays
   const entered = deferred(), completed = deferred(), abort = new AbortController()
   let applied = false
   const products = productService({ open: async (_id) => { entered.resolve(); await completed.promise; applied = true; return { state: 'running' } } })
-  const web = await startHarnessApiServer({}, 0, { products, activity: createProductActivity() })
+  const web = await startHarnessServerHttp({}, 0, { products, activity: createProductActivity() })
   try {
     assert.equal((await request(web, '/products')).status, 200)
     const pending = fetch(web.url + '/api/v1/products/agent/open', { method: 'POST', headers: { Origin: web.url, 'Content-Type': 'application/json' }, body: JSON.stringify({}), signal: abort.signal }).catch(() => {})

@@ -8,13 +8,13 @@ import { runServiceKey } from '../core/run/component.js'
 import type { RunPort } from '../core/run/component.js'
 import { sessionServiceKey } from '../core/session/port.js'
 import type { SessionPort } from '../core/session/port.js'
-import { createHarnessHttpHandler } from './server.js'
+import { createHarnessServerHttpHandler } from './handler.js'
 import { modelsError, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey } from '@anybox/models'
 import type { ModelsService, ModelsSettingsService, ModelsCatalogService } from '@anybox/models'
-import { webProviderTemplates } from '../models-startup.js'
+import { harnessServerProviderTemplates } from '../server-models.js'
 import { projectServiceKey } from '../core/project/component.js'
 import type { ProjectPort } from '../core/project/component.js'
-import type { HarnessApiCommands, HarnessHttpHandler } from './server.js'
+import type { HarnessServerApiCommands, HarnessServerHttpHandler } from './handler.js'
 import { directoryPickerServiceKey } from '../client/directory-picker.js'
 import type { DirectoryPickerPort } from '../client/directory-picker.js'
 import { promptServiceKey } from '../core/prompt/component.js'
@@ -25,7 +25,7 @@ import { runChangedEvent, runViewEvent } from '../core/run/notifications.js'
 import { decodeProtocolView } from '../core/view/decode.js'
 import { projectProtocolRecords } from '../core/protocol-agents/projection.js'
 
-export const harnessHttpServiceKey = 'harness.http'
+export const harnessServerHttpServiceKey = 'harness.http'
 const localActorId = 'local-web-user'
 
 type CommandDependencies = {
@@ -40,7 +40,7 @@ type CommandDependencies = {
   [agentPromptServiceKey]: AgentPromptPort
 }
 
-function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies): HarnessApiCommands {
+function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies): HarnessServerApiCommands {
   return {
     listAgents: () => agentIds,
     directoryPickerSupported: () => deps[directoryPickerServiceKey]?.supported ?? false,
@@ -61,6 +61,15 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
     createSession(projectId, agentId, modelId) {
       if (modelId !== undefined && !deps[modelsServiceKey].get(modelId)) throw modelsError('not-found')
       return deps[sessionServiceKey].createSession(projectId, agentId, modelId)
+    },
+    getSessionDefaults: agentId => deps[sessionServiceKey].getSessionDefaults(agentId),
+    setSessionDefaults(agentId, modelId, expectedRevision) {
+      if (modelId !== null) {
+        const model = deps[modelsServiceKey].get(modelId)
+        if (!model) throw modelsError('not-found')
+        if (!model.available) throw failure(409, 'model-unavailable')
+      }
+      return deps[sessionServiceKey].setSessionDefaults(agentId, modelId, expectedRevision)
     },
     selectSessionModel(sessionId, modelId) {
       const model = deps[modelsServiceKey].get(modelId)
@@ -99,10 +108,10 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
       if (live && live.sessionId === run.sessionId && live.runId === id && live.protocolId === run.protocolBinding.protocolId) return live
       const records = await deps[sessionServiceKey].getRunRecords(id)
       return {
-        envelopeVersion: 1, protocolId: run.protocolBinding.protocolId, viewSchemaVersion: 1,
+        envelopeVersion: 1, protocolId: run.protocolBinding.protocolId, viewSchemaVersion: 2,
         sessionId: run.sessionId, runId: id, viewRevision: active ? 0 : run.revision,
         status: active ? 'provisional' : 'committed',
-        exchanges: projectProtocolRecords(run.protocolBinding.protocolId, records),
+        exchanges: projectProtocolRecords(run.protocolBinding.protocolId, records, run.promptSnapshots),
       }
     },
     listRuns: (id, query) => deps[sessionServiceKey].listRuns(id, query),
@@ -111,7 +120,7 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
     get modelsSettings() { return deps[modelsSettingsServiceKey] },
     get modelsCatalog() { return deps[modelsCatalogServiceKey] },
     listModels: () => deps[modelsServiceKey].list(),
-    modelTemplates: () => webProviderTemplates,
+    modelTemplates: () => harnessServerProviderTemplates,
     listPrompts: () => deps[promptServiceKey].listPrompts(localActorId),
     getPrompt: id => deps[promptServiceKey].getPrompt(localActorId, id),
     createPrompt: input => deps[promptServiceKey].createPrompt(localActorId, input),
@@ -128,15 +137,15 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
   }
 }
 
-/** Owns Harness HTTP operations and subscriptions; the listener belongs to the host. */
-export function createHarnessHttpComponent(root: Context, agents: readonly Readonly<{ id: string }>[],
+/** Owns harness server HTTP operations and subscriptions; Anybox owns the listener. */
+export function createHarnessServerHttpComponent(root: Context, agents: readonly Readonly<{ id: string }>[],
   options: { authenticated?: boolean } = {}): Component.Object<void, {
     [productActivityServiceKey]: ProductActivityPort
     [hostAccessServiceKey]: HostAccessPort
   }> {
   if (root.root !== root) throw new TypeError('application root Context required')
   const agentIds = Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
-  const currentCommands = (): HarnessApiCommands => {
+  const currentCommands = (): HarnessServerApiCommands => {
     const snapshots = new Map<string, unknown>()
     const services = {} as CommandDependencies
     for (const key of [sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
@@ -158,9 +167,9 @@ export function createHarnessHttpComponent(root: Context, agents: readonly Reado
     name: 'harness-http',
     inject: [productActivityServiceKey, ...(options.authenticated ? [hostAccessServiceKey] : [])],
     async apply(ctx, _config, deps) {
-      let server: HarnessHttpHandler | undefined
+      let server: HarnessServerHttpHandler | undefined
       ctx.effect(() => async () => { await server?.close() }, 'stop and join application HTTP requests')
-      server = createHarnessHttpHandler(currentCommands(), { currentCommands, activity: deps[productActivityServiceKey],
+      server = createHarnessServerHttpHandler(currentCommands(), { currentCommands, activity: deps[productActivityServiceKey],
         onRevoked: options.authenticated ? listener => deps[hostAccessServiceKey].onRevoked(listener) : undefined })
       ctx.on(runChangedEvent, change => server?.notifyRunChange(change))
       ctx.on(runViewEvent, progress => {
@@ -169,7 +178,7 @@ export function createHarnessHttpComponent(root: Context, agents: readonly Reado
           server?.notifyProtocolView({ sessionId: snapshot.sessionId, runId: snapshot.runId, snapshot })
         }
       })
-      ctx.provide(harnessHttpServiceKey, server)
+      ctx.provide(harnessServerHttpServiceKey, server)
     },
   }
 }

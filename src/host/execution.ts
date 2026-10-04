@@ -24,29 +24,37 @@ export async function createExecutionHost(options: ExecutionHostOptions) {
   const root = new Context()
   const catalog = createApplicationCatalog(options.applications)
   const runtime = createApplicationRuntimes(root, catalog)
-  let products: ProductsPort | undefined, activity: ProductActivityPort | undefined
-  let closing: Promise<void> | undefined, restoring: Promise<void> | undefined
-  const close = () => {
-    if (closing) return closing
+  let products: ProductsPort | undefined
+  let preparingClose: Promise<void> | undefined, closing: Promise<void> | undefined, restoring: Promise<void> | undefined, drainingRequests: Promise<void> | undefined
+  let admissionClosed = false
+  const prepareClose = () => {
+    if (preparingClose) return preparingClose
+    admissionClosed = true
     const admissionErrors: unknown[] = []
     const attempt = <T>(work: () => T): T | undefined => { try { return work() } catch (error) { admissionErrors.push(error) } }
-    const stopping = attempt(() => products?.stop())
-    attempt(() => activity?.stop())
+    const stopping = attempt(() => root.get<ProductsPort>(productsServiceKey)?.stop())
+    attempt(() => root.get<ProductActivityPort>(productActivityServiceKey)?.stop())
     attempt(() => runtime.closeAdmission())
-    const requests = attempt(() => root.get<ApplicationHttpServer>(hostHttpServiceKey)?.close())
-    closing = (async () => {
-      const results = await Promise.allSettled([stopping, runtime.awaitIdle(), restoring, requests])
-      try { await root.fiber.dispose() } catch (error) { results.push({ status: 'rejected', reason: error }) }
+    drainingRequests = attempt(() => root.get<ApplicationHttpServer>(hostHttpServiceKey)?.close())
+    // Retained Run leases exit during root cleanup, so preparation must not join their HTTP drain.
+    void drainingRequests?.catch(() => {})
+    preparingClose = Promise.allSettled([stopping, runtime.awaitIdle(), restoring]).then(results => {
       const errors = [...admissionErrors, ...results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])]
-      if (errors.length) throw new AggregateError(errors, 'Application shutdown failed')
-    })()
-    return closing
+      if (errors.length) throw new AggregateError(errors, 'Application admission shutdown failed')
+    })
+    return preparingClose
   }
+  const close = () => closing ??= (async () => {
+    const errors: unknown[] = []
+    try { await prepareClose() } catch (error) { errors.push(error) }
+    const results = await Promise.allSettled([root.fiber.dispose(), drainingRequests])
+    errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))
+    if (errors.length) throw new AggregateError(errors, 'Application shutdown failed')
+  })()
   try {
     await root.installComponent(createLocalSqliteComponent(options.databasePath))
     await root.installComponent(createHostAccessComponent(options.name))
     await root.installComponent(createProductActivityComponent())
-    activity = root.get<ProductActivityPort>(productActivityServiceKey)!
     await root.installComponent(createProductsComponent({ directory: catalog.applications.map(app => app.definition), runtime: id => runtime.get(id) }))
     products = root.get<ProductsPort>(productsServiceKey)!
     await root.installComponent(createApplicationApiComponent(root, catalog, options.port, { authenticated: true, host: options.host }))
@@ -54,7 +62,7 @@ export async function createExecutionHost(options: ExecutionHostOptions) {
     void restoring.catch(() => root.logger.warn('Application product restoration failed'))
     const web = root.get<ApplicationHttpServer>(hostHttpServiceKey)!
     const access = root.get<HostAccessPort>(hostAccessServiceKey)!
-    return { root, products, ready: restoring, url: web.url, instance: access.instance, get closing() { return !!closing }, close }
+    return { root, products, ready: restoring, url: web.url, instance: access.instance, get closing() { return admissionClosed }, prepareClose, close }
   } catch (error) {
     try { await close() } catch (cleanup) { throw new AggregateError([error, cleanup], 'Application startup and cleanup failed') }
     throw error

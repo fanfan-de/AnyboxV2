@@ -12,7 +12,7 @@
 
 `createLocalSqliteComponent(file)` 返回一个 Nya 组件，由应用安装在唯一的根 Context 上。`apply` 中规范化路径，创建父目录，拒绝旧 `.lock` 目录，打开一个 SQLite 连接并取得跨事务排他锁，初始化提供方自己的布局，然后提供服务。应用宿主 `close()` 卸载根上的全部组件，因此也等待 SQLite 操作结束、关闭连接并释放锁。提供方只用 `PRAGMA user_version` 标记布局版本，并在 `schema_migrations(domain, version)` 表中记录各领域已应用的迁移版本；无法识别的已有数据库拒绝启动。
 
-执行端 Harness 另有两个独立 Models 数据库：`models.store` 独占配置、不可变版本和凭据操作日志的 `models.sqlite`；`models.catalog-cache` 独占公开目录的 `models-catalog.sqlite`。三者各有连接和布局，目录缓存不占业务迁移账本，也不要求可替换的 ModelsStore 增加方法。Harness 的装配传入配置库和业务库的 `reservedPaths`，目录缓存启动前拒绝同文件、符号链接或硬链接别名。公开缓存初始化失败并释放部分资源后，可报告故障并退回内存；密钥 Vault 没有这种后备策略。关闭依赖于 Nya 的真实注入关系，先等待目录获取与已接纳缓存事务，再释放目录连接。
+harness server 的 `models.store` 当前由 [JSON 配置存储](modules/models/json-store.md)独占 `models.json`，保存配置、不可变版本和凭据操作日志；旧 `models.sqlite` 仅作首次兼容导入源。`models.catalog-cache` 独占公开目录的 `models-catalog.sqlite`，与业务库各有连接和布局。JSON、导入源、目录缓存和业务库路径必须分离，目录缓存不占业务迁移账本，也不要求可替换的 ModelsStore 增加方法。harness server 的装配传入各资源的 `reservedPaths`，组件启动前拒绝同文件、符号链接或硬链接别名。公开缓存初始化失败并释放部分资源后，可报告故障并退回内存；Models 配置与密钥 Vault 没有这种后备策略。关闭依赖于 Nya 的真实注入关系，先等待目录获取与已接纳缓存事务，再释放目录连接；JSON 提供方等待已接纳保存完成后释放自己的所有权锁。
 
 表结构由领域所有者定义。领域组件在 `apply` 中调用 `migrate(domain, migrations)`，版本在该领域内从 1 连续编号；不同领域互不占用版本号，存储组件和组合根都不需要知道领域表。迁移与其他操作在同一队列中串行执行；每个迁移及其版本记录处于同一事务，失败回滚并使调用方的启动失败，已提交的其他领域不受影响。领域记录的版本高于当前迁移列表时拒绝，以免旧代码误读新结构。跨领域的先后依赖由 Nya `inject` 保证，例如 Agent Prompt 依赖 Prompt，因此在 Prompt 迁移与导入完成后才建立绑定表。
 

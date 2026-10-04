@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import type { ApplicationCatalog, ApplicationHttpPort } from './applications/registration.js'
@@ -17,7 +18,11 @@ export async function startApplicationHttpServer(options: {
   port?: number
   host?: string
   base?: '/api/v1' | '/api/client/v1'
+  /** Private desktop bridge capability; never sent to the renderer. */
+  transportSecret?: string
 }): Promise<ApplicationHttpServer> {
+  if (options.transportSecret !== undefined && !options.transportSecret) throw new TypeError('desktop transport secret must not be empty')
+  const transportDigest = options.transportSecret === undefined ? undefined : createHash('sha256').update(options.transportSecret).digest()
   const base = options.base ?? '/api/v1'
   let origin = '', closing = false
   const lifetime = new AbortController(), bodies = new Set<import('node:http').IncomingMessage>()
@@ -33,6 +38,10 @@ export async function startApplicationHttpServer(options: {
     const retained: Promise<unknown>[] = []
     const task = (async () => {
       if (closing) throw failure(503, 'service-unavailable')
+      if (transportDigest) {
+        const presented = request.headers['x-anybox-desktop-transport']
+        if (typeof presented !== 'string' || !timingSafeEqual(transportDigest, createHash('sha256').update(presented).digest())) throw failure(403, 'forbidden-transport')
+      }
       const method = request.method ?? 'GET'
       if (!options.access) {
         if (request.headers.host !== new URL(origin).host) throw failure(403, 'forbidden-host')
@@ -87,9 +96,10 @@ export async function startApplicationHttpServer(options: {
       const status = error instanceof URIError ? 400 : error && typeof error.status === 'number' ? error.status : 500
       const code = error instanceof URIError ? 'invalid-input' : error && typeof error.status === 'number' && typeof error.code === 'string' ? error.code : 'internal-error'
       if (!response.headersSent) json(response, status, { error: { code } }); else response.destroy()
-    }).finally(() => {
-      if (retained.length) void Promise.allSettled(retained).then(() => lease?.release())
-      else lease?.release()
+    }).finally(async () => {
+      // The response may finish before its accepted operation exits; retain the task and lease together.
+      if (retained.length) await Promise.allSettled(retained)
+      lease?.release()
       tasks.delete(task)
     })
     tasks.add(task)

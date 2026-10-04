@@ -13,14 +13,15 @@ const intent = () => ({ messages: [{ role: 'user', content: [{ type: 'text', tex
 const reader = (values = bytes) => ({ read() { return { result: Promise.resolve(values), done: Promise.resolve(), cancel() {} } } })
 const dataUrl = `data:image/png;base64,${Buffer.from(bytes).toString('base64')}`
 
-for (const deepseek of [false, true]) for (const streaming of [false, true]) test(`native image resources remain references across tool continuation and restore (${deepseek ? 'DeepSeek' : 'Chat'}, ${streaming ? 'SSE' : 'JSON'})`, async () => {
+for (const disabledThinking of [false, true]) for (const streaming of [false, true]) test(`native image resources remain references across tool continuation and restore (Chat thinking ${disabledThinking ? 'disabled' : 'omitted'}, ${streaming ? 'SSE' : 'JSON'})`, async () => {
   const sent = [], reads = []
   const protocol = createChatCompletionsProtocol({ fetch: async (_url, init) => {
     sent.push(JSON.parse(init.body))
     return streaming ? sse([chatChunk({ role: 'assistant', content: 'answer' }, 'stop'), '[DONE]']) : jsonResponse(chatReply())
-  } }, deepseek ? { protocolId: 'deepseek-chat-completions', name: 'DeepSeek', maxTokensField: 'max_tokens', disableThinking: true, allowDeveloper: false } : undefined)
+  } })
+  const parameters = disabledThinking ? { max_tokens: 75, thinking: { type: 'disabled' } } : {}
   const resources = { read(resource) { reads.push(resource.id); return reader().read() } }
-  const execution = nativeSession(protocol, { declaration, resources, streaming })
+  const execution = nativeSession(protocol, { declaration, resources, streaming, parameters })
   const prepared = execution.prepareExchange(intent(), { resourceRefs: [ref] })
   assert.equal(sent.length, 0); assert.equal(reads.length, 0); assert.equal(prepared.record.recordFormatVersion, 2)
   assert.deepEqual(prepared.record.resourceRefs, [ref]); assert.deepEqual(prepared.record.payload, intent())
@@ -28,11 +29,11 @@ for (const deepseek of [false, true]) for (const streaming of [false, true]) tes
   await execution.prepareExchange({ messages: [{ role: 'tool', tool_call_id: 'call', content: 'result' }] }).start().result
   assert.equal(sent[1].messages[0].content[1].image_url.url, dataUrl)
   assert.deepEqual(sent[0].messages[0].content.map(block => block.text ?? 'image'), ['Before', 'image', 'After'])
-  if (deepseek) assert.deepEqual(sent[0].thinking, { type: 'disabled' })
+  if (disabledThinking) assert.deepEqual(sent[0].thinking, { type: 'disabled' })
   const report = await execution.close()
   assert.equal(report.restoreState.recordFormatVersion, 2)
   assert.doesNotMatch(JSON.stringify(report), /data:image|base64|private-native-test-key/)
-  const restored = nativeSession(protocol, { declaration, resources, streaming, restore: { ...report.restoreState, records: structuredClone(report.records) } })
+  const restored = nativeSession(protocol, { declaration, resources, streaming, parameters, restore: { ...report.restoreState, records: structuredClone(report.records) } })
   await restored.prepareExchange({ messages: [{ role: 'user', content: 'Next' }] }).start().result
   assert.equal(sent[2].messages[0].content[1].image_url.url, dataUrl)
   assert.equal((await restored.close()).records.length, 2); assert.deepEqual(reads, [ref.id, ref.id, ref.id])

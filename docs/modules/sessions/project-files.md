@@ -4,7 +4,7 @@
 
 ## 工厂、服务与依赖
 
-`createProjectFilesComponent({ now?, newId?, collectionIntervalMs?, treeBrowser? })` 创建根上的 `harness-project-files`，提供 `harness.project-files: ProjectFilesPort`。组件注入 `local-storage` 和 `harness.projects`，从本轮 deps 使用服务；Harness 在 Projects 之后安装，Session 依赖它。没有项目 Context、额外 SQLite 连接、文件目录或工具注册。
+`createProjectFilesComponent({ now?, newId?, collectionIntervalMs?, treeBrowser? })` 创建根上的 `harness-project-files`，提供 `harness.project-files: ProjectFilesPort`。组件注入 `local-storage` 和 `harness.projects`，从本轮 deps 使用服务；harness server 在 Projects 之后安装，Session 依赖它。没有项目 Context、额外 SQLite 连接、文件目录或工具注册。
 
 源码：[组件](../../../src/applications/harness/core/project-files/component.ts)、[端口](../../../src/applications/harness/core/project-files/port.ts)、[文件系统提供方](../../../src/applications/harness/core/project-files/filesystem.ts)、[纯规则与浏览器共享类型](../../../src/applications/harness/core/project-files/domain.ts)。文件系统提供方、内部树浏览器和规则不是独立组件。树浏览器由该组件独占，`treeBrowser` 仅提供受控测试的目录访问及时间替身。
 
@@ -59,4 +59,4 @@ Effect 停止新调用和计时器，取消全部受管调用，等待树游标�
 
 ## 验证
 
-[组件行为测试](../../../tests/project-files.test.mjs) 覆盖路径、UTF-8、大小与行范围、原子批次、重启重试、保留回滚、过期墓碑、损坏、取消及实际关闭。[目录树行为测试](../../../tests/project-file-tree.test.mjs) 覆盖分页、作用域、预算、过期与实际退出，[目录树 HTTP 测试](../../../tests/project-file-tree-http.test.mjs) 覆盖认证撤销等待、代绑定与清理租约。[协议测试](../../../tests/native-protocol-agents.test.mjs) 覆盖五种协议、分支与重启，[浏览器控制器测试](../../../tests/session-client.test.mjs) 覆盖提交恢复，[HTTP 测试](../../../tests/web-server.test.mjs) 验证宿主边界。完整入口 `npm run check`。
+[组件行为测试](../../../tests/project-files.test.mjs) 覆盖路径、UTF-8、大小与行范围、原子批次、重启重试、保留回滚、过期墓碑、损坏、取消及实际关闭。[目录树行为测试](../../../tests/project-file-tree.test.mjs) 覆盖分页、作用域、预算、过期与实际退出，[目录树 HTTP 测试](../../../tests/project-file-tree-http.test.mjs) 覆盖认证撤销等待、代绑定与清理租约。[协议测试](../../../tests/native-protocol-agents.test.mjs) 覆盖四种协议、分支与重启，[浏览器控制器测试](../../../tests/session-client.test.mjs) 覆盖提交恢复，[HTTP 测试](../../../tests/harness-server-http.test.mjs) 验证宿主边界。完整入口 `npm run check`。

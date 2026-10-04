@@ -10,6 +10,6 @@
 
 `limits.ts` 是浏览器与服务端共享的纯限制数据及批量校验函数，`validation.ts` 是静态图片验证适配器，`directory-lock.ts` 是组件私有的目录所有权实现；它们均不是额外 Nya 组件。
 
-当前 Responses、Chat Completions、Anthropic Messages、Gemini Interactions 和 DeepSeek 五种协议都支持显式声明的静态 JPEG/PNG/WebP 输入。图片先保存为草稿，Session 接受 Run 时同事务永久保留引用；协议 execution 只在受管操作启动后读取并编码原字节，持久历史不含 base64。原生记录为 v2，当前 Run 输入为 v3；它们与图片组件自己的 `image-assets` v1 迁移域独立。
+当前 Responses、Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议都支持显式声明的静态 JPEG/PNG/WebP 输入。图片先保存为草稿，Session 接受 Run 时同事务永久保留引用；协议 execution 只在受管操作启动后读取并编码原字节，持久历史不含 base64。原生记录为 v2，当前 Run 输入为 v3；它们与图片组件自己的 `image-assets` v1 迁移域独立。
 
 会话归档由 Session 限制新的图片导入，不删除已保存图片或永久保留凭证；历史读取及草稿续期继续可用。组件不依赖会话状态，也不因归档而回收历史资源。完整接口、配额和取消/关闭等待见 [Image Assets](image-assets.md)。

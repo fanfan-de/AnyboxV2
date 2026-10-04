@@ -5,7 +5,7 @@ import type { ProtocolViewSnapshot } from '../core/view/types.js'
 import { createRunChangeClient } from './run-change-client.js'
 import { openChangeStream } from './event-stream.js'
 export interface HarnessConnection { readonly id: string; readonly name: string; readonly endpoint: string; readonly instanceId: string; readonly revision: number; readonly credentialConfigured: boolean }
-const identityKeys = new Set(['id', 'agentId', 'viewNodeId', 'focusedRunId', 'activePaneId', 'sidebarProjectId', 'projectId', 'sessionId', 'runId', 'parentId', 'parentNodeId', 'nodeId', 'sourceRunId', 'resultNodeId', 'modelId', 'requestedModelId', 'assetId', 'snapshotId', 'connectionId', 'providerId', 'modelDefinitionId', 'assetIds', 'snapshotIds', 'invalid'])
+const identityKeys = new Set(['id', 'agentId', 'viewNodeId', 'focusedRunId', 'activePaneId', 'sidebarProjectId', 'projectId', 'sessionId', 'runId', 'parentId', 'parentNodeId', 'nodeId', 'sourceRunId', 'resultNodeId', 'modelId', 'fallbackModelId', 'effectiveModelId', 'requestedModelId', 'assetId', 'snapshotId', 'connectionId', 'providerId', 'modelDefinitionId', 'assetIds', 'snapshotIds', 'invalid'])
 export function scopedId(instanceId: string, id: string): string { return `h:${instanceId}:${id}` }
 export function splitScopedId(value: string): { instanceId: string; id: string } | undefined {
   const match = /^h:([0-9a-f-]{36}):([\s\S]+)$/.exec(value)
@@ -43,6 +43,12 @@ export function connectionResourceURL(sessionId: string, path: string): string {
   if (mismatch) return '/unavailable-resource'
   return resourceURL(connection, clean, resourceProducts.get(ref.instanceId) ?? 'agent')
 }
+export interface HarnessChangeHandlers {
+  refresh(id: string): void
+  view(snapshot: ProtocolViewSnapshot): void
+  incompatibleView?(sessionId: string, runId: string): void
+  connected(ids: readonly string[], value: boolean): void
+}
 export interface HarnessClient extends Api {
   readonly connections: readonly HarnessConnection[]
   readonly errors: ReadonlyMap<string, string>
@@ -51,7 +57,7 @@ export interface HarnessClient extends Api {
   directoryTarget(id?: string): ProjectDirectoryTarget | undefined
   resource(path: string): string
   upload(sessionId: string, file: File, signal: AbortSignal): Promise<ImageRef>
-  changes(handlers: { refresh(id: string): void; view(snapshot: ProtocolViewSnapshot): void; connected(ids: readonly string[], value: boolean): void }): { update(ids: readonly string[]): void; dispose(): void }
+  changes(handlers: HarnessChangeHandlers): { update(ids: readonly string[]): void; dispose(): void }
   dispose(): Promise<void>
 }
 /** A selector holds this immutable binding until it closes, including its final write. */
@@ -179,6 +185,7 @@ export function createHarnessClient(inputConnections: readonly HarnessConnection
           },
           refresh: id => handlers.refresh(qualify(id)),
           view: snapshot => handlers.view(mapResourceIds(snapshot, qualify) as ProtocolViewSnapshot),
+          incompatibleView: (sessionId, runId) => handlers.incompatibleView?.(qualify(sessionId), qualify(runId)),
           connected: value => handlers.connected(ids.map(qualify), value),
         })
         return { update(all: readonly string[]) { ids = all.flatMap(id => { const ref = splitScopedId(id); return ref?.instanceId === connection.instanceId ? [ref.id] : [] }); change.update(ids) }, dispose: () => change.dispose() }

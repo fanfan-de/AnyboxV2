@@ -13,16 +13,34 @@ export interface Connection { readonly id: string; readonly name: string; readon
 interface Stored extends Omit<Connection, 'credentialConfigured'> { readonly credentialRef: string }
 export interface ConnectionInput { readonly id?: string; readonly name: string; readonly endpoint: string; readonly token?: string; readonly expectedRevision?: number }
 export interface ConnectionLease { readonly connection: Connection; readonly token: string }
+/** Trusted desktop callbacks. Tokens never appear in the public pairing projection. */
+export interface DesktopLocalPairingOptions {
+  getLocal(signal: AbortSignal): Promise<{ readonly endpoint: string; readonly instanceId: string }>
+  issue(signal: AbortSignal): Promise<string>
+  reconcile(retainedToken: string | undefined, signal: AbortSignal): Promise<void>
+}
+export interface LocalPairingStatus {
+  readonly enabled: boolean
+  readonly state: 'disabled' | 'pending' | 'ready' | 'failed'
+  readonly instanceId: string | null
+  readonly connectionId: string | null
+  readonly connectionRevision?: number
+  readonly error?: { readonly code: string }
+}
 export interface ConnectionsPort {
   list(): Promise<readonly Connection[]>
   save(input: ConnectionInput, signal?: AbortSignal): Promise<Connection>
   remove(id: string, revision: number): Promise<void>
   acquire(id: string): Promise<ConnectionLease>
   check(id: string, signal?: AbortSignal): Promise<InstanceInfo>
+  localStatus(): LocalPairingStatus
+  retryLocal(signal?: AbortSignal): Promise<LocalPairingStatus>
 }
 const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute('CREATE TABLE client_connections (id TEXT PRIMARY KEY, record TEXT NOT NULL)')
   tx.execute('CREATE TABLE client_credential_intents (id TEXT PRIMARY KEY)')
+} }, { version: 2, up(tx) {
+  tx.execute('CREATE TABLE client_local_connection (slot INTEGER PRIMARY KEY CHECK(slot=1), connection_id TEXT NOT NULL, instance_id TEXT NOT NULL)')
 } }]
 export function connectionEndpoint(value: string): string {
   try {
@@ -46,10 +64,12 @@ export async function inspectInstance(endpoint: string, token: string, signal: A
     return value
   } finally { if (!response.bodyUsed) await response.body?.cancel().catch(() => {}) }
 }
-export function createConnectionsComponent(options: { namespace?: string; openEntry?: SystemKeyringOptions['openEntry']; fetch?: typeof fetch } = {}): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
+export function createConnectionsComponent(options: { namespace?: string; openEntry?: SystemKeyringOptions['openEntry']; fetch?: typeof fetch; localPairing?: DesktopLocalPairingOptions } = {}): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
   return { name: 'client-connections', inject: [localStorageServiceKey], async apply(ctx, _config, deps) {
     const db = deps[localStorageServiceKey]; await db.migrate('client-connections', migrations)
     let vault: SystemKeyringStore | undefined, accepting = true, tail: Promise<unknown> = Promise.resolve()
+    let local: LocalPairingStatus = Object.freeze({ enabled: !!options.localPairing, state: options.localPairing ? 'pending' : 'disabled', instanceId: null, connectionId: null })
+    let pairing: Promise<LocalPairingStatus> | undefined
     const controllers = new Set<AbortController>(), pending = new Set<Promise<unknown>>()
     const track = <T>(work: () => Promise<T>): Promise<T> => {
       if (!accepting) return Promise.reject(hostFailure('service-unavailable', 503))
@@ -94,17 +114,7 @@ export function createConnectionsComponent(options: { namespace?: string; openEn
       try { return await inspectInstance(endpoint, token, controller.signal, options.fetch) }
       finally { clearTimeout(timer); controllers.delete(controller); signal?.removeEventListener('abort', abort) }
     }
-    const service: ConnectionsPort = {
-      list: () => queue(async () => (await db.read(r => r.all('SELECT record FROM client_connections ORDER BY id'))).map(row => view(JSON.parse(String(row.record))))),
-      acquire: id => queue(async () => { const record = await get(id); return { connection: view(record), token: await tokenFor(record) } }),
-      check: (id, signal) => track(async () => {
-        const lease = await service.acquire(id)
-        if (!accepting) throw hostFailure('service-unavailable', 503)
-        const info = await inspect(lease.connection.endpoint, lease.token, signal)
-        if (info.instanceId !== lease.connection.instanceId) throw hostFailure('instance-mismatch', 409)
-        return info
-      }),
-      save: (input, signal) => track(async () => {
+    const save = (input: ConnectionInput, signal?: AbortSignal, ownedInstanceId?: string): Promise<Connection> => track(async () => {
         if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 200 || typeof input.endpoint !== 'string') throw hostFailure('invalid-input')
         const endpoint = connectionEndpoint(input.endpoint)
         const { previous, token } = await queue(async () => {
@@ -114,6 +124,7 @@ export function createConnectionsComponent(options: { namespace?: string; openEn
         if (previous && previous.revision !== input.expectedRevision) throw hostFailure('conflict', 409)
         if (!/^[0-9a-f-]{36}\.[A-Za-z0-9_-]{43}$/.test(token)) throw hostFailure('invalid-token')
         const info = await inspect(endpoint, token, signal)
+        if (ownedInstanceId !== undefined && info.instanceId !== ownedInstanceId) throw hostFailure('instance-mismatch', 409)
         if (previous && previous.instanceId !== info.instanceId) throw hostFailure('instance-mismatch', 409)
         return queue(async () => {
         signal?.throwIfAborted()
@@ -129,21 +140,111 @@ export function createConnectionsComponent(options: { namespace?: string; openEn
         try {
           await db.transaction(tx => {
             tx.execute('INSERT INTO client_connections VALUES(?,?) ON CONFLICT(id) DO UPDATE SET record=excluded.record', [record.id, JSON.stringify(record)])
+            if (ownedInstanceId !== undefined) tx.execute('INSERT INTO client_local_connection VALUES(1,?,?) ON CONFLICT(slot) DO UPDATE SET connection_id=excluded.connection_id, instance_id=excluded.instance_id', [record.id, record.instanceId])
             tx.execute('DELETE FROM client_credential_intents WHERE id=?', [ref])
             if (previous && previous.credentialRef !== ref) tx.execute('INSERT INTO client_credential_intents VALUES(?)', [previous.credentialRef])
           })
         } catch (error) { await cleanup(); throw error }
-        await cleanup(); return view(record)
+        await cleanup()
+        if (local.state === 'ready' && local.connectionId === record.id) local = Object.freeze({ ...local, connectionRevision: record.revision })
+        return view(record)
         })
+      })
+    const retainLocal = (connection: Connection, signal: AbortSignal) => queue(async () => {
+      if ((await get(connection.id)).revision !== connection.revision) throw hostFailure('conflict', 409)
+      const token = await tokenFor(await get(connection.id))
+      signal.throwIfAborted()
+      await db.transaction(tx => {
+        tx.execute('INSERT INTO client_local_connection VALUES(1,?,?) ON CONFLICT(slot) DO UPDATE SET connection_id=excluded.connection_id, instance_id=excluded.instance_id', [connection.id, connection.instanceId])
+      })
+      await options.localPairing!.reconcile(token, signal)
+    })
+    const ensureLocal = async (signal: AbortSignal): Promise<LocalPairingStatus> => {
+      const pair = options.localPairing!
+      let issued: string | undefined, committed = false, previouslyRetained: string | undefined
+      try {
+        const target = await pair.getLocal(signal); signal.throwIfAborted()
+        const endpoint = connectionEndpoint(target.endpoint)
+        if (!/^[0-9a-f-]{36}$/.test(target.instanceId)) throw hostFailure('invalid-instance', 502)
+        const owner = await queue(() => db.read(r => r.get('SELECT connection_id,instance_id FROM client_local_connection WHERE slot=1')))
+        if (owner && owner.instance_id !== target.instanceId) throw hostFailure('instance-mismatch', 409)
+        const records = await service.list()
+        const previous = (owner ? records.find(item => item.id === owner.connection_id) : undefined) ?? records.find(item => item.instanceId === target.instanceId)
+        if (previous && previous.instanceId !== target.instanceId) throw hostFailure('instance-mismatch', 409)
+        local = Object.freeze({ enabled: true, state: 'pending', instanceId: target.instanceId, connectionId: previous?.id ?? null })
+        let saved: Connection
+        if (previous) {
+          // Read before reconciling: a locked Vault must not revoke a valid retained token.
+          const lease = await service.acquire(previous.id)
+          previouslyRetained = lease.token
+          try {
+            const info = await inspect(endpoint, lease.token, signal)
+            if (info.instanceId !== target.instanceId) throw hostFailure('instance-mismatch', 409)
+            saved = previous.endpoint === endpoint ? previous : await save({ ...previous, endpoint, expectedRevision: previous.revision }, signal, target.instanceId)
+            await retainLocal(saved, signal)
+          } catch (error) {
+            if (!error || typeof error !== 'object' || !('code' in error) || !['authentication-failed', 'invalid-managed-token'].includes(String(error.code))) throw error
+            // A revoked or unmanaged retained token cannot be retained by the host's managed ledger.
+            // Reconciliation only removes desktop-owned tokens, leaving unrelated credentials alone.
+            previouslyRetained = undefined
+            issued = await pair.issue(signal); signal.throwIfAborted()
+            saved = await save({ ...previous, endpoint, token: issued, expectedRevision: previous.revision }, signal, target.instanceId)
+            committed = true
+            await retainLocal(saved, signal)
+          }
+        } else {
+          await pair.reconcile(undefined, signal); signal.throwIfAborted()
+          issued = await pair.issue(signal); signal.throwIfAborted()
+          saved = await save({ name: '本机', endpoint, token: issued }, signal, target.instanceId)
+          committed = true
+          await retainLocal(saved, signal)
+        }
+        local = Object.freeze({ enabled: true, state: 'ready', instanceId: target.instanceId, connectionId: saved.id, connectionRevision: saved.revision })
+      } catch (error) {
+        // A failed save has no retained credential. If cancellation interrupts this cleanup,
+        // the host's durable managed ownership is reconciled on the next attempt.
+        if (issued && !committed) await pair.reconcile(previouslyRetained, signal).catch(() => {})
+        const code = signal.aborted ? 'cancelled' : error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' && /^[a-z0-9-]{1,64}$/.test(error.code) ? error.code : 'connection-unavailable'
+        local = Object.freeze({ ...local, state: 'failed', error: Object.freeze({ code }) })
+      }
+      return local
+    }
+    const service: ConnectionsPort = {
+      list: () => queue(async () => (await db.read(r => r.all('SELECT record FROM client_connections ORDER BY id'))).map(row => view(JSON.parse(String(row.record))))),
+      acquire: id => queue(async () => { const record = await get(id); return { connection: view(record), token: await tokenFor(record) } }),
+      check: (id, signal) => track(async () => {
+        const lease = await service.acquire(id)
+        if (!accepting) throw hostFailure('service-unavailable', 503)
+        const info = await inspect(lease.connection.endpoint, lease.token, signal)
+        if (info.instanceId !== lease.connection.instanceId) throw hostFailure('instance-mismatch', 409)
+        return info
       }),
+      save,
+      localStatus: () => local,
+      retryLocal: signal => {
+        if (!options.localPairing) return Promise.reject(hostFailure('local-pairing-unavailable', 403))
+        if (!accepting) return Promise.reject(hostFailure('service-unavailable', 503))
+        if (pairing) return pairing
+        const controller = new AbortController(); controllers.add(controller)
+        const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
+        local = Object.freeze({ enabled: true, state: 'pending', instanceId: local.instanceId, connectionId: local.connectionId })
+        const result = track(() => ensureLocal(controller.signal)).finally(() => {
+          controllers.delete(controller); signal?.removeEventListener('abort', abort); pairing = undefined
+        })
+        pairing = result
+        return result
+      },
       remove: (id, revision) => queue(async () => {
         const record = await get(id); if (record.revision !== revision) throw hostFailure('conflict', 409)
         await db.transaction(tx => { tx.execute('DELETE FROM client_connections WHERE id=?', [id]); tx.execute('INSERT INTO client_credential_intents VALUES(?)', [record.credentialRef]) })
+        if (local.enabled && local.connectionId === id) local = Object.freeze({ ...local, state: 'failed', error: Object.freeze({ code: 'local-connection-removed' }) })
         await cleanup()
       }),
     }
     await cleanup()
     ctx.effect(() => async () => { accepting = false; for (const controller of controllers) controller.abort(); await Promise.allSettled([...pending]); await tail; await vault?.close() }, 'cancel and join client connection operations')
     ctx.provide(connectionsServiceKey, service)
+    // Bootstrap is owned by this component generation and never holds up application readiness.
+    if (options.localPairing) void Promise.resolve().then(() => service.retryLocal()).catch(() => {})
   } }
 }

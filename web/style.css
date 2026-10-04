@@ -1,4 +1,4 @@
-/* Anybox Classic: desktop proportions and neutral surfaces, adapted for the Web host. */
+/* Anybox Classic: desktop proportions and neutral surfaces for the Anybox browser shell. */
 :root {
   font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   color: var(--text); background: var(--canvas); font-synthesis: none; color-scheme: light;

@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/applications/harness/core/agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from '../dist/applications/harness/core/run/component.js'
 import { createRunRuntimeComponent } from '../dist/applications/harness/core/run/runtime-component.js'
@@ -31,7 +31,7 @@ async function createHostHarness({ llm, databasePath, ...options }) {
     await root.installComponent(createImageAssetsComponent({ directory: (databasePath) + ".images" }))
     await provider
     await database
-    return await createTestHarnessHost(root, options)
+    return await createTestHarnessServerCore(root, options)
   } catch (error) { await root.fiber.dispose(); throw error }
 }
 
@@ -85,7 +85,12 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
     assert.deepEqual(llm.calls[0].input.messages[0], { role: 'system', content: 'Default instruction.' })
     assert.deepEqual(llm.calls[1].input.messages[0], { role: 'system', content: 'Published instruction.' })
     assert.notDeepEqual(first.promptVersionIds, second.promptVersionIds)
-    assert.equal(JSON.stringify(await harness.getRun(second.id)).includes('Published instruction.'), false)
+    const acceptedRun = await harness.getRun(second.id)
+    // Trusted Session facts retain accepted prompts; browser Run DTOs use a separate whitelist.
+    assert.deepEqual(acceptedRun.promptSnapshots, [{ versionId: version.id, documentId: document.id,
+      kind: 'agent-instruction', role: 'system', content: 'Published instruction.' }])
+    assert.deepEqual((await harness.getRun(first.id)).promptSnapshots.map(prompt => prompt.content), ['Default instruction.'])
+    assert.doesNotMatch(JSON.stringify(acceptedRun), /credentialRef|apiKey|Authorization|encrypted_content|signature/)
 
     const revised = await harness.editPrompt('alice', document.id, 2, { content: 'Later instruction.' })
     await assert.rejects(harness.editPrompt('alice', document.id, 2, { content: 'Lost edit.' }), /revision conflict/)
@@ -95,6 +100,8 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
     await harness.bindPrompt('alice', 'assistant', later.id)
     assert.equal((await harness.startRun(secondInput)).id, second.id)
     assert.equal(llm.calls.length, 2)
+    assert.deepEqual((await harness.getRun(second.id)).promptSnapshots, acceptedRun.promptSnapshots)
+    assert.doesNotMatch(JSON.stringify((await harness.getRun(second.id)).promptSnapshots), /Later instruction/)
 
     for (const call of llm.calls) { call.result.resolve('Answer'); call.done.resolve() }
     assert.equal((await harness.waitRun(first.id)).status, 'completed')

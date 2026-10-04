@@ -20,7 +20,7 @@
 | `thinking_level` | `minimal/low/medium/high`，需显式支持推理并列在配置 efforts 中 |
 | `thinking_summaries` | `auto/none`，需声明支持推理 |
 
-省略选项保留服务端默认。未实现参数（包含任意覆盖模型、input、store、stream、认证的字段）被拒绝。本地函数工具与流式基于显式能力，图片依赖显式 supported 声明，服务端搜索不开放。
+省略选项保留服务端默认。未实现参数（包含任意覆盖模型、input、store、stream、认证的字段）被拒绝。本地函数工具与图片依赖显式 supported 声明；流式默认开启，配置 streaming 为 unknown/supported 时发送 `stream: true`，显式 unsupported 时发送 false。已有 unknown 配置无须迁移。服务端搜索不开放。
 
 ## 输入、结果与恢复
 
@@ -34,9 +34,13 @@ intent 包含新增 `input`、可选初始 `system_instruction` 字符串与 `to
 
 ## 流式行为
 
-SSE 识别 interaction.created、interaction.status_update、step.start/delta/stop 及 interaction.completed。按 index 保存步骤，合并文本、text annotations、arguments 分片、thought signature 与 summary。在完整终态要求步骤连续且已停止；有权威 terminal steps 时保留其内容，否则由分片组装。
+SSE 识别 interaction.created、interaction.status_update、step.start/delta/stop 及 interaction.completed，也接纳[官方迁移指南](https://ai.google.dev/gemini-api/docs/interactions-breaking-changes-may-2026)中的 interaction.in_progress 与 interaction.requires_action 状态通知；状态通知不要求 step index，也不代替 interaction.completed 终态。按 index 保存步骤，合并文本、text annotations、arguments 分片、thought signature 与 summary。在完整终态要求步骤连续且已停止；有权威 terminal steps 时保留其内容，否则由分片组装。
+
+`store: false` 的实际流式终态可能省略服务器 interaction.id 与 steps：不要求服务器 ID，也不生成替代 ID；与 JSON 相同，使用已校验的原生步骤和本地 exchange/record 引用提交并恢复。function_call.id、函数名与完整参数仍严格校验。文本和函数调用的无 ID 终态均覆盖续轮与恢复测试。
 
 step 重复、缺少前置 start、已 stop 后再 delta、未知 delta 类型、错误终态和提前 `[DONE]` 都失败。原生事件只交给受信投影器；终态必须通过与 JSON 相同的结构校验才能提交。未知 response 字段会保留，不意味着任意请求字段也获允许。
+
+JSON/SSE 解析失败通过已有 diagnostic 记录保存固定解析阶段、已知事件类型、合法 step index 与已知 step/delta 类型，不保存原始失败帧、正文、签名、认证头或后端错误消息。公共错误仍使用固定分类，浏览器仍只接收既有白名单投影；诊断不是可恢复响应，失败不提交候选上下文。
 
 ## 发现与资源生命周期
 
@@ -48,7 +52,7 @@ step 重复、缺少前置 start、已 stop 后再 delta、未知 delta 类型�
 
 ## 测试与关联文档
 
-[gemini-interactions.test.mjs](../../../packages/models/tests/gemini-interactions.test.mjs) 覆盖 thought/注解/多函数分片、未知字段、无效终态、初始 system 固定、分页、取消/清理失败和组件依赖快照；[models-directory-web.test.mjs](../../../tests/models-directory-web.test.mjs) 覆盖保存配置至 Session 原生工具运行的链路。参见 [Models 协调服务](models.md) 与 [原生框架设计](../../native-protocol-agent-framework-design.md)。
+[gemini-interactions.test.mjs](../../../packages/models/tests/gemini-interactions.test.mjs) 覆盖无服务器 ID 的文本/工具终态和恢复、状态通知、解析位置诊断及脱敏、thought/注解/多函数分片、未知字段、无效终态、初始 system 固定、分页、取消/清理失败和组件依赖快照；[models-directory-web.test.mjs](../../../tests/models-directory-web.test.mjs) 覆盖保存配置至 Session 原生工具运行的链路。参见 [Models 协调服务](models.md) 与 [原生框架设计](../../native-protocol-agent-framework-design.md)。
 
 ## 图片资源与格式兼容
 
@@ -56,6 +60,6 @@ step 重复、缺少前置 start、已 stop 后再 delta、未知 delta 类型�
 
 [images.ts](../../../packages/models/src/protocols/images.ts) 是驱动内部共享函数，不是独立组件。start 后顺序读取去重资源，等待每次读取实际退出并校验摘要；同一图片在完整历史中多次出现时逐次计算 base64 体积，读取前及发送前均检查 32 MiB 请求上限。取消、超时与协议卸载同时覆盖图片和 HTTP；清理失败不创建成功上下文。网络终态已返回但随后取消/清理失败时，仍保留受信原生诊断，经 execution 脱敏持久化。
 
-新驱动 2.1.0 写记录 v2，读取旧驱动 2.0.0 的 v1 文本与 v1/v2 混合链。旧合法文本形状继续可读，v1 不接受图片；只有完整无图片父链允许有效图片能力 false→true。其他身份、账户和参数约束保持严格，旧 JSON 不改写。base64 只存在于临时 HTTP 请求，不写入意图、上下文或记录。
+新驱动 2.1.0 写记录 v2，读取旧驱动 2.0.0 的 v1 文本与 v1/v2 混合链。旧合法文本形状继续可读，v1 不接受图片；只有完整无图片父链允许有效图片能力 false→true。streaming 仅改变传输方式，恢复允许双向改变，包括从旧非流式成功父链继续流式执行；其他身份、账户、参数及执行语义约束保持严格，旧 JSON 不改写。base64 只存在于临时 HTTP 请求，不写入意图、上下文或记录。
 
 [multimodal-protocols.test.mjs](../../../packages/models/tests/multimodal-protocols.test.mjs) 验证 JSON/SSE 图片编码、三种 MIME、资源校验、超限、取消/超时/注销退出、失败诊断和混合版本恢复；[native-protocol-agents.test.mjs](../../../tests/native-protocol-agents.test.mjs) 验证图片工具续轮、重启、分支及接受后的失败保留。

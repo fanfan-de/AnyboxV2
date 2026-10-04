@@ -3,26 +3,34 @@ import { createFileView } from './file-view.js'
 import type { FilePreviewRequest } from './file-sidebar.js'
 import type { FileRef } from '../core/project-files/domain.js'
 import { canUseModel, modelAvailability, type ModelsCatalog } from './models-client.js'
-import type { ToolTrace, RunView, RunEventView, ImageRef } from './client-types.js'
+import type { ImageRef, SessionViewMode } from './client-types.js'
 import { imageURL } from './image-client.js'
 import type { SessionController } from './session-client.js'
 import { isActive } from './session-client.js'
 import type { Pane } from './workspace-layout.js'
-import { toolTrace } from './tool-trace.js'
+import { createTrajectoryView } from './trajectory-view.js'
 import { getProtocolWebModule, type MountedProtocolTurn } from './protocols/modules.js'
+import { renderMarkdown } from './markdown.js'
+import { protocolToolContext, toolContextReadiness } from './tool-call-view.js'
+export { createToolCallCard } from './tool-call-view.js'
 
+export interface SessionScrollPosition {
+  readonly dialogue: number
+  /** Undefined until the records have been viewed at a measurable size. */
+  readonly runs?: number
+}
 export interface SessionPanel {
   readonly element: HTMLElement
   setProjectName(name: string): void
   render(): void
-  captureScroll(): number
-  restoreScroll(top: number): void
+  captureScroll(): SessionScrollPosition
+  restoreScroll(position: SessionScrollPosition): void
   resizeInput(): void
-  dispose(): number
+  dispose(): SessionScrollPosition
 }
 
 export function createSessionPanel(pane: Pane, projectName: string, controller: SessionController,
-  focus: () => void, close: () => void, initialScroll = 0, models?: ModelsCatalog, restore?: () => Promise<void>,
+  focus: () => void, close: () => void, initialScroll: SessionScrollPosition = { dialogue: 0 }, models?: ModelsCatalog, restore?: () => Promise<void>,
   openFile?: (request: FilePreviewRequest) => void): SessionPanel {
   const element = document.createElement('section')
   element.className = 'conversation session-pane'
@@ -36,18 +44,26 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
       <span class="run-status" role="status"></span>
       <button class="pane-close" type="button" aria-label="关闭会话面板" title="关闭会话面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
     </div>
-    <div class="branch-navigation" aria-label="对话分支导航">
+    <div class="branch-navigation" aria-label="对话与轨迹导航">
+      <div class="branch-controls" aria-label="对话分支导航">
       <button type="button" data-go-root title="返回会话起点" aria-label="返回会话起点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 11 9-8 9 8M5 9v12h14V9M9 21v-8h6v8"/></svg></button>
       <button type="button" data-go-parent title="查看上一级对话" aria-label="查看上一级对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
       <span class="branch-position"></span>
       <select aria-label="选择后续分支"></select><button type="button" data-more-children title="加载更多后续分支" hidden>更多</button>
+      </div>
+      <span class="run-history-scope" hidden>本会话全部运行</span>
+      <div class="session-view-switch" role="tablist" aria-label="会话视图">
+        <button type="button" role="tab" data-view-mode="dialogue" aria-selected="true">对话</button>
+        <button type="button" role="tab" data-view-mode="runs" aria-selected="false" tabindex="-1">轨迹<span class="run-count" hidden><span class="run-count-wide"></span><span class="run-count-compact"></span></span></button>
+      </div>
     </div>
     <div class="archive-banner" hidden><span>此会话已归档，仅供查看。</span><button type="button" data-restore-session>恢复会话</button></div>
     <div class="pane-notice notice" role="alert" hidden></div>
     <div class="transcript" role="log" aria-label="对话内容" aria-live="polite" tabindex="0" hidden></div>
+    <div class="run-history" role="tabpanel" aria-label="轨迹" tabindex="0" hidden inert></div>
     <div class="empty-state">
       <svg class="empty-logo" aria-hidden="true" viewBox="0 0 128 128"><use href="#agent--anybox-mark"/></svg>
-      <h2>有什么想法？</h2><p>从这里开始，与 Anybox 一起完成。</p>
+      <h2>有什么想法？</h2><p>从这里开始，与 Anybox Harness 一起完成。</p>
       <div class="empty-branches" aria-label="选择已有对话分支" hidden></div>
     </div>
     <form class="composer">
@@ -74,17 +90,35 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   get('strong').textContent = '新建会话'
   get('small').textContent = projectName
   const transcript = get<HTMLElement>('.transcript'), messageInput = get<HTMLTextAreaElement>('textarea')
+  const runHistory = get<HTMLElement>('.run-history'), viewSwitch = get<HTMLElement>('.session-view-switch')
+  const viewButtons = [...viewSwitch.querySelectorAll<HTMLButtonElement>('[data-view-mode]')]
   const compose = get<HTMLFormElement>('form'), cancel = get<HTMLButtonElement>('.cancel-button')
   const send = get<HTMLButtonElement>('.send-button'), notice = get<HTMLElement>('.pane-notice')
   const empty = get<HTMLElement>('.empty-state'), status = get<HTMLElement>('.run-status')
   const emptyBranches = get<HTMLElement>('.empty-branches')
-  let eventCache: ReadonlyMap<string, readonly RunEventView[]> = new Map(), expandedTraces: ReadonlySet<string> = new Set()
-  let contentKey = '', rendered = false, savedScroll = initialScroll
+  let contentKey = '', savedScroll = { ...initialScroll }
+  let dialogueAtBottom = initialScroll.dialogue === 0, dialogueNeedsBottom = dialogueAtBottom
+  let dialogueScrollReady = false, runsScrollReady = false
+  let visibleMode: SessionViewMode = controller.snapshot().position.viewMode === 'runs' ? 'runs' : 'dialogue'
+  let locateRunId: string | undefined
   const turns = new Map<string, MountedProtocolTurn>()
   let renderNodes: Node[] = []
   let conversationTitle: string | undefined
   const active = isActive
   const listeners = new AbortController(), options = { signal: listeners.signal }
+  const measurable = (container: HTMLElement): boolean => !element.hidden && element.isConnected &&
+    element.clientWidth > 0 && element.clientHeight > 0 && !container.hidden && container.clientWidth > 0 && container.clientHeight > 0
+  const selectMode = (mode: SessionViewMode): void => { panel.captureScroll(); controller.setViewMode(mode) }
+  for (const button of viewButtons) button.addEventListener('click', () => selectMode(button.dataset.viewMode as SessionViewMode), options)
+  viewSwitch.addEventListener('keydown', event => {
+    const current = viewButtons.indexOf(event.target as HTMLButtonElement)
+    if (current < 0 || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    event.preventDefault()
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? viewButtons.length - 1
+      : (current + (event.key === 'ArrowRight' ? 1 : -1) + viewButtons.length) % viewButtons.length
+    selectMode(viewButtons[next]!.dataset.viewMode as SessionViewMode)
+    viewButtons[next]!.focus({ preventScroll: true })
+  }, options)
   const restoreButton = get<HTMLButtonElement>('[data-restore-session]')
   let restoring = false
   restoreButton.addEventListener('click', () => {
@@ -138,7 +172,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   element.addEventListener('focusin', focus, options)
   get('.pane-close').addEventListener('click', event => { event.stopPropagation(); close() }, options)
   const resizeInput = (): void => {
-    if (element.hidden || !element.isConnected) return
+    if (element.hidden || compose.hidden || !element.isConnected) return
     if (!element.isConnected || element.clientWidth === 0) return
     messageInput.style.height = 'auto'
     if (messageInput.scrollHeight) messageInput.style.height = `${Math.min(messageInput.scrollHeight, 200)}px`
@@ -159,18 +193,29 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-view-node]')
     if (button?.dataset.viewNode) void controller.navigate(button.dataset.viewNode)
   }, options)
-  transcript.addEventListener('click', event => {
+  const contentAction = (event: MouseEvent): void => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button')
     if (!button) return
     const data = button.dataset
-    if (data.traceRunId) controller.toggleTrace(data.traceRunId)
-    if (data.focusRun) controller.focusRun(data.focusRun)
+    if (data.focusRun || data.showRun) {
+      const id = data.focusRun ?? data.showRun!
+      locateRunId = id
+      selectMode('runs')
+      controller.focusRun(id)
+    }
     if (data.cancelRun) void controller.cancel(data.cancelRun)
-    if (data.viewNode) void controller.navigate(data.viewNode)
+    if (data.viewNode) { selectMode('dialogue'); void controller.navigate(data.viewNode) }
     const node = controller.snapshot().path.find(item => item.id === (data.editNode ?? data.regenerateNode))
     if (node && !controller.snapshot().session?.archivedAt && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images, node.files).then(() => messageInput.focus())
     if (node && data.regenerateNode) void controller.regenerate(node)
-  }, options)
+  }
+  for (const container of [transcript, notice]) container.addEventListener('click', contentAction, options)
+  const trajectory = createTrajectoryView(runHistory, {
+    viewport: ids => controller.setTraceViewport(ids), search: query => controller.setTraceSearch(query),
+    retry: id => controller.retryTrace(id), answer: id => { selectMode('dialogue'); void controller.navigate(id) },
+    cancel: id => { void controller.cancel(id) },
+  })
+  const traceScroll = trajectory.scrollElement
 function imagePreview(image: ImageRef, index: number): HTMLAnchorElement {
   const link = document.createElement('a')
   link.href = imageURL(pane.sessionId, image.assetId); link.target = '_blank'; link.rel = 'noopener noreferrer'
@@ -187,9 +232,8 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   const label = document.createElement('span')
   label.className = 'message-label'
   label.textContent = role === 'user' ? '你' : 'Agent'
-  const text = document.createElement('span')
-  text.className = 'message-content'
-  text.textContent = content
+  const text = role === 'assistant' ? renderMarkdown(content) : document.createElement('span')
+  if (role === 'user') { text.className = 'message-content'; text.textContent = content }
   item.append(label, text)
   if (files.length) { const refs = document.createElement('div'); refs.className = 'message-files'; files.forEach(file => refs.append(fileView.snapshotButton(file))); item.append(refs) }
   if (images.length) {
@@ -200,54 +244,59 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   renderNodes.push(item)
 }
 
-function addRunTrace(runValue: RunView, container: HTMLElement = transcript): void {
-  const section = document.createElement('section')
-  section.className = 'run-trace'
-  const toggle = document.createElement('button')
-  toggle.type = 'button'
-  toggle.className = 'trace-toggle'
-  toggle.dataset.traceRunId = runValue.id
-  const expanded = expandedTraces.has(runValue.id)
-  toggle.setAttribute('aria-expanded', String(expanded))
-  toggle.textContent = expanded ? '执行过程 ▾' : '执行过程 ▸'
-  section.append(toggle)
-  if (expanded) {
-    const events = eventCache.get(runValue.id)
-    if (!events) {
-      const loading = document.createElement('p')
-      loading.className = 'trace-empty'
-      loading.textContent = '正在读取执行过程…'
-      section.append(loading)
-    } else {
-      const calls = toolTrace(runValue, events)
-      if (!calls.length) {
-        const empty = document.createElement('p')
-        empty.className = 'trace-empty'
-        empty.textContent = active(runValue) ? '正在等待模型回答或工具请求…' : '本次运行没有工具调用。'
-        section.append(empty)
-      }
-      for (const call of calls) section.append(createToolCallCard(call))
-    }
-  }
-  container.append(section)
-}
-
-
   const panel: SessionPanel = {
     element,
     resizeInput,
     captureScroll() {
-      if (!element.hidden && element.isConnected && element.clientWidth > 0) savedScroll = transcript.scrollTop
-      return savedScroll
+      if (dialogueScrollReady && measurable(transcript)) {
+        savedScroll.dialogue = transcript.scrollTop
+        dialogueAtBottom = transcript.scrollHeight - transcript.clientHeight - transcript.scrollTop < 72
+      }
+      if (runsScrollReady && measurable(traceScroll)) savedScroll.runs = traceScroll.scrollTop
+      return { ...savedScroll }
     },
-    restoreScroll(top) { savedScroll = top; if (!element.hidden && element.clientWidth > 0) transcript.scrollTop = top },
+    restoreScroll(position) {
+      savedScroll = { ...position }
+      if (measurable(transcript)) {
+        transcript.scrollTop = dialogueNeedsBottom ? transcript.scrollHeight : savedScroll.dialogue
+        savedScroll.dialogue = transcript.scrollTop
+        dialogueNeedsBottom = false
+        dialogueScrollReady = true
+      }
+      if (measurable(traceScroll)) {
+        traceScroll.scrollTop = savedScroll.runs ?? traceScroll.scrollHeight
+        if (locateRunId) {
+          trajectory.locateRun(locateRunId); locateRunId = undefined
+        }
+        savedScroll.runs = traceScroll.scrollTop
+        runsScrollReady = true
+      }
+    },
     render() {
+      panel.captureScroll()
       const state = controller.snapshot()
+      visibleMode = state.position.viewMode === 'runs' ? 'runs' : 'dialogue'
+      const records = visibleMode === 'runs'
+      runHistory.hidden = !records
+      runHistory.inert = !records
+      compose.hidden = records
+      compose.inert = records
+      get('.branch-controls').hidden = records
+      get('.branch-controls').inert = records
+      get('.run-history-scope').hidden = !records
+      for (const button of viewButtons) {
+        const selected = button.dataset.viewMode === visibleMode
+        button.setAttribute('aria-selected', String(selected))
+        button.tabIndex = selected ? 0 : -1
+      }
       fileView.render(state)
       const readOnly = (Boolean(state.session?.archivedAt) || state.session?.historyMode === 'dialogue-v1')
-      eventCache = state.events
-      expandedTraces = state.expanded
       const activeCount = state.runs.filter(active).length
+      get('.run-count').hidden = activeCount === 0
+      get('.run-count-wide').textContent = `${activeCount} 运行中`
+      get('.run-count-compact').textContent = String(activeCount)
+      get('[data-view-mode="runs"]').setAttribute('aria-label', activeCount ? `轨迹，${activeCount} 个运行中` : '轨迹')
+      get('[data-view-mode="runs"]').title = activeCount ? `${activeCount} 个运行中（含正在取消）` : '查看本会话全部运行'
       if (!state.loading && !conversationTitle) {
         const first = state.path[0] ?? state.children[0] ?? state.runs.at(-1)
         conversationTitle = first?.input || (first?.images?.length ? `${first.images.length} 张图片` : undefined)
@@ -262,6 +311,13 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       status.textContent = state.loading ? '正在加载' : state.busy ? '正在处理' : activeCount ? `${activeCount} 个运行中` : state.session?.archivedAt ? '已归档' : '准备就绪'
       notice.hidden = !state.notice
       notice.textContent = state.notice
+      if (!records && state.notice && state.run && ['failed', 'cancelled', 'interrupted'].includes(state.run.status)) {
+        const summary = { failed: '本次运行失败。', cancelled: '本次运行已取消。', interrupted: '本次运行意外中断。' }
+        if (state.notice.startsWith('本次运行')) notice.textContent = summary[state.run.status as keyof typeof summary]
+        const details = document.createElement('button')
+        details.type = 'button'; details.dataset.showRun = state.run.id; details.textContent = '查看轨迹'
+        notice.append(details)
+      }
       messageInput.disabled = !state.session || Boolean(state.session.archivedAt) || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading
       attachImages.disabled = messageInput.disabled || Boolean(state.pending)
       const nextImagesKey = JSON.stringify([state.images, attachImages.disabled])
@@ -313,7 +369,7 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         modelSelect.value = selected
         modelSelect.disabled = (Boolean(state.session?.archivedAt) || state.session?.historyMode === 'dialogue-v1') || state.busy || state.loading || Boolean(state.pending) || catalog.loading
         const hint = get<HTMLElement>('.composer-model-hint')
-        hint.textContent = state.session?.archivedAt ? '恢复会话后可继续使用。' : state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“Harness 设置”的“模型管理”中选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
+        hint.textContent = state.session?.archivedAt ? '恢复会话后可继续使用。' : state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“Anybox Harness 设置”的“模型管理”中选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
         hint.hidden = !hint.textContent
         if (state.images.length && !imageModelReady()) { hint.textContent = '当前模型不支持图片，请切换支持图片的模型，或移除图片后发送。'; hint.hidden = false }
       }
@@ -350,25 +406,28 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       if (messageInput.value !== state.draft) messageInput.value = state.draft
       resizeInput()
       updateSend()
-      const progressRuns = state.runs.filter(run => active(run) && run.history.kind === 'tree' && run.history.parentNodeId === state.position.viewNodeId && state.views.has(run.id))
+      const progressRuns = state.runs.filter(run => (active(run) || (run.status === 'completed' && run.resultNodeId &&
+        state.position.follow?.runId === run.id && state.position.follow.parentNodeId === state.position.viewNodeId)) &&
+        run.history.kind === 'tree' && run.history.parentNodeId === state.position.viewNodeId && state.views.has(run.id))
       const hasVisibleMessages = Boolean(state.path.length || progressRuns.length || (state.pending && !state.runs.some(item => item.id === state.pending?.runId)))
-      empty.hidden = hasVisibleMessages
-      transcript.hidden = !hasVisibleMessages
-      element.classList.toggle('is-empty', !hasVisibleMessages)
+      empty.hidden = records || hasVisibleMessages
+      empty.inert = records || hasVisibleMessages
+      transcript.hidden = records || !hasVisibleMessages
+      transcript.inert = records || !hasVisibleMessages
+      element.classList.toggle('is-empty', !records && !hasVisibleMessages)
       emptyBranches.hidden = state.loading || !state.children.length
       for (const button of emptyBranches.querySelectorAll('button')) button.disabled = state.loading || state.busy
       empty.classList.toggle('has-branches', !emptyBranches.hidden)
       get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : readOnly ? state.session?.archivedAt ? '已归档会话' : '旧版会话历史' : state.children.length ? '从这里，继续你的想法' : activeCount ? 'Agent 正在思考…' : state.runs.length ? '你正在会话起点' : '有什么想法？'
-      get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : readOnly ? state.children.length ? '选择已有分支，查看保存的对话。' : state.session?.archivedAt ? '恢复此会话后可继续使用。' : '此会话仅供查看；请新建会话继续使用。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Anybox 一起完成。'
-      const key = JSON.stringify([state.path, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.busy, readOnly, [...state.views]])
-      if (key === contentKey) return
+      get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : readOnly ? state.children.length ? '选择已有分支，查看保存的对话。' : state.session?.archivedAt ? '恢复此会话后可继续使用。' : '此会话仅供查看；请新建会话继续使用。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Anybox Harness 一起完成。'
+      trajectory.update(state)
+      const key = JSON.stringify([state.path, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.position.follow, state.busy, readOnly, state.session?.historyMode, [...state.views], state.traceLoading && [...state.traceLoading.states]])
+      if (key === contentKey) { panel.restoreScroll(savedScroll); return }
       contentKey = key
-      const top = rendered ? panel.captureScroll() : initialScroll
-      const atBottom = !element.hidden && (rendered ? transcript.scrollHeight - transcript.clientHeight - top < 72 : initialScroll === 0)
-      const focused = transcript.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : undefined
-      const focusedData = focused ? JSON.stringify(focused.dataset) : undefined
+      const content = records ? runHistory : transcript
+      const focused = content.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : undefined
+      const focusedData = focused && Object.keys(focused.dataset).length ? JSON.stringify(focused.dataset) : undefined
       renderNodes = []
-      const retainedTurns = new Set<string>()
       const appendTurn = (runId: string | null): boolean => {
         if (!runId) return false
         const view = state.views.get(runId)
@@ -376,9 +435,11 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
         const module = getProtocolWebModule(view.protocolId)
         if (!module) return false
         let turn = turns.get(runId)
-        if (!turn) { turn = module.mount(view); turns.set(runId, turn) }
-        else turn.update(view)
-        retainedTurns.add(runId)
+        const run = state.runs.find(value => value.id === runId)
+        const toolContext = run ? protocolToolContext(run, state.events.get(runId) ?? [],
+          toolContextReadiness(state.traceLoading?.states.get(runId), state.events.has(runId))) : undefined
+        if (!turn) { turn = module.mount(view, { toolContext, presentation: 'compact' }); turns.set(runId, turn) }
+        else turn.update(view, { toolContext, presentation: 'compact' })
         renderNodes.push(turn.element)
         return true
       }
@@ -391,130 +452,45 @@ function addRunTrace(runValue: RunView, container: HTMLElement = transcript): vo
       }
       for (const node of state.path) {
         addMessage('user', node.input, false, node.images, node.files)
-        if (!appendTurn(node.sourceRunId)) addMessage('assistant', node.output)
+        if (!appendTurn(node.sourceRunId)) {
+          if (state.session?.historyMode === 'dialogue-v1') addMessage('assistant', node.output)
+          else {
+            const message = document.createElement('p'), loading = node.sourceRunId ? state.traceLoading?.states.get(node.sourceRunId) : undefined
+            message.className = 'native-display-missing streaming-label'; message.setAttribute('role', 'status')
+            message.textContent = state.loading || loading === 'unloaded' || loading === 'loading' ? '正在读取原生模型展示…' : '原生模型展示暂不可用。'
+            renderNodes.push(message)
+          }
+        }
         const actions = document.createElement('div')
         actions.className = 'node-actions'
         actions.append(action(readOnly ? '查看此处' : '从这里继续', 'viewNode', node.id), action('编辑重发', 'editNode', node.id), action('重新生成', 'regenerateNode', node.id))
         for (const button of actions.querySelectorAll('button')) button.disabled = Boolean(readOnly && !button.dataset.viewNode) || state.busy || Boolean(state.pending)
         renderNodes.push(actions)
       }
-      if (state.runs.length) {
-        const heading = document.createElement('h3')
-        heading.className = 'run-list-heading'
-        heading.textContent = '运行记录'
-        renderNodes.push(heading)
-      }
-      for (const item of state.runs) {
-        const card = document.createElement('section')
-        card.className = 'run-card'
-        card.classList.toggle('focused-run', item.id === state.position.focusedRunId)
-        const label = document.createElement('p')
-        const statuses = { running: '运行中', cancelling: '正在取消', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '意外中断' }
-        label.textContent = `${statuses[item.status]} · ${item.history.kind === 'legacy-unknown' ? '旧版运行，起点未知' : item.history.parentNodeId ? `起点 ${(splitScopedId(item.history.parentNodeId)?.id ?? item.history.parentNodeId).slice(0, 8)}` : '会话起点'}`
-        const input = document.createElement('p')
-        input.className = 'run-input'
-        input.textContent = item.input || (item.images?.length ? `${item.images.length} 张图片` : '')
-        const actions = document.createElement('div')
-        actions.className = 'node-actions'
-        actions.append(action('关注过程', 'focusRun', item.id))
-        if (item.resultNodeId) actions.append(action('查看回答', 'viewNode', item.resultNodeId))
-        if (active(item)) {
-          const stop = action('取消此运行', 'cancelRun', item.id)
-          stop.disabled = state.busy || item.status === 'cancelling'
-          actions.append(stop)
-        }
-        card.append(label, input, actions)
-        if (item.error) { const error = document.createElement('p'); error.textContent = item.error; card.append(error) }
-        if (item.history.kind === 'legacy-unknown' && item.output) {
-          const details = document.createElement('details'), summary = document.createElement('summary'), output = document.createElement('p')
-          summary.textContent = '查看旧版结果'; output.textContent = item.output; details.append(summary, output); card.append(details)
-        }
-        addRunTrace(item, card)
-        renderNodes.push(card)
-      }
       for (const run of progressRuns) {
         addMessage('user', run.input, false, run.images, run.files)
         appendTurn(run.id)
-        const label = document.createElement('p'); label.className = 'streaming-label'; label.textContent = '正在生成 · 临时输出'
+        const label = document.createElement('p'); label.className = 'streaming-label'; label.textContent = active(run) ? '正在生成 · 临时输出' : '已完成'
         renderNodes.push(label)
       }
       if (state.pending && !state.runs.some(item => item.id === state.pending?.runId)) addMessage('user', state.pending.input, true, state.pending.images, state.pending.files)
       // Move only changed siblings; protocol components retain their DOM and local state.
+      const retainedNodes = new Set(renderNodes)
+      for (const child of Array.from(transcript.childNodes)) if (!retainedNodes.has(child)) child.remove()
       let cursor: ChildNode | null = transcript.firstChild
       for (const node of renderNodes) {
         if (node === cursor) cursor = cursor.nextSibling
         else transcript.insertBefore(node, cursor)
       }
       while (cursor) { const next: ChildNode | null = cursor.nextSibling; cursor.remove(); cursor = next }
-      for (const [id, turn] of turns) if (!retainedTurns.has(id)) { turn.dispose(); turns.delete(id) }
-      panel.restoreScroll(atBottom ? transcript.scrollHeight : top)
-      if (focusedData) [...transcript.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
-      if (state.path.length || state.runs.length) rendered = true
+      if (dialogueAtBottom) dialogueNeedsBottom = true
+      panel.restoreScroll(savedScroll)
+      if (focused?.isConnected && content.contains(focused)) focused.focus({ preventScroll: true })
+      else if (focusedData) [...content.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
     },
     setProjectName(name) { get('small').textContent = name; element.setAttribute('aria-label', `${name} · 会话 ${(splitScopedId(pane.sessionId)?.id ?? pane.sessionId).slice(0, 8)}`) },
-    dispose() { fileView.dispose(); listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return panel.captureScroll() },
+    dispose() { const scroll = panel.captureScroll(); fileView.dispose(); trajectory.dispose(); listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return scroll },
   }
   panel.render()
   return panel
-}
-
-/** A standalone renderer keeps the process cards consistent across every session pane. */
-export function createToolCallCard(call: ToolTrace): HTMLElement {
-  const card = document.createElement('article')
-  card.className = 'tool-call'
-  const heading = document.createElement('div')
-  heading.className = 'tool-call-heading'
-  const label = document.createElement('strong')
-  label.textContent = call.name === 'bash' ? 'Bash' : 'Apply Patch'
-  const status = document.createElement('span')
-  status.textContent = {
-    queued: '等待执行', running: '执行中', completed: '已完成', applied: '已应用',
-    rejected: '已拒绝', partial: '部分完成',
-    failed: call.name === 'bash' && call.exitCode !== undefined ? '非零退出' : '执行失败',
-    skipped: '未执行', cancelled: '已取消', interrupted: '意外中断',
-  }[call.state]
-  heading.append(label, status)
-  card.append(heading)
-  const append = (tag: string, className: string, text: string): void => {
-    const element = document.createElement(tag)
-    element.className = className
-    element.textContent = text
-    card.append(element)
-  }
-  if (call.name === 'bash') {
-    append('code', 'tool-command', `$ ${call.command}`)
-    if (call.exitCode !== undefined || call.category) {
-      append('p', 'tool-result', call.category ? `失败类别：${call.category}` :
-        `退出码：${call.exitCode === null ? '无' : call.exitCode}${call.signal ? ` · 信号：${call.signal}` : ''}`)
-    }
-    for (const [labelText, content] of [['stdout', call.stdout], ['stderr', call.stderr]] as const) {
-      if (!content) continue
-      append('span', 'tool-output-label', labelText)
-      append('pre', 'tool-output', content)
-    }
-    if (call.truncated) append('small', 'trace-empty', '输出摘要已截断')
-  } else {
-    append('pre', 'tool-output', call.patch)
-    if (call.patchTruncated) append('small', 'trace-empty', '补丁预览已截断')
-    if (call.category) append('p', 'tool-result', `失败类别：${call.category}`)
-    if (call.result) {
-      const result = call.result
-      append('p', 'tool-result', `补丁结果：${{ applied: '已应用', rejected: '已拒绝', partial: '部分完成', cancelled: '已取消' }[result.status]}`)
-      if (result.changes.length) {
-        append('span', 'tool-output-label', '实际文件变更')
-        append('pre', 'tool-output', result.changes.map(change =>
-          `${{ added: '创建', updated: '修改', deleted: '删除' }[change.kind]} ${change.path}`).join('\n'))
-      }
-      if (result.pending.length) {
-        append('span', 'tool-output-label', '未完成操作')
-        append('pre', 'tool-output', result.pending.map(operation =>
-          `${{ add: '创建', update: '修改', delete: '删除' }[operation.kind]} ${operation.path}${operation.moveTo ? ` → ${operation.moveTo}` : ''}`).join('\n'))
-      }
-      if (result.diagnostic) {
-        const diagnostic = result.diagnostic
-        append('p', 'tool-result', `${diagnostic.code}：${diagnostic.message}${diagnostic.path ? ` · ${diagnostic.path}` : ''}${diagnostic.line === undefined ? '' : `:${diagnostic.line}`}`)
-      }
-    }
-  }
-  return card
 }

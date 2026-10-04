@@ -7,27 +7,46 @@
     "node": ">=22.13.0"
   },
   "scripts": {
-    "build": "node scripts/clean-build.mjs && npm --prefix packages/models run build && tsc -p tsconfig.json && node scripts/verify-web-assets.mjs",
+    "build": "node scripts/clean-build.mjs && npm --prefix packages/models run build && tsc -p tsconfig.json && node scripts/build-web-vendors.mjs && node scripts/verify-web-assets.mjs",
     "web": "npm run build && node dist/entrypoints/serve.js",
     "typecheck": "npm --prefix packages/models run typecheck && tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs packages/models/tests/*.test.mjs",
     "check": "npm run typecheck && npm test",
     "nya:build": "npm --prefix ../NyaCore run build",
     "nya:watch": "npm --prefix ../NyaCore run dev:core",
-    "harness": "npm run build && node dist/entrypoints/harness-main.js",
-    "harness:init": "npm run build && node dist/entrypoints/harness-main.js init",
+    "harness:server": "npm run build && node dist/entrypoints/harness-server-main.js",
+    "harness:server:init": "npm run build && node dist/entrypoints/harness-server-main.js init",
+    "harness": "npm run harness:server",
+    "harness:init": "npm run harness:server:init",
     "client": "npm run build && node dist/entrypoints/client-main.js",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "desktop:dev": "npm run build && node scripts/build-desktop-native.mjs && node scripts/desktop-run.mjs",
+    "desktop:package": "node scripts/desktop-package.mjs",
+    "desktop:make": "node scripts/desktop-package.mjs --make",
+    "desktop:smoke": "npm run build && node scripts/build-desktop-native.mjs && node scripts/desktop-run.mjs --smoke"
   },
   "dependencies": {
     "@anybox/api-key-manager": "file:packages/api-key-manager",
     "@anybox/models": "file:packages/models",
     "@napi-rs/keyring": "2.1.0",
     "@nya/core": "file:../NyaCore/packages/core",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm": "3.1.0",
+    "micromark-extension-gfm": "3.0.0",
     "sharp": "0.35.5"
   },
   "devDependencies": {
+    "@electron-forge/cli": "8.0.1",
+    "@electron-forge/core": "8.0.1",
+    "@electron-forge/maker-dmg": "8.0.1",
+    "@electron-forge/maker-zip": "8.0.1",
+    "@electron-forge/plugin-fuses": "8.0.1",
+    "@electron/fuses": "2.1.3",
+    "@types/mdast": "4.0.4",
     "@types/node": "22.20.1",
+    "electron": "44.5.1",
+    "esbuild": "0.28.2",
     "typescript": "5.9.3"
-  }
+  },
+  "main": "dist/entrypoints/desktop-main.js"
 }

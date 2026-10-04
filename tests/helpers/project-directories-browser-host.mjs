@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './harness-host.mjs'
+import { createTestHarnessServerCore } from './harness-server-core.mjs'
 import { createImageAssetsComponent } from '../../dist/applications/harness/core/image/component.js'
 import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
 import { createHostAccessComponent } from '../../dist/host/access.js'
@@ -44,7 +44,7 @@ try {
     await root.installComponent(createLocalSqliteComponent(join(data, 'harness.sqlite')))
     await root.installComponent(createHostAccessComponent(name))
     await root.installComponent(createImageAssetsComponent({ directory: join(data, 'images') }))
-    const harness = await createTestHarnessHost(root, { agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }],
+    const harness = await createTestHarnessServerCore(root, { agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }],
       ...(index < 2 ? { projectDirectoryHome: home } : {}) })
     const host = { root, harness, home, name }; hosts.push(host)
     await root.installComponent(createFixtureApplicationApiComponent(root, harness.listAgents(), 0, { authenticated: true }))

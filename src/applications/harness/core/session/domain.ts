@@ -12,6 +12,23 @@ export interface Session {
   readonly createdAt: string
 }
 
+/** Initialization preferences for future sessions; existing selections are independent. */
+export interface SessionDefaults {
+  readonly agentId: string
+  readonly modelId: string | null
+  readonly fallbackModelId: string | null
+  readonly effectiveModelId: string | null
+  readonly revision: number
+}
+
+export function resolveSessionModel(requested: string | undefined, saved: string | null, fallback: string | null): string | null {
+  return requested ?? saved ?? fallback
+}
+
+export function sessionDefaultsConflict(): Error & { readonly code: string } {
+  return Object.assign(new Error('session defaults changed; reload before saving'), { code: 'session-defaults-conflict' })
+}
+
 export interface ConversationNode {
   readonly id: string
   readonly sessionId: string

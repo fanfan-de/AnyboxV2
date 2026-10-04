@@ -11,6 +11,10 @@ export interface HostAccessPort {
   authenticate(authorization: string | undefined): string
   list(): Promise<readonly AccessToken[]>
   issue(name: string): Promise<{ readonly token: string; readonly record: AccessToken }>
+  /** Trusted bootstrap only; the public token issuer cannot assign managed ownership. */
+  issueManaged(owner: string, name: string): Promise<{ readonly token: string; readonly record: AccessToken }>
+  /** Retain one valid token of this owner, or revoke all when no token is retained. */
+  reconcileManaged(owner: string, retainedToken: string | undefined): Promise<void>
   revoke(id: string): Promise<void>
   resetIdentity(): Promise<InstanceInfo>
   /** Revocation is committed first; its result then joins every observer's resource cleanup. */
@@ -22,8 +26,16 @@ export function hostFailure(code: string, status = 400): Error & { code: string;
 const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute('CREATE TABLE host_identity (id INTEGER PRIMARY KEY CHECK(id=1), instance_id TEXT NOT NULL)')
   tx.execute('CREATE TABLE host_access_tokens (id TEXT PRIMARY KEY, name TEXT NOT NULL, digest TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT)')
+} }, { version: 2, up(tx) {
+  tx.execute('ALTER TABLE host_access_tokens ADD COLUMN managed_owner TEXT')
+  tx.execute('CREATE INDEX host_access_tokens_managed_owner ON host_access_tokens(managed_owner)')
 } }]
 const hash = (value: string) => createHash('sha256').update(value).digest()
+const tokenParts = (value: string) => /^([0-9a-f-]{36})\.([A-Za-z0-9_-]{43})$/.exec(value)
+function managedOwner(value: string): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > 200 || value.includes('\0')) throw hostFailure('invalid-input')
+  return value.trim()
+}
 export function createHostAccessComponent(name = 'Anybox'): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
   return { name: 'host-access', inject: [localStorageServiceKey], async apply(ctx, _config, deps) {
     const db = deps[localStorageServiceKey]
@@ -53,6 +65,14 @@ export function createHostAccessComponent(name = 'Anybox'): Component.Object<voi
       // An observer cannot roll back a committed revocation or revive its authentication index.
     }
     const info = (): InstanceInfo => Object.freeze({ instanceId, name, apiVersion: 1, capabilities: Object.freeze(['tokens']) })
+    const issue = (name: string, owner: string | null = null) => track(async () => {
+      if (typeof name !== 'string' || !name.trim() || name.length > 200) throw hostFailure('invalid-input')
+      const secret = randomBytes(32).toString('base64url'), id = randomUUID(), digest = hash(secret).toString('hex')
+      const record: AccessToken = { id, name: name.trim(), createdAt: new Date().toISOString(), revokedAt: null }
+      await db.transaction(tx => { tx.execute('INSERT INTO host_access_tokens VALUES(?,?,?,?,NULL,?)', [id, record.name, digest, record.createdAt, owner]) })
+      tokens.set(id, digest)
+      return { token: `${id}.${secret}`, record }
+    })
     const service: HostAccessPort = {
       get instance() { return info() },
       authenticate(authorization) {
@@ -63,16 +83,29 @@ export function createHostAccessComponent(name = 'Anybox'): Component.Object<voi
         return match[1]
       },
       list: () => track(async () => (await db.read(r => r.all('SELECT id,name,created_at,revoked_at FROM host_access_tokens ORDER BY created_at,id'))).map(row => ({ id: String(row.id), name: String(row.name), createdAt: String(row.created_at), revokedAt: row.revoked_at === null ? null : String(row.revoked_at) }))),
-      issue(name) {
-        return track(async () => {
-          if (typeof name !== 'string' || !name.trim() || name.length > 200) throw hostFailure('invalid-input')
-          const secret = randomBytes(32).toString('base64url'), id = randomUUID(), digest = hash(secret).toString('hex')
-          const record: AccessToken = { id, name: name.trim(), createdAt: new Date().toISOString(), revokedAt: null }
-          await db.transaction(tx => { tx.execute('INSERT INTO host_access_tokens VALUES(?,?,?,?,NULL)', [id, record.name, digest, record.createdAt]) })
-          tokens.set(id, digest)
-          return { token: `${id}.${secret}`, record }
-        })
+      issue: name => issue(name),
+      issueManaged(owner, name) {
+        try { return issue(name, managedOwner(owner)) } catch (error) { return Promise.reject(error) }
       },
+      reconcileManaged(owner, retainedToken) { return track(async () => {
+        const managed = managedOwner(owner)
+        const retained = retainedToken === undefined ? undefined : tokenParts(retainedToken)
+        if (retainedToken !== undefined && !retained) throw hostFailure('invalid-managed-token', 409)
+        const revokedIds = await db.transaction(tx => {
+          if (retained) {
+            const row = tx.get('SELECT digest,revoked_at,managed_owner FROM host_access_tokens WHERE id=?', [retained[1]])
+            if (!row || row.revoked_at !== null || row.managed_owner !== managed ||
+              !timingSafeEqual(hash(retained[2]!), Buffer.from(String(row.digest), 'hex'))) throw hostFailure('invalid-managed-token', 409)
+          }
+          const rows = tx.all('SELECT id FROM host_access_tokens WHERE managed_owner=? AND revoked_at IS NULL', [managed])
+          const ids = rows.map(row => String(row.id)).filter(id => id !== retained?.[1])
+          const now = new Date().toISOString()
+          for (const id of ids) tx.execute('UPDATE host_access_tokens SET revoked_at=? WHERE id=?', [now, id])
+          return ids
+        })
+        for (const id of revokedIds) tokens.delete(id)
+        await Promise.all(revokedIds.map(revoked))
+      }) },
       revoke(id) { return track(async () => {
         await db.transaction(tx => { tx.execute('UPDATE host_access_tokens SET revoked_at=? WHERE id=? AND revoked_at IS NULL', [new Date().toISOString(), id]) })
         tokens.delete(id); await revoked(id)

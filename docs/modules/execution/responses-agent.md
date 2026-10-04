@@ -27,6 +27,12 @@
 
 Responses 服务端 web_search 与本地 Bash/Apply Patch 分开：前者的声明、能力和结果属于原生驱动，不调用本地工具服务。搜索默认关闭，需在模型配置显式声明能力和原生参数。
 
+## 原生展示
+
+展示 v2 为 `message`（包含有序 `output_text` / `refusal` 子块）、`reasoning`、`function_call` 和 `web_search_call` 分别提供带协议前缀的类型、白名单投影和 Web 组件。消息保留原生 `phase`，exchange 保留原生响应状态；这些字段不代替 Run 的成功、取消或失败状态。位置有效的 URL 引用关联原始正文，没有位置的安全引用显示为块级来源。
+
+reasoning 显示为“推理摘要”，默认折叠；实时更新、最终替换和已提交历史使用相同展示身份，当前面板中的手动展开选择持续保留。函数请求只表达模型请求，Bash/Apply Patch 的实际执行状态与结果通过持久工具事件关联，服务端搜索由独立原生组件展示。签名与加密 continuation 不进入浏览器。
+
 ## 数据、取消与清理
 
 绑定保存长期驱动代租约和注册句柄；每个 program 另获同代租约与独立 execution。reasoning、phase、加密 continuation 和函数续接项留在 execution 与 Session 受信记录中；Models 使用 `store: false`，不依赖服务端会话。浏览器只接收安全投影，Key/认证头不进入记录。

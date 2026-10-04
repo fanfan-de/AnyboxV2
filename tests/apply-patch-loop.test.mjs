@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
@@ -27,7 +27,7 @@ async function fixture(t) {
   await root.installComponent(llm.component())
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
-  const harness = await createTestHarnessHost(root, { agents })
+  const harness = await createTestHarnessServerCore(root, { agents })
   const project = await harness.openProject(directory)
   const session = await harness.createSession(project.id, 'assistant')
   t.after(async () => {

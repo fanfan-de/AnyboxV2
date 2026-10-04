@@ -30,6 +30,12 @@ Run 通过[注册表](protocol-agent-registry.md) prepare 建立 program。首�
 
 服务端搜索不会进入 Bash/Apply Patch 的操作队列。web_search_20250305 默认关闭，只有能力与原生参数都显式声明时才启用；pause_turn 不制造虚假的本地 tool-started 事件。
 
+## 原生展示
+
+展示 v2 分别定义 text、thinking、redacted_thinking、tool_use、server_tool_use 和 web_search_tool_result 的协议专属类型、白名单投影和 Web 组件，保留 content 原有顺序与服务端搜索的对应关系。exchange 显示实际 stop_reason / stop_details，pause_turn 表示协议自动继续，不代替 Run 结算状态。已知安全引用保留正文位置或作为块级来源呈现。
+
+thinking 标题为“思考内容”，默认折叠；redacted_thinking 只显示隐藏占位，不暴露其 data。当前面板中手动展开选择在流式更新和终态提交中保留。tool_use 只表示请求；本地工具事实从持久事件关联，server_tool_use / web_search_tool_result 不冒充本地执行。思考签名与私有搜索数据仅保存在受信原生记录。
+
 ## 原生记录与生命周期
 
 ordered thinking、签名、redacted 块、服务端搜索块及引用元数据留在独立 execution 和 Session 受信记录中。展示通过白名单投影移除签名和私有搜索数据。Key、认证头不进入记录；驱动使用 x-api-key、固定版本头和 workspace-scoped Key，绑定不处理凭据。

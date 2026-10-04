@@ -4,9 +4,9 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHarnessHost } from '../dist/entrypoints/harness-main.js'
+import { createHarnessServer } from '../dist/entrypoints/harness-server-main.js'
 import { createClientHost } from '../dist/entrypoints/client-main.js'
-import { parseWebStartupConfig } from '../dist/applications/harness/startup-config.js'
+import { parseHarnessServerConfig } from '../dist/applications/harness/server-config.js'
 
 const request = async (url, path, body, expected = 200) => {
   const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : { Origin: url, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
@@ -17,16 +17,16 @@ test('Harness owns local/remote connections and opening a remote Agent leaves lo
   const openEntry = (namespace, id) => { const key = `${namespace}:${id}`; return {
     getPassword: async () => secrets.get(key), setPassword: async value => { secrets.set(key, value) }, deleteCredential: async () => secrets.delete(key),
   } }
-  const config = name => parseWebStartupConfig({ ANYBOX_HARNESS_DATABASE: join(directory, name + '.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, name + '-models.sqlite') })
+  const config = name => parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, name + '.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, name + '-models.sqlite') })
   const models = { openEntry, readLegacyCredential: async () => undefined, catalogAutoRefresh: false, fetch: async () => { throw new Error('no model network in this test') } }
   let local, remote, client
   try {
-    local = await createHarnessHost(config('local'), { models }); remote = await createHarnessHost(config('remote'), { models })
+    local = await createHarnessServer(config('local'), { models }); remote = await createHarnessServer(config('remote'), { models })
     await Promise.all([local.ready, remote.ready])
     client = await createClientHost({ path: join(directory, 'client.sqlite'), localInstanceId: local.instance.instanceId, openEntry })
     assert.equal(client.root.get('client.connections'), undefined); assert.equal(client.root.get('client.gateway'), undefined)
     assert.equal(client.root.get('host.directory-picker'), undefined)
-    assert.equal((await request(client.url, '/api/client/v1/products'))[0].definition.name, 'Harness')
+    assert.equal((await request(client.url, '/api/client/v1/products'))[0].definition.name, 'Anybox Harness')
     await request(client.url, '/api/client/v1/connections', undefined, 503)
     await request(client.url, '/api/client/v1/products', { name: 'Models', pages: [] }, 404)
     await request(client.url, '/api/client/v1/products/modules', undefined, 404)
@@ -39,7 +39,7 @@ test('Harness owns local/remote connections and opening a remote Agent leaves lo
     assert.equal((await request(client.url, base + '/products/agent')).state, 'disabled')
     assert.equal((await request(client.url, base + '/products/agent/open', {})).state, 'running')
     assert.ok(remote.root.get('models')); assert.ok(remote.root.get('harness.sessions'))
-    assert.equal(local.harness, undefined); assert.equal(existsSync(config('local').modelsDatabasePath), false)
+    assert.equal(local.api, undefined); assert.equal(existsSync(config('local').modelsDatabasePath), false)
     const prompt = await request(client.url, base + '/prompts', { name: 'Retained', kind: 'context', role: 'user', content: 'Saved on remote' })
     const activity = remote.root.get('app.activity'), lease = activity.enter('agent')
     await request(client.url, base + '/products/agent/stop', {}, 409)

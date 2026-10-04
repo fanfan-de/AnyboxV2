@@ -1,9 +1,13 @@
 # AnyboxV2 多实例架构图
 
+> 本页为历史架构快照；文中链接指向当前入口，图源节点和已导出的 SVG/PNG 保留绘制时的命名及结构。当前三层命名以 [命名规范](../naming.md) 为准。
+
+> 当前装配已统一为 Responses、Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议。DeepSeek 使用标准 Chat，不保留旧驱动或协议别名；旧协议历史仅供查看，不能续接执行。下文及图中的独立 DeepSeek 驱动和五种绑定仅反映绘制当时结构。
+
 > 此图记录 2026-09-29 的部署结构。通用应用注册、多标签、host.http 与 harness.http 的当前边界以[应用宿主设计](../products-v1.md)和[组件清单](../modules/README.md)为准。
 
 
-[返回文档首页](../README.md) · [Harness 模块边界](../harness-module-boundary.md) · [组件清单](../modules/README.md)
+[返回文档首页](../README.md) · [Anybox Harness 模块边界](../harness-module-boundary.md) · [组件清单](../modules/README.md)
 
 核对日期：2026-09-29，对应提交 `fd53c6a` 的源码装配。三张图分别说明进程与外部资源、执行根内的组件注入关系，以及一次 Run 的执行时序。每个进程只有一个 Nya 根 Context；图中的子图只按职责分组，不表示子 Context、npm 包或独立服务。
 
@@ -71,7 +75,7 @@ flowchart LR
 
 ## 02 · 执行根组件与注入关系
 
-箭头 `A → B` 表示 A 通过 `inject` 依赖 B 所在组件提供的服务，图中画出执行根的全部注入关系。执行根共 30 个运行期组件：Models 11 个（含宿主的 DeepSeek 驱动扩展），Harness 16 个（协议绑定按已安装驱动各装一个），另有 `local-sqlite`、`host-access` 和 `host-harness-api`。客户端根另有 `local-sqlite`、`client-connections`、`host-directory-picker` 和 `client-gateway`。
+箭头 `A → B` 表示 A 通过 `inject` 依赖 B 所在组件提供的服务，图中画出执行根的全部注入关系。执行根共 30 个运行期组件：Models 11 个（含宿主的 DeepSeek 驱动扩展），Anybox Harness 16 个（协议绑定按已安装驱动各装一个），另有 `local-sqlite`、`host-access` 和 `host-harness-api`。客户端根另有 `local-sqlite`、`client-connections`、`host-directory-picker` 和 `client-gateway`。
 
 ```mermaid
 flowchart TB
@@ -184,7 +188,7 @@ sequenceDiagram
 
 ## 源码依据
 
-- 进程装配：[执行端入口](../../src/entrypoints/harness-main.ts)、[客户端入口](../../src/entrypoints/client-main.ts)、[Models 装配](../../src/applications/harness/models-startup.ts)、[Harness 组合根](../../src/applications/harness/core/index.ts)。
+- 进程装配：[执行端入口](../../src/entrypoints/harness-server-main.ts)、[客户端入口](../../src/entrypoints/client-main.ts)、[Models 装配](../../src/applications/harness/server-models.ts)、[harness server 组合根](../../src/applications/harness/core/index.ts)。
 - 注入关系：各组件工厂的 `inject` 声明，入口见[组件清单](../modules/README.md)。
 - 执行时序：[Run](../../src/applications/harness/core/run/component.ts)、[RunRuntime](../../src/applications/harness/core/run/runtime-component.ts)、[程序契约](../../src/applications/harness/core/run/program.ts)、[Loop 公共运行器](../../src/applications/harness/core/protocol-agents/shared.ts)。
 

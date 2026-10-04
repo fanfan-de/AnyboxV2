@@ -6,7 +6,15 @@ export type { DirectoryPage } from '../core/project/directories.js'
 
 export type ToolTraceState = 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'interrupted' |
   ApplyPatchResult['status']
-interface ToolTraceBase { readonly id: string; state: ToolTraceState; category?: string }
+interface ToolTraceBase {
+  readonly id: string
+  state: ToolTraceState
+  category?: string
+  /** Position in the supplied event sequence, including legacy queued batches. */
+  eventIndex?: number
+  startedAt?: string
+  finishedAt?: string
+}
 export interface BashTrace extends ToolTraceBase {
   readonly name: 'bash'
   readonly command: string
@@ -43,8 +51,10 @@ export interface PendingSubmission {
 export interface ApiError extends Error { readonly status: number; readonly code: string; readonly fileIndex?: number }
 export type Api = <T>(path: string, body?: object, signal?: AbortSignal) => Promise<T>
 
+export type SessionViewMode = 'dialogue' | 'runs'
 export interface SessionPosition {
   readonly viewNodeId: string | null
+  readonly viewMode?: SessionViewMode
   readonly focusedRunId?: string
   readonly follow?: { readonly runId: string; readonly parentNodeId: string | null }
 }

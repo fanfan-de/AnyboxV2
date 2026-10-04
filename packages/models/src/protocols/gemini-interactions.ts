@@ -1,5 +1,6 @@
 import { geminiImages, imageContent, withImages } from './images.js';
-import { modelsError } from '../errors.js';
+import { isModelsError, modelsError } from '../errors.js';
+import { withNativeDiagnostic } from '../diagnostics.js';
 import { assert } from '../domain.js';
 import type { DiscoveredModel, JsonValue } from '../types.js';
 import type { NativeObject, NativeProtocol } from '../native-types.js';
@@ -7,6 +8,18 @@ import { array, captureOptions, connectionFields, conversation, effectiveCapabil
 import { pagedDiscover, request } from './transport.js';
 const protocolId = 'gemini-interactions', levels = ['minimal', 'low', 'medium', 'high'] as const;
 const authentication = { authHeader: 'google-api-key' } as const;
+const lifecycleEvents = ['interaction.created', 'interaction.status_update', 'interaction.in_progress', 'interaction.requires_action'];
+const streamEvents = [...lifecycleEvents, 'interaction.completed', 'step.start', 'step.delta', 'step.stop', 'error'];
+function failureDiagnostic(stage: string, event?: NativeObject): NativeObject {
+  const known = (value: JsonValue | undefined, allowed: readonly string[]) => typeof value === 'string' && allowed.includes(value) ? value : 'unknown';
+  const detail = (value: JsonValue | undefined): NativeObject | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as NativeObject : undefined;
+  const step = detail(event?.step), delta = detail(event?.delta);
+  return { type: 'gemini_response_diagnostic', stage,
+    ...(event ? { event_type: known(event.event_type, streamEvents),
+      ...(Number.isSafeInteger(event.index) && Number(event.index) >= 0 ? { index: Number(event.index) } : {}),
+      ...(step ? { step_type: known(step.type, ['model_output', 'thought', 'function_call']) } : {}),
+      ...(delta ? { delta_type: known(delta.type, ['text', 'text_annotation_delta', 'arguments_delta', 'thought_signature', 'thought_summary']) } : {}) } : {}) };
+}
 function validateIntent(intent: NativeObject, images = true): void {
   if (intent.system_instruction !== undefined) string(intent.system_instruction);
   for (const value of array(intent.input)) { const item = object(value); if (item.type === 'user_input') imageContent(item.content, geminiImages, images); else if (item.type === 'function_result') { nonempty(item.call_id); nonempty(item.name); textBlocks(item.result); } else throw modelsError('capability-unsupported'); }
@@ -74,40 +87,51 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
     },
     exchange(input) {
       return withImages(geminiImages, input, (wire, signal) => request(options, { ...input, signal }, 'interactions', wire, async reader => {
-        if (!input.request.stream) return validateResponse(await reader.json());
-        const steps = new Map<number, { step: Record<string, JsonValue>; stopped: boolean; arguments?: string }>(); let terminal: NativeObject | undefined;
-        await reader.sse(data => {
-          if (data === '[DONE]') { if (!terminal) throw modelsError('invalid-response'); return; }
-          if (terminal) throw modelsError('invalid-response');
-          const event = native(parseJson(data)), type = string(event.event_type);
-          if (type === 'error') throw modelsError('provider-failure');
-          if (type === 'interaction.created' || type === 'interaction.status_update') { input.onEvent(event); return; }
-          if (type === 'interaction.completed') {
-            const response = object(event.interaction); nonempty(response.id);
-            const complete = response.status === 'completed' || response.status === 'requires_action', ordered = [...steps.entries()].sort(([a], [b]) => a - b);
-            if (ordered.some(([position, step], order) => position !== order || complete && !step.stopped)) throw modelsError('invalid-response');
-            const output = response.steps === undefined ? ordered.map(([, value]) => ({ ...value.step, ...(value.arguments === undefined ? {} : { arguments: complete ? object(parseJson(value.arguments)) : value.arguments }) })) : array(response.steps);
-            terminal = validateResponse({ ...response, steps: output }); input.onEvent(event); return true;
-          }
-          const position = index(event.index);
-          if (type === 'step.start') { if (steps.has(position)) throw modelsError('invalid-response'); steps.set(position, { step: structuredClone(object(event.step)), stopped: false }); input.onEvent(event); return; }
-          const value = steps.get(position); if (!value || value.stopped) throw modelsError('invalid-response');
-          if (type === 'step.stop') { value.stopped = true; if (event.step !== undefined) value.step = { ...value.step, ...object(event.step) }; input.onEvent(event); return; }
-          if (type !== 'step.delta') throw modelsError('invalid-response');
-          const delta = object(event.delta), step = value.step;
-          if (delta.type === 'text' && step.type === 'model_output') {
-            const content = (step.content === undefined ? [] : array(step.content)).map(item => ({ ...object(item) })); const last = content.at(-1);
-            if (last) last.text = string(last.text) + string(delta.text); else content.push({ type: 'text', text: string(delta.text) }); step.content = content;
-          } else if (delta.type === 'text_annotation_delta' && step.type === 'model_output') {
-            if (delta.annotations !== undefined) { const content = array(step.content).map(item => ({ ...object(item) })), last = content.at(-1); if (!last) throw modelsError('invalid-response'); last.annotations = [...(last.annotations === undefined ? [] : array(last.annotations)), ...array(delta.annotations)]; step.content = content; }
-          } else if (delta.type === 'arguments_delta' && step.type === 'function_call') {
-            if (delta.arguments !== undefined) { if (Object.keys(object(step.arguments)).length) throw modelsError('invalid-response'); value.arguments = (value.arguments ?? '') + string(delta.arguments); }
-          } else if (delta.type === 'thought_signature' && step.type === 'thought') { if (delta.signature !== undefined) step.signature = string(delta.signature); }
-          else if (delta.type === 'thought_summary' && step.type === 'thought') { if (delta.content !== undefined) step.summary = [...(step.summary === undefined ? [] : array(step.summary)), object(delta.content)]; }
-          else throw modelsError('invalid-response');
-          input.onEvent(event);
-        });
-        if (!terminal) throw modelsError('invalid-response'); return terminal;
+        let stage = input.request.stream ? 'sse-stream' : 'json-response', lastEvent: NativeObject | undefined;
+        try {
+          if (!input.request.stream) return validateResponse(await reader.json());
+          const steps = new Map<number, { step: Record<string, JsonValue>; stopped: boolean; arguments?: string }>(); let terminal: NativeObject | undefined;
+          await reader.sse(data => {
+            stage = 'sse-event'; lastEvent = undefined;
+            if (data === '[DONE]') { if (!terminal) throw modelsError('invalid-response'); return; }
+            if (terminal) throw modelsError('invalid-response');
+            const event = native(parseJson(data)), type = string(event.event_type);
+            lastEvent = event;
+            if (type === 'error') throw modelsError('provider-failure');
+            if (lifecycleEvents.includes(type)) { input.onEvent(event); stage = 'sse-stream'; return; }
+            if (type === 'interaction.completed') {
+              stage = 'sse-terminal';
+              // store:false streams can omit the server interaction ID. Local
+              // history uses the ordered steps; function call IDs stay required.
+              const response = object(event.interaction);
+              const complete = response.status === 'completed' || response.status === 'requires_action', ordered = [...steps.entries()].sort(([a], [b]) => a - b);
+              if (ordered.some(([position, step], order) => position !== order || complete && !step.stopped)) throw modelsError('invalid-response');
+              const output = response.steps === undefined ? ordered.map(([, value]) => ({ ...value.step, ...(value.arguments === undefined ? {} : { arguments: complete ? object(parseJson(value.arguments)) : value.arguments }) })) : array(response.steps);
+              terminal = validateResponse({ ...response, steps: output }); input.onEvent(event); return true;
+            }
+            const position = index(event.index);
+            if (type === 'step.start') { if (steps.has(position)) throw modelsError('invalid-response'); steps.set(position, { step: structuredClone(object(event.step)), stopped: false }); input.onEvent(event); return; }
+            const value = steps.get(position); if (!value || value.stopped) throw modelsError('invalid-response');
+            if (type === 'step.stop') { value.stopped = true; if (event.step !== undefined) value.step = { ...value.step, ...object(event.step) }; input.onEvent(event); return; }
+            if (type !== 'step.delta') throw modelsError('invalid-response');
+            const delta = object(event.delta), step = value.step;
+            if (delta.type === 'text' && step.type === 'model_output') {
+              const content = (step.content === undefined ? [] : array(step.content)).map(item => ({ ...object(item) })); const last = content.at(-1);
+              if (last) last.text = string(last.text) + string(delta.text); else content.push({ type: 'text', text: string(delta.text) }); step.content = content;
+            } else if (delta.type === 'text_annotation_delta' && step.type === 'model_output') {
+              if (delta.annotations !== undefined) { const content = array(step.content).map(item => ({ ...object(item) })), last = content.at(-1); if (!last) throw modelsError('invalid-response'); last.annotations = [...(last.annotations === undefined ? [] : array(last.annotations)), ...array(delta.annotations)]; step.content = content; }
+            } else if (delta.type === 'arguments_delta' && step.type === 'function_call') {
+              if (delta.arguments !== undefined) { if (Object.keys(object(step.arguments)).length) throw modelsError('invalid-response'); value.arguments = (value.arguments ?? '') + string(delta.arguments); }
+            } else if (delta.type === 'thought_signature' && step.type === 'thought') { if (delta.signature !== undefined) step.signature = string(delta.signature); }
+            else if (delta.type === 'thought_summary' && step.type === 'thought') { if (delta.content !== undefined) step.summary = [...(step.summary === undefined ? [] : array(step.summary)), object(delta.content)]; }
+            else throw modelsError('invalid-response');
+            input.onEvent(event); stage = 'sse-stream';
+          });
+          if (!terminal) { stage = 'sse-terminal-missing'; throw modelsError('invalid-response'); } return terminal;
+        } catch (error) {
+          if (isModelsError(error) && (error.code === 'invalid-response' || error.code === 'provider-failure')) throw withNativeDiagnostic(error, failureDiagnostic(stage, lastEvent));
+          throw error;
+        }
       }, authentication));
     },
     commit: input => commit(input.state, input.intent, input.response),

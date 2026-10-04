@@ -2,7 +2,7 @@ import type { HarnessClient } from './harness-client.js'
 import { splitScopedId } from './harness-client.js'
 import type { Api, ProjectView, SessionView } from './client-types.js'
 
-/** Latest read wins, including a refresh after a restore or a dialog reopening. */
+/** Latest read wins, including a refresh after a restore or a settings reopening. */
 export function createArchiveIndex(api: Api, changed: () => void) {
   let sessions: readonly SessionView[] = [], loading = false, error: unknown
   let read: AbortController | undefined, disposed = false
@@ -35,15 +35,16 @@ export function setupArchivePanel(api: Api, messageFor: (error: unknown) => stri
   view(session: SessionView): void
   restore(session: SessionView): Promise<void>
 }) {
-  const dialog = env.root.querySelector<HTMLDialogElement>('#agent--archive-dialog')!
-  const trigger = env.root.querySelector<HTMLButtonElement>('#agent--open-archive')!
-  const list = dialog.querySelector<HTMLElement>('.archive-list')!
-  const status = dialog.querySelector<HTMLElement>('[data-archive-status]')!
-  const retry = dialog.querySelector<HTMLButtonElement>('[data-archive-refresh]')!
+  const dialog = env.root.querySelector<HTMLDialogElement>('#agent--settings-dialog')!
+  const panel = env.root.querySelector<HTMLElement>('#agent--archive-settings')!
+  const list = panel.querySelector<HTMLElement>('.archive-list')!
+  const status = panel.querySelector<HTMLElement>('[data-archive-status]')!
+  const retry = panel.querySelector<HTMLButtonElement>('[data-archive-refresh]')!
   const listeners = new AbortController(), options = { signal: listeners.signal }
   const restoring = new Set<string>()
   let disposed = false, actionError: unknown
   const index = createArchiveIndex(api, render)
+  const visible = () => dialog.open && !panel.hidden
   function render(): void {
     if (disposed) return
     const state = index.snapshot()
@@ -70,8 +71,8 @@ export function setupArchivePanel(api: Api, messageFor: (error: unknown) => stri
         restoring.add(session.id); actionError = undefined; render()
         void env.restore(session).then(() => index.load()).catch(error => { actionError = error }).finally(() => {
           restoring.delete(session.id); render()
-          // The restored row is gone; keep keyboard focus inside the dialog.
-          if (dialog.open && !dialog.contains(document.activeElement)) retry.focus()
+          // The restored row is gone; keep keyboard focus inside visible settings.
+          if (visible() && !dialog.contains(document.activeElement)) retry.focus()
         })
       }, options)
       row.append(copy, view, restore)
@@ -81,11 +82,10 @@ export function setupArchivePanel(api: Api, messageFor: (error: unknown) => stri
       (focused.archiveView && button.dataset.archiveView === focused.archiveView) ||
       (focused.archiveRestore && button.dataset.archiveRestore === focused.archiveRestore))?.focus({ preventScroll: true })
   }
-  dialog.querySelector('[data-archive-close]')!.addEventListener('click', () => dialog.close(), options)
-  trigger.addEventListener('click', () => { actionError = undefined; dialog.showModal(); void index.load() }, options)
   retry.addEventListener('click', () => { actionError = undefined; void index.load() }, options)
   return {
-    refresh() { if (dialog.open) void index.load() },
-    dispose() { disposed = true; listeners.abort(); index.dispose(); dialog.close() },
+    activate() { if (!disposed && visible()) { actionError = undefined; void index.load() } },
+    refresh() { if (!disposed && visible()) void index.load() },
+    dispose() { disposed = true; listeners.abort(); index.dispose() },
   }
 }

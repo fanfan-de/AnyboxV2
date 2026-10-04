@@ -1,6 +1,6 @@
-# Harness 图片输入链路
+# Anybox Harness 图片输入链路
 
-状态：2026-09-29。Responses、Anthropic Messages、Gemini Interactions、Chat Completions 与 DeepSeek 非推理扩展支持本地静态 JPEG、PNG、WebP 输入。上传、粘贴、拖拽、工具续轮、编辑、重新生成和重启后沿成功父节点继续，共用同一资源事实。所有协议都要求模型配置明确声明图片能力；没有远程 URL、动画、PDF、音视频、图片输出或工具返回图片支持。
+状态：2026-09-29。Responses、Anthropic Messages、Gemini Interactions 与 Chat Completions 四种协议支持本地静态 JPEG、PNG、WebP 输入。上传、粘贴、拖拽、工具续轮、编辑、重新生成和重启后沿成功父节点继续，共用同一资源事实。所有协议都要求模型配置明确声明图片能力；没有远程 URL、动画、PDF、音视频、图片输出或工具返回图片支持。
 
 ## 数据与资源所有权
 
@@ -26,9 +26,9 @@ Models 不查询 Session 或图片表。`openNative({ resources, requirements: {
 
 执行顺序为：同步校验/生成引用记录 → Runtime 持久化意图 → start 同步登记操作 → 操作内读取完整请求图片 → 等实际读取退出并校验摘要 → 临时编码原生图片字段 → 检查完整请求体 → 请求模型 → 等图片及网络资源退出 → 提交候选上下文。读取失败不会发模型请求，base64 不进入数据库、事件、浏览器草稿或持久原生状态。
 
-当前输入或所选成功父路径含图片时都要求有效图片能力，由配置声明与驱动实现共同决定。目录刷新不改已有配置；unknown/unsupported 需要用户显式修改。DeepSeek 保留原有禁用 thinking 策略和工具循环。
+当前输入或所选成功父路径含图片时都要求有效图片能力，由配置声明与驱动实现共同决定。目录刷新不改已有配置；unknown/unsupported 需要用户显式修改。DeepSeek 使用标准 Chat Completions，thinking 只来自显式保存参数；旧协议历史仅供查看，不能续接执行。
 
-五种协议驱动均为 2.1.0、绑定 1.1.0，新 Run 全部写 record v2；展示版本仍为 v1。明确兼容旧驱动 2.0.0、绑定 1.0.0、record v1 文本历史，可混合 v1/v2 父链；v1 reader 不接受图片记录。只有完整父路径验证为无图片时，允许 imageInput 从 false 增为 true；其他能力、账户 epoch、连接、远端模型、模型定义版本与执行参数仍严格匹配。Session `run-state` v6 只增加通用引用列；旧 JSON 保持不变，dialogue-v1 继续只读。
+四种协议驱动均为 2.1.0、绑定 1.1.0，新 Run 全部写 record v2；展示版本仍为 v1。明确兼容旧驱动 2.0.0、绑定 1.0.0、record v1 文本历史，可混合 v1/v2 父链；v1 reader 不接受图片记录。只有完整父路径验证为无图片时，允许 imageInput 从 false 增为 true；streaming 的开启或关闭只改变传输方式，不影响恢复。其他执行语义能力、账户 epoch、连接、远端模型、模型定义版本与执行参数仍严格匹配。Session `run-state` v6 只增加通用引用列；旧 JSON 保持不变，dialogue-v1 继续只读。
 
 协议编码固定如下：Responses 用户 `input_image.image_url` 为内部 URI，发送时改为 data URL；Anthropic 用户 `image.source` 保存 `{ type: 'url', url: 内部URI }`，发送时改为 base64 source；Gemini `user_input.content` 保存 `image.uri`，发送时改为 `image.data/mime_type`。三者与 Chat 共用 `protocols/images.ts` 的受管读取、体积校验和退出屏障；不递归解释工具参数或任意字符串。
 
@@ -59,9 +59,9 @@ Models 不查询 Session 或图片表。`openNative({ resources, requirements: {
 | --- | --- |
 | 图片格式/原字节/取消/排他/恢复/GC/保留 | `tests/image-assets.test.mjs` |
 | 资源端口/摘要/能力/版本/32 MiB/退出/JSON 与 SSE | `packages/models/tests/native-images.test.mjs`、`packages/models/tests/multimodal-protocols.test.mjs` |
-| 五种协议工具续轮、纯图片、重启、混合版本、分支、幂等与损坏 | `tests/native-protocol-agents.test.mjs` |
+| 四种协议工具续轮、纯图片、重启、混合版本、分支、幂等与损坏 | `tests/native-protocol-agents.test.mjs` |
 | Session 包装器与组件关闭 | `tests/session.test.mjs` |
-| HTTP/顺序/草稿/pending/模型能力 | `tests/{image-client,session-client,web-server,protocol-web-modules,web-startup-config}.test.mjs` |
+| HTTP/顺序/草稿/pending/模型能力 | `tests/{image-client,session-client,harness-server-http,protocol-web-modules,harness-server-config}.test.mjs` |
 | 显式真实 API 图片识别与重启 | `tests/native-live-api.test.mjs` |
 
 真实图片测试沿用 `ANYBOX_NATIVE_API_TESTS=1` 和显式协议/地址/模型/Key/原生参数，另外设置 `ANYBOX_NATIVE_API_IMAGES=1`，对选中的任一已实现协议运行。详见[原生协议验证入口](./native-protocol-agent-framework-design.md#11-独立联网验证入口)。普通检查跳过这些测试；模拟成功不能当作某个远端模型已通过图片识别验收。

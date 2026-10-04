@@ -8,7 +8,7 @@ export interface RunProbePort {
   start(prompt: string): OwnedCall<string>
 }
 
-/** H0 deliberately retains its original string input while the Harness model port evolves. */
+/** H0 deliberately retains its original string input while the harness server model port evolves. */
 export interface ProbeModelPort {
   call(prompt: string): OwnedCall<string>
 }

@@ -4,25 +4,26 @@ function apiError(error: unknown): error is ApiError {
 }
 
 export function messageFor(error: unknown): string {
-  if (!apiError(error)) return error instanceof Error && error.message === 'instance-unavailable' ? '请添加或恢复对应的 Harness 连接。' : '无法连接执行设备，请检查连接状态后重试。'
+  if (!apiError(error)) return error instanceof Error && error.message === 'instance-unavailable' ? '请添加或恢复对应的 harness server 连接。' : '无法连接执行设备，请检查连接状态后重试。'
   const connectionErrors: Record<string, string> = {
-    'product-busy': 'Harness 仍有正在执行的工作，请等待完成后重试。',
-    'product-unavailable': 'Harness 尚未打开或暂不可用，请查看应用状态。',
+    'product-busy': 'Anybox Harness 仍有正在执行的工作，请等待完成后重试。',
+    'product-unavailable': 'Anybox Harness 尚未打开或暂不可用，请查看应用状态。',
     'product-not-found': '未找到这个应用，请刷新应用列表。',
     'product-restart-required': '资源清理失败，需要重启服务后恢复。',
     'product-storage-failed': '应用状态未能保存，请检查存储状态后重试。',
-    'product-startup-failed': 'Harness 未能启动，请检查状态并明确重试。',
+    'product-startup-failed': 'Anybox Harness 未能启动，请检查状态并明确重试。',
     'product-cleanup-failed': '资源未能完整退出，需要重启服务。',
     'authentication-failed': '访问令牌无效或已撤销，请更新连接凭据。',
     'credential-unavailable': '系统凭据库不可用；连接配置仍保留。',
+    'local-connection-removed': '本机连接已移除，重试可重新配对。',
     'instance-mismatch': '此地址对应的实例已改变，已阻止请求。请为新实例添加连接。',
     'connection-changed': '此连接已被修改，请刷新页面后重新选择目录。',
-    'version-incompatible': '该 Harness 的 API 版本不兼容。',
-    'instance-already-connected': '此 Harness 已有连接。',
+    'version-incompatible': '该 harness server 的 API 版本不兼容。',
+    'instance-already-connected': '此 harness server 已有连接。',
     'invalid-endpoint': '远端地址需要 HTTPS；回环地址可以使用 HTTP。',
     'connection-unavailable': '无法连接执行设备。已有运行可能仍在继续。',
     'cross-instance-input': '该输入包含另一台设备的资源，请重新选择。',
-    'instance-unavailable': '对应的 Harness 尚未连接，旧请求不会发送到其他设备。',
+    'instance-unavailable': '对应的 harness server 尚未连接，旧请求不会发送到其他设备。',
   }
   if (connectionErrors[error.code]) return connectionErrors[error.code]
   return {
@@ -49,7 +50,7 @@ export function messageFor(error: unknown): string {
     'asset-expired': '草稿图片已过期，请重新添加。',
     'asset-missing': '图片不存在或不属于此会话，请重新添加。',
     'asset-corrupt': '图片无法读取，请重新添加有效图片。',
-    'asset-unavailable': '目标 Harness 的图片存储暂不可用，请稍后重试。',
+    'asset-unavailable': '目标 harness server 的图片存储暂不可用，请稍后重试。',
     'asset-cancelled': '图片上传已取消。',
     'asset-cleanup-failed': '图片资源未能正常清理，请重新启动服务。',
     'invalid-config': '模型配置无效，请检查地址、参数范围与能力声明。',
@@ -72,7 +73,7 @@ export function messageFor(error: unknown): string {
     'timeout': '远端请求超时，请稍后重试。',
     busy: '已有请求正在进行，请等待完成后重试。',
     'invalid-response': '远端数据未通过校验，请稍后重试。',
-    'storage-unavailable': '目标 Harness 暂时无法保存数据，请检查其存储位置。',
+    'storage-unavailable': '目标 harness server 暂时无法保存数据，请检查其存储位置。',
     cancelled: '请求已取消。',
     'cleanup-failure': '请求资源未能正常退出，请重新装配服务后重试。',
     'invalid-json': '请求格式无效，请重试。',

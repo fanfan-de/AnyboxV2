@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { runViewEvent } from '../dist/applications/harness/core/run/notifications.js'
 import { installManagedModels } from './helpers/managed-models.mjs'
@@ -19,7 +19,7 @@ async function host(directory, controlled) {
   else transport = (await installManagedModels(root, directory)).controlled
   await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
-  const harness = await createTestHarnessHost(root, { agents: [{ id: 'assistant', instructions: 'Answer briefly.' }] })
+  const harness = await createTestHarnessServerCore(root, { agents: [{ id: 'assistant', instructions: 'Answer briefly.' }] })
   const project = await harness.openProject(directory)
   return { root, harness, project, transport, async close() {
     for (const call of transport.calls) { call.result.resolve('Cleanup'); call.done.resolve() }

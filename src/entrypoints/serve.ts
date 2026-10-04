@@ -13,13 +13,13 @@ const startClient = (instanceId?: string) => {
   clientStarted = true
   start('./client-main.js', { ...process.env, ...(instanceId ? { ANYBOX_LOCAL_INSTANCE_ID: instanceId } : {}) })
 }
-const harness = start('./harness-main.js')
+const harnessServer = start('./harness-server-main.js')
 const timer = setTimeout(() => startClient(), 10000)
-harness.on('message', value => {
+harnessServer.on('message', value => {
   if (value && typeof value === 'object' && 'type' in value && value.type === 'ready' && 'instanceId' in value && typeof value.instanceId === 'string') {
     clearTimeout(timer); startClient(value.instanceId)
   }
 })
-harness.once('exit', () => { clearTimeout(timer); startClient() })
+harnessServer.once('exit', () => { clearTimeout(timer); startClient() })
 const stop = () => { if (stopping) return; stopping = true; clearTimeout(timer); for (const child of children) child.kill('SIGTERM') }
 process.once('SIGINT', stop); process.once('SIGTERM', stop)

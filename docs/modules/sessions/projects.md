@@ -8,7 +8,7 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 
 - 源码：[Projects 组件](../../../src/applications/harness/core/project/component.ts)、[RuntimeInputs](../../../src/applications/harness/core/contracts.ts)。
 - 工厂：`createProjectComponent(inputs, options?)`；组件名：`harness-projects`；配置类型：`void`。
-- `options.directoryHome` 由宿主通过 `HarnessOptions.projectDirectoryHome` 传入，生产默认是执行端系统用户主目录；未配置只禁用浏览，不影响旧接口。
+- `options.directoryHome` 由宿主通过 `HarnessServerCoreOptions.projectDirectoryHome` 传入，生产默认是执行端系统用户主目录；未配置只禁用浏览，不影响旧接口。
 - `options.initialProjects` 接收受信宿主预登记路径；每次依赖就绪后的激活先幂等登记，再提供服务，因此首次启用 Agent 或从 PENDING 恢复均会处理宿主配置。路径无效会使该次组件启动失败，先前成功登记的项目仍保留，显式重试继续幂等登记。
 - `inputs.now()` 和 `inputs.newId()` 由组合根注入，默认时间与 ID 生成不写死在领域动作里。
 - 注入 [本地存储](../infrastructure/local-sqlite.md) 的 `local-storage`；提供 `harness.projects: ProjectPort`。
@@ -27,7 +27,7 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 
 浏览服务还提供 `directoryBrowsingSupported`、`openDirectoryBrowse(owner,input,signal?)`、`readDirectoryPage(owner,browseId,page,signal?)` 与 `closeDirectoryBrowse(owner,browseId)`。`directoryCreationSupported` 声明子目录创建能力，`createDirectory(owner,browseId,name,signal?)` 在同一 owner 的已加载浏览目录下创建一个子目录，返回 `OwnedCall<{path:string}>`。open/page 同样返回 OwnedCall，close 幂等并等待实际退出；owner 由受信宿主提供。`onDirectoryBrowseRetired(listener)` 在实际清理后通知宿主移除认证归属跟踪，并返回取消订阅函数。预留、浏览和创建不登记项目，所有 DTO 见[公开协议](../../project-directory-picker.md#api-v1-与公开-dto)。
 
-Harness 门面提供登记、查询与浏览接口；`requireAvailable` 供 Session、Run 和工具的依赖校验使用。
+harness server API 提供登记、查询与浏览接口；`requireAvailable` 供 Session、Run 和工具的依赖校验使用。
 
 ## 业务流程与持久归属
 

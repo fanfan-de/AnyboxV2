@@ -1,11 +1,13 @@
 import { migrateLegacyParameters } from './legacy-parameters.js';
 import { validateParameters } from './domain.js';
+import { connectionRecord, configurationRecord, intentRecord, modelRecord, normalizeStoreChange, providerRecord, requiredString, sourceIdentity, sourceState, syncState, validateVersion, versionFields } from './store-domain.js';
 import type { LegacyParameterConverter, NativeObject } from './native-types.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { Component } from '@nya/core';
+import type { ModelsJsonSnapshot } from './json-store-domain.js';
 import { modelsError, normalizeError } from './errors.js';
 import { externalProviderId } from './identity.js';
 import { modelsStoreServiceKey } from './types.js';
@@ -24,137 +26,6 @@ function canonicalPath(input: string): string {
     mkdirSync(dirname(absolute), { recursive: true, mode: 0o700 });
     return existsSync(absolute) ? realpathSync(absolute) : join(realpathSync(dirname(absolute)), basename(absolute));
   } catch { throw modelsError('storage-unavailable'); }
-}
-function requiredString(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || !value.trim()) throw modelsError('invalid-config');
-}
-function pick<T, K extends keyof T>(input: T, keys: readonly K[]): Pick<T, K> {
-  const output = {} as Pick<T, K>;
-  for (const key of keys) if (input[key] !== undefined) output[key] = input[key];
-  return output;
-}
-function versionFields(record: Versioned): Versioned {
-  for (const field of [record.id, record.versionId, record.createdAt, record.updatedAt]) requiredString(field);
-  if (!Number.isSafeInteger(record.revision) || record.revision < 1) throw modelsError('invalid-config');
-  return pick(record, ['id', 'revision', 'versionId', 'createdAt', 'updatedAt']);
-}
-function validateVersion(record: Versioned, current: Versioned | undefined, expected: number | null): void {
-  if (expected === null ? current !== undefined : current?.revision !== expected) throw modelsError('conflict');
-  if (record.revision !== (current?.revision ?? 0) + 1 || (current && record.createdAt !== current.createdAt)) throw modelsError('invalid-config');
-}
-function sourceRef(source: SourceRef, model = false): SourceRef {
-  if (source.kind === 'user') return { kind: 'user' };
-  if (source.kind !== 'external') throw modelsError('invalid-config');
-  requiredString(source.sourceId); requiredString(source.providerId);
-  if (source.sourceVersion !== null) requiredString(source.sourceVersion);
-  if (model) requiredString(source.modelId);
-  else if (source.modelId !== undefined) throw modelsError('invalid-config');
-  return { kind: 'external', sourceId: source.sourceId, providerId: source.providerId,
-    ...(model ? { modelId: source.modelId } : {}), sourceVersion: source.sourceVersion };
-}
-function sourceIdentity(source: SourceRef): string {
-  return source.kind === 'user' ? 'user' : JSON.stringify([source.sourceId, source.providerId, source.modelId ?? null]);
-}
-function connectionHints(hints: ConnectionHints): ConnectionHints {
-  if (!Array.isArray(hints.protocolIds) || hints.protocolIds.some(id => typeof id !== 'string' || !id.trim())) throw modelsError('invalid-config');
-  if (hints.baseUrl !== undefined) requiredString(hints.baseUrl);
-  return { ...(hints.baseUrl === undefined ? {} : { baseUrl: hints.baseUrl }), protocolIds: [...hints.protocolIds] };
-}
-function finiteNonnegative(value: unknown): void {
-  if (value !== undefined && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) throw modelsError('invalid-config');
-}
-function capabilities(input: DeclaredCapabilities): DeclaredCapabilities {
-  if (input.webSearch && !['supported', 'unsupported', 'unknown'].includes(input.webSearch.support)) throw modelsError('invalid-config');
-  for (const cap of [input.tools, input.streaming, input.imageInput, input.reasoning]) {
-    if (!['supported', 'unsupported', 'unknown'].includes(cap.support)) throw modelsError('invalid-config');
-  }
-  for (const items of [input.reasoning.efforts, input.reasoning.modes]) {
-    if (items !== undefined && (!Array.isArray(items) || items.some(value => typeof value !== 'string' || !value.trim()))) throw modelsError('invalid-config');
-  }
-  const budget = input.reasoning.budget;
-  if (budget) {
-    finiteNonnegative(budget.min); finiteNonnegative(budget.max);
-    if (budget.min === undefined || budget.max === undefined || budget.min > budget.max) throw modelsError('invalid-config');
-  }
-  return {
-    ...(input.webSearch ? { webSearch: pick(input.webSearch, ['support']) } : {}),
-    tools: pick(input.tools, ['support']), streaming: pick(input.streaming, ['support']), imageInput: pick(input.imageInput, ['support']),
-    reasoning: { ...pick(input.reasoning, ['support', 'efforts', 'modes']), ...(budget ? { budget: pick(budget, ['min', 'max']) } : {}) },
-  };
-}
-function state(value: unknown): asserts value is Provider['state'] {
-  if (value !== 'present' && value !== 'missing' && value !== 'unresolved') throw modelsError('invalid-config');
-}
-/** Whitelist every definition field; upstream metadata and credentials are not module data. */
-function providerRecord(record: Provider): Provider {
-  requiredString(record.name); state(record.state);
-  if (record.documentationUrl !== undefined) requiredString(record.documentationUrl);
-  return { ...versionFields(record), ...pick(record, ['name', 'documentationUrl', 'state']),
-    source: sourceRef(record.source), connectionHints: connectionHints(record.connectionHints) };
-}
-function modelRecord(record: Model): Model {
-  requiredString(record.name); requiredString(record.providerId); requiredString(record.remoteModelId); state(record.state);
-  for (const key of ['description', 'family', 'releaseDate', 'lastUpdated', 'status', 'modelType'] as const) {
-    if (record[key] !== undefined && typeof record[key] !== 'string') throw modelsError('invalid-config');
-  }
-  if (record.openWeights !== undefined && typeof record.openWeights !== 'boolean') throw modelsError('invalid-config');
-  for (const items of [record.modalities.input, record.modalities.output]) {
-    if (!Array.isArray(items) || items.some(item => typeof item !== 'string' || !item.trim())) throw modelsError('invalid-config');
-  }
-  for (const number of [record.limits.context, record.limits.input, record.limits.output]) finiteNonnegative(number);
-  const controls = record.controls;
-  for (const support of [controls.temperature, controls.structuredOutput ?? 'unknown']) {
-    if (!['unknown', 'supported', 'unsupported'].includes(support)) throw modelsError('invalid-config');
-  }
-  const reasoning = controls.reasoning?.map(control => {
-    if (!['toggle', 'effort', 'budget'].includes(control.kind) || (control.values !== undefined &&
-        (!Array.isArray(control.values) || control.values.some(value => typeof value !== 'string')))) throw modelsError('invalid-config');
-    finiteNonnegative(control.min); finiteNonnegative(control.max);
-    return pick(control, ['kind', 'values', 'min', 'max']);
-  });
-  const cost = record.cost;
-  if (cost && (cost.currency !== 'USD' || cost.unit !== 'million-tokens')) throw modelsError('invalid-config');
-  const costFields = ['input', 'output', 'cacheRead', 'cacheWrite'] as const;
-  if (cost) for (const value of [...costFields.map(key => cost[key]), cost.reasoning]) finiteNonnegative(value);
-  return { ...versionFields(record), ...pick(record, ['name', 'providerId', 'remoteModelId', 'description', 'family', 'releaseDate',
-      'lastUpdated', 'status', 'openWeights', 'modelType', 'state']), source: sourceRef(record.source, true),
-    capabilities: capabilities(record.capabilities), controls: { ...pick(controls, ['temperature', 'structuredOutput']),
-      ...(reasoning === undefined ? {} : { reasoning }) }, modalities: pick(record.modalities, ['input', 'output']),
-    limits: pick(record.limits, ['context', 'input', 'output']), connectionHints: connectionHints(record.connectionHints),
-    ...(cost ? { cost: { ...pick(cost, ['currency', 'unit', ...costFields, 'reasoning']),
-      ...(cost.tiers === undefined ? {} : { tiers: cost.tiers.map(tier => {
-        for (const value of [...costFields.map(key => tier[key]), tier.reasoning, tier.contextMin, tier.contextMax]) finiteNonnegative(value);
-        return pick(tier, ['contextMin', 'contextMax', 'reasoning', ...costFields]);
-      }) }) } } : {}) };
-}
-function connectionRecord(record: ProviderConnectionRecord): ProviderConnectionRecord {
-  for (const value of [record.providerDefinitionId, record.name, record.protocolId, record.baseUrl]) requiredString(value);
-  if (typeof record.enabled !== 'boolean' || !['none', 'api-key'].includes(record.auth) ||
-      !Number.isSafeInteger(record.timeoutMs) || record.timeoutMs <= 0) throw modelsError('invalid-config');
-  if (record.credentialRef !== null) requiredString(record.credentialRef); requiredString(record.historyScopeEpoch);
-  return { ...versionFields(record), ...pick(record, ['providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'credentialRef', 'historyScopeEpoch']) };
-}
-function configurationRecord(record: ModelConfiguration): ModelConfiguration {
-  for (const value of [record.modelDefinitionId, record.modelDefinitionVersionId, record.connectionId, record.name, record.remoteModelId]) requiredString(value);
-  if (typeof record.enabled !== 'boolean' || typeof record.baseline !== 'boolean') throw modelsError('invalid-config');
-  return { ...versionFields(record), ...pick(record, ['modelDefinitionId', 'modelDefinitionVersionId', 'connectionId', 'name', 'enabled', 'baseline', 'remoteModelId']),
-    capabilities: capabilities(record.capabilities), parameters: (validateParameters(record.parameters), structuredClone(record.parameters)) };
-}
-function sourceState(record: SourceState): SourceState {
-  requiredString(record.sourceId); requiredString(record.snapshotVersion);
-  if (!Number.isSafeInteger(record.fetchedAt) || record.fetchedAt < 0) throw modelsError('invalid-config');
-  return pick(record, ['sourceId', 'snapshotVersion', 'fetchedAt']);
-}
-function syncState(record: ConnectionSyncState): ConnectionSyncState {
-  requiredString(record.connectionId);
-  if (!['pending', 'ready', 'failed'].includes(record.state)) throw modelsError('invalid-config');
-  for (const value of [record.targetSourceVersion, record.syncedSourceVersion]) if (value !== null) requiredString(value);
-  if (record.error !== undefined) requiredString(record.error);
-  return pick(record, ['connectionId', 'state', 'targetSourceVersion', 'syncedSourceVersion', 'error']);
-}
-function intentRecord(record: CredentialIntent): CredentialIntent {
-  for (const value of [record.id, record.providerId, record.slotId, record.createdAt]) requiredString(value);
-  return pick(record, ['id', 'providerId', 'slotId', 'createdAt']);
 }
 function createSchema(db: DatabaseSync): void {
   db.exec(`
@@ -446,19 +317,7 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
         let change: StoreChange;
         try {
           assertOpen();
-          if (input.deleteConnection) {
-            requiredString(input.deleteConnection.id);
-            if (!Number.isSafeInteger(input.deleteConnection.expectedRevision) || input.deleteConnection.expectedRevision < 1) throw modelsError('invalid-config');
-          }
-          change = structuredClone({
-            providers: input.providers?.map(item => ({ record: providerRecord(item.record), expectedRevision: item.expectedRevision })),
-            models: input.models?.map(item => ({ record: modelRecord(item.record), expectedRevision: item.expectedRevision })),
-            ...(input.connection ? { connection: { record: connectionRecord(input.connection.record), expectedRevision: input.connection.expectedRevision } } : {}),
-            ...(input.deleteConnection ? { deleteConnection: pick(input.deleteConnection, ['id', 'expectedRevision']) } : {}),
-            configurations: input.configurations?.map(item => ({ record: configurationRecord(item.record), expectedRevision: item.expectedRevision })),
-            sources: input.sources?.map(sourceState), syncStates: input.syncStates?.map(syncState), syncGuards: input.syncGuards?.map(guard => pick(guard, ['connectionId', 'targetSourceVersion'])),
-            addIntents: input.addIntents?.map(intentRecord), removeIntentIds: input.removeIntentIds,
-          });
+          change = normalizeStoreChange(input);
         } catch (error) { return Promise.reject(normalizeError(error, 'invalid-config')); }
         const result = tail.then(() => commit(change)); tail = result.then(() => {}, () => {}); return result;
       },
@@ -467,4 +326,45 @@ export function createModelsStoreComponent(options: ModelsStoreOptions): Compone
       'join models storage and release SQLite ownership');
     ctx.provide(modelsStoreServiceKey, service);
   } };
+}
+
+/** Finite legacy reader: keeps SQLite exclusive ownership through migration and export. */
+export function readModelsSqliteSnapshot(options: ModelsStoreOptions): ModelsJsonSnapshot {
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(canonicalPath(options.path));
+    initialize(db, options.legacyParameterConverters ?? {});
+    const rows = <T>(table: string): T[] => db!.prepare(`SELECT record FROM ${table}`).all().map(row => JSON.parse(String(row.record)) as T);
+    const providers = rows<Provider>('provider_definitions').map(providerRecord), models = rows<Model>('model_definitions').map(modelRecord);
+    const connections = rows<ProviderConnectionRecord>('connections').map(connectionRecord), configurations = rows<ModelConfiguration>('configurations').map(configurationRecord);
+    const epochs = new Map(connections.map(record => [record.id, record.historyScopeEpoch]));
+    const connectionHistory = rows<ProviderConnectionRecord>('connection_versions').map(record => {
+      let epoch = epochs.get(record.id);
+      if (!epoch) { epoch = record.historyScopeEpoch ?? randomUUID(); epochs.set(record.id, epoch); }
+      return connectionRecord({ ...record, historyScopeEpoch: record.historyScopeEpoch ?? epoch });
+    });
+    const configurationHistory = rows<ModelConfiguration & { defaults?: NativeObject }>('configuration_versions').map(record => {
+      const parent = connections.find(connection => connection.id === record.connectionId) ?? connectionHistory.filter(connection => connection.id === record.connectionId).sort((a, b) => b.revision - a.revision)[0];
+      const { defaults, ...rest } = record;
+      return configurationRecord({ ...rest, parameters: record.parameters?.formatVersion === 1 ? record.parameters : migrateLegacyParameters(parent?.protocolId ?? 'unknown', record.parameters?.value ?? defaults ?? {}, options.legacyParameterConverters) });
+    });
+    // Old SQLite migrations retain original history JSON. Export its read-normalized
+    // representation and align the current revision with its migrated current row.
+    const align = <T extends Versioned>(archived: T[], current: readonly T[]) => {
+      for (const record of current) {
+        const index = archived.findIndex(item => item.id === record.id && item.revision === record.revision);
+        if (index >= 0) archived[index] = record; else archived.push(record);
+      }
+      return archived;
+    };
+    const history = { providers: align(rows<Provider>('provider_definition_versions').map(providerRecord), providers),
+      models: align(rows<Model>('model_definition_versions').map(modelRecord), models),
+      connections: align(connectionHistory, connections), configurations: align(configurationHistory, configurations) };
+    return { schemaVersion: 1, providers, models, connections, configurations,
+      sources: rows<SourceState>('sources').map(sourceState), syncStates: rows<ConnectionSyncState>('connection_sync_states').map(syncState),
+      credentialIntents: rows<CredentialIntent>('credential_intents').map(intentRecord), history,
+      tombstones: { connections: [...new Set(history.connections.filter(record => !connections.some(item => item.id === record.id)).map(record => record.id))],
+        configurations: [...new Set(history.configurations.filter(record => !configurations.some(item => item.id === record.id)).map(record => record.id))] } };
+  } catch (error) { throw normalizeError(error, 'storage-unavailable'); }
+  finally { if (db) try { db.close(); } catch { throw modelsError('cleanup-failure'); } }
 }

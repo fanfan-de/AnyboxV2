@@ -10,7 +10,7 @@ import { migrateLegacyState } from './legacy-state.js'
 import type { ApplicationWebContext, ApplicationActivation } from '../../../host/web/application-contracts.js'
 
 export interface HarnessMountedPage extends MountedPage { activate(active: boolean, reason: ApplicationActivation): Promise<void> }
-/** Harness has one workspace; device configuration belongs to its dialogs. */
+/** Anybox Harness has one workspace; device configuration belongs to its dialogs. */
 export async function mountHarnessPage(root: HTMLElement, options: { context: ApplicationWebContext; templates: ParentNode; isActive(): boolean; connectionsChanged(): void }): Promise<HarnessMountedPage> {
   const readHash = () => '#/harness/' + (options.context.route.read() || 'workspace')
   const writeHash = (hash: string, replace = false) => options.context.route.navigate(hash.replace(/^#\/harness\//, ''), replace)
@@ -79,8 +79,11 @@ export async function mountHarnessPage(root: HTMLElement, options: { context: Ap
         const select = content.querySelector<HTMLSelectElement>('#agent--harness-select')!
         for (const option of select.options) {
           const item = connections.find(value => value.id === option.value)!
-          option.textContent = `${item.instanceId === local.instanceId ? '本地' : '远程'} · ${item.name}`
+          const isLocal = item.instanceId === local.instanceId
+          option.textContent = isLocal ? '本地' : item.name
+          option.title = `${isLocal ? '本地' : '远程'} · ${item.name}`
         }
+        select.title = `执行设备：${select.selectedOptions[0]?.title ?? '未选择'}`
         api = createHarnessClient(active, selectedId)
         if (active.some(item => item.instanceId === local.instanceId)) await migrateLegacyState(sessionStorage, local.instanceId!, async (id, project) => {
           const localConnection = active.find(item => item.instanceId === local.instanceId)!

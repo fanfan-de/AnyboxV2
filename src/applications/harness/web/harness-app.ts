@@ -11,7 +11,7 @@ export function restoreLegacyRoute(storage: Pick<Storage, 'getItem'>): string | 
 }
 export async function mount(root: HTMLElement, context: ApplicationWebContext): Promise<MountedApplication> {
   const response = await fetch('/apps/agent/template.html', { signal: context.signal, cache: 'no-store' })
-  if (!response.ok) throw new Error('Harness interface unavailable')
+  if (!response.ok) throw new Error('Anybox Harness interface unavailable')
   root.innerHTML = await response.text()
   const surface = document.createElement('div'); surface.className = 'harness-surface'; root.append(surface)
   let page: HarnessMountedPage | undefined, active = false, disposed = false, tail: Promise<void> = Promise.resolve()

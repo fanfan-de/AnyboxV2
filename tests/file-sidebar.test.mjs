@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createFileSidebar, restoreFileSidebarSessionState } from '../dist/applications/harness/web/file-sidebar.js'
+import { clampFileTreeWidth, createFileSidebar, restoreFileSidebarSessionState } from '../dist/applications/harness/web/file-sidebar.js'
 import { createFileView } from '../dist/applications/harness/web/file-view.js'
 import { sameFileReference } from '../dist/applications/harness/web/session-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
@@ -22,7 +22,9 @@ function documentFixture() {
     let ownText = ''
     const node = {
       ownerDocument: document, tagName, className: '', dataset: {}, children: [], parentElement: undefined,
-      attributes: {}, listeners: new Map(), style: { setProperty() {} }, scrollTop: 0, scrollLeft: 0, value: '', hidden: false, disabled: false,
+      attributes: {}, listeners: new Map(), style: { values: {}, setProperty(name, value) { this.values[name] = value } }, scrollTop: 0, scrollLeft: 0, value: '', hidden: false, disabled: false,
+      width: 600, getBoundingClientRect() { return { width: this.width } },
+      setPointerCapture(id) { this.pointerId = id }, releasePointerCapture() { delete this.pointerId },
       classList: { toggle(name, force) { const values = new Set(node.className.split(/\s+/).filter(Boolean)); if (force ?? !values.has(name)) values.add(name); else values.delete(name); node.className = [...values].join(' ') }, contains(name) { return node.className.split(/\s+/).includes(name) } },
       setAttribute(name, value) { this.attributes[name] = value }, getAttribute(name) { return this.attributes[name] }, removeAttribute(name) { delete this.attributes[name] },
       append(...children) { for (const child of children) { child.remove(); child.parentElement = this; this.children.push(child) } },
@@ -44,7 +46,7 @@ function documentFixture() {
   document.createElement = createElement
   return { document, container: createElement('div') }
 }
-function fixture({ read, treeApi, session = {} } = {}) {
+function fixture({ read, treeApi, session = {}, projectLabel } = {}) {
   const dom = documentFixture(), changed = [], requests = [], applied = [], treeRequests = []
   const state = { session: { id: 'a', projectId: 'p-a', historyMode: 'native-local-v1', ...session }, position: { viewNodeId: null }, draft: '', files: [], loading: false, busy: false }
   const controller = {
@@ -63,7 +65,7 @@ function fixture({ read, treeApi, session = {} } = {}) {
     treeRequests.push({ url, body, signal })
     if (treeApi) return treeApi(url, body, signal)
     if (url.endsWith('/open')) return { cursorId: 'tree', page: 0, path: body.path, entries: [], nextPage: null }
-  }, messageFor: error => error.message, changed: (sessionId, value) => changed.push({ sessionId, value: JSON.parse(JSON.stringify(value)) }) })
+  }, projectLabel, messageFor: error => error.message, changed: (sessionId, value) => changed.push({ sessionId, value: JSON.parse(JSON.stringify(value)) }) })
   sidebar.setSession(ref('a'), controller)
   return { ...dom, sidebar, controller, state, changed, requests, applied, treeRequests,
     open: (kind, item, extra = {}) => sidebar.open({ ref: ref('a'), parentNodeId: state.position.viewNodeId, kind, item, ...extra }) }
@@ -74,6 +76,9 @@ test('persistent descriptors separate snapshot purposes, normalize selection and
   const state = restoreFileSidebarSessionState(raw)
   assert.equal(state.tabs.length, 2); assert.notEqual(state.tabs[0].id, state.tabs[1].id)
   assert.deepEqual(state.treeExpanded, ['src']); assert.equal(state.treeScroll, 0)
+  assert.equal(state.treeWidth, 220)
+  assert.equal(restoreFileSidebarSessionState({ treeWidth: Infinity }).treeWidth, 220)
+  assert.equal(restoreFileSidebarSessionState({ treeWidth: 900 }).treeWidth, 360)
   assert.equal(JSON.stringify(state).includes('must not persist'), false)
   assert.equal(restoreFileSidebarSessionState({ tabs: [{ kind: 'current', parentNodeId: 7 }] }).tabs.length, 0)
 })
@@ -157,23 +162,150 @@ test('clearing a range previews and references the whole file, and current-file 
     const range = f.container.querySelector('.file-preview-range'), [start, end] = range.querySelectorAll('input')
     start.value = '1'; start.dispatch('input'); end.value = '1'; end.dispatch('input'); range.querySelector('button').click()
     await tick()
-    assert.equal(f.container.querySelector('.file-tab').textContent, 'src/a.ts · L1–1')
+    assert.equal(f.container.querySelector('.file-tab').textContent, 'a.ts')
     assert.match(f.container.querySelector('.file-tab').title, /L1–1/)
+    assert.match(f.container.querySelector('.file-tab').getAttribute('aria-label'), /src\/a.ts · L1–1/)
     assert.match(f.container.querySelector('.file-tab-close').getAttribute('aria-label'), /L1–1/)
-    assert.equal(f.container.querySelector('.file-preview-heading').textContent, 'src/a.ts · L1–1')
+    assert.equal(f.container.querySelector('.file-preview-heading').title, 'src/a.ts · L1–1')
+    assert.deepEqual(f.container.querySelectorAll('.file-preview-breadcrumb').map(crumb => crumb.textContent), ['项目', 'src', 'a.ts'])
     assert.match(f.container.querySelector('.file-preview-text').getAttribute('aria-label'), /L1–1/)
     assert.deepEqual(f.sidebar.snapshot().tabs[0].item.selection.range, { start: 1, end: 2 }, 'display ranges do not rewrite the original chip guard')
     start.value = ''; start.dispatch('input'); end.value = ''; end.dispatch('input'); range.querySelector('button').click()
     await tick()
     assert.deepEqual(f.requests.at(-1).selection, { kind: 'project-file', path: 'src/a.ts' })
-    assert.equal(f.container.querySelector('.file-tab').textContent, 'src/a.ts · 整文件')
-    assert.equal(f.container.querySelector('.file-preview-heading').textContent, 'src/a.ts · 整文件')
+    assert.equal(f.container.querySelector('.file-tab').textContent, 'a.ts')
+    assert.equal(f.container.querySelector('.file-preview-heading').title, 'src/a.ts · 整文件')
     assert.match(f.container.querySelector('.file-tab-close').getAttribute('aria-label'), /整文件/)
     f.state.position = { viewNodeId: 'next-parent' }; f.sidebar.refresh()
     f.container.querySelector('.file-preview-actions').children.at(-1).click()
     assert.equal(f.applied.at(-1).parentNodeId, 'next-parent')
     assert.deepEqual(f.applied.at(-1).item.selection, { kind: 'project-file', path: 'src/a.ts' })
     assert.equal(f.container.querySelector('.file-preview-text').textContent, '<script>plain text</script>')
+  } finally { await f.sidebar.dispose() }
+})
+
+test('tree filtering keeps loaded ancestors and pagination without new reads, and clears on session switch', async () => {
+  const f = fixture({ treeApi(url, body) {
+    if (url.endsWith('/open')) return { cursorId: `cursor-${body.path || 'root'}`, page: 0, path: body.path,
+      entries: body.path ? [{ name: 'a.ts', path: 'src/a.ts', kind: 'file' }, { name: 'b.ts', path: 'src/b.ts', kind: 'file' }]
+        : [{ name: 'src', path: 'src', kind: 'directory' }, { name: 'README.md', path: 'README.md', kind: 'file' }], nextPage: 1 }
+    return {}
+  } })
+  try {
+    await tick()
+    const entry = path => f.container.querySelectorAll('.file-tree-entry').find(button => button.dataset.treePath === path)
+    entry('src').click(); await tick()
+    assert.equal(entry('src').getAttribute('aria-selected'), 'true')
+    entry('src/a.ts').click(); await tick()
+    assert.equal(entry('src/a.ts').getAttribute('aria-selected'), 'true')
+    const filter = f.container.querySelector('.file-tree-filter').querySelector('input'), count = f.treeRequests.length
+    filter.focus(); filter.value = 'A.TS'; filter.dispatch('input'); await tick()
+    assert.deepEqual(f.container.querySelectorAll('.file-tree-entry').map(button => button.dataset.treePath), ['src', 'src/a.ts'])
+    assert.equal(f.document.activeElement, filter)
+    assert.equal(f.treeRequests.length, count, 'filtering never scans another directory')
+    assert.equal(f.container.querySelectorAll('.file-tree-more').length, 2)
+    filter.value = 'not-loaded'; filter.dispatch('input')
+    assert.deepEqual(f.container.querySelectorAll('.file-tree-entry').map(button => button.dataset.treePath), ['src'])
+    assert.equal(f.container.querySelectorAll('.file-tree-more').length, 2, 'expanded-directory and root pagination remain available')
+    assert.match(f.container.querySelector('.file-tree-status').textContent, /没有匹配项/)
+    filter.dispatch('keydown', { key: 'Escape', stopPropagation() {} })
+    assert.equal(filter.value, '')
+    assert.equal(f.container.querySelectorAll('.file-tree-entry').length, 4)
+    entry('src').click(); await tick()
+    assert.deepEqual(f.sidebar.snapshot().treeExpanded, [])
+    const closedReadCount = f.treeRequests.length
+    filter.value = 'a.ts'; filter.dispatch('input'); await tick()
+    assert.deepEqual(f.container.querySelectorAll('.file-tree-entry').map(button => button.dataset.treePath), ['src', 'src/a.ts'])
+    assert.equal(entry('src').getAttribute('aria-expanded'), 'true')
+    assert.deepEqual(f.sidebar.snapshot().treeExpanded, [], 'filter expansion does not overwrite saved branches')
+    assert.equal(f.treeRequests.length, closedReadCount, 'filtering a collapsed cached branch owns no new cursor')
+    assert.equal(f.container.querySelectorAll('.file-tree-more').length, 1, 'released cached branches expose no stale continuation')
+    filter.value = ''; filter.dispatch('input'); entry('src').click(); await tick()
+    f.open('history', { id: 'historical', file, selection: { kind: 'snapshot', snapshotId: file.snapshotId } }); await tick()
+    assert.equal(entry('src/a.ts').getAttribute('aria-selected'), 'false', 'history is never presented as the current project file')
+    filter.value = 'README'; filter.dispatch('input')
+    f.sidebar.setSession(ref('b'), { ...f.controller, snapshot: () => ({ ...f.state, session: { ...f.state.session, id: 'b', projectId: 'p-b' } }) })
+    await tick()
+    assert.equal(filter.value, '')
+    assert.equal(f.container.querySelector('.file-preview-empty').hidden, false)
+    assert.equal(f.treeRequests.some(request => request.url.startsWith('/sessions/b/')), true)
+  } finally { await f.sidebar.dispose() }
+})
+
+test('directory split fitting preserves session widths, supports keyboard and pointer, and stops when hidden', async () => {
+  const previousObserver = globalThis.ResizeObserver, observers = []
+  globalThis.ResizeObserver = class {
+    constructor(callback) { this.callback = callback; observers.push(this) }
+    observe(target) { this.target = target }
+    disconnect() { this.disconnected = true }
+  }
+  const f = fixture({ projectLabel: current => `设备 · ${current.projectId}` })
+  try {
+    const split = f.container.querySelector('.file-sidebar-split'), separator = f.container.querySelector('.file-tree-separator')
+    const collapse = f.container.querySelector('.file-pathbar-actions').children.at(-1)
+    assert.equal(f.container.querySelector('.file-preview-heading').textContent, '设备 · p-a', 'scope is visible before a file opens')
+    assert.equal(clampFileTreeWidth(360, 500), 219)
+    separator.dispatch('keydown', { key: 'ArrowLeft' })
+    assert.equal(f.sidebar.snapshot().treeWidth, 230)
+    separator.dispatch('keydown', { key: 'End' })
+    assert.equal(f.sidebar.snapshot().treeWidth, 319, 'reader keeps 280px and a 1px divider inside the 600px split')
+    const saved = f.sidebar.snapshot()
+    split.width = 500; observers[0].callback()
+    assert.equal(split.style.values['--file-tree-width'], '219px')
+    assert.equal(f.sidebar.snapshot().treeWidth, 319, 'automatic fitting preserves the preference')
+    split.width = 600; observers[0].callback(); separator.dispatch('dblclick')
+    assert.equal(f.sidebar.snapshot().treeWidth, 220)
+    separator.dispatch('pointerdown', { button: 0, pointerId: 7, clientX: 350 })
+    separator.dispatch('pointermove', { pointerId: 7, clientX: 330 })
+    assert.equal(f.sidebar.snapshot().treeWidth, 240)
+    assert.equal(split.classList.contains('is-resizing'), true)
+    f.sidebar.setVisible(false)
+    assert.equal(split.classList.contains('is-resizing'), false)
+    assert.equal(separator.pointerId, undefined)
+    separator.dispatch('pointermove', { pointerId: 7, clientX: 200 })
+    assert.equal(f.sidebar.snapshot().treeWidth, 240)
+    f.sidebar.setVisible(true); split.width = 390; separator.focus(); observers[0].callback()
+    assert.equal(separator.hidden, true); assert.equal(f.document.activeElement, collapse)
+    separator.dispatch('keydown', { key: 'Home' })
+    assert.equal(f.sidebar.snapshot().treeWidth, 240, 'stacked layout ignores inner resizing')
+    split.width = 600; observers[0].callback(); collapse.click()
+    assert.equal(f.container.querySelector('.file-tree-section').hidden, true)
+    assert.equal(separator.hidden, true)
+    assert.equal(split.classList.contains('tree-collapsed'), true)
+    collapse.click(); assert.equal(separator.hidden, false)
+    f.sidebar.setSession(ref('b'), { ...f.controller })
+    assert.equal(f.sidebar.snapshot().treeWidth, 220)
+    assert.equal(f.container.querySelector('.file-preview-heading').textContent, '设备 · p-b')
+    f.sidebar.setSession(ref('a'), f.controller, saved)
+    assert.equal(f.sidebar.snapshot().treeWidth, 319)
+    await f.sidebar.dispose(); assert.equal(observers[0].disconnected, true)
+  } finally {
+    await f.sidebar.dispose()
+    if (previousObserver === undefined) delete globalThis.ResizeObserver; else globalThis.ResizeObserver = previousObserver
+  }
+})
+
+test('explicit expansion can read while filtering and an empty reread replaces cached rows', async () => {
+  let children = [{ name: 'a.ts', path: 'src/a.ts', kind: 'file' }]
+  const f = fixture({ treeApi(url, body) {
+    if (url.endsWith('/open')) return { cursorId: `tree-${body.path || 'root'}`, page: 0, path: body.path,
+      entries: body.path ? children : [{ name: 'src', path: 'src', kind: 'directory' }], nextPage: null }
+    return {}
+  } })
+  try {
+    await tick()
+    const entry = path => f.container.querySelectorAll('.file-tree-entry').find(button => button.dataset.treePath === path)
+    const filter = f.container.querySelector('.file-tree-filter').querySelector('input')
+    filter.value = 'src'; filter.dispatch('input')
+    assert.equal(f.treeRequests.filter(request => request.url.endsWith('/open')).length, 1)
+    entry('src').click(); await tick()
+    assert.equal(f.treeRequests.filter(request => request.url.endsWith('/open')).length, 2)
+    assert.ok(entry('src/a.ts'), 'an explicit filtered expansion reads through the existing tree client')
+    filter.value = ''; filter.dispatch('input'); entry('src').click(); await tick()
+    children = []; entry('src').click(); await tick(); entry('src').click(); await tick()
+    filter.value = 'a.ts'; filter.dispatch('input')
+    assert.equal(entry('src/a.ts'), undefined, 'a successful empty refresh cannot resurrect older rows')
+    assert.match(f.container.querySelector('.file-tree-status').textContent, /没有匹配项/)
   } finally { await f.sidebar.dispose() }
 })
 

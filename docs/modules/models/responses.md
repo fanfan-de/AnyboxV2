@@ -22,7 +22,7 @@
 | `reasoning.summary` | `auto/concise/detailed`；要求声明支持推理且 effort 不为 `none` |
 | `tools` | 可选空数组或唯一 `{ type: 'web_search' }`；要求显式 `webSearch.support: 'supported'` |
 
-可选字段省略即保留服务端默认，无运行时暗补。表单 descriptor 暴露温度、最大输出及推理项，搜索工具仍通过已验证的原生参数保存。参数不能覆盖模型 ID、输入、凭据、流式设置或服务端会话。有效工具/流式能力依赖声明，图片依赖显式 supported 声明；`effort: 'none'` 会使有效推理能力关闭。
+可选字段省略即保留服务端默认，无运行时暗补。表单 descriptor 暴露温度、最大输出及推理项，搜索工具仍通过已验证的原生参数保存。参数不能覆盖模型 ID、输入、凭据、流式设置或服务端会话。有效工具与图片能力依赖显式 supported 声明；流式默认开启，配置 streaming 为 unknown/supported 时发送 `stream: true`，显式 unsupported 时发送 false。已有 unknown 配置无须迁移。`effort: 'none'` 会使有效推理能力关闭。
 
 ## 输入、请求与结果
 
@@ -56,6 +56,6 @@ transport 独占 fetch、reader、AbortController 和取消监听器，严格 UT
 
 [images.ts](../../../packages/models/src/protocols/images.ts) 是驱动内部共享函数，不是独立组件。start 后顺序读取去重资源，等待每次读取实际退出并校验摘要；同一图片在完整历史中多次出现时逐次计算 base64 体积，读取前及发送前均检查 32 MiB 请求上限。取消、超时与协议卸载同时覆盖图片和 HTTP；清理失败不创建成功上下文。网络终态已返回但随后取消/清理失败时，仍保留受信原生诊断，经 execution 脱敏持久化。
 
-新驱动 2.1.0 写记录 v2，读取旧驱动 2.0.0 的 v1 文本与 v1/v2 混合链。旧合法文本形状继续可读，v1 不接受图片；只有完整无图片父链允许有效图片能力 false→true。其他身份、账户和参数约束保持严格，旧 JSON 不改写。base64 只存在于临时 HTTP 请求，不写入意图、上下文或记录。
+新驱动 2.1.0 写记录 v2，读取旧驱动 2.0.0 的 v1 文本与 v1/v2 混合链。旧合法文本形状继续可读，v1 不接受图片；只有完整无图片父链允许有效图片能力 false→true。streaming 仅改变传输方式，恢复允许双向改变，包括从旧非流式成功父链继续流式执行；其他身份、账户、参数及执行语义约束保持严格，旧 JSON 不改写。base64 只存在于临时 HTTP 请求，不写入意图、上下文或记录。
 
 [multimodal-protocols.test.mjs](../../../packages/models/tests/multimodal-protocols.test.mjs) 验证 JSON/SSE 图片编码、三种 MIME、资源校验、超限、取消/超时/注销退出、失败诊断和混合版本恢复；[native-protocol-agents.test.mjs](../../../tests/native-protocol-agents.test.mjs) 验证图片工具续轮、重启、分支及接受后的失败保留。

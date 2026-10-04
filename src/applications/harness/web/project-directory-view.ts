@@ -3,7 +3,7 @@ import type { ProjectDirectoryTarget } from './harness-client.js'
 import { createDirectoryPositions, createProjectDirectoryController, createProjectDirectoryLauncher } from './project-directory-client.js'
 
 const messages: Readonly<Record<string, string>> = {
-  'directory-permission-denied': '目标 Harness 的运行账户没有访问此目录的权限。请选择可访问的目录，或返回主目录。',
+  'directory-permission-denied': '目标 harness server 的运行账户没有访问此目录的权限。请选择可访问的目录，或返回主目录。',
   'directory-missing': '此目录已删除或路径不存在。保留了输入，你可以重试、修改路径或返回主目录。',
   'directory-not-directory': '此路径不是目录。请输入已有文件夹的绝对路径。',
   'directory-link-loop': '此符号链接形成循环，无法进入。',
@@ -12,12 +12,12 @@ const messages: Readonly<Record<string, string>> = {
   'directory-browse-expired': '目录浏览已过期，请重试重新读取当前位置。',
   'directory-browse-conflict': '目录页已改变，请重新读取当前位置。',
   'directory-browse-busy': '目标设备正在处理其他目录请求，请稍后重试。',
-  'directory-browse-unsupported': '该 Harness 暂不支持目录浏览，请升级远端 Harness 后重新打开。',
-  'directory-browse-cleanup-failed': '目录句柄未能正常关闭，请重启目标 Harness 后重试。',
+  'directory-browse-unsupported': '该 harness server 暂不支持目录浏览，请升级远端 harness server 后重新打开。',
+  'directory-browse-cleanup-failed': '目录句柄未能正常关闭，请重启目标 harness server 后重试。',
   'directory-browse-cancelled': '目录读取已取消，可以重试。',
   'directory-name-invalid': '请输入有效的单个文件夹名称，不能包含路径分隔符，也不能使用“.”或“..”。',
   'directory-exists': '当前位置已存在同名文件或文件夹。请换一个名称，或取消新建后重新读取。',
-  'directory-create-unsupported': '该 Harness 暂不支持新建文件夹，请升级目标 Harness 后重新打开。',
+  'directory-create-unsupported': '该 harness server 暂不支持新建文件夹，请升级目标 harness server 后重新打开。',
   'connection-changed': '此连接的配置已改变。为避免提交到错误设备，请刷新页面后重新选择。',
   'instance-mismatch': '此地址的实例身份已改变，已阻止浏览和提交。请关闭窗口并检查连接。',
 }
@@ -43,7 +43,7 @@ export function setupProjectDirectoryPicker(messageFor: (error: unknown) => stri
     dialog.setAttribute('aria-labelledby', 'agent--project-directory-title')
     dialog.innerHTML = `<header class="settings-heading"><h2 id="agent--project-directory-title"></h2><button type="button" class="close-settings" data-cancel aria-label="取消选择项目目录">×</button></header>
       <div class="project-directory-body">
-        <p class="project-directory-compat" data-compat hidden>此 Harness 版本不支持浏览目录。升级远端 Harness 后即可逐层选择；当前可以填写目标设备上已有文件夹的绝对路径。</p>
+        <p class="project-directory-compat" data-compat hidden>此 harness server 版本不支持浏览目录。升级远端 harness server 后即可逐层选择；当前可以填写目标设备上已有文件夹的绝对路径。</p>
         <div class="project-directory-toolbar"><button type="button" class="secondary-button" data-parent>↑ 上一级</button><button type="button" class="secondary-button" data-home>⌂ 主目录</button><button type="button" class="secondary-button" data-new hidden>＋ 新建文件夹</button></div>
         <nav class="project-directory-breadcrumbs" aria-label="当前目录层级" data-breadcrumbs></nav>
         <form class="project-directory-create" data-create-form hidden><p data-create-parent></p><label for="agent--project-directory-name">新文件夹名称</label><input id="agent--project-directory-name" data-create-name autocomplete="off" spellcheck="false" aria-describedby="agent--project-directory-create-help"><p class="settings-hint" id="agent--project-directory-create-help">在当前浏览目录中创建，创建后会进入新文件夹。</p><p class="project-directory-create-error" data-create-error role="alert" hidden></p><div class="project-directory-create-actions"><button type="button" class="secondary-button" data-create-cancel>取消新建</button><button type="submit" data-create-submit>创建并进入</button></div></form>

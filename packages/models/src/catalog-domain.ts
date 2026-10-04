@@ -40,7 +40,7 @@ function connectionHints(provider: ObjectValue, override?: ObjectValue): Connect
   else if (values.npm === '@ai-sdk/openai') protocolIds = ['responses', 'chat-completions'];
   else if (values.npm === '@ai-sdk/anthropic') protocolIds = ['anthropic-messages'];
   else if (values.npm === '@ai-sdk/google') protocolIds = ['gemini-interactions'];
-  else if (['@ai-sdk/openai-compatible', '@ai-sdk/deepinfra', '@ai-sdk/cerebras', '@ai-sdk/groq', '@openrouter/ai-sdk-provider', '@ai-sdk/perplexity', '@ai-sdk/xai', '@ai-sdk/mistral', '@ai-sdk/togetherai'].includes(String(values.npm))) protocolIds = ['chat-completions'];
+  else if (['@ai-sdk/openai-compatible', '@ai-sdk/deepseek', '@ai-sdk/deepinfra', '@ai-sdk/cerebras', '@ai-sdk/groq', '@openrouter/ai-sdk-provider', '@ai-sdk/perplexity', '@ai-sdk/xai', '@ai-sdk/mistral', '@ai-sdk/togetherai'].includes(String(values.npm))) protocolIds = ['chat-completions'];
   const baseUrl = httpUrl(values.api, true);
   return { ...(baseUrl ? { baseUrl } : {}), protocolIds };
 }

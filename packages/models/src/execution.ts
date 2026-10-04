@@ -143,8 +143,10 @@ export function validateRestore(restore: NativeRestoreState, snapshot: NativeMod
   const old = restore.modelSnapshot; assert(old?.schemaVersion === 3);
   for (const key of ['modelId', 'modelDefinitionId', 'providerDefinitionId', 'modelDefinitionVersionId', 'remoteModelId', 'providerId', 'protocolId', 'historyScopeEpoch'] as const) assert(old[key] === snapshot[key]);
   assert(protocol.canRestoreVersion ? protocol.canRestoreVersion(old.protocolVersion) : old.protocolVersion === snapshot.protocolVersion);
-  const { imageInput: oldImage, ...oldCapabilities } = old.capabilities;
-  const { imageInput: nextImage, ...nextCapabilities } = snapshot.capabilities;
+  // Streaming changes transport delivery, not the archived native context.
+  const { imageInput: oldImage, streaming: oldStreaming, ...oldCapabilities } = old.capabilities;
+  const { imageInput: nextImage, streaming: nextStreaming, ...nextCapabilities } = snapshot.capabilities;
+  assert(typeof oldStreaming === 'boolean' && typeof nextStreaming === 'boolean');
   const additiveImages = oldImage === false && nextImage === true && restore.records.every(item => !item.resourceRefs?.length &&
     (item.kind !== 'request' || !(protocol.resourceIds?.(item.payload as NativeObject) ?? []).length));
   assert(equalJson(old.parameters, snapshot.parameters) && equalJson(oldCapabilities, nextCapabilities) && (oldImage === nextImage || additiveImages));

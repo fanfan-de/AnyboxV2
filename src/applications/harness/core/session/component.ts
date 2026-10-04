@@ -1,7 +1,7 @@
 import { projectFilesServiceKey } from '../project-files/port.js'
 import type { ProjectFilesPort } from '../project-files/port.js'
 import { fileError } from '../project-files/domain.js'
-import { treeError, type Session } from './domain.js'
+import { treeError, resolveSessionModel, type Session, type SessionDefaults } from './domain.js'
 import type { Component } from '@nya/core'
 import type { RuntimeInputs, OwnedCall } from '../contracts.js'
 import { imageAssetsServiceKey, imageAssetError } from '../image/port.js'
@@ -87,6 +87,16 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         void result.finally(() => pending.delete(result)).catch(() => {})
         return result
       }
+      const requireAgent = (rawId: string) => {
+        const id = nonEmpty(rawId, 'agentId')
+        const agent = agents.find(agent => agent.id === id)
+        if (!agent) throw new Error(`unknown agent ${id}`)
+        return agent
+      }
+      const withFallback = (saved: Pick<SessionDefaults, 'agentId' | 'modelId' | 'revision'>, agent: AgentDefinition): SessionDefaults => {
+        const fallbackModelId = agent.modelId ?? null
+        return Object.freeze({ ...saved, fallbackModelId, effectiveModelId: resolveSessionModel(undefined, saved.modelId, fallbackModelId) })
+      }
       ctx.effect(() => async () => {
         accepting = false
         for (const call of resourceCalls) call.cancel('session-closed')
@@ -135,14 +145,22 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           if (!await records.getSession(sessionId)) throw new Error(`unknown session ${sessionId}`)
           return images.renew(sessionId, assetIds)
         }),
+        getSessionDefaults: agentId => track(async () => {
+          const agent = requireAgent(agentId)
+          return withFallback(await records.getSessionDefaults(agent.id), agent)
+        }),
+        setSessionDefaults: (agentId, requestedModelId, expectedRevision) => track(async () => {
+          const agent = requireAgent(agentId)
+          const modelId = requestedModelId === null ? null : nonEmpty(requestedModelId, 'modelId')
+          if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new TypeError('expectedRevision must be a non-negative safe integer')
+          return withFallback(await records.setSessionDefaults(agent.id, modelId, expectedRevision), agent)
+        }),
         createSession(projectId, agentId, requestedModelId) {
           return track(async () => {
-            const id = nonEmpty(agentId, 'agentId')
-            const agent = agents.find(agent => agent.id === id)
-            if (!agent) throw new Error(`unknown agent ${id}`)
-            const modelId = requestedModelId === undefined ? agent.modelId ?? null : nonEmpty(requestedModelId, 'modelId')
+            const agent = requireAgent(agentId)
+            const modelId = requestedModelId === undefined ? undefined : nonEmpty(requestedModelId, 'modelId')
             await projects.requireAvailable(nonEmpty(projectId, 'projectId'))
-            return records.createSession(inputs.newId(), projectId, id, inputs.now(), modelId)
+            return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.modelId ?? null)
           })
         },
         selectSessionModel(sessionId, rawModelId, protocolId) {

@@ -5,7 +5,7 @@ import { validateToolBatch } from '../run/domain.js'
 import { completed, jsonArguments, nativeArray, nativeObject, nativeString, nonempty, toolResult } from './shared.js'
 import type { ExchangeRunner } from './shared.js'
 
-/** The DeepSeek binding deliberately reuses this native Chat flow. */
+/** All Chat Completions providers share this native Agent flow. */
 export async function runChat(runner: ExchangeRunner, initial: NativeObject): Promise<ProtocolConclusion> {
   let intent = initial
   while (true) {

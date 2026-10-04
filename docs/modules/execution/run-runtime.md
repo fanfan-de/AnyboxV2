@@ -34,6 +34,8 @@ RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制�
 
 最终文本最多 65,536 UTF-8 字节；累计工具输出最多 131,072 字节，Bash 计 stdout/stderr，Apply Patch 计结果 JSON。当前不设置固定模型轮次或工具次数上限。`publish` 每个活跃 Run 只保存一份不超过 1,048,576 UTF-8 字节的克隆快照，广播 `harness.run-view`；展示监听和不可序列化帧不能破坏执行，结束时删除快照。
 
+协议 program 发布展示 v2 的有界完整快照，Runtime 不解释其原生内容类型、停止状态或诊断。模型工具请求保留其来源 exchange；本地工具事实仍只写入 `tool-started`、`tool-observed`、`tool-failed` 事件。前端按 Run、来源模型 exchange、请求 ID、名称和事件位置关联事实，不发布额外 `tools-N` 临时 exchange，也不以请求快照推断工具完成。取消和清理失败时，已经保存的真实工具结果及部分补丁事实继续可查询。
+
 ## 结算、取消与关闭
 
 启动后先读取 Session 保存的 Run 和项目归属，验证原生上下文模式、绑定代与完整模型快照和 program 一致。执行结束时中止新操作，取消仍在途句柄，等待每个 `done` 和所有受管 Promise，再 `program.close()`，等待取消状态写入，然后请求 Session 原子结算。最终 `program.release()` 在清理和持久结算之后释放绑定租约。
@@ -44,6 +46,6 @@ Effect 先停止接收，再取消并等待所有活跃 Run，清空临时视图
 
 ## 验证
 
-[Harness 测试](../../../tests/harness.test.mjs) 覆盖早期取消、结果/退出分离、清理异常、Runtime 替换；[工具循环](../../../tests/tool-loop.test.mjs) 覆盖串行批次、输出限额、退出等待；[Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 覆盖部分变更与取消；[会话树](../../../tests/conversation-tree.test.mjs) 覆盖状态故障、结算原子性和等待者语义。统一执行 `npm run check`。
+[harness server 核心测试](../../../tests/harness-server-core.test.mjs) 覆盖早期取消、结果/退出分离、清理异常、Runtime 替换；[工具循环](../../../tests/tool-loop.test.mjs) 覆盖串行批次、输出限额、退出等待；[Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 覆盖部分变更与取消；[会话树](../../../tests/conversation-tree.test.mjs) 覆盖状态故障、结算原子性和等待者语义。统一执行 `npm run check`。
 
 图片读取和 data URL 编码属于模型 operation 的内部工作，与网络请求共享取消和实际退出屏障。Runtime 仍只保存序列化资源引用，不接触原图字节；图片读取/校验失败阻止发出模型请求，清理失败不创建成功节点。

@@ -6,7 +6,11 @@
 
 该组件协调模型定义、账户配置、凭据变更、协议注册代和原生 execution。入口是 [component.ts](../../../packages/models/src/component.ts)，execution 状态机在 [execution.ts](../../../packages/models/src/execution.ts)，公共契约见 [types.ts](../../../packages/models/src/types.ts) 与 [native-types.ts](../../../packages/models/src/native-types.ts)。内部 [resources.ts](../../../packages/models/src/resources.ts) 提供资源 URI、引用校验/合并和受信读取的摘要校验，不注册独立组件。
 
-工厂 `createModelsComponent()` 无配置参数；组件名 `models`，注入 `models.store` 与 `models.vault`，一次提供四个服务。它不依赖目录组件、Session、Run、工具或浏览器。
+工厂 `createModelsComponent()`，组件名 `models`，注入 `models.store` 与 `models.vault`，一次提供四个服务。它不依赖目录组件、Session、Run、工具或浏览器。
+
+Anybox Harness 在 [server-models.ts](../../../src/applications/harness/server-models.ts) 只装配 Responses、标准 Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议。DeepSeek 使用标准 `chat-completions`。旧 DeepSeek 当前配置由停机时的一次性配置迁移改为标准协议，保留连接与配置 ID、凭据引用、epoch 和不可变历史；运行期不提供旧驱动或协议别名。旧协议历史保留供查看，不能续接执行，需要新建标准协议会话。
+
+通用配置格式迁移不能无损转换参数时，保留原始 `value` 并标记 `formatVersion: 0` 只读待迁移，不能执行或静默丢弃未知字段。受信恢复数据必须与已安装协议、配置、账户、记录格式和执行语义兼容，不转换协议身份。
 
 ## 服务接口
 
@@ -34,6 +38,10 @@ Settings 的完整操作分组：
 
 连接同步以 `pending`、`ready`、`failed` 表示，不增加连接版本。补齐失败不删除已保存连接或 Key，`retryConnection(id)` 可幂等修复。来源目标守卫防止旧批次覆盖新来源的同步状态。当前没有单独删除配置或定义的 Settings 接口。
 
+Anybox Harness 的模型设置只读展示配置的工具、流式、图片、搜索与推理能力，包括可声明的推理档位、模式和预算范围；原生生成参数仍可在界面修改。能力声明表示模型支持什么，生成参数才表达本次执行如何使用该能力。新自定义模型继承定义能力，参数预设继承原配置能力，浏览器不提供能力编辑字段。
+
+人工修正能力需停止所属执行设备的 Agent，在 [JSON 配置文件](json-store.md)的 `configurations[].capabilities` 中修改，再重新装配 Agent。JSON 是当前 Models 配置的实际存储，管理接口提交也原子保存到同一文件。它不存密钥，不改变已打开 execution 或 Session/Run 历史；生成参数与能力仍由协议分别校验。运行中外部改文件会使后续保存返回冲突，避免覆盖人工修改。
+
 ## Key 与连接删除
 
 新 Key 先创建随机 Vault 槽及持久清理意图，再写系统凭据，最后事务提交新连接引用、移除新槽意图并登记旧槽清理。清理失败保留日志，启动或下一次该连接的凭据变更会重试；历史引用不使旧密钥继续存活。
@@ -56,7 +64,9 @@ Settings 的完整操作分组：
 4. 单次 `start(onEvent?)` 返回 `{ result, done, cancel }`。Models 同时观察驱动结果和退出，只有资源实际退出、候选结果校验和上下文提交完成后，公共 `result` 才成功。
 5. `close()` 幂等停止准入、取消在途操作并等待实际退出，返回仅本 execution 新增的 `records`、可选 `restoreState` 与 `cleanup`，随后释放私有凭据和上下文引用。
 
-每次请求记录只保存本轮增量 intent，v2 的 request 顶层附本轮 resourceRefs，响应保存原生结果。NativeImageResourceRef 只含 id、sha256、byteLength、mimeType；NativeResourceResolver 是每个 execution 的受信端口，不持久化 reader、图片 bytes 或路径。Models 私有重建父链资源目录，驱动只可读取当前请求使用的引用。宿主按所选成功父路径提供展开的恢复记录；Models 验证协议、格式、配置 ID、连接、模型定义版本、远端 ID、epoch、参数和有效能力，再由协议 codec 重建内存上下文。名称与对象键顺序不影响恢复，跨账户、跨协议及任意参数转换不受支持。五种协议 writer 均为 2.1.0/v2，reader 明确支持 2.0.0/v1 文本及 v1/v2 混合链；execution.recordFormatVersion 向宿主暴露当前 writer。仅旧文本历史允许 imageInput false→true，其他能力仍严格匹配；旧 JSON 不重写。
+流式默认开启：配置中的 `streaming: 'unknown'` 与 `'supported'` 均允许流式，显式 `'unsupported'` 关闭；驱动返回的有效 `streaming: false` 仍会关闭流式。内置协议按这一规则构造原生 `stream` 字段。目录缺失的流式元数据继续保留为 `unknown`，不改写来源或已保存能力；已有 `unknown` 配置在下次开启 execution 时应用默认，无须刷新目录或迁移配置库。
+
+每次请求记录只保存本轮增量 intent，v2 的 request 顶层附本轮 resourceRefs，响应保存原生结果。NativeImageResourceRef 只含 id、sha256、byteLength、mimeType；NativeResourceResolver 是每个 execution 的受信端口，不持久化 reader、图片 bytes 或路径。Models 私有重建父链资源目录，驱动只可读取当前请求使用的引用。宿主按所选成功父路径提供展开的恢复记录；Models 验证协议、格式、配置 ID、连接、模型定义版本、远端 ID、epoch、参数和执行语义能力，再由协议 codec 重建内存上下文。streaming 仅改变传输方式，不改变增量 intent、完整原生结果或记录 codec，恢复允许双向改变；旧非流式成功父链可继续为流式 execution。名称与对象键顺序不影响恢复，跨账户、跨协议及任意参数转换不受支持。四种协议 writer 均为 2.1.0/v2，reader 明确支持 2.0.0/v1 文本及 v1/v2 混合链；execution.recordFormatVersion 向宿主暴露当前 writer。仅旧文本历史允许 imageInput false→true，工具、搜索和推理能力仍严格匹配；旧 JSON 不重写。
 
 ## 生命周期、取消与失败
 
@@ -68,13 +78,15 @@ Settings 的完整操作分组：
 
 ## 限制与扩展
 
-有效图片能力是配置声明与已实现驱动的交集；Responses、Anthropic、Gemini、Chat/DeepSeek 均已实现。能力必须显式声明，缺失推理模式不猜测。配置和 Key 修改只影响新 execution。公共错误使用固定 `ModelsError.code`；非秘密查询不因系统凭据不可用而被全部关闭。原生记录和原生事件均属于受信边界，不能原样推送浏览器。
+有效图片能力是配置声明与已实现驱动的交集；Responses、Anthropic、Gemini、Chat Completions 均已实现。工具、图片、搜索与推理能力仍要求显式声明，缺失推理模式不猜测；流式采用上述默认开启规则。配置和 Key 修改只影响新 execution。公共错误使用固定 `ModelsError.code`；非秘密查询不因系统凭据不可用而被全部关闭。原生记录和原生事件均属于受信边界，不能原样推送浏览器。
 
-可替换 [Store](store.md)、[Vault](vault.md) 或注册其他 `NativeProtocol`；协调层保持与协议停止语义无关。`createNativeEventQueue` 是可选有界订阅帮助函数，不是新组件，也不是恢复存储。
+可替换 [JSON Store](json-store.md)、[SQLite Store](store.md)、[Vault](vault.md) 或注册其他 `NativeProtocol`；协调层保持与协议停止语义无关。`createNativeEventQueue` 是可选有界订阅帮助函数，不是新组件，也不是恢复存储。
 
 ## 测试与关联文档
 
 [runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 验证独立执行、实际退出、恢复身份和 epoch；[lifecycle-review.test.mjs](../../../packages/models/tests/lifecycle-review.test.mjs) 验证注销、清理失败与迟到结果；[unified-models.test.mjs](../../../packages/models/tests/unified-models.test.mjs) 和 [source-definitions.test.mjs](../../../packages/models/tests/source-definitions.test.mjs) 验证补齐与来源并发；[connection-deletion.test.mjs](../../../packages/models/tests/connection-deletion.test.mjs) 验证删除及恢复日志；[boundary.test.mjs](../../../packages/models/tests/boundary.test.mjs) 验证输入边界。
+
+[streaming-defaults.test.mjs](../../../packages/models/tests/streaming-defaults.test.mjs) 覆盖目录省略 streaming、自动基础配置、原生请求默认流式及结果返回前的连续文本增量，并验证显式关闭；runtime 测试同时验证驱动禁用、既有 unknown 配置与双向 streaming 切换的原生恢复。
 
 [native-images.test.mjs](../../../packages/models/tests/native-images.test.mjs) 验证资源引用、单 execution reader、v1 加法恢复、取消与实际清理和请求体积边界；[multimodal-protocols.test.mjs](../../../packages/models/tests/multimodal-protocols.test.mjs) 覆盖 Responses、Anthropic 和 Gemini 的图片物化、JSON/SSE、混合版本恢复与失败清理。
 

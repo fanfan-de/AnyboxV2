@@ -18,14 +18,18 @@ const showApplications = document.getElementById('show-applications')! as HTMLBu
 const closeButton = document.getElementById('close-application')! as HTMLButtonElement
 const notice = document.getElementById('workbench-notice')!, stopButton = document.getElementById('stop-application')! as HTMLButtonElement
 const moduleAttempts = new Map<string, number>()
+const unconfirmedStops = new Map<string, string>()
 const lifetime = new AbortController(), views = new Map<string, ApplicationPanel>(), modules = new Map<string, Promise<ApplicationWebModule>>()
-let applications: readonly ProductView[] = [], activeId: string | null = null, closed = false, requestRevision = 0, refreshTask: Promise<void> | undefined
+let applications: readonly ProductView[] = [], activeId: string | null = null, closed = false, requestRevision = 0, refreshTask: Promise<boolean> | undefined
+let catalogAvailable = false
 let listRevision = ''
 let managerInteractionRevision = 0
 const showManager = () => { if (!closed && !manager.matches(':popover-open')) manager.showPopover() }
 const hideManager = () => { if (manager.matches(':popover-open')) manager.hidePopover() }
 const show = (message = '') => { notice.textContent = message; notice.hidden = !message; if (message) showManager() }
 const states: Record<ProductView['state'], string> = { disabled: '尚未打开', applying: '正在处理', running: '运行中', blocked: '依赖未就绪', failed: '启动或关闭失败' }
+const hostUnavailableMessage = '无法连接应用宿主，请确认客户端仍在运行。'
+const stateLabel = (app: ProductView) => catalogAvailable ? states[app.state] : '暂时无法确认状态'
 const product = (id: string) => applications.find(app => app.definition.id === id)
 // Keep the saved workspace's tabs field so existing browser positions continue to restore.
 const snapshot = () => ({ tabs: [...views.values()].map(tab => ({ id: tab.id, route: tab.route })), activeId })
@@ -50,28 +54,32 @@ function button(text: string, action: () => void) {
   const element = document.createElement('button'); element.type = 'button'; element.textContent = text; element.addEventListener('click', action); return element
 }
 function renderList() {
-  const revision = JSON.stringify(applications.map(app => {
+  const revision = JSON.stringify([catalogAvailable, applications.map(app => {
     const view = views.get(app.definition.id)
     return [app, !!view?.control, !!view?.disposing, !!view?.loading, !!view?.error]
-  }))
+  })])
   if (revision === listRevision) { renderNavigation(); return }
   listRevision = revision
   list.replaceChildren()
-  if (!applications.length) { const empty = document.createElement('p'); empty.textContent = '当前没有注册应用。'; list.append(empty) }
+  if (!applications.length) { const empty = document.createElement('p'); empty.textContent = catalogAvailable ? '当前没有注册应用。' : '暂时无法读取应用目录。'; list.append(empty) }
   for (const app of applications) {
     const view = views.get(app.definition.id)
     const card = document.createElement('article'); card.className = 'application-card'
     const title = document.createElement('h3'); title.textContent = app.definition.name
     const description = document.createElement('p'); description.textContent = app.definition.description ?? ''
-    const state = document.createElement('p'); state.className = 'application-state'; state.textContent = view?.control ? '正在处理应用操作…' : states[app.state]
-    const open = button(`打开 ${app.definition.name}`, () => { void enterApplication(app.definition.id) }); open.disabled = !app.definition.web || app.state === 'applying' || !!view?.control || !!view?.disposing
+    const state = document.createElement('p'); state.className = 'application-state'; state.textContent = view?.control ? '正在处理应用操作…' : stateLabel(app)
+    const open = button(`打开 ${app.definition.name}`, () => { void enterApplication(app.definition.id) }); open.disabled = !catalogAvailable || !app.definition.web || app.state === 'applying' || !!view?.control || !!view?.disposing
     card.append(title, description, state, open)
     if (view?.loading) { const loading = document.createElement('p'); loading.textContent = '正在加载应用界面…'; card.append(loading) }
     if (view?.error) card.append(button('重新加载界面', () => {
       view.error = false; show(); hideManager(); void ensureMounted(view, 'select')
     }))
-    if (app.state === 'failed' || app.state === 'blocked') card.append(button('重试启动', () => { void openApplication(app.definition.id, true) }))
-    if (app.desiredEnabled) card.append(button('停止应用', () => { void stopApplication(app.definition.id) }))
+    if (app.state === 'failed' || app.state === 'blocked') {
+      const retry = button('重试启动', () => { void openApplication(app.definition.id, true) }); retry.disabled = !catalogAvailable || !!view?.control || !!view?.disposing; card.append(retry)
+    }
+    if (app.desiredEnabled) {
+      const stop = button('停止应用', () => { void stopApplication(app.definition.id) }); stop.disabled = !catalogAvailable || app.state === 'applying' || !!view?.control || !!view?.disposing; card.append(stop)
+    }
     list.append(card)
   }
   renderNavigation()
@@ -87,10 +95,10 @@ function renderNavigation() {
       shortcut.id = `app-shortcut-${id}`
     }
     shortcut.textContent = app.definition.name.slice(0, 1)
-    shortcut.title = `${app.definition.name} · ${states[app.state]}`
+    shortcut.title = `${app.definition.name} · ${stateLabel(app)}`
     shortcut.setAttribute('aria-label', app.definition.name)
-    shortcut.disabled = !app.definition.web || app.state === 'applying'
-    shortcut.dataset.state = app.state
+    shortcut.disabled = !catalogAvailable || !app.definition.web || app.state === 'applying'
+    shortcut.dataset.state = catalogAvailable ? app.state : 'unknown'
     if (views.has(id)) shortcut.setAttribute('aria-controls', `app-panel-${id}`)
     else shortcut.removeAttribute('aria-controls')
     if (shortcuts.children[index] !== shortcut) shortcuts.insertBefore(shortcut, shortcuts.children[index] ?? null)
@@ -102,7 +110,7 @@ function renderNavigation() {
 function updateNavigation() {
   for (const shortcut of shortcuts.querySelectorAll<HTMLButtonElement>('button')) {
     const id = shortcut.dataset.appId!, app = product(id), view = views.get(id)
-    shortcut.disabled = !app?.definition.web || app.state === 'applying' || !!view?.control || !!view?.disposing
+    shortcut.disabled = !catalogAvailable || !app?.definition.web || app.state === 'applying' || !!view?.control || !!view?.disposing
     if (shortcut.dataset.appId === activeId) shortcut.setAttribute('aria-current', 'page')
     else shortcut.removeAttribute('aria-current')
   }
@@ -120,7 +128,7 @@ function renderWorkspace() {
   closeButton.title = app ? `关闭 ${app.definition.name} 界面` : '关闭当前应用界面'
   closeButton.setAttribute('aria-label', closeButton.title)
   stopButton.hidden = !app || !app.desiredEnabled
-  stopButton.disabled = !!view?.control || !!view?.disposing
+  stopButton.disabled = !catalogAvailable || !!view?.control || !!view?.disposing
   stopButton.title = app ? `停止 ${app.definition.name}` : '停止应用'
   stopButton.setAttribute('aria-label', stopButton.title)
   updateNavigation()
@@ -148,7 +156,7 @@ async function ensureMounted(tab: ApplicationPanel, reason: ApplicationActivatio
   if (tab.disposal) await tab.disposal
   if (closed || views.get(tab.id) !== tab) return
   const app = product(tab.id)
-  if (closed || app?.state !== 'running' || !app.definition.web) { clearUnmountedPanel(tab); return }
+  if (closed || !catalogAvailable || app?.state !== 'running' || !app.definition.web) { clearUnmountedPanel(tab); return }
   if (reason === 'open') tab.openRequested = true
   if (tab.mounted) {
     const activation = tab.openRequested ? 'open' : reason; tab.openRequested = false
@@ -242,6 +250,7 @@ async function closeApplicationPage(id: string) {
   } else { renderWorkspace(); save() }
 }
 async function openApplication(id: string, retry = false) {
+  if (!catalogAvailable) { show(hostUnavailableMessage); return }
   const tab = addApplication(id), app = product(id); if (!app || tab.control) return
   selectApplication(id); tab.control = true; renderList(); renderWorkspace(); requestRevision++; show()
   const managerRevision = managerInteractionRevision
@@ -252,7 +261,7 @@ async function openApplication(id: string, retry = false) {
     if (value.state === 'running') { await ensureMounted(tab, 'open'); if (activeId === id && tab.mounted && managerRevision === managerInteractionRevision) hideManager() }
     else { clearUnmountedPanel(tab); show(value.error?.phase === 'cleanup' ? '应用清理失败，需要重启宿主。' : value.state === 'blocked' ? '应用正在等待依赖。' : '应用启动失败，可重试启动。') }
   } catch { show('应用操作未完成，正在核对当前状态。') }
-  finally { tab.control = false; renderList(); renderWorkspace(); requestRevision++; void refresh(); save() }
+  finally { tab.control = false; renderList(); renderWorkspace(); requestRevision++; void refresh(true); save() }
 }
 async function enterApplication(id: string) {
   const view = views.get(id)
@@ -261,6 +270,7 @@ async function enterApplication(id: string) {
   else await openApplication(id)
 }
 async function stopApplication(id: string) {
+  if (!catalogAvailable) { show(hostUnavailableMessage); return }
   const tab = views.get(id)
   if (tab?.control || tab?.mounted && !tab.mounted.canClose()) { show('请先完成或保存当前应用中的编辑。'); return }
   if (tab) tab.control = true
@@ -269,31 +279,59 @@ async function stopApplication(id: string) {
   try {
     const app = await requestJSON<ProductView>(`/api/client/v1/products/${encodeURIComponent(id)}/stop`, {})
     applications = applications.map(value => value.definition.id === id ? app : value)
-    if (app.state !== 'disabled') { show('应用停止失败，需要检查状态或重启宿主。'); return }
+    if (app.state !== 'disabled') { show(app.error?.phase === 'cleanup' ? '应用清理失败，需要重启宿主。' : '应用停止失败，请检查状态后重试。'); return }
     if (tab) { tab.control = false; await closeApplicationPage(id) }
     renderList(); renderWorkspace()
-  } catch (error) { show(error && typeof error === 'object' && 'code' in error && error.code === 'product-busy' ? '应用仍有任务或写入进行中，请稍后停止。' : '应用停止未完成，正在核对当前状态。') }
-  finally { if (tab) tab.control = false; renderList(); renderWorkspace(); requestRevision++; void refresh() }
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+    if (code === 'product-busy') show('应用仍有任务或写入进行中，请稍后停止。')
+    else {
+      unconfirmedStops.set(id, code === 'product-storage-failed' ? '无法保存停止状态，应用尚未停止，请稍后重试。' : '应用尚未停止，请重试；若持续失败，请检查宿主日志。')
+      show('停止结果尚未确认，正在核对当前状态。')
+    }
+  }
+  finally { if (tab) tab.control = false; renderList(); renderWorkspace(); requestRevision++; await refresh(true) }
 }
-function refresh(): Promise<void> {
-  if (refreshTask) return refreshTask
+function refresh(fresh = false): Promise<boolean> {
+  // A control invalidates an earlier poll; reconciliation must read after it exits.
+  if (refreshTask) return fresh ? refreshTask.then(() => refresh()) : refreshTask
   const revision = ++requestRevision
   const task = requestJSON<readonly ProductView[]>('/api/client/v1/products', undefined, lifetime.signal).then(async values => {
-    if (closed || revision !== requestRevision) return
-    applications = values; renderList(); renderWorkspace()
+    if (closed || revision !== requestRevision) return false
+    applications = values; catalogAvailable = true
+    if (notice.textContent === hostUnavailableMessage) show()
+    renderList(); renderWorkspace()
+    for (const [id, message] of unconfirmedStops) {
+      if (views.get(id)?.control) continue
+      const app = product(id)
+      if (app?.state === 'applying') { show('正在等待应用停止完成。'); continue }
+      unconfirmedStops.delete(id)
+      if (app?.state === 'disabled') { await closeApplicationPage(id); if (!views.has(id)) show() }
+      else show(app?.error?.phase === 'cleanup' ? '应用清理失败，需要重启宿主。' : message)
+      if (closed || revision !== requestRevision) return false
+    }
     for (const tab of views.values()) {
-      if (closed || revision !== requestRevision) return
+      if (closed || revision !== requestRevision) return false
       if (tab.control) continue
       if (product(tab.id)?.state === 'running') { if (!tab.error && !tab.mounted) void ensureMounted(tab, 'restore') }
       else {
         const hadInterface = !!tab.mounted || !!tab.loading
         if (hadInterface) await disposeMounted(tab)
-        if (closed || revision !== requestRevision || views.get(tab.id) !== tab) return
+        if (closed || revision !== requestRevision || views.get(tab.id) !== tab) return false
         clearUnmountedPanel(tab)
         if (hadInterface && activeId === tab.id) showManager()
       }
     }
-  }).catch(() => { if (!closed && !applications.length) show('暂时无法读取应用目录。') }).finally(() => { if (refreshTask === task) refreshTask = undefined })
+    return true
+  }, () => {
+    if (!closed && revision === requestRevision) {
+      catalogAvailable = false; renderList(); renderWorkspace(); show(hostUnavailableMessage)
+    }
+    return false
+  }).catch(() => {
+    if (!closed && revision === requestRevision) show('应用界面清理失败，请刷新页面。')
+    return false
+  }).finally(() => { if (refreshTask === task) refreshTask = undefined })
   refreshTask = task; return task
 }
 async function followAddress() {

@@ -11,17 +11,20 @@ import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
 import type { NativeHistory, NativeInitialization, NativeRunInput, ProtocolBindingSnapshot, ProtocolRecord, StoredProtocolRecord } from '../run/program.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow, StorageTransaction } from '../../../../storage/port.js'
-import { assemblePath, treeError, createSession } from './domain.js'
-import type { Session, ConversationNode } from './domain.js'
+import { assemblePath, treeError, createSession, resolveSessionModel, sessionDefaultsConflict } from './domain.js'
+import type { Session, SessionDefaults, ConversationNode } from './domain.js'
 import { requestCancellation, settleRun, validateRunInput } from '../run/domain.js'
 import type { Run, RunInput } from '../run/domain.js'
 import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent } from '../run/execution.js'
 import type { RunEventData } from '../run/execution.js'
 import type { SessionPort, SessionRunPort } from './port.js'
 
-type SessionRecords = Omit<SessionPort, 'createSession' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
+type SavedSessionDefaults = Pick<SessionDefaults, 'agentId' | 'modelId' | 'revision'>
+type SessionRecords = Omit<SessionPort, 'createSession' | 'getSessionDefaults' | 'setSessionDefaults' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> & Omit<SessionRunPort, 'describeImages' | 'readFileSnapshots'> & {
-  createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string | null): Promise<Session>
+  createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string, fallbackModelId?: string | null): Promise<Session>
+  getSessionDefaults(agentId: string): Promise<SavedSessionDefaults>
+  setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SavedSessionDefaults>
 }
 
 const migrations: readonly StorageMigration[] = [{
@@ -194,7 +197,22 @@ const migrations: readonly StorageMigration[] = [{
     tx.execute('ALTER TABLE harness_sessions ADD COLUMN archived_at TEXT')
     tx.execute('CREATE INDEX harness_sessions_archived ON harness_sessions(archived_at DESC, id) WHERE archived_at IS NOT NULL')
   },
+}, {
+  version: 8,
+  up(tx) {
+    tx.execute(`CREATE TABLE harness_session_defaults (
+      agent_id TEXT PRIMARY KEY, model_id TEXT,
+      revision INTEGER NOT NULL CHECK(revision > 0)
+    )`)
+  },
 }]
+
+function readSessionDefaults(reader: StorageReader, agentId: string): SavedSessionDefaults {
+  const row = reader.get('SELECT model_id, revision FROM harness_session_defaults WHERE agent_id = ?', [agentId])
+  if (!row) return Object.freeze({ agentId, modelId: null, revision: 0 })
+  if (typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new Error('invalid stored session defaults revision')
+  return Object.freeze({ agentId, modelId: optional(row, 'model_id') ?? null, revision: row.revision })
+}
 
 function required(row: StorageRow, key: string): string {
   const value = row[key]
@@ -432,6 +450,7 @@ function runFromRow(row: StorageRow): Run {
     ...(optional(row, 'result_node_id') ? { resultNodeId: optional(row, 'result_node_id') } : {}),
     createdAt: required(row, 'created_at'), updatedAt: required(row, 'updated_at'),
     promptVersionIds: Object.freeze(prompts.map(prompt => prompt.versionId)),
+    promptSnapshots: Object.freeze(prompts),
     modelId: optional(row, 'model_id') ?? null, requestedModelId: optional(row, 'requested_model_id') ?? null,
     modelSnapshot,
     ...(optional(row, 'binding_json') ? { protocolBinding: JSON.parse(required(row, 'binding_json')) as ProtocolBindingSnapshot } : {}),
@@ -488,11 +507,23 @@ export async function openSqliteSessionRecords(
   })
 
   const records: SessionRecords = {
-    createSession(id, projectId, agentId, now, modelId = null) {
+    getSessionDefaults: agentId => db.read(reader => readSessionDefaults(reader, agentId)),
+    setSessionDefaults(agentId, modelId, expectedRevision) {
+      return db.transaction(tx => {
+        const current = readSessionDefaults(tx, agentId)
+        if (current.revision !== expectedRevision) throw sessionDefaultsConflict()
+        const revision = current.revision + 1
+        tx.execute(`INSERT INTO harness_session_defaults (agent_id, model_id, revision) VALUES (?, ?, ?)
+          ON CONFLICT(agent_id) DO UPDATE SET model_id = excluded.model_id, revision = excluded.revision`, [agentId, modelId, revision])
+        return Object.freeze({ agentId, modelId, revision })
+      })
+    },
+    createSession(id, projectId, agentId, now, requestedModelId, fallbackModelId = null) {
       return db.transaction(tx => {
         if (!tx.get('SELECT id FROM harness_projects WHERE id = ?', [projectId])) {
           throw new Error(`unknown project ${projectId}`)
         }
+        const modelId = resolveSessionModel(requestedModelId, readSessionDefaults(tx, agentId).modelId, fallbackModelId)
         const session = createSession(id, projectId, agentId, now, modelId)
         tx.execute("INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode) VALUES (?, ?, ?, ?, ?, 'native-local-v1')",
           [id, projectId, agentId, now, modelId])

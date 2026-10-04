@@ -26,6 +26,8 @@
 
 adaptive/enabled 时温度必须省略或为 1。disabled 关闭有效推理，但依然必须通过配置中的 mode 声明；缺失 mode 不推断。`max_tokens` 默认是初始化时显式保存的值，不在运行时为漏填配置补齐。未实现字段和覆盖认证/模型/历史的参数被拒绝。图片输入要求配置显式声明 supported。
 
+流式默认开启，配置 streaming 为 unknown/supported 时发送 `stream: true`，显式 unsupported 时发送 false；已有 unknown 配置无须迁移。这项传输默认不改变工具、图片、搜索或推理能力的显式声明要求。
+
 ## 输入与上下文
 
 intent 为本轮 user `messages`、可选初始 `system` 和 `tools`。内容接受字符串，或 text/image/tool_result 块；tool_result 用 `tool_use_id` 关联并携带文本结果。本地工具声明使用 `{ name, input_schema }`，不带服务端工具的 type；有效工具能力不足时拒绝声明。
@@ -58,6 +60,6 @@ Effect 注销所属协议代，停止新准入并等待该代的 initialization�
 
 [images.ts](../../../packages/models/src/protocols/images.ts) 是驱动内部共享函数，不是独立组件。start 后顺序读取去重资源，等待每次读取实际退出并校验摘要；同一图片在完整历史中多次出现时逐次计算 base64 体积，读取前及发送前均检查 32 MiB 请求上限。取消、超时与协议卸载同时覆盖图片和 HTTP；清理失败不创建成功上下文。网络终态已返回但随后取消/清理失败时，仍保留受信原生诊断，经 execution 脱敏持久化。
 
-新驱动 2.1.0 写记录 v2，读取旧驱动 2.0.0 的 v1 文本与 v1/v2 混合链。旧合法文本形状继续可读，v1 不接受图片；只有完整无图片父链允许有效图片能力 false→true。其他身份、账户和参数约束保持严格，旧 JSON 不改写。base64 只存在于临时 HTTP 请求，不写入意图、上下文或记录。
+新驱动 2.1.0 写记录 v2，读取旧驱动 2.0.0 的 v1 文本与 v1/v2 混合链。旧合法文本形状继续可读，v1 不接受图片；只有完整无图片父链允许有效图片能力 false→true。streaming 仅改变传输方式，恢复允许双向改变，包括从旧非流式成功父链继续流式执行；其他身份、账户、参数及执行语义约束保持严格，旧 JSON 不改写。base64 只存在于临时 HTTP 请求，不写入意图、上下文或记录。
 
 [multimodal-protocols.test.mjs](../../../packages/models/tests/multimodal-protocols.test.mjs) 验证 JSON/SSE 图片编码、三种 MIME、资源校验、超限、取消/超时/注销退出、失败诊断和混合版本恢复；[native-protocol-agents.test.mjs](../../../tests/native-protocol-agents.test.mjs) 验证图片工具续轮、重启、分支及接受后的失败保留。

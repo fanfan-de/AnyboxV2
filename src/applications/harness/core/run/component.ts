@@ -40,7 +40,7 @@ export interface RunPort {
 }
 
 /** Admission owns a prepared program until the Runtime synchronously accepts it. */
-export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessClosing: () => boolean = () => false, closingSignal?: AbortSignal): Component.Object<void, {
+export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal): Component.Object<void, {
   [sessionServiceKey]: SessionPort
   [sessionRunServiceKey]: SessionRunPort
   [agentPromptServiceKey]: AgentPromptPort
@@ -70,7 +70,7 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
       ctx.effect(() => async () => {
         accepting = false
         for (const controller of opening) controller.abort()
-        const reason: RunCancelReason = isHarnessClosing() ? 'owner-disposed' : 'dependency-unavailable'
+        const reason: RunCancelReason = isHarnessServerClosing() ? 'owner-disposed' : 'dependency-unavailable'
         const initial = new Set(owned)
         const first = Promise.allSettled([...initial].filter(id => !untransferred.has(id)).map(id => runtime.cancel(id, reason)))
         await Promise.allSettled([...admissions])
@@ -92,7 +92,7 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
         },
         closeAdmission() { accepting = false; stopPreparing() },
       }
-      const ensureOpen = () => { if (!accepting || pauseCount > 0 || isHarnessClosing()) throw new Error('run service is closing') }
+      const ensureOpen = () => { if (!accepting || pauseCount > 0 || isHarnessServerClosing()) throw new Error('run service is closing') }
       const service: RunPort = {
         startRun(raw) {
           ensureOpen()
@@ -161,7 +161,7 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
                 try {
                   if (!accepting || controller.signal.aborted || program.signal.aborted) {
                     const report = await closeUntransferred()
-                    return records.settleRun(id, { ...(isHarnessClosing() || controller.signal.aborted ? { kind: 'cancelled' as const }
+                    return records.settleRun(id, { ...(isHarnessServerClosing() || controller.signal.aborted ? { kind: 'cancelled' as const }
                       : { kind: 'failed' as const, category: 'dependency-unavailable' as const, error: 'model dependency is unavailable' }), records: report.records }, inputs.now())
                   }
                   let started: Promise<Run>

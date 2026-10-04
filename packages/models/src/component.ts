@@ -8,7 +8,7 @@ import { createExecution, validateRestore } from './execution.js';
 import { captureResourceResolver } from './resources.js';
 import { abortLink, deferred, joinOperation, throwAborted } from './lifecycle.js';
 import { modelsProtocolsServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsStoreServiceKey, modelsVaultServiceKey, modelsSourceDataServiceKey } from './types.js';
-import type { ConnectionModel, ConnectionSyncState, CredentialIntent, EffectiveCapabilities, Model, ModelConfiguration, ModelConfigurationInput, ModelInput, ModelsProtocolsService, ModelsService, ModelsSettingsService, ModelsSourceDataService, ModelsStore, ModelsVault, RunnableModelSummary, ProtocolConnection, ProtocolOperation, Provider, ProviderConnectionInput, ProviderConnectionRecord, ProviderConnection, ProviderInput, SourceSnapshot, Versioned } from './types.js';
+import type { ConnectionModel, ConnectionSyncState, CredentialIntent, EffectiveCapabilities, Model, ModelConfiguration, ModelConfigurationInput, ModelInput, ModelsProtocolsService, ModelsService, ModelsSettingsService, ModelsSourceDataService, ModelsStore, ModelsVault, RunnableModelSummary, ProtocolConnection, ProtocolOperation, Provider, ProviderConnectionRecord, ProviderConnection, ProviderInput, SourceSnapshot, Versioned } from './types.js';
 import { validateCatalogSnapshot } from './catalog-domain.js';
 
 interface Owned { cancel(): void; readonly done: Promise<void> }
@@ -112,12 +112,12 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     } catch (error) { if (pending) await cleanupIntent(pending); throw normalizeError(error, 'credential-unavailable'); }
   };
   const effective = (generation: Generation, model: ModelConfiguration, parameters: NativeParameters): EffectiveCapabilities => {
-    generation.protocol.validateParameters(parameters.value, model.capabilities);
+    assert(parameters.formatVersion === 1); generation.protocol.validateParameters(parameters.value, model.capabilities);
     const declared = model.capabilities;
     const value = generation.protocol.effectiveCapabilities(declared, parameters.value);
     return immutable({
       tools: declared.tools.support === 'supported' && value.tools === true,
-      streaming: declared.streaming.support === 'supported' && value.streaming === true,
+      streaming: declared.streaming.support !== 'unsupported' && value.streaming === true,
       imageInput: declared.imageInput.support === 'supported' && value.imageInput === true, webSearch: declared.webSearch?.support === 'supported' && value.webSearch === true,
       reasoning: declared.reasoning.support === 'supported' ? value.reasoning : { support: declared.reasoning.support },
     });
@@ -278,7 +278,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
         if (existing.has(model.id) || compatibility(model, connection)) continue;
         const parameters = initialParameters(model, generation.protocol);
         // Unsupported source options stay visible as unavailable definitions.
-        try { generation.protocol.validateParameters(parameters.value, model.capabilities); } catch { continue; }
+        try { assert(parameters.formatVersion === 1); generation.protocol.validateParameters(parameters.value, model.capabilities); } catch { continue; }
         configurations.push({ expectedRevision: null, record: immutable({ id: randomUUID(), ...revision(), modelDefinitionId: model.id, connectionId: id, modelDefinitionVersionId: model.versionId, remoteModelId: model.remoteModelId, name: model.name, enabled: true, capabilities: model.capabilities, parameters, baseline: true }) });
       }
       const ready: ConnectionSyncState = { ...pending, state: 'ready', syncedSourceVersion: version };

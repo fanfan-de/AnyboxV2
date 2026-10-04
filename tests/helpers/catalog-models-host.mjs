@@ -3,11 +3,11 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './harness-host.mjs'
+import { createTestHarnessServerCore } from './harness-server-core.mjs'
 import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
 import { createImageAssetsComponent } from '../../dist/applications/harness/core/image/component.js'
-import { installWebModels } from '../../dist/applications/harness/models-startup.js'
-import { parseWebStartupConfig } from '../../dist/applications/harness/startup-config.js'
+import { installHarnessServerModels } from '../../dist/applications/harness/server-models.js'
+import { parseHarnessServerConfig } from '../../dist/applications/harness/server-config.js'
 import { createDirectoryPickerComponent } from '../../dist/applications/harness/client/directory-picker.js'
 import { hostHttpServiceKey } from '../../dist/host/component.js'
 import { createFixtureApplicationApiComponent } from './application-api.mjs'
@@ -87,7 +87,7 @@ export async function startCatalogModelsHost(options = {}) {
   const network = { catalog: [], protocol: [], generations: [], checks: [] }
   const catalogQueue = []
   let catalogData = structuredClone(options.catalogData ?? catalogModelsData), etagNumber = 1, harness, closing
-  const config = parseWebStartupConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite'),
+  const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite'),
     ANYBOX_MODELS_CATALOG_DATABASE: join(directory, 'models-catalog.sqlite'), ANYBOX_MODELS_NAMESPACE: 'catalog-web-qa', ANYBOX_WEB_PORT: String(options.port ?? 0) })
   const catalogFetch = async (url, init) => {
     const record = { url: String(url), method: init.method, headers: { ...init.headers }, signal: init.signal }
@@ -114,7 +114,7 @@ export async function startCatalogModelsHost(options = {}) {
     return new URL(url).pathname.endsWith('/messages') ? anthropicReply(body, network.generations.length) : geminiReply(body, network.generations.length)
   }
   try {
-    await installWebModels(root, config, { catalogAutoRefresh: false, catalogFetch, fetch: protocolFetch, readLegacyCredential: async () => undefined,
+    await installHarnessServerModels(root, config, { catalogAutoRefresh: false, catalogFetch, fetch: protocolFetch, readLegacyCredential: async () => undefined,
       openEntry(namespace, id) {
         const key = `${namespace}\0${id}`
         return {
@@ -138,7 +138,7 @@ export async function startCatalogModelsHost(options = {}) {
     }
     await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
-    harness = await createTestHarnessHost(root, { agents: [{ id: 'assistant', instructions: 'Answer briefly. Use Bash when the user asks for a tool.' }] })
+    harness = await createTestHarnessServerCore(root, { agents: [{ id: 'assistant', instructions: 'Answer briefly. Use Bash when the user asks for a tool.' }] })
     const project = await harness.openProject(projectPath)
     await root.installComponent(createDirectoryPickerComponent({ platform: 'darwin', runDialog: async () => projectPath }))
     await root.installComponent(createFixtureApplicationApiComponent(root, harness.listAgents(), config.port))

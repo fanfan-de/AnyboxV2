@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createAgentPromptComponent } from '../dist/applications/harness/core/agent/prompt-binding-component.js'
-import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { modelsServiceKey } from '@anybox/models'
 import { createPromptComponent } from '../dist/applications/harness/core/prompt/component.js'
 import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
@@ -32,7 +32,7 @@ async function fixture() {
     await root.installComponent(llm.component())
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
-    const harness = await createTestHarnessHost(root, { agents })
+    const harness = await createTestHarnessServerCore(root, { agents })
     const project = await harness.openProject(directory)
     const session = await harness.createSession(project.id, 'assistant')
     return {

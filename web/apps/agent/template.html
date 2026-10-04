@@ -4,8 +4,7 @@
     <main class="workspace">
 
       <aside id="agent--workspace-sidebar" class="sidebar" aria-label="项目与会话" tabindex="-1">
-        <div class="sidebar-brand">
-          <div class="brand"><strong>Anybox</strong><span>Agent</span></div>
+        <div class="sidebar-actions">
           <button id="agent--close-sidebar" class="icon-button sidebar-close" type="button" aria-label="关闭项目与会话"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-close"/></svg></button>
           <button id="agent--add-project" class="icon-button" type="button" aria-label="添加项目" title="添加执行设备上的项目" disabled><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-folder"/></svg></button>
         </div>
@@ -16,9 +15,10 @@
           </section>
         </div>
         <footer class="sidebar-footer">
-          <button id="agent--open-archive" class="sidebar-archive-button" type="button" aria-haspopup="dialog" aria-controls="agent--archive-dialog">已归档会话</button>
-          <div class="harness-controls"><label for="agent--harness-select">执行设备</label><select id="agent--harness-select"></select><button id="agent--manage-harnesses" type="button">管理连接</button></div>
-          <button id="agent--open-settings" class="sidebar-settings-button" type="button" aria-label="Harness 设置" title="Harness 设置" aria-haspopup="dialog" aria-controls="agent--settings-dialog"><svg class="icon" aria-hidden="true"><use href="#agent--icon-settings"/></svg><span>设置</span></button>
+          <div class="harness-controls">
+            <label class="sr-only" for="agent--harness-select">执行设备</label><select id="agent--harness-select" title="执行设备"></select>
+            <button id="agent--open-settings" class="icon-button sidebar-settings-button" type="button" aria-label="Anybox Harness 设置" title="Anybox Harness 设置" aria-haspopup="dialog" aria-controls="agent--settings-dialog"><svg class="icon" aria-hidden="true"><use href="#agent--icon-settings"/></svg></button>
+          </div>
         </footer>
       </aside>
       <div id="agent--left-sidebar-separator" class="sidebar-separator" role="separator" aria-label="调整项目侧栏宽度" aria-orientation="vertical" tabindex="0"></div>
@@ -36,26 +36,39 @@
       </aside>
     </main>
   </div>
-  <dialog id="agent--archive-dialog" class="settings-dialog archive-dialog" aria-labelledby="agent--archive-title">
-    <div class="settings-heading"><h2 id="agent--archive-title">已归档会话</h2><button type="button" class="close-settings" data-archive-close aria-label="关闭已归档会话" autofocus>×</button></div>
-    <div class="settings-content"><p>归档会话仅供查看，恢复后可继续。历史内容和附件会保留。</p><button type="button" class="secondary-button" data-archive-refresh>刷新列表</button><p data-archive-status role="status" aria-live="polite"></p><div class="archive-list" aria-label="所有项目的已归档会话"></div></div>
-  </dialog>
   <dialog id="agent--settings-dialog" class="settings-dialog" aria-labelledby="agent--settings-title">
-    <div class="settings-heading"><div><h2 id="agent--settings-title">Harness 设置</h2><p id="agent--settings-target" class="settings-hint"></p></div><button id="agent--close-settings" class="close-settings" type="button" aria-label="关闭设置" autofocus><svg aria-hidden="true"><use href="#agent--icon-close"/></svg></button></div>
+    <div class="settings-heading"><div><h2 id="agent--settings-title">Anybox Harness 设置</h2><p id="agent--settings-target" class="settings-hint"></p></div><button id="agent--close-settings" class="close-settings" type="button" aria-label="关闭设置" autofocus><svg aria-hidden="true"><use href="#agent--icon-close"/></svg></button></div>
     <div class="settings-workspace">
       <nav class="settings-navigation" aria-label="设置分类">
         <p class="settings-nav-label">工作区</p>
         <button type="button" data-settings-section="general" aria-controls="agent--general-settings" aria-current="page"><svg aria-hidden="true"><use href="#agent--icon-settings"/></svg><span>会话设置</span></button>
+        <button type="button" data-settings-section="connections" aria-controls="agent--connections-settings"><svg aria-hidden="true"><use href="#agent--icon-panels"/></svg><span>管理连接</span></button>
         <button type="button" data-settings-section="models" aria-controls="agent--models-settings"><svg aria-hidden="true"><use href="#agent--icon-settings"/></svg><span>模型管理</span></button>
         <button type="button" data-settings-section="prompts" aria-controls="agent--prompt-settings"><svg aria-hidden="true"><use href="#agent--icon-compose"/></svg><span>Prompt 管理</span></button>
+        <button type="button" data-settings-section="archive" aria-controls="agent--archive-settings"><svg aria-hidden="true"><use href="#agent--icon-folder"/></svg><span>已归档会话</span></button>
       </nav>
       <div id="agent--settings-content" class="settings-content">
+        <section id="agent--connections-settings" class="settings-panel connections-settings" data-settings-panel="connections" aria-labelledby="agent--connections-title" hidden></section>
         <section id="agent--general-settings" class="settings-panel" data-settings-panel="general" aria-labelledby="agent--agent-settings-title">
-          <header class="settings-panel-heading"><h3 id="agent--agent-settings-title">会话设置</h3><p>设置新会话使用的默认 Agent。</p></header>
+          <header class="settings-panel-heading"><h3 id="agent--agent-settings-title">会话设置</h3><p>设置新会话使用的 Agent 和默认模型。</p></header>
           <div class="settings-card settings-field-row">
             <div><label for="agent--agent-select">新会话使用的 Agent</label><p id="agent--agent-settings-hint" class="settings-hint">选择后用于接下来创建的会话。</p></div>
             <select id="agent--agent-select" aria-label="新会话使用的 Agent" aria-describedby="agent--agent-settings-hint" disabled></select>
           </div>
+          <div id="agent--session-defaults" class="settings-card session-defaults-settings">
+            <div class="settings-field-row">
+              <div><label for="agent--default-model">新会话默认模型</label><p id="agent--default-model-hint" class="settings-hint" data-default-model-hint>请先选择执行设备上的 Agent。</p></div>
+              <select id="agent--default-model" data-default-model aria-describedby="agent--default-model-hint" disabled><option value="">未设置默认模型</option></select>
+            </div>
+            <div class="settings-actions"><button type="button" data-save-session-defaults disabled>保存默认模型</button><button type="button" class="secondary-button" data-reload-session-defaults disabled>重新加载</button></div>
+            <p class="session-defaults-notice" data-session-defaults-notice role="status" aria-live="polite" hidden></p>
+          </div>
+        </section>
+        <section id="agent--archive-settings" class="settings-panel" data-settings-panel="archive" aria-labelledby="agent--archive-title" hidden>
+          <header class="settings-panel-heading"><h3 id="agent--archive-title">已归档会话</h3><p>查看所有执行设备和项目的归档会话。恢复后可继续，历史内容和附件会保留。</p></header>
+          <button type="button" class="secondary-button" data-archive-refresh>刷新列表</button>
+          <p data-archive-status role="status" aria-live="polite"></p>
+          <div class="archive-list" aria-label="所有执行设备和项目的已归档会话"></div>
         </section>
         <section id="agent--models-settings" class="settings-panel" data-settings-panel="models" aria-labelledby="agent--models-settings-title" hidden></section>
         <section id="agent--prompt-settings" class="settings-panel prompt-dialog" data-settings-panel="prompts" aria-labelledby="agent--prompt-title" hidden>

@@ -27,7 +27,7 @@ async function fixture(fn) {
 
 test('the registered Harness application opens once and has no composition API', () => fixture(async (path, start) => {
   const { products, runtime } = await start(path)
-  assert.deepEqual(products.list(), [{ definition: { id: 'agent', name: 'Harness', icon: 'agent' }, desiredEnabled: false, state: 'disabled' }])
+  assert.deepEqual(products.list(), [{ definition: { id: 'agent', name: 'Anybox Harness', icon: 'agent' }, desiredEnabled: false, state: 'disabled' }])
   assert.equal(runtime.inspect(), 'disabled')
   for (const method of ['modules', 'create', 'save', 'preview', 'apply', 'remove']) assert.equal(products[method], undefined)
   assert.equal((await products.open('agent')).state, 'running')

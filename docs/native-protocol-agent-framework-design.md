@@ -4,11 +4,11 @@
 
 ## 1. 范围与约束
 
-五种协议为 Responses、Anthropic Messages、标准 Chat Completions、Gemini Interactions 和 DeepSeek 非推理扩展。每种协议独立解释原生状态，共享 RunRuntime 的持久屏障、资源所有权、取消和退出保障。Session 沿指定成功父链保存完整原生恢复记录，可跨 Run、应用重启和分支继续；不能用文本投影替代恢复。
+四种协议为 Responses、Anthropic Messages、标准 Chat Completions 和 Gemini Interactions。DeepSeek 是使用标准 Chat Completions 的 Provider，不保留旧驱动或协议别名；旧协议历史仅供查看，不能续接执行。每种协议独立解释原生状态，共享 RunRuntime 的持久屏障、资源所有权、取消和退出保障。Session 沿指定成功父链保存完整原生恢复记录，可跨 Run、应用重启和分支继续；不能用文本投影替代恢复。
 
 Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResult 与统一消息执行路径。保留配置、Vault、目录和驱动注册，提供 openNative、原生参数、版本化记录和恢复 codec。旧 dialogue-v1 Session 只读，不导入文本，不提供跨协议或跨账户转换。新 Session 使用 native-local-v1，在第一次接受事务中固定协议，失败和取消不解除绑定。
 
-继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、已知 Bash/Apply Patch 判别联合、实际退出后结算和 interrupted 不重放规则。五种协议均支持显式声明能力的静态本地图片输入。本期不包含图片输出、工具返回图片、音频、远端后台任务、并行工具调度、动态工具注册中心或用户交互等待机制。
+继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、已知 Bash/Apply Patch 判别联合、实际退出后结算和 interrupted 不重放规则。四种协议均支持显式声明能力的静态本地图片输入。本期不包含图片输出、工具返回图片、音频、远端后台任务、并行工具调度、动态工具注册中心或用户交互等待机制。
 
 ## 2. 已实现模块与职责
 
@@ -17,15 +17,14 @@ Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResu
 | Models 原生内核 | `packages/models/src/native-types.ts`、`execution.ts`、`component.ts` | 固定配置与凭据、驱动代租约、prepare/start、实际退出屏障、记录与恢复 |
 | 协议驱动 | `packages/models/src/protocols/` | 原生参数、请求构建、JSON/SSE 消费、私有候选状态、restore/commit |
 | 协议应用绑定 | `src/applications/harness/core/protocol-agents/registry.ts` | 固定驱动代、Loop、根输入/工具编码、历史策略与 program 闭包 |
-| 五协议 Loop | `src/applications/harness/core/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案；DeepSeek复用Chat工厂 |
+| 四协议 Loop | `src/applications/harness/core/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案 |
 | Run | `src/applications/harness/core/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
 | RunRuntime | `src/applications/harness/core/run/runtime-component.ts` | 全部受管操作、取消、真实退出、持久屏障、视图与结算 |
 | 图片资源 | `src/applications/harness/core/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
 | Session | `src/applications/harness/core/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
 | 服务端展示 | `src/applications/harness/core/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
-| 协议 Web | `src/web/protocols/` | 安全 decoder/reducer、输入编码和稳定 Turn 生命周期 |
-| 共享 Web | `src/web/session-*`、`workspace-client.ts`、`run-change-*` | 分支、控制、订阅、重连、滚动与四面板 |
-| DeepSeek 扩展 | `src/applications/harness/deepseek-protocol.ts` | 独立协议ID、max_tokens、禁用thinking、developer限制和旧参数转换器 |
+| 协议 Web | `src/applications/harness/web/protocols/` | 安全 decoder/reducer、输入编码和稳定 Turn 生命周期 |
+| 共享 Web | `src/applications/harness/web/{session-client,session-view,workspace-client,run-change-client}.ts` | 分支、控制、订阅、重连、滚动与四面板 |
 
 Models 不导入应用源码、Session、数据库业务表或工具实现。Session 只理解公共信封、归属与引用，不解释协议块。RunRuntime 不识别 finish_reason、stop_reason 或任何协议的停止条件。
 
@@ -55,9 +54,8 @@ Models 只有在底层成功退出后才提交候选上下文；done 拒绝是�
 | --- | --- | --- | --- | --- | --- |
 | Responses | JSON + SSE；store:false | function_call / function_call_output | 有序output、reasoning、encrypted_content、phase、item ID、call_id | web_search，URL citations | 文本/摘要/工具/搜索/正文引用 |
 | Anthropic Messages | JSON + SSE；固定版本头，x-api-key | tool_use / tool_result | thinking/signature/redacted、有序content、原生ID | web_search_20250305；pause_turn自动续轮；服务端工具跨response关联 | 文本/摘要/工具/服务器搜索/引用 |
-| Chat Completions | JSON + SSE | tool_calls / tool消息 | 原生messages、finish_reason、工具身份 | max_completion_tokens、reasoning_effort | 文本/工具/拒绝与异常状态 |
+| Chat Completions | JSON + SSE | tool_calls / tool消息 | 原生messages、finish_reason、工具身份 | 互斥max_completion_tokens/max_tokens、reasoning_effort、显式thinking | 文本/工具/拒绝与异常状态 |
 | Gemini Interactions | JSON + SSE；store:false | function_call / function_result | 有序steps、thought signature、函数身份 | generation_config；本地无状态历史 | 文本/摘要/工具 |
-| DeepSeek非推理 | 共用Chat transport/解析 | 共用原生Chat工具Loop | 独立协议ID的Chat原生记录 | max_tokens、disabled thinking、拒绝developer | 独立绑定、共用Chat展示 |
 
 Responses 和 Gemini 不使用服务端会话、previous_response_id/previous_interaction_id 或后台任务。Anthropic 只执行客户端 tool_use，server_tool_use 不交给 Bash/Apply Patch；暂停内容按顺序提交后，由Loop发起新的受管模型操作。拒绝、截断或不支持的完成状态保存原生事实，但本期不创建成功节点。
 
@@ -69,7 +67,7 @@ Responses 和 Gemini 不使用服务端会话、previous_response_id/previous_in
 
 幂等键查询先于当前配置、Prompt 与协议恢复。已接受键始终返回原 Run；同键改变原始输入、父引用或显式模型ID产生冲突。默认选模和显式选模均检查Session协议，接受事务再次核对所选父路径。
 
-续接采用保守规则：同连接、固定远端模型与定义版本、相同语义参数和有效能力、相同工具契约，且记录/恢复格式可验证。配置名称、展示信息或JSON对象属性顺序不属于语义变化。不同驱动代可在明确兼容记录格式与Loop版本时恢复，新Run始终固定新代，旧Run不被偷偷换实现。
+续接采用保守规则：同连接、固定远端模型与定义版本、相同语义参数和执行语义能力、相同工具契约，且记录/恢复格式可验证。streaming 只改变传输方式，允许开启或关闭后继续恢复完整原生上下文；内置驱动默认开启，只有显式 unsupported 才关闭。配置名称、展示信息或JSON对象属性顺序不属于语义变化。不同驱动代可在明确兼容记录格式与Loop版本时恢复，新Run始终固定新代，旧Run不被偷偷换实现。
 
 非秘密 historyScopeEpoch 不使用Key哈希、Vault引用或凭据条目ID。成功更换/删除Key、改变地址/认证方式会更新；普通改名、超时调整、启停和目录刷新不更新；失败Key操作不更新。失去恢复兼容时明确拒绝，不能重建文本历史或隐式换账户。
 
@@ -89,7 +87,8 @@ Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原
 | Chat maxOutputTokens / 推理力度 | max_completion_tokens / reasoning_effort |
 | Anthropic maxOutputTokens / thinking / effort | max_tokens / thinking / output_config |
 | Gemini 输出上限和thinking | generation_config |
-| DeepSeek maxOutputTokens | max_tokens；Harness 扩展固定 thinking disabled |
+
+旧 DeepSeek 当前配置已通过停机时的一次性配置迁移改为标准 `chat-completions`，保留连接与配置 ID、凭据引用、epoch 和不可变历史。这不是运行期的通用转换规则；旧协议历史不能续接，新会话使用标准协议及显式保存的原生参数。
 
 新基础配置、预设、设置表单和旧环境变量初始化都写原生参数。Anthropic新配置显式保存max_tokens:4096；旧配置保留旧值。迁移可重复进入，失败回滚整个本库事务。
 
@@ -111,25 +110,27 @@ Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原
 
 ## 7. Web、安全展示与资源限制
 
-共享Thread外壳负责分支、Run控制、滚动和四面板；协议模块负责输入、原生嵌套参数表单和Turn展示。没有任意请求JSON编辑器。Turn以Run/节点身份稳定mount/update/dispose。
+共享Thread外壳负责分支、Run控制、滚动和四面板；四个协议模块分别负责输入、原生嵌套参数表单、原生内容投影和内容组件。没有任意请求JSON编辑器。Turn以Run/节点身份稳定mount/update/dispose；对话区与轨迹明细共同挂载协议内容组件，轨迹列表保留派生摘要和搜索文本，每个模型调用只对应一个真实计时行。
 
-`GET /api/runs/:id/view`：活动快照来自Runtime，历史快照从已提交记录投影。信封包含Session/Run/protocol/viewSchemaVersion、exchange与块ID、独立viewRevision及provisional/committed状态。当前帧是有界全量替换快照，便于断线校准；重复旧帧忽略，缺帧、重连、首次发现活动Run、终态触发重新查询，持久投影最终覆盖临时内容。
+`GET /api/runs/:id/view`：活动快照来自Runtime，历史快照从已提交记录投影。信封版本仍为1，viewSchemaVersion为2，包含Session/Run/protocol、exchange与内容ID、独立viewRevision及provisional/committed状态。内容type使用协议前缀判别，分别保留Responses message/output_text/refusal、reasoning、function_call、web_search_call，Anthropic text、thinking、redacted_thinking、tool_use、server_tool_use、web_search_tool_result，Chat content、reasoning_content、refusal、tool_calls，以及Gemini model_output/text、thought、function_call。阶段与原生停止状态附着在所属消息或exchange，不代替Run结算。当前帧是有界全量替换快照，便于断线校准；重复旧帧忽略，缺帧、重连、首次发现活动Run、终态触发重新查询，持久投影最终覆盖临时内容并保留稳定身份和组件实例。
 
-SSE仍由最多四Session共用，同Run未发送快照可合并，保留256KiB队列预算与慢连接清理。服务端显示预算约48KiB，裁剪不会修改原生记录。工具最终结果由持久Run trace补全，避免把模型请求误认为实际执行成功。
+SSE仍由最多四Session共用，同Run未发送快照可合并，保留256KiB队列预算与慢连接清理。服务端显示预算约48KiB，裁剪不修改原生记录，保留唯一截断提示并移除无效位置引用。工具最终结果由持久Run事件补全，通过Run、来源模型exchange、请求ID、名称及事件位置关联，不生成临时tools-N结果；待同步、读取失败和结果缺失单独表达。模型请求不表示实际执行成功，取消或清理失败仍显示已保存的真实工具结果和部分补丁事实。
 
-浏览器仅接收白名单文本、摘要、工具状态、查询和安全http(s)引用；签名、redacted data、encrypted continuation、认证头及Vault引用不进入展示。引用清晰可点击，文本使用安全DOM写入。旧会话显示只读和新建空会话入口；旧浏览器待提交键先查是否已接受，未接受内容只恢复草稿，不自动提交或转换。
+浏览器仅接收白名单文本、摘要、工具状态、查询和安全http(s)引用；签名、redacted data、encrypted continuation、认证头及Vault引用不进入展示。Responses/Gemini使用“推理摘要”，Anthropic thinking使用“思考内容”，Chat reasoning_content使用“推理内容”，redacted_thinking独立显示隐藏占位；默认折叠，各面板的手动展开在流式、引用更新和终态替换中保留，刷新后恢复默认。位置有效的引用关联原始正文，无位置的安全引用显示块级来源；文本使用安全DOM写入。失败诊断只显示已保存的白名单部分内容和状态，不推断缺失信息或当作成功回复。
+
+客户端、执行设备与Web资源同步升级展示v2，旧或未知展示版本明确不兼容，不维护展示v1兼容层。旧原生记录v1/v2在查询时重新投影，旧binding及历史JSON保留，展示版本不参与原生恢复兼容门槛；无需数据库迁移或驱动/Loop升级。旧dialogue-v1会话仍只读，并提供新建空会话入口；旧浏览器待提交键先查是否已接受，未接受内容只恢复草稿，不自动提交或转换。
 
 ## 8. 分阶段交付记录
 
 | 阶段 | 当前交付 |
 | --- | --- |
-| P0 | 接受五协议/只读/保守历史范围；保留旧格式与原生响应fixture；临时库基线 |
+| P0 | 接受四协议/只读/保守历史范围；保留旧格式与原生响应fixture；临时库基线 |
 | P1 | RunRuntime提取完成；所有操作经持久屏障，取消/退出/交接故障保留回归 |
 | P2 | Models原生内核、类型化代租约、结构化close、参数v3、epoch与0.2.0 |
 | P3 | Session v5、原子绑定/准入/成功引用、增量恢复链、interrupted不重放 |
 | P4 | Responses完整工具→下次Run→重启闭环；安全视图HTTP与稳定Turn |
 | P5 | Anthropic原生闭环及pause_turn；两种服务器搜索/引用能力 |
-| P6 | Chat、DeepSeek、Gemini原生Loop、codec、参数、恢复、展示与共享资源验收 |
+| P6 | Chat、Gemini原生Loop、codec、参数、恢复、展示与共享资源验收 |
 | P7 | 正式组合根统一切换；旧执行器/统一API/旧写入删除；旧只读兼容与文档同步 |
 
 过渡program没有留在正式源码；旧事件解析、快照读取与配置转换仅服务真实兼容需求。没有为未来功能预建组件。
@@ -143,11 +144,11 @@ SSE仍由最多四Session共用，同Run未发送快照可合并，保留256KiB�
 | 资源退出、done失败、注册代、取消和晚到结果 | packages/models/tests/runtime.test.mjs、lifecycle-review.test.mjs、boundary.test.mjs |
 | 四内置协议JSON/SSE与原生块 | packages/models/tests/protocols.test.mjs、anthropic-messages.test.mjs、gemini-interactions.test.mjs |
 | v1/v2/v3迁移、历史JSON、epoch、配置能力 | packages/models/tests/storage-migration.test.mjs、storage.test.mjs、unified-models.test.mjs |
-| 五协议工具→跨Run→重启→分支、记录增长、搜索暂停与私有投影 | tests/native-protocol-agents.test.mjs |
-| 准入/交接取消、依赖撤销、waiter、清理失败 | tests/harness.test.mjs、models-harness.test.mjs、tool-loop.test.mjs、apply-patch-loop.test.mjs |
+| 四协议工具→跨Run→重启→分支、记录增长、搜索暂停与私有投影 | tests/native-protocol-agents.test.mjs |
+| 准入/交接取消、依赖撤销、waiter、清理失败 | tests/harness-server-core.test.mjs、models-harness-server-core.test.mjs、tool-loop.test.mjs、apply-patch-loop.test.mjs |
 | 原子绑定、不可变引用、Prompt一次处理、旧只读 | tests/native-session.test.mjs、conversation-tree.test.mjs、conversation-migration.test.mjs |
 | 长流裁剪、稳定块身份、原生记录不变与协议模块隔离 | tests/native-projection.test.mjs、protocol-web-modules.test.mjs |
-| SSE、四面板、重连/迟到快照、DOM安全、参数/旧待提交 | tests/protocol-view-client.test.mjs、run-change-*.test.mjs、session-client.test.mjs、web-server.test.mjs |
+| SSE、四面板、重连/迟到快照、DOM安全、参数/旧待提交 | tests/protocol-view-client.test.mjs、run-change-*.test.mjs、session-client.test.mjs、harness-server-http.test.mjs |
 | 显式门控的真实API文本与重启续接冒烟 | tests/native-live-api.test.mjs |
 
 全部自动验证使用临时SQLite、内存凭据及受控/模拟HTTP。真实浏览器验收使用同类本地宿主，覆盖刷新、工具往返、同父分叉、协议选择限制和旧会话只读。真实模型API和原生Vault跨平台验证独立门控；本地模拟不代表这些验收已完成。
@@ -170,7 +171,7 @@ SSE仍由最多四Session共用，同Run未发送快照可合并，保留256KiB�
 ANYBOX_NATIVE_API_TESTS=1 ANYBOX_NATIVE_API_PROTOCOLS=responses node --test tests/native-live-api.test.mjs
 ```
 
-运行前另提供每个选中协议的 `ANYBOX_NATIVE_API_<ID>_ENDPOINT`、`_MODEL`、`_KEY` 和 `_PARAMETERS`；ID转大写并将连字符替换为下划线，例如 `ANTHROPIC_MESSAGES`。地址和模型ID由验证者明确指定；参数是原生JSON对象，必须显式包含正整数输出上限（Responses `max_output_tokens`、Chat `max_completion_tokens`、Anthropic/DeepSeek `max_tokens`、Gemini `generation_config.max_output_tokens`）。不从现有配置或业务库推断任何值。
+运行前另提供每个选中协议的 `ANYBOX_NATIVE_API_<ID>_ENDPOINT`、`_MODEL`、`_KEY` 和 `_PARAMETERS`；ID转大写并将连字符替换为下划线，例如 `ANTHROPIC_MESSAGES`。地址和模型ID由验证者明确指定；参数是原生JSON对象，必须显式包含正整数输出上限（Responses `max_output_tokens`、Chat `max_completion_tokens` 或 `max_tokens`、Anthropic `max_tokens`、Gemini `generation_config.max_output_tokens`）。不从现有配置或业务库推断任何值。
 
 该入口使用临时SQLite、内存Vault与实际协议传输，验证首轮文本、关闭重开、指定成功父节点的文本续接及原记录不变。对显式选中的任一协议再设置 `ANYBOX_NATIVE_API_IMAGES=1`，会增加图片颜色识别及重启后沿图片父节点继续的验收；无需访问已保存 Key 或实际业务数据。它不构成工具、搜索、流式或跨平台凭据验收。系统凭据仍独立使用 `ANYBOX_KEYRING_TESTS=1` 门控。本次没有启用这两类真实验证。
 

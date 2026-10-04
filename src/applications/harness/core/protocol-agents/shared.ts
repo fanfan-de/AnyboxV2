@@ -4,7 +4,8 @@ import { modelFailure } from '../run/model.js'
 import { validateToolBatch } from '../run/domain.js'
 import type { ToolObservation, ValidatedToolRequest } from '../run/domain.js'
 import type { ProtocolViewExchange, ProtocolViewSnapshot } from '../view/types.js'
-import { boundProtocolView, projectNativeResponse, reduceNativeView } from './projection.js'
+import { boundProtocolView, projectNativeRequest, projectNativeExchange, reduceNativeExchange } from './projection.js'
+import type { PromptSnapshot } from '../prompt/domain.js'
 
 export function nativeObject(value: unknown): NativeObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw modelFailure('invalid-response')
@@ -44,35 +45,38 @@ export interface ExchangeRunner {
 }
 
 /** Common resource plumbing contains no protocol flow decisions. */
-export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string }, initialResources: readonly NativeImageResourceRef[] = []): ExchangeRunner {
+export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string },
+  initialResources: readonly NativeImageResourceRef[] = [], prompts?: readonly PromptSnapshot[]): ExchangeRunner {
   let initial = true
   let exchanges: readonly ProtocolViewExchange[] = []
-  let revision = 0, toolExchange = 0
+  let revision = 0
   const update = (exchange: ProtocolViewExchange) => {
     const index = exchanges.findIndex(item => item.id === exchange.id)
     const next = [...exchanges]
-    if (index < 0) next.push(exchange); else next[index] = exchange
+    if (index < 0) next.push(exchange); else next[index] = { ...next[index]!, ...exchange }
     exchanges = boundProtocolView(next)
   }
   const publish = (exchangeId: string) => {
-    const snapshot: ProtocolViewSnapshot = { envelopeVersion: 1, protocolId: execution.snapshot.protocolId, viewSchemaVersion: 1,
+    const snapshot: ProtocolViewSnapshot = { envelopeVersion: 1, protocolId: execution.snapshot.protocolId, viewSchemaVersion: 2,
       ...identity, viewRevision: ++revision, status: 'provisional', exchanges }
-    host.publish({ protocolId: snapshot.protocolId, schemaVersion: 1, exchangeId, payload: serializable(snapshot) })
+    host.publish({ protocolId: snapshot.protocolId, schemaVersion: 2, exchangeId, payload: serializable(snapshot) })
   }
   return {
     async call(intent) {
       host.signal.throwIfAborted()
       const prepared = execution.prepareExchange(intent, initial && initialResources.length ? { resourceRefs: initialResources } : undefined)
+      const inputs = projectNativeRequest(execution.snapshot.protocolId, prepared.record.payload, initial ? prompts : undefined)
       initial = false
-      update({ id: prepared.exchangeId, blocks: [] })
+      update({ id: prepared.exchangeId, ...(inputs.length ? { inputs } : {}), blocks: [] })
+      publish(prepared.exchangeId)
       const reply = await host.perform({ id: prepared.exchangeId, kind: 'model', intent: serializable(prepared.request),
         records: [toProtocolRecord(prepared.record)], observe: reply => ({ records: reply.records.map(toProtocolRecord) }) },
       () => prepared.start(event => {
-        const previous = exchanges.find(item => item.id === prepared.exchangeId)?.blocks ?? []
-        update({ id: prepared.exchangeId, blocks: reduceNativeView(execution.snapshot.protocolId, previous, event) })
+        const previous = exchanges.find(item => item.id === prepared.exchangeId) ?? { id: prepared.exchangeId, blocks: [] }
+        update(reduceNativeExchange(execution.snapshot.protocolId, previous, event))
         publish(prepared.exchangeId)
       }))
-      update({ id: prepared.exchangeId, blocks: projectNativeResponse(execution.snapshot.protocolId, reply.response) })
+      update({ id: prepared.exchangeId, ...projectNativeExchange(execution.snapshot.protocolId, reply.response) })
       publish(prepared.exchangeId)
       return reply
     },
@@ -80,10 +84,6 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
       if (!execution.capabilities.tools) throw modelFailure('unsupported-request')
       const validated = validateToolBatch(calls)
       const results = await host.executeTools(validated, 'serial')
-      const id = 'tools-' + (++toolExchange)
-      update({ id, blocks: results.map((result, index) => ({ id: validated[index]!.id, kind: 'tool',
-        label: result.name, status: 'observed', requestId: validated[index]!.id, detail: JSON.stringify(result.result) })) })
-      publish(id)
       return results
     },
   }

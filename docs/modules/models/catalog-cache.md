@@ -6,7 +6,7 @@
 
 源码：[catalog-cache.ts](../../../packages/models/src/catalog-cache.ts)，契约：[catalog-types.ts](../../../packages/models/src/catalog-types.ts)。工厂 `createModelsCatalogCacheComponent(options)`，组件名 `models-catalog-cache`，提供 `models.catalog-cache: ModelsCatalogCache`，无注入依赖。
 
-它只保存公共来源快照及 ETag/check 时间，不保存执行配置或 Key。独立数据库不与 [Models Store](store.md) 或业务 SQLite 共用连接/文件；缓存是性能和离线辅助，已接纳的统一来源账本仍由 Models Store 持有。
+它只保存公共来源快照及 ETag/check 时间，不保存执行配置或 Key。独立数据库不与 [JSON 配置存储](json-store.md)、[SQLite 替换提供方](store.md)或业务 SQLite 共用文件；缓存是性能和离线辅助，已接纳的统一来源账本仍由 Models Store 持有。
 
 ## 配置与接口
 
@@ -36,6 +36,6 @@ SQLite 使用 `catalog_cache(cache_key, record)` 和自身 `user_version=1`，�
 
 ## 测试与关联文档
 
-[catalog.test.mjs](../../../packages/models/tests/catalog.test.mjs) 覆盖持久化重开、来源隔离、排他释放、初始化后备、保留路径及链接别名、旧记录转换与损坏缓存启动。当前宿主的 [installWebModels](../../../src/applications/harness/models-startup.ts) 将 Models 配置和业务数据库传入 `reservedPaths`。
+[catalog.test.mjs](../../../packages/models/tests/catalog.test.mjs) 覆盖持久化重开、来源隔离、排他释放、初始化后备、保留路径及链接别名、旧记录转换与损坏缓存启动。当前宿主的 [installHarnessServerModels](../../../src/applications/harness/server-models.ts) 将 Models 配置和业务数据库传入 `reservedPaths`。
 
 替换缓存只需实现 `ModelsCatalogCache`，保持原子替换和可观察存储状态。参见 [目录调度](catalog.md) 与 [配置存储](store.md)。

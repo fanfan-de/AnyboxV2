@@ -24,8 +24,8 @@ import type { ProjectPort } from './project/component.js'
 import { createBashComponent } from './tool/bash-component.js'
 import { createApplyPatchComponent } from './tool/apply-patch-component.js'
 
-/** The application root must provide Models, local storage and image assets before the Harness starts. */
-export interface HarnessOptions extends Partial<RuntimeInputs> {
+/** The root must provide Models, local storage and image assets before the harness server core starts. */
+export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly agents: readonly AgentDefinition[]
   /** Host-supplied default for its directory picker; omission disables browsing for embedded callers. */
   readonly projectDirectoryHome?: string
@@ -36,7 +36,7 @@ export interface HarnessOptions extends Partial<RuntimeInputs> {
   readonly canManageAgent?: (actorId: string, agentId: string) => boolean
 }
 
-export interface Harness extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable'>,
+export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable'>,
   Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly Readonly<{ id: string }>[]
@@ -51,24 +51,24 @@ function requireActive(fiber: Fiber): void {
     : `component ${fiber.name} is ${fiber.state}`)
 }
 
-export interface HarnessLifetime {
+export interface HarnessServerLifetime {
   isClosing(): boolean
   readonly signal?: AbortSignal
 }
 
-function runtimeInputs(options: HarnessOptions): RuntimeInputs {
+function runtimeInputs(options: HarnessServerCoreOptions): RuntimeInputs {
   return { now: options.now ?? (() => new Date().toISOString()), newId: options.newId ?? randomUUID }
 }
 
 /** Prompt capabilities do not require Models, Session or execution resources. */
-export function createHarnessPromptComponents(options: HarnessOptions): readonly Component<any, any>[] {
+export function createHarnessServerPromptComponents(options: HarnessServerCoreOptions): readonly Component<any, any>[] {
   const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
   return [createPromptComponent(inputs, options.legacyPromptStorePath),
     createAgentPromptComponent(inputs, agents, options.canManageAgent ?? (() => true), options.legacyPromptStorePath)]
 }
 
 /** Describes the Agent component closure; callers keep every installation on their root. */
-export function createHarnessAgentComponents(context: Context, options: HarnessOptions, lifetime: HarnessLifetime): readonly Component<any, any>[] {
+export function createHarnessServerAgentComponents(context: Context, options: HarnessServerCoreOptions, lifetime: HarnessServerLifetime): readonly Component<any, any>[] {
   const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
   const configuredProtocols = context.get<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
   const protocolComponents = context.get(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
@@ -80,50 +80,51 @@ export function createHarnessAgentComponents(context: Context, options: HarnessO
 }
 
 /** The facade resolves the current services and never owns the application root. */
-export function createHarnessFacade(context: Context, options: HarnessOptions, lifetime: HarnessLifetime): Harness {
+export function createHarnessServerApi(context: Context, options: HarnessServerCoreOptions, lifetime: HarnessServerLifetime): HarnessServerApi {
   if (!Context.is(context) || context.root !== context) throw new TypeError('application root Context required')
   const agents = validateAgents(options.agents)
-  const validateSelectedModel = (modelId: string): string => {
-    if (lifetime.isClosing()) throw new Error('harness is closing')
+  const validateSelectedModel = (modelId: string, requireAvailable = false): string => {
+    if (lifetime.isClosing()) throw new Error('harness server is closing')
     const models = context.get<ModelsService>(modelsServiceKey)
     if (!models) throw modelsError('unavailable')
     const model = models.get(modelId)
     if (!model) throw modelsError('not-found')
+    if (requireAvailable && !model.available) throw modelsError('unavailable')
     return model.parameters.protocolId
   }
   const current = (): RunPort => {
-    if (lifetime.isClosing()) throw new Error('harness is closing')
+    if (lifetime.isClosing()) throw new Error('harness server is closing')
     const service = context.get<RunPort>(runServiceKey)
     if (!service) throw new Error('run service is unavailable')
     return service
   }
   const currentSessions = (): SessionPort => {
-    if (lifetime.isClosing()) throw new Error('harness is closing')
+    if (lifetime.isClosing()) throw new Error('harness server is closing')
     const service = context.get<SessionPort>(sessionServiceKey)
     if (!service) throw new Error('session service is unavailable')
     return service
   }
   const currentProjects = (): ProjectPort => {
-    if (lifetime.isClosing()) throw new Error('harness is closing')
+    if (lifetime.isClosing()) throw new Error('harness server is closing')
     const service = context.get<ProjectPort>(projectServiceKey)
     if (!service) throw new Error('project service is unavailable')
     return service
   }
   const currentPrompts = (): PromptPort => {
-    if (lifetime.isClosing()) throw new Error('harness is closing')
+    if (lifetime.isClosing()) throw new Error('harness server is closing')
     const service = context.get<PromptPort>(promptServiceKey)
     if (!service) throw new Error('prompt service is unavailable')
     return service
   }
   const currentAgentPrompts = (): AgentPromptPort => {
-    if (lifetime.isClosing()) throw new Error('harness is closing')
+    if (lifetime.isClosing()) throw new Error('harness server is closing')
     const service = context.get<AgentPromptPort>(agentPromptServiceKey)
     if (!service) throw new Error('agent prompt service is unavailable')
     return service
   }
   return {
     listAgents: () => {
-      if (lifetime.isClosing()) throw new Error('harness is closing')
+      if (lifetime.isClosing()) throw new Error('harness server is closing')
       return Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
     },
     openProject: path => currentProjects().openProject(path),
@@ -136,6 +137,11 @@ export function createHarnessFacade(context: Context, options: HarnessOptions, l
     onDirectoryBrowseRetired: listener => currentProjects().onDirectoryBrowseRetired(listener),
     listProjects: () => currentProjects().listProjects(),
     getProject: id => currentProjects().getProject(id),
+    getSessionDefaults: agentId => currentSessions().getSessionDefaults(agentId),
+    setSessionDefaults: (agentId, modelId, expectedRevision) => {
+      if (modelId !== null) validateSelectedModel(modelId, true)
+      return currentSessions().setSessionDefaults(agentId, modelId, expectedRevision)
+    },
     createSession: (projectId, agentId, modelId) => {
       if (modelId !== undefined) validateSelectedModel(modelId)
       return currentSessions().createSession(projectId, agentId, modelId)
@@ -184,14 +190,14 @@ export function createHarnessFacade(context: Context, options: HarnessOptions, l
   }
 }
 
-export interface HarnessInstallation {
-  readonly harness: Harness
+export interface HarnessServerCoreInstallation {
+  readonly api: HarnessServerApi
   /** Removes this installation only; application shutdown belongs to the host. */
   close(): Promise<void>
 }
 
-/** Installs only Harness components. Closing this handle leaves host-owned dependencies running. */
-export async function installHarness(context: Context, options: HarnessOptions): Promise<HarnessInstallation> {
+/** Installs only harness server core components. Closing this handle leaves host-owned dependencies running. */
+export async function installHarnessServerCore(context: Context, options: HarnessServerCoreOptions): Promise<HarnessServerCoreInstallation> {
   if (!Context.is(context) || context.root !== context) throw new TypeError('application root Context required')
   const fibers: Fiber[] = [], abort = new AbortController()
   let closing = false, shutdown: Promise<void> | undefined
@@ -200,22 +206,22 @@ export async function installHarness(context: Context, options: HarnessOptions):
     closing = true; abort.abort()
     shutdown = Promise.allSettled([...fibers].reverse().map(fiber => fiber.dispose())).then(results => {
       const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-      if (errors.length) throw new AggregateError(errors, 'Harness cleanup failed')
+      if (errors.length) throw new AggregateError(errors, 'harness server core cleanup failed')
     })
     return shutdown
   }
-  const lifetime: HarnessLifetime = { isClosing: () => closing, signal: abort.signal }
+  const lifetime: HarnessServerLifetime = { isClosing: () => closing, signal: abort.signal }
   try {
     // Prompt providers are available before their Agent consumers start.
-    for (const component of [...createHarnessPromptComponents(options), ...createHarnessAgentComponents(context, options, lifetime)]) {
+    for (const component of [...createHarnessServerPromptComponents(options), ...createHarnessServerAgentComponents(context, options, lifetime)]) {
       const fiber = context.installComponent(component)
       fibers.push(fiber)
       await fiber
       requireActive(fiber)
     }
-    return { harness: createHarnessFacade(context, options, lifetime), close }
+    return { api: createHarnessServerApi(context, options, lifetime), close }
   } catch (error) {
-    try { await close() } catch (cleanup) { throw new AggregateError([error, cleanup], 'Harness startup and cleanup failed') }
+    try { await close() } catch (cleanup) { throw new AggregateError([error, cleanup], 'harness server core startup and cleanup failed') }
     throw error
   }
 }

@@ -4,7 +4,7 @@
 
 ## 自动验证
 
-统一 Provider/Model 迁移与 Web 模型服务整理后的根 `npm run check` 通过：428 项测试中 426 项通过、0 项失败，2 项真实系统凭据测试按既有门控跳过。检查包含 TypeScript strict、完整构建、模块与 Harness/Web 行为测试。
+统一 Provider/Model 迁移与 Web 模型服务整理后的根 `npm run check` 通过：428 项测试中 426 项通过、0 项失败，2 项真实系统凭据测试按既有门控跳过。检查包含 TypeScript strict、完整构建、模块与 Anybox Harness/Web 行为测试。
 
 覆盖统一定义与来源身份、跨来源同名、多账号、用户模型归属外部 Provider、自动基础配置与独立参数预设、必要参数初始化、来源新增/移除、失败重试、来源/Key 并发、目标版本守卫、协议稍后注册、缓存先提交而定义提交失败、重启权威与等时间版本冲突，以及关闭等待已接纳定义和配置事务。JSON 转换保留全模态和价格档位，规范化内容版本不受 SQLite 字段顺序影响。
 
@@ -12,7 +12,7 @@
 
 Session 读取旧与 schema 2 快照，验证原 JSON、Session 选择和历史 Run 身份不改写。宿主在协议/目录注册之前完成中断的默认配置迁入，避免抢先自动生成其他选择 ID。Web 测试验证保存一个 Key 自动生成适用模型、多账号列表、不可用原因、来源移除仍保留运行、删除 Key 影响整组新执行、代理地址和会话选模，以及刷新断连/关闭清理。
 
-原生 Responses、Chat Completions、Anthropic、Gemini 和宿主 DeepSeek 行为保持：JSON/SSE、多工具续轮、签名和原生 ID 私有化、截断/取消/终态、参数校验、分页发现和 usage。测试使用临时 SQLite、内存 Vault、mock source/protocol 和本地 HTTP，不调用真实付费模型或用户工作区数据库。
+原生 Responses、Chat Completions、Anthropic 和 Gemini 行为保持：JSON/SSE、多工具续轮、签名和原生 ID 私有化、截断/取消/终态、参数校验、分页发现和 usage。测试使用临时 SQLite、内存 Vault、mock source/protocol 和本地 HTTP，不调用真实付费模型或用户工作区数据库。
 
 随包源数据与 SHA-256/provenance 保持，转换得到 225 个 Provider、8268 个模型。此次构建和测试不下载来源数据。
 
@@ -42,4 +42,4 @@ Session 读取旧与 schema 2 快照，验证原 JSON、Session 选择和历史 
 
 ## 验收边界
 
-执行支持文本、函数工具、流式输出和原生推理续轮；后续图片链路已对 Chat/DeepSeek 开放显式声明的图片输入，其他协议仍关闭。目录图片声明可成为已有配置的有效驱动能力，unknown/unsupported 需要显式修改；刷新不覆盖已有配置。音频、视频、embedding 等仍仅作为目录信息。真实 Provider 的付费调用、workspace Key 权限和系统凭据跨平台测试需在对应环境另行运行，默认两项平台凭据测试按现有门控跳过。
+执行支持文本、函数工具、流式输出和原生推理续轮；后续图片链路已对 Responses、Anthropic、Gemini、Chat Completions 开放显式声明的图片输入。目录图片声明与驱动实现共同决定有效能力，unknown/unsupported 需要显式修正；刷新不覆盖已有配置。当前 Web 只读展示能力，人工修正需停止所属执行设备的 Agent，在实际 [Models JSON 配置](harness-server-deployment.md#模型-json-配置)中修改，再重新启动；原生生成参数仍可在界面编辑。音频、视频、embedding 等仍仅作为目录信息。真实 Provider 的付费调用、workspace Key 权限和系统凭据跨平台测试需在对应环境另行运行，默认两项平台凭据测试按现有门控跳过。

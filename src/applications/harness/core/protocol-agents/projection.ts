@@ -1,214 +1,247 @@
 import type { JsonValue } from '@anybox/models'
-import { createHash } from 'node:crypto'
-import type { ProtocolCitation, ProtocolViewBlock, ProtocolViewExchange } from '../view/types.js'
+import type { PromptSnapshot } from '../prompt/domain.js'
+import type { ProtocolViewBlock, ProtocolViewExchange, ProtocolViewInput, ProtocolNativeState } from '../view/types.js'
+import { object, array, string, identity } from './projection-common.js'
+import { projectResponses, reduceResponses, responsesState } from './projection-responses.js'
+import { projectAnthropic, reduceAnthropic, anthropicState } from './projection-anthropic.js'
+import { projectChat, reduceChat, chatState } from './projection-chat.js'
+import { projectGemini, reduceGemini, geminiState } from './projection-gemini.js'
 
 interface ViewRecord { readonly id: string; readonly kind: string; readonly exchangeId?: string; readonly payload: JsonValue }
-type ObjectValue = Readonly<Record<string, unknown>>
-const object = (value: unknown): ObjectValue => value && typeof value === 'object' && !Array.isArray(value) ? value as ObjectValue : {}
-const array = (value: unknown): readonly unknown[] => Array.isArray(value) ? value : []
-const string = (value: unknown): string => typeof value === 'string' ? value : ''
-const identity = (value: string): string => value.length <= 256 ? value : 'display-' + createHash('sha256').update(value).digest('hex')
-const safeUrl = (value: unknown): string | undefined => {
-  if (typeof value !== 'string' || value.length > 8192) return undefined
-  try { const url = new URL(string(value)); return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : undefined } catch { return undefined }
-}
 
-function citations(value: unknown, text: string): readonly ProtocolCitation[] {
-  return array(value).slice(0, 128).flatMap(raw => {
-    const item = object(raw), url = safeUrl(item.url), start = item.start_index, end = item.end_index
-    if (!url) return []
-    // Citations without positional metadata (Messages) are attached at the end of their block.
-    const from = Number.isSafeInteger(start) && Number(start) >= 0 ? Number(start) : text.length
-    const to = Number.isSafeInteger(end) && Number(end) >= from ? Number(end) : from
-    if (to > text.length) return []
-    return [{ start: from, end: to, url, ...(typeof item.title === 'string' ? { title: item.title.slice(0, 512) } : {}) }]
+interface NativeInputText { readonly id: string; readonly role: 'system' | 'developer' | 'user'; readonly text: string }
+
+/** Read only protocol text positions. Image bodies, tool results and opaque continuation are excluded. */
+function inputText(content: unknown, textTypes: readonly string[], imageTypes: readonly string[] = []): string | undefined {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return undefined
+  const text = content.flatMap(value => {
+    const part = object(value)
+    return textTypes.includes(string(part.type)) && typeof part.text === 'string' ? [part.text] : []
   })
+  if (text.length) return text.join('\n\n')
+  return content.some(value => imageTypes.includes(string(object(value).type))) ? '' : undefined
 }
 
-function textBlock(id: string, value: unknown, kind: 'text' | 'reasoning' = 'text', annotations?: unknown): ProtocolViewBlock {
-  const text = string(value)
-  const links = citations(annotations, text)
-  return { id: identity(id), kind, text, ...(links.length ? { citations: links } : {}) }
-}
-
-function tool(id: string, item: ObjectValue, name: unknown, args?: unknown): Extract<ProtocolViewBlock, { kind: 'tool' }> {
-  return { id: identity(id), kind: 'tool', label: string(name) || 'Tool', status: string(item.status) || 'requested',
-    ...(typeof item.id === 'string' || typeof item.call_id === 'string' ? { requestId: string(item.call_id ?? item.id) } : {}),
-    ...(args === undefined ? {} : { detail: typeof args === 'string' ? args : JSON.stringify(args) }) }
-}
-
-/** Only explicitly selected display fields leave the server. Opaque recovery fields never do. */
-export function projectNativeResponse(protocolId: string, response: unknown): readonly ProtocolViewBlock[] {
-  const raw = object(response), blocks: ProtocolViewBlock[] = []
-  if (protocolId === 'responses') {
-    array(raw.output).forEach((value, index) => {
-      const item = object(value), id = string(item.id) || 'item-' + index
-      if (item.type === 'message') array(item.content).forEach((content, at) => {
-        const block = object(content)
-        if (block.type === 'output_text') blocks.push(textBlock(id + ':' + at, block.text, 'text', block.annotations))
-        else if (block.type === 'refusal') blocks.push({ id: id + ':' + at, kind: 'status', text: string(block.refusal) || 'Request refused' })
-        else blocks.push({ id: id + ':' + at, kind: 'status', text: 'Unsupported content block' })
-      })
-      else if (item.type === 'reasoning') array(item.summary).forEach((part, at) => blocks.push(textBlock(id + ':reasoning:' + at, object(part).text, 'reasoning')))
-      else if (item.type === 'function_call') blocks.push(tool(id, item, item.name, item.arguments))
-      else if (item.type === 'web_search_call') blocks.push({ id, kind: 'tool', label: 'Web search', status: string(item.status) || 'completed', detail: string(object(item.action).query) })
-      else blocks.push({ id, kind: 'status', text: 'Unsupported response item' })
+/** Historical Prompt kinds preserve system/context meaning even when a protocol merges their native roles. */
+export function projectNativeRequest(protocolId: string, request: unknown, prompts?: readonly PromptSnapshot[]): readonly ProtocolViewInput[] {
+  const raw = object(request), messages: NativeInputText[] = []
+  const append = (id: string, role: unknown, text: string | undefined) => {
+    if (text !== undefined && (role === 'system' || role === 'developer' || role === 'user')) messages.push({ id, role, text })
+  }
+  if (protocolId === 'responses' || protocolId === 'chat-completions') {
+    const content = protocolId === 'responses' ? raw.input : raw.messages
+    if (protocolId === 'responses' && typeof content === 'string') append('input-0', 'user', content)
+    else array(content).forEach((value, index) => {
+      const message = object(value)
+      append('input-' + index, message.role, inputText(message.content,
+        protocolId === 'responses' ? ['input_text'] : ['text'], protocolId === 'responses' ? ['input_image'] : ['image_url']))
     })
   } else if (protocolId === 'anthropic-messages') {
-    array(raw.content).forEach((value, index) => {
-      const block = object(value), id = 'block-' + index
-      if (block.type === 'text') blocks.push(textBlock(id, block.text, 'text', block.citations))
-      else if (block.type === 'thinking') blocks.push(textBlock(id, block.thinking, 'reasoning'))
-      else if (block.type === 'redacted_thinking') blocks.push({ id, kind: 'status', text: 'Private reasoning preserved' })
-      else if (block.type === 'tool_use') blocks.push(tool(id, block, block.name, block.input))
-      else if (block.type === 'server_tool_use') blocks.push({ ...tool(id, block, 'Web search', object(block.input).query), status: 'server' })
-      else if (block.type === 'web_search_tool_result') blocks.push({ id, kind: 'tool', label: 'Web search results', status: object(block.content).type === 'web_search_tool_result_error' ? 'failed' : 'completed' })
-      else blocks.push({ id, kind: 'status', text: 'Unsupported content block' })
+    append('system', 'system', inputText(raw.system, ['text']))
+    array(raw.messages).forEach((value, index) => {
+      const message = object(value)
+      append('input-' + index, message.role, inputText(message.content, ['text'], ['image']))
     })
-    if (raw.stop_reason === 'pause_turn') blocks.push({ id: 'pause', kind: 'status', text: 'Continuing server tool turn' })
   } else if (protocolId === 'gemini-interactions') {
-    array(raw.steps).forEach((value, index) => {
-      const step = object(value), id = 'step-' + index
-      if (step.type === 'model_output') array(step.content).forEach((part, at) => blocks.push(textBlock(id + ':' + at, object(part).text)))
-      else if (step.type === 'thought') array(step.summary).forEach((part, at) => blocks.push(textBlock(id + ':thought:' + at, object(part).text, 'reasoning')))
-      else if (step.type === 'function_call') blocks.push(tool(id, step, step.name, step.arguments))
-      else blocks.push({ id, kind: 'status', text: 'Unsupported interaction step' })
+    if (typeof raw.system_instruction === 'string') append('system', 'system', raw.system_instruction)
+    array(raw.input).forEach((value, index) => {
+      const step = object(value)
+      if (step.type === 'user_input') append('input-' + index, 'user', inputText(step.content, ['text'], ['image']))
     })
-  } else if (protocolId === 'chat-completions' || protocolId === 'deepseek-chat-completions') {
-    array(raw.choices).forEach((value, index) => {
-      const message = object(object(value).message), id = 'choice-' + index
-      if (typeof message.content === 'string') blocks.push(textBlock(id, message.content))
-      else array(message.content).forEach((part, at) => blocks.push(textBlock(id + ':' + at, object(part).text)))
-      if (message.refusal) blocks.push({ id: id + ':refusal', kind: 'status', text: string(message.refusal) })
-      array(message.tool_calls).forEach((value, at) => {
-        const call = object(value), fn = object(call.function)
-        blocks.push(tool(id + ':tool-' + at, call, fn.name, fn.arguments))
-      })
-    })
-  } else blocks.push({ id: 'unsupported', kind: 'status', text: 'Protocol display is unavailable' })
-  return blocks
+  } else return []
+
+  const initial = prompts?.filter(prompt => prompt.kind === 'agent-instruction' || prompt.kind === 'context') ?? []
+  const nativeInputs = (values: readonly NativeInputText[]): readonly ProtocolViewInput[] => values.map(message => ({
+    id: identity(message.id), role: message.role === 'user' ? 'user' : 'system', text: message.text }))
+  if (!initial.length) return nativeInputs(messages)
+  let appended: readonly NativeInputText[]
+  if (protocolId === 'responses' || protocolId === 'chat-completions') {
+    const hasInitial = messages.length >= initial.length && initial.every((prompt, index) =>
+      messages[index]?.role === prompt.role && messages[index]?.text === prompt.content)
+    if (!hasInitial) return nativeInputs(messages)
+    appended = messages.slice(initial.length)
+  } else {
+    const instructions = initial.filter(prompt => prompt.role !== 'user').map(prompt => prompt.content).join('\n\n')
+    const context = initial.filter(prompt => prompt.role === 'user')
+    const users = messages.filter(message => message.role === 'user')
+    const hasInitial = (instructions ? messages.some(message => message.role === 'system' && message.text === instructions) : users.length > context.length) &&
+      context.every((prompt, index) => users[index]?.text === prompt.content)
+    if (!hasInitial) return nativeInputs(messages)
+    appended = users.slice(context.length)
+  }
+  // Only classify prompts actually present in this delta. Descendants inherit them through their parent records.
+  return [...initial.map((prompt, index): ProtocolViewInput => ({ id: 'prompt-' + index,
+    role: prompt.kind === 'context' ? 'context' : 'system', text: prompt.content })), ...nativeInputs(appended)]
 }
 
-/** Bounded replacement frames keep slow subscribers independent from model execution. */
+/** Protocol-specific output and terminal state stay distinct from Run status. */
+export function projectNativeResponse(protocolId: string, response: unknown): readonly ProtocolViewBlock[] {
+  switch (protocolId) {
+    case 'responses': return projectResponses(response)
+    case 'anthropic-messages': return projectAnthropic(response)
+    case 'chat-completions': return projectChat(response)
+    case 'gemini-interactions': return projectGemini(response)
+    default: return [{ id: 'unsupported', type: 'harness.unsupported', text: 'Protocol display is unavailable' }]
+  }
+}
+export function projectNativeState(protocolId: string, response: unknown, diagnostic = false): ProtocolNativeState | undefined {
+  switch (protocolId) {
+    case 'responses': return responsesState(response, diagnostic)
+    case 'anthropic-messages': return anthropicState(response, diagnostic)
+    case 'chat-completions': return chatState(response, diagnostic)
+    case 'gemini-interactions': return geminiState(response, diagnostic)
+    default: return undefined
+  }
+}
+export function projectNativeExchange(protocolId: string, response: unknown, diagnostic = false): Pick<ProtocolViewExchange, 'blocks' | 'nativeState'> {
+  return { blocks: projectNativeResponse(protocolId, response), nativeState: projectNativeState(protocolId, response, diagnostic) }
+}
+
+function displayLength(block: ProtocolViewBlock): number {
+  if ('text' in block) return block.text.length
+  if ('arguments' in block) return block.arguments.length
+  if ('content' in block) return block.content.reduce((sum, part) => sum + part.text.length, 0)
+  if ('summary' in block) return block.summary.reduce((sum, part) => sum + part.text.length, 0)
+  return block.type === 'responses.web_search_call' ? (block.query?.length ?? 0) : 0
+}
+/** Clipping cannot change original offsets; clipped text drops positional citations. */
+function clipBlock(block: ProtocolViewBlock, budget: number): ProtocolViewBlock {
+  let remaining = budget
+  const clip = (text: string): string => {
+    const length = Math.max(0, Math.min(remaining, 16_000))
+    const value = length ? text.slice(-length) : ''
+    remaining -= value.length
+    return value
+  }
+  const id = identity(block.id)
+  if ('text' in block) {
+    const text = clip(block.text)
+    return { ...block, id, text, ...(block.type === 'anthropic.text' && text !== block.text ? { citations: [] } : {}) }
+  }
+  if ('arguments' in block) return { ...block, id, name: block.name.slice(0, 256), arguments: clip(block.arguments), ...(block.requestId ? { requestId: identity(block.requestId) } : {}) }
+  if (block.type === 'responses.message') return { ...block, id, content: block.content.slice(-128).reverse().map(part => {
+    const text = clip(part.text)
+    return { ...part, id: identity(part.id), text, ...(part.type === 'output_text' && text !== part.text ? { citations: [] } : {}) }
+  }).reverse() }
+  if (block.type === 'gemini.model_output') return { ...block, id, content: block.content.slice(-128).reverse().map(part => {
+    const text = clip(part.text)
+    return { ...part, id: identity(part.id), text, ...(text !== part.text ? { citations: [] } : {}) }
+  }).reverse() }
+  if ('summary' in block) return { ...block, id, summary: block.summary.slice(-128).reverse().map(part => ({ id: identity(part.id), text: clip(part.text) })).reverse() }
+  if (block.type === 'responses.web_search_call') return { ...block, id, ...(block.query !== undefined ? { query: clip(block.query) } : {}) }
+  if (block.type === 'anthropic.web_search_tool_result') return { ...block, id, ...(block.requestId ? { requestId: identity(block.requestId) } : {}) }
+  return { ...block, id }
+}
+function stripReferences(block: ProtocolViewBlock): ProtocolViewBlock {
+  if (block.type === 'responses.message') return { ...block, content: block.content.map(part => part.type === 'output_text' ? { ...part, citations: [] } : part) }
+  if (block.type === 'gemini.model_output') return { ...block, content: block.content.map(part => ({ ...part, citations: [] })) }
+  if (block.type === 'anthropic.text') return { ...block, citations: [] }
+  if (block.type === 'responses.web_search_call' || block.type === 'anthropic.web_search_tool_result') return { ...block, sources: [] }
+  return block
+}
+
+/** Bounded replacement frames keep slow subscribers independent from native execution. */
 export function boundProtocolView(exchanges: readonly ProtocolViewExchange[]): readonly ProtocolViewExchange[] {
   const retained = exchanges.filter(exchange => exchange.id !== 'display-limit')
-  let remaining = 48_000
-  let clipped = retained.length !== exchanges.length || retained.length > 63
+  let remaining = 48_000, clipped = retained.length !== exchanges.length || retained.length > 63
   const result: ProtocolViewExchange[] = []
-  // Reserve one exchange for the truncation marker, including after repeated streaming updates.
   for (const exchange of retained.slice(-63).reverse()) {
-    const blocks: ProtocolViewBlock[] = []
-    if (exchange.blocks.length > 128) clipped = true
-    const content = exchange.blocks.filter(block => block.id !== 'display-limit')
-    if (content.length !== exchange.blocks.length) clipped = true
+    const blocks: ProtocolViewBlock[] = [], inputs: ProtocolViewInput[] = []
+    const content = exchange.blocks.filter(block => block.type !== 'harness.display_limit')
+    if (content.length !== exchange.blocks.length || content.length > 128) clipped = true
     for (const block of content.slice(-128).reverse()) {
       if (remaining <= 0) { clipped = true; break }
-      const field = block.kind === 'tool' ? block.detail ?? '' : block.text
-      const text = field.slice(-Math.min(remaining, 16_000))
+      const bounded = clipBlock(block, remaining)
+      if (JSON.stringify(block) !== JSON.stringify(bounded)) clipped = true
+      remaining -= displayLength(bounded) + 128
+      blocks.unshift(bounded)
+    }
+    if ((exchange.inputs?.length ?? 0) > 128) clipped = true
+    for (const input of (exchange.inputs ?? []).slice(-128).reverse()) {
+      if (remaining <= 0) { clipped = true; break }
+      const text = input.text.slice(0, Math.max(0, Math.min(remaining, 16_000)))
       remaining -= text.length + 128
-      if (text.length !== field.length) clipped = true
-      const id = identity(block.id)
-      blocks.unshift(block.kind === 'tool' ? { ...block, id, label: block.label.slice(0, 256), status: block.status.slice(0, 64),
-        ...(block.requestId ? { requestId: identity(block.requestId) } : {}), detail: text } :
-        block.kind === 'status' ? { ...block, id, text } : { ...block, id, text, ...(text === field ? {} : { citations: [] }) })
+      if (text !== input.text) clipped = true
+      inputs.unshift({ id: identity(input.id), role: input.role, text })
     }
-    result.unshift({ id: identity(exchange.id), blocks })
+    result.unshift({ id: identity(exchange.id), ...(inputs.length ? { inputs } : {}), blocks, ...(exchange.nativeState ? { nativeState: exchange.nativeState } : {}) })
   }
-  // JSON escaping and citation URLs count against the byte budget too.
-  while (Buffer.byteLength(JSON.stringify(result), 'utf8') > 48 * 1024 - 256) {
+  const bytes = () => Buffer.byteLength(JSON.stringify(result), 'utf8')
+  if (bytes() > 48 * 1024 - 512) {
     clipped = true
-    const citedIndex = result.findIndex(exchange => exchange.blocks.some(block => (block.kind === 'text' || block.kind === 'reasoning') && block.citations?.length))
-    if (citedIndex >= 0) {
-      const cited = result[citedIndex]!
-      result[citedIndex] = { ...cited, blocks: cited.blocks.map(block => block.kind === 'text' || block.kind === 'reasoning' ? { ...block, citations: [] } : block) }
-      continue
-    }
-    const exchange = result.find(item => item.blocks.length)
-    if (!exchange) { result.shift(); continue }
-    const block = exchange.blocks[0]!
-    if (block.kind === 'text' || block.kind === 'reasoning') {
-      const half = Math.floor(block.text.length / 2)
-      if (half > 128) {
-        result[result.indexOf(exchange)] = { ...exchange, blocks: [{ ...block, text: block.text.slice(-half), citations: [] }, ...exchange.blocks.slice(1)] }
-        continue
-      }
-    }
-    const exchangeIndex = result.indexOf(exchange)
-    result[exchangeIndex] = { ...exchange, blocks: exchange.blocks.slice(1) }
-    if (!result[exchangeIndex]!.blocks.length) result.splice(exchangeIndex, 1)
+    for (let at = 0; at < result.length; at++) result[at] = { ...result[at]!, blocks: result[at]!.blocks.map(stripReferences) }
   }
-  if (clipped) result.unshift({ id: 'display-limit', blocks: [{ id: 'display-limit', kind: 'status', text: 'Earlier display content is truncated; complete native history is retained.' }] })
+  while (bytes() > 48 * 1024 - 512) {
+    clipped = true
+    const exchange = result[0]
+    if (!exchange) break
+    const block = exchange.blocks[0], exchangeIndex = 0
+    if (block) {
+      const length = displayLength(block)
+      result[exchangeIndex] = { ...exchange, blocks: length > 256 ? [clipBlock(block, Math.floor(length / 2)), ...exchange.blocks.slice(1)] : exchange.blocks.slice(1) }
+    } else if (exchange.inputs?.length) {
+      const input = exchange.inputs[0]!
+      result[exchangeIndex] = { ...exchange, inputs: input.text.length > 256 ? [{ ...input, text: input.text.slice(0, Math.floor(input.text.length / 2)) }, ...exchange.inputs.slice(1)] : exchange.inputs.slice(1) }
+    } else result.shift()
+  }
+  if (clipped) result.unshift({ id: 'display-limit', blocks: [{ id: 'display-limit', type: 'harness.display_limit', text: 'Some display content is truncated; complete native history is retained.' }] })
   return result
 }
 
-export function projectProtocolRecords(protocolId: string, records: readonly ViewRecord[]): readonly ProtocolViewExchange[] {
-  return boundProtocolView(records.filter(record => record.kind === 'response').map(record => ({
-    id: record.exchangeId ?? record.id, blocks: projectNativeResponse(protocolId, record.payload),
-  })))
+/** Read old native record versions without rewriting them; views always use the current schema. */
+export function projectProtocolRecords(protocolId: string, records: readonly ViewRecord[], prompts?: readonly PromptSnapshot[]): readonly ProtocolViewExchange[] {
+  const exchanges = new Map<string, ProtocolViewExchange>()
+  let firstRequest = true
+  for (const record of records) {
+    if (!['request', 'response', 'diagnostic'].includes(record.kind)) continue
+    const id = record.exchangeId ?? record.id, previous = exchanges.get(id)
+    if (record.kind === 'request') {
+      const inputs = projectNativeRequest(protocolId, record.payload, firstRequest ? prompts : undefined)
+      firstRequest = false
+      exchanges.set(id, { ...previous, id, ...(inputs.length ? { inputs } : {}), blocks: previous?.blocks ?? [] })
+    } else {
+      const projected = projectNativeExchange(protocolId, record.payload, record.kind === 'diagnostic')
+      exchanges.set(id, { ...previous, id, ...projected, blocks: projected.blocks.length ? projected.blocks : previous?.blocks ?? [] })
+    }
+  }
+  return boundProtocolView([...exchanges.values()])
 }
 
-/** Streaming state contains display fields only, never a second native continuation. */
 export function reduceNativeView(protocolId: string, previous: readonly ProtocolViewBlock[], event: unknown): readonly ProtocolViewBlock[] {
-  const raw = object(event), type = string(raw.type ?? raw.event_type), result = [...previous]
-  const upsert = (rawId: string, kind: 'text' | 'reasoning', delta: string, allowEmpty = false) => {
-    if (!delta && !allowEmpty) return
-    const id = identity(rawId)
-    const at = result.findIndex(block => block.id === id)
-    const old = at < 0 ? undefined : result[at]
-    const block = textBlock(id, (old && (old.kind === 'text' || old.kind === 'reasoning') ? old.text : '') + delta, kind)
-    if (at < 0) result.push(block); else result[at] = block
+  let blocks: readonly ProtocolViewBlock[]
+  switch (protocolId) {
+    case 'responses': blocks = reduceResponses(previous, event); break
+    case 'anthropic-messages': blocks = reduceAnthropic(previous, event); break
+    case 'chat-completions': blocks = reduceChat(previous, event); break
+    case 'gemini-interactions': blocks = reduceGemini(previous, event); break
+    default: blocks = previous
   }
-  const toolDelta = (rawId: string, name: string, args: string, requestId?: string) => {
-    const id = identity(rawId), at = result.findIndex(block => block.id === id), previous = result[at]
-    const old = previous?.kind === 'tool' ? previous : undefined
-    const block: ProtocolViewBlock = { id, kind: 'tool', label: (old?.label === 'Tool' ? '' : old?.label ?? '') + name || 'Tool',
-      status: 'preparing', detail: (old?.detail ?? '') + args, ...(requestId ? { requestId } : old?.requestId ? { requestId: old.requestId } : {}) }
-    if (at < 0) result.push(block); else result[at] = block
-  }
+  return boundProtocolView([{ id: 'stream', blocks }]).flatMap(exchange => exchange.blocks)
+}
+/** Stream state contains only safe display data, never a second native continuation. */
+export function reduceNativeExchange(protocolId: string, previous: ProtocolViewExchange, event: unknown): ProtocolViewExchange {
+  const raw = object(event), type = string(raw.type ?? raw.event_type)
+  let state = previous.nativeState
   if (protocolId === 'responses') {
-    const id = string(raw.item_id) || 'item-' + String(raw.output_index ?? 0)
-    if (type === 'response.output_text.delta') upsert(id + ':' + String(raw.content_index ?? 0), 'text', string(raw.delta))
-    if (type === 'response.reasoning_summary_text.delta') upsert(id + ':reasoning:' + String(raw.summary_index ?? 0), 'reasoning', string(raw.delta))
-    if (type === 'response.function_call_arguments.delta') toolDelta(id, '', string(raw.delta))
-    if (type === 'response.output_item.added') {
-      const item = object(raw.item)
-      if (item.type === 'function_call') result.push(tool(string(item.id) || id, item, item.name))
-      if (item.type === 'web_search_call') result.push({ id: identity(string(item.id) || id), kind: 'tool', label: 'Web search', status: 'running' })
-    }
+    if (raw.response !== undefined && type.startsWith('response.')) state = responsesState(raw.response)
+    else if (['response.in_progress', 'response.queued', 'response.failed', 'response.cancelled'].includes(type)) state = responsesState({ status: type.slice(9) })
   } else if (protocolId === 'anthropic-messages') {
-    const id = 'block-' + String(raw.index ?? 0), delta = object(raw.delta), block = object(raw.content_block)
-    if (type === 'content_block_start') {
-      if (block.type === 'text') upsert(id, 'text', string(block.text))
-      if (block.type === 'thinking') upsert(id, 'reasoning', string(block.thinking))
-      if (block.type === 'tool_use' || block.type === 'server_tool_use') result.push(tool(id, block, block.name))
-    }
-    if (type === 'content_block_delta' && delta.type === 'text_delta') upsert(id, 'text', string(delta.text))
-    if (type === 'content_block_delta' && delta.type === 'thinking_delta') upsert(id, 'reasoning', string(delta.thinking))
-    if (type === 'content_block_delta' && delta.type === 'input_json_delta') toolDelta(id, '', string(delta.partial_json))
-    if (type === 'message_delta' && delta.stop_reason === 'pause_turn') result.push({ id: 'pause', kind: 'status', text: 'Continuing server tool turn' })
-  } else if (protocolId === 'gemini-interactions') {
-    const id = 'step-' + String(raw.index ?? 0), step = object(raw.step), delta = object(raw.delta)
-    if (type === 'step.start' && step.type === 'model_output') array(step.content).forEach((part, at) => upsert(id + ':' + at, 'text', string(object(part).text), true))
-    if (type === 'step.start' && step.type === 'thought') array(step.summary).forEach((part, at) => upsert(id + ':thought:' + at, 'reasoning', string(object(part).text), true))
-    if (type === 'step.start' && step.type === 'function_call') result.push(tool(id, step, step.name))
-    if (type === 'step.delta' && delta.type === 'text') {
-      const content = result.filter(block => block.kind === 'text' && block.id.startsWith(id + ':'))
-      upsert(content.at(-1)?.id ?? id + ':0', 'text', string(delta.text))
-    }
-    if (type === 'step.delta' && delta.type === 'thought_summary') {
-      const at = result.filter(block => block.kind === 'reasoning' && block.id.startsWith(id + ':thought:')).length
-      upsert(id + ':thought:' + at, 'reasoning', string(object(delta.content).text))
-    }
-    if (type === 'step.delta' && delta.type === 'arguments_delta') toolDelta(id, '', string(delta.arguments))
-  } else {
-    array(raw.choices).forEach((value, index) => {
-      const delta = object(object(value).delta), id = 'choice-' + index
-      upsert(id, 'text', string(delta.content))
-      array(delta.tool_calls).forEach(value => {
-        const call = object(value), fn = object(call.function)
-        toolDelta(id + ':tool-' + String(call.index ?? 0), string(fn.name), string(fn.arguments), typeof call.id === 'string' ? call.id : undefined)
-      })
-    })
+    if (type === 'message_start') state = anthropicState(raw.message)
+    if (type === 'message_delta') state = anthropicState(raw.delta)
+  } else if (protocolId === 'chat-completions') {
+    if (array(raw.choices).some(choice => typeof object(choice).finish_reason === 'string')) state = chatState(raw)
+  } else if (protocolId === 'gemini-interactions' && type.startsWith('interaction.')) {
+    const native = object(raw.interaction), eventStatus = type === 'interaction.in_progress' ? 'in_progress' : type === 'interaction.requires_action' ? 'requires_action' : undefined
+    state = geminiState({ ...native, ...(typeof raw.status === 'string' ? { status: raw.status } : native.status === undefined && eventStatus ? { status: eventStatus } : {}) })
   }
-  return boundProtocolView([{ id: 'stream', blocks: result }]).flatMap(exchange => exchange.blocks)
+  const settled = (value: ProtocolNativeState): boolean => {
+    if (value.type === 'anthropic.state') return value.stopReason !== undefined
+    if (value.type === 'chat.state') return value.finishReason !== undefined
+    return ['completed', 'incomplete', 'failed', 'cancelled', 'requires_action', 'budget_exceeded'].includes(value.status ?? '')
+  }
+  if (state && previous.nativeState?.type === state.type) {
+    state = settled(previous.nativeState) && !settled(state) ? previous.nativeState : { ...previous.nativeState, ...state }
+  }
+  return { ...previous, blocks: reduceNativeView(protocolId, previous.blocks, event), ...(state ? { nativeState: state } : {}) }
 }

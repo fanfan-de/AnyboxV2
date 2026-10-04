@@ -97,6 +97,22 @@ test('normalization retains model connection overrides and does not invent reaso
   assert.throws(() => normalizeModelsDevCatalog({ p: { id: 'p', name: 'Missing models' } }), code('invalid-response'));
 });
 
+test('DeepSeek SDK metadata selects the installed standard Chat protocol without using provider identity or hostname', () => {
+  const input = raw(), endpoint = 'https://independent.invalid/v1/chat/completions';
+  input.p.npm = '@ai-sdk/deepseek'; input.p.api = endpoint;
+  const value = normalizeModelsDevCatalog(input), provider = value.providers[0], model = value.models[0];
+  assert.deepEqual(provider.connectionHints, { baseUrl: 'https://independent.invalid/v1', protocolIds: ['chat-completions'] });
+  assert.deepEqual(model.connectionHints.protocolIds, ['chat-completions']);
+  const installed = ['responses', 'chat-completions'].map(id => ({ id, name: id }));
+  const choices = resolveCatalogConnections(provider, installed, [], model);
+  assert.deepEqual(choices.map(choice => choice.values.protocolId), ['chat-completions']);
+  assert.equal(choices[0].values.baseUrl, 'https://independent.invalid/v1');
+  input.p.npm = '@ai-sdk/unknown'; input.p.api = 'https://api.deepseek.com';
+  const unknown = normalizeModelsDevCatalog(input);
+  assert.deepEqual(unknown.providers[0].connectionHints.protocolIds, []);
+  assert.deepEqual(resolveCatalogConnections(unknown.providers[0], installed), []);
+});
+
 test('connection templates use installed protocols and host catalog identities, with model overrides first', () => {
   const value = normalizeModelsDevCatalog(raw('Model', { provider: { api: 'https://alternate.invalid/v1', shape: 'responses' } }));
   const provider = value.providers[0], model = value.models[0];

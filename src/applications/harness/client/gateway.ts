@@ -14,13 +14,13 @@ export interface HarnessGateway { handle(request: IncomingMessage, response: Ser
 const id = '[^/]+'
 const paths: Record<string, readonly RegExp[]> = {
   GET: [ /^\/(instance|agents|projects|models|prompts|access\/tokens|changes)$/, /^\/products(?:\/[^/]+)?$/, new RegExp(`^/projects/${id}/sessions$`),
-    new RegExp(`^/agents/${id}/prompts$`), new RegExp(`^/prompts/${id}(/versions)?$`),
+    new RegExp(`^/agents/${id}/(prompts|session-defaults)$`), new RegExp(`^/prompts/${id}(/versions)?$`),
     new RegExp(`^/sessions/${id}(/runs(/by-key/${id})?|/nodes(/${id}(/path)?)?|/images/${id}/content|/project-files/(search|preview|snapshots/${id}))?$`),
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
     new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|connections|configurations)(/${id}(/(history|models))?)?$`) ],
   POST: [ /^\/(projects|sessions|prompts|access\/tokens)$/, /^\/products\/[^/]+\/(open|stop|retry)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
     /^\/projects\/directories\/(browse|close|create)$/,
-    new RegExp(`^/agents/${id}/prompts$`), new RegExp(`^/prompts/${id}(/publish)?$`),
+    new RegExp(`^/agents/${id}/(prompts|session-defaults)$`), new RegExp(`^/prompts/${id}(/publish)?$`),
     new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew|tree/(open|page|close)))$`), new RegExp(`^/runs/${id}/cancel$`),
     /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|connections|configurations)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`) ],
 }
@@ -94,7 +94,7 @@ import type { ApplicationHttpContext } from '../../../host/applications/registra
 import { productActivityServiceKey } from '../../../host/applications/contracts.js'
 import type { ProductActivityPort } from '../../../host/applications/contracts.js'
 
-/** Harness owns its connection requests and proxy operations; the listener belongs to the shell. */
+/** The Anybox Harness client owns connection requests and proxy operations; Anybox owns the listener. */
 export function createHarnessGateway(connections: ConnectionsPort, options: { localInstanceId?: string; picker?: DirectoryPickerPort; activity?: ProductActivityPort } = {}): HarnessGateway {
   let closing = false
   const tasks = new Map<AbortController, Promise<void>>()
@@ -118,7 +118,16 @@ export function createHarnessGateway(connections: ConnectionsPort, options: { lo
       if (method === 'GET') { json(response, 200, await connections.list()); return }
       if (method === 'POST') { const body = await requestObject(request, ['id', 'name', 'endpoint', 'token', 'expectedRevision']); json(response, 200, await connections.save(body as unknown as ConnectionInput, controller.signal)); return }
     }
-    if (method === 'GET' && url.pathname === '/api/client/v1/local') { json(response, 200, { instanceId: options.localInstanceId ?? null, picker: !!options.localInstanceId && !!options.picker?.supported }); return }
+    if (method === 'GET' && url.pathname === '/api/client/v1/local') {
+      const status = connections.localStatus?.()
+      const instanceId = status?.instanceId ?? options.localInstanceId ?? null
+      json(response, 200, { instanceId, picker: !!instanceId && !!options.picker?.supported, ...(status?.enabled ? { status } : {}) }); return
+    }
+    if (method === 'POST' && url.pathname === '/api/client/v1/local/retry') {
+      if (!connections.localStatus?.().enabled) throw failure(403, 'local-pairing-unavailable')
+      await requestObject(request, [])
+      json(response, 200, await connections.retryLocal(controller.signal)); return
+    }
     const action = /^\/api\/client\/v1\/connections\/([^/]+)\/(check|delete|pick)$/.exec(url.pathname)
     if (action && method === 'POST') {
       const connectionId = decodeURIComponent(action[1])
@@ -126,7 +135,8 @@ export function createHarnessGateway(connections: ConnectionsPort, options: { lo
       if (action[2] === 'check') { json(response, 200, await connections.check(connectionId, controller.signal)); return }
       if (action[2] === 'pick') {
         const connection = (await connections.list()).find(item => item.id === connectionId)
-        if (!connection || !options.localInstanceId || connection.instanceId !== options.localInstanceId || !options.picker?.supported) throw failure(403, 'picker-unavailable')
+        const localInstanceId = connections.localStatus?.().instanceId ?? options.localInstanceId
+        if (!connection || !localInstanceId || connection.instanceId !== localInstanceId || !options.picker?.supported) throw failure(403, 'picker-unavailable')
         expectedConnection(requestBinding(request), connection)
         const path = await options.picker.pick(controller.signal) ?? null
         const current = (await connections.list()).find(item => item.id === connectionId)
@@ -159,7 +169,7 @@ export function createClientGatewayComponent(options: { localInstanceId?: string
 }> {
   return { name: 'client-gateway', inject: [connectionsServiceKey, directoryPickerServiceKey, productActivityServiceKey], apply(ctx, _config, deps) {
     const gateway = createHarnessGateway(deps[connectionsServiceKey], { ...options, picker: deps[directoryPickerServiceKey], activity: deps[productActivityServiceKey] })
-    ctx.effect(() => () => gateway.close(), 'cancel and join Harness connection and proxy requests')
+    ctx.effect(() => () => gateway.close(), 'cancel and join Anybox Harness client connection and proxy requests')
     ctx.provide(clientGatewayServiceKey, gateway)
   } }
 }

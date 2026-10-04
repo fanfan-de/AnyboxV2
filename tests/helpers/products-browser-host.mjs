@@ -3,11 +3,11 @@ import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { createHarnessHost } from '../../dist/entrypoints/harness-main.js'
+import { createHarnessServer } from '../../dist/entrypoints/harness-server-main.js'
 import { createClientHost } from '../../dist/entrypoints/client-main.js'
 import { harnessClientApplication } from '../../dist/applications/harness/registration.js'
 import { testApplication } from './test-application.mjs'
-import { parseWebStartupConfig } from '../../dist/applications/harness/startup-config.js'
+import { parseHarnessServerConfig } from '../../dist/applications/harness/server-config.js'
 
 const directory = await mkdtemp(join(tmpdir(), 'anybox-products-browser-'))
 const secrets = new Map()
@@ -27,8 +27,8 @@ const stop = () => closing ??= (async () => {
 })()
 try {
   const project = join(directory, 'Example'); await mkdir(project)
-  const config = parseWebStartupConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'business.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
-  host = await createHarnessHost(config, { name: '本地测试 Agent', projects: [project], models: {
+  const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'business.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
+  host = await createHarnessServer(config, { name: '本地测试 Agent', projects: [project], models: {
     openEntry, catalogAutoRefresh: false, readLegacyCredential: async () => 'disposable-controlled-model-key',
     catalogFetch: async () => { throw new Error('Network is disabled in product acceptance') },
     fetch: async (_input, init) => {

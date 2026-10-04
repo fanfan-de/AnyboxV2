@@ -1,6 +1,6 @@
 import { validateSnapshotIds } from '../project-files/domain.js'
 import type { FileRef } from '../project-files/domain.js'
-/** Harness domain values and transitions are independent of Nya and providers. */
+/** harness server domain values and transitions are independent of Nya and providers. */
 import type { NativeModelSnapshot } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from './legacy-snapshot.js'
 import type { ProtocolBindingSnapshot, NativeRunInput, NativeInitialization, ProtocolRecord } from './program.js'
@@ -10,6 +10,7 @@ import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 import { nonEmpty } from '../validation.js'
 import type { ImageRef } from '../image/port.js'
 import { imageLimits } from '../image/limits.js'
+import type { PromptSnapshot } from '../prompt/domain.js'
 
 export type RunHistory =
   | { readonly kind: 'tree'; readonly parentNodeId: string | null }
@@ -94,6 +95,8 @@ export interface Run {
   readonly createdAt: string
   readonly updatedAt: string
   readonly promptVersionIds: readonly string[]
+  /** Accepted historical prompts; public transports expose only an explicit display projection. */
+  readonly promptSnapshots?: readonly PromptSnapshot[]
   readonly modelId: string | null
   /** The caller's explicit selection; null means Session/Agent defaults were resolved. */
   readonly requestedModelId: string | null

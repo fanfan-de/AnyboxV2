@@ -105,7 +105,7 @@ export function setupPromptSettings(
     if (roles.includes(preferred as PromptRole)) role.value = preferred
     hint.textContent = kind.value === 'task-template'
       ? '任务模板必须包含且只包含一个 {{input}}，运行时替换为用户消息。'
-      : '消息角色需与所用模型兼容；当前默认 DeepSeek 不支持 developer。'
+      : '消息角色需与所用模型及服务商 API 兼容。'
   }
   const updateControls = () => {
     const blocked = busy || !ready

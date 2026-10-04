@@ -79,6 +79,6 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 - [apply-patch-domain.test.mjs](../../../tests/apply-patch-domain.test.mjs)：语法、精确匹配、锚点/EOF、Unicode/BOM、换行、大文件匹配。
 - [apply-patch-component.test.mjs](../../../tests/apply-patch-component.test.mjs)：全部预检、跨项目队列、路径别名、并发外部编辑、部分提交、Move 事实、取消及清理失败。
 - [apply-patch-loop.test.mjs](../../../tests/apply-patch-loop.test.mjs)：混合工具顺序、失败后修正、参数预检、旧事件读取及在途补丁恢复为 interrupted。
-- [web-server.test.mjs](../../../tests/web-server.test.mjs)、[tool-trace.test.mjs](../../../tests/tool-trace.test.mjs)：浏览器补丁预览截断与部分/取消结果展示。
+- [harness-server-http.test.mjs](../../../tests/harness-server-http.test.mjs)、[tool-trace.test.mjs](../../../tests/tool-trace.test.mjs)：浏览器补丁预览截断与部分/取消结果展示。
 
 完整验收运行 `npm run check`。

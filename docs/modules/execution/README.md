@@ -15,19 +15,18 @@
 | [Chat Completions Agent](chat-completions-agent.md) | `harness-protocol-agent-chat-completions` | 注册标准 Chat 配对 |
 | [Anthropic Agent](anthropic-agent.md) | `harness-protocol-agent-anthropic-messages` | 注册 Messages 配对 |
 | [Gemini Agent](gemini-agent.md) | `harness-protocol-agent-gemini-interactions` | 注册 Interactions 配对 |
-| [DeepSeek Agent](deepseek-agent.md) | `harness-protocol-agent-deepseek-chat-completions` | 注册 DeepSeek 非推理配对，复用 Chat Loop |
 
-五个绑定组件由同一 `createProtocolAgentBindingComponent(protocolId)` 工厂创建，分别持有自己的注册和驱动代租约。`runResponses`、`runChat`、`runAnthropic`、`runGemini` 是协议循环函数，不是额外的 Nya 组件。Agent 定义是启动时验证的只读配置，也不是组件。
+四个绑定组件由同一 `createProtocolAgentBindingComponent(protocolId)` 工厂创建，分别持有自己的注册和驱动代租约。`runResponses`、`runChat`、`runAnthropic`、`runGemini` 是协议循环函数，不是额外的 Nya 组件。Agent 定义是启动时验证的只读配置，也不是组件。
 
 ## 依赖与装配
 
-[组合根](../../../src/applications/harness/core/index.ts) 在应用唯一的根 Context 上安装组件；没有 Harness 子 Context，也没有项目或任务 Context。它在尚无 `harness.protocol-agents` 服务时安装注册表，并为 `models.settings.protocols()` 已配置且本项目支持的协议安装绑定。
+[组合根](../../../src/applications/harness/core/index.ts) 在应用唯一的根 Context 上安装组件；没有 harness server 子 Context，也没有项目或任务 Context。它在尚无 `harness.protocol-agents` 服务时安装注册表，并为 `models.settings.protocols()` 已配置且本项目支持的协议安装绑定。
 
 - Run 注入 Session 两个端口、[Agent Prompt](../prompts/agent-prompts.md)、`models`、协议 Agent 注册表、RunRuntime 和 [Projects](../sessions/projects.md)。
 - RunRuntime 注入 `harness.session-runs`、[Bash](../tools/bash.md) 与 [Apply Patch](../tools/apply-patch.md)。它不解释原生协议状态。
 - 协议注册表注入 `models`、`models.protocols` 和 [Image Assets](../images/image-assets.md)；每个绑定注入协议注册表与 `models.protocols`。文件正文由 Run 经 Session 读取后传入注册表，注册表不直接依赖 Project Files。
 
-`apply` 只完成初始化和服务注册，不运行长期循环。组件使用本轮 `deps` 快照，通过 Effect 注册清理；Nya 负责依赖失效时的停止与重建。Harness 门面每次请求重新获取当前服务，避免跨组件重启缓存引用。
+`apply` 只完成初始化和服务注册，不运行长期循环。组件使用本轮 `deps` 快照，通过 Effect 注册清理；Nya 负责依赖失效时的停止与重建。harness server API 每次请求重新获取当前服务，避免跨组件重启缓存引用。
 
 ## 一次 Run 的完整流程
 
@@ -45,4 +44,4 @@
 
 新 Run 仅使用 `native-local-v1` 与 schemaVersion 3 模型快照。旧 `dialogue-v1` Session 只读；旧 Bash 事件、旧模型快照的兼容位于 Session 读取边界。浏览器展示来自有界白名单投影，不是原生恢复事实。凭据、认证头、运行句柄不进入历史；签名和原生续接数据只保留在受信记录中。
 
-[Harness 行为测试](../../../tests/harness.test.mjs)、[会话树测试](../../../tests/conversation-tree.test.mjs)、[原生协议测试](../../../tests/native-protocol-agents.test.mjs)、[原生 Session 测试](../../../tests/native-session.test.mjs) 和 [工具循环测试](../../../tests/tool-loop.test.mjs) 覆盖准入、交接、恢复、并发分支、取消、退出等待与事务失败。根目录的 `npm run check` 是统一验证入口。
+[harness server 核心行为测试](../../../tests/harness-server-core.test.mjs)、[会话树测试](../../../tests/conversation-tree.test.mjs)、[原生协议测试](../../../tests/native-protocol-agents.test.mjs)、[原生 Session 测试](../../../tests/native-session.test.mjs) 和 [工具循环测试](../../../tests/tool-loop.test.mjs) 覆盖准入、交接、恢复、并发分支、取消、退出等待与事务失败。根目录的 `npm run check` 是统一验证入口。

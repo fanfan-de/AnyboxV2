@@ -12,7 +12,7 @@ import { createDraftStore } from './draft-client.js'
 import type { ImageRef } from './client-types.js'
 import { createRunChangeClient } from './run-change-client.js'
 import { createSessionPanel } from './session-view.js'
-import type { SessionPanel } from './session-view.js'
+import type { SessionPanel, SessionScrollPosition } from './session-view.js'
 import { closePane, emptyWorkspace, fitRatios, fits, openSession, panes, parseRoute, ratioBounds,
   resizeSplit, restoreWorkspace, sessionHash, splitSession, separatorSize, waitForProjectSnapshot } from './workspace-layout.js'
 import type { Edge, LayoutNode, Pane, SessionRef, Size, Split, Workspace } from './workspace-layout.js'
@@ -20,6 +20,7 @@ import { createSidebarStateStore } from './sidebar-layout.js'
 import { setupSidebarLayout } from './sidebar-client.js'
 import { createFileSidebar, restoreFileSidebarSessionState } from './file-sidebar.js'
 import type { FilePreviewRequest } from './file-sidebar.js'
+import { createSessionMenu } from './session-menu.js'
 
 export const workspaceKey = 'anybox.web.workspace.v2'
 const storage: BrowserStorage = {
@@ -56,6 +57,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         if (!raw || typeof raw !== 'object' || !('viewNodeId' in raw) ||
             (raw.viewNodeId !== null && typeof raw.viewNodeId !== 'string')) continue
         const position: SessionPosition = { viewNodeId: raw.viewNodeId,
+          viewMode: 'viewMode' in raw && raw.viewMode === 'runs' ? 'runs' : 'dialogue',
           ...('focusedRunId' in raw && typeof raw.focusedRunId === 'string' ? { focusedRunId: raw.focusedRunId } : {}) }
         // Restoring a view never resumes an implicit follow; the user can choose the result explicitly.
         positions.set(id, position)
@@ -66,18 +68,18 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   let initialProjectsSettled = false, receivedProjects: readonly ProjectView[] = []
   let ready = false, compact = false, creating = false, pickerSupported = false
   let disposed = false
-  const collapsedProjects = new Set<string>()
   const projectGroups = new Map<string, HTMLElement>()
   const sessionIndex = createProjectSessionIndex(api, id => renderProjectSessions(id))
   let dropTarget: { id: string; edge: Edge } | undefined
   let resizeCleanup: (() => void) | undefined
   let dragCleanup: (() => void) | undefined, suppressClick = false
-  const bundles = new Map<string, { controller: SessionController; view?: SessionPanel; scroll: number }>()
+  const bundles = new Map<string, { controller: SessionController; view?: SessionPanel; scroll: SessionScrollPosition }>()
   const sessionLabels = new Map<string, string>()
   const multi = api as Partial<HarnessClient>
   const changes = multi.changes ? multi.changes({
     refresh(id) { bundles.get(id)?.controller.notifyChange() },
     view(snapshot) { bundles.get(snapshot.sessionId)?.controller.protocolView(snapshot) },
+    incompatibleView(sessionId, runId) { bundles.get(sessionId)?.controller.incompatibleView(runId) },
     connected(ids, value) { for (const id of ids) bundles.get(id)?.controller.setLive(value) },
   }) : createRunChangeClient({
     open(url, handlers) {
@@ -90,6 +92,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     },
     refresh(id) { bundles.get(id)?.controller.notifyChange() },
     view(snapshot) { bundles.get(snapshot.sessionId)?.controller.protocolView(snapshot) },
+    incompatibleView(sessionId, runId) { bundles.get(sessionId)?.controller.incompatibleView(runId) },
     connected(value) { for (const bundle of bundles.values()) bundle.controller.setLive(value) },
   })
   const splitElements = new Map<string, { node: Split; element: HTMLElement; separator: HTMLElement }>()
@@ -124,7 +127,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       if (archive) {
         const pane = panes(state.root).find(item => item.sessionId === id)
         if (pane) close(pane.id)
-        showNotice('会话已归档，可从“已归档会话”查看或恢复。')
+        showNotice('会话已归档，可从“设置 → 已归档会话”查看或恢复。')
       } else {
         await bundles.get(id)?.controller.refresh()
         showNotice('会话已恢复。')
@@ -155,6 +158,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   })
   const fileSidebar = createFileSidebar(get('agent--file-sidebar-content'), {
     api, messageFor,
+    projectLabel: ref => { const project = projects.find(item => item.id === ref.projectId); return project && [project.harnessName, project.name].filter(Boolean).join(' · ') },
     changed(sessionId, value) {
       if (disposed) return
       try { sidebarState.update(current => ({ ...current, perSession: { ...current.perSession, [sessionId]: value } })) }
@@ -192,6 +196,21 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     const next = splitSession(state, ref, target, edge, 'drop-preview')
     return next !== state && fits(next.root, size()) ? next : undefined
   }
+  const sessionMenu = createSessionMenu(get('agent--workspace-sidebar'), {
+    available(ref, action) {
+      if (action === 'archive') return !archiveWrites.has(ref.sessionId)
+      const active = activePane()
+      return !!active && !!candidate(ref, active.id, action)
+    },
+    select(ref, action) {
+      if (action === 'archive') {
+        void changeArchive(ref.sessionId, ref.projectId, true).catch(error => { if (!disposed) showNotice(messageFor(error)) })
+      } else if (state.activePaneId) {
+        selectProject(ref.projectId)
+        performSplit(ref, state.activePaneId, action)
+      }
+    },
+  })
 
   function refreshControls(): void {
     const navigation = sidebar()
@@ -230,10 +249,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         button.title = label
       }
     }
-    for (const button of projectList.querySelectorAll<HTMLButtonElement>('button[data-split-edge]')) {
-      button.disabled = !active || !candidate({ projectId: button.dataset.projectId!, sessionId: button.dataset.sessionId! }, active.id, button.dataset.splitEdge as Edge)
-    }
-    for (const button of projectList.querySelectorAll<HTMLButtonElement>('[data-archive-session]')) button.disabled = archiveWrites.has(button.dataset.archiveSession!)
+    sessionMenu.refresh()
     for (const button of tabs.querySelectorAll<HTMLButtonElement>('button')) {
       button.setAttribute('aria-pressed', String(button.dataset.paneId === state.activePaneId))
     }
@@ -265,8 +281,8 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     setWorkspace(closePane(state, id))
     const pane = activePane()
     const element = pane ? bundles.get(pane.sessionId)?.view?.element : undefined
-    const input = element?.querySelector<HTMLTextAreaElement>('textarea:not(:disabled)')
-    if (applicationActive) (input ?? element ?? get('agent--open-archive')).focus({ preventScroll: true })
+    const input = element?.querySelector<HTMLTextAreaElement>('.composer:not([hidden]) textarea:not(:disabled)')
+    if (applicationActive) (input ?? element ?? get('agent--toggle-sidebar')).focus({ preventScroll: true })
   }
 
   function getView(pane: Pane): SessionPanel {
@@ -293,7 +309,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
           if (item) { showNotice('会话不存在或不属于该项目，已从工作区移除。'); setWorkspace(closePane(state, item.id)) }
         },
       })
-      bundle = { controller, scroll: 0 }
+      bundle = { controller, scroll: { dialogue: 0 } }
       bundles.set(pane.sessionId, bundle)
     }
     if (!bundle.view) {
@@ -305,7 +321,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
           try {
             await changeArchive(pane.sessionId, pane.projectId, false)
             const element = bundles.get(pane.sessionId)?.view?.element
-            if (applicationActive) (element?.querySelector<HTMLElement>('textarea:not(:disabled)') ?? element)?.focus({ preventScroll: true })
+            if (applicationActive) (element?.querySelector<HTMLElement>('.composer:not([hidden]) textarea:not(:disabled)') ?? element)?.focus({ preventScroll: true })
           }
           catch (error) { if (!disposed) showNotice(messageFor(error)) }
         }, openFile)
@@ -391,7 +407,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       const empty = document.createElement('div')
       empty.className = 'workspace-empty empty-state'
       empty.innerHTML = `<svg class="empty-logo" aria-hidden="true" viewBox="0 0 128 128"><use href="#agent--anybox-mark"/></svg>
-        <h2>让想法，从这里开始</h2><p>选择一个执行设备上的项目，和 Anybox 一起完成工作。</p>
+        <h2>让想法，从这里开始</h2><p>选择一个执行设备上的项目，和 Anybox Harness 一起完成工作。</p>
         <div class="empty-actions"><button class="primary-button" type="button" data-create-session>新建会话</button><button type="button" data-add-project>添加项目</button></div>`
       host.append(empty)
     } else if (compact) {
@@ -425,6 +441,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   function renderProjectSessions(id: string): void {
     const group = projectGroups.get(id)
     if (!group) return
+    if (sessionMenu.reference()?.projectId === id) sessionMenu.close(true)
     const list = group.querySelector<HTMLElement>('.project-sessions')!
     const entry = sessionIndex.get(id)
     const focused = list.contains(document.activeElement) ? document.activeElement as HTMLElement : undefined
@@ -451,26 +468,13 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         time.title = date.toLocaleString('zh-CN')
       }
       button.append(name, time)
-      const menu = document.createElement('details')
-      menu.className = 'session-menu'
-      const summary = document.createElement('summary')
-      summary.textContent = '⋯'
-      summary.setAttribute('aria-label', `会话 ${(splitScopedId(item.id)?.id ?? item.id).slice(0, 8)} 的操作`)
-      menu.append(summary)
-      for (const [edge, text] of [['right', '在活动面板右侧打开'], ['bottom', '在活动面板下方打开']] as const) {
-        const action = document.createElement('button')
-        action.type = 'button'
-        action.textContent = text
-        action.dataset.splitEdge = edge
-        action.dataset.projectId = item.projectId
-        action.dataset.sessionId = item.id
-        menu.append(action)
-      }
-      const archive = document.createElement('button')
-      archive.type = 'button'; archive.textContent = '归档'
-      archive.dataset.archiveSession = item.id; archive.dataset.projectId = item.projectId
-      menu.append(archive)
-      row.append(button, menu)
+      const trigger = document.createElement('button')
+      trigger.type = 'button'; trigger.className = 'session-menu-trigger icon-button'; trigger.textContent = '⋯'
+      trigger.dataset.sessionMenu = item.id; trigger.dataset.projectId = item.projectId
+      trigger.setAttribute('aria-label', `会话 ${(splitScopedId(item.id)?.id ?? item.id).slice(0, 8)} 的操作`)
+      trigger.title = '会话操作'; trigger.setAttribute('aria-haspopup', 'menu')
+      trigger.setAttribute('aria-expanded', 'false'); trigger.setAttribute('aria-controls', sessionMenu.id)
+      row.append(button, trigger)
       return row
     }))
     if (!entry || entry.loading || entry.error || !entry.sessions.length) {
@@ -486,7 +490,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         list.append(retry)
       }
     }
-    if (focusedData) [...list.querySelectorAll<HTMLElement>('button, summary')]
+    if (focusedData) [...list.querySelectorAll<HTMLElement>('button')]
       .find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
     refreshControls()
   }
@@ -494,11 +498,12 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   function renderNavigation(): void {
     const visible = sidebar().projects
     for (const [id, group] of projectGroups) {
-      if (!visible.some(item => item.id === id)) { group.remove(); projectGroups.delete(id) }
+      if (!visible.some(item => item.id === id)) {
+        if (sessionMenu.reference()?.projectId === id) sessionMenu.close()
+        group.remove(); projectGroups.delete(id)
+      }
     }
     projectList.querySelector(':scope > .navigation-empty')?.remove()
-    projectList.querySelectorAll('.harness-heading').forEach(heading => heading.remove())
-    let previousInstance: string | undefined
     for (const item of visible) {
       let group = projectGroups.get(item.id)
       if (!group) {
@@ -507,14 +512,10 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         group.dataset.projectId = item.id
         group.setAttribute('aria-label', item.name)
         group.innerHTML = `<div class="project-row">
-          <button class="project-toggle" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg></button>
-          <button class="project-button" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-folder"/></svg><span class="project-copy"><span class="project-name"></span><small></small></span></button>
+          <button class="project-button" type="button"><span class="project-copy"><span class="project-name"></span><small></small></span></button>
           <button class="project-create icon-button" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-plus"/></svg></button>
         </div><div class="project-sessions navigation-list"></div>`
-        const toggle = group.querySelector<HTMLButtonElement>('.project-toggle')!
-        toggle.dataset.toggleProject = item.id
-        toggle.setAttribute('aria-label', `展开或收起 ${item.name} 的会话`)
-        toggle.setAttribute('aria-controls', `agent--project-sessions-${item.id}`)
+        group.querySelector('.project-button')!.setAttribute('aria-controls', `agent--project-sessions-${item.id}`)
         const create = group.querySelector<HTMLButtonElement>('.project-create')!
         create.dataset.createProjectSession = item.id
         create.setAttribute('aria-label', `在 ${item.name} 中新建会话`)
@@ -526,14 +527,9 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         projectList.append(group)
         renderProjectSessions(item.id)
       }
-      if (item.instanceId !== previousInstance && item.harnessName) {
-        const heading = document.createElement('h3'); heading.className = 'harness-heading'; heading.textContent = item.harnessName
-        projectList.append(heading); previousInstance = item.instanceId
-      }
       projectList.append(group)
       const button = group.querySelector<HTMLButtonElement>('.project-button')!
       group.setAttribute('aria-label', item.name)
-      group.querySelector('.project-toggle')!.setAttribute('aria-label', `展开或收起 ${item.name} 的会话`)
       group.querySelector('.project-create')!.setAttribute('aria-label', `在 ${item.name} 中新建会话`)
       group.querySelector<HTMLButtonElement>('.project-create')!.title = `在 ${item.name} 中新建会话`
       group.querySelector('.project-sessions')!.setAttribute('aria-label', `${item.name} 的会话`)
@@ -556,16 +552,23 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   function updateProjectExpansion(id: string): void {
     const group = projectGroups.get(id)
     if (!group) return
-    const expanded = !collapsedProjects.has(id)
-    group.querySelector('.project-toggle')!.setAttribute('aria-expanded', String(expanded))
+    const expanded = !sidebarState.read().collapsedProjects.includes(id)
+    if (!expanded && sessionMenu.reference()?.projectId === id) sessionMenu.close()
+    group.querySelector('.project-button')!.setAttribute('aria-expanded', String(expanded))
     group.querySelector<HTMLElement>('.project-sessions')!.hidden = !expanded
   }
 
-  function selectProject(id: string, write = true): void {
+  function setProjectExpanded(id: string, expanded: boolean): void {
+    if (sidebarState.read().collapsedProjects.includes(id) === !expanded) return
+    sidebarState.update(current => ({ ...current, collapsedProjects: expanded
+      ? current.collapsedProjects.filter(projectId => projectId !== id) : [...current.collapsedProjects, id] }))
+    updateProjectExpansion(id)
+  }
+
+  function selectProject(id: string, { write = true, expand = true }: { write?: boolean; expand?: boolean } = {}): void {
     if (!sidebar().projects.some(item => item.id === id)) return
     state = { ...state, sidebarProjectId: id }
-    collapsedProjects.delete(id)
-    updateProjectExpansion(id)
+    if (expand) setProjectExpanded(id, true)
     refreshControls()
     if (write) { persist(); if (!state.root) updateURL() }
   }
@@ -577,7 +580,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     if (waitForProjectSnapshot(parsed.projectId, receivedProjects, initialProjectsSettled)) return
     if (!projects.some(item => item.id === parsed.projectId)) { showNotice('项目不存在。'); updateURL(); return }
     if (parsed.sessionId) open({ projectId: parsed.projectId, sessionId: parsed.sessionId }, false)
-    else void selectProject(parsed.projectId)
+    else selectProject(parsed.projectId, { expand: false })
   }
 
   function clearDrop(): void {
@@ -594,12 +597,8 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('button') : null
     if (!button || button.disabled) return
     const data = button.dataset
-    if (data.archiveSession && data.projectId) {
-      void changeArchive(data.archiveSession, data.projectId, true).catch(error => { if (!disposed) showNotice(messageFor(error)) })
-    } else if (data.toggleProject) {
-      if (collapsedProjects.has(data.toggleProject)) collapsedProjects.delete(data.toggleProject)
-      else collapsedProjects.add(data.toggleProject)
-      updateProjectExpansion(data.toggleProject)
+    if (data.sessionMenu && data.projectId) {
+      sessionMenu.toggle(button, { projectId: data.projectId, sessionId: data.sessionMenu })
     } else if (data.createProjectSession) {
       createSession(data.createProjectSession)
     } else if (data.retryProject) {
@@ -607,9 +606,18 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     } else if (data.sessionId && data.projectId) {
       const ref = { projectId: data.projectId, sessionId: data.sessionId }
       selectProject(ref.projectId)
-      if (data.splitEdge && state.activePaneId) performSplit(ref, state.activePaneId, data.splitEdge as Edge)
-      else open(ref)
-    } else if (data.projectId) selectProject(data.projectId)
+      open(ref)
+    } else if (data.projectId) {
+      setProjectExpanded(data.projectId, sidebarState.read().collapsedProjects.includes(data.projectId))
+      selectProject(data.projectId, { expand: false })
+    }
+  }, options)
+  projectList.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+    const trigger = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('[data-session-menu]') : null
+    if (!trigger?.dataset.projectId || !trigger.dataset.sessionMenu) return
+    event.preventDefault(); event.stopPropagation()
+    sessionMenu.toggle(trigger, { projectId: trigger.dataset.projectId, sessionId: trigger.dataset.sessionMenu }, event.key === 'ArrowUp')
   }, options)
   tabs.addEventListener('click', event => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button[data-pane-id]')
@@ -749,6 +757,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     if (!applicationActive || host.clientWidth === 0 || host.clientHeight === 0) return
     const value = `${host.clientWidth}:${host.clientHeight}:${root.clientWidth <= 760}`
     if (value === observedSize) return
+    sessionMenu.close()
     observedSize = value
     const shouldCompact = root.clientWidth <= 760 || !fits(state.root, size())
     if (shouldCompact !== compact) renderLayout()
@@ -764,7 +773,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   renderLayout()
   pickerSupported = !!multi.directoryTarget?.()
   pickerStatus.hidden = pickerSupported
-  pickerStatus.textContent = pickerSupported ? '' : '请先添加 Harness 连接，再选择项目目录。'
+  pickerStatus.textContent = pickerSupported ? '' : '请先添加 harness server 连接，再选择项目目录。'
   refreshControls()
   const receiveProjects = (value: readonly ProjectView[]) => {
     if (disposed) return
@@ -789,7 +798,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     renderLayout()
     if (!waiting) route()
     renderNavigation()
-    if (navigation.selectedProjectId) selectProject(navigation.selectedProjectId, false)
+    if (navigation.selectedProjectId) selectProject(navigation.selectedProjectId, { write: false, expand: false })
     for (const item of projects) void sessionIndex.load(item.id)
     if (!waiting) { persist(); updateURL() }
   }
@@ -797,12 +806,13 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   void api<readonly ProjectView[]>('/projects').then(values => { initialProjectsSettled = true; receiveProjects(values) }).catch(error => showNotice(messageFor(error)))
   return {
     openSidebar: () => sidebarLayout.openLeft(),
-    closeSidebar: () => sidebarLayout.closeDrawers(),
+    closeSidebar: () => { sessionMenu.close(); sidebarLayout.closeDrawers() },
+    refreshArchive: () => archivePanel.activate(),
     setActive(active: boolean) {
       applicationActive = active
       sidebarLayout.setActive(active)
       fileSidebar.setVisible(active && !document.hidden && sidebarLayout.rightVisible())
-      if (!active) { void projectPicker.close(); dragCleanup?.(); resizeCleanup?.(); for (const menu of root.querySelectorAll<HTMLDetailsElement>('.session-menu[open]')) menu.open = false; return }
+      if (!active) { sessionMenu.close(); void projectPicker.close(); dragCleanup?.(); resizeCleanup?.(); return }
       if (disposed) return
       renderLayout()
       for (const bundle of bundles.values()) void bundle.controller.refresh()
@@ -811,6 +821,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     dispose() {
       unsubscribeRoute?.()
       disposed = true
+      sessionMenu.dispose()
       unsubscribeSidebar()
       sidebarLayout.dispose()
       changes.dispose()

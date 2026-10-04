@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { controlledModels } from './helpers/controlled-models.mjs'
 
@@ -19,7 +19,7 @@ async function host(file) {
     await root.installComponent(llm.component())
     await root.installComponent(createLocalSqliteComponent(file))
     await root.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
-    const harness = await createTestHarnessHost(root, { agents })
+    const harness = await createTestHarnessServerCore(root, { agents })
     return { harness, llm }
   } catch (error) { await root.fiber.dispose(); throw error }
 }
@@ -105,7 +105,7 @@ test('a new process settles an abandoned Run as interrupted without replaying it
   const file = join(directory, 'state.sqlite')
   const script = `
     import { Context } from '@nya/core'
-    import { createTestHarnessHost } from './tests/helpers/harness-host.mjs'
+    import { createTestHarnessServerCore } from './tests/helpers/harness-server-core.mjs'
     import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
     import { createImageAssetsComponent } from './dist/applications/harness/core/image/component.js'
     import { controlledModels } from './tests/helpers/controlled-models.mjs'
@@ -113,7 +113,7 @@ test('a new process settles an abandoned Run as interrupted without replaying it
     await root.installComponent(controlledModels().component())
     await root.installComponent(createLocalSqliteComponent(process.argv[1]))
     await root.installComponent(createImageAssetsComponent({ directory: (process.argv[1]) + ".images" }))
-    const harness = await createTestHarnessHost(root, { agents: [{ id: 'assistant', instructions: 'Shared instructions.', modelId: 'default' }] })
+    const harness = await createTestHarnessServerCore(root, { agents: [{ id: 'assistant', instructions: 'Shared instructions.', modelId: 'default' }] })
     const project = await harness.openProject(process.cwd())
     const session = await harness.createSession(project.id, 'assistant')
     const run = await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Maybe executed', idempotencyKey: 'original' })

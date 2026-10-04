@@ -90,11 +90,11 @@ Run 负责准入、取消和等待；RunRuntime 拥有交接后的 program、模
 
 v1–v4 历史迁移保留原行为：旧 `turns_json` 按数组顺序迁为单链，不根据相同文本或时间猜测来源 Run；旧快照 JSON、事件游标和歧义来源保持只读。v5 将迁移前所有 Session（包括旧空 Session）标记 `dialogue-v1`，禁止继续和修改模型，不导入到新原生会话。旧 profile/configVersion 和 v2 快照由专门的只读类型解释，不保留统一执行引擎。
 
-Chat/DeepSeek 的 v2 原生记录可以与旧 v1 文本记录混合恢复；v1 读取器拒绝伪装图片。整条父路径验证为无图片时才允许 imageInput false→true，其余兼容要求不变。图片只来自当前 Run 与指定成功父路径；编辑、重新生成及同父并发不混入兄弟引用。
+标准 Chat Completions 的 v2 原生记录可以与同协议的旧 v1 文本记录混合恢复；v1 读取器拒绝伪装图片。旧 DeepSeek 协议历史仅供查看，不能映射到标准 Chat 或续接执行。整条父路径验证为无图片时才允许 imageInput false→true，其余兼容要求不变。图片只来自当前 Run 与指定成功父路径；编辑、重新生成及同父并发不混入兄弟引用。
 
 上线前停止旧宿主、备份数据库及图片目录并确认排他所有权。正常构建和测试不修改工作区数据库。
 
-验证覆盖 `conversation-tree` 的并发／竞态／事务故障，`conversation-migration` 的旧样本不重写与迁移回滚，`native-session` 的首次协议绑定、不可变增量引用、Prompt 固定与模板一次应用、持久启动屏障，以及工具／Harness 测试的取消、实际退出、清理失败与无副作用重放。五协议端到端及 Web 展示验收另由原生协议集成测试和 Web 测试覆盖。
+验证覆盖 `conversation-tree` 的并发／竞态／事务故障，`conversation-migration` 的旧样本不重写与迁移回滚，`native-session` 的首次协议绑定、不可变增量引用、Prompt 固定与模板一次应用、持久启动屏障，以及工具／harness server 核心测试的取消、实际退出、清理失败与无副作用重放。四协议端到端及 Web 展示验收另由原生协议集成测试和 Web 测试覆盖。
 
 ## 会话归档
 

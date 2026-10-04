@@ -1,14 +1,14 @@
 # 项目目录选择
 
-[文档首页](README.md) · [Projects](modules/sessions/projects.md) · [Harness API](modules/web/web-frontend.md) · [客户端网关](modules/web/client-gateway.md)
+[文档首页](README.md) · [Projects](modules/sessions/projects.md) · [harness server API](modules/web/web-frontend.md) · [客户端网关](modules/web/client-gateway.md)
 
 ## 归属与权限
 
-点击“添加项目”时固定目标设备。组合启动器确认 `localInstanceId` 匹配且客户端平台支持原生选择器时，直接打开系统目录窗口；用户确认后立即向该固定目标登记路径，取消则结束本次流程。远程设备、本机身份未确认或原生能力检查未确认可用时，打开应用内目录对话框。文件系统操作发生在目标 Harness，浏览器只展示目录 DTO；应用内浏览的默认主目录由执行宿主传入 `node:os.homedir()`，不读取客户端主目录来推断远端路径。`HarnessOptions.projectDirectoryHome` 可供嵌入宿主和测试显式配置；未配置的旧嵌入调用继续登记项目，但不提供目录浏览。
+点击“添加项目”时固定目标设备。组合启动器确认 `localInstanceId` 匹配且客户端平台支持原生选择器时，直接打开系统目录窗口；用户确认后立即向该固定目标登记路径，取消则结束本次流程。远程设备、本机身份未确认或原生能力检查未确认可用时，打开应用内目录对话框。文件系统操作发生在目标 harness server，浏览器只展示目录 DTO；应用内浏览的默认主目录由执行宿主传入 `node:os.homedir()`，不读取客户端主目录来推断远端路径。`HarnessServerCoreOptions.projectDirectoryHome` 可供嵌入宿主和测试显式配置；未配置的旧嵌入调用继续登记项目，但不提供目录浏览。
 
 Projects 的内部目录提供方拥有浏览会话、目录句柄、扫描调度、子目录创建和过期回收，不注册额外 Nya 服务或创建数据库。浏览、新建文件夹和取消不登记项目；系统目录窗口确认或应用内“选择当前文件夹”才调用原有 `POST /projects {path}`。原生选择器只返回路径，登记由浏览器启动器使用已固定的目标完成，不再打开应用内对话框二次确认。Projects 再次 realpath、校验目录并按规范路径去重，目录别名继续复用同一项目 ID。
 
-权限以 Harness 进程的操作系统账户为准。设备令牌不是 root 权限，不自动提权或更改文件权限。项目目录是工具运行的相对路径基准，不是文件系统沙箱。应用内目录选择可浏览已有目录，并在已经成功加载的当前目录下新建一个子文件夹；不删除、移动或读取文件内容。
+权限以 harness server 进程的操作系统账户为准。设备令牌不是 root 权限，不自动提权或更改文件权限。项目目录是工具运行的相对路径基准，不是文件系统沙箱。应用内目录选择可浏览已有目录，并在已经成功加载的当前目录下新建一个子文件夹；不删除、移动或读取文件内容。
 
 ## API v1 与公开 DTO
 
@@ -23,7 +23,7 @@ Projects 的内部目录提供方拥有浏览会话、目录句柄、扫描调�
 
 `DirectoryPage` 包含 `browseId`、`page`、realpath 后的 `path`、`homePath`、可空 `parentPath`、服务端按目标操作系统生成的 `breadcrumbs: {name,path}[]`、`entries` 和可空 `nextPage`。目录条目为 `{name,path,kind:"directory"|"symlink",reason?}`；reason 表示不可进入的原因。没有文件内容、stat 内部对象、认证头或运行句柄。
 
-open 省略 path 时定位配置主目录。路径必须是目标操作系统的绝对路径，不展开 shell 表达式。无效主目录配置不阻止 Harness 启动；默认浏览时返回路径错误，用户仍可显式跳转到有效绝对路径。query 对名称作不区分大小写的子串筛选，showHidden 默认 false，隐藏目录指名称以点开头的目录。条件在会话中固定；切换条件必须关闭并新建会话。
+open 省略 path 时定位配置主目录。路径必须是目标操作系统的绝对路径，不展开 shell 表达式。无效主目录配置不阻止 harness server 启动；默认浏览时返回路径错误，用户仍可显式跳转到有效绝对路径。query 对名称作不区分大小写的子串筛选，showHidden 默认 false，隐藏目录指名称以点开头的目录。条件在会话中固定；切换条件必须关闭并新建会话。
 
 create 使用已加载首页的浏览会话确定父目录，不能提交任意父路径，也不能只预留会话后创建。会话保留规范路径与父目录身份，创建前重新确认目标；读到目录末尾并关闭枚举句柄后，未关闭或过期的会话仍可创建。name 必须是有效的单个目录名，不能包含路径分隔符、`.`、`..` 或其他非法名称；目标平台的文件系统权限仍需允许创建。每次只创建一层，不递归补齐路径、不复用同名目录，也不自动登记为项目。返回路径用于随后进入新目录，项目登记继续使用“选择当前文件夹”。
 
@@ -45,7 +45,7 @@ Projects Effect 停止准入、停止计时器、取消浏览并等待全部在�
 
 `project-directory-client.ts` 的启动器管理原生优先的流程、取消和实际退出等待，目录控制器管理应用内浏览状态和请求；`project-directory-view.ts` 管理 DOM、键盘和焦点。两者是客户端实现，不是 Nya 组件。HarnessClient 只负责网络与固定目标，Workspace 沿用现有登记成功后的项目导航刷新。
 
-打开时固定 `{connectionId,instanceId,revision,name}`。选择流程向本机网关发送 `X-Anybox-Expected-Instance-Id` 与 `X-Anybox-Connection-Revision`；网关使用同一次获取的连接租约比较后才允许上游请求。浏览器头不转发给 Harness，Bearer 与执行端实例头仍由网关生成。连接配置变化返回 `connection-changed`，不会向新地址登记原路径。旧客户端不发送这对头的请求继续兼容。
+打开时固定 `{connectionId,instanceId,revision,name}`。选择流程向本机网关发送 `X-Anybox-Expected-Instance-Id` 与 `X-Anybox-Connection-Revision`；网关使用同一次获取的连接租约比较后才允许上游请求。浏览器头不转发给 harness server，Bearer 与执行端实例头仍由网关生成。连接配置变化返回 `connection-changed`，不会向新地址登记原路径。旧客户端不发送这对头的请求继续兼容。
 
 对话框提供路径编辑、面包屑、上一级、主目录、筛选、隐藏目录开关、分页、重试、取消和“选择当前文件夹”。单击聚焦目录，双击或 Enter 进入；方向键、Home/End 移动焦点，Alt+↑ 返回父目录，路径栏 Enter 跳转，Escape 关闭并恢复触发按钮焦点。路径尚未跳转、导航失败、加载或身份失效时不能确认旧目录。失败保留输入、位置及筛选条件。
 
@@ -57,12 +57,12 @@ Projects Effect 停止准入、停止计时器、取消浏览并等待全部在�
 
 只有组合启动器确认 localInstanceId 匹配且平台支持的实例，才直接使用系统目录窗口，不按 hostname 判断本机。原生能力检查未确认可用时采用应用内流程；窗口已启动后的失败或路径登记失败通过工作区通知显示，不自动打开应用内对话框、不切换连接或向其他设备重试。系统窗口用户取消返回空结果，不登记项目，也不打开应用内对话框。界面停用或关闭时取消启动器并等待其本轮操作退出，忽略迟到结果；应用内浏览继续沿用自己的关闭和会话释放规则。
 
-缺少 `projects.browse` 的 API v1 实例显示升级说明和应用内手动绝对路径输入；缺少 `projects.create-directory` 时隐藏“新建文件夹”，已有目录浏览与登记继续可用。认证失败、连接中断、实例不匹配不会伪装成旧版本。真实目录浏览及新建能力均需要客户端、网关与目标 Harness 升级，不涉及数据迁移。
+缺少 `projects.browse` 的 API v1 实例显示升级说明和应用内手动绝对路径输入；缺少 `projects.create-directory` 时隐藏“新建文件夹”，已有目录浏览与登记继续可用。认证失败、连接中断、实例不匹配不会伪装成旧版本。真实目录浏览及新建能力均需要客户端、网关与目标 harness server 升级，不涉及数据迁移。
 
 ## 验证
 
 - [Projects 目录行为测试](../tests/project-directories.test.mjs)：目录事实、别名、筛选分页、容量、单层创建、名称与重名校验、认证归属、取消及实际清理。
-- [多实例与网关测试](../tests/remote-harness.test.mjs)：认证、实例、连接版本、白名单和登记隔离。
+- [多实例与网关测试](../tests/remote-harness-server.test.mjs)：认证、实例、连接版本、白名单和登记隔离。
 - [HarnessClient 测试](../tests/harness-client.test.mjs)：固定目标与网络身份边界。
 - [目录选择启动器与控制器测试](../tests/project-directory-client.test.mjs)：原生优先、取消不登记、固定目标提交、启动或登记失败不回退、关闭等待，以及应用内迟到响应、创建后进入、创建失败保留输入、关闭释放和旧版兼容。
 - [临时浏览器宿主](../tests/helpers/project-directories-browser-host.mjs)：真实认证接口、网关与临时目录，内存凭据；启动后输出测试 URL 和非秘密测试路径，stdin `stop-b` 可制造连接中断，`quit` 清理退出。

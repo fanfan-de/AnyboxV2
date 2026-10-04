@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Anybox · 动态架构图</title>
+  <style>
+    :root{--bg:#10131d;--surface:#171b28;--raised:#1d2232;--ink:#edf0f9;--muted:#a0a9c2;--line:#363d55;--cyan:#88deed;--amber:#f1bd77;--violet:#c0a2f3;--lime:#c3e68b;--rose:#f293be;--mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 var(--sans)}button,select,input{font:inherit}button,a,select,input{touch-action:manipulation}button,select{color:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.45}button:focus-visible,a:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--cyan);outline-offset:4px}a{color:var(--cyan);text-underline-offset:3px}button{appearance:none}button::-moz-focus-inner{border:0}
+    .terminal{max-width:1580px;margin:26px auto;border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:0 24px 80px #0005}
+    .windowbar{height:40px;display:flex;align-items:center;justify-content:center;background:#202434;border-bottom:1px solid var(--line);position:relative;color:var(--muted);font:11px var(--mono);letter-spacing:.025em}
+    .windowdots{position:absolute;left:18px;display:flex;gap:7px}.windowdots i{display:block;width:9px;height:9px;border-radius:50%;background:var(--rose)}.windowdots i:nth-child(2){background:var(--amber)}.windowdots i:nth-child(3){background:var(--lime)}
+    .head{padding:27px 32px 21px;display:flex;justify-content:space-between;gap:20px;align-items:center}.eyebrow{font:11px var(--mono);letter-spacing:.13em;color:var(--cyan)}h1{font:500 26px/1.3 var(--mono);letter-spacing:-.025em;margin:9px 0 7px}h1 span{color:var(--amber)}.subtitle{margin:0;color:var(--muted);font-size:12px}.headnote{text-align:right;font:11px/1.9 var(--mono);color:var(--muted)}.headnote strong{font-weight:400;color:var(--lime)}
+    .workspace{padding:0 32px 26px}.viewbar{display:flex;align-items:center;justify-content:space-between;gap:20px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:13px 0}.views{display:flex;flex-wrap:wrap;gap:6px}.view{padding:8px 12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--muted);font-size:12px}.view span{font:11px var(--mono);margin-right:7px;opacity:.65}.view[aria-pressed="true"]{color:var(--ink);border-color:#626b87;background:var(--raised)}.view[aria-pressed="true"] span{color:var(--amber);opacity:1}.legend{display:flex;gap:15px;flex-wrap:wrap;font:10px var(--mono);color:var(--muted)}.legend span{display:flex;gap:6px;align-items:center}.legend i{width:6px;height:6px;display:inline-block;background:var(--line)}.legend span:nth-child(2) i{background:var(--cyan)}.legend span:nth-child(3) i{background:var(--lime)}
+    .controls{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0 15px;flex-wrap:wrap}.scenario-field{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px}.scenario-field label{white-space:nowrap}.scenario-field select{border:1px solid var(--line);border-radius:4px;padding:7px 28px 7px 11px;background:var(--bg);max-width:100%}.transport{display:flex;gap:7px;align-items:center}.transport button{padding:7px 12px;min-height:34px;border:1px solid var(--line);border-radius:4px;background:transparent;font-size:12px}.transport .play{color:var(--bg);background:var(--cyan);border-color:var(--cyan);min-width:88px}.transport .play:hover{background:#b0edf6}.transport button:hover:not(:disabled):not(.play){background:var(--raised)}.speed{padding:7px;background:var(--bg);border:1px solid var(--line);border-radius:4px;font:11px var(--mono)}
+    .stage{display:grid;grid-template-columns:225px minmax(0,1fr);gap:28px}.rail{border-right:1px solid var(--line);padding:17px 21px 0 0;min-width:0}.rail-tag{font:11px var(--mono);color:var(--amber);letter-spacing:.12em}.rail h2{font-size:19px;font-weight:500;margin:8px 0 11px}.rail-summary{font-size:12px;color:var(--muted);margin:0}.rules{list-style:none;padding:0;margin:21px 0 24px;display:grid;gap:12px}.rules li{font-size:11px;color:var(--muted);padding-left:13px;border-left:1px solid #515b78}.rules strong{display:block;font-weight:500;color:var(--ink);margin-bottom:3px}.inspect{border-top:1px solid var(--line);padding-top:20px}.inspect .inspect-kicker{font:10px var(--mono);letter-spacing:.08em;color:var(--cyan)}.inspect h3{font-size:15px;font-weight:500;margin:7px 0 3px;overflow-wrap:anywhere}.inspect-type{font-size:11px;color:var(--muted);margin-bottom:15px}.inspect dl{margin:0;font-size:11px}.inspect dt{color:var(--muted);margin-top:12px}.inspect dd{margin:4px 0 0;overflow-wrap:anywhere;white-space:pre-line}.inspect-code{font:10px/1.6 var(--mono);overflow-wrap:anywhere}.source-links{display:grid;gap:7px;margin-top:7px}.source-links a{font:10px/1.6 var(--mono);overflow-wrap:anywhere}.inspect-footer{font-size:10px;color:var(--muted);margin-top:18px}
+    .diagram-panel{min-width:0}.diagram-heading{display:flex;justify-content:space-between;align-items:center;gap:15px;min-height:35px;color:var(--muted);font:10px var(--mono)}.diagram-heading strong{font-weight:400;color:var(--cyan);font:12px/1.5 var(--sans);max-width:62%;text-align:right}.diagram{position:relative;isolation:isolate;background-image:radial-gradient(#737e9919 .7px,transparent .7px);background-size:18px 18px;margin:1px 0 5px}.wires{position:absolute;inset:0;width:100%;height:100%;overflow:visible;z-index:1;pointer-events:none}.boundaries{position:absolute;inset:0;pointer-events:none;z-index:0}.boundary{position:absolute;border:1px solid #444c65;border-radius:5px;background:#252c3d18}.boundary[data-tone="cyan"]{border-color:#88deed40;background:#88deed04}.boundary[data-tone="violet"]{border-color:#c0a2f33c;background:#c0a2f304}.boundary[data-tone="amber"]{border-color:#f1bd7740;background:#f1bd7704}.boundary-label{position:absolute;top:7px;left:12px;font:10px var(--mono);color:var(--muted);max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.boundary-label b{font-weight:400;color:var(--ink);margin-right:9px}.boundary-label em{font-style:normal;color:var(--muted)}
+    .node{position:absolute;z-index:2;display:flex;flex-direction:column;align-items:stretch;text-align:left;height:97px;padding:11px 13px;border:1px solid #566079;background:#1b2030;border-radius:3px;transition:border-color .2s,background .2s,box-shadow .2s;min-width:0;color:var(--ink)}.node:hover{border-color:var(--muted);background:#232a3c}.node[data-kind="object"],.node[data-kind="data"]{border-style:dashed;background:#191d2a}.node[data-kind="external"]{background:#202334}.node.selected{box-shadow:0 0 0 2px #88deed30;border-color:var(--cyan)}.node.active{border-color:var(--flow-color,var(--cyan));background:color-mix(in srgb,var(--flow-color,var(--cyan)) 8%,#1b2030);box-shadow:0 0 20px color-mix(in srgb,var(--flow-color,var(--cyan)) 10%,transparent)}.node.visited:not(.active){border-color:#697952}.node-top{display:flex;align-items:center;justify-content:space-between;gap:5px;font:9px var(--mono);color:var(--muted);letter-spacing:.015em}.node-kind{white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}.node-status{flex-shrink:0}.node-status{display:flex;gap:4px;align-items:center;color:var(--cyan);font:9px var(--mono);white-space:nowrap}.node.active .node-status{color:var(--flow-color,var(--cyan))}.node.active .node-status:before{content:"";height:6px;width:6px;border:1px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin 1s linear infinite}.node.visited:not(.active) .node-status{color:var(--lime)}.node-title{font-size:14px;line-height:1.2;font-weight:500;margin:9px 0 5px;overflow-wrap:anywhere}.node-service{font:11px/1.35 var(--mono);color:var(--muted);overflow-wrap:anywhere}.node-service span{color:var(--cyan)}
+    .wire{fill:none;stroke:var(--line);stroke-width:1.2;stroke-linejoin:round;stroke-linecap:round}.wire.related{stroke:#6a7894;stroke-width:1.4}.wire.active{stroke:var(--flow-color,var(--cyan));stroke-width:2;filter:drop-shadow(0 0 4px #88deed28)}.packet{fill:var(--flow-color,var(--cyan));filter:drop-shadow(0 0 5px var(--flow-color,var(--cyan)))}.wire.completed{stroke:#576447}.diagram-caption{font:10px/1.5 var(--mono);color:var(--muted);padding:6px 0 12px}
+    .timeline{border-top:1px solid var(--line);padding-top:20px;margin-top:14px}.current-event{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:12px}.event-left{display:flex;align-items:center;gap:12px;min-width:0}.step-counter{font:11px var(--mono);color:var(--amber);white-space:nowrap}.event-title{font-size:14px;font-weight:500}.event-detail{font-size:12px;color:var(--muted);margin:5px 0 0 70px;min-height:20px}.event-status{font:10px var(--mono);color:var(--cyan);border:1px solid #88deed50;padding:3px 7px;white-space:nowrap}.scrubber{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;margin:15px 0 20px}.scrubber input{width:100%;accent-color:var(--cyan);margin:0;height:16px;cursor:pointer}.time-display{font:10px var(--mono);color:var(--muted);min-width:66px;text-align:right}.log{position:relative;padding:21px 17px 10px;border:1px solid var(--line);background:#10141f4d;min-height:136px}.log-caption{position:absolute;top:-9px;left:16px;background:var(--surface);padding:0 9px;font:10px var(--mono);color:var(--muted)}.log-lines{display:grid;gap:4px}.log-line{display:grid;grid-template-columns:65px 105px minmax(0,1fr);gap:12px;align-items:baseline;border:0;background:transparent;color:var(--muted);text-align:left;padding:3px 0;font:11px/1.5 var(--mono);width:100%}.log-line:hover{background:#69738a14}.log-line.current{color:var(--ink)}.log-time{color:#8993af}.log-owner{color:var(--cyan);overflow-wrap:anywhere}.log-message{overflow-wrap:anywhere}.empty-log{color:var(--muted);font:11px var(--mono)}
+    .foot{display:flex;justify-content:space-between;gap:15px;flex-wrap:wrap;padding-top:18px;font:10px var(--mono);color:var(--muted)}.prompt{color:var(--cyan)}.prompt b{font-weight:400;color:var(--rose)}.prompt span{color:var(--lime)}.foot a{color:var(--muted)}.kbd{border:1px solid var(--line);border-radius:2px;padding:1px 4px;font:10px var(--mono)}.screen-reader{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    [data-playing="false"] .node.active .node-status:before{animation-play-state:paused}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.node{transition:none}.node.active .node-status:before{animation:none}.packet{display:none}}
+    @media(max-width:1250px){.terminal{margin:14px}.workspace{padding:0 22px 22px}.head{padding:24px 22px 20px}.stage{grid-template-columns:200px minmax(0,1fr);gap:20px}.node{padding:11px 10px}.node-title{font-size:13px}.node-service{font-size:10.5px}.legend{display:none}}
+    @media(max-width:1050px){.stage{display:flex;flex-direction:column;gap:14px}.diagram-panel{order:0}.rail{order:1;border-right:0;border-top:1px solid var(--line);padding:20px 0 5px;display:grid;grid-template-columns:1fr 1fr;gap:24px}.rail-about{min-width:0}.inspect{border-top:0;border-left:1px solid var(--line);padding:0 0 0 24px}.rules{margin-bottom:0}.source-links{gap:4px}.headnote{display:none}.timeline{margin-top:18px}.node-service{font-size:10px}.node-title{font-size:14px}}
+    @media(max-width:600px){.terminal{margin:0;border-radius:0;border-left:0;border-right:0}.head{padding:21px 18px 18px}h1{font-size:22px}.workspace{padding:0 18px 20px}.windowbar{font-size:9px}.windowdots{left:13px}.viewbar{padding:10px 0}.views{gap:2px}.view{padding:8px}.view span{display:none}.controls{gap:12px;align-items:flex-start}.scenario-field{width:100%}.scenario-field select{flex:1;min-width:0}.transport{width:100%;justify-content:flex-start;flex-wrap:wrap}.transport button{padding:8px 10px;min-height:38px}.rail{display:block}.rules{margin:18px 0}.inspect{border-left:0;border-top:1px solid var(--line);padding:17px 0 0}.inspect dl{display:grid;grid-template-columns:62px 1fr;gap:8px}.inspect dt{margin:0}.inspect dd{margin:0}.log{padding:18px 10px 9px}.log-line{grid-template-columns:42px 76px minmax(0,1fr);gap:7px;font-size:10px}.event-left{gap:8px}.event-title{font-size:13px}.event-detail{margin-left:0;font-size:11px}.event-status{display:none}.foot{font-size:9px}.diagram-heading{font-size:9px}.diagram-caption{font-size:9px}.node{height:97px}.node-top{font-size:10px}.node-service{font-size:11px}.node-title{font-size:15px}.source-links a{font-size:11px}}
+  </style>
+</head>
+<body>
+  <main class="terminal" id="anybox-architecture">
+    <div class="windowbar"><span class="windowdots" aria-hidden="true"><i></i><i></i><i></i></span>~/AnyboxV2 — architecture / source walkthrough</div>
+    <header class="head">
+      <div><div class="eyebrow">ANYBOX V2 / NYA CORE</div><h1>Architecture <span>in motion.</span></h1><p class="subtitle">从应用宿主到原生协议，沿一次调用看清协作与资源归属。</p></div>
+      <div class="headnote">SOURCE SNAPSHOT <strong>2026-10-03</strong><br>源码导览 · 离线演示<br>一进程一根 / 五原生协议 / 三库分离</div>
+    </header>
+    <div class="workspace">
+      <nav class="viewbar" aria-label="架构视图"><div class="views">
+        <button class="view" type="button" data-view="host" aria-pressed="true"><span>01</span>宿主与设备</button>
+        <button class="view" type="button" data-view="run" aria-pressed="false"><span>02</span>Run 执行</button>
+        <button class="view" type="button" data-view="models" aria-pressed="false"><span>03</span>Models</button>
+        <button class="view" type="button" data-view="exit" aria-pressed="false"><span>04</span>取消与退出</button>
+      </div><div class="legend" aria-label="状态图例"><span><i></i>协作关系</span><span><i></i>当前步骤</span><span><i></i>已经过</span></div></nav>
+      <div class="controls">
+        <div class="scenario-field"><label for="scenario">演示路径</label><select id="scenario"></select></div>
+        <div class="transport" aria-label="演示播放控制"><button class="play" id="play" type="button">暂停</button><button id="previous" type="button" aria-label="上一步">← 上一步</button><button id="next" type="button" aria-label="下一步">下一步 →</button><button id="replay" type="button">重播</button><select class="speed" id="speed" aria-label="播放速度"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></div>
+      </div>
+      <div class="stage">
+        <aside class="rail" aria-label="组件与边界说明"><div class="rail-about"><div class="rail-tag" id="scene-index"></div><h2 id="scene-title"></h2><p class="rail-summary" id="scene-summary"></p><ul class="rules" id="scene-rules"></ul></div>
+          <section class="inspect" aria-label="所选节点详情"><div class="inspect-kicker">INSPECT / 点击节点查看</div><h3 id="inspect-title"></h3><div class="inspect-type" id="inspect-type"></div><dl id="inspect-fields"></dl><div class="source-links" id="inspect-sources"></div><div class="inspect-footer">顶栏标明组件、组件组、界面或外部资源；虚线表示内部对象或数据。分组仅表达边界。</div></section>
+        </aside>
+        <section class="diagram-panel" aria-label="动态架构关系图"><div class="diagram-heading"><span id="diagram-heading"></span><strong id="diagram-flow"></strong></div><div class="diagram" id="diagram"><div class="boundaries" id="boundaries"></div><svg class="wires" id="wires" aria-hidden="true"></svg><div id="nodes"></div></div><div class="diagram-caption" id="diagram-caption"></div></section>
+      </div>
+      <section class="timeline" aria-label="运行步骤时间线"><div class="current-event"><div style="min-width:0;flex:1"><div class="event-left"><span class="step-counter" id="step-counter"></span><span class="event-title" id="event-title"></span></div><p class="event-detail" id="event-detail"></p></div><span class="event-status" id="event-status"></span></div><div class="scrubber"><label class="screen-reader" for="timeline">选择演示步骤</label><input id="timeline" type="range" min="0" max="1000" value="0"><span class="time-display" id="time-display"></span></div><div class="log"><span class="log-caption">| architecture event log | 演示事件 · 非实时遥测</span><div class="log-lines" id="log"></div></div><div class="screen-reader" id="announcement" aria-live="polite"></div></section>
+      <footer class="foot"><span class="prompt">~/AnyboxV2 <b>$</b> <span>trace architecture</span> --source current-workspace</span><span><span class="kbd">Space</span> 播放 / 暂停 · <span class="kbd">← →</span> 单步 · <a href="anybox-dynamic-architecture.md">说明与源码依据</a></span></footer>
+    </div>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+    const root = document.getElementById('anybox-architecture');
+    const $ = id => root.querySelector('#' + id);
+    const source = (path, label) => ({path, label:label || path});
+    const core = 'src/applications/harness/core/';
+    const model = 'packages/models/src/';
+    const kindNames = {component:'Nya 组件',group:'Nya 组件组',object:'内部运行对象',data:'持久数据 / 投影',external:'外部资源',ui:'浏览器界面'};
+    function node(id, col, row, span, title, service, kind, fields, sources) { return {id,col,row,span,title,service,kind,fields,sources}; }
+    function edge(id, from, to, label, fromPort, toPort) { return {id,from,to,label,fromPort,toPort}; }
+    function boundary(title, note, members, tone) { return {title,note,members,tone}; }
+    function event(title, detail, owner, nodes, edges, status, duration) { return {title,detail,owner,nodes,edges,status:status || 'working',duration:duration || 2600}; }
+    const scenes = {};
+    // Scene definitions are an explanatory projection of the current source. Edges are
+    // handoffs/calls/ownership, not a second dependency graph or a running application.
+    const sessionNode = (col,row,span) => node('session',col,row,span,'Session','harness.sessions / session-runs','component',{
+      '组件':'harness-sessions','服务':'harness.sessions\nharness.session-runs','持有':'会话、完整节点、Run、事件、原生记录与恢复引用。','边界':'接受和成功结算使用业务库事务；只恢复所选成功父路径。失败、取消与 interrupted 不创建可继续节点。'
+    },[source(core+'session/component.ts'),source(core+'session/sqlite-records.ts')]);
+    const runNode = (col,row,span) => node('run',col,row,span,'Run / 准入与控制','harness.runs / run-admission','component',{
+      '组件':'harness-runs','服务':'harness.runs\nharness.run-admission','持有':'准备期间的 program、幂等查找、接受准入、取消和等待。','边界':'先返回已接受幂等结果，再读取当前配置；显式 parentNodeId。同步移交前由 Run 清理，接管后由 Runtime 清理。'
+    },[source(core+'run/component.ts'),source(core+'run/program.ts')]);
+    const runtimeNode = (col,row,span) => node('runtime',col,row,span,'RunRuntime','harness.run-runtime','component',{
+      '组件':'harness-run-runtime','服务':'harness.run-runtime','依赖':'harness.session-runs / tools.bash / tools.apply-patch','持有':'program、在途 OwnedCall、取消信号、操作登记与持久化屏障、有界临时展示。','边界':'同步接管；intent → 停止检查 → 同步启动登记 → result / done → observation。退出与清理完成后才结算。'
+    },[source(core+'run/runtime-component.ts')]);
+    const modelsNode = (col,row,span) => node('models',col,row,span,'Models / 协调服务','models · settings · protocols · source-data','component',{
+      '组件':'models','服务':'models / models.settings\nmodels.protocols / models.source-data','依赖':'models.store / models.vault','持有':'连接协调队列、协议注册代、租约、初始化与 execution。','边界':'四个端口属于一个组件。配置变化只影响新 execution；通用包不依赖 Anybox Harness、Session 或工具。'
+    },[source(model+'component.ts'),source('packages/models/README.md')]);
+    const registryNode = (col,row,span) => node('registry',col,row,span,'协议 Agent 注册与绑定','harness.protocol-agents + bindings ×4','group',{
+      '组件':'harness-protocol-agents\n四个 harness-protocol-agent-<protocolId> 绑定组件','服务':'harness.protocol-agents；绑定组件登记 driver / Loop 配对。','持有':'驱动代租约、program 准备和受管图片读取端口。','边界':'Responses、Anthropic、Chat、Gemini 各有协议 Loop；DeepSeek 作为 Provider 使用标准 Chat Loop。没有统一文本执行 API。'
+    },[source(core+'protocol-agents/registry.ts'),source(core+'protocol-agents/shared.ts')]);
+    const loopNode = (col,row,span) => node('loop',col,row,span,'原生协议 Loop','Responses / Anthropic / Chat / Gemini','object',{
+      '身份':'普通异步函数 · 非 Nya 组件','职责':'直接消费原生结果，解释工具调用、停止、拒绝、续轮和 pause_turn。','边界':'通过 RunHost 请求受管操作。Run / Runtime 不解释协议语义；DeepSeek 作为 Provider 使用标准 Chat Loop。'
+    },[source(core+'protocol-agents/responses.ts'),source(core+'protocol-agents/anthropic.ts'),source(core+'protocol-agents/chat.ts'),source(core+'protocol-agents/gemini.ts')]);
+    const executionNode = (col,row,span) => node('execution',col,row,span,'Native execution','private snapshot / Key / context','object',{
+      '身份':'运行期私有对象 · 非 Nya 组件','持有':'不可变模型/连接快照、一次读取的 Key、原生可变上下文和当前 exchange。','边界':'在受管 start 后读图并临时编码；公开 result 等待实际退出与上下文提交。凭据、认证头、base64 和运行句柄不进入历史。'
+    },[source(model+'execution.ts'),source(model+'resources.ts')]);
+    const providerNode = (col,row,span) => node('provider',col,row,span,'模型 Provider','native HTTP / streaming','external',{
+      '身份':'外部模型服务','协议':'Responses / Chat Completions\nAnthropic Messages / Gemini Interactions\nDeepSeek 等 Provider 使用标准 Chat','边界':'本地 execution 负责原生上下文。Responses / Gemini 使用 store:false，不依赖服务端会话续接。'
+    },[source(model+'protocols/responses.ts'),source(model+'protocols/anthropic-messages.ts'),source(model+'protocols/gemini-interactions.ts'),source(model+'protocols/chat-completions.ts')]);
+    const storageNode = (col,row,span) => node('storage',col,row,span,'业务 SQLite','local-storage · exclusive connection','component',{
+      '组件':'local-sqlite','服务':'local-storage','持有':'单实例排他连接、跨事务锁、迁移账本。','边界':'Session、Prompt、Projects、图片引用与文件快照共享业务连接，各组件登记自己的迁移域。Models 配置与目录缓存各有独立连接。'
+    },[source('src/storage/sqlite.ts'),source('src/storage/port.ts')]);
+
+    scenes.host = {
+      index:'01',code:'HOST / MULTI-INSTANCE',title:'宿主与设备',summary:'界面、连接代理与执行设备各有明确归属。沿请求去程和 SSE 回程，跨越两个独立服务进程。',
+      heading:'BROWSER → CLIENT ROOT → EXECUTION ROOT',caption:'箭头表示主要调用与交接；每个客户端 / 执行进程各一个 Nya 根。设备 B 只示意可选远端，不参与本次演示。',initial:'gateway',
+      rules:[['一个进程，一个根','harness server 能力安装在原根；Browser、项目与任务不创建子 Context。'],['连接固定到本次请求','固定 connection revision 与 instanceId，跨实例不重试。'],['按需装配','只有打开 Agent 才装配业务能力。浏览器切换或恢复位置不隐式启动设备。'],['客户端关闭边界','关闭界面或观察连接，已接受远端 Run 仍继续。']],
+      nodes:[
+        node('shell',0,0,5,'Anybox 浏览器外壳','src/host/web · #/apps/:appId','ui',{'身份':'原生 ESM 界面 · 无 Nya 根','持有':'应用入口、管理浮层、路由、sessionStorage 工作区与界面生命周期。','边界':'mount / setActive / canClose / dispose。右侧只提供挂载容器，布局由应用负责。'},[source('src/host/web/client.ts'),source('src/host/web/application-workspace.ts')]),
+        node('workspace',7,0,5,'Anybox Harness 工作区','projects / sessions / devices / split views','ui',{'身份':'Anybox Harness 浏览器入口 · 非 Nya 组件','职责':'执行设备、项目、会话树、Models/Prompt 设置、图片/文件附件和最多四个分屏。','边界':'既有会话保持设备归属；浏览器只接收白名单投影。界面位置不构成服务端全局 head。'},[source('src/applications/harness/web/harness-app.ts'),source('src/applications/harness/web/harness-client.ts')]),
+        node('clienthttp',0,1,3,'Client HTTP','app.client-http','component',{'组件':'app-client-http','服务':'app.client-http','依赖':'app.products / app.activity','职责':'客户端通用监听与 /api/client/v1/apps/:appId 分派；现行 Anybox Harness Browser 使用显式兼容代理地址。'},[source('src/host/client-http.ts'),source('src/host/client.ts')]),
+        node('connections',4,1,4,'设备连接','client.connections','component',{'组件':'client-connections','服务':'client.connections','依赖':'local-storage','持有':'本机连接元数据、版本、instanceId；令牌由客户端系统凭据保管。','边界':'一次 acquire 固定一代连接；改连接只影响后续请求。'},[source('src/applications/harness/client/connections.ts')]),
+        node('gateway',9,1,3,'同源网关','client.gateway','component',{'组件':'client-gateway','服务':'client.gateway','依赖':'client.connections / host.directory-picker / app.activity','职责':'白名单代理；固定地址、token、revision 和 instanceId，转发 HTTP 与 SSE。','边界':'首次异步调用前登记活动；不跨实例重试。Browser 不接触私有认证令牌。'},[source('src/applications/harness/client/gateway.ts')]),
+        node('clientlife',0,2,3,'客户端应用控制','app.products / app.activity','group',{'组件':'app-products / app-activity','服务':'app.products / app.activity','持有':'客户端应用目标、按 ID 串行控制、活动与停止 guard。','边界':'受信应用目录决定可安装能力。runtime 只登记安装归属，不复制 Nya 依赖图。'},[source('src/host/applications/component.ts'),source('src/host/applications/activity.ts'),source('src/applications/harness/client/runtime.ts')]),
+        node('clientdb',4,2,4,'客户端资源','local-storage + OS credential storage','external',{'组件':'local-sqlite；系统凭据是 Connections 内部提供方。','持有':'独立客户端业务库、连接元数据、应用目标与客户端令牌。','边界':'不共享执行设备的业务库、Models 库或模型 Key。'},[source('src/host/client.ts'),source('src/applications/harness/client/connections.ts')]),
+        node('picker',9,2,3,'目录选择器','host.directory-picker','component',{'组件':'host-directory-picker','服务':'host.directory-picker','职责':'本机目录选择，随客户端 Anybox Harness 安装归属关闭。','边界':'是实际组件；应用注册目录与安装 runtime helper 不是组件。'},[source('src/applications/harness/client/directory-picker.ts')]),
+        node('hosthttp',0,3,3,'执行端 HTTP / Access','host.http / host.access','group',{'组件':'host-application-api / host-access','服务':'host.http / host.access','职责':'摘要认证、instanceId 核对、通用 /api/v1/apps/:appId 分派。','边界':'首次异步读取前固定 handler 和活动租约；通用 HTTP 不导入 harness server 领域服务。'},[source('src/host/component.ts'),source('src/host/access.ts'),source('src/host/http-server.ts')]),
+        node('harnesshttp',4,3,4,'harness server HTTP / SSE','harness.http','component',{'组件':'harness-http','服务':'harness.http','职责':'会话、Run、模型、附件、投影与 SSE 业务接口。','边界':'请求同步捕获当前服务代。Run HTTP 租约延续到实际退出；关闭观察不取消已接受 Run。'},[source('src/applications/harness/http/harness-http.ts'),source('src/applications/harness/http/handler.ts')]),
+        node('execlife',9,3,3,'执行端应用控制','app.products / app.activity','group',{'组件':'app-products / app-activity','服务':'app.products / app.activity','持有':'本设备应用目标、按 ID 控制队列、活动与 Run guard。','边界':'本设备打开 Anybox Harness 时安装 Models、业务与协议组件；停止先检查忙碌，再提交目标和卸载。'},[source('src/host/execution.ts'),source('src/applications/harness/server-runtime.ts')]),
+        sessionNode(0,4,3),
+        node('harnesscore',4,4,4,'harness server 执行核心','Run → protocol Loop → RunRuntime','group',{'组件':'harness-runs / harness-run-runtime\nharness-protocol-agents 与五绑定\nProjects / Prompts / Image Assets / Project Files\nBash / Apply Patch','持有':'按真实资源与可替换边界拆分的业务能力。','边界':'同一执行根。Session 保存事实，Runtime 拥有运行资源，Loop 解释原生协议。'},[source('src/applications/harness/server-runtime.ts'),source(core+'index.ts')]),
+        modelsNode(9,4,3),
+        node('deviceb',0,5,3,'harness server B','independent instance / independent root','external',{'身份':'另一台执行设备 / 服务进程','持有':'自己的 Nya 根、instanceId、业务库、Models 库、目录缓存、项目与系统凭据。','边界':'可以通过另一个客户端连接访问；不与设备 A 跨实例共享或同步。'},[source('src/host/execution.ts'),source('docs/harness-server-deployment.md')]),
+        node('resources',4,5,8,'每个执行设备的独立资源','business SQLite / Models SQLite / catalog SQLite / images / OS Vault','external',{'身份':'执行根中各资源所有者独占的资源','归属':'业务库 → local-storage\nModels 配置库 → models.store\n目录缓存库 → models.catalog-cache\n图片目录 → harness.image-assets\n模型 Key → models.vault\n项目目录身份 → harness.projects','边界':'三套 SQLite 连接和路径不能相同；项目目录是相对路径基准，不是沙箱。'},[source('src/applications/harness/server-models.ts'),source('src/applications/harness/server-config.ts')])
+      ],
+      boundaries:[boundary('BROWSER','ESM 界面 · 无 Nya 根',['shell','workspace'],'cyan'),boundary('CLIENT HOST','本机进程 · 一个 Nya 根',['clienthttp','connections','gateway','clientlife','clientdb','picker'],'cyan'),boundary('harness server / A','执行进程 · 一个 Nya 根',['hosthttp','harnesshttp','execlife','session','harnesscore','models'],'amber')],
+      edges:[edge('mount','shell','workspace','mount(container, context)','right','left'),edge('open','shell','clientlife','打开客户端应用','left','left'),edge('browserrequest','workspace','clienthttp','HTTP / 当前连接','bottom','top'),edge('dispatch','clienthttp','gateway','应用分派','right','left'),edge('capture','gateway','connections','acquire / 固定连接代','left','right'),edge('clientstore','connections','clientdb','连接元数据'),edge('pick','gateway','picker','本机目录选择'),edge('install','clientlife','gateway','原根装配','right','left'),edge('remote','gateway','hosthttp','白名单代理 + 实例认证','left','top'),edge('route','hosthttp','harnesshttp','应用注册目录分派','right','left'),edge('enable','execlife','harnesscore','打开后装配','bottom','right'),edge('start','harnesshttp','harnesscore','startRun / waitRun'),edge('records','harnesscore','session','持久事实','left','right'),edge('modelcall','harnesscore','models','openNative','right','left'),edge('sse','harnesshttp','gateway','SSE / 白名单投影','right','right'),edge('render','gateway','workspace','更新工作区','top','bottom'),edge('own','models','resources','Models 资源所有权','bottom','top')],
+      sequences:[{label:'远端请求与 SSE 回程',tone:'var(--cyan)',events:[
+        event('打开应用，装配客户端能力','客户端 Products 在已有根中安装 Connections / Picker / Gateway；外壳挂载 Anybox Harness 界面。','app.products',['shell','clientlife','gateway','workspace'],['open','install','mount'],'install'),
+        event('提交显式父节点与本轮输入','Browser 使用所属设备连接；规范应用地址和注册的兼容地址由通用监听器分派。','browser',['workspace','clienthttp','gateway'],['browserrequest','dispatch'],'request'),
+        event('捕获连接版本和实例身份','Gateway 在首次异步调用前登记活动，acquire 一代连接并固定 revision、instanceId、地址和私有 token。','gateway',['gateway','connections'],['capture'],'capture'),
+        event('跨进程代理，认证与分派','白名单代理到设备 A。host.access 验证令牌摘要，host.http 核对 instanceId 并固定当前 handler。','host.http',['gateway','hosthttp'],['remote'],'authenticate'),
+        event('固定本请求的领域服务代','harness.http 接收业务请求；本次调用不跨组件重启或跨实例自动重试。','harness.http',['hosthttp','harnesshttp'],['route'],'dispatch'),
+        event('接受 Run，执行租约延续到退出','Run / Runtime 接管执行；HTTP 可先返回 running，活动租约留到 waitRun 的实际终态。','harness.runs',['harnesshttp','harnesscore','session','models'],['start','records','modelcall'],'accepted',3300),
+        event('临时流帧沿 SSE 回到界面','Run 的有界白名单投影通过 harness server SSE 和 Gateway 回到 Browser；流帧不是恢复事实。','SSE',['harnesshttp','gateway','workspace'],['sse','render'],'stream'),
+        event('退出后结算，刷新持久记录','实际资源退出后 Session 原子提交成功节点；Browser 从 Session 查询完整持久事实。','session',['harnesscore','session','workspace'],['records'],'settled',3200)
+      ]}]
+    };
+
+    scenes.run = {
+      index:'02',code:'HARNESS / RUN',title:'一次 Run 的协作',summary:'Run 负责准入，具体协议 Loop 解释原生结果，RunRuntime 管操作与退出，Session 保存持久事实。',
+      heading:'ACCEPT → HANDOFF → PERFORM → EXIT → SETTLE',caption:'全部 Nya 组件在同一执行根。协议 Loop、PreparedRunProgram 与 execution 是内部函数 / 对象，虚线卡片不代表新组件。',initial:'runtime',
+      rules:[['幂等优先','先查已接受请求；仅未命中才读取当前配置、Prompt 和附件。'],['运行期所有权移交','Runtime 首次异步读取前同步接管 program；移交前后的清理所有者不同。'],['操作先记录再启动','intent → 停止检查 → 同步登记 → 等待 result/done → observation。'],['成功节点的门槛','program、工具与所有调用退出且清理成功后，Session 才原子创建节点。']],
+      nodes:[
+        node('prompts',0,0,3,'Prompt / Agent Prompt','harness.prompts / agent-prompts','group',{'组件':'harness-prompts / harness-agent-prompts','服务':'harness.prompts / harness.agent-prompts','职责':'Prompt 草稿、发布版本和 Agent 绑定。','边界':'Session 首次接受固定初始化 instruction/context 与工具声明；当前 task-template 只处理本轮原始输入一次。AgentDefinition 是只读配置。'},[source(core+'prompt/component.ts'),source(core+'agent/prompt-binding-component.ts')]),
+        node('input',4,0,4,'本轮提交','parentNodeId / key / text / files / images','data',{'身份':'RunInput → NativeRunInput v3 / 本轮输入','内容':'显式可空 parentNodeId、幂等键、本轮原始输入、图片与文件资源引用。','边界':'重试、编辑或重新生成默认复用附件快照；刷新当前文件需显式操作。'},[source(core+'run/domain.ts'),source(core+'session/port.ts')]),
+        node('projects',9,0,3,'Projects','harness.projects','component',{'组件':'harness-projects','服务':'harness.projects','持有':'项目目录身份、可用性和目录浏览。','边界':'项目是数据归属，不是 Context 或文件系统沙箱。'},[source(core+'project/component.ts')]),
+        sessionNode(0,1,3),runNode(4,1,4),
+        node('assets',9,1,3,'图片与文件引用','image-assets / project-files','group',{'组件':'harness-image-assets / harness-project-files','服务':'harness.image-assets / harness.project-files','持有':'图片不可变原字节目录；文件内容保存在业务 SQLite 快照。','边界':'接受事务原子固定引用。失败、取消与 interrupted 仍保留已接受附件。文件服务不新开连接或目录。'},[source(core+'image/component.ts'),source(core+'project-files/component.ts')]),
+        storageNode(0,2,3),registryNode(4,2,4),modelsNode(9,2,3),
+        loopNode(0,3,3),runtimeNode(4,3,4),executionNode(9,3,3),
+        node('bash',0,4,3,'Bash','tools.bash','component',{'组件':'bash-tool','服务':'tools.bash','依赖':'harness.projects','持有':'命令进程、进程组、输出观察和实际退出等待。','边界':'取消必须等待真实进程与观察清理；项目目录仅作为相对路径基准。'},[source(core+'tool/bash-component.ts')]),
+        node('patch',4,4,4,'Apply Patch','tools.apply-patch','component',{'组件':'apply-patch-tool','服务':'tools.apply-patch','持有':'跨项目串行队列、全量预检、逐文件提交和临时资源。','边界':'只接受普通 UTF-8 文本；精确唯一匹配。取消不回滚已完成变更，changes / pending 反映事实。'},[source(core+'tool/apply-patch-component.ts'),source(core+'tool/apply-patch-domain.ts')]),
+        providerNode(9,4,3),
+        node('node',0,5,3,'成功节点 / 恢复链','node + context link + result reference','data',{'身份':'Session 持久数据 · 非独立组件','内容':'完整节点、结果引用、context 链节、原生记录与终态事件。','边界':'与 completed Run 同事务提交。只从所选成功父路径恢复，历史保留增量 intent 与前驱引用。'},[source(core+'session/sqlite-records.ts')]),
+        node('program',4,5,4,'PreparedRunProgram','execute(RunHost) / close() / lease','object',{'身份':'内部运行契约 · 非 Nya 组件','持有':'具体协议 Loop、独立 execution、撤销信号与驱动代租约。','边界':'Run 准备后交给 Runtime；close 等待运行资源退出并收集 records / checkpoint。租约最后释放。'},[source(core+'run/program.ts'),source(core+'protocol-agents/registry.ts')]),
+        node('projection',9,5,3,'浏览器安全投影','bounded run view / SSE','data',{'身份':'有界临时投影 · 非恢复记录','内容':'允许展示的模型帧、工具观察和 Run 状态。','边界':'不暴露签名、加密 continuation 或私有凭据；不能从临时流帧恢复执行。'},[source(core+'protocol-agents/projection.ts'),source(core+'run/runtime-component.ts')])
+      ],
+      boundaries:[boundary('PREPARE / ACCEPT','准入与持久事实',['prompts','input','projects','session','run','assets'],'amber'),boundary('OPERATE / EXIT','原生 Loop 与运行资源协作',['storage','registry','models','loop','runtime','execution','bash','patch','provider','node','program','projection'],'violet')],
+      edges:[edge('submit','input','run','显式 parentNodeId + key'),edge('dedupe','run','session','已接受幂等查询','left','right'),edge('prompt','prompts','run','本轮 task-template','bottom','top'),edge('project','run','projects','项目可用性 / 目录身份','right','left'),edge('readassets','run','assets','准备文件与图片引用','right','left'),edge('persistassets','session','assets','接受事务固定引用','bottom','bottom'),edge('prepare','run','registry','固定驱动代 / 准备 program'),edge('openmodel','registry','models','openNative','right','left'),edge('openexecution','models','execution','私有 execution'),edge('accept','run','session','事务复核 / 接受 Run','left','right'),edge('prepared','registry','run','返回 PreparedRunProgram'),edge('handoff','run','runtime','同步接管 program','left','top'),edge('dispatchloop','runtime','loop','RunHost / 原生 Loop','left','right'),edge('intent','runtime','session','intent / observation','left','right'),edge('exchange','runtime','execution','同步启动并登记','right','left'),edge('returned','execution','runtime','result / done · 实际退出','left','right'),edge('native','execution','provider','原生 HTTP'),edge('bashtool','runtime','bash','已知工具联合分派','bottom','top'),edge('patchtool','runtime','patch','已知工具联合分派'),edge('db','session','storage','业务库事务'),edge('close','runtime','program','close / 等待退出'),edge('programreturned','program','runtime','records / checkpoint / cleanup','top','bottom'),edge('settle','session','node','原子成功节点','left','left'),edge('view','runtime','projection','有界白名单投影','right','top')],
+      sequences:[{label:'成功：模型 → 工具 → 续轮 → 原子结算',tone:'var(--amber)',events:[
+        event('提交本轮输入和显式父节点','输入包含 parentNodeId、幂等键及稳定附件引用；同父节点可并发 Run。','input',['input','run'],['submit'],'request'),
+        event('先查询已接受幂等结果','未命中才继续准备；相同 key 输入不一致时拒绝。','harness.runs',['run','session'],['dedupe'],'check'),
+        event('解析项目、选模与本轮 Prompt','模型选择优先显式输入、Session 选择、Agent 默认；初始化复用 Session 已固定记录。','prepare',['run','prompts','projects','assets'],['prompt','project','readassets'],'prepare',3100),
+        event('固定协议驱动代，准备独立 execution','Registry 获取匹配 lease，Models 捕获不可变配置和一次读取的 Key；此时尚未发送模型请求。','registry',['run','registry','models','execution'],['prepare','openmodel','openexecution','prepared'],'lease',3200),
+        event('Session 原子接受 Run','事务再次复核归档、协议和父恢复引用；首次固定初始化，并永久保留图片与文件引用。','session',['run','session','assets','storage'],['accept','persistassets','db'],'commit',3400),
+        event('Runtime 同步接管 program','接管发生在首次异步读取前。现在由 Runtime 独占在途调用和退出清理。','runtime',['run','registry','runtime','loop'],['prepared','handoff','dispatchloop'],'handoff'),
+        event('先持久化本轮操作 intent','具体 Loop 编码增量请求；Runtime 将操作意图交给 Session，持久化失败立即关闭新操作准入。','perform',['runtime','loop','session'],['dispatchloop','intent'],'intent'),
+        event('检查停止，然后同步启动并登记','检查后不插入 await，登记 OwnedCall。execution 在受管 start 后读取图片原字节并临时编码。','perform',['runtime','execution','provider'],['exchange','native'],'start',3300),
+        event('等待真实退出，提交 observation','模型 transport / reader 退出且私有 context 提交后才返回公开 result；Runtime 还等待 done。','models',['execution','runtime','session','projection'],['returned','intent','view'],'observe',3500),
+        event('Loop 解释工具调用，Runtime 执行工具','直接注入 Bash / Apply Patch；没有动态工具注册中心。真实工具结果通过 Session 记录。','tools',['loop','runtime','bash','patch','session'],['dispatchloop','bashtool','patchtool','intent'],'tool',3400),
+        event('增量续轮，然后等待 program 退出','Loop 只提交新增消息与原生工具结果。完成后停止新操作并等待调用、工具和 program.close()。','exit',['runtime','execution','provider','program'],['exchange','native','close'],'join',3400),
+        event('一个事务提交 completed 和完整成功节点','Session 同时保存终态、原生记录、context 链节、结果引用和事件；最后释放驱动代租约。','session',['runtime','program','session','storage','node'],['programreturned','intent','db','settle'],'settled',3600)
+      ]},{label:'幂等重试：直接返回已接受 Run',tone:'var(--lime)',events:[
+        event('使用相同幂等键重试提交','提交输入与原请求一致；Run 优先检查已接受记录。','input',['input','run'],['submit'],'retry'),
+        event('Session 找到已接受 Run','只比较已保存输入，不解析当前 Prompt、模型配置或读取新附件。','harness.runs',['run','session'],['dedupe'],'matched'),
+        event('返回同一个 Run，不重放副作用','已有 Run 继续原本的执行或返回既有终态；不重新创建 execution，不再次执行工具。','session',['session','run'],['dedupe'],'returned',3500)
+      ]}]
+    };
+
+    scenes.models = {
+      index:'03',code:'MODELS / NATIVE',title:'Models 与原生协议',summary:'通用 Models 独立于 Anybox Harness。配置与凭据决定新的 execution，可选公开目录只刷新定义和缺失基础配置。',
+      heading:'CONFIG / VAULT · NATIVE EXECUTION · OPTIONAL CATALOG',caption:'这是同一执行根中的协作分组。Provider / Model / Connection / Configuration 是数据；execution 是私有对象。目录不是模型执行的实时依赖。',initial:'models',
+      rules:[['一个组件，四个端口','models / settings / protocols / source-data 由同一个 models 组件提供。'],['三套独占 SQLite','Models 配置、目录缓存与 harness server 业务库各有独占连接与路径。'],['凭据留在私有边界','OS Vault 一次读取 Key，后续续轮复用 execution；没有明文文件或 SQLite 回退。'],['目录只补缺失配置','刷新不改已有参数、模型选择、连接地址、Key 或在途 execution。']],
+      nodes:[
+        node('store',0,0,3,'Models 配置存储','models.store','component',{'组件':'models-store','服务':'models.store','持有':'Provider/Model 定义、ProviderConnection、ModelConfiguration、版本/CAS、historyScopeEpoch 与凭据操作日志。','边界':'独占 Models 配置 SQLite。只保存 Key 引用；协议参数是版本化 JSON，未知扩展保留待迁移。'},[source(model+'store.ts'),source(model+'types.ts')]),
+        modelsNode(4,0,4),
+        node('vault',9,0,3,'系统凭据 Vault','models.vault','component',{'组件':'models-vault','服务':'models.vault','持有':'系统凭据 namespace、槽位操作与串行队列。','边界':'macOS Keychain / Windows Credential Manager / Linux Secret Service。不可用则报告固定错误，禁止明文或数据库回退。'},[source(model+'vault.ts')]),
+        registryNode(0,1,3),executionNode(4,1,4),
+        node('drivers',9,1,3,'四种原生协议驱动','registered in models.protocols','group',{'组件':'models-protocol-responses\nmodels-protocol-chat-completions\nmodels-protocol-anthropic-messages\nmodels-protocol-gemini-interactions','职责':'原生 codec、传输、stream reader 与 context commit；驱动 2.1.0 / record v2，双读旧文本 v1。','边界':'四种通用协议均在 packages/models；DeepSeek 使用标准 Chat。SDK 标签只是目录数据，不动态加载实现。'},[source(model+'protocols/shared.ts'),source(model+'protocols/chat-completions.ts')]),
+        runtimeNode(0,2,3),loopNode(4,2,4),providerNode(9,2,3),
+        node('catalog',0,3,3,'目录调度','models.catalog','component',{'组件':'models-catalog','服务':'models.catalog','依赖':'models.catalog-source / models.catalog-cache / models.source-data','持有':'计时器、刷新控制器、启动来源选择、接纳和关闭等待。','边界':'已有接纳来源优先，随后有效缓存或验证 provenance / SHA-256 的快照；24 小时后台刷新，失败 1 小时重试。'},[source(model+'catalog.ts'),source(model+'catalog-builtin.ts')]),
+        node('source',4,3,4,'公开目录来源','models.catalog-source','component',{'组件':'models-catalog-source','服务':'models.catalog-source','持有':'匿名 HTTP 请求与 reader，完整模态元数据归一化。','边界':'https://models.dev/api.json?type=all；ETag / If-None-Match，Catalog 默认设置 30 秒获取超时；不携带模型连接 Key。'},[source(model+'catalog-source.ts')]),
+        node('public',9,3,3,'models.dev','anonymous catalog / ETag','external',{'身份':'公开来源数据 · 非模型执行 Provider','职责':'提供统一目录与模态/能力/参数建议。','边界':'来源 ID 不替代本地连接 ID；不按 hostname 猜协议。未知协议、其他模态与弃用项展示不可用原因。'},[source(model+'catalog-domain.ts'),source(model+'catalog-source.ts')]),
+        node('cache',0,4,3,'目录缓存','models.catalog-cache','component',{'组件':'models-catalog-cache','服务':'models.catalog-cache','持有':'独立缓存 SQLite、快照、ETag 与 checkedAt。','边界':'初始化失败可报告并采用内存后备；此后备不改变 Vault 的要求。缓存写入可为失败后的接纳重放保留来源。'},[source(model+'catalog-cache.ts')]),
+        node('modeldb',4,4,4,'Models 配置库','definitions / connections / configurations','external',{'身份':'models.store 独占 SQLite 文件','数据':'模型定义、稳定内部 ID 与来源版本；连接固定协议和 Key 引用；执行配置固定远端 ID、定义版本、能力和参数。','边界':'来源删除标记 missing、保留历史，已有执行配置仍可用；每对连接/定义至多一个 baseline，适用且连接可用时补齐。'},[source(model+'store.ts')]),
+        node('cachedb',9,4,3,'目录缓存库','models-catalog.sqlite','external',{'身份':'models.catalog-cache 独占 SQLite 文件','边界':'默认位于 Models 配置库旁，但使用不同文件与连接。普通构建和测试不下载公开目录。'},[source(model+'catalog-cache.ts'),source('src/applications/harness/server-config.ts')])
+      ],
+      boundaries:[boundary('CONFIGURATION','服务、定义与凭据',['store','models','vault'],'violet'),boundary('NATIVE EXCHANGE','harness server / Models 协作 · 内部对象标为虚线',['registry','execution','drivers','runtime','loop','provider'],'violet'),boundary('CATALOG / OPTIONAL','独立刷新路径 · 执行不经过',['catalog','source','public','cache','modeldb','cachedb'],'cyan')],
+      edges:[edge('config','models','store','连接协调 / 配置快照','left','right'),edge('key','models','vault','一次读取 Key','right','left'),edge('acquire','registry','models','固定 driver generation','top','bottom'),edge('create','models','execution','openNative / private snapshot'),edge('executionclose','runtime','execution','execution.close / join','right','left'),edge('loopprepare','loop','execution','prepareExchange / 只准备','top','bottom'),edge('intent','loop','runtime','RunHost / persist intent','left','right'),edge('start','runtime','execution','受管 start / OwnedCall','top','left'),edge('codec','execution','drivers','codec + transport','right','left'),edge('network','drivers','provider','原生 HTTP / stream'),edge('commitcontext','drivers','execution','实际退出后 commit context','left','right'),edge('result','execution','loop','public result after exit','bottom','top'),edge('fetch','catalog','source','fetch({etag, signal})','right','left'),edge('publicfetch','source','public','匿名 GET','right','left'),edge('cachestore','catalog','cache','先写快照 / ETag'),edge('cachefile','cache','cachedb','独占缓存连接','bottom','bottom'),edge('accept','catalog','models','models.source-data.accept','left','left'),edge('definitions','models','store','原子接纳 / 补齐 baseline','left','right'),edge('modelfile','store','modeldb','独占配置连接','left','left')],
+      sequences:[{label:'原生执行：固定快照 → 交换 → 上下文提交',tone:'var(--violet)',events:[
+        event('固定原生驱动注册代','harness server Registry 获取协议租约并验证所选父恢复记录的兼容性。','registry',['registry','models'],['acquire'],'lease'),
+        event('捕获不可变连接与执行配置','按连接队列校验启停、能力、版本、参数和账户语义，生成 schema 3 原生模型快照。','models',['models','store'],['config'],'snapshot'),
+        event('只读取一次系统 Key','Vault 读取凭据后建立 private execution，释放配置队列；后续网络不占配置队列。','vault',['models','vault','execution'],['key','create'],'capture'),
+        event('Loop 准备本轮增量 exchange','prepareExchange 生成 request record 与前驱引用，准备阶段不发送网络请求。','protocol-loop',['loop','execution'],['loopprepare'],'prepare'),
+        event('先持久化 intent，再受管 start','Loop 通过 RunHost 请求 Runtime，Runtime 先写操作意图，再同步登记当前交换。','runtime',['loop','runtime','execution'],['intent','start'],'start'),
+        event('驱动发送原生请求并处理流帧','受管操作启动后才读取图片、临时编码 wire body；签名和 continuation 留在受信记录。','driver',['execution','drivers','provider'],['codec','network'],'stream',3300),
+        event('等待 transport / reader 实际退出','接收到原生结果仍要等待传输与 reader；protocol commit 产生新的私有上下文。','driver',['drivers','execution'],['commitcontext'],'join',3100),
+        event('提交候选 context，释放交换占用','成功才替换 execution 私有 context，追加 response record、settle done，最后返回公共 result。','execution',['execution','loop'],['result'],'committed',3300),
+        event('下一轮复用已捕获 Key 与上下文','续轮只提交新增消息；此期间修改连接配置或 Key 不改变这次 execution 的快照。','protocol-loop',['loop','execution'],['loopprepare'],'continue'),
+        event('close 等待退出并清除私有资源','execution.close 停准入、取消并等待在途资源，返回 records / restoreState / cleanup；Session 负责最终持久化。','execution',['runtime','execution','models'],['executionclose'],'closed',3500)
+      ]},{label:'目录刷新：ETag → 缓存 → 原子接纳 → 补齐',tone:'var(--cyan)',events:[
+        event('调度显式或后台目录刷新','Catalog 独立启动刷新，不在模型请求路径上；首次或过 24 小时触发后台 ETag 检查。','catalog',['catalog'],[],'refresh'),
+        event('Source 以 ETag 匿名请求公开目录','只发送目录缓存对应的 If-None-Match，不使用任何模型 Provider 的 Key。','catalog-source',['catalog','source','public'],['fetch','publicfetch'],'fetch'),
+        event('读取、校验并等待来源真正退出','规范化所有模态元数据；Catalog 同时等待 result 和 done，reader 必须实际退出。','catalog-source',['source','catalog'],['fetch'],'join'),
+        event('最后检查取消，进入提交阶段','已准入提交等待完成，迟到取消不回滚提交；获取超时不截断后续接纳。','catalog',['catalog'],[],'committing'),
+        event('先写目录缓存快照和 ETag','缓存先落盘，便于接纳失败后下次启动重放；缓存连接独立于配置库。','catalog-cache',['catalog','cache','cachedb'],['cachestore','cachefile'],'cache'),
+        event('通过 source-data 原子接纳来源定义','Models 事务更新来源拥有的定义与账本；消失的定义标记 missing，用户定义保留。','source-data',['catalog','models','store'],['accept','definitions'],'accept',3400),
+        event('补齐每个连接缺失的 baseline','按连接队列检查显式协议映射、文本契约、Key 和可用性；已有配置的名称、地址、参数和启停保持。','models',['models','store','modeldb'],['definitions','modelfile'],'reconcile',3500),
+        event('公布权威目录与连接同步状态','目录 network/store 与连接 ready/failed 分开；目录失败 1 小时后重试，连接补齐失败保留 Key 并支持 retryConnection()。','catalog',['catalog','models'],['accept'],'ready',3300)
+      ]}]
+    };
+
+    scenes.exit = {
+      index:'04',code:'CANCEL / JOIN / SETTLE',title:'取消不是瞬间结束',summary:'取消先关闭新操作准入，然后等待真正退出。真实工具事实和已接受资源仍保存；不同关闭入口有不同作用。',
+      heading:'CLOSE ADMISSION → CANCEL → JOIN → OBSERVE → SETTLE',caption:'玫红路径演示补丁提交中取消；关闭界面只结束观察。整根关闭由宿主阻止调用，再由 Nya 负责依赖清理。',initial:'runtime',
+      rules:[['保留已经发生的事实','Apply Patch 取消不回滚，changes / pending 与实际文件一致。'],['done 必须等清理','等待当前提交、临时资源、进程、reader 和 program 全部实际退出。'],['取消不创建成功节点','cancelled / failed / interrupted 无可继续节点，已接受附件仍保留。'],['清理失败覆盖成功','cleanup-failed 不可伪装成功结算；应用要求重新启动。']],
+      nodes:[
+        node('request',0,0,3,'用户控制 / 界面','cancelRun / close view / stop app','ui',{'身份':'Browser / 外部调用者','职责':'显式取消 Run、关闭界面或停止应用，是三个不同操作。','边界':'关闭界面不取消 Run；显式停止应用运行中被 guard 拒绝；整根关闭取消并等待拥有的执行资源。'},[source('src/applications/harness/web/harness-client.ts'),source('src/host/applications/component.ts')]),
+        runNode(4,0,4),
+        node('admission',9,0,3,'宿主准入与活动','products / activity / HTTP','group',{'组件':'app-products / app-activity\nhost-application-api（执行端）','职责':'控制准入、活动登记、同步冻结和应用停止 guard。','边界':'Run 从准备到实际退出都持有保护；停止忙碌时拒绝。关闭整根先停控制与 HTTP 准入，再排空已接受调用。'},[source('src/host/applications/activity.ts'),source('src/host/applications/component.ts'),source('src/host/execution.ts')]),
+        sessionNode(0,1,3),runtimeNode(4,1,4),
+        node('lease',9,1,3,'协议驱动代 lease','fixed generation / revocation signal','object',{'身份':'内部租约 / 非 Nya 组件','职责':'将一次 Run 固定到 driver / Loop 配对代；注销取消并等待本代全部 Run。','边界':'资源退出和持久结算后释放；协议注销时正在跑的本地工具也要取消并等待。'},[source(core+'protocol-agents/registry.ts'),source(model+'component.ts')]),
+        node('tools',0,2,3,'Bash / Apply Patch','tools.bash / tools.apply-patch','group',{'组件':'bash-tool / apply-patch-tool','持有':'进程组；串行补丁队列、当前逐文件提交、临时资源。','边界':'工具 result 表示实际结果，done 等待实际退出与清理；取消保留已完成 changes。'},[source(core+'tool/bash-component.ts'),source(core+'tool/apply-patch-component.ts')]),
+        node('program',4,2,4,'PreparedRunProgram.close','cancel / join / records / checkpoint','object',{'身份':'内部运行契约 · 非 Nya 组件','职责':'关闭原生 execution，等待 program 资源退出，返回原生记录与 checkpoint。','边界':'接管后归 Runtime。close 的失败必须导致 cleanup-failed，不能创建成功节点。'},[source(core+'run/program.ts'),source(core+'protocol-agents/registry.ts')]),
+        executionNode(9,2,3),
+        node('facts',0,3,3,'真实工具观察','changes / pending / tool-observed','data',{'身份':'Session 保存的操作事实','内容':'真实工具观察、部分补丁结果、tool-failed 和操作事件。','边界':'取消后仍持久化真实观察；不回滚已提交文件。不写旧 bash-* / bashCalls 格式。'},[source(core+'run/runtime-component.ts'),source(core+'session/sqlite-records.ts')]),
+        storageNode(4,3,4),
+        node('modelowners',9,3,3,'Models 资源所有者','models / catalog / store / vault / drivers','group',{'组件':'Models 协调、配置 Store、系统 Vault\n目录 Source / Cache / Catalog、五原生驱动','持有':'在途请求、execution、凭据操作、计时器、缓存和已接纳写入。','边界':'各所有者关闭准入、取消并等待实际退出；Vault 仍等待系统操作，目录等待已准入写入。'},[source(model+'component.ts'),source(model+'catalog.ts'),source(model+'vault.ts')]),
+        node('hostclose',0,4,3,'宿主 close()','drain control / HTTP / root dispose','object',{'身份':'应用宿主的整根关闭入口 · 非组件','职责':'同步阻止控制与业务新调用，排空控制、装配队列和恢复，再同时 dispose 根 Fiber 与排空 HTTP 保留操作。','边界':'HTTP 的 Run 租约等待根清理取消后的实际退出；收集清理错误。关闭的 harness server API不能复用，进程信号由 entrypoint 调用。'},[source('src/host/execution.ts'),source('src/host/client.ts'),source('src/entrypoints/harness-server-main.ts')]),
+        node('fiber',4,4,4,'Nya 根 Fiber / Effect','dependency readiness / ownership / cleanup','object',{'身份':'框架根运行资源 · 非业务组件','职责':'依赖就绪、组件代、重启和 Effect 清理；卸载根上的安装能力。','边界':'应用 runtime 只登记安装归属，不手工复制依赖图，不创建应用 Context。'},[source('src/host/applications/runtime.ts'),source('docs/application-development.md')]),
+        node('observer',9,4,3,'客户端观察 / 界面','SSE observer / dispose UI','ui',{'身份':'浏览器界面与客户端 SSE 观察','职责':'停止本地观察与前端清理，释放临时连接租约。','边界':'远端已接受 Run 生命周期独立；关页面、切换应用或客户端退出不等于 cancelRun。'},[source('src/applications/harness/client/gateway.ts'),source('src/applications/harness/web/harness-app.ts')])
+      ],
+      boundaries:[boundary('RUN RESOURCE OWNERSHIP','同一执行根 · 取消与实际退出分离',['request','run','admission','session','runtime','lease','tools','program','execution','facts','storage','modelowners'],'amber'),boundary('DISTINCT CLOSE ENTRIES','宿主整根关闭 / 客户端观察关闭',['hostclose','fiber','observer'],'cyan')],
+      edges:[edge('cancel','request','run','显式 cancelRun','right','left'),edge('cancelruntime','run','runtime','取消本 Run'),edge('toolintent','runtime','session','工具 intent / tool-started','left','right'),edge('mark','runtime','session','cancelling / 最终结算','left','right'),edge('toolcall','runtime','tools','执行工具 / 受管 OwnedCall','left','top'),edge('executioncall','runtime','execution','执行模型 / 受管 OwnedCall','right','top'),edge('toolreturned','tools','runtime','result / done · 真实工具退出','top','left'),edge('programreturned','program','runtime','close report · 实际退出','top','bottom'),edge('canceltool','runtime','tools','cancel OwnedCall','bottom','top'),edge('closeprogram','runtime','program','program.close'),edge('cancelexec','program','execution','关闭原生 execution','right','left'),edge('partial','tools','facts','已提交 changes / pending'),edge('observations','facts','session','取消后仍提交观察','left','left'),edge('persist','session','storage','业务库持久事实','bottom','top'),edge('release','runtime','lease','实际退出后释放','right','left'),edge('stop','request','admission','停止应用 / 同步 guard','top','top'),edge('guard','admission','run','准备到退出的 Run guard','left','right'),edge('closeview','request','observer','关闭 UI / SSE 观察','left','right'),edge('hostadmission','hostclose','admission','同步关闭整根准入','left','right'),edge('dispose','hostclose','fiber','排空后 root.fiber.dispose','right','left'),edge('nyaruntime','fiber','runtime','Effect 取消并 join','top','bottom'),edge('nyamodels','fiber','modelowners','按依赖和资源归属清理','right','bottom'),edge('dbclose','fiber','storage','排空持有者后关闭业务库')],
+      sequences:[{label:'取消 Run：补丁提交中取消',tone:'var(--rose)',events:[
+        event('工具 intent 已保存，补丁开始执行','Runtime 接管 program；Apply Patch 已完成全量预检并进入逐文件提交。','runtime',['runtime','tools','session'],['toolintent','toolcall'],'patch'),
+        event('当前文件已提交，changes 累积','一部分文件已经真实修改；剩余项仍在 pending。取消不能把这些事实抹掉。','apply_patch',['tools','facts'],['partial'],'changes'),
+        event('用户显式发出 cancelRun','Run 将取消交给当前 Runtime，不用前端观察连接代替取消控制。','harness.runs',['request','run','runtime'],['cancel','cancelruntime'],'cancel'),
+        event('关闭本 Run 新操作准入，标记 cancelling','Runtime abort、取消已登记 OwnedCall，并请求 program.close；后续模型/工具操作不再启动。','runtime',['runtime','session','tools','program'],['mark','canceltool','closeprogram'],'cancelling',3300),
+        event('等当前提交单元退出，停止后续文件','Apply Patch 保留真实 changes / pending；done 还要等待临时资源清理。','apply_patch',['tools','facts'],['partial'],'join',3500),
+        event('关闭空闲 execution 并收集原生记录','工具执行前的模型交换已退出。program.close 收集记录；若取消发生在模型交换期间，则还须等待 transport / reader 真正退出。','program',['program','execution'],['cancelexec'],'join',3100),
+        event('即使取消也提交真实工具观察','Runtime 同时观察 result 和 done，将已完成变更、tool-observed / tool-failed 保存到 Session。','observation',['facts','session','storage'],['observations','persist'],'observe',3500),
+        event('等待调用、工具和 program 全部退出','所有在途 calls、受管任务和关闭写入结束，才进入 Run 最终结算。','runtime',['runtime','tools','program','execution'],['toolreturned','programreturned'],'exited',3400),
+        event('Session 结算 cancelled，不创建成功节点','记录、事件和已接受图片/文件引用保留。若清理失败，终态改为 cleanup-failed。','session',['runtime','session','storage'],['mark','persist'],'cancelled',3400),
+        event('释放绑定代 lease，取消等待完成','持久结算与资源退出都完成，waitRun 才返回终态；后续显式 Run 可重新准备。','lease',['runtime','lease'],['release'],'released',3100)
+      ]},{label:'关闭界面：只停止观察，远端 Run 继续',tone:'var(--cyan)',events:[
+        event('已接受的 Run 正在执行','Runtime 在执行设备上独占运行资源，客户端只观察状态。','runtime',['runtime','execution','tools'],['toolcall','executioncall'],'running'),
+        event('用户关闭 Anybox Harness 界面','Browser 等待 dispose 前端清理并停止 SSE 观察；不发送 Run 取消请求。','browser',['request','observer'],['closeview'],'dispose'),
+        event('本地观察结束，远端执行继续','Gateway 释放观察租约；执行端 Runtime 和工具仍拥有原来的 Run。','observer',['observer','runtime','execution'],[],'detached',3400),
+        event('远端实际退出后仍正常结算','Session 保存终态和成功节点；再次打开所属设备可查询持久结果。','session',['runtime','session','storage'],['mark','persist'],'settled',3400)
+      ]},{label:'整根关闭：关准入 → 排空 → Nya 清理',tone:'var(--amber)',events:[
+        event('进程信号或应用调用宿主 close()','整根关闭入口由执行宿主拥有；入口开始便同步阻止产品控制、HTTP 和业务新调用。','host.close',['hostclose','admission'],['hostadmission'],'close'),
+        event('排空控制、装配队列和 HTTP 请求','排空产品控制、装配队列、恢复与已接受 HTTP 请求；Run 保护持续到实际退出，随后根清理取消并等待执行资源。','admission',['admission','run','hostclose'],['guard','hostadmission'],'drain',3500),
+        event('dispose 根 Fiber，由 Nya 执行清理','应用只卸载自己的安装归属；依赖和 Effect 清理由 Nya 负责，不手写一套依赖生命周期。','NyaCore',['hostclose','fiber'],['dispose'],'dispose',3200),
+        event('Runtime 取消并等待自己的运行树','Runtime 停止准入、取消 program 和已登记操作，等待工具与 execution 真正退出。','runtime',['fiber','runtime','tools','program','execution'],['nyaruntime','canceltool','closeprogram','cancelexec'],'join',3500),
+        event('Session 保存真实观察与终态','资源清理成功才提交允许的终态；异常进程中断的遗留 Run 下次启动结算 interrupted，不重放副作用。','session',['runtime','session','storage'],['mark','persist'],'settle',3300),
+        event('Models 各所有者清理在途资源','目录停 timer、请求和准入并等待已接纳写入；Models / Vault 等待 execution 与系统凭据操作。','models',['fiber','modelowners'],['nyamodels'],'join',3500),
+        event('持有者排空后关闭各独占连接','业务库、Models 配置库和目录缓存库分别由自己的组件关闭，不能共享连接或路径。','storage',['fiber','storage','modelowners'],['dbclose','nyamodels'],'closed'),
+        event('整根关闭完成，旧门面不可复用','宿主聚合清理错误；重新启动重新装配组件，通常创建新根。','host.close',['hostclose','fiber'],['dispose'],'disposed',3300)
+      ]},{label:'停止应用：运行中被 guard 拒绝',tone:'var(--rose)',events:[
+        event('一个 Run 仍持有执行租约','准备、模型请求、工具与退出等待都受应用安装 guard 保护。','harness.runs',['run','runtime'],[],'busy'),
+        event('用户请求停止设备 Agent','Products 先同步冻结活动并检查 guard；同应用控制串行。','app.products',['request','admission','run'],['stop','guard'],'check'),
+        event('guard 报告忙碌，停止被拒绝','此时不提交关闭目标、不卸载组件、不暗中取消 Run；产品恢复准入。','app.activity',['admission','run','runtime'],['guard'],'rejected',3700),
+        event('Run 继续到实际退出','显式 cancelRun 与整根 close 是各自独立的入口；空闲后才可重试停止应用。','runtime',['runtime','execution','tools'],['toolcall','executioncall'],'running',3300)
+      ]}]
+    };
+    const state = {scene:'host',sequence:0,step:0,phase:0,playing:!matchMedia('(prefers-reduced-motion: reduce)').matches,speed:1,selected:null,lastTime:null};
+    let activeScene, sequence, paths = new Map(), packets = [], geometries = new Map(), frame = 0;
+    const ns = 'http://www.w3.org/2000/svg';
+    const svgElement = (tag, attrs) => { const element = document.createElementNS(ns,tag);for(const [key,value] of Object.entries(attrs || {}))element.setAttribute(key,String(value));return element; };
+    const textElement = (tag, text, className) => { const element=document.createElement(tag);element.textContent=text;if(className)element.className=className;return element; };
+    const steps = () => sequence.events;
+    const totalDuration = () => steps().reduce((total,item)=>total+item.duration,0);
+    const elapsed = () => steps().slice(0,state.step).reduce((total,item)=>total+item.duration,0)+steps()[state.step].duration*state.phase;
+    const seconds = value => String(Math.floor(value / 1000 / 60)).padStart(2,'0') + ':' + String(Math.floor(value / 1000)%60).padStart(2,'0');
+    function renderScene() {
+      activeScene=scenes[state.scene];sequence=activeScene.sequences[state.sequence];
+      root.style.setProperty('--flow-color',sequence.tone || 'var(--cyan)');
+      for(const button of root.querySelectorAll('[data-view]'))button.setAttribute('aria-pressed',String(button.dataset.view===state.scene));
+      $('scene-index').textContent=activeScene.index+' / '+activeScene.code;
+      $('scene-title').textContent=activeScene.title;$('scene-summary').textContent=activeScene.summary;
+      $('diagram-heading').textContent=activeScene.heading;$('diagram-caption').textContent=activeScene.caption;
+      $('scene-rules').replaceChildren(...activeScene.rules.map(rule=>{const li=document.createElement('li');li.append(textElement('strong',rule[0]),document.createTextNode(rule[1]));return li;}));
+      $('scenario').replaceChildren(...activeScene.sequences.map((item,index)=>{const option=textElement('option',item.label);option.value=String(index);return option;}));$('scenario').value=String(state.sequence);
+      $('nodes').replaceChildren(...activeScene.nodes.map(item=>{
+        const button=document.createElement('button');button.type='button';button.className='node';button.dataset.node=item.id;button.dataset.kind=item.kind;button.setAttribute('aria-label',item.title+'，'+kindNames[item.kind]+'，查看职责与源码');button.setAttribute('aria-pressed','false');
+        const top=document.createElement('span');top.className='node-top';top.append(textElement('span',item.kind==='group'?'COMPONENT GROUP':item.kind==='component'?'NYA COMPONENT':item.kind==='ui'?'BROWSER / ESM':item.kind==='external'?'EXTERNAL RESOURCE':item.kind==='object'?'RUNTIME OBJECT':'DATA / PROJECTION','node-kind'),textElement('span','','node-status'));
+        button.append(top,textElement('span',item.title,'node-title'),textElement('span',item.service,'node-service'));
+        button.addEventListener('click',()=>{state.selected=item.id;renderInspector();renderState(false);});return button;
+      }));
+      $('boundaries').replaceChildren(...activeScene.boundaries.map(item=>{const div=document.createElement('div');div.className='boundary';div.dataset.tone=item.tone || '';const label=document.createElement('div');label.className='boundary-label';label.append(textElement('b',item.title),textElement('em',item.note));div.append(label);return div;}));
+      if(!activeScene.nodes.some(item=>item.id===state.selected))state.selected=activeScene.initial;
+      renderInspector();layout();renderState(true);
+    }
+    function renderInspector(){
+      const item=activeScene.nodes.find(item=>item.id===state.selected);if(!item)return;
+      $('inspect-title').textContent=item.title;$('inspect-type').textContent=kindNames[item.kind];
+      const fields=[];for(const [name,value]of Object.entries(item.fields)){fields.push(textElement('dt',name),textElement('dd',value,name==='组件'||name==='服务'?'inspect-code':''));}$('inspect-fields').replaceChildren(...fields);
+      $('inspect-sources').replaceChildren(...item.sources.map(item=>{const a=textElement('a',item.label);a.href='../../'+item.path;a.target='_blank';a.rel='noopener';return a;}));
+    }
+    function layout(){
+      if(!activeScene)return;
+      const canvas=$('diagram');const width=canvas.clientWidth;const compact=width<650;const margin=16;const gap=16;const cell=(width-32)/12;
+      geometries=new Map();
+      const ordered=[...activeScene.nodes].sort((a,b)=>a.row-b.row||a.col-b.col);
+      const measured=new Map(),rowHeights=new Map(),rowY=new Map();
+      for(const item of ordered){const button=$('nodes').querySelector('[data-node="'+item.id+'"]');button.style.width=(compact?width-margin*2:item.span*cell-gap)+'px';button.style.height='auto';const height=Math.max(104,Math.ceil(button.getBoundingClientRect().height));measured.set(item.id,height);rowHeights.set(item.row,Math.max(rowHeights.get(item.row)||0,height));}
+      let cursor=43;for(const row of [...rowHeights.keys()].sort((a,b)=>a-b)){rowY.set(row,cursor);cursor+=rowHeights.get(row)+50;}
+      let compactY=40;
+      ordered.forEach((item,index)=>{
+        const x=compact?margin:margin+item.col*cell;const y=compact?compactY:rowY.get(item.row);const w=compact?width-margin*2:item.span*cell-gap;const h=compact?measured.get(item.id):rowHeights.get(item.row);compactY+=h+50;
+        const geo={x,y,w,h};geometries.set(item.id,geo);const button=$('nodes').querySelector('[data-node="'+item.id+'"]');Object.assign(button.style,{left:x+'px',top:y+'px',width:w+'px',height:h+'px'});
+      });
+      const bottom=Math.max(...[...geometries.values()].map(item=>item.y+item.h));canvas.style.height=(bottom+26)+'px';
+      const boundaries=[...$('boundaries').children];activeScene.boundaries.forEach((item,index)=>{
+        const coords=item.members.map(id=>geometries.get(id)).filter(Boolean);const panel=boundaries[index];if(!coords.length){panel.hidden=true;return;}panel.hidden=false;
+        const left=Math.min(...coords.map(g=>g.x))-10,top=Math.min(...coords.map(g=>g.y))-30,right=Math.max(...coords.map(g=>g.x+g.w))+10,end=Math.max(...coords.map(g=>g.y+g.h))+13;
+        Object.assign(panel.style,{left:left+'px',top:top+'px',width:(right-left)+'px',height:(end-top)+'px'});
+      });
+      const wires=$('wires');wires.setAttribute('viewBox','0 0 '+width+' '+(bottom+26));wires.replaceChildren();paths=new Map();packets=[];
+      const defs=svgElement('defs');for(const [id,color]of [['arrow','#46516c'],['arrow-active','var(--flow-color)'],['arrow-related','#6a7894']]){const marker=svgElement('marker',{id,viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:6,markerHeight:6,orient:'auto-start-reverse'});marker.append(svgElement('path',{d:'M 0 1 L 9 5 L 0 9 Z',fill:color}));defs.append(marker);}wires.append(defs);
+      activeScene.edges.forEach((item,index)=>{
+        const a=geometries.get(item.from),b=geometries.get(item.to);if(!a||!b)return;
+        let d;
+        if(compact){const sx=a.x+(index%2===0?0:a.w),sy=a.y+a.h/2,tx=b.x+(index%2===0?0:b.w),ty=b.y+b.h/2;const gutter=index%2===0?5+index%3*3:width-5-index%3*3;d='M '+sx+' '+sy+' H '+gutter+' V '+ty+' H '+tx;}
+        else {
+          const horizontal=Math.abs(a.y-b.y)<20;const downward=a.y<b.y;const fp=item.fromPort||(horizontal?(a.x<b.x?'right':'left'):(downward?'bottom':'top'));const tp=item.toPort||(horizontal?(a.x<b.x?'left':'right'):(downward?'top':'bottom'));
+          const port=(g,side)=>side==='left'?{x:g.x,y:g.y+g.h/2}:side==='right'?{x:g.x+g.w,y:g.y+g.h/2}:side==='top'?{x:g.x+g.w/2,y:g.y}:{x:g.x+g.w/2,y:g.y+g.h};
+          const start=port(a,fp),end=port(b,tp);const sx=start.x,sy=start.y,tx=end.x,ty=end.y;
+          if(fp==='left'||fp==='right'){const x=horizontal?(sx+tx)/2:sx+(fp==='right'?11:-11);d='M '+sx+' '+sy+' H '+x+' V '+ty+' H '+tx;}
+          else{const y=horizontal?sy+(fp==='bottom'?13:-13):(sy+ty)/2;d='M '+sx+' '+sy+' V '+y+' H '+tx+' V '+ty;}
+        }
+        const path=svgElement('path',{d,class:'wire','marker-end':'url(#arrow)'});path.dataset.edge=item.id;const title=svgElement('title');title.textContent=item.label;path.append(title);wires.append(path);paths.set(item.id,path);
+      });
+      for(let i=0;i<4;i++){const packet=svgElement('circle',{r:3.7,class:'packet',visibility:'hidden'});wires.append(packet);packets.push(packet);}
+      renderState(false);
+    }
+    function renderState(announce){
+      const current=steps()[state.step];const visited=new Set(steps().slice(0,state.step).flatMap(item=>item.nodes));const visitedEdges=new Set(steps().slice(0,state.step).flatMap(item=>item.edges));
+      for(const button of $('nodes').children){const id=button.dataset.node;const active=current.nodes.includes(id);button.classList.toggle('active',active);button.classList.toggle('visited',visited.has(id));button.classList.toggle('selected',id===state.selected);button.setAttribute('aria-pressed',String(id===state.selected));button.querySelector('.node-status').textContent=active?current.status:visited.has(id)?'visited':'';}
+      for(const item of activeScene.edges){const path=paths.get(item.id);if(!path)continue;const active=current.edges.includes(item.id);const related=item.from===state.selected||item.to===state.selected;path.setAttribute('class','wire'+(visitedEdges.has(item.id)?' completed':'')+(related?' related':'')+(active?' active':''));path.setAttribute('marker-end','url(#'+(active?'arrow-active':related?'arrow-related':'arrow')+')');}
+      $('diagram-flow').textContent=current.title;root.dataset.playing=String(state.playing);
+      $('step-counter').textContent=String(state.step+1).padStart(2,'0')+' / '+String(steps().length).padStart(2,'0');$('event-title').textContent=current.title;$('event-detail').textContent=current.detail;$('event-status').textContent=state.playing?'PLAYING':state.step===steps().length-1&&state.phase===1?'COMPLETE':'PAUSED';
+      $('play').textContent=state.playing?'Ⅱ 暂停':'▶ 播放';$('play').setAttribute('aria-label',state.playing?'暂停演示':'播放演示');$('previous').disabled=state.step===0;$('next').disabled=state.step===steps().length-1;
+      $('timeline').value=String(Math.round(elapsed()/totalDuration()*1000));$('timeline').setAttribute('aria-valuetext','第 '+(state.step+1)+' 步：'+current.title);$('time-display').textContent=seconds(elapsed())+' / '+seconds(totalDuration());
+      const first=Math.max(0,state.step-3);$('log').replaceChildren(...steps().slice(first,state.step+1).map((item,index)=>{const at=first+index;const button=document.createElement('button');button.type='button';button.className='log-line'+(at===state.step?' current':'');button.setAttribute('aria-label','跳转到第 '+(at+1)+' 步：'+item.title);const time=steps().slice(0,at).reduce((sum,item)=>sum+item.duration,0);button.append(textElement('span',seconds(time),'log-time'),textElement('span',item.owner,'log-owner'),textElement('span',item.title,'log-message'));button.addEventListener('click',()=>seek(at,0,true));return button;}));
+      if(announce)$('announcement').textContent='第 '+(state.step+1)+' 步，'+current.title+'。'+current.detail;
+      animatePackets();
+    }
+    function animatePackets(){
+      const active=steps()[state.step].edges.map(id=>paths.get(id)).filter(Boolean);const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+      packets.forEach((packet,index)=>{const path=active[index];if(!path||reduced||state.phase>=1){packet.setAttribute('visibility','hidden');return;}const length=path.getTotalLength();const progress=Math.min(1,Math.max(0,(state.phase-.08)/.80));const point=path.getPointAtLength(length*progress);packet.setAttribute('cx',point.x);packet.setAttribute('cy',point.y);packet.setAttribute('visibility','visible');});
+    }
+    function seek(step,phase,pause){state.step=Math.max(0,Math.min(steps().length-1,step));state.phase=Math.max(0,Math.min(1,phase));if(pause)state.playing=false;state.lastTime=null;renderState(true);}
+    function changeScene(key){state.scene=key;state.sequence=0;state.step=0;state.phase=0;state.selected=null;state.lastTime=null;state.playing=!matchMedia('(prefers-reduced-motion: reduce)').matches;renderScene();}
+    for(const button of root.querySelectorAll('[data-view]'))button.addEventListener('click',()=>changeScene(button.dataset.view));
+    $('scenario').addEventListener('change',()=>{state.sequence=Number($('scenario').value);state.step=0;state.phase=0;state.lastTime=null;state.playing=!matchMedia('(prefers-reduced-motion: reduce)').matches;renderScene();});
+    $('play').addEventListener('click',()=>{if(!state.playing&&state.step===steps().length-1&&state.phase===1){state.step=0;state.phase=0;}state.playing=!state.playing;state.lastTime=null;renderState(true);});
+    $('next').addEventListener('click',()=>seek(state.step+1,0,true));$('previous').addEventListener('click',()=>seek(state.step-1,0,true));$('replay').addEventListener('click',()=>{state.step=0;state.phase=0;state.lastTime=null;state.playing=!matchMedia('(prefers-reduced-motion: reduce)').matches;renderState(true);});
+    $('speed').addEventListener('change',()=>{state.speed=Number($('speed').value);state.lastTime=null;});
+    $('timeline').addEventListener('input',()=>{let amount=Number($('timeline').value)/1000*totalDuration();let index=0;while(index<steps().length-1&&amount>=steps()[index].duration){amount-=steps()[index].duration;index++;}seek(index,amount/steps()[index].duration,true);});
+    document.addEventListener('keydown',event=>{if(event.target instanceof Element&&event.target.closest('input,select,textarea,a,button,[contenteditable]'))return;if(event.code==='Space'){event.preventDefault();$('play').click();}else if(event.key==='ArrowRight'){event.preventDefault();seek(state.step+1,0,true);}else if(event.key==='ArrowLeft'){event.preventDefault();seek(state.step-1,0,true);}});
+    const resize=new ResizeObserver(()=>layout());resize.observe($('diagram'));
+    document.addEventListener('visibilitychange',()=>{state.lastTime=null;});
+    const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)');reducedMotion.addEventListener('change',()=>{if(reducedMotion.matches){state.playing=false;state.lastTime=null;renderState(false);}});
+    function tick(time){
+      if(state.playing&&!document.hidden){if(state.lastTime!==null){const delta=Math.min(150,time-state.lastTime)*state.speed;state.phase+=delta/steps()[state.step].duration;if(state.phase>=1){if(state.step<steps().length-1){state.step++;state.phase=0;renderState(true);}else{state.phase=1;state.playing=false;renderState(true);}}$('timeline').value=String(Math.round(elapsed()/totalDuration()*1000));$('time-display').textContent=seconds(elapsed())+' / '+seconds(totalDuration());animatePackets();}state.lastTime=time;}else state.lastTime=null;
+      frame=requestAnimationFrame(tick);
+    }
+    renderScene();frame=requestAnimationFrame(tick);
+    window.addEventListener('pagehide',()=>{cancelAnimationFrame(frame);resize.disconnect();});
+    window.addEventListener('pageshow',event=>{if(event.persisted){resize.observe($('diagram'));state.lastTime=null;frame=requestAnimationFrame(tick);}});
+  })();
+  </script>
+</body>
+</html>

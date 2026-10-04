@@ -20,10 +20,10 @@ import { runAnthropic } from './anthropic.js'
 import { runChat } from './chat.js'
 import { runGemini } from './gemini.js'
 
-export const supportedProtocolIds = Object.freeze(['responses', 'anthropic-messages', 'chat-completions', 'gemini-interactions', 'deepseek-chat-completions'])
+export const supportedProtocolIds = Object.freeze(['responses', 'anthropic-messages', 'chat-completions', 'gemini-interactions'])
 type Loop = (runner: ExchangeRunner, initial: NativeObject) => Promise<ProtocolConclusion>
 const loops: Readonly<Record<string, Loop>> = Object.freeze({ responses: runResponses, 'anthropic-messages': runAnthropic,
-  'chat-completions': runChat, 'deepseek-chat-completions': runChat, 'gemini-interactions': runGemini })
+  'chat-completions': runChat, 'gemini-interactions': runGemini })
 interface Owner { readonly abort: AbortController; readonly done: Promise<void>; release(): void }
 interface Entry { readonly id: string; readonly protocolId: string; readonly driverGenerationId: string; readonly loop: Loop;
   readonly controller: AbortController; readonly owners: Set<Owner>; accepting: boolean; closing?: Promise<void> }
@@ -57,8 +57,7 @@ function encodeInitial(protocolId: string, input: PrepareRunInput): NativeObject
     ? [...(text ? [{ type: 'input_text', text }] : []),
       ...images.map(image => ({ type: 'input_image', image_url: nativeImageResourceUri(image.assetId) }))] : text }],
     ...withTools(tools.map(tool => ({ type: 'function', ...declaration(tool), strict: false }))) }
-  if (protocolId === 'chat-completions' || protocolId === 'deepseek-chat-completions') {
-    if (protocolId === 'deepseek-chat-completions' && prompts.some(prompt => prompt.role === 'developer')) throw modelFailure('unsupported-request')
+  if (protocolId === 'chat-completions') {
     const content = images.length ? [...(text ? [{ type: 'text', text }] : []),
       ...images.map(image => ({ type: 'image_url', image_url: { url: nativeImageResourceUri(image.assetId) } }))] : text
     return { messages: [...prompts, { role: 'user', content }],
@@ -130,13 +129,15 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         if (!accepting || !entry?.accepting) throw modelFailure('dependency-unavailable')
         validateInitialization(input.initialization)
         if (input.history && (input.history.binding.protocolId !== protocolId ||
+          input.history.binding.protocolId !== input.history.modelSnapshot.protocolId ||
+          input.history.records.some(record => record.protocolId !== protocolId) ||
           !['1.0.0', '1.1.0'].includes(input.history.binding.loopVersion) ||
           ![1, 2].includes(input.history.binding.recordFormatVersion) || input.history.initialization.toolContractVersion !== 'known-tools-v1')) throw modelFailure('unsupported-request')
         if (input.history) {
           const checkpoint = input.history.checkpoint
           if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) throw modelFailure('unsupported-request')
           const metadata = checkpoint as NativeObject
-          if (metadata.protocolId !== protocolId || metadata.recordFormatVersion !== input.history.binding.recordFormatVersion ||
+          if (metadata.protocolId !== input.history.binding.protocolId || metadata.recordFormatVersion !== input.history.binding.recordFormatVersion ||
             input.history.binding.driverVersion !== input.history.modelSnapshot.protocolVersion ||
             !isDeepStrictEqual(metadata.modelSnapshot, input.history.modelSnapshot)) throw modelFailure('unsupported-request')
         }
@@ -153,7 +154,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         try {
           signal.throwIfAborted()
           const restore: NativeRestoreState | undefined = input.history ? { protocolId, recordFormatVersion: input.history.binding.recordFormatVersion as 1 | 2,
-            modelSnapshot: input.history.modelSnapshot, records: input.history.records.map(record => toNativeRecord(protocolId, record)) } : undefined
+            modelSnapshot: input.history.modelSnapshot, records: input.history.records.map(record => toNativeRecord(record.protocolId, record)) } : undefined
           const currentImages = new Map<string, NativeImageResourceRef>()
           for (const image of inputImages(input.input)) {
             const ref = { id: image.assetId, sha256: image.sha256, byteLength: image.byteLength, mimeType: image.mediaType }
@@ -182,14 +183,15 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
           if (input.initialization.tools.length && !execution.capabilities.tools) throw modelFailure('unsupported-request')
           const initial = encodeInitial(protocolId, input), owned = execution
           const binding: ProtocolBindingSnapshot = { protocolId, generationId: entry.id + ':' + driver.generationId,
-            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.1.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 1 }
+            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.1.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 2 }
           let closing: Promise<ProgramExitReport> | undefined, executed = false
           const program: PreparedRunProgram = { binding, modelSnapshot: owned.snapshot, initialization: input.initialization, input: input.input,
             signal,
             async execute(host) {
               if (executed) throw modelFailure('invalid-response')
               executed = true
-              try { return await entry.loop(createExchangeRunner(owned, host, { sessionId: input.sessionId, runId: input.runId }, imageRefs), initial) }
+              try { return await entry.loop(createExchangeRunner(owned, host, { sessionId: input.sessionId, runId: input.runId },
+                imageRefs, input.initialization.prompts), initial) }
               catch (error) {
                 if (host.signal.aborted || program.signal.aborted) throw error
                 const failure = error instanceof RunFailure ? error : normalizeModelFailure(error)

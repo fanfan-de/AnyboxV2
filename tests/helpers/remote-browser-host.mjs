@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './harness-host.mjs'
+import { createTestHarnessServerCore } from './harness-server-core.mjs'
 import { createImageAssetsComponent } from '../../dist/applications/harness/core/image/component.js'
 import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
 import { createHostAccessComponent } from '../../dist/host/access.js'
@@ -18,7 +18,7 @@ for (const name of ['Local laptop', 'Cloud server', 'Other computer']) {
   await root.installComponent(createLocalSqliteComponent(join(path, 'harness.sqlite')))
   await root.installComponent(createHostAccessComponent(name))
   await root.installComponent(createImageAssetsComponent({ directory: join(path, 'images') }))
-  const harness = await createTestHarnessHost(root, { agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }] }); hosts.push(harness)
+  const harness = await createTestHarnessServerCore(root, { agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }] }); hosts.push(harness)
   const project = await harness.openProject(path)
   for (let i = 0; i < 2; i++) {
     const session = await harness.createSession(project.id, 'assistant')

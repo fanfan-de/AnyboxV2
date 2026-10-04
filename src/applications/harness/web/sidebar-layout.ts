@@ -5,13 +5,14 @@ export interface SidebarState {
   readonly rightWidth: number
   readonly leftExpanded: boolean
   readonly rightExpanded: boolean
+  readonly collapsedProjects: readonly string[]
   readonly perSession: Readonly<Record<string, unknown>>
 }
 
 export const defaultSidebarState: SidebarState = {
-  version: 1, leftWidth: 240, rightWidth: 400, leftExpanded: true, rightExpanded: true, perSession: {},
+  version: 1, leftWidth: 240, rightWidth: 600, leftExpanded: true, rightExpanded: true, collapsedProjects: [], perSession: {},
 }
-export const sidebarSeparatorSize = 8
+export const sidebarSeparatorSize = 1
 export const sidebarBounds = { left: [200, 360], right: [320, 720] } as const
 export type SidebarSide = keyof typeof sidebarBounds
 
@@ -26,9 +27,11 @@ export function restoreSidebarState(value: unknown): SidebarState {
   return {
     version: 1,
     leftWidth: typeof record.leftWidth === 'number' ? clampSidebarWidth('left', record.leftWidth) : 240,
-    rightWidth: typeof record.rightWidth === 'number' ? clampSidebarWidth('right', record.rightWidth) : 400,
+    rightWidth: typeof record.rightWidth === 'number' ? clampSidebarWidth('right', record.rightWidth) : defaultSidebarState.rightWidth,
     leftExpanded: typeof record.leftExpanded === 'boolean' ? record.leftExpanded : true,
     rightExpanded: typeof record.rightExpanded === 'boolean' ? record.rightExpanded : true,
+    collapsedProjects: Array.isArray(record.collapsedProjects)
+      ? [...new Set(record.collapsedProjects.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 512))] : [],
     perSession: record.perSession && typeof record.perSession === 'object' && !Array.isArray(record.perSession)
       ? Object.fromEntries(Object.entries(record.perSession)) : {},
   }
@@ -44,7 +47,7 @@ export interface SidebarFit {
   readonly centerWidth: number
 }
 
-/** Fit the Harness container, rather than the browser viewport. */
+/** Fit the Anybox Harness container, rather than the browser viewport. */
 export function fitSidebars(width: number, state: SidebarState): SidebarFit {
   const available = Math.max(0, Number.isFinite(width) ? width : 0)
   const narrow = available <= 760

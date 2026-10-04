@@ -9,6 +9,30 @@ const a = '11111111-1111-4111-8111-111111111111', b = '22222222-2222-4222-8222-2
 const connections = [{ id: 'a', name: 'Laptop', instanceId: a, revision: 1 }, { id: 'b', name: 'Server', instanceId: b, revision: 1 }]
 const store = () => { const map = new Map(); return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value) } }
 
+test('session default model IDs remain scoped to their execution device while fixed settings clients use local IDs', async t => {
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options })
+    return Response.json({ agentId: 'assistant', modelId: 'chosen', fallbackModelId: 'startup', effectiveModelId: 'chosen', revision: 2 })
+  })
+  const api = createHarnessClient(connections, 'a')
+  try {
+    const defaults = await api(`/agents/${encodeURIComponent(scopedId(b, 'assistant'))}/session-defaults`)
+    assert.deepEqual(defaults, { agentId: scopedId(b, 'assistant'), modelId: scopedId(b, 'chosen'),
+      fallbackModelId: scopedId(b, 'startup'), effectiveModelId: scopedId(b, 'chosen'), revision: 2 })
+    assert.equal(calls.at(-1).url, '/api/connections/b/v1/agents/assistant/session-defaults')
+    await api(`/agents/${encodeURIComponent(scopedId(b, 'assistant'))}/session-defaults`, { modelId: scopedId(b, 'chosen'), expectedRevision: 2 })
+    assert.deepEqual(JSON.parse(calls.at(-1).options.body), { modelId: 'chosen', expectedRevision: 2 })
+    const count = calls.length
+    await assert.rejects(api(`/agents/${encodeURIComponent(scopedId(b, 'assistant'))}/session-defaults`,
+      { modelId: scopedId(a, 'chosen'), expectedRevision: 2 }), { code: 'cross-instance-input' })
+    assert.equal(calls.length, count)
+    assert.equal((await api.forConnection('b')('/agents/assistant/session-defaults')).effectiveModelId, 'chosen')
+    assert.deepEqual(mapResourceIds({ modelId: null, fallbackModelId: null, effectiveModelId: null }, id => scopedId(a, id)),
+      { modelId: null, fallbackModelId: null, effectiveModelId: null })
+  } finally { await api.dispose() }
+})
+
 test('same resource IDs are scoped across projects, archives, models, files, images, commands and fixed settings clients', async t => {
   const calls = []
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -53,6 +77,26 @@ test('four panes and persistent pending/drafts with equal server IDs retain sepa
   assert.equal(createPendingStore(storage).get(scopedId(a, 's')).input, a)
   assert.equal(createPendingStore(storage).get(scopedId(b, 's')).input, b)
   assert.equal(createDraftStore(storage).get(scopedId(b, 's'), scopedId(b, 'node')).text, b)
+})
+
+test('incompatible stream views keep session and Run identities scoped to the notifying device', async t => {
+  const streams = new Map(), incompatible = [], refreshed = [], views = []
+  t.mock.method(globalThis, 'fetch', async url => new Response(new ReadableStream({
+    start(controller) { streams.set(url.includes('/a/') ? 'a' : 'b', controller) },
+  }), { headers: { 'Content-Type': 'text/event-stream' } }))
+  const api = createHarnessClient(connections), changes = api.changes({
+    refresh: id => refreshed.push(id), view: snapshot => views.push(snapshot), connected() {},
+    incompatibleView: (...ids) => incompatible.push(ids),
+  })
+  t.after(async () => { for (const controller of streams.values()) controller.close(); changes.dispose(); await api.dispose() })
+  changes.update([scopedId(a, 'same'), scopedId(b, 'same')])
+  await new Promise(resolve => setImmediate(resolve))
+  const send = (device, version, runId = 'run', sessionId = 'same') => streams.get(device).enqueue(new TextEncoder().encode(
+    `event: protocol-view\ndata: ${JSON.stringify({ sessionId, runId, snapshot: { envelopeVersion: 1, viewSchemaVersion: version, sessionId, runId } })}\n\n`))
+  send('a', 1); send('a', 99); send('a', 1, 'outside', 'not-subscribed'); send('b', 0)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(incompatible, [[scopedId(a, 'same'), scopedId(a, 'run')], [scopedId(b, 'same'), scopedId(b, 'run')]])
+  assert.deepEqual(refreshed, []); assert.deepEqual(views, [])
 })
 
 test('legacy state stays untouched until launcher identity and remote session ownership are confirmed', async () => {

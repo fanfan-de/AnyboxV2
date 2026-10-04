@@ -1,6 +1,6 @@
 # Run 状态转换设计（H2）
 
-状态：2026-09-28，Harness 已接入通用 Models execution、文本/工具/流式协议和 Web 配置。此次验证使用受控模型和临时存储，真实服务与系统凭据验收单独记录。
+状态：2026-09-28，Anybox Harness 已接入通用 Models execution、文本/工具/流式协议和 Web 配置。此次验证使用受控模型和临时存储，真实服务与系统凭据验收单独记录。
 
 ## 执行边界
 
@@ -22,7 +22,7 @@ Run 服务负责准入、快照和取消入口；AgentLoop 独占执行期间的
 
 `@anybox/models` 提供 `ModelExecution` 与 `ModelResult`：结果包含 `status`、文本、工具请求及可选用量，文本与多个工具请求可以同时返回。Run 在准入时解析模型 ID，通过 `open()` 固定配置与凭据；具备有效工具能力时传入 Bash/Apply Patch 定义，否则执行纯文本请求。AgentLoop 首轮发送 Prompt、祖先历史与本轮用户输入，后续只提交新增工具结果。
 
-Models 解析工具参数 JSON，并检查工具名称、调用 ID 与结果对应关系；AgentLoop 校验具体业务参数并执行。`incomplete` 和 `refused` 分别使 Run 以 `incomplete-response` 和 `refused-response` 失败，不执行其中的工具片段。原生 reasoning、phase 与续轮数据由协议私有保存，不进入 Session。DeepSeek 扩展显式关闭 thinking；Responses 使用 `store: false`。
+Models 解析工具参数 JSON，并检查工具名称、调用 ID 与结果对应关系；AgentLoop 校验具体业务参数并执行。`incomplete` 和 `refused` 分别使 Run 以 `incomplete-response` 和 `refused-response` 失败，不执行其中的工具片段。原生 reasoning、phase 与续轮数据由协议私有保存，不进入 Session。Chat Completions 的 thinking 来自显式保存参数，不按提供方补入 disabled；旧 DeepSeek 协议历史仅供查看，不能续接执行。Responses 使用 `store: false`。
 
 模型公共 `result` 在实际退出、上下文提交与解锁后才返回。同一 execution 拒绝重叠调用，不同 execution 可以并发。AgentLoop 不自动重试，结算前必须 `execution.close()`；清理失败覆盖业务成功，不能创建节点。新 Run 从成功节点文本重新开始，不恢复跨进程原生上下文。临时流式事件只用于展示，不作为状态转换输入。
 
@@ -38,7 +38,7 @@ Bash 非零退出码是包含退出码与有界输出的普通观察。Apply Pat
 
 `run-state` v4 迁移保存会话所选 `modelId`、Run 的实际模型与显式请求模型 ID，以及非秘密的 `ExecutionSnapshot`。旧 `llm_snapshot_json` 迁为 `model_snapshot_json`，历史 profile/configVersion 仅以 `legacyModelSnapshot` 读取，不伪造 Models 版本。
 
-`run-state` 第 2 版迁移给旧 Run 表增加执行快照，并建立事件表。旧终态 Run 标为内部 `terminal`；旧在途 Run 在启动时结算为 `interrupted`。每次启动意图、工具观察与终态有递增序号，`SessionRunPort.getRunExecution` 和 `SessionPort.getRunEvents` 可供受信组件读取。Session 服务与 Harness 门面提供事件读取，Web 通过 `GET /api/v1/runs/:id/events` 返回公开事件及有界输出摘要。
+`run-state` 第 2 版迁移给旧 Run 表增加执行快照，并建立事件表。旧终态 Run 标为内部 `terminal`；旧在途 Run 在启动时结算为 `interrupted`。每次启动意图、工具观察与终态有递增序号，`SessionRunPort.getRunExecution` 和 `SessionPort.getRunEvents` 可供受信组件读取。Session 服务与 harness server API 提供事件读取，Web 通过 `GET /api/v1/runs/:id/events` 返回公开事件及有界输出摘要。
 
 工具扩展不新增表或列。新执行 JSON 只写 `toolCalls`，事件只写通用 `tool-*`；`parseRunExecution` 将旧 `bashCalls` 映射为工具总数，`parseRunEvent` 将旧 `bash-*` 映射为带 `name: 'bash'` 的事件。兼容只在读取边界保留，原序号、时间及 `afterSeq` 不变，不维护旧格式写入器，也不全量重写已结算历史。
 

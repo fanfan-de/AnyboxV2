@@ -12,7 +12,7 @@
 4. Run 先返回已接受幂等结果；新请求解析配置、初始上下文、task-template 和父路径，并经 Session 读取本轮快照。读调用的实际退出由准入路径等待。
 5. NativeRunInput v3 保存 raw/text/template/images/files。文件正文只在准备协议输入时暂存，不重复放入该快照字段。Session 接受事务同时复核并保留文件、图片、协议及父恢复引用。
 6. 协议绑定将文件相对路径、实际行范围和正文确定性 JSON 编码为 `project-file-context` v1 用户资料。顺序是模板后的本轮用户文本、文件资料、图片。文件内容不再经过模板，不成为 system/developer 指令。
-7. 五种协议使用已有原生文本内容，不新增 Models 文件类型、Files API 或图片 resourceRefs。原生增量请求记录保存实际发送资料，后续只沿所选成功父链恢复，不访问项目源文件。
+7. 四种协议使用已有原生文本内容，不新增 Models 文件类型、Files API 或图片 resourceRefs。原生增量请求记录保存实际发送资料，后续只沿所选成功父链恢复，不访问项目源文件。
 
 ## 恢复语义
 
@@ -24,7 +24,7 @@ NativeRunInput v1/v2、旧节点和旧图片待提交继续读取，缺失 files
 
 ## Web 与接口
 
-Session/Harness 提供 openProjectFileTree、readProjectFileTreePage、closeProjectFileTree、onProjectFileTreeRetired，以及 searchProjectFiles、previewProjectFile、prepareProjectFiles、getFileSnapshot、renewProjectFiles；受信执行端口提供 readFileSnapshots。Web 只经过 Session 验证和包装后的 HTTP 接口；退休通知由 HTTP 管理观察租约。
+Session/harness server API 提供 openProjectFileTree、readProjectFileTreePage、closeProjectFileTree、onProjectFileTreeRetired，以及 searchProjectFiles、previewProjectFile、prepareProjectFiles、getFileSnapshot、renewProjectFiles；受信执行端口提供 readFileSnapshots。Web 只经过 Session 验证和包装后的 HTTP 接口；退休通知由 HTTP 管理观察租约。
 
 目录、搜索和当前文件预览在旧 `dialogue-v1` 或归档会话中仍可读取所属项目。旧会话不开放快照及图片资源入口；旧会话与归档会话均不能引用到草稿、准备新快照或发送。受限旧格式资源返回 `legacy-session-readonly`，不使用通用内部错误。
 

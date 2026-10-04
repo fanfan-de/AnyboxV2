@@ -2,14 +2,15 @@
 
 [返回模块导航](../README.md)
 
-Models 负责统一模型定义、账户连接、可执行配置、系统凭据、原生模型 execution 与可选目录刷新。通用实现位于独立包 [packages/models](../../../packages/models/README.md)，只从 `@nya/core` 公共入口使用组件机制，不导入 Anybox 的 `src/`。本目录另外收录 Harness 的 DeepSeek 协议扩展，因其职责属于同一模型接入模块。
+Models 负责统一模型定义、账户连接、可执行配置、系统凭据、原生模型 execution 与可选目录刷新。通用实现位于独立包 [packages/models](../../../packages/models/README.md)，只从 `@nya/core` 公共入口使用组件机制，不导入 Anybox 的 `src/`。DeepSeek 等兼容提供方使用标准 Chat Completions，不单独注册协议组件。
 
 ## 组件与边界
 
 | 组件 | 提供的服务或注册项 | 说明 |
 | --- | --- | --- |
 | [Models 协调服务](models.md) | `models`、`models.settings`、`models.protocols`、`models.source-data` | 查询、配置、来源接纳、协议代及 execution 所有权 |
-| [配置存储](store.md) | `models.store` | 独占 SQLite、不可变版本、CAS、迁移与凭据操作日志 |
+| [JSON 配置存储](json-store.md) | `models.store` | Anybox Harness 当前提供方；独占 JSON、原子保存、不可变版本与凭据操作日志 |
+| [SQLite 配置存储](store.md) | `models.store` | 可替换提供方及旧配置读取；独占 SQLite、不可变版本、CAS 与迁移 |
 | [系统凭据](vault.md) | `models.vault` | 系统安全存储、按槽串行及实际退出等待 |
 | [目录来源](catalog-source.md) | `models.catalog-source` | 匿名获取并规范化 models.dev 数据 |
 | [目录缓存](catalog-cache.md) | `models.catalog-cache` | 独立 SQLite 缓存与可观察的内存后备 |
@@ -18,11 +19,10 @@ Models 负责统一模型定义、账户连接、可执行配置、系统凭据�
 | [Chat Completions](chat-completions.md) | 注册 `chat-completions` | 标准 Chat 文本、用户图片和函数工具协议 |
 | [Anthropic Messages](anthropic-messages.md) | 注册 `anthropic-messages` | thinking、签名、工具与服务端搜索块 |
 | [Gemini Interactions](gemini-interactions.md) | 注册 `gemini-interactions` | 原生步骤、thought、函数调用和结果 |
-| [DeepSeek 扩展](deepseek.md) | 注册 `deepseek-chat-completions` | Harness 显式非推理策略，复用 Chat 驱动 |
 
 协议驱动负责原生数据与 HTTP 生命周期；[执行模块](../execution/README.md)的协议 Agent Loop 决定如何响应工具调用、停止原因、拒绝和续轮。Models 不运行 Bash/Apply Patch，不决定 Run 成败，不存 Session 对话树，也不把原生结果转换成统一文本结果。
 
-五种驱动均支持显式声明能力的 JPEG/PNG/WebP 用户图片：资源引用留在原生记录，字节只在受管 start 后读取并编码到临时 HTTP 请求。当前驱动为 2.1.0、记录为 v2，双读旧文本 v1；各协议的编码与兼容细节见独立文档。项目文件资料由宿主绑定编码为普通用户文本，Models 不新增文件读取服务或记录格式。Session 的归档状态也由宿主负责。
+四种驱动均支持显式声明能力的 JPEG/PNG/WebP 用户图片：资源引用留在原生记录，字节只在受管 start 后读取并编码到临时 HTTP 请求。当前驱动为 2.1.0、记录为 v2，双读旧文本 v1；各协议的编码与兼容细节见独立文档。项目文件资料由宿主绑定编码为普通用户文本，Models 不新增文件读取服务或记录格式。Session 的归档状态也由宿主负责。
 
 ## 依赖与资源
 
@@ -49,7 +49,7 @@ flowchart TD
 
 ## 装配与使用
 
-包要求 Node.js 22.13+。当前宿主在打开所选执行端 Agent 时调用 [installWebModels](../../../src/applications/harness/models-startup.ts)，一般装配关系为：
+包要求 Node.js 22.13+。当前宿主在打开所选执行端 Agent 时调用 [installHarnessServerModels](../../../src/applications/harness/server-models.ts)，一般装配关系为：
 
 1. 安装 `createModelsStoreComponent({ path })`、`createModelsVaultComponent({ namespace })` 和 `createModelsComponent()`，等待 Nya 激活。
 2. 安装需要的协议组件。没有驱动时仍可查看和保存非秘密配置，执行保持不可用。

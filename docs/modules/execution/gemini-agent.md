@@ -20,11 +20,17 @@
 ## 原生循环
 
 1. status 为 incomplete 或 budget_exceeded 时归为 incomplete-response；只有 completed 或 requires_action 继续解析，其他状态归为 provider-failure。
-2. 遍历 steps。function_call 读取非空 id、name 和对象 arguments；model_output 的 content 只接受 text；thought 允许保留。其他 step 或非文本输出块归为 unsupported-request。
+2. 遍历 steps。function_call 读取非空 id、name 和对象 arguments；model_output 的 content 为可选字段，省略时按空内容处理，显式 null 或非数组仍是 invalid-response；数组内只接受 text。thought 允许保留。其他 step 或非文本输出块归为 unsupported-request。
 3. 无函数调用时，requires_action 是 invalid-response；completed 则拼接当前回复文本并引用其 response 记录。
 4. 有函数调用时先校验完整批次，再串行运行工具；下一轮只发 function_result，包含 call_id、name 和 text result，text 为实际工具结果 JSON。
 
 Loop 保留原生调用对应关系，不在共享 Runtime 中添加 Gemini 专属停止分支。新请求和工具结果保持增量，完整原生历史由同一 execution 持有和恢复。
+
+## 原生展示
+
+展示 v2 分别定义 model_output（含有序 text 子块）、thought 和 function_call 的 Gemini 专属类型、白名单投影及 Web 组件，保留 step 与内容的父子顺序。exchange 保留原生 interaction.status。已知 annotations 的安全引用关联原始正文，有效位置显示编号，无位置时显示块级来源。
+
+thought 显示为“推理摘要”，默认折叠；当前面板的手动展开选择在流式更新和终态替换中保留。function_call 只表示原生工具请求，本地工具状态及结果通过持久事件关联。thought 签名和其他私有 continuation 不进入展示；旧原生记录读取时重新投影为展示 v2，不改写历史或改变恢复约束。
 
 ## 数据归属、取消与清理
 
@@ -36,4 +42,4 @@ Effect 先等待本注册代 unregister，撤销准入和活跃 program 的信�
 
 支持项目当前的原生 Interactions 文本、显式声明的用户图片输入和已知工具契约。恢复接受 Loop 1.0.0/1.1.0、记录格式 1/2、有效 checkpoint 和 Models 执行语义兼容；不能使用 previous_interaction_id 代替本地历史，也不能跨协议恢复。
 
-[原生协议测试](../../../tests/native-protocol-agents.test.mjs) 覆盖原生工具、thought 签名、跨 Run/重启恢复、独立分支和截断；[Gemini 驱动测试](../../../packages/models/tests/gemini-interactions.test.mjs) 覆盖 steps 顺序、碎片流、预算状态、签名、实际退出和组件注销；[投影测试](../../../tests/native-projection.test.mjs) 覆盖多内容块和 thought 摘要。统一执行 `npm run check`。
+[原生协议测试](../../../tests/native-protocol-agents.test.mjs) 覆盖原生工具、thought 签名、跨 Run/重启恢复、独立分支和截断；[Gemini Loop 测试](../../../tests/gemini-agent.test.mjs) 覆盖可选输出内容、空回复、工具续轮及坏内容在工具执行前拒绝；[Gemini 驱动测试](../../../packages/models/tests/gemini-interactions.test.mjs) 覆盖 steps 顺序、碎片流、预算状态、签名、实际退出和组件注销；[投影测试](../../../tests/native-projection.test.mjs) 覆盖多内容块和 thought 摘要。统一执行 `npm run check`。

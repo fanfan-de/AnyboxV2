@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
 import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
@@ -23,7 +23,7 @@ async function host(t, executing = false) {
   if (executing) {
     llm = controlledModels()
     await root.installComponent(llm.component())
-    harness = await createTestHarnessHost(root, { agents })
+    harness = await createTestHarnessServerCore(root, { agents })
   } else {
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
@@ -104,6 +104,7 @@ test('root instructions and tools stay fixed; the current task template applies 
   await f.harness.bindPrompt('owner', 'assistant', firstTemplate.id)
   const raw = '$& {{input}}'
   const first = await f.harness.startRun({ ...input(f.session.id, 'first'), input: raw })
+  assert.equal(first.protocolBinding.viewSchemaVersion, 2)
   assert.equal(f.llm.calls[0].input.messages.at(-1).content, `first:${raw}`)
   f.llm.calls[0].result.resolve('first answer'); f.llm.calls[0].done.resolve()
   const completed = await f.harness.waitRun(first.id)
@@ -113,6 +114,7 @@ test('root instructions and tools stay fixed; the current task template applies 
   const secondTemplate = await f.harness.publishPrompt('owner', template.id)
   await f.harness.bindPrompt('owner', 'assistant', secondTemplate.id)
   const second = await f.harness.startRun(input(f.session.id, 'next', completed.resultNodeId))
+  assert.equal(second.protocolBinding.viewSchemaVersion, 2)
   assert.deepEqual(f.llm.calls[1].input.messages.map(message => message.content), ['Root instruction', `first:${raw}`, 'first answer', 'second:next'])
   assert.equal(second.nativeInput.template.versionId, secondTemplate.id)
   assert.ok(second.promptVersionIds.includes(first.promptVersionIds[0]))

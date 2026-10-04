@@ -41,7 +41,7 @@ Prompt 管理用户拥有的提示词文档、可编辑草稿和不可变发布�
 | `getPromptVersions(actorId, id)` | 按发布顺序返回指定文档的版本；不存在或越权报错 |
 | `getPublishedVersion(id)` | 供受信消费者读取版本；不接收 actor，也不执行用户授权 |
 
-`actorId` 由宿主确认，不能使用客户端自报身份充当权限依据。`getPublishedVersion` 不从 Harness 管理门面暴露；Nya 服务名称本身也不是访问控制。
+`actorId` 由宿主确认，不能使用客户端自报身份充当权限依据。`getPublishedVersion` 不从 harness server 管理 API暴露；Nya 服务名称本身也不是访问控制。
 
 ## 编辑、发布与并发
 

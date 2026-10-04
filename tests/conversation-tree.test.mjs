@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createTestHarnessHost } from './helpers/harness-host.mjs'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
@@ -26,7 +26,7 @@ async function host(directory, clock = now) {
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   await root.installComponent(llm.component())
-  const harness = await createTestHarnessHost(root, { agents, now: clock })
+  const harness = await createTestHarnessServerCore(root, { agents, now: clock })
   const project = await harness.openProject(directory)
   const plans = new Map(), loop = root.get(runRuntimeServiceKey), start = loop.start.bind(loop)
   loop.start = request => { plans.set(request.runId, request.program); return start(request) }

@@ -1,0 +1,2059 @@
+{
+  "meta": {
+    "title": "Anybox / Anybox Harness — live-panel 框架图",
+    "lang": "zh-CN"
+  },
+  "canvas": {
+    "width": 2160,
+    "height": 1760,
+    "duration": 28,
+    "fps": 30,
+    "preroll": 0
+  },
+  "theme": {
+    "preset": "terminal-dark",
+    "font": "Menlo,\"PingFang SC\",monospace",
+    "fontSize": 23,
+    "lineHeight": 32,
+    "boxMode": "segmented",
+    "wireWidth": 2,
+    "packetSize": 8,
+    "glow": true,
+    "colors": {
+      "bg": "#121820",
+      "bar": "#1c2530",
+      "panel": "#17202b",
+      "line": "#425165",
+      "line2": "#3c4e63",
+      "dim": "#99a9bc",
+      "fg": "#dce7f2",
+      "wh": "#ffffff",
+      "cy": "#71d7eb",
+      "bl": "#95b8ff",
+      "gr": "#8dd5ae",
+      "ye": "#efc681",
+      "hl": "#243444",
+      "dots": "#50627a",
+      "none": "transparent"
+    }
+  },
+  "clock": {
+    "start": "00:00:00",
+    "rate": 1
+  },
+  "titlebar": {
+    "text": "~/AnyboxV2 — live-panel / architecture demo — no live telemetry",
+    "height": 38,
+    "size": 16
+  },
+  "credit": {
+    "text": "依据 AnyboxV2 当前工作区源码 · 2026-10-04 · live-panel: github.com/ythx-101/live-panel-skill · motion after @thedelost · 流动与日志为示意",
+    "y": 1735,
+    "size": 17
+  },
+  "machines": {
+    "seq": {
+      "type": "cycle",
+      "period": 3.5,
+      "t0": 0,
+      "values": [
+        {
+          "t": "固定设备",
+          "tip": "明确会话与所选父节点",
+          "m": "固定连接版本、instanceId 和 parentNodeId",
+          "g": "client → http"
+        },
+        {
+          "t": "准入准备",
+          "tip": "幂等优先，固定执行语义",
+          "m": "Run 解析 Prompt 与模型，准备独立 execution / program",
+          "g": "prepare"
+        },
+        {
+          "t": "接受事务",
+          "tip": "固定资源引用与恢复路径",
+          "m": "Session 复核协议与父引用，原子接受 Run",
+          "g": "accepted"
+        },
+        {
+          "t": "接管资源",
+          "tip": "先同步交接，再开始异步执行",
+          "m": "RunRuntime 同步接管 PreparedRunProgram 和资源所有权",
+          "g": "runtime owns"
+        },
+        {
+          "t": "模型交换",
+          "tip": "原生 Loop 消费原生结果",
+          "m": "Loop 经 RunHost 持久化意图，等待模型 result + done",
+          "g": "native call"
+        },
+        {
+          "t": "工具续轮",
+          "tip": "工具真实观察交回协议 Loop",
+          "m": "RunRuntime 执行 Bash / Apply Patch，记录观察后续轮",
+          "g": "tool → loop"
+        },
+        {
+          "t": "等待退出",
+          "tip": "取消与完成均等待实际退出",
+          "m": "关闭 program，等待全部模型与工具资源退出",
+          "g": "join cleanup"
+        },
+        {
+          "t": "成功结算",
+          "tip": "成功节点与终态原子提交",
+          "m": "Session 同事务提交节点、记录、链节与终态事件",
+          "g": "commit"
+        }
+      ],
+      "log": {
+        "who": "FLOW DEMO",
+        "c": "bl"
+      }
+    }
+  },
+  "elements": [
+    {
+      "type": "text",
+      "x": 60,
+      "y": 111,
+      "t": "Anybox / FRAMEWORK",
+      "size": 52,
+      "c": "wh",
+      "b": true
+    },
+    {
+      "type": "text",
+      "x": 62,
+      "y": 172,
+      "t": "通用应用宿主  ·  Anybox Harness  ·  原生协议执行",
+      "size": 27,
+      "c": "dim",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 1635,
+      "y": 110,
+      "t": "2026-10-04 / WORKSPACE",
+      "size": 23,
+      "c": "dim",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 1635,
+      "y": 154,
+      "t": "动画与日志为流程示意",
+      "size": 23,
+      "c": "ye",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 62,
+      "y": 221,
+      "size": 22,
+      "runs": [
+        {
+          "sw": "cy"
+        },
+        {
+          "t": "界面与传输    ",
+          "c": "cy"
+        },
+        {
+          "sw": "bl"
+        },
+        {
+          "t": "准入与执行    ",
+          "c": "bl"
+        },
+        {
+          "sw": "gr"
+        },
+        {
+          "t": "协议与模型    ",
+          "c": "gr"
+        },
+        {
+          "sw": "ye"
+        },
+        {
+          "t": "持久事实与资源    ",
+          "c": "ye"
+        },
+        {
+          "t": "实线：主调用   虚线：记录 / 配置支持",
+          "c": "dim"
+        }
+      ]
+    },
+    {
+      "type": "box",
+      "_node": "execution-root",
+      "x": 535,
+      "y": 260,
+      "w": 1565,
+      "h": 1080,
+      "color": "line",
+      "fill": "none",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [],
+      "container": true,
+      "sides": "solid",
+      "radius": 0
+    },
+    {
+      "type": "text",
+      "x": 580,
+      "y": 290,
+      "t": "EXECUTION / harness server  ·  本机或远端 · 每实例一个 Nya 根",
+      "size": 24,
+      "c": "dim",
+      "b": true,
+      "inside": true
+    },
+    {
+      "type": "box",
+      "_node": "client-root",
+      "x": 60,
+      "y": 500,
+      "w": 410,
+      "h": 400,
+      "color": "line",
+      "fill": "none",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [],
+      "container": true,
+      "sides": "solid",
+      "radius": 0
+    },
+    {
+      "type": "text",
+      "x": 84,
+      "y": 528,
+      "t": "CLIENT PROCESS / 一个 Nya 根",
+      "size": 21,
+      "c": "dim",
+      "b": true,
+      "inside": true
+    },
+    {
+      "type": "box",
+      "_node": "ui",
+      "x": 60,
+      "y": 270,
+      "w": 410,
+      "h": 150,
+      "color": "cy",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "Anybox / Anybox Harness",
+          "c": "cy",
+          "size": 25,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "应用入口 / 项目 / 会话工作区",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "Browser 或 Electron Renderer",
+          "c": "dim",
+          "size": 20,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          0,
+          7
+        ]
+      },
+      "then": {
+        "color": "cy",
+        "fill": "hl",
+        "glow": "cy"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "connections",
+      "x": 84,
+      "y": 575,
+      "w": 362,
+      "h": 115,
+      "color": "cy",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "client.connections",
+          "c": "cy",
+          "size": 25,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "连接版本 / instanceId / Vault",
+          "c": "dim",
+          "size": 19,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          0
+        ]
+      },
+      "then": {
+        "color": "cy",
+        "fill": "hl",
+        "glow": "cy"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "gateway",
+      "x": 84,
+      "y": 738,
+      "w": 362,
+      "h": 112,
+      "color": "cy",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "app.client-http → gateway",
+          "c": "cy",
+          "size": 21,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "同源白名单代理 / SSE 回流",
+          "c": "dim",
+          "size": 21,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          0,
+          7
+        ]
+      },
+      "then": {
+        "color": "cy",
+        "fill": "hl",
+        "glow": "cy"
+      }
+    },
+    {
+      "type": "text",
+      "x": 83,
+      "y": 874,
+      "t": "HTTP(S) · Bearer · instanceId",
+      "size": 20,
+      "c": "cy",
+      "b": false,
+      "inside": true
+    },
+    {
+      "type": "box",
+      "_node": "desktop",
+      "x": 60,
+      "y": 970,
+      "w": 410,
+      "h": 170,
+      "color": "cy",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "Electron 桌面适配",
+          "c": "cy",
+          "size": 25,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "Main：窗口 / 协议桥 / 私有 RPC",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "Client + Execution Workers",
+          "c": "dim",
+          "size": 22,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "两个独立进程，各有一个根",
+          "c": "dim",
+          "size": 22,
+          "b": false,
+          "align": "left"
+        }
+      ]
+    },
+    {
+      "type": "box",
+      "_node": "ownership-notes",
+      "x": 60,
+      "y": 1190,
+      "w": 410,
+      "h": 150,
+      "color": "line",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "边界约束",
+          "c": "wh",
+          "size": 25,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "项目与 Session 是数据边界",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "界面关闭仅停止观察",
+          "c": "dim",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "用户取消 Run 需显式操作",
+          "c": "dim",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        }
+      ]
+    },
+    {
+      "type": "box",
+      "_node": "http",
+      "x": 580,
+      "y": 335,
+      "w": 480,
+      "h": 145,
+      "color": "cy",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "host.http → harness.http",
+          "c": "cy",
+          "size": 27,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "认证 / 实例核对 / 按应用分派",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "本次请求固定当前服务代",
+          "c": "dim",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          0,
+          7
+        ]
+      },
+      "then": {
+        "color": "cy",
+        "fill": "hl",
+        "glow": "cy"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "applications",
+      "x": 1120,
+      "y": 335,
+      "w": 910,
+      "h": 145,
+      "color": "bl",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "Anybox 应用宿主   ·   app.products / app.activity",
+          "c": "bl",
+          "size": 27,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "受信应用目录 → 按需安装 · 同应用控制串行 · Run guard",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "关闭准入 → 取消并等待实际退出 → Nya Effect 清理",
+          "c": "dim",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        }
+      ]
+    },
+    {
+      "type": "box",
+      "_node": "run",
+      "x": 580,
+      "y": 555,
+      "w": 430,
+      "h": 170,
+      "color": "bl",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "Run / harness.runs",
+          "c": "bl",
+          "size": 28,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "幂等优先 / 显式 parentNodeId",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "固定 Prompt、模型与协议租约",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "准备 PreparedRunProgram",
+          "c": "dim",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          1,
+          2
+        ]
+      },
+      "then": {
+        "color": "bl",
+        "fill": "hl",
+        "glow": "bl"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "session",
+      "x": 1110,
+      "y": 555,
+      "w": 480,
+      "h": 170,
+      "color": "ye",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "Session / 会话与恢复事实",
+          "c": "ye",
+          "size": 28,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "会话树 / Run / 记录 / 事件",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "接受事务固定协议、父路径与引用",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "成功节点在资源退出后原子提交",
+          "c": "dim",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          2,
+          7
+        ]
+      },
+      "then": {
+        "color": "ye",
+        "fill": "hl",
+        "glow": "ye"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "inputs",
+      "x": 1660,
+      "y": 555,
+      "w": 370,
+      "h": 170,
+      "color": "ye",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "准备输入 / 资源归属",
+          "c": "ye",
+          "size": 25,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "Projects / Agent Prompt",
+          "c": "fg",
+          "size": 21,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "Image Assets / Project Files",
+          "c": "fg",
+          "size": 18,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "项目身份 / 版本 / 不变快照",
+          "c": "dim",
+          "size": 20,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          1,
+          2
+        ]
+      },
+      "then": {
+        "color": "ye",
+        "fill": "hl",
+        "glow": "ye"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "runtime",
+      "x": 580,
+      "y": 820,
+      "w": 430,
+      "h": 180,
+      "color": "bl",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "RunRuntime",
+          "c": "bl",
+          "size": 30,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "同步接管 program 与在途句柄",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "意图 → 操作 → 观察 → 结算",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "取消 / result + done 实际退出",
+          "c": "dim",
+          "size": 21,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          3,
+          4,
+          5,
+          6
+        ]
+      },
+      "then": {
+        "color": "bl",
+        "fill": "hl",
+        "glow": "bl"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "loops",
+      "x": 1110,
+      "y": 820,
+      "w": 480,
+      "h": 180,
+      "color": "gr",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "Protocol Agents / 独立 Loop",
+          "c": "gr",
+          "size": 27,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "Responses / Chat Completions",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "Anthropic Messages / Gemini",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "解释原生语义 · 经 RunHost 操作",
+          "c": "dim",
+          "size": 22,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          1,
+          4,
+          5,
+          6
+        ]
+      },
+      "then": {
+        "color": "gr",
+        "fill": "hl",
+        "glow": "gr"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "models",
+      "x": 1660,
+      "y": 820,
+      "w": 370,
+      "h": 180,
+      "color": "gr",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "packages/models",
+          "c": "gr",
+          "size": 29,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "openNative / 4 种原生驱动",
+          "c": "fg",
+          "size": 21,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "私有 execution 状态与凭据",
+          "c": "fg",
+          "size": 20,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "原生流事件 / 私有上下文提交",
+          "c": "dim",
+          "size": 20,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          1,
+          4,
+          5,
+          6
+        ]
+      },
+      "then": {
+        "color": "gr",
+        "fill": "hl",
+        "glow": "gr"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "tools",
+      "x": 580,
+      "y": 1100,
+      "w": 430,
+      "h": 145,
+      "color": "bl",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "Bash + Apply Patch",
+          "c": "bl",
+          "size": 27,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "受管进程 / 补丁串行提交",
+          "c": "fg",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "保留真实观察与部分变更",
+          "c": "dim",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          5,
+          6
+        ]
+      },
+      "then": {
+        "color": "bl",
+        "fill": "hl",
+        "glow": "bl"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "storage",
+      "x": 1110,
+      "y": 1100,
+      "w": 480,
+      "h": 145,
+      "color": "ye",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "业务 SQLite + 图片目录",
+          "c": "ye",
+          "size": 27,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "Session / Prompt / Projects / 文件快照",
+          "c": "fg",
+          "size": 20,
+          "b": false,
+          "align": "left"
+        },
+        {
+          "t": "同一业务连接 · 各领域登记迁移",
+          "c": "dim",
+          "size": 23,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          2,
+          7
+        ]
+      },
+      "then": {
+        "color": "ye",
+        "fill": "hl",
+        "glow": "ye"
+      }
+    },
+    {
+      "type": "box",
+      "_node": "model-resources",
+      "x": 1660,
+      "y": 1100,
+      "w": 370,
+      "h": 165,
+      "color": "gr",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "Models 支持组件",
+          "c": "gr",
+          "size": 25,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "JSON Store / Vault / Catalog",
+          "size": 18,
+          "align": "left"
+        },
+        {
+          "t": "目录缓存DB / source-data",
+          "size": 20,
+          "align": "left"
+        },
+        {
+          "t": "配置非秘密 · Key 仅系统保管",
+          "c": "dim",
+          "size": 20,
+          "align": "left"
+        }
+      ]
+    },
+    {
+      "type": "text",
+      "x": 580,
+      "y": 1291,
+      "t": "以上组件直接安装在执行端根上；分组表示职责。Agent 定义为只读配置。",
+      "size": 22,
+      "c": "dim",
+      "b": false,
+      "inside": true
+    },
+    {
+      "type": "box",
+      "_node": "nya",
+      "x": 580,
+      "y": 1395,
+      "w": 430,
+      "h": 100,
+      "color": "bl",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "NyaCore / 每进程组件框架",
+          "c": "bl",
+          "size": 25,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "注入就绪 / 重启 / Effect 清理",
+          "c": "dim",
+          "size": 22,
+          "b": false,
+          "align": "left"
+        }
+      ]
+    },
+    {
+      "type": "box",
+      "_node": "catalog",
+      "x": 1110,
+      "y": 1395,
+      "w": 480,
+      "h": 100,
+      "color": "gr",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "models.dev / 公共模型目录",
+          "c": "gr",
+          "size": 25,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "匿名读取 api.json · 定义元数据",
+          "c": "dim",
+          "size": 21,
+          "b": false,
+          "align": "left"
+        }
+      ]
+    },
+    {
+      "type": "box",
+      "_node": "providers",
+      "x": 1660,
+      "y": 1395,
+      "w": 370,
+      "h": 100,
+      "color": "gr",
+      "fill": "panel",
+      "align": "left",
+      "pad": [
+        17,
+        22,
+        22
+      ],
+      "lines": [
+        {
+          "t": "外部模型 API",
+          "c": "gr",
+          "size": 27,
+          "b": true,
+          "align": "left"
+        },
+        {
+          "t": "标准原生协议 / 增量消息",
+          "c": "dim",
+          "size": 21,
+          "b": false,
+          "align": "left"
+        }
+      ],
+      "when": {
+        "var": "seq.i",
+        "in": [
+          4,
+          5
+        ]
+      },
+      "then": {
+        "color": "gr",
+        "fill": "hl",
+        "glow": "gr"
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "ui-to-client",
+      "points": [
+        [
+          265,
+          420
+        ],
+        [
+          265,
+          453
+        ],
+        [
+          40,
+          453
+        ],
+        [
+          40,
+          795
+        ],
+        [
+          84,
+          795
+        ]
+      ],
+      "color": "cy",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "when": {
+        "var": "seq.i",
+        "in": [
+          0,
+          7
+        ]
+      },
+      "then": {
+        "color": "cy",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 2,
+        "offsets": [
+          0
+        ],
+        "color": "cy",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "connections-to-gateway",
+      "points": [
+        [
+          265,
+          690
+        ],
+        [
+          265,
+          738
+        ]
+      ],
+      "color": "cy",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "dash": "7 7",
+      "when": {
+        "var": "seq.i",
+        "in": [
+          0
+        ]
+      },
+      "then": {
+        "color": "cy",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 1.75,
+        "offsets": [
+          0
+        ],
+        "color": "cy",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "gateway-to-server",
+      "points": [
+        [
+          446,
+          795
+        ],
+        [
+          510,
+          795
+        ],
+        [
+          510,
+          408
+        ],
+        [
+          580,
+          408
+        ]
+      ],
+      "color": "cy",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "when": {
+        "var": "seq.i",
+        "in": [
+          0,
+          7
+        ]
+      },
+      "then": {
+        "color": "cy",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 2.8,
+        "offsets": [
+          0
+        ],
+        "color": "cy",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "http-to-run",
+      "points": [
+        [
+          795,
+          480
+        ],
+        [
+          795,
+          555
+        ]
+      ],
+      "color": "cy",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "when": {
+        "var": "seq.i",
+        "in": [
+          1
+        ]
+      },
+      "then": {
+        "color": "cy",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 1.75,
+        "offsets": [
+          0
+        ],
+        "color": "cy",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "run-accept-session",
+      "points": [
+        [
+          1010,
+          620
+        ],
+        [
+          1110,
+          620
+        ]
+      ],
+      "color": "ye",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "dash": "7 7",
+      "when": {
+        "var": "seq.i",
+        "in": [
+          2
+        ]
+      },
+      "then": {
+        "color": "ye",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 1.75,
+        "offsets": [
+          0
+        ],
+        "color": "ye",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "session-to-run",
+      "points": [
+        [
+          1110,
+          690
+        ],
+        [
+          1010,
+          690
+        ]
+      ],
+      "color": "ye",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "dash": "7 7",
+      "when": {
+        "var": "seq.i",
+        "in": [
+          1
+        ]
+      },
+      "then": {
+        "color": "ye",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 2,
+        "offsets": [
+          0
+        ],
+        "color": "ye",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "input-to-run",
+      "points": [
+        [
+          1845,
+          555
+        ],
+        [
+          1845,
+          517
+        ],
+        [
+          900,
+          517
+        ],
+        [
+          900,
+          555
+        ]
+      ],
+      "color": "ye",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "dash": "7 7",
+      "when": {
+        "var": "seq.i",
+        "in": [
+          1
+        ]
+      },
+      "then": {
+        "color": "ye",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 3.5,
+        "offsets": [
+          0
+        ],
+        "color": "ye",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "run-to-runtime",
+      "points": [
+        [
+          795,
+          725
+        ],
+        [
+          795,
+          820
+        ]
+      ],
+      "color": "bl",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "when": {
+        "var": "seq.i",
+        "in": [
+          3
+        ]
+      },
+      "then": {
+        "color": "bl",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 1.75,
+        "offsets": [
+          0
+        ],
+        "color": "bl",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "runtime-runs-program",
+      "points": [
+        [
+          1010,
+          895
+        ],
+        [
+          1110,
+          895
+        ]
+      ],
+      "color": "bl",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "when": {
+        "var": "seq.i",
+        "in": [
+          3,
+          4,
+          5,
+          6
+        ]
+      },
+      "then": {
+        "color": "bl",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 1.75,
+        "offsets": [
+          0
+        ],
+        "color": "bl",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "loop-to-models",
+      "points": [
+        [
+          1590,
+          895
+        ],
+        [
+          1660,
+          895
+        ]
+      ],
+      "color": "gr",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "when": {
+        "var": "seq.i",
+        "in": [
+          4,
+          5
+        ]
+      },
+      "then": {
+        "color": "gr",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 1.75,
+        "offsets": [
+          0
+        ],
+        "color": "gr",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "runtime-to-tools",
+      "points": [
+        [
+          795,
+          1000
+        ],
+        [
+          795,
+          1100
+        ]
+      ],
+      "color": "bl",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "when": {
+        "var": "seq.i",
+        "in": [
+          5,
+          6
+        ]
+      },
+      "then": {
+        "color": "bl",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 2,
+        "offsets": [
+          0
+        ],
+        "color": "bl",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "runtime-observations-to-session",
+      "points": [
+        [
+          1010,
+          955
+        ],
+        [
+          1060,
+          955
+        ],
+        [
+          1060,
+          770
+        ],
+        [
+          1350,
+          770
+        ],
+        [
+          1350,
+          725
+        ]
+      ],
+      "color": "ye",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "dash": "7 7",
+      "when": {
+        "var": "seq.i",
+        "in": [
+          4,
+          5,
+          7
+        ]
+      },
+      "then": {
+        "color": "ye",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 3.5,
+        "offsets": [
+          0
+        ],
+        "color": "ye",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "session-storage",
+      "points": [
+        [
+          1410,
+          725
+        ],
+        [
+          1410,
+          752
+        ],
+        [
+          1622,
+          752
+        ],
+        [
+          1622,
+          1055
+        ],
+        [
+          1350,
+          1055
+        ],
+        [
+          1350,
+          1100
+        ]
+      ],
+      "color": "ye",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "dash": "7 7",
+      "when": {
+        "var": "seq.i",
+        "in": [
+          2,
+          7
+        ]
+      },
+      "then": {
+        "color": "ye",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 2.8,
+        "offsets": [
+          0
+        ],
+        "color": "ye",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "model-resources",
+      "points": [
+        [
+          1845,
+          1100
+        ],
+        [
+          1845,
+          1000
+        ]
+      ],
+      "color": "gr",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "dash": "7 7",
+      "when": {
+        "var": "seq.i",
+        "in": [
+          1
+        ]
+      },
+      "then": {
+        "color": "gr",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 2.8,
+        "offsets": [
+          0
+        ],
+        "color": "gr",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "models-api",
+      "points": [
+        [
+          2030,
+          940
+        ],
+        [
+          2070,
+          940
+        ],
+        [
+          2070,
+          1445
+        ],
+        [
+          2030,
+          1445
+        ]
+      ],
+      "color": "gr",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "when": {
+        "var": "seq.i",
+        "in": [
+          4,
+          5
+        ]
+      },
+      "then": {
+        "color": "gr",
+        "width": 3.4,
+        "opacity": 1
+      },
+      "flow": {
+        "period": 2,
+        "offsets": [
+          0
+        ],
+        "color": "gr",
+        "tail": 15
+      }
+    },
+    {
+      "type": "path",
+      "_edge": "catalog-admission",
+      "points": [
+        [
+          1470,
+          1395
+        ],
+        [
+          1470,
+          1369
+        ],
+        [
+          1638,
+          1369
+        ],
+        [
+          1638,
+          1190
+        ],
+        [
+          1660,
+          1190
+        ]
+      ],
+      "color": "gr",
+      "r": 10,
+      "width": 2,
+      "head": 10,
+      "opacity": 0.5,
+      "dash": "7 7",
+      "flow": {
+        "period": 3.5,
+        "offsets": [
+          0
+        ],
+        "color": "gr",
+        "tail": 15
+      }
+    },
+    {
+      "type": "text",
+      "x": 816,
+      "y": 515,
+      "t": "分派",
+      "size": 18,
+      "c": "cy",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 1021,
+      "y": 596,
+      "t": "接受",
+      "size": 18,
+      "c": "ye",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 1021,
+      "y": 666,
+      "t": "恢复",
+      "size": 18,
+      "c": "ye",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 819,
+      "y": 780,
+      "t": "交接 program",
+      "size": 19,
+      "c": "bl",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 1018,
+      "y": 869,
+      "t": "RunHost",
+      "size": 18,
+      "c": "bl",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 1596,
+      "y": 868,
+      "t": "原生",
+      "size": 18,
+      "c": "gr",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 819,
+      "y": 1052,
+      "t": "工具操作",
+      "size": 20,
+      "c": "bl",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 1130,
+      "y": 795,
+      "t": "操作观察 / 成功结算",
+      "size": 18,
+      "c": "ye",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 60,
+      "y": 1450,
+      "t": "展示流程：{seq.t}",
+      "size": 22,
+      "c": "cy",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 60,
+      "y": 1490,
+      "t": "{seq.tip}",
+      "size": 20,
+      "c": "dim",
+      "b": false
+    },
+    {
+      "type": "text",
+      "x": 580,
+      "y": 1527,
+      "t": "目录刷新独立于执行；原生历史归 Session，秘密与句柄留在私有执行边界。",
+      "size": 22,
+      "c": "dim",
+      "b": false
+    },
+    {
+      "type": "log",
+      "x": 60,
+      "y": 1580,
+      "w": 2040,
+      "rows": 3,
+      "padTop": 20,
+      "padBottom": 32,
+      "title": "FLOW LOG / 模拟事件",
+      "titleX": 55,
+      "titleW": 350,
+      "cols": [
+        {
+          "key": "time",
+          "x": 0
+        },
+        {
+          "key": "who",
+          "x": 170
+        },
+        {
+          "key": "m",
+          "x": 340
+        },
+        {
+          "key": "g",
+          "x": 1660
+        }
+      ]
+    }
+  ],
+  "_sources": {
+    "ui": [
+      "src/host/web/client.ts",
+      "src/applications/harness/web/harness-app.ts"
+    ],
+    "client": [
+      "src/host/client.ts",
+      "src/applications/harness/client/runtime.ts",
+      "src/applications/harness/client/gateway.ts"
+    ],
+    "desktop": [
+      "docs/desktop-runtime.md",
+      "src/entrypoints/desktop-main.ts",
+      "src/entrypoints/desktop-worker.ts"
+    ],
+    "execution": [
+      "src/host/execution.ts",
+      "src/applications/harness/server-runtime.ts",
+      "src/applications/harness/core/index.ts"
+    ],
+    "run": [
+      "src/applications/harness/core/run/component.ts",
+      "src/applications/harness/core/run/runtime-component.ts",
+      "src/applications/harness/core/run/program.ts"
+    ],
+    "session": [
+      "src/applications/harness/core/session/component.ts",
+      "src/applications/harness/core/session/sqlite-records.ts"
+    ],
+    "models": [
+      "src/applications/harness/server-models.ts",
+      "packages/models/src/component.ts",
+      "packages/models/src/execution.ts",
+      "packages/models/src/catalog.ts"
+    ],
+    "loops": [
+      "src/applications/harness/core/protocol-agents/registry.ts",
+      "src/applications/harness/core/protocol-agents/shared.ts"
+    ]
+  }
+}

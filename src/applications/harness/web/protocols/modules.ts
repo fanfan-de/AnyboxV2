@@ -1,5 +1,10 @@
 import type { ProtocolViewSnapshot } from '../../core/view/types.js'
-import { decodeProtocolView, reduceProtocolView, mountProtocolTurn, type MountedProtocolTurn } from './view.js'
+import { decodeProtocolView, reduceProtocolView, mountProtocolTurn, type MountedProtocolTurn, type ProtocolTurnOptions, type NativeBlockContext, type MountedNativeBlock } from './view.js'
+import type { ProtocolViewBlock, ProtocolViewExchange } from '../../core/view/types.js'
+import { mountResponsesBlock, responsesStateText } from './responses.js'
+import { mountAnthropicBlock, anthropicStateText } from './anthropic.js'
+import { mountChatBlock, chatStateText } from './chat.js'
+import { mountGeminiBlock, geminiStateText } from './gemini.js'
 
 export type { MountedProtocolTurn } from './view.js'
 
@@ -10,7 +15,7 @@ export interface ProtocolWebModule {
   encodeInput(text: string, imageCount?: number, fileCount?: number): string
   decode(value: unknown): ProtocolViewSnapshot | undefined
   reduce(current: ProtocolViewSnapshot | undefined, next: ProtocolViewSnapshot): ProtocolViewSnapshot | undefined
-  mount(initial: ProtocolViewSnapshot): MountedProtocolTurn
+  mount(initial: ProtocolViewSnapshot, options?: ProtocolTurnOptions): MountedProtocolTurn
 }
 
 /** Text is sent unchanged. Prompt/template expansion belongs exclusively to the server. */
@@ -19,7 +24,9 @@ function encodeTextInput(text: string, imageCount = 0, fileCount = 0): string {
   return text
 }
 
-function bindProtocol(protocolId: string, name: string): ProtocolWebModule {
+function bindProtocol(protocolId: string, name: string,
+  mountBlock: (block: ProtocolViewBlock, context: NativeBlockContext) => MountedNativeBlock,
+  stateText: (exchange: ProtocolViewExchange, presentation?: NativeBlockContext['presentation']) => string): ProtocolWebModule {
   const imageInput = true
   const decode = (value: unknown): ProtocolViewSnapshot | undefined => {
     const snapshot = decodeProtocolView(value)
@@ -32,21 +39,20 @@ function bindProtocol(protocolId: string, name: string): ProtocolWebModule {
   return Object.freeze({ protocolId, imageInput, encodeInput(text: string, imageCount = 0, fileCount = 0) {
     return encodeTextInput(text, imageCount, fileCount)
   }, decode, reduce,
-    mount(initial: ProtocolViewSnapshot) {
+    mount(initial: ProtocolViewSnapshot, options?: ProtocolTurnOptions) {
       const snapshot = decode(initial)
       if (!snapshot) throw new TypeError('此协议的视图不兼容。')
-      return mountProtocolTurn(snapshot, { name, reduce })
+      return mountProtocolTurn(snapshot, { name, reduce, mountBlock, stateText }, options)
     },
   })
 }
 
-export const responsesWebModule = bindProtocol('responses', 'Responses')
-export const chatWebModule = bindProtocol('chat-completions', 'Chat Completions')
-export const deepSeekWebModule = bindProtocol('deepseek-chat-completions', 'DeepSeek')
-export const anthropicWebModule = bindProtocol('anthropic-messages', 'Anthropic')
-export const geminiWebModule = bindProtocol('gemini-interactions', 'Gemini')
+export const responsesWebModule = bindProtocol('responses', 'Responses', mountResponsesBlock, responsesStateText)
+export const chatWebModule = bindProtocol('chat-completions', 'Chat Completions', mountChatBlock, chatStateText)
+export const anthropicWebModule = bindProtocol('anthropic-messages', 'Anthropic', mountAnthropicBlock, anthropicStateText)
+export const geminiWebModule = bindProtocol('gemini-interactions', 'Gemini', mountGeminiBlock, geminiStateText)
 
-const modules = new Map([responsesWebModule, chatWebModule, deepSeekWebModule, anthropicWebModule, geminiWebModule]
+const modules = new Map([responsesWebModule, chatWebModule, anthropicWebModule, geminiWebModule]
   .map(module => [module.protocolId, module]))
 
 export function getProtocolWebModule(protocolId: unknown): ProtocolWebModule | undefined {

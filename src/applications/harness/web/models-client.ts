@@ -101,7 +101,7 @@ export function settingsModelEditorSelection(configurations: readonly Pick<Model
   return own[0] ? { connectionId, target: { kind: 'configuration', id: own[0].id }, visible: false, expanded: false } : undefined
 }
 
-const supportChoices: readonly [Support, string][] = [['unknown', '未知'], ['supported', '支持'], ['unsupported', '不支持']]
+const supportLabels: Readonly<Record<Support, string>> = { unknown: '未知', supported: '支持', unsupported: '不支持' }
 const unknownCapabilities = (): DeclaredCapabilities => ({ tools: { support: 'unknown' }, streaming: { support: 'unknown' }, imageInput: { support: 'unknown' }, reasoning: { support: 'unknown' } })
 function option(value: string, text: string): HTMLOptionElement {
   const item = document.createElement('option'); item.value = value; item.textContent = text; return item
@@ -151,12 +151,12 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
               <form data-model-form>
                 <div class="models-grid"><label>显示名称<input data-model-name required maxlength="200" placeholder="例如：深入分析"></label><label>远端模型标识<input data-remote-id required placeholder="提供方要求的 model ID"></label></div>
                 <label class="models-check"><input data-model-enabled type="checkbox" checked>启用此模型</label>
-                <fieldset class="models-parameters"><legend>生成参数</legend><p class="settings-hint">留空使用服务端默认值。</p><div class="models-grid" data-parameters></div><label data-server-search-label class="models-check" hidden><input type="checkbox" data-server-search>启用服务端网络搜索</label><p data-server-search-hint class="settings-hint" hidden>先在模型能力中明确声明支持网络搜索，再启用此功能。</p></fieldset>
-                <details class="models-capabilities"><summary>模型能力与推理声明</summary><p class="settings-hint">未知能力不会被认定为支持。工具能力未知时仅进行文本调用。</p><div class="models-grid" data-capabilities></div><label>推理档位（可选，逗号分隔）<input data-efforts placeholder="例如：low, medium, high"></label><label>推理模式（可选，逗号分隔）<input data-modes></label><div class="models-grid"><label>最小推理预算<input data-budget-min type="number" min="0" step="1"></label><label>最大推理预算<input data-budget-max type="number" min="0" step="1"></label></div></details>
+                <fieldset class="models-parameters"><legend>生成参数</legend><p class="settings-hint">留空使用服务端默认值。</p><div class="models-grid" data-parameters></div><label data-server-search-label class="models-check" hidden><input type="checkbox" data-server-search>启用服务端网络搜索</label><p data-server-search-hint class="settings-hint" hidden>此模型尚未声明支持服务端网络搜索。</p></fieldset>
+                <details class="models-capabilities"><summary>模型能力（只读）</summary><p class="settings-hint">以下为模型能力声明。实际推理开关、档位和预算在生成参数中设置。未知能力不会被认定为支持。</p><dl class="models-capability-list" data-capabilities></dl><p class="settings-hint">能力声明只读；如需调整，请修改执行设备上的模型配置 JSON 文件，停止并重新打开 Anybox Harness 后生效。</p></details>
                 <div class="settings-actions"><button type="submit" data-save-model>保存参数</button><button type="button" data-reset-model class="secondary-button">放弃修改</button><button type="button" data-close-model class="secondary-button">收起</button></div>
               </form>
             </details>
-            <details class="models-remote-models"><summary>获取远端模型列表</summary><p class="settings-hint">目录中没有所需模型时，可从当前连接获取候选，再确认能力与参数。</p><button type="button" data-discover class="secondary-button">获取模型</button><label data-candidates-label hidden>远端候选<select data-candidates></select></label></details>
+            <details class="models-remote-models"><summary>获取远端模型列表</summary><p class="settings-hint">目录中没有所需模型时，可从当前连接获取候选，查看能力声明并配置生成参数。</p><button type="button" data-discover class="secondary-button">获取模型</button><label data-candidates-label hidden>远端候选<select data-candidates></select></label></details>
           </section>
         </div>
       </div>
@@ -193,6 +193,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   let provider: ProviderConnection | undefined, model: ModelConfiguration | undefined, busy = false, loaded = false
   let mode: 'manage' | 'add' = 'manage', returnConnectionId: string | undefined, customConnection = false
   let providerDefinitionId = '', configurationDefinitionId = '', variantDefaults: NativeObject | undefined, variantCapabilities: DeclaredCapabilities | undefined
+  let modelCapabilities = unknownCapabilities()
   let directory: ReturnType<typeof setupModelsDirectory> | undefined
   let preferredConnectionId: string | undefined
   try { preferredConnectionId = localStorage.getItem(`anybox.models.connection.${instanceId}`) ?? undefined } catch { /* Browser storage may be unavailable. */ }
@@ -212,14 +213,13 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   const modelPath = () => `/models/configurations/${encodeURIComponent(model!.id)}`
   const definition = () => definitions.find(value => value.id === providerDefinitionId)
   const connectionFields = ['provider-name', 'base-url', 'timeout', 'provider-enabled'] as const
-  const modelFields = ['model-name', 'remote-id', 'model-enabled', 'efforts', 'modes', 'budget-min', 'budget-max', 'server-search'] as const
+  const modelFields = ['model-name', 'remote-id', 'model-enabled', 'server-search'] as const
   function readFields(names: readonly string[]): Record<string, string | boolean> {
     return Object.fromEntries(names.map(name => [name, input(name).type === 'checkbox' ? input(name).checked : input(name).value]))
   }
   function writeFields(fields: Fields): void {
     for (const [name, value] of Object.entries(fields)) {
-      const field = name.startsWith('parameter:') ? root.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-parameter="${name.slice(10)}"]`) :
-        name.startsWith('capability:') ? root.querySelector<HTMLSelectElement>(`[data-capability="${name.slice(11)}"]`) : input(name)
+      const field = name.startsWith('parameter:') ? root.querySelector<HTMLInputElement | HTMLSelectElement>(`[data-parameter="${name.slice(10)}"]`) : input(name)
       if (!field) continue
       if (typeof value === 'boolean' && field instanceof HTMLInputElement) field.checked = value
       else field.value = String(value)
@@ -237,7 +237,6 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   function readModelFields(): Record<string, string | boolean> {
     const fields = readFields(modelFields)
     for (const field of root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-parameter]')) fields[`parameter:${field.dataset.parameter}`] = field.value
-    for (const field of root.querySelectorAll<HTMLSelectElement>('[data-capability]')) fields[`capability:${field.dataset.capability}`] = field.value
     return fields
   }
   function captureModel(): void {
@@ -246,7 +245,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     if (!modelDraftKey || modelEditor.hidden) return
     const fields = readModelFields()
     if (model && JSON.stringify(fields) === JSON.stringify(modelBaseFields)) modelDrafts.delete(modelDraftKey)
-    else modelDrafts.set(modelDraftKey, { fields, baseFields: modelBaseFields, baseRevision: modelBaseRevision, definitionId: configurationDefinitionId, defaults: variantDefaults, capabilities: variantCapabilities })
+    else modelDrafts.set(modelDraftKey, { fields, baseFields: modelBaseFields, baseRevision: modelBaseRevision, definitionId: configurationDefinitionId, defaults: variantDefaults, capabilities: modelCapabilities })
   }
   function connectionChanged(): boolean {
     return Boolean(provider && (key.value || JSON.stringify(readConnectionFields()) !== JSON.stringify(connectionBaseFields)))
@@ -256,10 +255,20 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     get('[data-provider-draft]').textContent = changed ? provider?.revision !== connectionBaseRevision ? '有未保存的修改；已保存配置有更新，保存时将检查版本。' : '有未保存的修改' : ''
     get('[data-provider-draft]').hidden = !changed
   }
-  for (const [name, label] of [['tools', '工具调用'], ['streaming', '流式输出'], ['imageInput', '图片输入'], ['reasoning', '推理'], ['webSearch', '服务端网络搜索']] as const) {
-    const wrapper = document.createElement('label'), field = document.createElement('select')
-    wrapper.textContent = label; field.dataset.capability = name
-    field.append(...supportChoices.map(([value, text]) => option(value, text))); wrapper.append(field); get('[data-capabilities]').append(wrapper)
+  function renderCapabilities(): void {
+    const reasoning = modelCapabilities.reasoning
+    const entries: readonly (readonly [string, string, string])[] = [
+      ...([['tools', '工具调用'], ['streaming', '流式输出'], ['imageInput', '图片输入'], ['reasoning', '推理能力'], ['webSearch', '服务端网络搜索']] as const)
+        .map(([name, label]) => [name, label, supportLabels[modelCapabilities[name]?.support ?? 'unknown']] as const),
+      ['reasoning-efforts', '可用推理档位', reasoning.efforts?.join(', ') || '未声明'],
+      ['reasoning-modes', '可用推理模式', reasoning.modes?.join(', ') || '未声明'],
+      ['reasoning-budget', '推理预算范围', reasoning.budget ? `${reasoning.budget.min}–${reasoning.budget.max}` : '未声明'],
+    ]
+    get('[data-capabilities]').replaceChildren(...entries.map(([name, label, value]) => {
+      const wrapper = document.createElement('div'), term = document.createElement('dt'), description = document.createElement('dd')
+      term.textContent = label; description.dataset.capability = name; description.textContent = value
+      wrapper.append(term, description); return wrapper
+    }))
   }
   function renderParameters(defaults: NativeObject = {}): void {
     parameterFields = currentProtocol()?.modelFields ?? []
@@ -292,14 +301,12 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     input('remote-id').value = value?.remoteModelId ?? candidate?.remoteModelId ?? ''
     input('remote-id').readOnly = Boolean(value || configurationDefinitionId)
     input('model-enabled').checked = value?.enabled ?? true
-    const capabilities = value?.capabilities ?? variantCapabilities ?? { ...unknownCapabilities(), ...candidate?.suggestedCapabilities }
-    for (const name of ['tools', 'streaming', 'imageInput', 'reasoning', 'webSearch'] as const) get<HTMLSelectElement>(`[data-capability="${name}"]`).value = capabilities[name]?.support ?? 'unknown'
-    input('efforts').value = capabilities.reasoning.efforts?.join(', ') ?? ''; input('modes').value = capabilities.reasoning.modes?.join(', ') ?? ''
-    input('budget-min').value = capabilities.reasoning.budget ? String(capabilities.reasoning.budget.min) : ''; input('budget-max').value = capabilities.reasoning.budget ? String(capabilities.reasoning.budget.max) : ''
+    modelCapabilities = value?.capabilities ?? variantCapabilities ?? { ...unknownCapabilities(), ...candidate?.suggestedCapabilities }
     renderParameters(value?.parameters.value ?? variantDefaults ?? initialNativeParameters(currentProtocol()?.modelFields ?? []))
     modelBaseFields = readModelFields(); modelBaseRevision = value?.revision
     const draft = restore ? modelDrafts.get(modelDraftKey) : undefined
-    if (draft) { configurationDefinitionId = draft.definitionId; variantDefaults = draft.defaults; variantCapabilities = draft.capabilities; modelBaseFields = draft.baseFields; modelBaseRevision = draft.baseRevision; writeFields(draft.fields); input('remote-id').readOnly = Boolean(value || configurationDefinitionId) }
+    if (draft) { configurationDefinitionId = draft.definitionId; variantDefaults = draft.defaults; variantCapabilities = value ? undefined : draft.capabilities; if (!value) modelCapabilities = draft.capabilities ?? modelCapabilities; modelBaseFields = draft.baseFields; modelBaseRevision = draft.baseRevision; writeFields(draft.fields); input('remote-id').readOnly = Boolean(value || configurationDefinitionId) }
+    renderCapabilities()
     get('[data-model-editor-title]').textContent = value ? `模型参数 · ${value.name}` : variantDefaults ? '新增参数预设' : '添加自定义模型'
     renderState()
   }
@@ -402,7 +409,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     get<HTMLButtonElement>('[data-save-model]').disabled = !provider || !currentProtocol()
     get<HTMLButtonElement>('[data-model-history]').disabled = !model
     const searchable = ['responses', 'anthropic-messages'].includes(currentProtocol()?.id ?? '')
-    const searchSupported = get<HTMLSelectElement>('[data-capability="webSearch"]').value === 'supported'
+    const searchSupported = modelCapabilities.webSearch?.support === 'supported'
     get('[data-server-search-label]').hidden = !searchable
     get('[data-server-search-hint]').hidden = !searchable || searchSupported
     input('server-search').disabled = !searchable || !searchSupported
@@ -595,7 +602,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     captureModel(); if (resumeModelDraft()) return
     try {
       const defaults = readNativeParameters()
-      const capabilities = readCapabilities(), name = input('model-name').value.trim() || model.name
+      const capabilities = modelCapabilities, name = input('model-name').value.trim() || model.name
       const original = model; configurationDefinitionId = original.modelDefinitionId; variantDefaults = defaults; variantCapabilities = capabilities
       loadModel(undefined, { remoteModelId: original.remoteModelId, name: `${name} · 预设` }, false); modelEditor.hidden = false; modelEditor.open = true; renderState(); input('model-name').focus()
     } catch (error) { show(errorText(error), true) }
@@ -657,34 +664,26 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   get('[data-discover]').addEventListener('click', () => { if (provider) void perform(async () => {
     candidates = await api<readonly DiscoveredModel[]>(`${connectionPath()}/discover`, {})
     select('candidates').replaceChildren(option('', '选择候选模型'), ...candidates.map((value, index) => option(String(index), `${value.name} · ${value.remoteModelId}`)))
-    get('[data-candidates-label]').hidden = !candidates.length; show(candidates.length ? `找到 ${candidates.length} 个候选模型，请确认能力与参数后保存。` : '未返回候选模型，可添加自定义模型。')
+    get('[data-candidates-label]').hidden = !candidates.length; show(candidates.length ? `找到 ${candidates.length} 个候选模型，请查看能力声明并配置生成参数后保存。` : '未返回候选模型，可添加自定义模型。')
   }) })
   select('candidates').addEventListener('change', () => {
     if (select('candidates').value === '') return
     captureModel(); if (resumeModelDraft()) return
     configurationDefinitionId = ''; variantDefaults = variantCapabilities = undefined; loadModel(undefined, candidates[Number(select('candidates').value)], false); modelEditor.hidden = false; modelEditor.open = true; renderState()
   })
-  function readCapabilities(): DeclaredCapabilities {
-    const support = (name: string) => get<HTMLSelectElement>(`[data-capability="${name}"]`).value as Support
-    const strings = (name: string) => input(name).value.split(',').map(value => value.trim()).filter(Boolean)
-    const efforts = strings('efforts'), modes = strings('modes'), budgetMin = input('budget-min').value, budgetMax = input('budget-max').value
-    if (Boolean(budgetMin) !== Boolean(budgetMax)) throw new Error('请同时填写推理预算的最小值和最大值。')
-    return { webSearch: { support: support('webSearch') }, tools: { support: support('tools') }, streaming: { support: support('streaming') }, imageInput: { support: support('imageInput') }, reasoning: { support: support('reasoning'), ...(efforts.length ? { efforts } : {}), ...(modes.length ? { modes } : {}), ...(budgetMin && budgetMax ? { budget: { min: Number(budgetMin), max: Number(budgetMax) } } : {}) } }
-  }
   function readNativeParameters(): NativeObject {
     const values = Object.fromEntries([...root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('[data-parameter]')].map(field => [field.dataset.parameter!, field.value]))
     const value = nativeParameterValues(parameterFields, values)
     if (!input('server-search').checked) return value
-    if (readCapabilities().webSearch?.support !== 'supported') throw new Error('请先明确声明此模型支持网络搜索。')
+    if (modelCapabilities.webSearch?.support !== 'supported') throw new Error('此模型尚未声明支持服务端网络搜索。')
     if (provider?.protocolId === 'responses') return { ...value, tools: [{ type: 'web_search' }] }
     if (provider?.protocolId === 'anthropic-messages') return { ...value, tools: [{ type: 'web_search_20250305', name: 'web_search' }] }
     throw new Error('此协议尚未支持服务端网络搜索。')
   }
-  get<HTMLSelectElement>('[data-capability="webSearch"]').addEventListener('change', renderState)
   get<HTMLFormElement>('[data-model-form]').addEventListener('submit', event => {
     event.preventDefault(); if (!provider) return
     void perform(async () => {
-      const capabilities = readCapabilities()
+      const capabilities = modelCapabilities
       const defaults = readNativeParameters(), name = input('model-name').value.trim(), remoteModelId = input('remote-id').value.trim()
       if (!name || !remoteModelId) throw new Error('请填写模型名称和远端模型标识。')
       if (!model && !configurationDefinitionId) {
@@ -692,7 +691,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
         const savedDefinition = await api<Model>('/models/definitions', definition); configurationDefinitionId = savedDefinition.id; input('remote-id').readOnly = true
       }
       const config: ModelConfigurationInput = { name, connectionId: provider!.id, modelDefinitionId: model?.modelDefinitionId ?? configurationDefinitionId, baseline: !variantDefaults, enabled: input('model-enabled').checked, capabilities, parameters: { protocolId: provider!.protocolId, formatVersion: 1, value: defaults } }
-      const { connectionId: _connection, modelDefinitionId: _definition, baseline: _baseline, ...patch } = config
+      const { connectionId: _connection, modelDefinitionId: _definition, baseline: _baseline, capabilities: _capabilities, ...patch } = config
       const saved = model ? await api<ModelConfiguration>(modelPath(), { patch, expectedRevision: modelBaseRevision ?? model.revision }) : await api<ModelConfiguration>('/models/configurations', config)
       modelDrafts.delete(modelDraftKey)
       records = records.some(value => value.id === saved.id) ? records.map(value => value.id === saved.id ? saved : value) : [...records, saved]

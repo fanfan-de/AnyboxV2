@@ -8,15 +8,13 @@ import { Context, FiberState } from '@nya/core'
 import { createModelsStoreComponent, migrateLegacyParameters } from '../dist/index.js'
 const cap = { support: 'unknown' }, capabilities = { tools: cap, streaming: cap, imageInput: cap, reasoning: cap }
 const version = id => ({ id, revision: 1, versionId: `${id}-v1`, createdAt: '2026-01-01', updatedAt: '2026-01-01' })
-const deepseek = value => { const { maxOutputTokens, protocol, ...rest } = value; if (protocol && Object.keys(protocol).length) throw new Error('unsupported'); return { ...rest, ...(maxOutputTokens === undefined ? {} : { max_tokens: maxOutputTokens }) } }
 const oldParameters = {
   responses: { temperature: 0, maxOutputTokens: 12, protocol: { reasoningEffort: 'high', reasoningSummary: 'auto' } },
   'chat-completions': { maxOutputTokens: 23, protocol: { reasoningEffort: 'none' } },
   'anthropic-messages': { maxOutputTokens: 4096, protocol: { reasoningMode: 'enabled', reasoningBudgetTokens: 1024, reasoningDisplay: 'omitted', reasoningEffort: 'high' } },
   'gemini-interactions': { maxOutputTokens: 45, protocol: { thinkingLevel: 'high', thinkingSummaries: 'none' } },
-  'deepseek-chat-completions': { temperature: 0, maxOutputTokens: 56 },
 }
-const expected = { responses: { temperature: 0, max_output_tokens: 12, reasoning: { effort: 'high', summary: 'auto' } }, 'chat-completions': { max_completion_tokens: 23, reasoning_effort: 'none' }, 'anthropic-messages': { max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 1024, display: 'omitted' }, output_config: { effort: 'high' } }, 'gemini-interactions': { generation_config: { max_output_tokens: 45, thinking_level: 'high', thinking_summaries: 'none' } }, 'deepseek-chat-completions': { temperature: 0, max_tokens: 56 } }
+const expected = { responses: { temperature: 0, max_output_tokens: 12, reasoning: { effort: 'high', summary: 'auto' } }, 'chat-completions': { max_completion_tokens: 23, reasoning_effort: 'none' }, 'anthropic-messages': { max_tokens: 4096, thinking: { type: 'enabled', budget_tokens: 1024, display: 'omitted' }, output_config: { effort: 'high' } }, 'gemini-interactions': { generation_config: { max_output_tokens: 45, thinking_level: 'high', thinking_summaries: 'none' } } }
 async function open(path, converters = {}) { const root = new Context(), fiber = root.installComponent(createModelsStoreComponent({ path, legacyParameterConverters: converters })); await fiber; assert.equal(fiber.state, FiberState.ACTIVE); return { root, store: root.get('models.store') } }
 async function seedV2(t, values = oldParameters) {
   const directory = await mkdtemp(join(tmpdir(), 'models-v3-')); t.after(() => rm(directory, { recursive: true, force: true })); const path = join(directory, 'models.sqlite'), { root, store } = await open(path)
@@ -31,11 +29,11 @@ async function seedV2(t, values = oldParameters) {
   db.exec('PRAGMA user_version=2'); db.close(); return { path, snapshots }
 }
 
-test('v2→v3 converts all five protocols atomically without rewriting immutable JSON, identity or Key references', async t => {
-  const { path, snapshots } = await seedV2(t); let opened = await open(path, { 'deepseek-chat-completions': deepseek }); const epochs = {}
+test('v2→v3 converts the four supported protocols atomically without rewriting immutable JSON, identity or Key references', async t => {
+  const { path, snapshots } = await seedV2(t); let opened = await open(path); const epochs = {}
   for (const protocolId of Object.keys(oldParameters)) { const configuration = opened.store.configuration(`s-${protocolId}`), connection = opened.store.connection(`c-${protocolId}`); assert.deepEqual(configuration.parameters.value, expected[protocolId]); assert.equal(configuration.parameters.formatVersion, 1); assert.equal(configuration.versionId, `s-${protocolId}-v1`); assert.equal(configuration.enabled, protocolId !== 'responses'); assert.equal(connection.credentialRef, `slot-${protocolId}`); epochs[protocolId] = connection.historyScopeEpoch; assert.notEqual(connection.historyScopeEpoch, 'old') }
   await opened.root.fiber.dispose(); const db = new DatabaseSync(path); assert.equal(db.prepare('PRAGMA user_version').get().user_version, 3); for (const [id, raw] of Object.entries(snapshots)) assert.equal(db.prepare('SELECT record FROM configuration_versions WHERE configuration_id=?').get(`s-${id}`).record, raw); db.close()
-  opened = await open(path, { 'deepseek-chat-completions': deepseek }); for (const id of Object.keys(epochs)) assert.equal(opened.store.connection(`c-${id}`).historyScopeEpoch, epochs[id]); await opened.root.fiber.dispose()
+  opened = await open(path); for (const id of Object.keys(epochs)) assert.equal(opened.store.connection(`c-${id}`).historyScopeEpoch, epochs[id]); await opened.root.fiber.dispose()
 })
 
 test('unknown extension parameters stay readable and convert on a later startup with a supplied converter', async t => {
@@ -49,7 +47,7 @@ test('migration failure rolls back every current record and the schema version',
 })
 
 test('legacy parameter conversion preserves omissions and unsupported fields instead of inventing native values', () => {
-  for (const id of Object.keys(oldParameters)) { const empty = migrateLegacyParameters(id, {}, { 'deepseek-chat-completions': deepseek }); assert.deepEqual(empty.value, {}); assert.equal(empty.formatVersion, 1) }
+  for (const id of Object.keys(oldParameters)) { const empty = migrateLegacyParameters(id, {}); assert.deepEqual(empty.value, {}); assert.equal(empty.formatVersion, 1) }
   assert.equal(migrateLegacyParameters('responses', { protocol: { unknown: false } }).formatVersion, 0)
   assert.deepEqual(migrateLegacyParameters('anthropic-messages', { maxOutputTokens: 7000 }).value, { max_tokens: 7000 })
 })

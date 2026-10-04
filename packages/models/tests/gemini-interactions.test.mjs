@@ -21,6 +21,99 @@ test('Gemini fragmented SSE consumes thought, text annotation and parallel tool 
   const execution = nativeSession(createGeminiInteractionsProtocol({ fetch: async () => sse(events, { newline: '\r\n' }) }), { streaming: true }), response = await run(execution, initial)
   assert.equal(response.steps[0].signature, 'sig'); assert.equal(response.steps[1].content[0].text, '汉字'); assert.equal(response.steps[1].content[0].annotations.length, 1); assert.deepEqual(response.steps[2].arguments, { q: 'x' }); await execution.close()
 })
+
+test('Gemini accepts current interaction lifecycle events without step indices', async () => {
+  const events = [
+    { event_type: 'interaction.created', interaction: { id: 'interaction', status: 'in_progress' } },
+    { event_type: 'interaction.in_progress', interaction_id: 'interaction' },
+    { event_type: 'step.start', index: 0, step: { type: 'function_call', id: 'native-call', name: 'lookup', arguments: {} } },
+    { event_type: 'step.delta', index: 0, delta: { type: 'arguments_delta', arguments: '{"q":' } },
+    { event_type: 'step.delta', index: 0, delta: { type: 'arguments_delta', arguments: '"x"}' } },
+    { event_type: 'step.stop', index: 0 },
+    { event_type: 'interaction.requires_action', interaction_id: 'interaction' },
+    { event_type: 'interaction.completed', interaction: { id: 'interaction', status: 'requires_action' } },
+  ]
+  const observed = [], execution = nativeSession(createGeminiInteractionsProtocol({ fetch: async () => sse(events) }), { streaming: true })
+  try {
+    const response = await run(execution, initial, observed)
+    assert.equal(response.status, 'requires_action')
+    assert.deepEqual(response.steps, [call])
+    assert.deepEqual(observed.map(event => event.event_type), events.map(event => event.event_type))
+  } finally { await execution.close() }
+})
+
+for (const tools of [false, true]) test(`Gemini store:false streams without interaction IDs commit and restore ${tools ? 'tool' : 'text'} history`, async () => {
+  const requests = [], observed = [], firstSteps = [thought, tools ? { ...call, signature: 'private-tool-signature' } : output('answer')]
+  const protocol = createGeminiInteractionsProtocol({ fetch: async (_url, init) => {
+    const request = JSON.parse(init.body)
+    requests.push(request)
+    const first = requests.length === 1, steps = first ? firstSteps : [output('continued')]
+    return sse([
+      { event_type: 'interaction.created', interaction: { object: 'interaction', model: 'remote' } },
+      { event_type: 'interaction.status_update', status: 'in_progress' },
+      ...steps.flatMap((step, index) => [{ event_type: 'step.start', index, step }, { event_type: 'step.stop', index }]),
+      { event_type: 'interaction.completed', interaction: { object: 'interaction', model: 'remote', status: first && tools ? 'requires_action' : 'completed', usage: { total_tokens: 7 } } },
+      '[DONE]',
+    ])
+  } })
+  const execution = nativeSession(protocol, { streaming: true })
+  let restored
+  try {
+    const response = await run(execution, initial, observed)
+    assert.equal(response.id, undefined)
+    assert.deepEqual(response.steps, firstSteps)
+    const archive = await execution.close()
+    assert.equal(archive.cleanup, 'succeeded')
+    assert.deepEqual(archive.records.map(record => record.kind), ['request', 'response'])
+    assert.deepEqual(archive.records[1].payload, response)
+    restored = nativeSession(protocol, { streaming: true, restore: { ...archive.restoreState, records: archive.records } })
+    const next = tools ? { input: [{ type: 'function_result', call_id: call.id, name: call.name, result: [text('done')] }] }
+      : { input: [{ type: 'user_input', content: [text('Continue')] }] }
+    assert.equal((await run(restored, next)).steps[0].content[0].text, 'continued')
+    assert.deepEqual(requests[1].input.slice(1, 3), firstSteps)
+    assert.equal(requests[0].store, false)
+    assert.equal(requests[1].previous_interaction_id, undefined)
+    assert.equal(observed.at(-1).event_type, 'interaction.completed')
+  } finally { await execution.close(); await restored?.close() }
+})
+
+test('Gemini malformed stream diagnostics retain only the failure location and never restore partial output', async () => {
+  const malformed = { event_type: 'step.delta', index: 1, delta: { type: 'arguments_delta', arguments: 'private-native-test-key' },
+    message: 'private-native-test-key', headers: { authorization: 'private-native-test-key' }, signature: 'private-signature' }
+  const execution = nativeSession(createGeminiInteractionsProtocol({ fetch: async () => sse([malformed]) }), { streaming: true })
+  await assert.rejects(run(execution, initial), error => error.code === 'invalid-response' && !('stage' in error))
+  const archive = await execution.close()
+  assert.equal(archive.cleanup, 'succeeded')
+  assert.equal(archive.restoreState, undefined)
+  assert.deepEqual(archive.records.map(record => record.kind), ['request', 'diagnostic'])
+  assert.deepEqual(archive.records[1].payload, { type: 'gemini_response_diagnostic', stage: 'sse-event', event_type: 'step.delta', index: 1, delta_type: 'arguments_delta' })
+  assert.doesNotMatch(JSON.stringify(archive.records), /private-native-test-key|private-signature|authorization|headers/)
+})
+
+test('Gemini status notifications never substitute for a completed interaction', async () => {
+  const execution = nativeSession(createGeminiInteractionsProtocol({ fetch: async () => sse([
+    { event_type: 'step.start', index: 0, step: call }, { event_type: 'step.stop', index: 0 },
+    { event_type: 'interaction.requires_action', interaction_id: 'interaction' },
+  ]) }), { streaming: true })
+  await assert.rejects(run(execution, initial), { code: 'invalid-response' })
+  const archive = await execution.close()
+  assert.equal(archive.restoreState, undefined)
+  assert.equal(archive.records.at(-1).payload.stage, 'sse-terminal-missing')
+})
+
+test('Gemini omitting a server interaction ID never relaxes function call ID validation', async () => {
+  for (const steps of [[{ ...call, id: undefined }], [call, call]]) {
+    const execution = nativeSession(createGeminiInteractionsProtocol({ fetch: async () => sse([
+      ...steps.flatMap((step, index) => [{ event_type: 'step.start', index, step }, { event_type: 'step.stop', index }]),
+      { event_type: 'interaction.completed', interaction: { status: 'requires_action' } },
+    ]) }), { streaming: true })
+    await assert.rejects(run(execution, initial), { code: 'invalid-response' })
+    const archive = await execution.close()
+    assert.equal(archive.restoreState, undefined)
+    assert.equal(archive.records.at(-1).kind, 'diagnostic')
+    assert.equal(archive.records.at(-1).payload.stage, 'sse-terminal')
+  }
+})
 for (const status of ['incomplete', 'budget_exceeded']) test(`Gemini ${status} retains native status and unfinished tool data`, async () => {
   const execution = nativeSession(createGeminiInteractionsProtocol({ fetch: async () => jsonResponse(reply([{ ...call, arguments: '{unfinished' }], status)) })); const response = await run(execution, initial); assert.equal(response.status, status); assert.equal(response.steps[0].arguments, '{unfinished'); await execution.close()
 })

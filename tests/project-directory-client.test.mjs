@@ -309,7 +309,7 @@ test('duplicate confirm is suppressed while registration is pending and errors s
   assert.equal(f.controller.snapshot().error.code, 'project-unavailable')
   assert.equal(f.controller.snapshot().pathInput, '/remote/home')
   assert.equal(f.controller.snapshot().canSelect, false)
-  assert.match(directoryMessageFor(failure('directory-permission-denied'), () => 'fallback'), /Harness.*账户.*权限/)
+  assert.match(directoryMessageFor(failure('directory-permission-denied'), () => 'fallback'), /harness server.*账户.*权限/)
   f.controller.close()
 })
 

@@ -16,7 +16,7 @@ export async function runGemini(runner: ExchangeRunner, initial: NativeObject): 
       const step = nativeObject(raw)
       if (step.type === 'function_call') calls.push({ id: nonempty(step.id), name: nonempty(step.name), arguments: nativeObject(step.arguments) })
       else if (step.type === 'model_output') {
-        for (const raw of nativeArray(step.content)) {
+        for (const raw of step.content === undefined ? [] : nativeArray(step.content)) {
           const block = nativeObject(raw)
           if (block.type !== 'text') throw modelFailure('unsupported-request')
           text.push(nativeString(block.text))

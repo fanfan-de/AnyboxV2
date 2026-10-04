@@ -1,4 +1,4 @@
-import type { ProtocolViewSnapshot } from '../core/view/types.js'
+import { protocolViewSchemaVersion, type ProtocolViewSnapshot } from '../core/view/types.js'
 import { decodeProtocolWebView } from './protocols/modules.js'
 
 export interface ChangeConnection { close(): void }
@@ -8,6 +8,7 @@ export interface ChangeEnvironment {
   refresh(sessionId: string): void
   connected(value: boolean): void
   view?(snapshot: ProtocolViewSnapshot): void
+  incompatibleView?(sessionId: string, runId: string): void
 }
 
 /** One connection per workspace. Ready always reconciles, including after EventSource reconnects. */
@@ -34,6 +35,7 @@ export function createRunChangeClient(env: ChangeEnvironment) {
       status(false)
       if (!ids.length) return
       const current = () => !disposed && generation === version
+      const incompatibleRuns = new Set<string>()
       const query = new URLSearchParams(ids.map(id => ['sessionId', id]))
       try {
         connection = env.open(`/api/v1/changes?${query}`, {
@@ -54,14 +56,24 @@ export function createRunChangeClient(env: ChangeEnvironment) {
             env.refresh(change.sessionId)
           },
           view(data) {
-            if (!current() || !env.view) return
+            if (!current() || (!env.view && !env.incompatibleView)) return
             let value: unknown
             try { value = JSON.parse(data) } catch { return }
             if (!value || typeof value !== 'object') return
             const message = value as Record<string, unknown>
-            const snapshot = decodeProtocolWebView(message.snapshot)
-            if (!snapshot || !subscribed.has(snapshot.sessionId) || message.sessionId !== snapshot.sessionId || message.runId !== snapshot.runId) return
-            env.view(snapshot)
+            const raw = message.snapshot
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
+            const candidate = raw as Record<string, unknown>
+            if (typeof message.sessionId !== 'string' || !subscribed.has(message.sessionId) ||
+              typeof message.runId !== 'string' || !message.runId || candidate.sessionId !== message.sessionId || candidate.runId !== message.runId) return
+            if (candidate.envelopeVersion === 1 && Number.isSafeInteger(candidate.viewSchemaVersion) &&
+              Number(candidate.viewSchemaVersion) >= 0 && candidate.viewSchemaVersion !== protocolViewSchemaVersion) {
+              const key = JSON.stringify([message.sessionId, message.runId])
+              if (!incompatibleRuns.has(key)) { incompatibleRuns.add(key); env.incompatibleView?.(message.sessionId, message.runId) }
+              return
+            }
+            const snapshot = decodeProtocolWebView(raw)
+            if (snapshot) env.view?.(snapshot)
           },
           error() { if (current()) status(false) },
         })

@@ -1,10 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { resolveCatalogConnections } from '@anybox/models'
 import type { ProviderInput, ModelInput, ProviderConnectionInput, ModelConfigurationInput } from '@anybox/models'
-import type { HarnessApiCommands } from './server.js'
+import type { HarnessServerApiCommands } from './handler.js'
 import { json, requestObject, failure } from '../../../host/http-utils.js'
 import { promptRevision } from './validation.js'
-export async function handleModelsApi(commands: HarnessApiCommands, request: IncomingMessage, response: ServerResponse, url: URL,
+export async function handleModelsApi(commands: HarnessServerApiCommands, request: IncomingMessage, response: ServerResponse, url: URL,
   modelRequest: <T>(response: ServerResponse, work: (signal: AbortSignal) => Promise<T>) => Promise<T>): Promise<boolean> {
   const method = request.method, path = url.pathname
       if (method === 'GET' && path === '/api/v1/models') { json(response, 200, commands.listModels()); return true }

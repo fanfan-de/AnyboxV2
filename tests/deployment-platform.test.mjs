@@ -8,8 +8,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import sharp from 'sharp'
 import { createSystemKeyringStore } from '@anybox/api-key-manager'
-import { createHarnessHost } from '../dist/entrypoints/harness-main.js'
-import { parseWebStartupConfig } from '../dist/applications/harness/startup-config.js'
+import { createHarnessServer } from '../dist/entrypoints/harness-server-main.js'
+import { parseHarnessServerConfig } from '../dist/applications/harness/server-config.js'
 import { createClientHost } from '../dist/entrypoints/client-main.js'
 
 test('real deployment platform: native credentials, headless host, Bash, image bytes and clean shutdown', { skip: process.env.ANYBOX_DEPLOYMENT_TESTS !== '1' }, async () => {
@@ -18,14 +18,14 @@ test('real deployment platform: native credentials, headless host, Bash, image b
   const vault = createSystemKeyringStore({ namespace }), id = randomUUID(); let h, c
   try {
     await vault.write(id, 'test-only-value'); assert.equal(await vault.read(id), 'test-only-value')
-    const config = parseWebStartupConfig({ ANYBOX_WEB_PORT: '0', ANYBOX_HARNESS_DATABASE: join(dir, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(dir, 'models.sqlite'), ANYBOX_MODELS_NAMESPACE: namespace })
-    h = await createHarnessHost(config, { models: { catalogAutoRefresh: false, readLegacyCredential: async () => undefined } })
+    const config = parseHarnessServerConfig({ ANYBOX_WEB_PORT: '0', ANYBOX_HARNESS_DATABASE: join(dir, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(dir, 'models.sqlite'), ANYBOX_MODELS_NAMESPACE: namespace })
+    h = await createHarnessServer(config, { models: { catalogAutoRefresh: false, readLegacyCredential: async () => undefined } })
     const issued = await h.root.get('host.access').issue('platform client')
     c = await createClientHost({ path: join(dir, 'client.sqlite'), namespace: namespace + '.client' })
     await c.products.open('agent'); await h.products.open('agent')
     const connection = await c.root.get('client.connections').save({ name: 'platform', endpoint: h.url, token: issued.token })
     assert.equal((await c.root.get('client.connections').check(connection.id)).instanceId, h.instance.instanceId)
-    const project = await h.harness.openProject(dir), session = await h.harness.createSession(project.id, 'assistant')
+    const project = await h.api.openProject(dir), session = await h.api.createSession(project.id, 'assistant')
     const bytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: 'red' } }).png().toBuffer()
     const response = await fetch(`${c.url}/api/connections/${connection.id}/v1/sessions/${session.id}/images`, { method: 'POST', headers: { Origin: c.url, 'Content-Type': 'image/png' }, body: bytes })
     assert.equal(response.status, 201)

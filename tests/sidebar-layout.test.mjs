@@ -5,15 +5,15 @@ import { setupSidebarLayout } from '../dist/applications/harness/web/sidebar-cli
 
 test('three-column fitting shrinks right before left and never changes desired widths', () => {
   assert.deepEqual(fitSidebars(1440, defaultSidebarState), {
-    leftWidth: 240, rightWidth: 400, leftDocked: true, rightDocked: true, leftDrawer: false, rightDrawer: false, centerWidth: 784,
+    leftWidth: 240, rightWidth: 600, leftDocked: true, rightDocked: true, leftDrawer: false, rightDrawer: false, centerWidth: 598,
   })
   const desired = { ...defaultSidebarState, leftWidth: 360, rightWidth: 720 }
-  assert.equal(fitSidebars(1200, desired).rightWidth, 504)
+  assert.equal(fitSidebars(1200, desired).rightWidth, 518)
   assert.equal(fitSidebars(1200, desired).leftWidth, 360)
   assert.equal(fitSidebars(1000, desired).rightWidth, 320)
-  assert.equal(fitSidebars(1000, desired).leftWidth, 344)
-  assert.equal(fitSidebars(856, desired).centerWidth, 320)
-  assert.equal(fitSidebars(855, desired).rightDrawer, true)
+  assert.equal(fitSidebars(1000, desired).leftWidth, 358)
+  assert.equal(fitSidebars(842, desired).centerWidth, 320)
+  assert.equal(fitSidebars(841, desired).rightDrawer, true)
   assert.equal(desired.leftWidth, 360); assert.equal(desired.rightWidth, 720)
 })
 
@@ -42,7 +42,7 @@ test('sidebar recovery and shared writes preserve independent session descriptor
   assert.equal(records.get('workspace'), '{"version":1,"root":{"kind":"pane"}}')
   assert.deepEqual(restoreSidebarState({ version: 99 }), defaultSidebarState)
   assert.equal(restoreSidebarState({ version: 1, leftWidth: 20, rightWidth: 1000 }).leftWidth, 200)
-  assert.equal(clampSidebarWidth('right', NaN), 400)
+  assert.equal(clampSidebarWidth('right', NaN), 600)
 })
 
 test('disabled persistence retains in-memory preferences and notifies subscribers', () => {
@@ -137,7 +137,7 @@ test('keyboard and pointer resizing persist preferences; zero-size and hidden-ap
     f.dispatch(f.element('left-sidebar-separator'), 'keydown', { key: 'ArrowRight' })
     assert.equal(f.store.read().leftWidth, 250)
     f.dispatch(f.element('right-sidebar-separator'), 'keydown', { key: 'ArrowLeft' })
-    assert.equal(f.store.read().rightWidth, 410)
+    assert.equal(f.store.read().rightWidth, 610)
     f.dispatch(f.element('left-sidebar-separator'), 'pointerdown', { button: 0, pointerId: 1, clientX: 250 })
     f.dispatch(f.element('left-sidebar-separator'), 'pointermove', { pointerId: 1, clientX: 305 })
     f.dispatch(f.element('left-sidebar-separator'), 'pointerup', { pointerId: 1 })
@@ -154,7 +154,65 @@ test('keyboard and pointer resizing persist preferences; zero-size and hidden-ap
     assert.equal(f.shell.style.gridTemplateColumns, columns)
     f.layout.setActive(true)
     assert.equal(f.shell.style.gridTemplateColumns, '0px 0px minmax(0, 1fr) 0px 0px')
-    assert.equal(f.store.read().leftWidth, 305); assert.equal(f.store.read().rightWidth, 410)
+    assert.equal(f.store.read().leftWidth, 305); assert.equal(f.store.read().rightWidth, 610)
     f.layout.dispose(); assert.equal(f.observer().disconnected, true)
   } finally { f.restore() }
+})
+
+test('project collapse survives a page reload and shared sidebar writes with independent device identities', () => {
+  const records = new Map()
+  const storage = { getItem: key => records.get(key) ?? null, setItem: (key, value) => records.set(key, value) }
+  const key = 'workspace.sidebars.v1'
+  const local = 'h:11111111-1111-1111-1111-111111111111:same-project'
+  const remote = 'h:22222222-2222-2222-2222-222222222222:same-project'
+  const store = createSidebarStateStore(key, { storage })
+  store.update(state => ({ ...state, collapsedProjects: [local, remote] }))
+  store.update(state => ({ ...state, leftWidth: 300, rightExpanded: false }))
+  const session = { treeExpanded: ['src'], tabs: [{ kind: 'current', path: 'src/a.ts' }] }
+  store.update(state => ({ ...state, perSession: { ...state.perSession, 'device:session': session } }))
+
+  const reloaded = createSidebarStateStore(key, { storage })
+  assert.deepEqual(reloaded.read().collapsedProjects, [local, remote])
+  assert.equal(reloaded.read().leftWidth, 300)
+  assert.equal(reloaded.read().rightExpanded, false)
+  assert.deepEqual(reloaded.read().perSession['device:session'], session)
+  reloaded.update(state => ({ ...state, collapsedProjects: state.collapsedProjects.filter(id => id !== local) }))
+  assert.deepEqual(createSidebarStateStore(key, { storage }).read().collapsedProjects, [remote],
+    'expanding a local project does not change the same project ID on another device')
+})
+
+test('old and damaged project-collapse fields recover without discarding other sidebar preferences', () => {
+  const saved = { version: 1, leftWidth: 280, rightWidth: 520, leftExpanded: false, rightExpanded: true,
+    perSession: { session: { treeExpanded: ['src'] } } }
+  for (const value of [saved, ...[null, 'project-a', {}, [null, 1, '', 'x'.repeat(513)]].map(collapsedProjects => ({ ...saved, collapsedProjects }))]) {
+    const restored = restoreSidebarState(value)
+    assert.deepEqual(restored.collapsedProjects, [])
+    assert.equal(restored.leftWidth, 280)
+    assert.equal(restored.rightWidth, 520)
+    assert.equal(restored.leftExpanded, false)
+    assert.equal(restored.rightExpanded, true)
+    assert.deepEqual(restored.perSession, saved.perSession)
+  }
+  const longest = 'x'.repeat(512)
+  const collapsedProjects = ['project-a', null, 'project-a', '', 1, longest, 'x'.repeat(513), 'project-b']
+  assert.deepEqual(restoreSidebarState({ ...saved, collapsedProjects }).collapsedProjects, ['project-a', longest, 'project-b'])
+  assert.equal(collapsedProjects.length, 8, 'recovery does not mutate the saved input')
+})
+
+test('project-collapse preferences remain usable when browser storage fails', () => {
+  const failures = [], updates = []
+  const store = createSidebarStateStore('denied', {
+    storage: { getItem() { throw Error('denied') }, setItem() { throw Error('denied') } },
+    onStorageError: error => failures.push(error.message),
+  })
+  const unsubscribe = store.subscribe(state => updates.push(state.collapsedProjects))
+  store.update(state => ({ ...state, collapsedProjects: ['project-a'] }))
+  store.update(state => ({ ...state, leftWidth: 320 }))
+  store.update(state => ({ ...state, perSession: { session: { tabs: [] } } }))
+  unsubscribe()
+  assert.deepEqual(store.read().collapsedProjects, ['project-a'])
+  assert.equal(store.read().leftWidth, 320)
+  assert.deepEqual(store.read().perSession, { session: { tabs: [] } })
+  assert.deepEqual(updates, [[], ['project-a'], ['project-a'], ['project-a']])
+  assert.deepEqual(failures, ['denied', 'denied', 'denied'])
 })
