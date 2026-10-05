@@ -57,7 +57,8 @@ export function setupArchivePanel(api: Api, messageFor: (error: unknown) => stri
       const copy = document.createElement('div'); copy.className = 'archive-copy'
       const title = document.createElement('strong')
       const project = env.projects().find(project => project.id === session.projectId)
-      title.textContent = `${project ? [project.harnessName, project.name].filter(Boolean).join(' · ') : session.projectId} · 会话 ${(splitScopedId(session.id)?.id ?? session.id).slice(0, 8)}`
+      const label = session.title || `会话 ${(splitScopedId(session.id)?.id ?? session.id).slice(0, 8)}`
+      title.textContent = `${project ? [project.harnessName, project.name].filter(Boolean).join(' · ') : session.projectId} · ${label}`
       const time = document.createElement('time'); time.dateTime = session.archivedAt!
       time.textContent = `归档于 ${new Date(session.archivedAt!).toLocaleString('zh-CN')}`
       copy.append(title, time)

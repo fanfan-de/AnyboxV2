@@ -4,7 +4,7 @@
 
 ## 定位与装配
 
-源码：[protocols/responses.ts](../../../packages/models/src/protocols/responses.ts)，共用 [shared.ts](../../../packages/models/src/protocols/shared.ts) 与 [transport.ts](../../../packages/models/src/protocols/transport.ts)。`createResponsesProtocolComponent(options?)` 创建组件 `models-protocol-responses`，注入 `models.protocols`，注册 ID `responses`、版本 `2.1.0` 的驱动；不额外提供命名服务。
+源码：[protocols/responses.ts](../../../packages/models/src/protocols/responses.ts)，共用 [shared.ts](../../../packages/models/src/protocols/shared.ts) 与 [transport.ts](../../../packages/models/src/protocols/transport.ts)。`createResponsesProtocolComponent(options?)` 创建组件 `models-protocol-responses`，注入 `models.protocols`，注册 ID `responses`、版本 `2.2.0` 的驱动；不额外提供命名服务。
 
 `createResponsesProtocol(options?)` 返回独立 `NativeProtocol`。唯一工厂选项为可替换 `fetch`。驱动实现参数/连接验证、有效能力、`restore/prepare/exchange/commit` 和发现/检查。它保留 Responses 语义，工具执行与停止决策见 [Responses Agent](../execution/responses-agent.md)。
 
@@ -28,7 +28,13 @@
 
 增量 intent 为 `input` 加可选初始 `instructions`、`tools`。输入接受 system/developer/user 文本、user 的 input_text/input_image 块或 `function_call_output { call_id, output }`；本地工具采用 `{ type: 'function', name, parameters }`。历史建立后不得变更初始 instructions/tool 声明，也不得追加 system/developer 消息。
 
-`prepare()` 将私有历史与本轮 input 合并，合并本地函数工具和已配置搜索工具，固定 `store: false`、有效 streaming 和 `include: ['reasoning.encrypted_content']`。宿主每轮只交新增输入，完整 HTTP 上下文由驱动在内存重建；不使用服务端 conversation 或 previous-response 链。
+`prepare()` 将私有历史与本轮 input 合并，合并本地函数工具和已配置搜索工具，固定 `store: false` 和 `include: ['reasoning.encrypted_content']`。stream 按本轮 responseMode 选择，省略时使用有效 streaming。descriptor 声明支持 stream/complete；显式 stream 仍要求有效流式能力，complete 使用 JSON 路径，回调不改变模式。宿主每轮只交新增输入，完整 HTTP 上下文由驱动在内存重建；不使用服务端 conversation 或 previous-response 链。mode 仅用于请求准备，不持久化到意图、快照或恢复记录。
+
+## 单次文本适配
+
+驱动提供 `textGeneration` 纯函数适配器：createIntent 将可选 instruction 映射到 instructions，并把原样 input 放入用户输入；validateParameters 在已保存 tools 实际启用 web_search 时以 capability-unsupported 拒绝，不改写参数或隐式关闭推理，仅声明搜索能力仍可使用。
+
+readText 要求 completed，按 assistant 消息顺序读取 output_text 并以换行连接，保留块内格式；忽略私有 reasoning。拒绝块返回 refused-response，incomplete 等需续轮结果返回 incomplete-response，函数或搜索工具输出返回 capability-unsupported，未知输出或无有效文本返回 invalid-response。该适配仅供 `models.generateText()` 的全新 execution 使用；原生 Agent Loop 继续解释完整 Responses 结果。
 
 JSON 与 SSE 最终都返回完整原生 response。允许原生 `completed/incomplete`；failed/cancelled/error 为失败。验证 assistant message、文本/拒绝块、唯一 `call_id`、函数名与参数字符串；完成的函数参数必须是 JSON 对象。保留未知 JSON 字段、reasoning/encrypted content、phase、搜索动作与引用，不压平为统一文本。
 
@@ -40,7 +46,7 @@ SSE 转发原生事件给受信投影器，以 `response.completed` / `response.
 
 transport 独占 fetch、reader、AbortController 和取消监听器，严格 UTF-8，响应总量上限 32 MiB，SSE 缓冲上限 8 MiB，无隐藏网络重试。cancel 先请求 reader 退出再 abort；原始驱动 result 可早于 done，Models 的公共 result 会等两者及上下文提交。超时由 execution/Settings 控制。
 
-组件 `apply` 只注册协议并通过 Effect 注销；卸载同步停止该代准入，取消并等待其 execution、初始化、发现与检查。普通 HTTP 错误脱敏为固定错误；reader 清理失败使 execution 不能成功恢复。原生记录和事件仅给受信宿主，浏览器使用白名单投影。
+组件 `apply` 只注册协议并通过 Effect 注销；卸载同步停止该代准入，取消并等待其整次文本生成、execution、初始化、发现与检查。普通 HTTP 错误脱敏为固定错误；reader 清理失败使 execution 不能成功恢复。原生记录和事件仅给受信宿主，浏览器使用白名单投影。
 
 ## 发现、限制与验证
 
@@ -50,12 +56,14 @@ transport 独占 fetch、reader、AbortController 和取消监听器，严格 UT
 
 [protocols.test.mjs](../../../packages/models/tests/protocols.test.mjs) 覆盖 JSON/SSE 的 reasoning、phase、搜索、工具 ID、恢复、失败诊断和真实清理等待；[native-boundaries.test.mjs](../../../packages/models/tests/native-boundaries.test.mjs) 覆盖异常流边界；[runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 验证共享 execution 所有权。参见 [Models 协调服务](models.md) 与 [原生框架设计](../../native-protocol-agent-framework-design.md)。
 
+[response-modes.test.mjs](../../../packages/models/tests/response-modes.test.mjs) 验证默认与显式 JSON/SSE 请求、模式切换和旧版本恢复；[responses-chat-generation.test.mjs](../../../packages/models/tests/responses-chat-generation.test.mjs) 与 [generation-responses-chat-errors.test.mjs](../../../packages/models/tests/generation-responses-chat-errors.test.mjs) 验证单次文本、搜索预设、拒绝/截断/工具、未知结构及空白正文。
+
 ## 图片资源与格式兼容
 
 `input_image.image_url` 保存内部资源 URI，发送时生成 data URL。MIME、长度与 SHA-256 取自受信的顶层 resourceRefs；不接受外部 URL、内联 base64、文件 ID 或未开放的图片参数。只转换用户图片位置，系统指令和工具结果继续使用文本契约。
 
 [images.ts](../../../packages/models/src/protocols/images.ts) 是驱动内部共享函数，不是独立组件。start 后顺序读取去重资源，等待每次读取实际退出并校验摘要；同一图片在完整历史中多次出现时逐次计算 base64 体积，读取前及发送前均检查 32 MiB 请求上限。取消、超时与协议卸载同时覆盖图片和 HTTP；清理失败不创建成功上下文。网络终态已返回但随后取消/清理失败时，仍保留受信原生诊断，经 execution 脱敏持久化。
 
-新驱动 2.1.0 写记录 v2，读取旧驱动 2.0.0 的 v1 文本与 v1/v2 混合链。旧合法文本形状继续可读，v1 不接受图片；只有完整无图片父链允许有效图片能力 false→true。streaming 仅改变传输方式，恢复允许双向改变，包括从旧非流式成功父链继续流式执行；其他身份、账户、参数及执行语义约束保持严格，旧 JSON 不改写。base64 只存在于临时 HTTP 请求，不写入意图、上下文或记录。
+新驱动 2.2.0 写记录 v2，明确读取 2.0.0/2.1.0/2.2.0 与 v1/v2 混合链。旧合法文本形状继续可读，v1 不接受图片；只有完整无图片父链允许有效图片能力 false→true。streaming 仅改变传输方式，恢复允许双向改变，包括从旧非流式成功父链继续流式执行或逐次选择 complete；其他身份、账户、参数及执行语义约束保持严格，旧 JSON 不改写。base64 只存在于临时 HTTP 请求，不写入意图、上下文或记录。
 
 [multimodal-protocols.test.mjs](../../../packages/models/tests/multimodal-protocols.test.mjs) 验证 JSON/SSE 图片编码、三种 MIME、资源校验、超限、取消/超时/注销退出、失败诊断和混合版本恢复；[native-protocol-agents.test.mjs](../../../tests/native-protocol-agents.test.mjs) 验证图片工具续轮、重启、分支及接受后的失败保留。

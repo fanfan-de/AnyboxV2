@@ -25,6 +25,9 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 | `GET /agents` | 可选 Agent ID 列表 |
 | `GET /agents/:id/session-defaults` | 该设备与 Agent 的新会话默认模型，返回 modelId、fallbackModelId、effectiveModelId 和 revision |
 | `POST /agents/:id/session-defaults` | `{ modelId: string \| null, expectedRevision }`；保存可用模型配置覆盖，null 恢复启动后备值，expectedRevision 为非负安全整数 |
+| `GET /tools` | 统一工具目录，包含稳定 toolId、版本、名称、功能类别、声明、依赖及可选来源元数据；来源不限制组合 |
+| `GET /agents/:id/tools` | 该设备 Agent 的 `{ agentId, toolIds, revision }`；尚无保存记录时使用默认工具选择 |
+| `POST /agents/:id/tools` | `{ toolIds: string[], expectedRevision }`；已知工具和依赖校验，CAS 保存，空数组明确关闭工具；冲突返回 agent-tools-conflict |
 | `GET /projects` | 项目列表 |
 | `POST /projects` | `{path}`，目标端绝对目录，经 Projects 校验、规范化和登记 |
 | `POST /projects/directories/browse` | `{action:"open",path?,query?,showHidden?}` 预留会话；`{action:"page",browseId,page}` 分页浏览 |
@@ -139,7 +142,7 @@ Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返
 
 内部 Run 的 `promptSnapshots` 来自现有 prompts_json，不加入 Run DTO 或轮次列表；仅在协议投影中使用。实时 prepare 后立即发布输入，后续流式和最终响应保持同一输入与内容身份；request-only 失败也保留已保存输入。inputs 和响应共同受 48KiB、exchange/块数及单字段展示上限约束，截断使用唯一提示，移除无法定位的引用；视图不保证覆盖完整长 Run。HTTP、SSE 和 Runtime 统一输出信封版本 1、`viewSchemaVersion=2`，浏览器按协议白名单解析带协议前缀的内容类型及安全 HTTP(S) 引用，明确拒绝旧或未知展示版本，不提供通用原生内容降级。旧原生记录 v1/v2 读取时重新投影，旧绑定 JSON 不改写，展示版本不阻止原生恢复。签名、加密续接、redacted 正文、诊断原文和认证字段不进入投影；失败诊断只显示已保存的部分内容及白名单状态并明确标记。临时帧可能合并或丢失，不能作为恢复事实或成功终态证据。
 
-推理组件按协议分别使用“推理摘要”“思考内容”“推理内容”及隐藏占位，默认折叠并在当前面板保留手动展开。内容更新复用稳定组件实例，持久投影不会重建整个交互容器。工具请求与实际执行分开：两种视图通过 Run、来源模型 exchange、请求 ID、工具名称及事件位置关联持久 Bash/Apply Patch 事实，事件待读取、读取失败和结果缺失分别展示，不生成 `tools-N` 临时结果。服务端搜索仍由所属原生类型展示。客户端、执行设备与 Web 资源统一构建发行，升级后刷新浏览器。
+推理组件按协议分别使用“推理摘要”“思考内容”“推理内容”及隐藏占位，默认折叠并在当前面板保留手动展开。内容更新复用稳定组件实例，持久投影不会重建整个交互容器。工具请求与实际执行分开：两种视图通过 Run、来源模型 exchange、请求 ID、工具名称及事件位置关联持久工具库与兼容 Bash/Apply Patch 事实，事件待读取、读取失败和结果缺失分别展示，不生成 `tools-N` 临时结果。工具 result/images 在观察和清理失败时都可投影；图片只通过保留于本会话的资源读取。通用 operation 的任意 result 不公开，只投影已知进程退出列表：sessionId、exitCode、signal、有界 output、truncated、terminated、timedOut 与有界 error。服务端搜索仍由所属原生类型展示。客户端、执行设备与 Web 资源统一构建发行，升级后刷新浏览器。
 
 ## 关闭、依赖重启与故障
 

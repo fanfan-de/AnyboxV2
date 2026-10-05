@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createSessionPanel } from '../dist/applications/harness/web/session-view.js'
+import { conversationTree } from '../dist/applications/harness/web/conversation-tree.js'
+import { createConversationTreeView } from '../dist/applications/harness/web/conversation-tree-view.js'
 import { mapResourceIds, scopedId } from '../dist/applications/harness/web/harness-client.js'
 import { renderMarkdown } from '../dist/applications/harness/web/markdown.js'
 
@@ -78,12 +80,15 @@ function documentFixture() {
       dispatchEvent(event) { this.dispatch(event.type, { key: event.key }); return true },
       click() { if (!this.disabled) this.dispatch('click') },
       focus() { document.activeElement = this },
+      getBoundingClientRect() { const top = node.offsetTop; return { top, left: 0, right: node.clientWidth, bottom: top + node.clientHeight, width: node.clientWidth, height: node.clientHeight } },
     }
     const visible = () => { for (let current = node; current; current = current.parentElement) if (current.hidden) return false; return true }
     Object.defineProperties(node, {
       firstChild: { get: () => node.children[0] ?? null },
+      firstElementChild: { get: () => node.children.find(child => child.tagName !== '#text') ?? null },
       childNodes: { get: () => node.children },
       nextSibling: { get: () => node.parentElement?.children[node.parentElement.children.indexOf(node) + 1] ?? null },
+      nextElementSibling: { get: () => node.parentElement?.children.slice(node.parentElement.children.indexOf(node) + 1).find(child => child.tagName !== '#text') ?? null },
       isConnected: { get: () => node === document.body || Boolean(node.parentElement?.isConnected) },
       clientWidth: { get: () => visible() ? ownWidth : 0, set(value) { ownWidth = value } },
       clientHeight: { get: () => visible() ? ownHeight : 0, set(value) { ownHeight = value } },
@@ -138,7 +143,7 @@ function fixture(t, { runs = [run('first')], position = {}, initialScroll = { di
   const previous = globalThis.document, document = documentFixture(), calls = []
   globalThis.document = document
   const state = { session: { id: 'session', projectId: 'project', agentId: 'assistant', protocolId: 'chat-completions', historyMode: 'native-local-v1' },
-    runs, position: { viewNodeId: 'node-first', ...position }, path: path ?? [{ id: 'node-first', parentId: null, input: 'Thread input', output: 'Thread answer', sourceRunId: 'first' }],
+    runs, position: { viewNodeId: 'node-first', ...position }, path: (path ?? [{ id: 'node-first', parentId: null, input: 'Thread input', output: 'Thread answer', sourceRunId: 'first' }]).map(node => ({ sessionId: 'session', parentId: null, ...node })),
     children: [], moreChildren: false, loading: false, busy: false, notice: '', draft: 'Unsent draft', images: [], files: [], events: new Map(), expanded: new Set(),
     views: new Map([['first', projection('first', 'Thread answer')]]) }
   let panel
@@ -389,6 +394,139 @@ test('protocol reasoning uses Markdown but status and tool details keep literal 
   assert.equal(f.find('.native-notice').querySelectorAll('.markdown-content, strong').length, 0)
   assert.equal(f.find('.native-function-request pre').textContent, detail)
   assert.equal(f.find('.native-function-request').querySelectorAll('.markdown-content, ul, li').length, 0)
+})
+
+function branchingFixture(t) {
+  const first = run('first'), second = { ...run('second', 'completed', 'node-first'), input: 'Same question' }
+  const alternative = { ...run('alternative', 'completed', 'node-first'), input: 'Same question', createdAt: 'third' }
+  const f = fixture(t, { runs: [first, second, alternative, run('pending', 'running', 'node-first'), run('failure', 'failed', 'node-first')],
+    position: { viewNodeId: 'node-second' }, path: [
+      { id: 'node-first', parentId: null, input: 'Shared root', output: 'Shared answer', sourceRunId: 'first' },
+      { id: 'node-second', parentId: 'node-first', input: 'Same question', output: 'First version', sourceRunId: 'second' },
+    ] })
+  f.state.views.set('second', projection('second', 'First version')); f.panel.render()
+  return f
+}
+
+test('branch overview highlights the current path and navigates sibling nodes without submitting or replacing drafts', t => {
+  const f = branchingFixture(t), toggle = f.find('[data-toggle-tree]'), tree = f.find('.conversation-tree-panel')
+  assert.equal(tree.hidden, true); assert.equal(tree.inert, true)
+  toggle.click()
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true'); assert.equal(toggle.getAttribute('aria-controls'), tree.id)
+  assert.equal(tree.hidden, false); assert.equal(tree.inert, false)
+  assert.equal(f.find('[data-tree-navigate="node:node-second"]').getAttribute('aria-current'), 'location')
+  assert.deepEqual(tree.querySelectorAll('.conversation-tree-item.is-path').map(row => row.dataset.treeKey), ['root', 'node:node-first', 'node:node-second'])
+  assert.equal(tree.querySelector('[data-tree-navigate="node:node-failure"]'), null)
+  assert.match(f.find('[data-tree-navigate="run:pending"]').textContent, /进行中/)
+  const previous = f.find('[data-tree-navigate="node:node-first"]')
+  f.state.draft = 'Draft remains at its selected parent'; f.panel.render()
+  assert.equal(f.find('[data-tree-navigate="node:node-first"]'), previous)
+  f.find('[data-tree-navigate="node:node-alternative"]').click()
+  assert.equal(f.state.position.viewNodeId, 'node-alternative')
+  assert.equal(f.state.draft, 'Draft remains at its selected parent')
+  assert.ok(f.calls.some(([kind, id]) => kind === 'navigate' && id === 'node-alternative'))
+  assert.equal(f.calls.some(([kind]) => ['submit', 'cancel'].includes(kind)), false)
+  tree.dispatch('keydown', { key: 'Escape' })
+  assert.equal(tree.hidden, true); assert.equal(tree.inert, true); assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+  assert.equal(f.document.activeElement, toggle)
+})
+
+test('branch folds and scrolling survive refresh and mode changes, and locating reopens the current path', t => {
+  const f = branchingFixture(t)
+  f.find('[data-toggle-tree]').click()
+  const viewport = f.find('.conversation-tree-viewport'), tree = f.find('.conversation-tree-panel')
+  f.find('[data-tree-toggle="node:node-first"]').click()
+  assert.equal(tree.querySelector('[data-tree-navigate="node:node-second"]'), null)
+  viewport.scrollTop = 64
+  f.panel.render()
+  assert.equal(f.find('[data-tree-toggle="node:node-first"]').getAttribute('aria-expanded'), 'false')
+  assert.equal(viewport.scrollTop, 64)
+  f.history().click(); assert.equal(tree.hidden, true); assert.equal(tree.inert, true)
+  f.dialogue().click(); assert.equal(tree.hidden, false)
+  assert.equal(f.find('[data-tree-toggle="node:node-first"]').getAttribute('aria-expanded'), 'false')
+  f.find('.conversation-tree-locate').click()
+  const selected = f.find('[data-tree-navigate="node:node-second"]')
+  assert.equal(f.find('[data-tree-toggle="node:node-first"]').getAttribute('aria-expanded'), 'true')
+  assert.equal(f.document.activeElement, selected)
+  f.panel.render(); assert.equal(f.document.activeElement, selected)
+})
+
+test('round branch controls switch siblings and remain available in archived history while writes stay disabled', t => {
+  const f = branchingFixture(t), versions = f.find('.node-versions')
+  assert.equal(versions.querySelector('.node-version-label').textContent, '1 / 2')
+  const previous = versions.querySelector('[aria-label="查看此轮的上一个分支"]'), next = versions.querySelector('[aria-label="查看此轮的下一个分支"]')
+  assert.equal(previous.disabled, true); assert.equal(next.disabled, false)
+  f.state.session = { ...f.state.session, archivedAt: '2026-10-04T00:00:00.000Z' }; f.panel.render()
+  assert.equal(f.find('[data-edit-node="node-second"]').disabled, true)
+  assert.equal(f.find('.node-versions [aria-label="查看此轮的下一个分支"]').disabled, false)
+  f.find('.node-version-label').click()
+  assert.equal(f.find('.conversation-tree-panel').hidden, false)
+  f.find('.node-versions [aria-label="查看此轮的下一个分支"]').click()
+  assert.ok(f.calls.some(([kind, id]) => kind === 'navigate' && id === 'node-alternative'))
+  assert.equal(f.calls.some(([kind]) => kind === 'submit'), false)
+})
+
+test('active attempts in the tree open their trajectory and disposing removes overview controls', t => {
+  const f = branchingFixture(t)
+  f.find('[data-toggle-tree]').click()
+  f.find('[data-tree-navigate="run:pending"]').click()
+  assert.equal(f.state.position.viewMode, 'runs')
+  assert.equal(f.state.position.focusedRunId, 'pending')
+  assert.equal(f.state.position.viewNodeId, 'node-second')
+  assert.equal(f.find('.conversation-tree-panel').hidden, true)
+  f.dialogue().click()
+  const toggle = f.find('[data-toggle-tree]')
+  f.panel.dispose()
+  const expanded = toggle.getAttribute('aria-expanded')
+  toggle.click()
+  assert.equal(toggle.getAttribute('aria-expanded'), expanded)
+})
+
+test('legacy navigation expands the selected ancestors after the new path finishes loading', t => {
+  const f = branchingFixture(t), originalPath = f.state.path
+  f.state.session = { ...f.state.session, historyMode: 'dialogue-v1' }
+  f.state.position = { viewNodeId: 'node-first' }
+  f.state.path = [originalPath[0]]; f.state.children = [originalPath[1]]; f.panel.render()
+  f.find('[data-toggle-tree]').click()
+  f.find('[data-tree-toggle="node:node-first"]').click()
+  f.state.position = { viewNodeId: 'node-second' }; f.state.loading = true
+  f.state.path = []; f.state.children = []; f.panel.render()
+  f.state.path = originalPath; f.state.loading = false; f.panel.render()
+  assert.equal(f.find('[data-tree-toggle="node:node-first"]').getAttribute('aria-expanded'), 'true')
+  assert.equal(f.find('[data-tree-navigate="node:node-second"]').getAttribute('aria-current'), 'location')
+})
+
+test('long single-child segments fold without hiding forks, current nodes or active attempts', t => {
+  const path = Array.from({ length: 7 }, (_, index) => ({ id: `node-chain-${index + 1}`, sessionId: 'session',
+    parentId: index ? `node-chain-${index}` : null, input: `Round ${index + 1}`, output: 'Answer', sourceRunId: `chain-${index + 1}` }))
+  const runs = path.map((node, index) => ({ ...run(node.sourceRunId, 'completed', node.parentId), resultNodeId: node.id, createdAt: String(index) }))
+  const f = fixture(t, { runs: [...runs, run('alternative', 'completed', path[0].id), run('pending', 'running', path[0].id)],
+    position: { viewNodeId: path.at(-1).id }, path })
+  f.find('[data-toggle-tree]').click()
+  const tree = f.find('.conversation-tree-panel'), group = f.find('[data-tree-chain]')
+  assert.match(group.textContent, /中间 4 轮/)
+  assert.equal(group.getAttribute('aria-expanded'), 'false')
+  assert.equal(tree.querySelector('[data-tree-navigate="node:node-chain-3"]'), null)
+  assert.ok(tree.querySelector('[data-tree-navigate="node:node-chain-2"]'))
+  assert.ok(tree.querySelector('[data-tree-navigate="node:node-alternative"]'))
+  assert.ok(tree.querySelector('[data-tree-navigate="run:pending"]'))
+  assert.equal(f.find('[data-tree-navigate="node:node-chain-7"]').getAttribute('aria-current'), 'location')
+  const navigations = f.calls.filter(([kind]) => kind === 'navigate').length
+  group.focus(); group.click()
+  assert.equal(group.getAttribute('aria-expanded'), 'true')
+  assert.ok(tree.querySelector('[data-tree-navigate="node:node-chain-3"]'))
+  assert.ok(tree.querySelector('[data-tree-navigate="node:node-chain-6"]'))
+  f.panel.render()
+  assert.equal(f.find('[data-tree-chain]'), group); assert.equal(f.document.activeElement, group)
+  group.click()
+  assert.equal(tree.querySelector('[data-tree-navigate="node:node-chain-3"]'), null)
+  assert.equal(f.calls.filter(([kind]) => kind === 'navigate').length, navigations)
+  const container = f.document.createElement('aside'); f.document.body.append(container)
+  const view = createConversationTreeView(container, { navigate() { assert.fail('locating must not navigate') }, showRun() {}, close() {} })
+  view.update(f.state, conversationTree(f.state)); view.locate('node-chain-4')
+  assert.equal(container.querySelector('[data-tree-chain]').getAttribute('aria-expanded'), 'true')
+  assert.equal(f.document.activeElement, container.querySelector('[data-tree-navigate="node:node-chain-4"]'))
+  view.dispose(); container.remove()
 })
 
 test('dialogue is the default and switching shows all session records without changing the branch or draft', t => {

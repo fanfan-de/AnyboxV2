@@ -7,8 +7,7 @@ import type { AgentDefinition } from '../agent/domain.js'
 import { agentPromptServiceKey } from '../agent/prompt-binding-component.js'
 import type { AgentPromptPort } from '../agent/prompt-binding-component.js'
 import { modelFailure, normalizeModelFailure } from './model.js'
-import { bashToolDefinition } from '../tool/bash-component.js'
-import { applyPatchToolDefinition } from '../tool/apply-patch-component.js'
+import { listTools, validateToolSelection } from '../tool/catalog.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 import { validateRunInput, sameRunInput } from './domain.js'
@@ -121,12 +120,13 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
             const history = await records.loadNativeHistory(session.id, input.parentNodeId)
             const fixedInitialization = history?.initialization ?? await records.loadNativeInitialization(session.id)
-            const availableTools = [bashToolDefinition, applyPatchToolDefinition]
+            const availableTools = listTools().map(tool => tool.definition)
             if (fixedInitialization?.tools.some(tool => !availableTools.some(current => JSON.stringify(current) === JSON.stringify(tool)))) throw treeError('history-incompatible')
-            const initialization: NativeInitialization = fixedInitialization ?? Object.freeze({ schemaVersion: 1,
+            try { validateToolSelection(session.toolSelection) } catch { throw treeError('history-incompatible') }
+            const initialization: NativeInitialization = fixedInitialization ?? Object.freeze({ schemaVersion: 2,
               prompts: prompts.resolveInitialPrompts(session.agentId),
-              tools: Object.freeze(models.get(modelId)?.effectiveCapabilities?.tools === true ? availableTools : []),
-              toolContractVersion: 'known-tools-v1' })
+              tools: Object.freeze(models.get(modelId)?.effectiveCapabilities?.tools === true ? session.toolSelection.tools.map(tool => tool.definition) : []),
+              toolContractVersion: 'tool-library-v1', toolSelection: session.toolSelection })
             const template = prompts.resolveTaskTemplate(session.agentId) ?? null
             const images = (input.images?.length ? await records.describeImages(session.id, input.images.map(image => image.assetId)) : [])
               .map(({ expiresAt: _expiresAt, ...image }) => Object.freeze(image))

@@ -8,6 +8,7 @@ import { imageAssetsServiceKey, imageAssetError } from '../image/port.js'
 import type { ImageAssetsPort } from '../image/port.js'
 import type { AgentDefinition } from '../agent/domain.js'
 import { nonEmpty } from '../validation.js'
+import { createToolSelection } from '../tool/catalog.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 import { localStorageServiceKey } from '../../../../storage/port.js'
@@ -154,6 +155,13 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           const modelId = requestedModelId === null ? null : nonEmpty(requestedModelId, 'modelId')
           if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new TypeError('expectedRevision must be a non-negative safe integer')
           return withFallback(await records.setSessionDefaults(agent.id, modelId, expectedRevision), agent)
+        }),
+        getAgentTools: agentId => track(() => records.getAgentTools(requireAgent(agentId).id)),
+        setAgentTools: (agentId, input) => track(() => {
+          const agent = requireAgent(agentId)
+          if (!input || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) throw new TypeError('expectedRevision must be a non-negative safe integer')
+          const selection = createToolSelection(input.toolIds)
+          return records.setAgentTools(agent.id, { toolIds: selection.tools.map(tool => tool.toolId), expectedRevision: input.expectedRevision })
         }),
         createSession(projectId, agentId, requestedModelId) {
           return track(async () => {

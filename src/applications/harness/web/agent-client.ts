@@ -4,6 +4,7 @@ import { setupWorkspace } from './workspace-client.js'
 import { createModelsCatalog, setupModelsSettings } from './models-client.js'
 import { setupPromptSettings } from './prompt-client.js'
 import { setupSessionDefaults } from './session-defaults-client.js'
+import { setupToolsSettings } from './tools-client.js'
 import { messageFor } from './client-errors.js'
 import type { AgentView } from './client-types.js'
 import type { MountedPage } from './page-lifecycle.js'
@@ -36,7 +37,7 @@ sidebar.addEventListener('click', event => {
 
 const selected = options.selectedId === undefined ? api.connections[0] : api.connections.find(item => item.id === options.selectedId)
 required('agent--settings-target').textContent = `执行设备：${options.selectedName ?? selected?.name ?? '未选择'}`
-type SettingsSection = 'general' | 'connections' | 'archive' | 'models' | 'prompts'
+type SettingsSection = 'general' | 'connections' | 'archive' | 'models' | 'prompts' | 'tools'
 const settingsNavigation = [...settingsDialog.querySelectorAll<HTMLButtonElement>('[data-settings-section]')]
 const settingsPanels = [...settingsDialog.querySelectorAll<HTMLElement>('[data-settings-panel]')]
 function selectSettingsSection(section: SettingsSection): void {
@@ -67,6 +68,7 @@ settingsDialog.addEventListener('close', () => { void models.refresh() })
 const hostApi = selected ? api.forConnection(selected.id) : undefined
 const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefined
 const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('agent--session-defaults'), agentSelect) : undefined
+const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('agent--tools-settings'), agentSelect) : undefined
 const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, selected.instanceId, required('agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('agent--prompt-settings'), JSON.stringify(['agent', selected.instanceId, 'prompts'])) : undefined
 if (!selected) {
@@ -80,6 +82,7 @@ if (!selected) {
     hint.textContent = '请先在管理连接中启动所选设备上的 Agent，再管理模型与 Prompt。'
     panel.append(heading, hint)
   }
+  required('agent--tools-settings').textContent = '请先在管理连接中启动所选设备上的 Agent，再配置工具。'
 }
 function revealSettings(section: SettingsSection): void {
   selectSettingsSection(section)
@@ -87,6 +90,7 @@ function revealSettings(section: SettingsSection): void {
 }
 function canLeave(): boolean {
   if (sessionDefaults && !sessionDefaults.canLeave()) { revealSettings('general'); return false }
+  if (toolsSettings && !toolsSettings.canLeave()) { revealSettings('tools'); return false }
   if (modelsSettings && !modelsSettings.canLeave()) { revealSettings('models'); return false }
   if (promptSettings && !promptSettings.canLeave()) { revealSettings('prompts'); return false }
   return true
@@ -111,6 +115,7 @@ const receiveAgents = (agents: readonly AgentView[]) => {
   if (own.some(agent => agent.id === previous)) agentSelect.value = previous
   agentSelect.disabled = own.length === 0
   sessionDefaults?.selectAgent(agentSelect.value)
+  toolsSettings?.selectAgent(agentSelect.value)
   workspace.refreshControls()
 }
 const unsubscribeAgents = api.subscribeList('/agents', values => receiveAgents(values as readonly AgentView[]))
@@ -120,7 +125,7 @@ void api<readonly AgentView[]>('/agents').then(receiveAgents).catch(error => {
   notice.textContent = messageFor(error)
   notice.hidden = false
 })
-agentSelect.addEventListener('change', () => { sessionDefaults?.selectAgent(agentSelect.value); workspace.refreshControls() }, { signal: lifetime.signal })
+agentSelect.addEventListener('change', () => { sessionDefaults?.selectAgent(agentSelect.value); toolsSettings?.selectAgent(agentSelect.value); workspace.refreshControls() }, { signal: lifetime.signal })
 return {
   setActive(active) {
     if (!active) settingsDialog.close()
@@ -129,7 +134,7 @@ return {
   canLeave,
   async dispose() {
     closed = true; lifetime.abort(); settingsDialog.close(); unsubscribeAgents(); const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
-    await Promise.all([workspaceExit, modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose()])
+    await Promise.all([workspaceExit, modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose()])
     await api.dispose()
   },
 }

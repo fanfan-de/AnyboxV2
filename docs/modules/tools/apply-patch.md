@@ -21,6 +21,8 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 
 `ApplyPatchPort.definition` 声明唯一必填字符串参数 `patch`，禁止额外属性。宿主调用 `execute({ projectId, patch }): OwnedCall<ApplyPatchResult>`，项目 ID 来自执行上下文。服务先同步验证项目 ID 和 patch 类型；语法错误在队列内解析为诊断结果。
 
+文件工具另调用 `mutateText({projectId,path,mutation})`：`mutation` 为整文件 `write` 或 `oldString/newString/replaceAll` 的精确 `edit`。它在同一队列内部读取最新快照并规划变更，共享全部文本校验、文件预检、逐文件提交及清理；不是第二个写入提供方。纯 `applyTextMutation` 保留显式文本、BOM 和末尾换行，不添加补丁 Add 的隐含换行。
+
 | 结果字段 | 含义 |
 | --- | --- |
 | `status` | `applied` 全部完成；`rejected` 发生已知拒绝且尚无变更；`partial` 已有变更后发生已知失败；`cancelled` 已响应取消，仍可能带已完成变更 |

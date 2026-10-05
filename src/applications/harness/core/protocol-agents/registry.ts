@@ -12,6 +12,7 @@ import { modelFailure, normalizeModelFailure } from '../run/model.js'
 import { RunFailure } from '../run/domain.js'
 import { bashToolDefinition } from '../tool/bash-component.js'
 import { applyPatchToolDefinition } from '../tool/apply-patch-component.js'
+import { validateToolSelection } from '../tool/catalog.js'
 import { createExchangeRunner, initialMessages, serializable, toNativeRecord, toProtocolRecord } from './shared.js'
 import type { ExchangeRunner } from './shared.js'
 import type { ProtocolConclusion } from '../run/program.js'
@@ -32,6 +33,14 @@ export interface ProtocolAgentRegistry extends ProtocolAgentPort {
 }
 
 function validateInitialization(initialization: NativeInitialization): void {
+  if (initialization.schemaVersion === 2) {
+    if (initialization.toolContractVersion !== 'tool-library-v1') throw modelFailure('unsupported-request')
+    try { validateToolSelection(initialization.toolSelection) } catch { throw modelFailure('unsupported-request') }
+    if (initialization.tools.length && !isDeepStrictEqual(initialization.tools, initialization.toolSelection.tools.map(tool => tool.definition))) {
+      throw modelFailure('unsupported-request')
+    }
+    return
+  }
   if (initialization.schemaVersion !== 1 || initialization.toolContractVersion !== 'known-tools-v1') throw modelFailure('unsupported-request')
   const names = new Set<string>()
   for (const tool of initialization.tools) {
@@ -128,11 +137,12 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         const protocolId = service.protocolForModel(input.modelId), entry = entries.get(protocolId)
         if (!accepting || !entry?.accepting) throw modelFailure('dependency-unavailable')
         validateInitialization(input.initialization)
+        if (input.history) validateInitialization(input.history.initialization)
         if (input.history && (input.history.binding.protocolId !== protocolId ||
           input.history.binding.protocolId !== input.history.modelSnapshot.protocolId ||
           input.history.records.some(record => record.protocolId !== protocolId) ||
-          !['1.0.0', '1.1.0'].includes(input.history.binding.loopVersion) ||
-          ![1, 2].includes(input.history.binding.recordFormatVersion) || input.history.initialization.toolContractVersion !== 'known-tools-v1')) throw modelFailure('unsupported-request')
+          !['1.0.0', '1.1.0', '1.2.0'].includes(input.history.binding.loopVersion) ||
+          ![1, 2].includes(input.history.binding.recordFormatVersion))) throw modelFailure('unsupported-request')
         if (input.history) {
           const checkpoint = input.history.checkpoint
           if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) throw modelFailure('unsupported-request')
@@ -178,12 +188,12 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
             return { result, done, cancel: () => call.cancel('model-resource-cancelled') }
           } }
           execution = await deps[modelsServiceKey].openNative({ modelId: input.modelId, lease: driver, signal,
-            ...(permitted.size ? { resources, requirements: { imageInput: true } } : {}), ...(restore ? { restore } : {}) })
+            resources, ...(permitted.size ? { requirements: { imageInput: true } } : {}), ...(restore ? { restore } : {}) })
           signal.throwIfAborted()
           if (input.initialization.tools.length && !execution.capabilities.tools) throw modelFailure('unsupported-request')
           const initial = encodeInitial(protocolId, input), owned = execution
           const binding: ProtocolBindingSnapshot = { protocolId, generationId: entry.id + ':' + driver.generationId,
-            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.1.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 2 }
+            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.2.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 2 }
           let closing: Promise<ProgramExitReport> | undefined, executed = false
           const program: PreparedRunProgram = { binding, modelSnapshot: owned.snapshot, initialization: input.initialization, input: input.input,
             signal,
@@ -191,7 +201,13 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
               if (executed) throw modelFailure('invalid-response')
               executed = true
               try { return await entry.loop(createExchangeRunner(owned, host, { sessionId: input.sessionId, runId: input.runId },
-                imageRefs, input.initialization.prompts), initial) }
+                imageRefs, input.initialization.prompts, refs => {
+                  for (const ref of refs) {
+                    const prior = permitted.get(ref.id)
+                    if (prior && !isDeepStrictEqual(prior, ref)) throw modelFailure('invalid-resource')
+                    permitted.set(ref.id, ref)
+                  }
+                }, input.initialization.tools), initial) }
               catch (error) {
                 if (host.signal.aborted || program.signal.aborted) throw error
                 const failure = error instanceof RunFailure ? error : normalizeModelFailure(error)

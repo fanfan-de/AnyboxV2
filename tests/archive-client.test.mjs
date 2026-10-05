@@ -107,6 +107,13 @@ test('viewing an archived session closes settings before opening its workspace',
   assert.equal(f.requests.length, 1)
 })
 
+test('unopened archived sessions display titles from the list without reading conversation history', async t => {
+  const f = archiveFixture(t)
+  await f.show([{ ...session('unopened'), title: '第一次发送的内容' }])
+  assert.equal(f.list.children[0].children[0].children[0].textContent, 'Device · Project · 第一次发送的内容')
+  assert.deepEqual(f.requests.map(item => item.url), ['/sessions/archived'])
+})
+
 test('archive restore deduplicates clicks, refreshes the list and returns focus to its settings controls', async t => {
   const restore = deferred(), restored = []
   const f = archiveFixture(t, { restore: value => { restored.push(value); return restore.promise } })

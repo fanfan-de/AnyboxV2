@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { toolTrace } from '../dist/applications/harness/web/tool-trace.js'
 import { createToolCallCard } from '../dist/applications/harness/web/session-view.js'
+import { mountToolCallDetails } from '../dist/applications/harness/web/tool-call-view.js'
 
 const bash = (id = 'bash') => ({ id, name: 'bash', command: 'printf hello' })
 const patch = (id = 'patch') => ({ id, name: 'apply_patch', patch: '*** Begin Patch\n*** End Patch', patchTruncated: false })
@@ -15,6 +16,52 @@ const observed = (call, status) => call.name === 'bash' ? {
   kind: 'tool-observed', requestId: call.id, name: call.name,
   exitCode: 0, signal: null, stdout: 'hello', stderr: '', truncated: false,
 } : { kind: 'tool-observed', requestId: call.id, name: call.name, result: result(status) }
+
+test('mixed library names keep literal arguments, result and immutable image references', () => {
+  const calls = [
+    { id: 'same', name: 'codex_exec_command', arguments: { cmd: 'printf hello' } },
+    { id: 'same', name: 'claude_code_Read', arguments: { file_path: 'file.txt' } },
+    { id: 'picture', name: 'deepseek_harness_read_image', arguments: { file_path: 'image.png' } },
+  ]
+  const images = [{ assetId: 'asset', mediaType: 'image/png', sha256: 'hash', byteLength: 10, width: 2, height: 2 }]
+  const events = calls.flatMap((call, index) => [start(call), { kind: 'tool-observed', requestId: call.id, name: call.name,
+    result: index === 0 ? { output: 'hello', session_id: 1 } : index === 1 ? 'literal <script>content</script>' : { read: true },
+    ...(index === 2 ? { images } : {}) }])
+  const traced = toolTrace({ status: 'completed' }, events)
+  assert.deepEqual(traced.map(call => call.name), calls.map(call => call.name))
+  assert.deepEqual(traced[0].arguments, calls[0].arguments)
+  assert.equal(traced[1].result, 'literal <script>content</script>')
+  assert.deepEqual(traced[2].images, images)
+  assert.ok(traced.every(call => call.state === 'completed'))
+})
+
+test('persisted process cleanup joins final exit and remaining output onto matching exec and stdin cards', () => {
+  const exec = { id: 'exec', name: 'codex_exec_command', arguments: { cmd: 'read value' } }
+  const stdin = { id: 'stdin', name: 'codex_write_stdin', arguments: { session_id: 9, chars: 'value' } }
+  const unrelated = { id: 'other', name: 'codex_exec_command', arguments: { cmd: 'sleep' } }
+  const events = [start(exec), { kind: 'tool-observed', requestId: exec.id, name: exec.name, result: { session_id: 9, exit_code: null, output: 'begin\n' } },
+    start(stdin), { kind: 'tool-observed', requestId: stdin.id, name: stdin.name, result: { session_id: 9, exit_code: null, output: 'value\n' } },
+    start(unrelated), { kind: 'tool-observed', requestId: unrelated.id, name: unrelated.name, result: { session_id: 10, exit_code: null, output: '' } },
+    { kind: 'operation-observed', at: '2026-10-04T00:00:02Z', operationId: 'close', processes: [{ sessionId: 9, exitCode: 3, signal: null, output: 'end\n', truncated: true, terminated: false, timedOut: false }] }]
+  const calls = toolTrace({ status: 'completed' }, events)
+  for (const call of calls.slice(0, 2)) { assert.equal(call.state, 'failed'); assert.equal(call.result.exit_code, 3); assert.equal(call.result.closed, true); assert.equal(call.finishedAt, events.at(-1).at) }
+  assert.equal(calls[0].result.output, 'begin\nend\n'); assert.equal(calls[1].result.output, 'value\nend\n')
+  assert.equal(calls[2].result.closed, undefined); assert.equal(events[1].result.closed, undefined)
+  const cancelled = toolTrace({ status: 'cancelled' }, [...events.slice(0, 2), { ...events.at(-1), processes: [{ ...events.at(-1).processes[0], exitCode: null, signal: 'SIGTERM', terminated: true }] }])[0]
+  assert.equal(cancelled.result.terminated, true); assert.equal(cancelled.result.signal, 'SIGTERM')
+})
+
+test('library observed errors and failed cleanup retain partial result and images without replacing earlier facts', () => {
+  const edit = { id: 'edit', name: 'codex_apply_patch', arguments: { patch: 'literal' } }, image = { id: 'image', name: 'codex_view_image', arguments: { path: 'image.png' } }
+  const images = [{ assetId: 'picture', width: 2, height: 2 }]
+  const events = [start(edit), { kind: 'tool-failed', name: edit.name, requestId: edit.id, category: 'cleanup-failed', result: result('partial') },
+    start(image), { kind: 'tool-observed', name: image.name, requestId: image.id, result: { path: 'image.png' }, images },
+    { kind: 'tool-failed', name: image.name, requestId: image.id, category: 'cleanup-failed' }]
+  const calls = toolTrace({ status: 'failed' }, events)
+  assert.equal(calls[0].result.status, 'partial'); assert.equal(calls[0].result.changes.length, 1)
+  assert.deepEqual(calls[1].images, images); assert.deepEqual(calls[1].result, { path: 'image.png' })
+  assert.equal(toolTrace({ status: 'completed' }, [start(image), { kind: 'tool-observed', name: image.name, requestId: image.id, result: { status: 'error', code: 'image-unavailable' } }])[0].state, 'failed')
+})
 
 test('mixed tools retain result details and associate reused request IDs with the latest batch', () => {
   const b = bash('shared'), p = patch('shared')
@@ -88,6 +135,28 @@ function element(tag) {
   return node
 }
 const field = (card, key) => card.querySelectorAll('.tool-copy').find(button => button.dataset.copyField === key)?.parentElement.parentElement
+
+test('library tool details render retained images, readable process output and observed plan lists safely', () => {
+  const previous = globalThis.document
+  globalThis.document = { createElement: element }
+  try {
+    const image = { id: 'image', name: 'codex_view_image', arguments: { path: 'photo.png' }, state: 'completed', result: { path: 'photo.png' },
+      images: [{ assetId: 'asset', mediaType: 'image/png', byteLength: 10, sha256: 'hash', width: 20, height: 30 }] }
+    const picture = mountToolCallDetails(image, 'session')
+    assert.equal(picture.element.querySelector('img').src, '/api/v1/sessions/session/images/asset/content')
+    assert.match(picture.element.querySelector('img').alt, /20 × 30/)
+    const call = { id: 'command', name: 'codex_exec_command', state: 'failed', arguments: { cmd: 'printf output' }, result: { output: '<script>literal</script>', exit_code: 2, signal: null, closed: true } }
+    const card = mountToolCallDetails(call).element
+    assert.equal(field(card, 'command').querySelector('.tool-command').textContent, '$ printf output')
+    assert.equal(field(card, 'output').querySelector('.tool-output').textContent, '<script>literal</script>')
+    assert.match(card.textContent, /退出码：2/); assert.equal(card.querySelectorAll('script').length, 0)
+    assert.equal(field(card, 'result').tag, 'details')
+    const plan = mountToolCallDetails({ id: 'plan', name: 'codex_update_plan', arguments: {}, state: 'completed', result: { status: 'updated', plan: [{ step: '<b>Implement</b>', status: 'in_progress' }] } }).element
+    assert.equal(plan.querySelector('li').dataset.status, 'in_progress'); assert.match(plan.textContent, /最新计划/)
+    assert.equal(plan.querySelectorAll('b').length, 0)
+    picture.dispose()
+  } finally { if (previous === undefined) delete globalThis.document; else globalThis.document = previous }
+})
 
 test('Apply Patch cards render every outcome, preview truncation, actual changes and unfinished moves', () => {
   const previous = globalThis.document

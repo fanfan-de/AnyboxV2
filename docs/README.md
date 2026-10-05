@@ -18,7 +18,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | 项目与会话 | [sessions](./modules/sessions/README.md) | 项目身份、文件快照、对话树、归档与运行事实归谁所有 |
 | 图片资源 | [images](./modules/images/README.md) | 上传验证、原字节保存、草稿续期、原子保留与回收 |
 | Prompt | [prompts](./modules/prompts/README.md) | 草稿、发布版本、Agent 绑定与运行快照如何生效 |
-| 工具 | [tools](./modules/tools/README.md) | Bash 与 Apply Patch 如何执行、取消及记录实际结果 |
+| 工具 | [tools](./modules/tools/README.md) | 来源契约如何混选，文件/进程/图片如何执行、取消及记录实际结果 |
 | 基础存储 | [infrastructure](./modules/infrastructure/README.md) | 业务 SQLite 的排他所有权、事务与领域迁移 |
 | Web 宿主 | [web](./modules/web/README.md) | 本机 HTTP、SSE、附件草稿、归档界面与原生目录选择 |
 | 资源归属验证 | [diagnostics](./modules/diagnostics/README.md) | H0 探针如何证明结果与真实退出的区别 |
@@ -39,10 +39,13 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | [Anybox 宿主与 Anybox Harness 应用边界](./harness-module-boundary.md) | 当前目录、宿主与应用依赖方向、组合入口与资源归属 |
 | [harness server 组件协作总览](./harness-server-components.md) | 单根装配、资源所有权与关键调用路径 |
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
+| [工具库设计](./tools-library-design.md) | 来源工具混选、不可变会话快照、Run 进程清理和原生工具图片 |
 | [多模态图片输入设计](./multimodal-image-input-design.md) | 四种原生协议图片输入的端到端链路、历史升级兼容与验收 |
 | [项目目录选择](./project-directory-picker.md) | 多实例目录浏览、固定连接、分页清理和旧版兼容 |
 | [项目文件引用](./project-file-references-design.md) | @ 搜索、发送快照、原子保留、幂等提交与历史恢复 |
 | [Session 对话树](./session-conversation-tree.md) | 父节点选择、分支并发、原子成功节点、归档恢复及旧历史读取 |
+| [通用内容生成设计](./content-generation-design.md) | 复用 Models 的单次非流式生成、默认与用途选模、资源退出及标题接入，待实施 |
+| [会话自动命名实施计划](./session-titles-design.md) | 首轮摘要、后台模型命名、持久标题、人工改名保护及列表同步，待实施 |
 | [Prompt 管理设计](./prompt-management-design.md) | 提示词产品语义、权限与版本固定 |
 | [Run 状态转换](./run-state-machine-design.md) | Run 状态与执行/持久化边界 |
 | [业务 SQLite 设计](./local-sqlite-storage.md) | 存储契约、领域迁移及已有表归属 |

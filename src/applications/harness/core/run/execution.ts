@@ -1,6 +1,10 @@
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 import { validateToolBatch } from './domain.js'
 import type { RunFailureCategory, RunStatus, ValidatedToolRequest, ToolObservation } from './domain.js'
+import { listTools } from '../tool/catalog.js'
+import type { JsonValue } from '@anybox/models'
+import type { ImageRef } from '../image/port.js'
+import type { BashResult } from '../tool/bash-component.js'
 
 export type RunPhase = 'active' | 'ready-model' | 'model-in-flight' | 'ready-tool' | 'tool-in-flight' | 'terminal'
 
@@ -15,13 +19,13 @@ export interface RunExecution {
 
 export type RunEventData =
   | { readonly kind: 'operation-started'; readonly operationId: string; readonly operationKind: 'model' | 'operation' }
-  | { readonly kind: 'operation-observed'; readonly operationId: string }
-  | { readonly kind: 'operation-failed'; readonly operationId: string; readonly category: RunFailureCategory }
+  | { readonly kind: 'operation-observed'; readonly operationId: string; readonly result?: JsonValue }
+  | { readonly kind: 'operation-failed'; readonly operationId: string; readonly category: RunFailureCategory; readonly result?: JsonValue }
   | { readonly kind: 'model-started' }
   | { readonly kind: 'model-tool-calls'; readonly calls: readonly ValidatedToolRequest[] }
   | { readonly kind: 'tool-started'; readonly call: ValidatedToolRequest }
   | ({ readonly kind: 'tool-observed'; readonly requestId: string } & ToolObservation)
-  | { readonly kind: 'tool-failed'; readonly name: ValidatedToolRequest['name']; readonly requestId: string; readonly category: RunFailureCategory; readonly result?: ApplyPatchResult }
+  | { readonly kind: 'tool-failed'; readonly name: ValidatedToolRequest['name']; readonly requestId: string; readonly category: RunFailureCategory; readonly result?: ApplyPatchResult | BashResult | JsonValue; readonly images?: readonly ImageRef[] }
   | { readonly kind: 'terminal'; readonly status: RunStatus; readonly errorCategory?: RunFailureCategory }
   | { readonly kind: 'interrupted'; readonly previousPhase: RunPhase }
 
@@ -80,26 +84,30 @@ export function parseRunEvent(raw: string, seq: number, at: string): RunEvent {
       event = { kind: value.kind, operationId: value.operationId, operationKind: value.operationKind }; break
     case 'operation-observed':
       if (typeof value.operationId !== 'string') throw new Error('invalid operation event')
-      event = { kind: value.kind, operationId: value.operationId }; break
+      event = { kind: value.kind, operationId: value.operationId,
+        ...(value.result === undefined ? {} : { result: value.result as JsonValue }) }; break
     case 'operation-failed':
       if (typeof value.operationId !== 'string' || typeof value.category !== 'string') throw new Error('invalid operation event')
-      event = { kind: value.kind, operationId: value.operationId, category: value.category as RunFailureCategory }; break
+      event = { kind: value.kind, operationId: value.operationId, category: value.category as RunFailureCategory,
+        ...(value.result === undefined ? {} : { result: value.result as JsonValue }) }; break
     case 'model-started': event = { kind: value.kind }; break
     case 'model-tool-calls': event = { kind: value.kind, calls: validateToolBatch(value.calls) }; break
     case 'tool-started': event = { kind: value.kind, call: validateToolBatch([value.call])[0]! }; break
     case 'tool-observed':
     case 'tool-failed': {
-      if ((value.name !== 'bash' && value.name !== 'apply_patch') || typeof value.requestId !== 'string' || !value.requestId) {
+      if (!listTools().some(tool => tool.definition.name === value.name) || typeof value.requestId !== 'string' || !value.requestId) {
         throw new Error('invalid stored tool event')
       }
       if (value.kind === 'tool-failed') {
         if (typeof value.category !== 'string') throw new Error('invalid stored tool failure')
-        event = { kind: value.kind, name: value.name, requestId: value.requestId,
+        event = { kind: value.kind, name: value.name as ValidatedToolRequest['name'], requestId: value.requestId,
           category: value.category as RunFailureCategory,
-          ...(value.result === undefined ? {} : { result: object(value.result) as unknown as ApplyPatchResult }) }
+          ...(value.result === undefined ? {} : { result: object(value.result) as unknown as ApplyPatchResult }),
+          ...(Array.isArray(value.images) ? { images: value.images as readonly ImageRef[] } : {}) }
       } else {
         object(value.result)
-        event = { kind: value.kind, name: value.name, requestId: value.requestId, result: value.result } as RunEventData
+        event = { kind: value.kind, name: value.name, requestId: value.requestId, result: value.result,
+          ...(Array.isArray(value.images) ? { images: value.images } : {}) } as RunEventData
       }
       break
     }

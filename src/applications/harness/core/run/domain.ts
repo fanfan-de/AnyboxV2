@@ -11,6 +11,9 @@ import { nonEmpty } from '../validation.js'
 import type { ImageRef } from '../image/port.js'
 import { imageLimits } from '../image/limits.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
+import type { JsonValue } from '@anybox/models'
+import type { ToolDefinition } from '../tool/definition.js'
+import { validateLibraryArguments, type LibraryToolName } from '../tool/catalog.js'
 
 export type RunHistory =
   | { readonly kind: 'tree'; readonly parentNodeId: string | null }
@@ -46,14 +49,16 @@ export const runLimits = Object.freeze({
 export type ValidatedToolRequest =
   | (Readonly<{ id: string }> & { readonly name: 'bash'; readonly arguments: Readonly<{ command: string }> })
   | (Readonly<{ id: string }> & { readonly name: 'apply_patch'; readonly arguments: Readonly<{ patch: string }> })
+  | (Readonly<{ id: string }> & { readonly name: LibraryToolName; readonly arguments: Readonly<Record<string, JsonValue>> })
 
 export type ToolObservation =
   | { readonly name: 'bash'; readonly result: BashResult }
   | { readonly name: 'apply_patch'; readonly result: ApplyPatchResult }
+  | { readonly name: LibraryToolName; readonly result: JsonValue; readonly images?: readonly ImageRef[] }
 
 /** Validate the complete batch envelope before acquiring any tool resource.
  * Patch syntax is an execution observation so the model can correct it. */
-export function validateToolBatch(calls: unknown): readonly ValidatedToolRequest[] {
+export function validateToolBatch(calls: unknown, allowed?: readonly ToolDefinition[]): readonly ValidatedToolRequest[] {
   if (!Array.isArray(calls) || calls.length === 0) throw new RunFailure('invalid-tool-request')
   const ids = new Set<string>()
   return Object.freeze(calls.map((call: unknown): ValidatedToolRequest => {
@@ -61,16 +66,19 @@ export function validateToolBatch(calls: unknown): readonly ValidatedToolRequest
       !('id' in call) || typeof call.id !== 'string' || !call.id.trim() || call.id.length > 256 ||
       ids.has(call.id) || !('name' in call) || !('arguments' in call) ||
       !call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments) ||
-      Object.keys(call.arguments).length !== 1) throw new RunFailure('invalid-tool-request')
+      allowed !== undefined && !allowed.some(tool => tool.name === call.name)) throw new RunFailure('invalid-tool-request')
     ids.add(call.id)
-    if (call.name === 'bash' && 'command' in call.arguments && typeof call.arguments.command === 'string' &&
+    if (call.name === 'bash' && Object.keys(call.arguments).length === 1 && 'command' in call.arguments && typeof call.arguments.command === 'string' &&
       call.arguments.command.trim() && !call.arguments.command.includes('\0')) {
       return Object.freeze({ id: call.id, name: 'bash', arguments: Object.freeze({ command: call.arguments.command }) })
     }
-    if (call.name === 'apply_patch' && 'patch' in call.arguments && typeof call.arguments.patch === 'string') {
+    if (call.name === 'apply_patch' && Object.keys(call.arguments).length === 1 && 'patch' in call.arguments && typeof call.arguments.patch === 'string') {
       return Object.freeze({ id: call.id, name: 'apply_patch', arguments: Object.freeze({ patch: call.arguments.patch }) })
     }
-    throw new RunFailure('invalid-tool-request')
+    try {
+      const args = validateLibraryArguments(call.name, call.arguments)
+      return Object.freeze({ id: call.id, name: call.name as LibraryToolName, arguments: args })
+    } catch { throw new RunFailure('invalid-tool-request') }
   }))
 }
 

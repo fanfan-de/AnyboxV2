@@ -17,6 +17,7 @@ Session 是会话、新会话初始化默认值、不可变对话节点、Run �
 | --- | --- |
 | `getSessionDefaults(agentId)` | 查询该执行设备上指定 Agent 的新会话模型覆盖、启动后备值、有效默认值和 revision |
 | `setSessionDefaults(agentId, modelId, expectedRevision)` | CAS 保存模型配置 ID；modelId 为 null 时清除覆盖，恢复启动后备值；初始 revision 为 0 |
+| `getAgentTools(agentId)` / `setAgentTools(agentId, { toolIds, expectedRevision })` | 查询或 CAS 保存该设备上 Agent 的新会话工具选择；独立 revision；空数组明确关闭工具 |
 | `createSession(projectId, agentId, modelId?)` | 检查 Agent 和可用项目，在创建事务内按显式模型、已保存覆盖、Agent 启动默认、null 的顺序选定并复制 modelId |
 | `selectSessionModel(sessionId, modelId, protocolId?)` | 保存后续 Run 默认模型；已绑定协议时必须匹配，旧 Session 不可修改 |
 | `getSession(id)` / `listSessions(projectId)` | 按 ID 查询包含归档会话；项目列表只返回未归档会话，要求项目存在但目录可暂时不可用 |
@@ -30,7 +31,9 @@ Session 是会话、新会话初始化默认值、不可变对话节点、Run �
 | `getRunEvents(id, afterSeq?)` | 按递增 seq 读取事件，游标默认 0、必须为非负安全整数；未知 Run 返回 undefined |
 | `getRunRecords(id)` | 读取该 Run 的不可变受信原生记录；未知 Run 抛错 |
 
-Session 保存 id、projectId、agentId、可空 modelId、historyMode、可空 protocolId、可空 archivedAt、createdAt。ConversationNode 保存 id、sessionId、parentId、原始 input、output、sourceRunId，并从来源 Run 的 nativeInput 投影 images 和 files：v1 两者为空，v2 只有图片，v3 包含图片和文件引用。节点不承载当前选中位置或全局 head。harness server API 在显式选模时先通过 Models 验证配置，并传入真实协议 ID；Session 本身不注入 Models，也不查凭据。
+Session 保存 id、projectId、agentId、可空 modelId、toolSelection、historyMode、可空 protocolId、可空 archivedAt、createdAt。ConversationNode 保存 id、sessionId、parentId、原始 input、output、sourceRunId，并从来源 Run 的 nativeInput 投影 images 和 files：v1 两者为空，v2 只有图片，v3 包含图片和文件引用。节点不承载当前选中位置或全局 head。harness server API 在显式选模时先通过 Models 验证配置，并传入真实协议 ID；Session 本身不注入 Models，也不查凭据。
+
+所有返回 Session 的入口统一提供可空 `title` 展示投影，列表读取即可获得，无须打开会话或加载历史。原生会话使用首个已接受 Run 的原始 input，按保留的 SQLite rowid 接受顺序选取，因此同时间、失败、取消、中断、后续分支和选中路径均不改变标题。旧 `dialogue-v1` 会话使用 seq 最早的根节点，不从关联不明确的旧 Run 推断。标题压缩空白，最多 120 个 Unicode 字符，超出以省略号截断；无正文时提供图片/文件数量摘要，空会话返回 null。标题读取不使用 task-template 展开正文，不写回历史或增加迁移，也不包含恢复记录、凭据和执行句柄。
 
 ## 新会话默认模型
 
@@ -42,6 +45,14 @@ harness server API 及 HTTP 保存非空覆盖时检查 Models 配置存在且�
 
 首次查询没有持久记录时 revision 为 0；写入与清除都提交新 revision，过期 expectedRevision 返回 `session-defaults-conflict`，不覆盖另一调用方的结果。此配置复用 Session 既有操作跟踪、业务 SQLite 连接与生命周期，没有额外 Nya 组件、数据库或项目级继承。
 
+## Agent 工具与会话固定
+
+Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude Code、DeepSeek Harness 来源组合；来源标签只描述出处，不选择模型协议或执行器。保存先验证已知工具及明确依赖，再通过独立 revision 提交，冲突返回 `agent-tools-conflict`。默认配置仅在尚无保存记录时使用；保存 `[]` 与默认配置有不同语义。
+
+创建 Session 的同一业务库事务读取 Agent 的最新选择，并保存 `ToolSelectionSnapshot { schemaVersion: 1, tools: [{ toolId, version, definition }] }`。后续修改 Agent、模型或来源展示不会改变已有会话工具；Session 没有改工具入口，数据库禁止更新 tool_selection_json。工具运行资源归对应执行组件，配置和快照不保存运行句柄。
+
+首次 Run 的原生 initialization v2 保存该选择与实际模型声明，接受事务复核选择等于 Session 快照；其后所有根、分支和重新生成复用同一 initialization。无工具能力模型继续纯文本调用。旧会话迁移保存原 Bash/Apply Patch 选择，历史 initialization v1 和记录 JSON 原样保留。
+
 ## 受信执行记录端口
 
 | 方法 | 职责 |
@@ -52,14 +63,14 @@ harness server API 及 HTTP 保存非空覆盖时检查 Models 配置存在且�
 | `registerRun(id, input, now, prompts, model, native)` | 原子复核并接受 Run，返回 `{ run, created }` |
 | `loadNativeInitialization(sessionId)` | 读取首次接受后固定的 instruction/context 与工具声明 |
 | `loadNativeHistory(sessionId, parentNodeId)` | 校验所选成功路径，临时物化其原生记录、绑定、快照和 checkpoint |
-| `startOperation(runId, operation, at)` | 运行态才接受；保存操作 intent、初始记录及 started 事件，返回是否准入 |
+| `startOperation(runId, operation, at)` | running 接受正常操作；cancelling 仅接受显式 cleanup:true 且 kind:operation 的清理操作；保存 intent、初始记录及 started 事件，返回是否准入 |
 | `observeOperation(runId, operationId, observation, at)` | 允许 running/cancelling 的已开始操作提交结果、错误或清理失败事实 |
 | `loadRunContext(id)` | 返回已接受 Run 与项目 ID，不含运行期模型计划 |
 | `getRun(id)` / `getRunExecution(id)` | 读取 Run 和执行计数/阶段 |
 | `requestCancellation(id, now)` | 把 running 改为 cancelling；未知 ID 返回 undefined，终态不改变 |
 | `settleRun(id, outcome, now)` | 原子保存终态和成功节点；调用前 Runtime 必须已经等待所有资源实际退出 |
 
-`RunOperationStart` 包含 id、kind（model/operation/tool）、JSON intent、可选 records 与 tool；observation 的 kind 为 value/error/cleanup-failed，可携 records、checkpoint、工具事实和失败分类。
+`RunOperationStart` 包含 id、kind（model/operation/tool）、JSON intent、可选 records 与 tool，以及只用于通用 operation 的 cleanup:true 准入标记。Session 不解释 intent 来推断清理，模型或工具操作不能利用该标记在取消后启动。observation 的 kind 为 value/error/cleanup-failed，可携 records、checkpoint、工具事实、通用 JSON result 和失败分类；结果在现有 observation_json 中持久化，不增加事件种类。
 
 ## 接受、分支与成功结算
 
@@ -71,9 +82,11 @@ harness server API 及 HTTP 保存非空覆盖时检查 Models 配置存在且�
 
 ## 表、通知与资源归属
 
-迁移继续使用历史 `run-state` 账本，当前版本 8（v6 增加原生记录 resource_refs_json，v7 增加 Session archived_at 和归档列表索引，v8 增加按 Agent 保存的新会话默认模型表；旧 JSON 原样保留）。该组件拥有 `harness_session_defaults`、`harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
+迁移继续使用历史 `run-state` 账本，当前版本 9（v6 增加原生记录 resource_refs_json，v7 增加 Session archived_at 和归档列表索引，v8 增加按 Agent 保存的新会话默认模型表，v9 增加 Agent 工具配置和不可变 Session 工具快照；旧 JSON 原样保留）。该组件拥有 `harness_agent_tool_settings`、`harness_session_defaults`、`harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
 
 每次 Run 变更提交后发送 `harness.run.changed`，载荷为 sessionId、runId、revision。监听失败只记录警告，不回滚已提交事实。原生记录可能含签名、加密续接和工具原生 ID，属于受信恢复面；浏览器必须使用白名单投影。Key、认证头、凭据引用和运行句柄不得写入历史。
+
+工具读取图片的 `observation.tool.images` 在同一观察事务通过图片组件 retainIn 保留，所有者键为 `run-tool:<runId>:<operationId>`；失败事务不保留图片或半份观察。随后增量原生请求可引用同 Run 已观察图片，资源元数据必须与受信输入或已保存观察一致。tool-failed 同样保留清理失败时已有的工具 result/images，工具名称必须与 started 意图一致。普通操作还可在 observation.result 保存版本化 JSON 事实，例如实际进程清理结果，并附在 operation-observed/failed 内部事件；不保存实时进程对象。浏览器只接收 HTTP 白名单投影的进程退出字段。
 
 ## 关闭、恢复与兼容
 
@@ -85,7 +98,9 @@ Effect 先停止新调用，取消并等待图片及文件搜索/预览/准备/�
 
 ## 验证
 
-[Session 生命周期](../../../tests/session.test.mjs) 验证关闭等待与替换后事实保留；[新会话默认模型](../../../tests/session-defaults.test.mjs) 验证创建复制、显式优先、Agent 隔离、CAS、无效引用保留、重启与关闭等待；[原生 Session](../../../tests/native-session.test.mjs) 验证协议固定、父引用复核、原生记录不可变和事务回滚；[会话树](../../../tests/conversation-tree.test.mjs) 验证并发兄弟、路径隔离、结算与取消竞争；[迁移](../../../tests/conversation-migration.test.mjs)、[多项目](../../../tests/multi-project.test.mjs) 与[Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 验证旧数据、重启和不重放副作用。统一执行 `npm run check`。
+[Agent 工具测试](../../../tests/agent-tools.test.mjs) 验证混合选择、空配置、Agent 隔离、CAS、原子复制、重启、关闭等待、不可变会话快照及工具图片观察与引用的事务保留。
+
+[Session 生命周期](../../../tests/session.test.mjs) 验证关闭等待与替换后事实保留；[新会话默认模型](../../../tests/session-defaults.test.mjs) 验证创建复制、显式优先、Agent 隔离、CAS、无效引用保留、重启与关闭等待；[原生 Session](../../../tests/native-session.test.mjs) 验证列表标题、首次失败、分支与同时间接受顺序、Unicode 截断、重启、协议固定、父引用复核、原生记录不可变和事务回滚；[HTTP](../../../tests/harness-server-http.test.mjs) 验证未加载历史的标题投影与文件摘要；[原生协议](../../../tests/native-protocol-agents.test.mjs) 验证纯图片标题；[会话树](../../../tests/conversation-tree.test.mjs) 验证并发兄弟、路径隔离、结算与取消竞争；[迁移](../../../tests/conversation-migration.test.mjs) 验证旧标题来源与历史不改写，[多项目](../../../tests/multi-project.test.mjs) 与[Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 验证旧数据、重启和不重放副作用。统一执行 `npm run check`。
 
 ## 图片输入与引用
 

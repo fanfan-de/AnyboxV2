@@ -10,13 +10,17 @@
 
 `ANYBOX_LLM_*` 保留为新 Models 数据库的初次迁入参数；已有连接/配置不会被环境变量覆盖。Models 能力首次启用时建立显式用户定义、迁入连接和稳定 `default` 配置，将旧参数转换为对应协议的 `parameters`，并尝试把旧凭据复制到 Models 管理的系统凭据条目；旧密钥缺失或系统凭据库暂不可访问时仍允许进入设置。后续连接、模型、生成参数及 Key 可通过 `models.settings` 修改并原子保存 JSON，不需要重启应用。能力在界面只读展示，人工修正需停止所属执行设备的 Agent，编辑 `configurations[].capabilities` 后重新启动；文件是实际配置存储，无运行期监听，运行中改文件使后续保存返回冲突。文件结构与兼容导入见 [JSON 配置存储](modules/models/json-store.md)。变量详情见 [README](../README.md#本机-web-界面)。执行宿主拥有稳定业务 HTTP 监听器，客户端应用外壳提供静态页面；进程信号由入口处理，经应用宿主 `close()` 关闭整个根。harness server 负责项目、Session、Run 准入、幂等、工具执行、取消和结算；协议 Driver/Loop 通过 Runtime 执行并生成安全视图，Models 提供原生 execution、凭据和传输边界。
 
-页面使用原生 TypeScript、HTML 和 CSS。`src/host/web/client.ts` 只负责应用目录、打开和关闭，`harness-page-client.ts` 在 Anybox Harness 内管理连接、设备目标和工作区生命周期，`agent-client.ts` 挂载工作区及设置分类，`models-client.ts` 管理连接/模型配置表单及跨面板共享的已保存模型列表，`models-directory-client.ts` 独立管理公共目录状态、查询、刷新和短暂轮询；`workspace-layout.ts` 提供纯布局函数，`workspace-client.ts` 管理工作区，`session-client.ts` 管理各会话请求与 Run 视图快照，`session-view.ts` 管理面板和稳定的 Turn 挂载点，`protocols/view.ts` 管理共享 Turn 容器，四协议内容模块分别实现块渲染并使用服务端公共展示白名单与 reducer，`tool-trace.ts` 归并两类工具的展示状态，`prompt-client.ts` 保留 Prompt 设置。浏览器运行时代码只使用浏览器 API；Models 类型导入仅用于编译检查，不向浏览器加载 Nya 或 Models 的服务端代码。
+页面使用原生 TypeScript、HTML 和 CSS。`src/host/web/client.ts` 只负责应用目录、打开和关闭，`harness-page-client.ts` 在 Anybox Harness 内管理连接、设备目标和工作区生命周期，`agent-client.ts` 挂载工作区及设置分类，`models-client.ts` 管理连接/模型配置表单及跨面板共享的已保存模型列表，`models-directory-client.ts` 独立管理公共目录状态、查询、刷新和短暂轮询；`workspace-layout.ts` 提供纯布局函数，`workspace-client.ts` 管理工作区，`session-client.ts` 管理各会话请求与 Run 视图快照，`session-view.ts` 管理面板和稳定的 Turn 挂载点，`protocols/view.ts` 管理共享 Turn 容器，四协议内容模块分别实现块渲染并使用服务端公共展示白名单与 reducer，`tool-trace.ts` 归并统一工具库及旧 Bash/Apply Patch 的展示状态，`prompt-client.ts` 保留 Prompt 设置，`tools-client.ts` 管理固定执行设备上的 Agent 工具选择。浏览器运行时代码只使用浏览器 API；Models 类型导入仅用于编译检查，不向浏览器加载 Nya 或 Models 的服务端代码。
 
 模型服务主页面展示“我的连接”；添加连接流程以可搜索、可滚动的列表同时展示多个 Provider 定义，按定义 ID 显示来源、已有连接数量及当前选中项。点击提供方后在右侧填写连接配置，连接方案、模型目录预览和自定义连接入口沿用原流程。列表选择仅填写草稿，不创建连接或修改会话选模；目录状态更新保留列表按钮焦点。
 
 `src/host/component.ts` 只注入常驻的产品、活动及访问服务，接收通用应用目录；`http-server.ts` 根据已注册路由确定应用并登记活动。harness server 自己的 `harness-http.ts` 在首次异步工作前从受信根捕获本次服务快照，`http/handler.ts` 处理业务路由。业务查询取自 `harness.sessions`，执行控制取自 `harness.runs`，已保存模型查询取自 `models`，配置和 Key 操作取自 `models.settings`，统一目录定义也取自 `models.settings`；`models.catalog` 仅提供来源状态和刷新。Web 不依赖旧 `credentials.settings`，也不向前端提供凭据读取服务或协议注册服务。
 
 公开 Session 包含选定的 `modelId`、`historyMode` 和首次原生 Run 固定的 `protocolId`；公开 Run 包含实际 `modelId`、调用者显式指定的 `requestedModelId`、`protocolBinding` 和不含秘密的 `modelSnapshot`（新写入 schemaVersion 3，含原生参数；旧快照只读且不重写）。Agent 指令、Prompt 内容快照、execution 句柄、原生续轮记录与密钥不进入普通 Session/Run DTO。Bash 命令和输出摘要、Apply Patch 预览和结果仍可展示；Prompt 管理单独返回可管理文档和版本。模型管理接口仅返回 Key 是否已配置，绝不回传密钥值或内部凭据引用。
+
+工作区设置增加“Agent 工具”，按所选执行设备和 Agent 查询统一工具目录及独立修订。用户按功能分类、名称/描述与来源过滤后自由勾选单个工具，来源不绑定模型或其他工具；明确依赖由用户补选后才可保存。保存仅影响新会话，空选择明确关闭工具。每个 Agent 保留独立草稿，设备请求目标固定，冲突保留当前选择并要求显式重新加载；未保存或进行中的保存参与离开检查，关闭取消读取并等待已提交写入。toolId 和固定声明不添加 instanceId，会话等业务资源仍归原设备。
+
+Session 创建事务复制工具 ID、版本和完整声明，输入区只读显示原始工具名称与来源。首次 Run 保存 initialization v2，此后同会话所有分支和重新生成使用固定声明；已有 v1 历史保留原 Bash/Apply Patch 读取兼容。工具卡显示真实命令、进程状态/退出码/信号、输出、文件事实及搜索结果，原始 JSON 可展开。图片只按本会话已保留引用生成认证缩略图 URL；每个 Run 的轨迹组展示最新已观察计划或 todo 列表。通用进程关闭事件仅白名单公开退出字段，并补充对应 exec/stdin 卡的最终状态；取消、清理失败仍展示已发生的退出、部分文件变更和图片事实。验证见 `tests/agent-tools.test.mjs`、`tests/tools-client.test.mjs`、`tests/tool-call-view.test.mjs` 和 `tests/tool-trace.test.mjs`。
 
 停止 harness server 时同步冻结准入：有用户任务或写入则拒绝；空闲时结束观察并等待只读请求退出，再释放执行组件。关闭 Anybox Harness 客户端只释放连接、目录选择和代理，不停止远程 Run。稳定 HTTP 监听器保持运行。应用整体关闭先关闭准入并等待控制与装配退出，再同时进行 Nya 根清理与 HTTP 排空；HTTP 的 Run 保留租约需要根清理取消后实际退出，不能在根清理前等待这些租约。目录刷新请求断连会取消其来源操作并等待 reader 实际退出。Web 单独关闭不取消已交给 harness server 的 Run，应用根关闭则按依赖顺序取消并等待所有执行。前端不保存权威业务状态，不直接连接 Provider、SQLite 或系统凭据库。
 
@@ -25,6 +29,9 @@
 | 方法与路径 | 用途 |
 | --- | --- |
 | `GET /api/v1/agents` | 返回全局 Agent `{id}` 列表 |
+| `GET /api/v1/tools` | 返回统一工具目录，含稳定 toolId、版本、原始名称、分类、可选来源与明确依赖 |
+| `GET /api/v1/agents/:id/tools` | 该设备 Agent 的新会话工具 ID 选择与独立 revision；未保存时返回默认选择 |
+| `POST /api/v1/agents/:id/tools` | 用 `{toolIds,expectedRevision}` CAS 保存；空数组关闭工具，拒绝未知项或缺少依赖；仅影响新会话 |
 | `GET /api/v1/projects` | 返回项目 ID、名称、规范化目录路径和可用状态 |
 | `POST /api/v1/projects/directories/browse` | open 预留浏览会话；page 读取有界当前层目录 |
 | `POST /api/v1/projects/directories/close` | 关闭浏览会话并等待句柄清理 |
@@ -37,7 +44,7 @@
 | `POST /api/v1/sessions/:id/project-files/tree/open` | 用 `{path}` 打开相对目录并返回第一页，空路径表示项目根 |
 | `POST /api/v1/sessions/:id/project-files/tree/page` | 用 `{cursorId,page}` 读取下一页，校验会话及受信 actor |
 | `POST /api/v1/sessions/:id/project-files/tree/close` | 用 `{cursorId}` 幂等关闭并等待目录句柄退出 |
-| `GET /api/v1/sessions/:id` | 读取 Session 元数据、`projectId`、`modelId`、`historyMode` 与 `protocolId`，不返回 turns |
+| `GET /api/v1/sessions/:id` | 读取 Session 元数据、`projectId`、`modelId`、不可变 `toolSelection`、`historyMode` 与 `protocolId`，不返回 turns |
 | `GET /api/v1/sessions/:id/runs` | 列出会话的 Run，支持 `status=active` 和 `parentNodeId` 过滤（`root` 表示虚拟根） |
 | `POST /api/v1/sessions/:id/runs` | 用 `{parentNodeId: string|null,input,images?: {assetId}[],idempotencyKey,modelId?}` 接受 Run；父节点必填，显式模型与有序图片引用参与幂等比较 |
 | `GET /api/v1/runs/:id` | 读取公开 Run 的 `history`、`revision`、状态、模型 ID/快照与 `resultNodeId`/结果 |
@@ -128,6 +135,8 @@ Prompt 操作者由 Web 宿主固定为持久身份 `local-web-user`，浏览器
 
 HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run。详细合约、迁移与客户端语义见[对话树实施记录](./session-conversation-tree.md)。
 
+顶部“分支”打开当前会话面板内的覆盖式树总览，不挤占线性阅读列。总览展示虚拟起点、轮次短摘要及分叉连接线，高亮当前祖先路径与选定节点；点击成功节点切换查看和发送起点，展开按钮独立折叠后续子树，“定位当前”展开并定位当前祖先。各轮操作旁显示同父成功分支的序号与前后切换，序号本身可在总览中定位。running/cancelling 以独立状态行挂到其父位置，点击进入轨迹，不构成可续接节点。树索引只消费已查询的真实节点和原生会话明确的成功 Run 关系，旧会话不补造分支；不新增 HTTP 或持久字段。总览开关、折叠、焦点及滚动由每个面板独立持有，切换轨迹临时隐藏；关闭、Esc 或点击面板内的外部区域收起，关闭按钮和 Esc 返回开关焦点。行为验证见 `tests/conversation-tree-view.test.mjs` 与 `tests/session-view.test.mjs`；`tests/helpers/conversation-tree-browser-host.mjs` 提供常规、320px 和四分屏的内存样本。
+
 工具过程按 `name` 区分 `bash` 与 `apply_patch`，事件使用 `tool-started`、`tool-observed`、`tool-failed`；旧 Bash 事件由状态读取边界归一化后再发布。对话与轨迹共用工具事实组件，按 Run、来源模型 exchange、请求 ID、工具名和事件位置关联持久记录，同一 ID 在后续模型批次重新使用时仍保留两条记录。不生成 `tools-N` 临时结果，也不把模型请求或服务端搜索状态当作本地工具完成；事件尚未读取、读取失败和结果缺失分别提示。Apply Patch 卡片显示 `applied/rejected/partial/cancelled`，保留已完成的文件变更、未完成操作和诊断；部分提交或移动未删源不会显示成完整成功。清理失败仍显示已知变更事实，状态显示失败。补丁预览单独标注截断，不影响持久记录或模型收到的工具结果。
 
 对话显式选择协议 Turn 的 `presentation:'compact'`；轨迹模型明细显式选择 `detail`（默认模式），工具行直接打开完整详情。紧凑工具默认使用约 32px 摘要行，显示名称、动作、真实状态及可取得的已结束耗时；长动作单行省略，窄面板优先隐藏耗时。Bash 动作优先取持久事实中的命令，无事实时只读取完整合法参数的已知字段，不完整参数显示“参数生成中”。Apply Patch 执行前只显示“补丁请求”，执行后文件数取实际 `changes`、未完成数取 `pending`。失败、拒绝、部分完成、取消、中断、未执行和记录不可用保留可见状态及一行原因；原因来自诊断、失败类别、信号或退出码，不从输出猜测。待同步独立显示，不表示失败。进行中、未知或倒退的时间不补造耗时。
@@ -137,6 +146,8 @@ HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run
 同一 exchange 内相邻的两个及以上本地工具请求折为工具组；正文、思考、拒绝、服务端工具和展示截断提示均打断组，不跨 exchange 或 Run 合并。组标题显示调用数、执行中数和需关注数；只有全部成功才显示“已完成”，收起组仍显示首个需关注工具的原因。组从第一个工具起稳定挂载；单工具增长为组时，已有详情展开或组内有焦点则保持打开，否则默认收起。之后状态或终态更新始终保留手动选择。网页搜索等服务端工具使用独立紧凑折叠，协议模块自行解释查询、原生状态、来源数和错误码；请求和结果保持原顺序，不参与本地分组。
 
 工具详情原地展开，使用最大 320px 的单一纵向滚动区域，展示命令、原始 stdout/stderr、补丁预览、实际变更、未完成操作和诊断；原始 JSON 位于默认收起的“原始参数”披露项。命令、补丁及输出的复制使用浏览器已取得的原文，失败明确提示，输出/补丁截断提示继续保留。外层摘要按钮和详情节点在事实同步时原地更新，保留展开状态、键盘焦点和详情滚动；收起包含焦点的详情时把焦点移回摘要。按钮使用 `aria-expanded/aria-controls`，收起内容设 `hidden/inert`。同一面板内切换对话/轨迹或重访分支保留独立选择，关闭面板或刷新恢复默认，各分屏互不影响；监听和子挂载点由对应 `dispose()` 清理。本次仅改变展示，不改 HTTP/SSE、协议记录、数据库或 Nya 组件。
+
+协议工具卡只保留请求层的一处“原始参数”，优先展示和复制模型原始 JSON；请求展示不完整且已有库工具执行事实时，使用执行记录中的参数并标注来源。嵌入的执行详情省略重复参数并保留原始结果。独立轨迹工具详情继续展示执行记录中的参数。
 
 工具摘要与边界验证见 `tests/tool-call-view.test.mjs`、`tests/protocol-web-modules.test.mjs` 和 `tests/session-view.test.mjs`。隔离浏览器验收宿主 `tests/helpers/native-view-browser-host.mjs` 提供四协议工具 1→2→3 流式增长、失败、长且截断的输出、部分补丁与约 320px/四分屏切换，不访问真实服务或业务数据。
 

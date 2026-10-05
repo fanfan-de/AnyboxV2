@@ -1,6 +1,28 @@
 import type { DeclaredCapabilities, EffectiveCapabilities, JsonValue, ModelQuery, ProtocolConnection, ProtocolDescriptor, ProtocolOperation, ProviderConnectionInput, RunnableModelSummary } from './types.js';
 
 export type NativeObject = Readonly<Record<string, JsonValue>>;
+export type NativeResponseMode = 'stream' | 'complete';
+export interface NativeExchangeOptions {
+  readonly resourceRefs?: readonly NativeImageResourceRef[];
+  readonly responseMode?: NativeResponseMode;
+}
+export interface GenerateTextInput {
+  readonly modelId: string;
+  readonly instruction?: string;
+  readonly input: string;
+  readonly signal?: AbortSignal;
+}
+export interface GenerateTextResult {
+  readonly text: string;
+  readonly modelId: string;
+  readonly modelRevision: number;
+  readonly protocolId: string;
+}
+export interface NativeTextGenerationAdapter<I extends NativeObject = NativeObject, R extends NativeObject = NativeObject> {
+  createIntent(input: { readonly instruction?: string; readonly input: string }): I;
+  validateParameters(parameters: NativeObject): void;
+  readText(response: R): string;
+}
 export interface NativeImageResourceRef {
   readonly id: string;
   readonly sha256: string;
@@ -77,7 +99,7 @@ export interface NativeExecution<I extends NativeObject = NativeObject, R extend
   readonly capabilities: EffectiveCapabilities;
   readonly signal: AbortSignal;
   readonly recordFormatVersion: 1 | 2;
-  prepareExchange(intent: I, options?: { readonly resourceRefs?: readonly NativeImageResourceRef[] }): PreparedNativeExchange<I, R, E>;
+  prepareExchange(intent: I, options?: NativeExchangeOptions): PreparedNativeExchange<I, R, E>;
   close(): Promise<NativeExitReport>;
 }
 export interface NativeProtocolLease<I extends NativeObject = NativeObject, R extends NativeObject = NativeObject, E extends NativeObject = NativeObject> {
@@ -100,12 +122,14 @@ export interface OpenNativeModelInput<I extends NativeObject = NativeObject, R e
 export interface ModelsService {
   list(query?: ModelQuery): readonly RunnableModelSummary[];
   get(modelId: string): RunnableModelSummary | undefined;
+  generateText(input: GenerateTextInput): ProtocolOperation<GenerateTextResult>;
   openNative<I extends NativeObject = NativeObject, R extends NativeObject = NativeObject, E extends NativeObject = NativeObject>(input: OpenNativeModelInput<I, R, E>): Promise<NativeExecution<I, R, E>>;
 }
 /** Driver state is private to one execution. Native requests and responses remain protocol-shaped. */
 export interface NativeProtocol<I extends NativeObject = NativeObject, R extends NativeObject = NativeObject, E extends NativeObject = NativeObject> {
   readonly descriptor: ProtocolDescriptor;
   readonly recordFormatVersion?: 1 | 2;
+  readonly textGeneration?: NativeTextGenerationAdapter<I, R>;
   canRestoreVersion?(version: string): boolean;
   /** Reads only recognized image positions, never arbitrary strings or JSON keys. */
   resourceIds?(intentOrRequest: NativeObject): readonly string[];
@@ -114,7 +138,7 @@ export interface NativeProtocol<I extends NativeObject = NativeObject, R extends
   effectiveCapabilities(declared: DeclaredCapabilities, parameters: NativeObject): EffectiveCapabilities;
   initialParameters?(outputLimit?: number): NativeObject;
   restore(records: readonly NativeRecordDraft[]): NativeObject;
-  prepare(input: { readonly state: NativeObject; readonly intent: I; readonly remoteModelId: string; readonly parameters: NativeObject; readonly capabilities: EffectiveCapabilities }): NativeObject;
+  prepare(input: { readonly state: NativeObject; readonly intent: I; readonly remoteModelId: string; readonly parameters: NativeObject; readonly capabilities: EffectiveCapabilities; readonly responseMode?: NativeResponseMode }): NativeObject;
   exchange(input: ProtocolConnection & { readonly request: NativeObject; readonly onEvent: (event: E) => void; readonly resources?: NativeResourceResolver; readonly resourceRefs?: readonly NativeImageResourceRef[] }): ProtocolOperation<R>;
   commit(input: { readonly state: NativeObject; readonly intent: I; readonly request: NativeObject; readonly response: R }): NativeObject;
   discover?(input: ProtocolConnection): ProtocolOperation<readonly import('./types.js').DiscoveredModel[]>;

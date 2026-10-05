@@ -44,6 +44,7 @@
         <button type="button" data-settings-section="general" aria-controls="agent--general-settings" aria-current="page"><svg aria-hidden="true"><use href="#agent--icon-settings"/></svg><span>会话设置</span></button>
         <button type="button" data-settings-section="connections" aria-controls="agent--connections-settings"><svg aria-hidden="true"><use href="#agent--icon-panels"/></svg><span>管理连接</span></button>
         <button type="button" data-settings-section="models" aria-controls="agent--models-settings"><svg aria-hidden="true"><use href="#agent--icon-settings"/></svg><span>模型管理</span></button>
+        <button type="button" data-settings-section="tools" aria-controls="agent--tools-settings"><svg aria-hidden="true"><use href="#agent--icon-settings"/></svg><span>Agent 工具</span></button>
         <button type="button" data-settings-section="prompts" aria-controls="agent--prompt-settings"><svg aria-hidden="true"><use href="#agent--icon-compose"/></svg><span>Prompt 管理</span></button>
         <button type="button" data-settings-section="archive" aria-controls="agent--archive-settings"><svg aria-hidden="true"><use href="#agent--icon-folder"/></svg><span>已归档会话</span></button>
       </nav>
@@ -71,6 +72,7 @@
           <div class="archive-list" aria-label="所有执行设备和项目的已归档会话"></div>
         </section>
         <section id="agent--models-settings" class="settings-panel" data-settings-panel="models" aria-labelledby="agent--models-settings-title" hidden></section>
+        <section id="agent--tools-settings" class="settings-panel" data-settings-panel="tools" aria-labelledby="agent--tools-title" hidden></section>
         <section id="agent--prompt-settings" class="settings-panel prompt-dialog" data-settings-panel="prompts" aria-labelledby="agent--prompt-title" hidden>
           <header class="settings-panel-heading"><h3 id="agent--prompt-title">Prompt 管理</h3><p>保存草稿 → 发布版本 → 应用到 Agent</p></header>
           <p id="agent--prompt-notice" class="prompt-notice" role="status" aria-live="polite" hidden></p>

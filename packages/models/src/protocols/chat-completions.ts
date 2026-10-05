@@ -46,11 +46,20 @@ function commit(state: NativeObject, intent: NativeObject, response: NativeObjec
   const value = validateResponse(response), next = conversation(state, intent, 'messages', ['tools']);
   return native({ ...next, messages: [...array(next.messages), object(array(value.choices)[0]).message] });
 }
+function readGeneratedText(response: NativeObject): string {
+  const value = validateResponse(response), choice = object(array(value.choices)[0]), message = object(choice.message);
+  if (choice.finish_reason === 'content_filter' || message.refusal != null) throw modelsError('refused-response');
+  if (choice.finish_reason === 'tool_calls' || message.tool_calls !== undefined && array(message.tool_calls).length) throw modelsError('capability-unsupported');
+  if (choice.finish_reason !== 'stop') throw modelsError('incomplete-response');
+  const result = string(message.content);
+  if (!result.trim()) throw modelsError('invalid-response');
+  return result;
+}
 export function createChatCompletionsProtocol(options: ProtocolOptions = {}): NativeProtocol {
   options = captureOptions(options);
   const protocolId = 'chat-completions';
   return {
-    descriptor: { id: protocolId, version: '2.1.0', name: 'Chat Completions', connectionFields,
+    descriptor: { id: protocolId, version: '2.2.0', name: 'Chat Completions', connectionFields, responseModes: ['stream', 'complete'],
       modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 },
         { key: 'max_completion_tokens', label: 'Maximum completion tokens', type: 'number', min: 1, integer: true },
         { key: 'max_tokens', label: 'Maximum output tokens', type: 'number', min: 1, integer: true },
@@ -70,7 +79,12 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}): Na
       effortOption(options.reasoning_effort, declared, reasoningEfforts);
     },
     recordFormatVersion: 2,
-    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0' || version === '2.2.0',
+    textGeneration: {
+      createIntent: input => native({ messages: [...(input.instruction === undefined ? [] : [{ role: 'system', content: input.instruction }]), { role: 'user', content: input.input }] }),
+      validateParameters: () => {},
+      readText: readGeneratedText,
+    },
     resourceIds: chatImages.ids,
     effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, options.thinking !== undefined && object(options.thinking).type === 'disabled' || options.reasoning_effort === 'none'), imageInput: declared.imageInput.support === 'supported' }),
     restore: records => {
@@ -82,8 +96,9 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}): Na
       if (chatImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
       const next = conversation(input.state, input.intent, 'messages', ['tools']);
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(object(tool.function).parameters); }
-      return native({ ...input.parameters, ...next, model: input.remoteModelId, stream: input.capabilities.streaming,
-        ...(input.capabilities.streaming ? { stream_options: { include_usage: true } } : {}) });
+      const streaming = input.responseMode === undefined ? input.capabilities.streaming : input.responseMode === 'stream';
+      return native({ ...input.parameters, ...next, model: input.remoteModelId, stream: streaming,
+        ...(streaming ? { stream_options: { include_usage: true } } : {}) });
     },
     exchange(input) {
       return withImages(chatImages, input, (wire, signal) => request(options, { ...input, signal }, 'chat/completions', wire, async reader => {

@@ -144,6 +144,7 @@ export function mountFunctionRequest(type: string, initial: FunctionRequest, con
   const requestField = document.createElement('div'), requestBar = document.createElement('div'), requestLabel = document.createElement('span')
   const outcome = document.createElement('div'), note = document.createElement('p')
   const raw = document.createElement('details'), rawLabel = document.createElement('summary'), args = document.createElement('pre')
+  const argsSource = document.createElement('small'); argsSource.className = 'trace-empty'
   const listeners = new AbortController()
   let requestedValue = ''
   heading.className = 'native-function-heading'; request.className = 'native-request-input'
@@ -153,35 +154,42 @@ export function mountFunctionRequest(type: string, initial: FunctionRequest, con
   const rawCopy = createToolCopyButton('原始参数', 'arguments', () => args.textContent ?? '', listeners.signal)
   const requestCopy = createToolCopyButton('请求内容', 'request', () => requestedValue, listeners.signal)
   requestBar.append(requestLabel, requestCopy); requestField.append(requestBar, request)
-  raw.append(rawLabel, args, rawCopy)
+  raw.append(rawLabel, argsSource, args, rawCopy)
   body.append(heading, requestField, note, outcome, raw)
   let details: MountedToolCallDetails | undefined, outcomeKey = '', disposed = false
   const update = (value: FunctionRequest, ctx: NativeBlockContext) => {
     if (disposed) return
     heading.textContent = `工具请求 · ${value.name}`
     heading.hidden = ctx.presentation === 'compact'
-    if (args.textContent !== value.arguments) {
-      args.textContent = value.arguments; rawCopy.textContent = '复制'; rawCopy.title = ''; requestCopy.textContent = '复制'; requestCopy.title = ''
-    }
     const fact = value.requestId ? findProtocolToolFact(ctx.toolContext, ctx.exchange.id, value.requestId, value.name, ctx.toolOccurrence) : undefined
+    const parsed = parseToolArguments(value.arguments)
+    const useExecutionArguments = !parsed && fact && fact.name !== 'bash' && fact.name !== 'apply_patch'
+    const displayedArguments = useExecutionArguments ? JSON.stringify(fact.arguments, null, 2) : value.arguments
+    argsSource.hidden = !useExecutionArguments
+    argsSource.textContent = useExecutionArguments ? '模型请求的参数展示不完整，以下参数来自执行记录。' : ''
+    if (args.textContent !== displayedArguments) {
+      args.textContent = displayedArguments; rawCopy.textContent = '复制'; rawCopy.title = ''; requestCopy.textContent = '复制'; requestCopy.title = ''
+    }
     summary = summarizeToolRequest(value, fact, ctx.toolContext?.readiness, ctx.toolContext?.runStatus)
     disclosure.update(summary, ctx)
-    const parsed = parseToolArguments(value.arguments)
     requestedValue = value.name === 'bash' && typeof parsed?.command === 'string' ? parsed.command :
-      value.name === 'apply_patch' && typeof parsed?.patch === 'string' ? parsed.patch : ''
+      value.name === 'apply_patch' && typeof parsed?.patch === 'string' ? parsed.patch :
+        typeof parsed?.cmd === 'string' ? parsed.cmd : typeof parsed?.command === 'string' ? parsed.command :
+          typeof parsed?.file_path === 'string' ? parsed.file_path : typeof parsed?.path === 'string' ? parsed.path : ''
     const requested = value.name === 'bash' && requestedValue ? `$ ${requestedValue}` : requestedValue
     if (request.textContent !== requested) request.textContent = requested
     const hideRequest = Boolean(fact) || !requested
     if ((hideRequest && requestField.contains(document.activeElement)) || (!fact && outcome.contains(document.activeElement))) body.focus({ preventScroll: true })
     requestField.hidden = hideRequest; requestField.inert = hideRequest
-    requestLabel.textContent = value.name === 'bash' ? '命令请求' : '补丁请求'
+    requestLabel.textContent = value.name === 'bash' || typeof parsed?.cmd === 'string' || typeof parsed?.command === 'string' ? '命令请求' :
+      value.name === 'apply_patch' ? '补丁请求' : '请求内容'
     note.hidden = Boolean(fact); note.textContent = fact ? '' : summary.statusLabel
     outcome.hidden = !fact; outcome.inert = !fact
     const nextKey = JSON.stringify(fact)
     if (nextKey !== outcomeKey) {
       outcomeKey = nextKey ?? ''
       if (fact) {
-        if (!details) { details = mountToolCallDetails(fact); outcome.append(details.element) }
+        if (!details) { details = mountToolCallDetails(fact, ctx.sessionId, { showArguments: false }); outcome.append(details.element) }
         else details.update(fact)
       }
     }

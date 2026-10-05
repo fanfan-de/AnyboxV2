@@ -20,9 +20,9 @@
 
 支持的协议为 `responses`、`anthropic-messages`、`chat-completions`、`gemini-interactions`。DeepSeek 使用标准 `chat-completions` 与 `runChat`，没有单独绑定或旧协议别名；旧协议历史可查看但不能准备或续接 Run。注册表不是任意脚本或 SDK 的动态加载器。
 
-`PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input，以及可选 history 和 fileContents。initialization 固定 `schemaVersion: 1`、`known-tools-v1`、Prompt 快照与工具定义；只接受当前完整 Bash/Apply Patch 定义且不允许重名。新 input v3 保存 raw、text、template、有序 images 和 files 引用；旧 v1 无附件，v2 按 files=[] 读取。fileContents 是受管读取的本轮文件正文，编码前核对其引用与 input.files 一致，仅忽略会变化的 expiresAt。
+`PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input，以及可选 history 和 fileContents。新 initialization 使用 `schemaVersion: 2`、`tool-library-v1`、Prompt 快照、实际工具定义与 Session 不可变 toolSelection；声明必须属于已选择的稳定 ID/版本，且完整定义精确匹配。旧 schemaVersion 1/known-tools-v1 仅接纳原 Bash/Apply Patch 定义，原 JSON 不改写；均不允许重名。新 input v3 保存 raw、text、template、有序 images 和 files 引用；旧 v1 无附件，v2 按 files=[] 读取。fileContents 是受管读取的本轮文件正文，编码前核对其引用与 input.files 一致，仅忽略会变化的 expiresAt。
 
-`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（四种协议均为 1.1.0）、execution 实际记录格式（四种协议均为 2）和新 Run 的 `viewSchemaVersion: 2`。驱动、Loop 与记录格式用于恢复兼容判断；展示版本不是原生恢复的新门槛。旧 binding 的展示版本保留原值，旧原生记录在查询时重新投影为展示 v2，不改写历史 JSON。
+`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（四种协议均为 1.2.0）、execution 实际记录格式（四种协议均为 2）和新 Run 的 `viewSchemaVersion: 2`。驱动、Loop 与记录格式用于恢复兼容判断；展示版本不是原生恢复的新门槛。旧 binding 的展示版本保留原值，旧原生记录在查询时重新投影为展示 v2，不改写历史 JSON。
 
 ## 准备与执行
 
@@ -54,10 +54,10 @@ program 的 `close()` 缓存关闭 Promise，等待 execution 退出，返回原
 
 ## 图片资源与版本兼容
 
-各协议把模板文本与图片资源 URI 编码为同一个用户 content 数组（Gemini 使用 user_input）；首个 exchange 携带本轮 resourceRefs，工具续轮不重复声明祖先资源。注册表为每个 execution 提供限定本轮与所选成功父路径资源的读取端口，作用域固定为当前 Session。Models 在受管 start 后读取字节并生成实际请求。Session 不解释协议 URI，Runtime 不解释图片块。
+各协议把模板文本与图片资源 URI 编码为同一个用户 content 数组（Gemini 使用 user_input）；每个 exchange 携带其增量 intent 中图片的匹配 resourceRefs，工具续轮不重复声明无关祖先资源。注册表始终提供 execution 私有读取端口，初始许可仅包含本轮与所选成功父路径资源；工具图片必须先随 Session 工具观察同事务保留，再由 program 接纳引用。作用域固定为当前 Session。Models 在受管 start 后读取字节并生成实际请求。Session 不解释协议 URI，Runtime 不解释图片块。
 
-四种协议均接受 Loop 1.0.0/1.1.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。
+四种协议均接受 Loop 1.0.0/1.1.0/1.2.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。
 
 ## 项目文件资料
 
-PrepareRunInput.fileContents 是 Run 从 Session 读取的本轮文件内容。注册表将相对路径、实际行范围和正文按 project-file-context v1 JSON 附加在本轮用户文本之后、图片之前。文件正文不参与 task-template，不成为系统提示词；NativeRunInput v3 只保存引用，原生请求记录保存实际资料文本。父链恢复直接复用原生记录，不读取源文件、不重复附加祖先文件。四种协议复用现有文本编码，Models 的图片 resourceRefs、驱动版本和工具契约不变。
+PrepareRunInput.fileContents 是 Run 从 Session 读取的本轮文件内容。注册表将相对路径、实际行范围和正文按 project-file-context v1 JSON 附加在本轮用户文本之后、图片之前。文件正文不参与 task-template，不成为系统提示词；NativeRunInput v3 只保存引用，原生请求记录保存实际资料文本。父链恢复直接复用原生记录，不读取源文件、不重复附加祖先文件。四种协议复用现有文本编码和 Models 图片 resourceRefs；工具库使新初始化升级为 v2、Loop 为 1.2.0，驱动 2.1.0 与原生记录 v2 不变。

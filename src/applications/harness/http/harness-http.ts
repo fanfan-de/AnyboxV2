@@ -24,6 +24,7 @@ import type { AgentPromptPort } from '../core/agent/prompt-binding-component.js'
 import { runChangedEvent, runViewEvent } from '../core/run/notifications.js'
 import { decodeProtocolView } from '../core/view/decode.js'
 import { projectProtocolRecords } from '../core/protocol-agents/projection.js'
+import { listTools } from '../core/tool/catalog.js'
 
 export const harnessServerHttpServiceKey = 'harness.http'
 const localActorId = 'local-web-user'
@@ -43,6 +44,9 @@ type CommandDependencies = {
 function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies): HarnessServerApiCommands {
   return {
     listAgents: () => agentIds,
+    listTools,
+    getAgentTools: agentId => deps[sessionServiceKey].getAgentTools(agentId),
+    setAgentTools: (agentId, input) => deps[sessionServiceKey].setAgentTools(agentId, input),
     directoryPickerSupported: () => deps[directoryPickerServiceKey]?.supported ?? false,
     directoryBrowsingSupported: () => deps[projectServiceKey].directoryBrowsingSupported,
     directoryCreationSupported: () => deps[projectServiceKey].directoryCreationSupported,

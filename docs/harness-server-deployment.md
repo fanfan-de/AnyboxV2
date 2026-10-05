@@ -24,12 +24,12 @@ npm run web
 ```sh
 npm run release -- /tmp/anybox-app-release
 # 复制整个发行目录到目标机器，再在目标机器执行：
-npm ci --omit=dev
+npm ci --omit=dev --include=optional
 npm run harness:server:init
 npm run harness:server
 ```
 
-构建和发行都会验证登记的浏览器入口、相对依赖、MIME 与全部资源文件。输出目录必须为空。`package-lock.json` 固定全部直接、间接与平台可选依赖，`release.json` 记录内置包完整性和锁文件 SHA-256。目标机器运行 `npm ci` 准备匹配平台和架构的 keyring、sharp 等原生依赖；不要直接复制另一种平台的 node_modules。目录快照随 Models 包携带，普通构建与测试不更新快照。
+构建和发行都会验证登记的浏览器入口、相对依赖、MIME 与全部资源文件。输出目录必须为空。`package-lock.json` 固定全部直接、间接与平台可选依赖，`release.json` 记录内置包完整性和锁文件 SHA-256。目标机器运行 `npm ci --omit=dev --include=optional` 准备匹配平台和架构的 keyring、sharp、随包 ripgrep 等原生依赖；不要直接复制另一种平台的 node_modules。目录快照随 Models 包携带，普通构建与测试不更新快照。
 
 ## 配置与持久目录
 

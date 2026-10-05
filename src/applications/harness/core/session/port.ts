@@ -1,5 +1,5 @@
 import type { FileSelection, FileContent, FileRef, FileSearch, FilePreview, FileRenewal, FileTreePage } from '../project-files/domain.js'
-import type { Session, SessionDefaults, ConversationNode, NodePage, NodeQuery } from './domain.js'
+import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput, ConversationNode, NodePage, NodeQuery } from './domain.js'
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
 import type { RunEvent, RunExecution } from '../run/execution.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
@@ -28,6 +28,8 @@ export interface SessionPort {
   renewImages(sessionId: string, assetIds: readonly string[]): Promise<ImageRenewal>
   getSessionDefaults(agentId: string): Promise<SessionDefaults>
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SessionDefaults>
+  getAgentTools(agentId: string): Promise<AgentToolsSelection>
+  setAgentTools(agentId: string, input: AgentToolsInput): Promise<AgentToolsSelection>
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
   selectSessionModel(sessionId: string, modelId: string, protocolId?: string): Promise<Session>
   archiveSession(id: string): Promise<Session>
@@ -79,12 +81,14 @@ export interface NativeRunRegistration {
 export interface RunOperationStart {
   readonly id: string
   readonly kind: 'model' | 'operation' | 'tool'
+  readonly cleanup?: true
   readonly intent: JsonValue
   readonly records?: readonly ProtocolRecord[]
   readonly tool?: ValidatedToolRequest
 }
 export interface RunOperationObservation {
   readonly kind: 'value' | 'error' | 'cleanup-failed'
+  readonly result?: JsonValue
   readonly records?: readonly ProtocolRecord[]
   readonly checkpoint?: JsonValue
   readonly tool?: ToolObservation

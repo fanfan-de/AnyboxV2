@@ -23,6 +23,9 @@ import { createProjectComponent, projectServiceKey } from './project/component.j
 import type { ProjectPort } from './project/component.js'
 import { createBashComponent } from './tool/bash-component.js'
 import { createApplyPatchComponent } from './tool/apply-patch-component.js'
+import { createProcessToolsComponent } from './tool/process-component.js'
+import { createFileToolsComponent } from './tool/files-component.js'
+import { listTools } from './tool/catalog.js'
 
 /** The root must provide Models, local storage and image assets before the harness server core starts. */
 export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
@@ -40,6 +43,7 @@ export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort
   Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly Readonly<{ id: string }>[]
+  listTools(): ReturnType<typeof listTools>
 }
 
 function requireActive(fiber: Fiber): void {
@@ -74,7 +78,7 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   const protocolComponents = context.get(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
   return [...protocolComponents, createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects }),
-    createProjectFilesComponent(inputs), createBashComponent(), createApplyPatchComponent(),
+    createProjectFilesComponent(inputs), createBashComponent(), createApplyPatchComponent(), createProcessToolsComponent(), createFileToolsComponent(),
     createSessionComponent(inputs, agents), createRunRuntimeComponent(inputs),
     createRunComponent(inputs, agents, lifetime.isClosing, lifetime.signal)]
 }
@@ -127,6 +131,12 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
       if (lifetime.isClosing()) throw new Error('harness server is closing')
       return Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
     },
+    listTools: () => {
+      if (lifetime.isClosing()) throw new Error('harness server is closing')
+      return listTools()
+    },
+    getAgentTools: agentId => currentSessions().getAgentTools(agentId),
+    setAgentTools: (agentId, input) => currentSessions().setAgentTools(agentId, input),
     openProject: path => currentProjects().openProject(path),
     get directoryBrowsingSupported() { return currentProjects().directoryBrowsingSupported },
     get directoryCreationSupported() { return currentProjects().directoryCreationSupported },

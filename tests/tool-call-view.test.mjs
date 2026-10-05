@@ -1,10 +1,46 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { summarizeToolRequest } from '../dist/applications/harness/web/tool-call-view.js'
+import { summarizeToolRequest, latestRunPlan, toolSelectionDisplayName } from '../dist/applications/harness/web/tool-call-view.js'
 
 const request = (name = 'bash', arguments_ = '{"command":"requested-command"}') => ({ id: 'request', name, arguments: arguments_ })
 const bash = (state, extra = {}) => ({ id: 'call', name: 'bash', state, command: 'real-command', ...extra })
 const patch = (state, extra = {}) => ({ id: 'call', name: 'apply_patch', state, patch: 'not a source of file-count facts', patchTruncated: false, ...extra })
+
+test('library tool summaries distinguish provenance while using observed facts and useful input previews', () => {
+  const requested = request('claude_code_Read', '{"file_path":"/project/file.txt"}')
+  const fact = { id: 'call', name: 'claude_code_Read', state: 'completed', arguments: { file_path: '/project/file.txt' }, result: 'hello' }
+  const summary = summarizeToolRequest(requested, fact, 'ready', 'completed')
+  assert.equal(summary.title, 'Claude Code · Read')
+  assert.equal(summary.preview, '/project/file.txt')
+  assert.equal(summary.success, true)
+  assert.equal(summarizeToolRequest(request('codex_exec_command', '{"cmd":"pwd"}')).preview, 'pwd')
+  assert.equal(summarizeToolRequest(request('deepseek_harness_read')).title, 'DeepSeek Harness · read')
+})
+
+test('library cards summarize observed process exits and actual partial file changes', () => {
+  const command = { id: 'exec', name: 'codex_exec_command', arguments: { cmd: 'printf output' }, state: 'failed',
+    result: { session_id: 4, output: 'output', exit_code: 7, signal: null, closed: true } }
+  const failed = summarizeToolRequest(request(command.name, JSON.stringify(command.arguments)), command, 'ready', 'failed')
+  assert.equal(failed.statusLabel, '非零退出'); assert.equal(failed.shortReason, '退出码：7')
+  assert.equal(summarizeToolRequest(request(command.name), { ...command, state: 'completed', result: { session_id: 4, exit_code: null } }).statusLabel, '进程运行中')
+  assert.equal(summarizeToolRequest(request(command.name), { ...command, result: { terminated: true, exit_code: null, signal: 'SIGTERM' } }).statusLabel, '进程已终止')
+  const partial = { id: 'edit', name: 'claude_code_Edit', arguments: { file_path: '/p/a' }, state: 'partial',
+    result: { status: 'partial', changes: [{ kind: 'updated', path: '/p/a' }], pending: [{ kind: 'update', path: '/p/b' }], diagnostic: { code: 'commit-failed', message: 'Write failed' } } }
+  const summary = summarizeToolRequest(request(partial.name), partial)
+  assert.equal(summary.preview, '已变更 1 个文件，1 项未完成'); assert.equal(summary.shortReason, 'commit-failed：Write failed')
+  assert.equal(toolSelectionDisplayName('claude-code.Read'), 'Claude Code · Read')
+  assert.equal(toolSelectionDisplayName('codex.update_plan'), 'Codex · update_plan')
+})
+
+test('latest Run plans use only committed full-list observations and a later empty list clears them', () => {
+  const first = { kind: 'tool-observed', name: 'codex_update_plan', result: { status: 'updated', explanation: 'next', plan: [{ step: 'Implement', status: 'in_progress' }] } }
+  const second = { kind: 'tool-observed', name: 'claude_code_TodoWrite', result: { status: 'updated', todos: [{ content: 'Verify', status: 'pending', activeForm: 'Verifying' }] } }
+  assert.equal(latestRunPlan([{ kind: 'tool-started', name: first.name, arguments: first.result }]), undefined)
+  assert.deepEqual(latestRunPlan([first]), { name: first.name, explanation: 'next', items: [{ text: 'Implement', status: 'in_progress' }] })
+  assert.deepEqual(latestRunPlan([first, second, { ...second, kind: 'tool-failed' }]), { name: second.name, items: [{ text: 'Verify', status: 'pending' }] })
+  assert.deepEqual(latestRunPlan([first, { ...second, result: { status: 'updated', todos: [] } }]).items, [])
+  assert.equal(latestRunPlan([{ ...first, name: 'unknown' }]), undefined)
+})
 
 test('tool summaries use durable execution facts and valid real timing', () => {
   const result = summarizeToolRequest(request(), bash('completed', { exitCode: 0, startedAt: '2026-10-04T00:00:00Z', finishedAt: '2026-10-04T00:00:02.300Z' }))

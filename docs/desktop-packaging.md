@@ -49,4 +49,6 @@ Node release 和桌面打包共同调用 `scripts/stage-application.mjs`。它�
 
 Sharp、`@img` 的 libvips 库与 Keyring 平台二进制完整保留在 `app.asar.unpacked`，打包完成后自动检查 `.node`、`.dylib` 与包入口存在。它们保持原生外部包，不混入浏览器代码、不使用系统全局 libvips；同架构 Node-API 预编译包在 Electron 内实际验证。桌面 staging 单独编译 `dist/desktop/native/mac-dialog.node`，同样解包、检查 arm64 Mach-O 与签名，由 Main 对指定窗口所属的原生目录面板执行取消。发行关闭 `RunAsNode`、`NODE_OPTIONS` 和 Node inspector 的 fuses。离线 Models 目录快照随 Models 包携带，普通构建或打包不刷新目录快照。
 
+文件工具的 `@vscode/ripgrep` 和 `picomatch` 保持固定版本；发行验证锁文件中所有 ripgrep 平台可选包的版本、完整性与平台声明，供目标设备 `npm ci` 选择。桌面同时解包 `@vscode` 下的 wrapper 和 arm64 `rg` 可执行文件，执行时把 archive 中的解析路径转换为实际 `app.asar.unpacked` 路径。成品验证拒绝缺失、符号链接、无执行权限或错误架构的二进制，并直接执行随包 `rg --version`；不依赖用户 PATH。`tests/search-release.test.mjs` 用真实 ASAR 打包覆盖解包配置和损坏包拒绝。
+
 安装验收包括从 Finder 启动、没有外部 Node 时使用本机与远端连接、流式消息、图片原字节上传、Bash/Apply Patch、窗口隐藏后任务继续、退出后数据库和文件锁释放、重开读取桌面数据，以及同一构建的 Web/桌面资源一致。

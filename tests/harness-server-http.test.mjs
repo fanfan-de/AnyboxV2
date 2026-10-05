@@ -69,6 +69,32 @@ async function request(web, method, path, body, origin = web.url) {
   return { response, data: await response.json() }
 }
 
+test('HTTP exposes the unified tool catalog and Agent CAS settings while fixing new Session selections', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-http-tools-')), f = await fixture(directory)
+  try {
+    const catalog = await request(f.web, 'GET', '/tools')
+    assert.equal(catalog.response.status, 200)
+    assert.ok(catalog.data.some(tool => tool.toolId === 'codex.exec_command'))
+    assert.ok(catalog.data.some(tool => tool.toolId === 'claude-code.Read'))
+    assert.ok(catalog.data.some(tool => tool.toolId === 'deepseek-harness.read'))
+    const original = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
+    const initialRevision = (await request(f.web, 'GET', '/agents/assistant/tools')).data.revision
+    const toolIds = ['codex.update_plan', 'claude-code.Read', 'deepseek-harness.edit']
+    const saved = await request(f.web, 'POST', '/agents/assistant/tools', { toolIds, expectedRevision: initialRevision })
+    assert.equal(saved.response.status, 200); assert.equal(saved.data.revision, initialRevision + 1)
+    assert.equal((await request(f.web, 'GET', '/agents/assistant/tools')).data.agentId, 'assistant')
+    const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
+    assert.deepEqual(new Set(created.data.toolSelection.tools.map(tool => tool.toolId)), new Set(toolIds))
+    assert.deepEqual((await request(f.web, 'GET', `/sessions/${original.data.id}`)).data.toolSelection, original.data.toolSelection)
+    assert.equal((await request(f.web, 'POST', '/agents/assistant/tools', { toolIds: [], expectedRevision: initialRevision })).response.status, 409)
+    for (const body of [{ toolIds: ['unknown'], expectedRevision: saved.data.revision }, { toolIds: ['codex.exec_command'], expectedRevision: saved.data.revision },
+      { toolIds: [], expectedRevision: saved.data.revision, extra: true }]) assert.equal((await request(f.web, 'POST', '/agents/assistant/tools', body)).response.status, 400)
+    const cleared = await request(f.web, 'POST', '/agents/assistant/tools', { toolIds: [], expectedRevision: saved.data.revision })
+    assert.equal(cleared.response.status, 200)
+    assert.deepEqual((await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data.toolSelection.tools, [])
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
 async function serviceReady(root, name) {
   let ready
   const started = new Promise(resolve => { ready = resolve })
@@ -1319,6 +1345,7 @@ test('harness server HTTP project references prepare atomically, preserve histor
     assert.equal((await request(f.web, 'POST', `${base}/prepare`, { preparationKey: 'key', selections: [{ kind: 'project-file', path: '.reference.txt' }] })).data[0].snapshotId, ref.snapshotId)
     const submitted = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { input: '', parentNodeId: null, files: [{ snapshotId: ref.snapshotId }], idempotencyKey: 'run' })
     assert.equal(submitted.response.status, 200)
+    assert.equal((await request(f.web, 'GET', `/projects/${f.project.id}/sessions`)).data[0].title, '1 个文件')
     f.llm.calls[0].result.resolve('file answer'); f.llm.calls[0].done.resolve()
     const terminal = await f.harness.waitRun(submitted.data.id)
     assert.equal(terminal.status, 'completed')
@@ -1372,6 +1399,34 @@ test('harness server HTTP legacy Sessions browse and preview project files while
     assert.equal((await request(f.web, 'GET', `${base}/search?q=file-109`)).data.paths[0], 'readable/file-109.txt')
     assert.equal((await f.harness.getSession(legacyId)).historyMode, 'dialogue-v1')
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('harness server HTTP lists Session titles before history is opened and retains the first failed input', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-titles-'))
+  const f = await fixture(directory)
+  try {
+    const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
+    assert.equal(created.data.title, null)
+    const base = `/sessions/${created.data.id}`, title = '无需打开即可 显示名字'
+    const first = await request(f.web, 'POST', `${base}/runs`, {
+      parentNodeId: null, input: '  无需打开即可\n显示名字  ', idempotencyKey: 'first',
+    })
+    assert.equal(first.response.status, 200)
+    assert.equal((await request(f.web, 'GET', `/projects/${f.project.id}/sessions`)).data[0].title, title)
+    f.llm.calls[0].result.reject(new Error('test failure')); f.llm.calls[0].done.resolve()
+    assert.equal((await f.harness.waitRun(first.data.id)).status, 'failed')
+    assert.equal((await request(f.web, 'GET', base)).data.title, title)
+    const next = await request(f.web, 'POST', `${base}/runs`, { parentNodeId: null, input: '新分支', idempotencyKey: 'next' })
+    f.llm.calls[1].result.resolve('done'); f.llm.calls[1].done.resolve(); await f.harness.waitRun(next.data.id)
+    assert.equal((await request(f.web, 'POST', `${base}/model`, { modelId: 'default' })).data.title, title)
+    assert.equal((await request(f.web, 'POST', `${base}/archive`, {})).data.title, title)
+    assert.equal((await request(f.web, 'GET', '/sessions/archived')).data[0].title, title)
+    assert.equal((await request(f.web, 'POST', `${base}/restore`, {})).data.title, title)
+    assert.equal((await request(f.web, 'GET', `/projects/${f.project.id}/sessions`)).data[0].title, title)
+  } finally {
+    for (const call of f.llm.calls) { call.result.resolve('cleanup'); call.done.resolve() }
+    await f.close(); rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 test('harness server HTTP archive routes enforce read-only state, active conflict, static route precedence and restoration', async () => {

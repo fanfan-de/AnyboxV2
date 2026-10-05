@@ -13,6 +13,7 @@ import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
 import { initialRunExecution } from '../dist/applications/harness/core/run/execution.js'
+import { legacyToolSelection } from '../dist/applications/harness/core/tool/catalog.js'
 import { ids, modelSnapshot, controlledModels } from './helpers/controlled-models.mjs'
 const sample = JSON.parse(readFileSync(new URL('./fixtures/legacy-turns-v2.json', import.meta.url), 'utf8'))
 const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Test instructions.' }]
@@ -100,6 +101,30 @@ test('legacy and archived legacy Sessions can read their project tree/search/cur
   assert.equal((await sessions.getSession('legacy')).historyMode, 'dialogue-v1')
 })
 
+test('legacy Session titles come from the first root node and preserve historical data across restart', async t => {
+  const f = await legacyFixture(t, [
+    { input: '  Legacy\n  title  ', output: 'First answer' },
+    { input: 'Later input', output: 'Second answer' },
+  ])
+  const owner = f.root.installComponent(createSessionComponent(f.inputs, agents))
+  await owner
+  const sessions = f.root.get(sessionServiceKey), legacy = await sessions.getSession('legacy')
+  const saved = await f.db.read(reader => reader.all('SELECT id, input, model_snapshot_json FROM harness_runs ORDER BY id'))
+  assert.equal(legacy.title, 'Legacy title')
+  assert.equal((await sessions.listSessions(legacy.projectId)).find(session => session.id === legacy.id).title, legacy.title)
+  assert.equal((await sessions.getSession('empty')).title, null)
+  assert.equal((await sessions.listNodes(legacy.id, null)).nodes[0].input, '  Legacy\n  title  ')
+  const archived = await sessions.archiveSession(legacy.id)
+  assert.equal(archived.title, legacy.title)
+  assert.equal((await sessions.listArchivedSessions())[0].title, legacy.title)
+  await owner.dispose()
+  await f.root.installComponent(createSessionComponent(f.inputs, agents))
+  const restarted = f.root.get(sessionServiceKey)
+  assert.equal((await restarted.getSession(legacy.id)).title, legacy.title)
+  assert.equal((await restarted.restoreSession(legacy.id)).title, legacy.title)
+  assert.deepEqual(await f.db.read(reader => reader.all('SELECT id, input, model_snapshot_json FROM harness_runs ORDER BY id')), saved)
+})
+
 test('legacy turns migrate in array order; ambiguous Run associations remain explicitly unknown', async t => {
   const f = await legacyFixture(t)
   await f.root.installComponent(createSessionComponent(f.inputs, agents))
@@ -133,12 +158,13 @@ test('legacy turns migrate in array order; ambiguous Run associations remain exp
   await assert.rejects(state.findAcceptedRun({ sessionId: 'legacy', parentNodeId: null, input: 'Duplicate', idempotencyKey: 'z-completed' }), /idempotency key/)
   assert.equal((await sessions.getSession('legacy')).historyMode, 'dialogue-v1')
   assert.equal((await sessions.getSession('empty')).historyMode, 'dialogue-v1')
+  assert.deepEqual((await sessions.getSession('legacy')).toolSelection, legacyToolSelection)
   await assert.rejects(state.registerRun('new-run', { sessionId: 'legacy', parentNodeId: third.id, input: 'Continue', idempotencyKey: 'new-key' }, 'now', [], modelSnapshot()), /legacy-session-readonly/)
   await assert.rejects(sessions.selectSessionModel('legacy', 'default', 'chat-completions'), /legacy-session-readonly/)
   assert.equal((await sessions.getNodePath('legacy', third.id)).length, 3)
   const schema = await f.db.read(reader => reader.all('PRAGMA table_info(harness_sessions)'))
   assert.equal(schema.some(column => column.name === 'turns_json'), false)
-  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 8)
+  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 9)
   assert.deepEqual(await f.db.read(reader => reader.all('SELECT * FROM harness_session_defaults')), [])
   assert.deepEqual(await sessions.getSessionDefaults('assistant'), {
     agentId: 'assistant', modelId: null, fallbackModelId: 'default', effectiveModelId: 'default', revision: 0,

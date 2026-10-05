@@ -1,6 +1,6 @@
 # Anybox Harness 图片输入链路
 
-状态：2026-09-29。Responses、Anthropic Messages、Gemini Interactions 与 Chat Completions 四种协议支持本地静态 JPEG、PNG、WebP 输入。上传、粘贴、拖拽、工具续轮、编辑、重新生成和重启后沿成功父节点继续，共用同一资源事实。所有协议都要求模型配置明确声明图片能力；没有远程 URL、动画、PDF、音视频、图片输出或工具返回图片支持。
+状态：2026-10-04。Responses、Anthropic Messages、Gemini Interactions 与 Chat Completions 四种协议支持本地静态 JPEG、PNG、WebP 输入。上传、粘贴、拖拽、工具续轮、编辑、重新生成和重启后沿成功父节点继续，共用同一资源事实。所有协议都要求模型配置明确声明图片能力；没有远程 URL、动画、PDF、音视频、模型图片输出。工具库的读图结果通过同事务保留的不可变图片引用，在文本工具结果后附加用户图片块支持。
 
 ## 数据与资源所有权
 
@@ -28,11 +28,19 @@ Models 不查询 Session 或图片表。`openNative({ resources, requirements: {
 
 当前输入或所选成功父路径含图片时都要求有效图片能力，由配置声明与驱动实现共同决定。目录刷新不改已有配置；unknown/unsupported 需要用户显式修改。DeepSeek 使用标准 Chat Completions，thinking 只来自显式保存参数；旧协议历史仅供查看，不能续接执行。
 
-四种协议驱动均为 2.1.0、绑定 1.1.0，新 Run 全部写 record v2；展示版本仍为 v1。明确兼容旧驱动 2.0.0、绑定 1.0.0、record v1 文本历史，可混合 v1/v2 父链；v1 reader 不接受图片记录。只有完整父路径验证为无图片时，允许 imageInput 从 false 增为 true；streaming 的开启或关闭只改变传输方式，不影响恢复。其他执行语义能力、账户 epoch、连接、远端模型、模型定义版本与执行参数仍严格匹配。Session `run-state` v6 只增加通用引用列；旧 JSON 保持不变，dialogue-v1 继续只读。
+四种协议驱动均为 2.1.0、当前绑定 Loop 1.2.0，新 Run 全部写 record v2；展示版本为 v2。明确兼容旧驱动 2.0.0、绑定 1.0.0/1.1.0、record v1 文本历史，可混合 v1/v2 父链；v1 reader 不接受图片记录。只有完整父路径验证为无图片时，允许 imageInput 从 false 增为 true；streaming 的开启或关闭只改变传输方式，不影响恢复。其他执行语义能力、账户 epoch、连接、远端模型、模型定义版本与执行参数仍严格匹配。Session `run-state` v6 引入通用引用列，当前 v9 另保存工具选择；旧 JSON 保持不变，dialogue-v1 继续只读。
 
 协议编码固定如下：Responses 用户 `input_image.image_url` 为内部 URI，发送时改为 data URL；Anthropic 用户 `image.source` 保存 `{ type: 'url', url: 内部URI }`，发送时改为 base64 source；Gemini `user_input.content` 保存 `image.uri`，发送时改为 `image.data/mime_type`。三者与 Chat 共用 `protocols/images.ts` 的受管读取、体积校验和退出屏障；不递归解释工具参数或任意字符串。
 
 每个 execution 的读取端口只允许当前输入及选定成功父链中的图片，作用域固定到 Session。同父并发、编辑和重新生成各自建立 execution，不包含兄弟路径。图片、Session、Models 都遵守 cancel 请求停止、done 等待实际退出的契约；清理失败不能创建成功节点。
+
+## 工具图片的增量接纳
+
+Codex view_image、Claude Read 的图片分支及 DeepSeek read_image 使用 tools.files 调用既有 Image Assets，导入符合原限制的静态原字节。Session 在保存 tool-observed 的同一业务事务调用 retainIn，保留给当前 Run；失败、取消和 interrupted 已保留引用不丢弃。Runtime 不接触原字节，只在观察实际提交后允许 program 的私有 resolver 接纳对应引用。
+
+各 Loop 先回填普通文本工具结果，再附加当前结果对应的用户图片消息；每次增量 prepareExchange 提供与这些块匹配的 resourceRefs。初始没有图片的 execution 也预先持有私有 resolver，以支持后续工具读图。完整请求仍受 32 MiB 校验，既有 v2 用户图片 codec 和记录格式不升级，不递归解释工具参数或任意输出字段。后代通过原生记录引用恢复，不重新读取图片源文件。
+
+模型不具备图片能力时，读图工具返回结构化不支持结果，其他文本工具继续可用；不隐式修改模型能力或全局禁止该 Agent。相关接纳、文本模型、四协议和重启测试位于 native-tool-library.test.mjs 与 file-tools.test.mjs。
 
 ## HTTP 与浏览器
 

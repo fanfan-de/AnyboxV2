@@ -36,6 +36,11 @@ export interface ApplyPatchResult {
   readonly diagnostic?: PatchDiagnostic
 }
 
+/** Literal file mutations use the patch owner's existing queue and commit boundary. */
+export type TextMutation =
+  | { readonly kind: 'write'; readonly content: string }
+  | { readonly kind: 'edit'; readonly oldString: string; readonly newString: string; readonly replaceAll?: boolean }
+
 export function patchRejection(code: string, message: string, path?: string, line?: number): Error & { readonly diagnostic: PatchDiagnostic } {
   return Object.assign(new Error(message), { name: 'PatchRejection', diagnostic: Object.freeze({
     code, message, ...(path === undefined ? {} : { path }), ...(line === undefined ? {} : { line }),

@@ -12,6 +12,8 @@ Shell 只监听 127.0.0.1 并检查精确 Host/Origin 和同源约束；通过�
 
 新会话默认值白名单只接纳 `GET` / `POST /agents/:id/session-defaults`。默认属于固定连接所指的执行设备，不在客户端 SQLite 或 sessionStorage 另存权威副本。浏览器设置使用所选设备的固定 settings Api，模型目录与响应保留本地 ID，Agent 选择器的作用域 ID 在进入该 Api 前转为本地 ID。聚合 Api 则对请求解包，并将响应的 agentId、modelId、fallbackModelId、effectiveModelId 包装回同一 instanceId。设备切换或连接版本变化不会把旧草稿提交到其他实例；冲突、断开或未知写入结果不会自动重试。
 
+工具库增加精确 `GET /tools` 和 `GET` / `POST /agents/:id/tools` 白名单，不允许目录写入或任意子路径。目录与工具设置使用所选执行设备的固定 Api。toolId、toolIds 和 toolSelection 内的声明是跨设备稳定工具身份，不做 instanceId 包装；Agent 和会话资源身份仍按原规则固定设备。不存在按来源标签分流模型或跨设备合并后保存配置的路径。
+
 目录选择只增加精确的 POST `/projects/directories/browse`、`/projects/directories/create` 与 `/projects/directories/close` 白名单，路径作为 JSON 业务参数，不成为代理目标 URL。create 只转发 `{browseId,name}`，属于写请求；目标 Projects 在认证调用方已加载的当前浏览目录下创建单个子目录，不递归创建或登记项目。选择器请求携带 `X-Anybox-Expected-Instance-Id` 和 `X-Anybox-Connection-Revision`；网关获取同一连接租约后比较，匹配才访问上游。新增头只在网关消费，旧客户端未发送时仍兼容。系统目录窗口同样检查预期连接。浏览器在“添加项目”时捕获目标，本机身份匹配且平台支持时直接调用窗口，用户确认后立即向该目标登记，不再打开应用内对话框；取消不登记。远程或原生能力未确认可用时使用应用内浏览，窗口启动或登记失败只显示通知，不回退、换连接或重试写入。确认登记和新建文件夹不会跟随另一标签页的连接修改，创建未知结果也不自动重试。完整协议见[项目目录选择](../../project-directory-picker.md)。
 
 新建入口以目标声明的 `projects.create-directory` 为准；缺少该能力时隐藏入口，原有 `projects.browse` 流程继续可用。创建代理和目标 harness server 都需要升级，能力协商不新增数据库或迁移。

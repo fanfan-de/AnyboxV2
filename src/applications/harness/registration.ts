@@ -12,7 +12,7 @@ export const harnessDefinition: ProductDefinition = Object.freeze({ id: 'agent',
   description: '使用本地或远程 Agent，管理项目、会话、模型与 Prompt。' })
 export const harnessServerHttp = Object.freeze({ service: harnessServerHttpServiceKey,
   capabilities: Object.freeze(['projects.path', 'images', 'project-files', 'sse']),
-  legacyRoutes: ['models', 'prompts', 'agents', 'projects', 'sessions', 'runs', 'changes'].map(path => ({ prefix: `/api/v1/${path}`, stripPrefix: '/api/v1' })) })
+  legacyRoutes: ['models', 'prompts', 'tools', 'agents', 'projects', 'sessions', 'runs', 'changes'].map(path => ({ prefix: `/api/v1/${path}`, stripPrefix: '/api/v1' })) })
 export const harnessClientHttp = Object.freeze({ service: clientGatewayServiceKey, legacyRoutes: [
   { prefix: '/api/client/v1/connections', stripPrefix: '/api/client/v1' },
   { prefix: '/api/client/v1/local', stripPrefix: '/api/client/v1' },

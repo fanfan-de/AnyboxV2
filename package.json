@@ -30,9 +30,11 @@
     "@anybox/models": "file:packages/models",
     "@napi-rs/keyring": "2.1.0",
     "@nya/core": "file:../NyaCore/packages/core",
+    "@vscode/ripgrep": "1.18.0",
     "mdast-util-from-markdown": "2.0.3",
     "mdast-util-gfm": "3.1.0",
     "micromark-extension-gfm": "3.0.0",
+    "picomatch": "4.0.7",
     "sharp": "0.35.5"
   },
   "devDependencies": {
@@ -44,6 +46,7 @@
     "@electron/fuses": "2.1.3",
     "@types/mdast": "4.0.4",
     "@types/node": "22.20.1",
+    "@types/picomatch": "4.0.3",
     "electron": "44.5.1",
     "esbuild": "0.28.2",
     "typescript": "5.9.3"

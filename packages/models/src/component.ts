@@ -6,6 +6,7 @@ import { assert, identifier, immutable, keys, nonempty, connectionInput, configu
 import { modelsError, normalizeError } from './errors.js';
 import { createExecution, validateRestore } from './execution.js';
 import { captureResourceResolver } from './resources.js';
+import { createTextGeneration } from './text-generation.js';
 import { abortLink, deferred, joinOperation, throwAborted } from './lifecycle.js';
 import { modelsProtocolsServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsStoreServiceKey, modelsVaultServiceKey, modelsSourceDataServiceKey } from './types.js';
 import type { ConnectionModel, ConnectionSyncState, CredentialIntent, EffectiveCapabilities, Model, ModelConfiguration, ModelConfigurationInput, ModelInput, ModelsProtocolsService, ModelsService, ModelsSettingsService, ModelsSourceDataService, ModelsStore, ModelsVault, RunnableModelSummary, ProtocolConnection, ProtocolOperation, Provider, ProviderConnectionRecord, ProviderConnection, ProviderInput, SourceSnapshot, Versioned } from './types.js';
@@ -176,6 +177,24 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       return immutable(store.configurations().map(summary).filter(item => (!query.connectionId || item.connectionId === query.connectionId) && (query.available === undefined || item.available === query.available)));
     },
     get(id) { requireOpen(); identifier(id); const model = store.configuration(id); return model ? summary(model) : undefined; },
+    generateText(input) {
+      return createTextGeneration(input, captured => {
+        requireOpen();
+        const connection = getConnection(getConfiguration(captured.modelId).connectionId);
+        const generation = getGeneration(connection.protocolId), adapter = generation.protocol.textGeneration;
+        if (!adapter || !generation.protocol.descriptor.responseModes?.includes('complete')) throw modelsError('capability-unsupported');
+        const held = acquire(generation);
+        return { adapter, lease: held, open: signal => models.openNative({ modelId: captured.modelId, lease: held, signal }),
+          track(operation) {
+            operations.add(operation); generation.pending.add(operation);
+            return failed => {
+              generation.pending.delete(operation); operations.delete(operation);
+              if (failed) { generation.cleanupFailed = true; cleanupFailed = true; }
+            };
+          },
+        };
+      });
+    },
     async openNative<I extends NativeObject, R extends NativeObject, E extends NativeObject>(input: OpenNativeModelInput<I, R, E>): Promise<NativeExecution<I, R, E>> {
       requireOpen(); keys(input, ['modelId', 'lease', 'restore', 'requirements', 'resources', 'signal']); identifier(input.modelId); validateSignal(input.signal);
       const resources = captureResourceResolver(input.resources);
@@ -440,9 +459,13 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     register<I extends NativeObject, R extends NativeObject, E extends NativeObject>(protocol: NativeProtocol<I, R, E>) {
       requireOpen(); identifier(protocol.descriptor.id); assert(nonempty(protocol.descriptor.version));
       assert(protocol.recordFormatVersion === undefined || protocol.recordFormatVersion === 1 || protocol.recordFormatVersion === 2);
+      assert(protocol.descriptor.responseModes === undefined || Array.isArray(protocol.descriptor.responseModes) && protocol.descriptor.responseModes.every(value => value === 'stream' || value === 'complete') && new Set(protocol.descriptor.responseModes).size === protocol.descriptor.responseModes.length);
+      const adapter = protocol.textGeneration;
+      assert(adapter === undefined || adapter && typeof adapter.createIntent === 'function' && typeof adapter.validateParameters === 'function' && typeof adapter.readText === 'function');
       if (generations.has(protocol.descriptor.id)) throw modelsError('conflict');
       const stable: NativeProtocol = Object.freeze({
         descriptor: immutable(protocol.descriptor), validateProvider: protocol.validateProvider.bind(protocol),
+        textGeneration: adapter ? Object.freeze({ createIntent: adapter.createIntent.bind(adapter), validateParameters: adapter.validateParameters.bind(adapter), readText: adapter.readText.bind(adapter) }) as NativeProtocol['textGeneration'] : undefined,
         recordFormatVersion: protocol.recordFormatVersion, canRestoreVersion: protocol.canRestoreVersion?.bind(protocol), resourceIds: protocol.resourceIds?.bind(protocol),
         validateParameters: protocol.validateParameters.bind(protocol), effectiveCapabilities: protocol.effectiveCapabilities.bind(protocol),
         initialParameters: protocol.initialParameters?.bind(protocol), restore: protocol.restore.bind(protocol), prepare: protocol.prepare.bind(protocol),

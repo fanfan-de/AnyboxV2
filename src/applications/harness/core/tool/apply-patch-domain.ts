@@ -1,5 +1,5 @@
 import { patchRejection } from './apply-patch-types.js'
-import type { PatchChunk, PatchOperation } from './apply-patch-types.js'
+import type { PatchChunk, PatchOperation, TextMutation } from './apply-patch-types.js'
 
 const beginMarker = '*** Begin Patch'
 const endMarker = '*** End Patch'
@@ -130,6 +130,31 @@ function readText(bytes: Buffer): TextLines {
 /** Reject text that cannot be changed without guessing its encoding or line ending convention. */
 export function validatePatchText(bytes: Buffer): void {
   readText(bytes)
+}
+
+/** Preserve the caller's exact text; do not add a newline or reinterpret replacement syntax. */
+export function applyTextMutation(bytes: Buffer | undefined, mutation: TextMutation): Buffer {
+  let text: string
+  if (mutation.kind === 'write') text = mutation.content
+  else {
+    if (bytes === undefined) throw patchRejection('file-not-found', 'The file to edit does not exist.')
+    validatePatchText(bytes)
+    if (!mutation.oldString) throw patchRejection('invalid-edit', 'The text to replace must not be empty.')
+    const source = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes)
+    const first = source.indexOf(mutation.oldString)
+    if (first < 0) throw patchRejection('context-not-found', 'The text to replace was not found.')
+    if (!mutation.replaceAll && source.indexOf(mutation.oldString, first + 1) >= 0) {
+      throw patchRejection('ambiguous-context', 'The text to replace occurs more than once.')
+    }
+    text = mutation.replaceAll ? source.split(mutation.oldString).join(mutation.newString)
+      : source.slice(0, first) + mutation.newString + source.slice(first + mutation.oldString.length)
+  }
+  if (/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(text)) {
+    throw patchRejection('invalid-utf8', 'Text must not contain unpaired Unicode surrogates.')
+  }
+  const output = Buffer.from(text, 'utf8')
+  validatePatchText(output)
+  return output
 }
 
 /** Stop at two matches: that is enough to reject ambiguity without retaining every position. */

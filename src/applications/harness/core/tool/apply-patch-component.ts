@@ -5,15 +5,16 @@ import type { OwnedCall } from '../contracts.js'
 import type { ToolDefinition } from './definition.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
-import { applyPatchText, parsePatch, validatePatchText } from './apply-patch-domain.js'
+import { applyPatchText, applyTextMutation, parsePatch, validatePatchText } from './apply-patch-domain.js'
 import { patchDiagnostic, patchRejection } from './apply-patch-types.js'
-import type { ApplyPatchResult, PatchChange, PatchDiagnostic, PatchOperation, PendingPatchOperation } from './apply-patch-types.js'
+import type { ApplyPatchResult, PatchChange, PatchDiagnostic, PatchOperation, PendingPatchOperation, TextMutation } from './apply-patch-types.js'
 
 export const applyPatchServiceKey = 'tools.apply-patch'
 
 export interface ApplyPatchPort {
   readonly definition: ToolDefinition
   execute(input: { readonly projectId: string; readonly patch: string }): OwnedCall<ApplyPatchResult>
+  mutateText(input: { readonly projectId: string; readonly path: string; readonly mutation: TextMutation }): OwnedCall<ApplyPatchResult>
 }
 
 export const applyPatchToolDefinition: ToolDefinition = Object.freeze({
@@ -163,11 +164,13 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
         if (failures.size > 1) throw new AggregateError([...failures], 'apply patch cleanup failed')
       }, 'cancel and join patch operations')
 
-      const service: ApplyPatchPort = {
-        definition: applyPatchToolDefinition,
-        execute(input) {
+      const enqueue = (input: { readonly projectId: string; readonly patch?: string; readonly path?: string; readonly mutation?: TextMutation }): OwnedCall<ApplyPatchResult> => {
           if (!accepting) throw failure('unavailable')
-          if (!input || typeof input.projectId !== 'string' || !input.projectId.trim() || typeof input.patch !== 'string') {
+          if (!input || typeof input.projectId !== 'string' || !input.projectId.trim() ||
+            (input.mutation === undefined ? typeof input.patch !== 'string' :
+              typeof input.path !== 'string' || !input.path.trim() || input.path.includes('\0') ||
+              !['write', 'edit'].includes(input.mutation.kind) || (input.mutation.kind === 'write'
+                ? typeof input.mutation.content !== 'string' : typeof input.mutation.oldString !== 'string' || typeof input.mutation.newString !== 'string'))) {
             throw failure('invalid-request')
           }
           let cancelled = false
@@ -288,7 +291,7 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
           }
 
           const work = async (): Promise<ApplyPatchResult> => {
-            operations = parsePatch(input.patch)
+            operations = input.mutation === undefined ? parsePatch(input.patch!) : [Object.freeze({ kind: 'update' as const, path: input.path!, chunks: [] })]
             checkpoint()
             let projectPath: string
             try { projectPath = (await projects.requireAvailable(input.projectId)).path }
@@ -312,6 +315,18 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
               checkpoint()
               let source = await canonicalTarget(resolve(projectPath, operation.path))
               checkpoint()
+              if (input.mutation !== undefined) {
+                const info = await existingInfo(source)
+                const prior = info === undefined ? undefined : await snapshot(source, operation.path)
+                if (prior) source = await filesystem.realpath(source)
+                const output = applyTextMutation(prior?.bytes, input.mutation)
+                const actual: PatchOperation = prior ? operation : { kind: 'add', path: operation.path, content: output.toString('utf8') }
+                operations = [actual]
+                claim(source, actual.path)
+                planned.push({ operation: actual, source, target: source, snapshot: prior, output })
+                checkpoint()
+                continue
+              }
               if (operation.kind === 'add') {
                 claim(source, operation.path)
                 if (await existingInfo(source)) throw patchRejection('target-exists', 'The destination already exists.', operation.path)
@@ -407,7 +422,11 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
           void call.result.catch(() => {})
           void call.done.catch(error => { failures.add(error) })
           return call
-        },
+      }
+      const service: ApplyPatchPort = {
+        definition: applyPatchToolDefinition,
+        execute(input) { return enqueue(input) },
+        mutateText(input) { return enqueue(input) },
       }
       ctx.provide(applyPatchServiceKey, service)
     },

@@ -4,6 +4,8 @@ import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, compl
 import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
 import { createApplyPatchComponent } from '../dist/applications/harness/core/tool/apply-patch-component.js'
+import { createFileToolsComponent } from '../dist/applications/harness/core/tool/files-component.js'
+import { createProcessToolsComponent } from '../dist/applications/harness/core/tool/process-component.js'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -254,6 +256,8 @@ test('removing the Models component waits for the run consumer and its call', as
   root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
+  root.installComponent(createFileToolsComponent())
+  root.installComponent(createProcessToolsComponent())
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await database
@@ -348,6 +352,8 @@ test('RunRuntime owns in-flight calls while Session and Run state survive its re
   root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
+  root.installComponent(createFileToolsComponent())
+  root.installComponent(createProcessToolsComponent())
   const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await database

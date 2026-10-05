@@ -1,6 +1,6 @@
 # 原生协议 Agent 框架设计与迁移验收
 
-日期：2026-09-29（原生框架验收保留于文末；图片增量见[图片输入设计](./multimodal-image-input-design.md)）。正式组合根已切换原生框架；本文说明本次交付范围、固定契约和验收方式。最终检查结果见文末。先前草案中尚未采用的交互等待、文本导入和直接 exchange 接口不属于现行契约。
+日期：2026-10-04（原生框架验收保留于文末；图片增量见[图片输入设计](./multimodal-image-input-design.md)）。正式组合根已切换原生框架；本文说明本次交付范围、固定契约和验收方式。最终检查结果见文末。先前草案中尚未采用的交互等待、文本导入和直接 exchange 接口不属于现行契约。
 
 ## 1. 范围与约束
 
@@ -8,7 +8,7 @@
 
 Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResult 与统一消息执行路径。保留配置、Vault、目录和驱动注册，提供 openNative、原生参数、版本化记录和恢复 codec。旧 dialogue-v1 Session 只读，不导入文本，不提供跨协议或跨账户转换。新 Session 使用 native-local-v1，在第一次接受事务中固定协议，失败和取消不解除绑定。
 
-继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、已知 Bash/Apply Patch 判别联合、实际退出后结算和 interrupted 不重放规则。四种协议均支持显式声明能力的静态本地图片输入。本期不包含图片输出、工具返回图片、音频、远端后台任务、并行工具调度、动态工具注册中心或用户交互等待机制。
+继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、受信静态工具目录与按 Session 固定的来源契约判别联合、实际退出后结算和 interrupted 不重放规则。四种协议均支持显式声明能力的静态本地图片输入。工具图片以文本工具结果之后的原生用户图片块支持。当前不包含模型图片输出、音频、PTY、独立远端后台任务、PDF/notebook、并行工具调度、动态插件注册、联网搜索工具或用户交互等待机制。
 
 ## 2. 已实现模块与职责
 
@@ -20,6 +20,7 @@ Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResu
 | 四协议 Loop | `src/applications/harness/core/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案 |
 | Run | `src/applications/harness/core/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
 | RunRuntime | `src/applications/harness/core/run/runtime-component.ts` | 全部受管操作、取消、真实退出、持久屏障、视图与结算 |
+| 工具目录与执行器 | `src/applications/harness/core/tool/` | 静态来源契约、参数校验、Run 管道进程、文本读写及搜索；Nya 组件按资源拆分 |
 | 图片资源 | `src/applications/harness/core/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
 | Session | `src/applications/harness/core/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
 | 服务端展示 | `src/applications/harness/core/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
@@ -46,7 +47,7 @@ Models 不导入应用源码、Session、数据库业务表或工具实现。Ses
 
 Runtime 在首次异步读取前同步登记 program 所有权。同步拒绝表示未接管，Run 清理；接管后 Runtime 清理。请求准备后若持久意图失败，start 从未调用。观察提交失败立即停止后续操作。取消后仍提交已发生的工具结果和 Apply Patch 部分提交。
 
-Models 只有在底层成功退出后才提交候选上下文；done 拒绝是失败退出，不无限等待悬空 result，迟到结果不能改变冻结报告。Runtime 还要等待 program.close 和所有工具退出；结果成功但 done/close 失败不能产生成功节点。cleanup 失败保留已知事实与固定错误，不能暴露原始提供方错误或凭据。
+Models 只有在底层成功退出后才提交候选上下文；done 拒绝是失败退出，不无限等待悬空 result，迟到结果不能改变冻结报告。Runtime 还要关闭每 Run 进程 scope，经通用 tool-process-cleanup operation 保存最终退出观察，再等待 program.close 和所有工具退出；结果成功但 done/close 失败不能产生成功节点。cleanup 失败保留已知事实与固定错误，不能暴露原始提供方错误或凭据。
 
 ## 4. 协议支持矩阵
 
@@ -57,7 +58,7 @@ Models 只有在底层成功退出后才提交候选上下文；done 拒绝是�
 | Chat Completions | JSON + SSE | tool_calls / tool消息 | 原生messages、finish_reason、工具身份 | 互斥max_completion_tokens/max_tokens、reasoning_effort、显式thinking | 文本/工具/拒绝与异常状态 |
 | Gemini Interactions | JSON + SSE；store:false | function_call / function_result | 有序steps、thought signature、函数身份 | generation_config；本地无状态历史 | 文本/摘要/工具 |
 
-Responses 和 Gemini 不使用服务端会话、previous_response_id/previous_interaction_id 或后台任务。Anthropic 只执行客户端 tool_use，server_tool_use 不交给 Bash/Apply Patch；暂停内容按顺序提交后，由Loop发起新的受管模型操作。拒绝、截断或不支持的完成状态保存原生事实，但本期不创建成功节点。
+Responses 和 Gemini 不使用服务端会话、previous_response_id/previous_interaction_id 或后台任务。Anthropic 只执行客户端 tool_use，server_tool_use 不交给本地工具目录；暂停内容按顺序提交后，由Loop发起新的受管模型操作。拒绝、截断或不支持的完成状态保存原生事实，但本期不创建成功节点。
 
 搜索默认关闭。必须保存模型 webSearch 支持声明并通过驱动验证，才能写入 Responses 的 `tools:[{type:'web_search'}]` 或 Anthropic 的 `tools:[{type:'web_search_20250305',name:'web_search'}]`。不由协议ID推断支持；不接入动态过滤或隐含代码执行的Anthropic版本。本地函数工具声明仍由应用固定，参数payload不能覆盖。
 
@@ -71,11 +72,11 @@ Responses 和 Gemini 不使用服务端会话、previous_response_id/previous_in
 
 非秘密 historyScopeEpoch 不使用Key哈希、Vault引用或凭据条目ID。成功更换/删除Key、改变地址/认证方式会更新；普通改名、超时调整、启停和目录刷新不更新；失败Key操作不更新。失去恢复兼容时明确拒绝，不能重建文本历史或隐式换账户。
 
-Session 首次接受 Run 固定 instruction、context 和工具声明；所有根分支、首节点编辑/重新生成与首次失败后的新 Run 都复用同一初始化，各 Run 另固定执行配置；后代继承原始初始化。发布新初始指令不能改写旧会话链；使用新初始指令需新Session。每个新Run固定当前task-template，只处理本次原始输入一次。编辑与重新生成取原始输入和原节点父引用，`$&`、`{{input}}` 等字面内容不二次替换。
+Session 创建时复制 Agent 工具选择，首次接受 Run 固定 instruction、context 和实际工具声明；新初始化为 schemaVersion 2 / tool-library-v1，旧 v1 / known-tools-v1 原样兼容；所有根分支、首节点编辑/重新生成与首次失败后的新 Run 都复用同一初始化，各 Run 另固定执行配置；后代继承原始初始化。发布新初始指令不能改写旧会话链；使用新初始指令需新Session。每个新Run固定当前task-template，只处理本次原始输入一次。编辑与重新生成取原始输入和原节点父引用，`$&`、`{{input}}` 等字面内容不二次替换。
 
 ## 6. 持久化与迁移
 
-Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原生历史，v6 增加通用资源引用列；图片组件用独立迁移域登记自身表。迁移阶段与行为测试仅使用临时库，未升级用户实际业务数据。三套库不建立跨库事务；任何组件迁移或初始化失败阻止Run准入并清理已安装资源。
+Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原生历史、v6 增加通用资源引用、v7 增加归档、v8 保存默认模型、v9 保存 Agent 工具配置及不可变 Session 工具选择；图片组件用独立迁移域登记自身表。迁移阶段与行为测试仅使用临时库，未升级用户实际业务数据。三套库不建立跨库事务；任何组件迁移或初始化失败阻止Run准入并清理已安装资源。
 
 ### Models v3
 
@@ -92,7 +93,7 @@ Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原
 
 新基础配置、预设、设置表单和旧环境变量初始化都写原生参数。Anthropic新配置显式保存max_tokens:4096；旧配置保留旧值。迁移可重复进入，失败回滚整个本库事务。
 
-### Session v5
+### Session v5 至 v9
 
 | 持久对象 | 内容 |
 | --- | --- |
@@ -185,3 +186,9 @@ ANYBOX_NATIVE_API_TESTS=1 ANYBOX_NATIVE_API_PROTOCOLS=responses node --test test
 ### 项目文件输入扩展
 
 应用输入现有 v1/v2 继续读取，v3 增加 files 快照引用；文件内容由 Run 准备后交给协议绑定，作为本轮用户文本保存进增量原生请求。原生驱动和记录格式不升级，Models 不解释项目路径，历史恢复不回源文件。详见[项目文件引用](project-file-references-design.md)。
+
+### 工具库增量（2026-10-04）
+
+三个 harness 来源的 20 个开发工具契约及两个既有 Anybox 工具进入统一静态目录，用户按 Agent 混选单个工具；配置更改只影响新 Session。run-state v9 原子复制会话选择并保留旧工具历史，新 NativeInitialization v2 携带版本化选择，新 Loop 1.2.0 继续读取旧 1.0.0/1.1.0；Models 驱动 2.1.0 与原生记录 v2 不变。
+
+Codex exec/write 使用按 Run 的管道进程 scope；正常完成、取消和关闭均等待实际退出并保存通用清理观察。工具图片先随观察同事务保留，再附加用户图片块与资源引用；私有 resolver 只接纳已提交引用，base64 不写历史。验证入口为 tool-catalog、process-tools、file-tools 及 native-tool-library 测试，完整规则见[工具库设计](./tools-library-design.md)。

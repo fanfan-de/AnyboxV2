@@ -1,4 +1,4 @@
-import type { JsonValue, NativeExecution, NativeObject, NativeRecordDraft, NativeReply, NativeImageResourceRef } from '@anybox/models'
+import { nativeImageResourceUri, type JsonValue, type NativeExecution, type NativeObject, type NativeRecordDraft, type NativeReply, type NativeImageResourceRef } from '@anybox/models'
 import type { NativeInitialization, ProtocolConclusion, ProtocolRecord, RunHost } from '../run/program.js'
 import { modelFailure } from '../run/model.js'
 import { validateToolBatch } from '../run/domain.js'
@@ -6,6 +6,8 @@ import type { ToolObservation, ValidatedToolRequest } from '../run/domain.js'
 import type { ProtocolViewExchange, ProtocolViewSnapshot } from '../view/types.js'
 import { boundProtocolView, projectNativeRequest, projectNativeExchange, reduceNativeExchange } from './projection.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
+import type { ToolDefinition } from '../tool/definition.js'
+import { validateImageBatch } from '../image/limits.js'
 
 export function nativeObject(value: unknown): NativeObject {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw modelFailure('invalid-response')
@@ -46,8 +48,10 @@ export interface ExchangeRunner {
 
 /** Common resource plumbing contains no protocol flow decisions. */
 export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string },
-  initialResources: readonly NativeImageResourceRef[] = [], prompts?: readonly PromptSnapshot[]): ExchangeRunner {
+  initialResources: readonly NativeImageResourceRef[] = [], prompts?: readonly PromptSnapshot[],
+  acceptResources?: (refs: readonly NativeImageResourceRef[]) => void, allowedTools?: readonly ToolDefinition[]): ExchangeRunner {
   let initial = true
+  let nextResources: readonly NativeImageResourceRef[] = []
   let exchanges: readonly ProtocolViewExchange[] = []
   let revision = 0
   const update = (exchange: ProtocolViewExchange) => {
@@ -64,7 +68,9 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
   return {
     async call(intent) {
       host.signal.throwIfAborted()
-      const prepared = execution.prepareExchange(intent, initial && initialResources.length ? { resourceRefs: initialResources } : undefined)
+      const resources = initial ? initialResources : nextResources
+      const prepared = execution.prepareExchange(intent, resources.length ? { resourceRefs: resources } : undefined)
+      nextResources = []
       const inputs = projectNativeRequest(execution.snapshot.protocolId, prepared.record.payload, initial ? prompts : undefined)
       initial = false
       update({ id: prepared.exchangeId, ...(inputs.length ? { inputs } : {}), blocks: [] })
@@ -82,8 +88,14 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
     },
     async tools(calls) {
       if (!execution.capabilities.tools) throw modelFailure('unsupported-request')
-      const validated = validateToolBatch(calls)
+      const validated = validateToolBatch(calls, allowedTools)
       const results = await host.executeTools(validated, 'serial')
+      const images = results.flatMap(result => 'images' in result ? result.images ?? [] : [])
+      validateImageBatch(images)
+      nextResources = [...new Map(images.map(image => [image.assetId, { id: image.assetId, sha256: image.sha256,
+        byteLength: image.byteLength, mimeType: image.mediaType }])).values()]
+      // Runtime returns only after the Session observation and retain transaction commits.
+      if (nextResources.length) acceptResources?.(nextResources)
       return results
     },
   }
@@ -99,3 +111,16 @@ export function initialMessages(initialization: NativeInitialization): readonly 
   return initialization.prompts.map(prompt => ({ role: prompt.role, content: prompt.content }))
 }
 export function toolResult(value: ToolObservation): string { return JSON.stringify(value.result) }
+
+/** Image tool observations use the already-supported native user-image shapes.
+ * The tool result carries correlation; raw bytes are resolved privately at operation start. */
+export function toolImageInputs(protocolId: string, results: readonly ToolObservation[]): readonly NativeObject[] {
+  return results.flatMap(result => ('images' in result ? result.images ?? [] : []).map((image): NativeObject => {
+    const text = `Image returned by tool ${result.name}: ${image.assetId}`
+    const uri = nativeImageResourceUri(image.assetId)
+    if (protocolId === 'responses') return { role: 'user', content: [{ type: 'input_text', text }, { type: 'input_image', image_url: uri }] }
+    if (protocolId === 'chat-completions') return { role: 'user', content: [{ type: 'text', text }, { type: 'image_url', image_url: { url: uri } }] }
+    if (protocolId === 'anthropic-messages') return { role: 'user', content: [{ type: 'text', text }, { type: 'image', source: { type: 'url', url: uri } }] }
+    return { type: 'user_input', content: [{ type: 'text', text }, { type: 'image', uri }] }
+  }))
+}

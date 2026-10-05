@@ -155,6 +155,37 @@ Native results retain their protocol status, ordered content and unknown JSON fi
 
 Streaming is enabled by default. A saved `streaming: 'unknown'` declaration allows streaming, as does `'supported'`; explicit `'unsupported'` disables it. Models also respects a driver's effective `streaming: false`, so a replacement protocol can decline streaming. All built-in protocols apply this default when preparing their native `stream` field. Catalog definitions keep missing upstream streaming metadata as `unknown`, and saved declarations are unchanged: existing configurations with `unknown` use streaming on their next execution without a catalog refresh or configuration migration.
 
+Each exchange may select `responseMode: 'stream' | 'complete'` in `NativeExchangeOptions`, alongside `resourceRefs`. Omitting the mode keeps the effective-capability default. Explicit `stream` requires effective streaming support; `complete` sends a non-streaming request regardless of that capability. All four built-in drivers declare both modes in `descriptor.responseModes`; an extension that omits this declaration remains usable for default calls but rejects explicit modes with `capability-unsupported`. Invalid mode values return `invalid-config` before preparation produces a request record or network traffic. Callback presence never chooses the transport. Modes affect only that exchange, do not change the snapshot or saved parameters, and are excluded from request/recovery records. Chat sends `stream_options` only for streaming requests.
+
+## Single text generation
+
+```ts
+const operation = models.generateText({
+  modelId: selectedConfigurationId,
+  instruction: 'Return a concise description.',
+  input: 'Describe the supplied text.',
+  signal: controller.signal,
+})
+const { text, modelId, modelRevision, protocolId } = await operation.result
+await operation.done
+// operation.cancel() is also available.
+```
+
+`generateText()` requires an explicit existing ModelConfiguration ID and non-whitespace `input`; an optional `instruction` must also be non-whitespace. Validation preserves the supplied text. Every call opens a fresh execution with its captured configuration, saved native parameters and credential, requests `complete`, extracts final text, then closes the execution and releases the protocol-generation lease before settling. The result contains only `text`, `modelId`, `modelRevision` and `protocolId`. It accepts no history, resources, tools or parameter overrides and does not persist temporary native history. Use-purpose prompts, purpose-specific model selection, titles and persistence belong to the host.
+
+| Protocol | Instruction mapping | Final text and accepted completion |
+| --- | --- | --- |
+| Responses | `instructions` | assistant `output_text` blocks; `completed` |
+| Chat Completions | system message | the single choice's `message.content`; `stop` |
+| Anthropic Messages | `system` text block | `content` text blocks; `end_turn` or `stop_sequence` |
+| Gemini Interactions | `system_instruction` | `model_output` text blocks; `completed` |
+
+Text blocks are joined in native order with newlines, preserving their text and formatting. Private reasoning/thinking is ignored. Refusals return `refused-response`; truncation, budget exhaustion, pauses and other continuation states return `incomplete-response`. Tool calls return `capability-unsupported`; unknown output shapes or no non-whitespace final text return `invalid-response`. Responses/Anthropic presets with enabled native search tools are rejected with `capability-unsupported` before HTTP; merely declaring search support is allowed. Generation never silently disables reasoning, modifies a preset, retries, continues or truncates output. The existing connection timeout applies.
+
+The internal generation orchestrator uses the same Models execution/credential lifecycle and protocol registry. Extensions must provide `textGeneration` pure functions `createIntent()`, `validateParameters()` and `readText()`, and declare `complete` in `responseModes`. Registration captures and freezes these methods with the protocol generation. There is no extra Nya component, configuration store, service registration or generation queue; executions for different Providers may proceed independently.
+
+An outer operation is registered in Models operations and the fixed protocol generation's pending set before the first async call. It remains owned through execution closure, lease release and abort-listener removal. Both success and failure of `result` wait for all cleanup. Ordinary generation failure, cancellation or timeout still fulfills `done` after successful cleanup. Cleanup failure rejects both with `cleanup-failure` and marks the existing runtime/generation cleanup state. `cancel()` and the input signal cancel idempotently; protocol unregister and Models/root close cancel and wait for the entire generation. Network work runs outside the connection configuration queue, so it cannot block Key edits or await itself through that queue.
+
 ## Source ingestion and public catalog
 
 `models.catalog` supplies source status and refresh. Definition queries use `models.settings`; separate catalog Provider/Model DTOs and queries have been removed. The anonymous source requests [models.dev JSON](https://models.dev/api.json?type=all), normalizing every known modality into the module's Provider/Model types. `settings.models({ textOnly: true })` filters for the current text and native function-tool support; price and control metadata remain reference information.
@@ -224,7 +255,7 @@ For the next Run, the host resolves the selected immutable parent chain and supp
 
 ## Image resources and recovery
 
-Responses, Anthropic Messages, Gemini Interactions and Chat Completions 2.1.0 (including DeepSeek) accept ordered user text/image blocks. Chat images use `image_url.url = nativeImageResourceUri(id)`; this reserved internal URI is never sent to the provider. External URLs, inline data URLs, provider file IDs, image detail controls, and images in system/developer/tool messages remain unsupported. Existing string messages remain unchanged.
+Responses, Anthropic Messages, Gemini Interactions and Chat Completions 2.2.0 (including DeepSeek) accept ordered user text/image blocks. Chat images use `image_url.url = nativeImageResourceUri(id)`; this reserved internal URI is never sent to the provider. External URLs, inline data URLs, provider file IDs, image detail controls, and images in system/developer/tool messages remain unsupported. Existing string messages remain unchanged.
 
 Pass a trusted `resources: NativeResourceResolver` to `openNative`. Its `read(ref, { signal })` synchronously returns `ProtocolOperation<Uint8Array>`; callers may implement memory, file or object storage without depending on Anybox Harness. `NativeImageResourceRef` contains only `{ id, sha256, byteLength, mimeType }`, with JPEG/PNG/GIF/WebP MIME types. Resource bytes must already have been admitted by the host's image validation policy. Models checks the byte count and SHA-256; it never opens a host path or interprets Session ownership. The host pins resource lifetime through accepted Run settlement and maintains durable resource ownership.
 
@@ -254,7 +285,7 @@ These internal URI forms never reach the provider. `protocols/images.ts` contain
 
 After `start`, each protocol operation joins each resource read's result and actual exit before generating private native image fields and starting HTTP. Cancellation, missing bytes, checksum mismatch and cleanup failure never silently remove an image. The 32 MiB serialized request limit counts base64 expansion and repeated historical images, is checked before resource reads and again after materialization, and is separate from response limits. Model result/done and unregister wait for resource reads and HTTP cleanup. Wire image strings are temporary and never enter snapshots or request records. Public resource failures use fixed `resource-unavailable`, `invalid-resource` or `request-too-large` codes.
 
-All built-in drivers write native record format 2 and read formats 1/2; each new Run writes one format while the selected parent chain may contain both. Their explicit readers support driver versions 2.0.0/2.1.0. Format 1 remains text-only and is never rewritten. The execution exposes `recordFormatVersion` so a host can bind its matching writer. Only a text-only parent's effective `imageInput: false` may upgrade to true; tools/search/reasoning, native parameters and account/model identity still require compatibility. Streaming may switch on or off across restored executions, including continuation from an old non-streaming parent. Downgrading image capability is rejected. Catalog refresh never rewrites saved configuration capabilities.
+All built-in drivers are version 2.2.0, write native record format 2 and read formats 1/2; each new Run writes one format while the selected parent chain may contain both. Their explicit readers support driver versions 2.0.0/2.1.0/2.2.0. Format 1 remains text-only and is never rewritten. The execution exposes `recordFormatVersion` so a host can bind its matching writer. Only a text-only parent's effective `imageInput: false` may upgrade to true; tools/search/reasoning, native parameters and account/model identity still require compatibility. Streaming may switch on or off across restored executions, including continuation from an old non-streaming parent, and each new exchange may choose its response mode independently. Downgrading image capability is rejected. Catalog refresh never rewrites saved configuration capabilities.
 
 `NativeProtocol` may declare `recordFormatVersion`, `canRestoreVersion(version)` and `resourceIds(intentOrRequest)`. Without these, the writer is format 1, reader version compatibility is strict, and resource references are unavailable. The protocol owns its native image mapping; Models owns reference validation and execution lifetime. [native-images.test.mjs](tests/native-images.test.mjs) covers JSON/SSE, explicit Chat parameters, tools, recovery, capability admission, resource failures, read cancellation/cleanup and wire limits.
 
@@ -268,7 +299,7 @@ Drivers provide parameter validation, effective capability calculation, native `
 
 A raw driver's `result` may precede `done`. `done` is the actual resource-exit boundary, including a completed cleanup attempt that failed. Models observes both promises immediately; failed `done` terminates a broken still-pending result, preserves available diagnostics and requests cancellation only once. Ordinary result failure still waits for `done`. Cancellation does not substitute for exit. No hidden network retries occur.
 
-Unregister stops admission and signals revocation synchronously, then closes executions and joins owned initialization/discovery/check resources. The old generation cannot remove a replacement or stop another protocol. A host application registry must additionally stop and wait for its Run tools, program and settlement; Models unregister only guarantees resources Models owns. Nya still manages service dependency cleanup.
+Unregister stops admission and signals revocation synchronously, then closes executions and joins owned generation/initialization/discovery/check resources. The old generation cannot remove a replacement or stop another protocol. A host application registry must additionally stop and wait for its Run tools, program and settlement; Models unregister only guarantees resources Models owns. Nya still manages service dependency cleanup.
 
 ## Credential consistency and tests
 
@@ -277,5 +308,7 @@ Before writing a fresh vault slot, the configuration database commits a cleanup 
 `npm --prefix packages/models test` builds and runs protocol, catalog source/cache/refresh, runtime, storage, vault and host event-queue tests. Root `npm run check` includes this package. Tests use injected vaults, mocked streams, bundled catalog data and a loopback HTTP server; they do not contact paid APIs or certify native credential stores on every platform. Real OS vault behavior requires platform-specific acceptance.
 
 [streaming-defaults.test.mjs](tests/streaming-defaults.test.mjs) covers missing catalog metadata through automatic baseline configuration and live native text events before completion, plus explicit JSON mode. [runtime.test.mjs](tests/runtime.test.mjs) covers driver opt-out, unchanged existing configurations and native restore across streaming mode changes.
+
+[response-modes.test.mjs](tests/response-modes.test.mjs) verifies the four wire requests, explicit-mode admission, observer independence, exchange mode switching and 2.0.0/2.1.0/2.2.0 history. [text-generation.test.mjs](tests/text-generation.test.mjs), [Responses/Chat generation](tests/responses-chat-generation.test.mjs) and [Anthropic/Gemini generation](tests/anthropic-gemini-generation.test.mjs) use memory Store/Vault and fake transport to cover prompt mappings, output/error projection, configuration capture and actual-exit ownership without paid API calls. Public error matrices are in [Responses/Chat errors](tests/generation-responses-chat-errors.test.mjs) and [Anthropic/Gemini errors](tests/generation-anthropic-gemini-errors.test.mjs).
 
 Protocol references: [Responses streaming](https://developers.openai.com/api/reference/resources/responses/streaming-events), [function calling](https://developers.openai.com/api/docs/guides/function-calling), [reasoning](https://developers.openai.com/api/docs/guides/reasoning), [Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions), [Anthropic Messages](https://platform.claude.com/docs/en/api/messages/create), [Anthropic thinking](https://platform.claude.com/docs/en/build-with-claude/thinking), [Gemini Interactions](https://ai.google.dev/gemini-api/docs/interactions-overview).

@@ -5,7 +5,7 @@ import { splitScopedId } from './harness-client.js'
 import { runTrace, formatTraceDuration } from './run-trace.js'
 import { sessionTrajectory, filterTrajectory, trajectoryTimeline, type TrajectoryRow } from './trajectory.js'
 import { getProtocolWebModule, type MountedProtocolTurn } from './protocols/modules.js'
-import { mountToolCallDetails, protocolToolContext, toolContextReadiness, type MountedToolCallDetails } from './tool-call-view.js'
+import { mountToolCallDetails, protocolToolContext, toolContextReadiness, latestRunPlan, createToolPlanList, type MountedToolCallDetails } from './tool-call-view.js'
 
 interface TrajectoryActions {
   readonly viewport: (ids: readonly string[]) => void
@@ -143,7 +143,7 @@ export function createTrajectoryView(container: HTMLElement, actions: Trajectory
     if (row.provisional) append('临时展示', '模型正在生成，最终以已提交记录为准。')
     if (row.tool && !row.requestOnly) {
       let mounted = detailTools.get(row.id)
-      if (!mounted) { mounted = { runId: run.id, detail: mountToolCallDetails(row.tool) }; detailTools.set(row.id, mounted) }
+      if (!mounted) { mounted = { runId: run.id, detail: mountToolCallDetails(row.tool, run.sessionId) }; detailTools.set(row.id, mounted) }
       else mounted.detail.update(row.tool)
       nodes.push(mounted.detail.element)
     }
@@ -222,6 +222,8 @@ export function createTrajectoryView(container: HTMLElement, actions: Trajectory
         const counts = runTrace(run, snapshot.events.get(run.id) ?? []).counts
         status.textContent = [states[run.status], counts.modelCalls ? `${counts.modelCalls} 次模型` : '', counts.toolCalls ? `${counts.toolCalls} 次工具` : ''].filter(Boolean).join(' · ')
         status.className = 'trajectory-group-state'; status.dataset.state = run.status; header.append(number, context, status); group.append(header)
+        const plan = latestRunPlan(snapshot.events.get(run.id) ?? [])
+        if (plan && !hasQuery && !foldedRuns.has(run.id)) group.append(createToolPlanList(plan, 'trajectory-plan'))
         let assistant: string | undefined
         for (const row of groupRows) {
           if (!hasQuery && foldedRuns.has(run.id) && row.role !== 'user') continue

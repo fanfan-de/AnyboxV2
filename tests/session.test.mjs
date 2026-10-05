@@ -19,6 +19,8 @@ import { createRunRuntimeComponent } from '../dist/applications/harness/core/run
 import { createRunComponent, runServiceKey } from '../dist/applications/harness/core/run/component.js'
 import { createBashComponent } from '../dist/applications/harness/core/tool/bash-component.js'
 import { createApplyPatchComponent } from '../dist/applications/harness/core/tool/apply-patch-component.js'
+import { createFileToolsComponent } from '../dist/applications/harness/core/tool/files-component.js'
+import { createProcessToolsComponent } from '../dist/applications/harness/core/tool/process-component.js'
 import { modelsServiceKey } from '@anybox/models'
 import { controlledModels, deferred, ids } from './helpers/controlled-models.mjs'
 
@@ -43,6 +45,8 @@ async function fixture(execution = false, imagePort) {
       await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
       await root.installComponent(createBashComponent())
       await root.installComponent(createApplyPatchComponent())
+      await root.installComponent(createFileToolsComponent())
+      await root.installComponent(createProcessToolsComponent())
       await root.installComponent(createRunRuntimeComponent(inputs))
       await installTestProtocolAgents(root)
       await root.installComponent(createRunComponent(inputs, agents))
@@ -192,7 +196,7 @@ test('Session revocation joins executing consumers and a new owner preserves con
     await ready(f.root, runServiceKey)
     const current = f.root.get(sessionServiceKey)
     assert.notEqual(current, sessions)
-    assert.deepEqual(await current.getSession(session.id), { ...session, protocolId: 'chat-completions' })
+    assert.deepEqual(await current.getSession(session.id), { ...session, title: 'First', protocolId: 'chat-completions' })
     assert.deepEqual(await current.getRun(second.id), interrupted)
     assert.equal((await current.getRunEvents(second.id)).at(-1).status, 'failed')
     assert.deepEqual((await current.getNodePath(session.id, completed.resultNodeId)).map(node => node.output), ['Saved answer'])

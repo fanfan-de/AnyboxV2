@@ -1,6 +1,8 @@
 import type { FileSelection, FileRef } from '../core/project-files/domain.js'
 import type { ApplyPatchResult } from '../core/tool/apply-patch-types.js'
 import type { ImageRef } from '../core/image/port.js'
+import type { LibraryToolName } from '../core/api.js'
+import type { JsonValue } from '@anybox/models'
 export type * from '../core/api.js'
 export type { DirectoryPage } from '../core/project/directories.js'
 
@@ -30,7 +32,13 @@ export interface ApplyPatchTrace extends ToolTraceBase {
   readonly patchTruncated: boolean
   result?: ApplyPatchResult
 }
-export type ToolTrace = BashTrace | ApplyPatchTrace
+export interface LibraryToolTrace extends ToolTraceBase {
+  readonly name: LibraryToolName
+  readonly arguments: Readonly<Record<string, JsonValue>>
+  result?: JsonValue
+  images?: readonly ImageRef[]
+}
+export type ToolTrace = BashTrace | ApplyPatchTrace | LibraryToolTrace
 export interface PendingSubmission {
   /** Missing on old pending inputs, which must be confirmed again. */
   readonly schemaVersion?: number

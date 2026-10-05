@@ -1,6 +1,6 @@
 import type { ActivityLease, ProductActivityPort } from '../../../host/applications/contracts.js'
 import type { ApplicationHttpPort, ApplicationHttpContext } from '../../../host/applications/registration.js'
-import type { SessionView, RunView } from '../core/api.js'
+import type { SessionView, RunView, ProcessExitView } from '../core/api.js'
 import { handleModelsApi } from './models-api.js'
 import { failure, json, requestObject } from '../../../host/http-utils.js'
 import { promptRevision } from './validation.js'
@@ -11,7 +11,8 @@ import type { OwnedCall } from '../core/contracts.js'
 import type { ImageRef } from '../core/image/port.js'
 import { imageLimits } from '../core/image/limits.js'
 import type { Run } from '../core/run/domain.js'
-import type { Session, SessionDefaults } from '../core/session/domain.js'
+import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput } from '../core/session/domain.js'
+import type { listTools } from '../core/tool/catalog.js'
 import type { RunInput, RunQuery } from '../core/run/domain.js'
 import type { ConversationNode, NodePage, NodeQuery } from '../core/session/domain.js'
 import type { RunEvent } from '../core/run/execution.js'
@@ -33,6 +34,7 @@ import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
 export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> {
   listAgents(): readonly { readonly id: string }[]
+  listTools(): ReturnType<typeof listTools>
   directoryPickerSupported(): boolean
   directoryBrowsingSupported(): boolean
   directoryCreationSupported(): boolean
@@ -47,6 +49,8 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
   getSessionDefaults(agentId: string): Promise<SessionDefaults>
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SessionDefaults>
+  getAgentTools(agentId: string): Promise<AgentToolsSelection>
+  setAgentTools(agentId: string, input: AgentToolsInput): Promise<AgentToolsSelection>
   selectSessionModel(sessionId: string, modelId: string): Promise<Session>
   archiveSession(id: string): Promise<Session>
   restoreSession(id: string): Promise<Session>
@@ -144,6 +148,7 @@ function knownFailure(error: unknown): HttpFailure {
     if ('code' in error && error.code === 'node-not-found') return failure(404, 'node-not-found')
     if ('code' in error && error.code === 'invalid-history') return failure(409, 'invalid-history')
     if ('code' in error && error.code === 'session-defaults-conflict') return failure(409, 'session-defaults-conflict')
+    if ('code' in error && error.code === 'agent-tools-conflict') return failure(409, 'agent-tools-conflict')
     if ('code' in error && ['session-archived', 'session-has-active-runs', 'legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable'].includes(String(error.code))) return failure(409, String(error.code))
     if (/idempotency key already used/.test(error.message)) {
       return failure(409, 'conflict')
@@ -159,8 +164,8 @@ function knownFailure(error: unknown): HttpFailure {
 
 function sessionView(session: Session): SessionView {
   return {
-    id: session.id, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
-    modelId: session.modelId, archivedAt: session.archivedAt,
+    id: session.id, title: session.title, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
+    modelId: session.modelId, archivedAt: session.archivedAt, toolSelection: session.toolSelection,
     protocolId: session.protocolId, historyMode: session.historyMode,
   }
 }
@@ -207,6 +212,7 @@ function outputSummary(value: string): { readonly text: string; readonly truncat
 
 function toolCallView(call: ValidatedToolRequest): object {
   if (call.name === 'bash') return { id: call.id, name: call.name, command: call.arguments.command }
+  if (call.name !== 'apply_patch') return { id: call.id, name: call.name, arguments: call.arguments }
   const patch = outputSummary(call.arguments.patch)
   return { id: call.id, name: call.name, patch: patch.text, patchTruncated: patch.truncated }
 }
@@ -215,13 +221,15 @@ function runEventView(event: RunEvent): object {
   const base = { seq: event.seq, at: event.at, kind: event.kind }
   switch (event.kind) {
     case 'operation-started': return { ...base, operationId: event.operationId, operationKind: event.operationKind }
-    case 'operation-observed': return { ...base, operationId: event.operationId }
-    case 'operation-failed': return { ...base, operationId: event.operationId, category: event.category }
+    case 'operation-observed': return { ...base, operationId: event.operationId, ...processExitProjection(event.result) }
+    case 'operation-failed': return { ...base, operationId: event.operationId, category: event.category, ...processExitProjection(event.result) }
     case 'model-started': return base
     case 'model-tool-calls': return { ...base, calls: event.calls.map(toolCallView) }
     case 'tool-started': return { ...base, ...toolCallView(event.call), requestId: event.call.id }
     case 'tool-observed': {
       if (event.name === 'apply_patch') return { ...base, name: event.name, requestId: event.requestId, result: event.result }
+      if (event.name !== 'bash') return { ...base, name: event.name, requestId: event.requestId, result: event.result,
+        ...('images' in event && event.images?.length ? { images: event.images } : {}) }
       const stdout = outputSummary(event.result.stdout)
       const stderr = outputSummary(event.result.stderr)
       return { ...base, name: event.name, requestId: event.requestId, exitCode: event.result.exitCode,
@@ -229,11 +237,30 @@ function runEventView(event: RunEvent): object {
         truncated: event.result.truncated || stdout.truncated || stderr.truncated }
     }
     case 'tool-failed': return { ...base, name: event.name, requestId: event.requestId, category: event.category,
-      ...(event.result ? { result: event.result } : {}) }
+      ...(event.result === undefined ? {} : { result: event.result }), ...(event.images?.length ? { images: event.images } : {}) }
     case 'terminal': return { ...base, status: event.status,
       ...(event.errorCategory ? { errorCategory: event.errorCategory } : {}) }
     case 'interrupted': return { ...base, previousPhase: event.previousPhase }
   }
+}
+
+function processExitProjection(value: import('@anybox/models').JsonValue | undefined): { readonly processes?: readonly ProcessExitView[] } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const result = value as Readonly<Record<string, import('@anybox/models').JsonValue>>
+  if (!Array.isArray(result.processes)) return {}
+  const processes: ProcessExitView[] = []
+  for (const raw of result.processes.slice(0, 64)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+    const item = raw as Readonly<Record<string, import('@anybox/models').JsonValue>>
+    if (typeof item.session_id !== 'number' || !Number.isSafeInteger(item.session_id) || item.session_id < 1 ||
+      (item.exit_code !== null && (typeof item.exit_code !== 'number' || !Number.isSafeInteger(item.exit_code))) ||
+      (item.signal !== null && typeof item.signal !== 'string') || typeof item.output !== 'string') continue
+    const output = outputSummary(item.output)
+    processes.push({ sessionId: item.session_id, exitCode: item.exit_code, signal: item.signal, output: output.text,
+      truncated: item.truncated === true || output.truncated, terminated: item.terminated === true, timedOut: item.timed_out === true,
+      ...(typeof item.error === 'string' ? { error: outputSummary(item.error).text } : {}) })
+  }
+  return processes.length ? { processes } : {}
 }
 
 
@@ -451,6 +478,21 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
       if (method === 'GET' && path === '/api/v1/agents') {
         json(response, 200, commands.listAgents())
         return
+      }
+      if (method === 'GET' && path === '/api/v1/tools') {
+        json(response, 200, commands.listTools()); return
+      }
+      const agentToolsMatch = /^\/api\/v1\/agents\/([^/]+)\/tools$/.exec(path)
+      if (agentToolsMatch && method === 'GET') {
+        json(response, 200, await commands.getAgentTools(decodeURIComponent(agentToolsMatch[1]))); return
+      }
+      if (agentToolsMatch && method === 'POST') {
+        const body = await requestObject(request, ['toolIds', 'expectedRevision'])
+        if (!Array.isArray(body.toolIds) || body.toolIds.some(id => typeof id !== 'string' || !id.trim()) ||
+          typeof body.expectedRevision !== 'number' || !Number.isSafeInteger(body.expectedRevision) || body.expectedRevision < 0) throw failure(400, 'invalid-input')
+        json(response, 200, await commands.setAgentTools(decodeURIComponent(agentToolsMatch[1]), {
+          toolIds: body.toolIds as string[], expectedRevision: body.expectedRevision,
+        })); return
       }
       const sessionDefaultsMatch = /^\/api\/v1\/agents\/([^/]+)\/session-defaults$/.exec(path)
       if (sessionDefaultsMatch && method === 'GET') {

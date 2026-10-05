@@ -83,3 +83,13 @@ Session 组件在 Run 接受、执行记录、取消和结算事务实际提交�
 ## 图片输入增量（2026-09-29）
 
 Chat/DeepSeek 接通本地静态图片、工具续轮和成功父路径重启恢复。Session run-state 升为 v6，NativeRunInput 写 v2；独立图片组件管理原始资源和原子保留，Models 资源端口在受管操作中解析引用，Web 支持有序上传、分支草稿与续期。详细范围、版本兼容与验证入口见[图片输入设计](./multimodal-image-input-design.md)。其他协议图片能力继续关闭。
+
+## 工具库与按 Agent 混选增量（2026-10-04）
+
+完成受信静态 22 项目录：Codex 五项、Claude Code 七项、DeepSeek Harness 八项及既有 Anybox Bash/Apply Patch。稳定 ID、来源版本、参数和固定调用名前缀分别保存；推荐默认是 Codex 五项与 Claude Read/Write/Edit/Glob/Grep。设置按执行设备和 Agent 保存，创建 Session 原子复制不可变选择；后续修改只影响新 Session，Codex exec/write 缺失依赖明确拒绝。
+
+Session run-state 写 v9，新 NativeInitialization v2 / tool-library-v1 复制选择；旧 v1 / known-tools-v1 和旧原生记录不改写。四种协议 Loop 写 1.2.0 并读取旧 Loop，驱动 2.1.0 与记录 v2 保持不变。
+
+新增根上的进程和文件执行器，分别持有按 Run 的管道命令、stdin/输出及文件读取、搜索和图片导入；来源写入复用 Apply Patch 队列。正常模型结束也终止并等待剩余进程，经通用 tool-process-cleanup 操作保存实际退出后再结算。工具图片与观察同事务保留，再以用户图片块及 resourceRefs 进入下一次增量请求；文本模型返回不支持诊断。
+
+验收入口：tool-catalog、process-tools、file-tools、native-tool-library 及现有 Run/原生协议行为测试，统一执行 npm run check。检查不使用实际业务库、真实模型 API 或系统 Vault；未修改 NyaCore。具体契约和升级边界见[工具库设计](./tools-library-design.md)。

@@ -2,6 +2,7 @@ import type { JsonValue, NativeModelSnapshot, NativeImageResourceRef } from '@an
 import type { FileRef, FileContent } from '../project-files/domain.js'
 import type { ImageRef } from '../image/port.js'
 import type { ToolDefinition } from '../tool/definition.js'
+import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 export type { NativeModelSnapshot } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
@@ -17,11 +18,17 @@ export interface ProtocolBindingSnapshot {
   readonly viewSchemaVersion: number
 }
 
-export interface NativeInitialization {
+export type NativeInitialization = {
   readonly schemaVersion: 1
   readonly prompts: readonly PromptSnapshot[]
   readonly tools: readonly ToolDefinition[]
   readonly toolContractVersion: 'known-tools-v1'
+} | {
+  readonly schemaVersion: 2
+  readonly prompts: readonly PromptSnapshot[]
+  readonly tools: readonly ToolDefinition[]
+  readonly toolContractVersion: 'tool-library-v1'
+  readonly toolSelection: ToolSelectionSnapshot
 }
 
 /** The template is applied exactly once before protocol encoding. */

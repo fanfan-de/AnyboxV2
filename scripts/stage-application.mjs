@@ -40,7 +40,7 @@ export async function stageApplication(root, directory, { desktop = false, build
   const lock = await readFile(join(output, 'package-lock.json'))
   await writeFile(join(output, 'release.json'), JSON.stringify({ version: manifest.version, artifacts,
     lockSha256: createHash('sha256').update(lock).digest('hex'),
-    nativeDependencies: desktop ? 'Matching macOS arm64 native dependencies are included in the desktop package.' : 'Install with npm ci --omit=dev on the target macOS/Linux platform.' }, null, 2) + '\n')
+    nativeDependencies: desktop ? 'Matching macOS arm64 native dependencies are included in the desktop package.' : 'Install with npm ci --omit=dev --include=optional on the target macOS/Linux platform.' }, null, 2) + '\n')
   await verifyStagedApplication(root, output)
   return { output, manifest, artifacts }
 }

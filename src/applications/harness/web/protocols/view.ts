@@ -10,6 +10,7 @@ export interface ProtocolTurnOptions {
 }
 export interface NativeBlockContext extends ProtocolTurnOptions {
   readonly presentation: ProtocolPresentation
+  readonly sessionId?: string
   readonly runId: string
   readonly exchange: ProtocolViewExchange
   readonly snapshotStatus: ProtocolViewSnapshot['status']
@@ -171,7 +172,7 @@ export function mountProtocolTurn(initial: ProtocolViewSnapshot, binding: {
         const requestKey = 'requestId' in block && 'name' in block ? JSON.stringify([block.requestId, block.name]) : undefined
         const toolOccurrence = requestKey ? occurrences.get(requestKey) ?? 0 : 0
         if (requestKey) occurrences.set(requestKey, toolOccurrence + 1)
-        const context: NativeBlockContext = { exchange, presentation, runId: model.runId, snapshotStatus: model.status, toolOccurrence,
+        const context: NativeBlockContext = { exchange, presentation, sessionId: model.sessionId, runId: model.runId, snapshotStatus: model.status, toolOccurrence,
           ...(options.toolContext?.runId === model.runId ? { toolContext: options.toolContext } : {}) }
         const key = JSON.stringify([exchange.id, block.id])
         retained.add(key)

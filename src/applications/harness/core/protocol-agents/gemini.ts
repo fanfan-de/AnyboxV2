@@ -2,7 +2,7 @@ import type { NativeObject } from '@anybox/models'
 import type { ProtocolConclusion } from '../run/program.js'
 import { modelFailure } from '../run/model.js'
 import { validateToolBatch } from '../run/domain.js'
-import { completed, nativeArray, nativeObject, nativeString, nonempty, toolResult } from './shared.js'
+import { completed, nativeArray, nativeObject, nativeString, nonempty, toolResult, toolImageInputs } from './shared.js'
 import type { ExchangeRunner } from './shared.js'
 
 export async function runGemini(runner: ExchangeRunner, initial: NativeObject): Promise<ProtocolConclusion> {
@@ -28,7 +28,7 @@ export async function runGemini(runner: ExchangeRunner, initial: NativeObject): 
       return completed(reply, text.join(''))
     }
     const batch = validateToolBatch(calls), results = await runner.tools(batch)
-    intent = { input: batch.map((call, index) => ({ type: 'function_result', call_id: call.id, name: call.name,
-      result: [{ type: 'text', text: toolResult(results[index]!) }] })) }
+    intent = { input: [...batch.map((call, index) => ({ type: 'function_result', call_id: call.id, name: call.name,
+      result: [{ type: 'text', text: toolResult(results[index]!) }] })), ...toolImageInputs('gemini-interactions', results)] }
   }
 }

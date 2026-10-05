@@ -4,6 +4,8 @@ import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, compl
 import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
 import { createApplyPatchComponent } from '../dist/applications/harness/core/tool/apply-patch-component.js'
+import { createProcessToolsComponent } from '../dist/applications/harness/core/tool/process-component.js'
+import { createFileToolsComponent } from '../dist/applications/harness/core/tool/files-component.js'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -421,10 +423,13 @@ test('revoking Bash waits for its done and prevents another model step', async (
     })
     await bashFiber
     await root.installComponent(createApplyPatchComponent())
+    await root.installComponent(createProcessToolsComponent())
+    await root.installComponent(createFileToolsComponent())
     await root.installComponent(createRunRuntimeComponent(inputs))
     await installTestProtocolAgents(root)
       await root.installComponent(createRunComponent(inputs, agents))
     const project = await root.get(projectServiceKey).openProject(directory)
+    await root.get(sessionServiceKey).setAgentTools('assistant', { toolIds: ['anybox.bash', 'anybox.apply_patch'], expectedRevision: 0 })
     const session = await root.get(sessionServiceKey).createSession(project.id, 'assistant')
     const runs = root.get(runServiceKey)
     const run = await runs.startRun({ sessionId: session.id, parentNodeId: null, input: 'Use Bash', idempotencyKey: 'one' })

@@ -19,7 +19,7 @@ async function host(t, executing = false) {
   const inputs = { now: () => 'now', newId: ids() }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
-  let harness, llm
+  let harness, llm, sessionFiber
   if (executing) {
     llm = controlledModels()
     await root.installComponent(llm.component())
@@ -27,7 +27,8 @@ async function host(t, executing = false) {
   } else {
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
-    await root.installComponent(createSessionComponent(inputs, agents))
+    sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
+    await sessionFiber
   }
   const sessions = root.get('harness.sessions'), records = root.get('harness.session-runs'), db = root.get('local-storage')
   const project = await root.get('harness.projects').openProject(directory)
@@ -36,9 +37,54 @@ async function host(t, executing = false) {
     for (const call of llm?.calls ?? []) { call.result.resolve('Cleanup'); call.done.resolve() }
     try { await root.fiber.dispose() } finally { rmSync(directory, { recursive: true, force: true }) }
   })
-  return { directory, root, harness, llm, sessions, records, db, session }
+  return { directory, root, harness, llm, sessions, records, db, session, sessionFiber, inputs }
 }
 const input = (sessionId, id, parentNodeId = null) => ({ sessionId, input: id, parentNodeId, idempotencyKey: id })
+
+test('Session titles are available from lists before history loads and retain first admission across failure, branches and restart', async t => {
+  const f = await host(t)
+  assert.equal(f.session.title, null)
+  assert.deepEqual(await f.sessions.listSessions(f.session.projectId), [f.session])
+  const raw = 'First\n\t accepted   input', title = 'First accepted input'
+  const first = { ...input(f.session.id, 'z-first'), input: raw }
+  const registration = nativeRegistration(first)
+  registration.input.text = 'Task template content must not become the title'
+  await f.records.registerRun('z-first', first, 'same-time', [], modelSnapshot(), registration)
+  const saved = await f.db.read(reader => reader.get('SELECT input, native_input_json FROM harness_runs WHERE id = ?', ['z-first']))
+  // This reads only the Session list, before asking for nodes, Run history or a selected path.
+  assert.equal((await f.sessions.listSessions(f.session.projectId))[0].title, title)
+  await f.records.settleRun('z-first', { kind: 'failed', error: 'test failure', category: 'provider-failure' }, 'same-time')
+  assert.equal((await f.sessions.getSession(f.session.id)).title, title)
+  assert.deepEqual((await f.sessions.listNodes(f.session.id, null)).nodes, [])
+
+  // Same timestamps and reverse lexical IDs must keep the first accepted input.
+  await registerNativeRun(f.records, 'a-later-root', input(f.session.id, 'a-later-root'), 'same-time')
+  const root = await f.records.settleRun('a-later-root', completedOutcome('a-later-root', 'root answer'), 'same-time')
+  await registerNativeRun(f.records, 'child', input(f.session.id, 'child', root.resultNodeId), 'same-time')
+  await f.records.settleRun('child', completedOutcome('child', 'child answer'), 'same-time')
+  assert.equal((await f.sessions.getNodePath(f.session.id, root.resultNodeId))[0].input, 'a-later-root')
+  assert.equal((await f.sessions.selectSessionModel(f.session.id, 'default', 'chat-completions')).title, title)
+  const archived = await f.sessions.archiveSession(f.session.id)
+  assert.equal(archived.title, title)
+  assert.deepEqual(await f.sessions.listArchivedSessions(), [archived])
+  assert.equal((await f.sessions.restoreSession(f.session.id)).title, title)
+
+  await f.sessionFiber.dispose()
+  await f.root.installComponent(createSessionComponent(f.inputs, agents))
+  const restarted = f.root.get('harness.sessions')
+  assert.equal((await restarted.listSessions(f.session.projectId))[0].title, title)
+  assert.equal((await restarted.getSession(f.session.id)).title, title)
+  assert.deepEqual(await f.db.read(reader => reader.get('SELECT input, native_input_json FROM harness_runs WHERE id = ?', ['z-first'])), saved)
+})
+
+test('Session titles bound Unicode input without changing the original Run', async t => {
+  const f = await host(t), raw = '😀'.repeat(125)
+  await registerNativeRun(f.records, 'long-title', { ...input(f.session.id, 'long-title'), input: raw }, 'now')
+  const title = (await f.sessions.listSessions(f.session.projectId))[0].title
+  assert.equal(title, `${'😀'.repeat(119)}…`)
+  assert.equal(Array.from(title).length, 120)
+  assert.equal((await f.sessions.getRun('long-title')).input, raw)
+})
 
 test('first native admission atomically binds a Session; failure does not release its protocol', async t => {
   const f = await host(t), a = modelSnapshot(), b = { ...modelSnapshot(), protocolId: 'responses', parameters: { protocolId: 'responses', formatVersion: 1, value: {} } }

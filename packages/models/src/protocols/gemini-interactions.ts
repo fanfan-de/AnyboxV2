@@ -10,6 +10,16 @@ const protocolId = 'gemini-interactions', levels = ['minimal', 'low', 'medium', 
 const authentication = { authHeader: 'google-api-key' } as const;
 const lifecycleEvents = ['interaction.created', 'interaction.status_update', 'interaction.in_progress', 'interaction.requires_action'];
 const streamEvents = [...lifecycleEvents, 'interaction.completed', 'step.start', 'step.delta', 'step.stop', 'error'];
+const generationBlockedCodes = ['safety', 'recitation', 'language', 'prohibited_content', 'spii', 'blocklist', 'image_safety', 'image_prohibited_content', 'image_recitation', 'image_other', 'content_blocked'];
+function generationBlocked(value: JsonValue | undefined): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const code = (value as NativeObject).code;
+  return typeof code === 'string' && generationBlockedCodes.includes(code);
+}
+const interactionRequestOptions = { ...authentication, classifyHttpError(body: unknown) {
+  if (body !== null && typeof body === 'object' && !Array.isArray(body) && generationBlocked((body as NativeObject).error)) return 'refused-response' as const;
+  return undefined;
+} };
 function failureDiagnostic(stage: string, event?: NativeObject): NativeObject {
   const known = (value: JsonValue | undefined, allowed: readonly string[]) => typeof value === 'string' && allowed.includes(value) ? value : 'unknown';
   const detail = (value: JsonValue | undefined): NativeObject | undefined => value && typeof value === 'object' && !Array.isArray(value) ? value as NativeObject : undefined;
@@ -26,11 +36,12 @@ function validateIntent(intent: NativeObject, images = true): void {
 }
 function validateResponse(raw: unknown): NativeObject {
   const response = native(raw);
-  if (response.errors !== undefined && array(response.errors).length || response.status === 'failed' || response.status === 'cancelled') throw modelsError('provider-failure');
+  if (generationBlocked(response.error) || response.errors !== undefined && array(response.errors).some(generationBlocked)) throw modelsError('refused-response');
+  if (response.error != null || response.errors !== undefined && array(response.errors).length || response.status === 'failed' || response.status === 'cancelled') throw modelsError('provider-failure');
   if (!['completed', 'requires_action', 'incomplete', 'budget_exceeded'].includes(string(response.status))) throw modelsError('invalid-response');
   const complete = response.status === 'completed' || response.status === 'requires_action', ids = new Set<string>(); let calls = 0;
   for (const value of array(response.steps)) {
-    const step = object(value); if (step.error != null) throw modelsError('provider-failure');
+    const step = object(value); if (step.error != null) throw modelsError(generationBlocked(step.error) ? 'refused-response' : 'provider-failure');
     if (step.type === 'model_output') for (const item of step.content === undefined ? [] : array(step.content)) { const content = object(item); if (content.type === 'text') string(content.text); }
     else if (step.type === 'thought') { if (step.signature !== undefined) string(step.signature); if (step.summary !== undefined) array(step.summary); }
     else if (step.type === 'function_call') { const id = nonempty(step.id); if (ids.has(id)) throw modelsError('invalid-response'); ids.add(id); nonempty(step.name); if (complete) object(step.arguments); calls++; }
@@ -43,6 +54,22 @@ function commit(state: NativeObject, intent: NativeObject, response: NativeObjec
   validateIntent(intent);
   const value = validateResponse(response), next = conversation(state, intent, 'input', ['system_instruction', 'tools']);
   return native({ ...next, input: [...array(next.input), ...array(value.steps)] });
+}
+function readGeneratedText(response: NativeObject): string {
+  const value = validateResponse(response), text: string[] = [];
+  for (const item of array(value.steps)) {
+    const step = object(item);
+    if (step.type === 'model_output') {
+      for (const item of step.content === undefined ? [] : array(step.content)) {
+        const content = object(item);
+        if (content.type !== 'text') throw modelsError('invalid-response');
+        text.push(string(content.text));
+      }
+    } else if (['function_call', 'function_result', 'google_search_call', 'google_search_result', 'code_execution_call', 'code_execution_result', 'url_context_call', 'url_context_result', 'file_search_call', 'file_search_result', 'google_maps_call', 'google_maps_result'].includes(string(step.type))) throw modelsError('capability-unsupported');
+    else if (step.type !== 'thought') throw modelsError('invalid-response');
+  }
+  if (value.status !== 'completed') throw modelsError('incomplete-response');
+  return nonempty(text.join('\n'));
 }
 function discoverPage(raw: unknown): { models: readonly DiscoveredModel[]; nextPath?: string } {
   const page = object(raw);
@@ -60,7 +87,7 @@ function discoverPage(raw: unknown): { models: readonly DiscoveredModel[]; nextP
 export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}): NativeProtocol {
   options = captureOptions(options);
   return {
-    descriptor: { id: protocolId, version: '2.1.0', name: 'Gemini Interactions', connectionFields,
+    descriptor: { id: protocolId, version: '2.2.0', name: 'Gemini Interactions', responseModes: ['stream', 'complete'], connectionFields,
       modelFields: [{ key: 'generation_config.max_output_tokens', label: 'Maximum output tokens', type: 'number', min: 1, max: 2_147_483_647, integer: true },
         { key: 'generation_config.thinking_level', label: 'Thinking level', type: 'enum', values: levels }, { key: 'generation_config.thinking_summaries', label: 'Thinking summaries', type: 'enum', values: ['auto', 'none'] }], supportsDiscovery: true, supportsCheck: true },
     validateProvider: provider => validateProvider(provider, protocolId),
@@ -71,7 +98,12 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
     },
     effectiveCapabilities: declared => ({ ...effectiveCapabilities(declared), imageInput: declared.imageInput.support === 'supported' }),
     recordFormatVersion: 2,
-    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0' || version === '2.2.0',
+    textGeneration: {
+      createIntent: input => native({ input: [{ type: 'user_input', content: [{ type: 'text', text: input.input }] }], ...(input.instruction === undefined ? {} : { system_instruction: input.instruction }) }),
+      validateParameters: () => {},
+      readText: readGeneratedText,
+    },
     resourceIds: geminiImages.ids,
     restore: records => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
@@ -83,7 +115,7 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
       requireLocalTools(input.intent.tools, input.capabilities.tools);
       const next = conversation(input.state, input.intent, 'input', ['system_instruction', 'tools']);
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(tool.parameters); }
-      return native({ ...input.parameters, ...next, model: input.remoteModelId, store: false, stream: input.capabilities.streaming });
+      return native({ ...input.parameters, ...next, model: input.remoteModelId, store: false, stream: input.responseMode === undefined ? input.capabilities.streaming : input.responseMode === 'stream' });
     },
     exchange(input) {
       return withImages(geminiImages, input, (wire, signal) => request(options, { ...input, signal }, 'interactions', wire, async reader => {
@@ -97,7 +129,7 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
             if (terminal) throw modelsError('invalid-response');
             const event = native(parseJson(data)), type = string(event.event_type);
             lastEvent = event;
-            if (type === 'error') throw modelsError('provider-failure');
+            if (type === 'error') throw modelsError(generationBlocked(event.error) ? 'refused-response' : 'provider-failure');
             if (lifecycleEvents.includes(type)) { input.onEvent(event); stage = 'sse-stream'; return; }
             if (type === 'interaction.completed') {
               stage = 'sse-terminal';
@@ -132,7 +164,7 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
           if (isModelsError(error) && (error.code === 'invalid-response' || error.code === 'provider-failure')) throw withNativeDiagnostic(error, failureDiagnostic(stage, lastEvent));
           throw error;
         }
-      }, authentication));
+      }, interactionRequestOptions));
     },
     commit: input => commit(input.state, input.intent, input.response),
     discover: input => pagedDiscover(options, input, 'models?pageSize=1000', discoverPage, authentication),

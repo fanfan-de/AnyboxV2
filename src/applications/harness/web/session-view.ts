@@ -9,9 +9,11 @@ import type { SessionController } from './session-client.js'
 import { isActive } from './session-client.js'
 import type { Pane } from './workspace-layout.js'
 import { createTrajectoryView } from './trajectory-view.js'
+import { conversationTree } from './conversation-tree.js'
+import { createConversationTreeView } from './conversation-tree-view.js'
 import { getProtocolWebModule, type MountedProtocolTurn } from './protocols/modules.js'
 import { renderMarkdown } from './markdown.js'
-import { protocolToolContext, toolContextReadiness } from './tool-call-view.js'
+import { protocolToolContext, toolContextReadiness, toolSelectionDisplayName } from './tool-call-view.js'
 export { createToolCallCard } from './tool-call-view.js'
 
 export interface SessionScrollPosition {
@@ -46,6 +48,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     </div>
     <div class="branch-navigation" aria-label="对话与轨迹导航">
       <div class="branch-controls" aria-label="对话分支导航">
+      <button class="branch-tree-toggle" type="button" data-toggle-tree aria-expanded="false" aria-label="打开分支总览" title="打开分支总览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 5v14M6 9h9M6 17h9"/><circle cx="6" cy="4" r="2"/><circle cx="17" cy="9" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>分支</span></button>
       <button type="button" data-go-root title="返回会话起点" aria-label="返回会话起点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 11 9-8 9 8M5 9v12h14V9M9 21v-8h6v8"/></svg></button>
       <button type="button" data-go-parent title="查看上一级对话" aria-label="查看上一级对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
       <span class="branch-position"></span>
@@ -57,6 +60,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
         <button type="button" role="tab" data-view-mode="runs" aria-selected="false" tabindex="-1">轨迹<span class="run-count" hidden><span class="run-count-wide"></span><span class="run-count-compact"></span></span></button>
       </div>
     </div>
+    <aside class="conversation-tree-panel" aria-label="分支总览" hidden inert></aside>
     <div class="archive-banner" hidden><span>此会话已归档，仅供查看。</span><button type="button" data-restore-session>恢复会话</button></div>
     <div class="pane-notice notice" role="alert" hidden></div>
     <div class="transcript" role="log" aria-label="对话内容" aria-live="polite" tabindex="0" hidden></div>
@@ -68,6 +72,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     </div>
     <form class="composer">
       <div class="composer-model-row"><select class="composer-model" aria-label="本会话使用的模型"></select></div>
+      <p class="composer-tools" aria-label="本会话固定工具" hidden></p>
       <p class="composer-model-hint" role="status" hidden></p>
       <div class="composer-images" aria-label="待发送图片" aria-live="polite" hidden></div>
       <textarea rows="2" placeholder="随心输入" aria-label="消息"></textarea>
@@ -103,12 +108,39 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   let locateRunId: string | undefined
   const turns = new Map<string, MountedProtocolTurn>()
   let renderNodes: Node[] = []
-  let conversationTitle: string | undefined
   const active = isActive
   const listeners = new AbortController(), options = { signal: listeners.signal }
   const measurable = (container: HTMLElement): boolean => !element.hidden && element.isConnected &&
     element.clientWidth > 0 && element.clientHeight > 0 && !container.hidden && container.clientWidth > 0 && container.clientHeight > 0
   const selectMode = (mode: SessionViewMode): void => { panel.captureScroll(); controller.setViewMode(mode) }
+  const treeContainer = get<HTMLElement>('.conversation-tree-panel'), treeToggle = get<HTMLButtonElement>('[data-toggle-tree]')
+  treeContainer.id = `agent--conversation-tree-${pane.id}`
+  treeToggle.setAttribute('aria-controls', treeContainer.id)
+  let treeOpen = false
+  const closeTree = (restoreFocus = true): void => {
+    treeOpen = false
+    panel.render()
+    if (restoreFocus) treeToggle.focus({ preventScroll: true })
+  }
+  const treeView = createConversationTreeView(treeContainer, {
+    navigate: id => { selectMode('dialogue'); void controller.navigate(id) },
+    showRun: id => { locateRunId = id; selectMode('runs'); controller.focusRun(id) },
+    close: () => closeTree(),
+  })
+  treeToggle.addEventListener('click', () => {
+    treeOpen = !treeOpen
+    panel.render()
+    if (treeOpen) treeView.locate()
+  }, options)
+  element.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && treeOpen && !treeContainer.hidden) {
+      event.preventDefault(); event.stopPropagation(); closeTree()
+    }
+  }, options)
+  element.addEventListener('pointerdown', event => {
+    const target = event.target as Node | null
+    if (treeOpen && !treeContainer.hidden && !treeContainer.contains(target) && !treeToggle.contains(target)) closeTree(false)
+  }, options)
   for (const button of viewButtons) button.addEventListener('click', () => selectMode(button.dataset.viewMode as SessionViewMode), options)
   viewSwitch.addEventListener('keydown', event => {
     const current = viewButtons.indexOf(event.target as HTMLButtonElement)
@@ -205,6 +237,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     }
     if (data.cancelRun) void controller.cancel(data.cancelRun)
     if (data.viewNode) { selectMode('dialogue'); void controller.navigate(data.viewNode) }
+    if (data.locateNode) { treeOpen = true; panel.render(); treeView.locate(data.locateNode) }
     const node = controller.snapshot().path.find(item => item.id === (data.editNode ?? data.regenerateNode))
     if (node && !controller.snapshot().session?.archivedAt && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images, node.files).then(() => messageInput.focus())
     if (node && data.regenerateNode) void controller.regenerate(node)
@@ -275,6 +308,11 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
     render() {
       panel.captureScroll()
       const state = controller.snapshot()
+      const selectedTools = state.session?.toolSelection?.tools
+      const toolsSummary = get<HTMLElement>('.composer-tools')
+      toolsSummary.hidden = !selectedTools
+      toolsSummary.textContent = selectedTools ? `工具：${selectedTools.length ? selectedTools.map(tool => toolSelectionDisplayName(tool.toolId)).join('、') : '未启用'} · 创建时固定` : ''
+      const tree = conversationTree(state)
       visibleMode = state.position.viewMode === 'runs' ? 'runs' : 'dialogue'
       const records = visibleMode === 'runs'
       runHistory.hidden = !records
@@ -284,6 +322,14 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       get('.branch-controls').hidden = records
       get('.branch-controls').inert = records
       get('.run-history-scope').hidden = !records
+      const showTree = treeOpen && !records
+      treeContainer.hidden = !showTree
+      treeContainer.inert = !showTree
+      treeToggle.disabled = !state.session
+      treeToggle.setAttribute('aria-expanded', String(showTree))
+      treeToggle.setAttribute('aria-label', showTree ? '关闭分支总览' : '打开分支总览')
+      treeToggle.title = showTree ? '关闭分支总览' : '打开分支总览'
+      if (showTree) treeView.update(state, tree)
       for (const button of viewButtons) {
         const selected = button.dataset.viewMode === visibleMode
         button.setAttribute('aria-selected', String(selected))
@@ -297,10 +343,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       get('.run-count-compact').textContent = String(activeCount)
       get('[data-view-mode="runs"]').setAttribute('aria-label', activeCount ? `轨迹，${activeCount} 个运行中` : '轨迹')
       get('[data-view-mode="runs"]').title = activeCount ? `${activeCount} 个运行中（含正在取消）` : '查看本会话全部运行'
-      if (!state.loading && !conversationTitle) {
-        const first = state.path[0] ?? state.children[0] ?? state.runs.at(-1)
-        conversationTitle = first?.input || (first?.images?.length ? `${first.images.length} 张图片` : undefined)
-      }
+      const conversationTitle = state.session?.title
       if (conversationTitle) {
         get('.pane-title strong').textContent = conversationTitle
         get('.pane-title strong').title = conversationTitle
@@ -421,7 +464,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : readOnly ? state.session?.archivedAt ? '已归档会话' : '旧版会话历史' : state.children.length ? '从这里，继续你的想法' : activeCount ? 'Agent 正在思考…' : state.runs.length ? '你正在会话起点' : '有什么想法？'
       get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : readOnly ? state.children.length ? '选择已有分支，查看保存的对话。' : state.session?.archivedAt ? '恢复此会话后可继续使用。' : '此会话仅供查看；请新建会话继续使用。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Anybox Harness 一起完成。'
       trajectory.update(state)
-      const key = JSON.stringify([state.path, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.position.follow, state.busy, readOnly, state.session?.historyMode, [...state.views], state.traceLoading && [...state.traceLoading.states]])
+      const key = JSON.stringify([state.path, state.children, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.position.follow, state.busy, readOnly, state.session?.historyMode, [...state.views], state.traceLoading && [...state.traceLoading.states]])
       if (key === contentKey) { panel.restoreScroll(savedScroll); return }
       contentKey = key
       const content = records ? runHistory : transcript
@@ -463,8 +506,26 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         }
         const actions = document.createElement('div')
         actions.className = 'node-actions'
+        const siblings = tree.children.get(node.parentId) ?? [], siblingIndex = siblings.findIndex(value => value.id === node.id)
+        if (siblings.length > 1 && siblingIndex >= 0) {
+          const versions = document.createElement('div'); versions.className = 'node-versions'
+          versions.setAttribute('aria-label', '此轮分支切换')
+          const previous = action('‹', 'viewNode', siblings[Math.max(0, siblingIndex - 1)]!.id)
+          previous.setAttribute('aria-label', '查看此轮的上一个分支'); previous.title = '查看此轮的上一个分支'
+          previous.disabled = siblingIndex === 0 || state.loading
+          const label = action(`${siblingIndex + 1} / ${siblings.length}`, 'locateNode', node.id)
+          label.className = 'node-version-label'; label.title = '在分支总览中定位此轮'
+          label.setAttribute('aria-label', `此轮有 ${siblings.length} 个分支，当前第 ${siblingIndex + 1} 个；在分支总览中定位`)
+          const next = action('›', 'viewNode', siblings[Math.min(siblings.length - 1, siblingIndex + 1)]!.id)
+          next.setAttribute('aria-label', '查看此轮的下一个分支'); next.title = '查看此轮的下一个分支'
+          next.disabled = siblingIndex === siblings.length - 1 || state.loading
+          versions.append(previous, label, next); actions.append(versions)
+        }
         actions.append(action(readOnly ? '查看此处' : '从这里继续', 'viewNode', node.id), action('编辑重发', 'editNode', node.id), action('重新生成', 'regenerateNode', node.id))
-        for (const button of actions.querySelectorAll('button')) button.disabled = Boolean(readOnly && !button.dataset.viewNode) || state.busy || Boolean(state.pending)
+        for (const button of actions.querySelectorAll<HTMLButtonElement>('button')) {
+          if (button.closest('.node-versions')) continue
+          button.disabled = Boolean(readOnly && !button.dataset.viewNode) || state.busy || Boolean(state.pending)
+        }
         renderNodes.push(actions)
       }
       for (const run of progressRuns) {
@@ -489,7 +550,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       else if (focusedData) [...content.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
     },
     setProjectName(name) { get('small').textContent = name; element.setAttribute('aria-label', `${name} · 会话 ${(splitScopedId(pane.sessionId)?.id ?? pane.sessionId).slice(0, 8)}`) },
-    dispose() { const scroll = panel.captureScroll(); fileView.dispose(); trajectory.dispose(); listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return scroll },
+    dispose() { const scroll = panel.captureScroll(); fileView.dispose(); trajectory.dispose(); treeView.dispose(); listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return scroll },
   }
   panel.render()
   return panel

@@ -1,15 +1,30 @@
 import type { FileRef } from '../project-files/domain.js'
 /** Immutable conversation facts, independent of persistence and execution. */
 import type { ImageRef } from '../image/port.js'
+import { createToolSelection } from '../tool/catalog.js'
+import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 export interface Session {
   readonly id: string
+  readonly title: string | null
   readonly projectId: string
   readonly agentId: string
   readonly modelId: string | null
+  readonly toolSelection: ToolSelectionSnapshot
   readonly historyMode: 'dialogue-v1' | 'native-local-v1'
   readonly protocolId: string | null
   readonly archivedAt: string | null
   readonly createdAt: string
+}
+
+/** A bounded display label from the first durable user input, independent of the selected branch. */
+export function deriveSessionTitle(input: string, imageCount = 0, fileCount = 0): string | null {
+  const text = input.replace(/\s+/gu, ' ').trim()
+  if (text) {
+    const characters = Array.from(text)
+    return characters.length > 120 ? `${characters.slice(0, 119).join('')}…` : text
+  }
+  const attachments = [imageCount ? `${imageCount} 张图片` : '', fileCount ? `${fileCount} 个文件` : ''].filter(Boolean)
+  return attachments.length ? attachments.join(' · ') : null
 }
 
 /** Initialization preferences for future sessions; existing selections are independent. */
@@ -19,6 +34,22 @@ export interface SessionDefaults {
   readonly fallbackModelId: string | null
   readonly effectiveModelId: string | null
   readonly revision: number
+}
+
+/** Agent-owned tool defaults are copied into each newly created Session. */
+export interface AgentToolsSelection {
+  readonly agentId: string
+  readonly toolIds: readonly string[]
+  readonly revision: number
+}
+
+export interface AgentToolsInput {
+  readonly toolIds: readonly string[]
+  readonly expectedRevision: number
+}
+
+export function agentToolsConflict(): Error & { readonly code: string } {
+  return Object.assign(new Error('Agent tools changed; reload before saving'), { code: 'agent-tools-conflict' })
 }
 
 export function resolveSessionModel(requested: string | undefined, saved: string | null, fallback: string | null): string | null {
@@ -64,6 +95,7 @@ export function assemblePath(sessionId: string, parentId: string | null, ancesto
   return Object.freeze([...ancestors].reverse())
 }
 
-export function createSession(id: string, projectId: string, agentId: string, now: string, modelId: string | null = null): Session {
-  return Object.freeze({ id, projectId, agentId, modelId, archivedAt: null, createdAt: now, historyMode: 'native-local-v1' as const, protocolId: null })
+export function createSession(id: string, projectId: string, agentId: string, now: string, modelId: string | null = null,
+  toolSelection: ToolSelectionSnapshot = createToolSelection()): Session {
+  return Object.freeze({ id, title: null, projectId, agentId, modelId, toolSelection, archivedAt: null, createdAt: now, historyMode: 'native-local-v1' as const, protocolId: null })
 }

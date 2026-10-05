@@ -430,6 +430,7 @@ for (const protocolId of ['responses', 'anthropic-messages', 'gemini-interaction
   try {
     const session = await f.harness.createSession(f.project.id, 'assistant', 'default'), picture = await importPicture(f, session.id)
     const accepted = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: '', images: [{ assetId: picture.image.assetId }], idempotencyKey: 'image' })
+    assert.equal((await f.harness.listSessions(f.project.id))[0].title, '1 张图片')
     if (cancel) { await entered; await f.harness.cancelRun(accepted.id); release() }
     const settled = await f.harness.waitRun(accepted.id)
     assert.equal(settled.status, cancel ? 'cancelled' : 'failed'); assert.equal(settled.resultNodeId, undefined)

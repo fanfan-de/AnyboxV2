@@ -2,7 +2,7 @@ import type { NativeObject } from '@anybox/models'
 import type { ProtocolConclusion } from '../run/program.js'
 import { modelFailure } from '../run/model.js'
 import { validateToolBatch } from '../run/domain.js'
-import { completed, jsonArguments, nativeArray, nativeObject, nativeString, nonempty, toolResult } from './shared.js'
+import { completed, jsonArguments, nativeArray, nativeObject, nativeString, nonempty, toolResult, toolImageInputs } from './shared.js'
 import type { ExchangeRunner } from './shared.js'
 
 /** All Chat Completions providers share this native Agent flow. */
@@ -22,7 +22,7 @@ export async function runChat(runner: ExchangeRunner, initial: NativeObject): Pr
     if (choice.finish_reason === 'tool_calls') {
       if (!calls.length) throw modelFailure('invalid-response')
       const batch = validateToolBatch(calls), results = await runner.tools(batch)
-      intent = { messages: batch.map((call, index) => ({ role: 'tool', tool_call_id: call.id, content: toolResult(results[index]!) })) }
+      intent = { messages: [...batch.map((call, index) => ({ role: 'tool', tool_call_id: call.id, content: toolResult(results[index]!) })), ...toolImageInputs('chat-completions', results)] }
     } else if (choice.finish_reason === 'stop') {
       if (calls.length) throw modelFailure('invalid-response')
       return completed(reply, message.content == null ? '' : nativeString(message.content))

@@ -2,12 +2,19 @@ import { installHarnessServerCore } from '../../dist/applications/harness/core/i
 import { runAdmissionServiceKey } from '../../dist/applications/harness/core/run/component.js'
 
 /** Test application host: its close owns the root; the Harness facade has no close method. */
-export async function createTestHarnessServerCore(root, options) {
+export async function createTestHarnessServerCore(root, options, { legacyTools = true } = {}) {
   let installation
   try { installation = await installHarnessServerCore(root, options) }
   catch (error) {
     try { await root.fiber.dispose() } catch (cleanup) { throw new AggregateError([error, cleanup], 'Test application startup and cleanup failed') }
     throw error
+  }
+  // Existing loop fixtures exercise the original contracts explicitly. Production
+  // and library integration fixtures use the recommended mixed-source defaults.
+  if (legacyTools) for (const agent of options.agents) {
+    const selection = await installation.api.getAgentTools(agent.id)
+    if (selection.revision === 0) await installation.api.setAgentTools(agent.id,
+      { toolIds: ['anybox.bash', 'anybox.apply_patch'], expectedRevision: selection.revision })
   }
   let closing
   const close = () => {

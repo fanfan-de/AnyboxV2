@@ -121,6 +121,7 @@ export interface ProtocolDescriptor {
   readonly modelFields: readonly FormField[];
   readonly supportsDiscovery: boolean;
   readonly supportsCheck: boolean;
+  readonly responseModes?: readonly import('./native-types.js').NativeResponseMode[];
   readonly sourceMappings?: readonly { readonly sourceId: string; readonly providerId: string; readonly protocolIds: readonly string[] }[];
 }
 export interface DiscoveredModel {

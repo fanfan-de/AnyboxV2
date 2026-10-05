@@ -74,7 +74,6 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   let resizeCleanup: (() => void) | undefined
   let dragCleanup: (() => void) | undefined, suppressClick = false
   const bundles = new Map<string, { controller: SessionController; view?: SessionPanel; scroll: SessionScrollPosition }>()
-  const sessionLabels = new Map<string, string>()
   const multi = api as Partial<HarnessClient>
   const changes = multi.changes ? multi.changes({
     refresh(id) { bundles.get(id)?.controller.notifyChange() },
@@ -153,6 +152,8 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   }
   const size = (): Size => ({ width: host.clientWidth, height: host.clientHeight })
   const activePane = () => panes(state.root).find(pane => pane.id === state.activePaneId)
+  const titleFor = (ref: SessionRef) => bundles.get(ref.sessionId)?.controller.snapshot().session?.title ||
+    sessionIndex.get(ref.projectId)?.sessions.find(session => session.id === ref.sessionId)?.title
   const sidebarState = createSidebarStateStore(`${layoutKey}.sidebars.v1`, { storage,
     onStorageError: () => showNotice('浏览器无法保存边栏与文件视图位置，当前工作区仍可使用。'),
   })
@@ -240,10 +241,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       button.classList.toggle('selected', button.dataset.sessionId === active?.sessionId)
       button.classList.toggle('opened', panes(state.root).some(item => item.sessionId === button.dataset.sessionId))
       const known = bundles.get(button.dataset.sessionId!)?.controller.snapshot()
-      const first = known?.path[0] ?? known?.children[0] ?? known?.runs.at(-1)
-      const firstInput = first?.input || (first?.images?.length ? `${first.images.length} 张图片` : undefined)
-      if (!known?.loading && firstInput && !sessionLabels.has(button.dataset.sessionId!)) sessionLabels.set(button.dataset.sessionId!, firstInput)
-      const label = sessionLabels.get(button.dataset.sessionId!)
+      const label = known?.session?.title
       if (label) {
         button.querySelector<HTMLElement>('.session-name')!.textContent = label
         button.title = label
@@ -252,6 +250,11 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     sessionMenu.refresh()
     for (const button of tabs.querySelectorAll<HTMLButtonElement>('button')) {
       button.setAttribute('aria-pressed', String(button.dataset.paneId === state.activePaneId))
+      const pane = panes(state.root).find(item => item.id === button.dataset.paneId)
+      if (pane) {
+        button.textContent = `${projects.find(item => item.id === pane.projectId)?.name ?? '项目'} · ${titleFor(pane) || (splitScopedId(pane.sessionId)?.id ?? pane.sessionId).slice(0, 8)}`
+        button.title = button.textContent
+      }
     }
     syncFileSidebar()
   }
@@ -397,7 +400,8 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       const button = document.createElement('button')
       button.type = 'button'
       button.dataset.paneId = pane.id
-      button.textContent = `${projects.find(item => item.id === pane.projectId)?.name ?? '项目'} · ${(splitScopedId(pane.sessionId)?.id ?? pane.sessionId).slice(0, 8)}`
+      button.textContent = `${projects.find(item => item.id === pane.projectId)?.name ?? '项目'} · ${titleFor(pane) || (splitScopedId(pane.sessionId)?.id ?? pane.sessionId).slice(0, 8)}`
+      button.title = button.textContent
       return button
     }))
     splitElements.clear()
@@ -459,7 +463,8 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       button.draggable = false
       const name = document.createElement('span'), time = document.createElement('time')
       name.className = 'session-name'
-      name.textContent = `会话 · ${(splitScopedId(item.id)?.id ?? item.id).slice(0, 8)}`
+      name.textContent = item.title || `会话 · ${(splitScopedId(item.id)?.id ?? item.id).slice(0, 8)}`
+      button.title = name.textContent
       time.className = 'session-time'
       time.dateTime = item.createdAt
       const date = new Date(item.createdAt)

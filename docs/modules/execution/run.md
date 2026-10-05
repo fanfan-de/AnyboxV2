@@ -27,9 +27,9 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 
 同一个 Session 和幂等键的并发调用共享一个准备 Promise。相同键但原始输入、图片或文件快照身份/顺序、父节点或显式模型不同会抛出 `idempotency-conflict`。数据库中的已接受 Run 在读取当前 Agent、模型、Prompt 和附件前返回，因此配置更新、归档或草稿过期不会让重复请求重新执行。
 
-首次请求按以下顺序处理：读取 Session，拒绝归档状态和旧历史模式；检查项目目录可用；解析 Agent；以 `input.modelId ?? session.modelId ?? agent.modelId` 选模；检查 Session 固定协议；加载父路径历史和 Session 固定初始化。固定工具声明必须与当前 Bash/Apply Patch 定义精确匹配，否则拒绝续接。
+首次请求按以下顺序处理：读取 Session，拒绝归档状态和旧历史模式；检查项目目录可用；解析 Agent；以 `input.modelId ?? session.modelId ?? agent.modelId` 选模；检查 Session 固定协议；加载父路径历史和 Session 固定初始化。固定工具声明必须与受信静态目录对应版本精确匹配，Session 工具选择快照也须验证；否则拒绝续接。Agent 工具配置更改只影响新 Session，不替换已有会话或分支的工具。
 
-没有固定初始化时，[Agent Prompt](../prompts/agent-prompts.md) 提供 instruction/context；模型有效 tools 能力为 true 时声明 Bash 和 Apply Patch，否则为空。task-template 每次重新解析，但只把 `{{input}}` 替换为本次原始输入一次，并保存 v3 raw/text/template/images/files 快照，图片和文件内容不参与模板替换。历史不重新套用模板。
+没有固定初始化时，[Agent Prompt](../prompts/agent-prompts.md) 提供 instruction/context；新 NativeInitialization schemaVersion 2 保存 tool-library-v1 并复制不可变 Session.toolSelection。模型有效 tools 能力为 true 时声明该选择内的全部工具，否则声明为空但选择快照仍保留。旧 schemaVersion 1/known-tools-v1 初始化保持原样。task-template 每次重新解析，但只把 `{{input}}` 替换为本次原始输入一次，并保存 v3 raw/text/template/images/files 快照，图片和文件内容不参与模板替换。历史不重新套用模板。
 
 [协议注册表](protocol-agent-registry.md) 为这些输入创建 `PreparedRunProgram`。Session 的 `registerRun` 事务复核父上下文引用、协议和初始化，并通过图片与项目文件组件的同步 retainIn 固定资源引用，再保存接受结果；引用与 Run 一起提交或回滚。只有 `created: true` 的 Run 会交给 Runtime。事务返回已有幂等结果时，当前多余 program 仍需关闭和释放。
 

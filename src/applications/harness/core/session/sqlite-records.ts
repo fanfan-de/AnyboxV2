@@ -11,8 +11,10 @@ import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
 import type { NativeHistory, NativeInitialization, NativeRunInput, ProtocolBindingSnapshot, ProtocolRecord, StoredProtocolRecord } from '../run/program.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow, StorageTransaction } from '../../../../storage/port.js'
-import { assemblePath, treeError, createSession, resolveSessionModel, sessionDefaultsConflict } from './domain.js'
-import type { Session, SessionDefaults, ConversationNode } from './domain.js'
+import { assemblePath, treeError, createSession, deriveSessionTitle, resolveSessionModel, sessionDefaultsConflict, agentToolsConflict } from './domain.js'
+import type { Session, SessionDefaults, AgentToolsSelection, ConversationNode } from './domain.js'
+import { createToolSelection, defaultToolIds, legacyToolSelection } from '../tool/catalog.js'
+import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 import { requestCancellation, settleRun, validateRunInput } from '../run/domain.js'
 import type { Run, RunInput } from '../run/domain.js'
 import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent } from '../run/execution.js'
@@ -205,7 +207,28 @@ const migrations: readonly StorageMigration[] = [{
       revision INTEGER NOT NULL CHECK(revision > 0)
     )`)
   },
+}, {
+  version: 9,
+  up(tx) {
+    tx.execute('ALTER TABLE harness_sessions ADD COLUMN tool_selection_json TEXT')
+    tx.execute('UPDATE harness_sessions SET tool_selection_json = ?', [JSON.stringify(legacyToolSelection)])
+    tx.execute(`CREATE TABLE harness_agent_tool_settings (
+      agent_id TEXT PRIMARY KEY, tool_ids_json TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK(revision > 0)
+    )`)
+    tx.execute(`CREATE TRIGGER harness_sessions_tools_immutable BEFORE UPDATE OF tool_selection_json ON harness_sessions
+      BEGIN SELECT RAISE(ABORT, 'Session tools are immutable'); END`)
+  },
 }]
+
+function readAgentTools(reader: StorageReader, agentId: string): AgentToolsSelection {
+  const row = reader.get('SELECT tool_ids_json, revision FROM harness_agent_tool_settings WHERE agent_id = ?', [agentId])
+  if (!row) return Object.freeze({ agentId, toolIds: Object.freeze([...defaultToolIds]), revision: 0 })
+  const toolIds: unknown = JSON.parse(required(row, 'tool_ids_json'))
+  if (!Array.isArray(toolIds) || toolIds.some(id => typeof id !== 'string' || !id) || new Set(toolIds).size !== toolIds.length ||
+    typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new Error('invalid stored Agent tool settings')
+  return Object.freeze({ agentId, toolIds: Object.freeze(toolIds as string[]), revision: row.revision })
+}
 
 function readSessionDefaults(reader: StorageReader, agentId: string): SavedSessionDefaults {
   const row = reader.get('SELECT model_id, revision FROM harness_session_defaults WHERE agent_id = ?', [agentId])
@@ -270,7 +293,12 @@ function insertRecords(tx: StorageTransaction, run: Run, records: readonly Proto
     if (record.resourceRefs !== undefined && (record.formatVersion !== 2 || record.kind !== 'request' || !Array.isArray(record.resourceRefs))) throw treeError('invalid-history')
     const resourceIds = new Set<string>()
     for (const ref of record.resourceRefs ?? []) {
-      const image = run.images.find(image => image.assetId === ref.id)
+      const toolImages = tx.all('SELECT observation_json FROM harness_run_operations WHERE run_id = ? AND observation_json IS NOT NULL', [run.id])
+        .flatMap(row => {
+          const observed = JSON.parse(required(row, 'observation_json')) as { tool?: { images?: readonly ImageRef[] } }
+          return observed.tool?.images ?? []
+        })
+      const image = [...run.images, ...toolImages].find(image => image.assetId === ref.id)
       if (!image || resourceIds.has(ref.id) || !isDeepStrictEqual(ref, {
         id: image.assetId, sha256: image.sha256, byteLength: image.byteLength, mimeType: image.mediaType,
       })) throw treeError('invalid-history')
@@ -335,12 +363,28 @@ function nativeHistory(reader: StorageReader, sessionId: string, parentNodeId: s
     checkpoint: JSON.parse(required(lastContext!, 'checkpoint_json')) as JsonValue })
 }
 
-function sessionFromRow(row: StorageRow): Session {
+function sessionTitle(reader: StorageReader, sessionId: string, historyMode: Session['historyMode']): string | null {
+  if (historyMode === 'dialogue-v1') {
+    const first = reader.get('SELECT input FROM harness_nodes WHERE session_id = ? AND parent_id IS NULL ORDER BY seq LIMIT 1', [sessionId])
+    return first ? deriveSessionTitle(required(first, 'input')) : null
+  }
+  // Run rows are retained; rowid preserves admission order even when timestamps and IDs do not.
+  const first = reader.get('SELECT input, native_input_json FROM harness_runs WHERE session_id = ? ORDER BY rowid LIMIT 1', [sessionId])
+  if (!first) return null
+  const title = deriveSessionTitle(required(first, 'input'))
+  if (title) return title
+  const nativeInput = optional(first, 'native_input_json')
+  return deriveSessionTitle('', storedImages(nativeInput).length, storedFiles(nativeInput).length)
+}
+
+function sessionFromRow(row: StorageRow, reader: StorageReader): Session {
+  const id = required(row, 'id'), historyMode = required(row, 'history_mode') as Session['historyMode']
   return Object.freeze({
-    id: required(row, 'id'), projectId: required(row, 'project_id'),
+    id, title: sessionTitle(reader, id, historyMode), projectId: required(row, 'project_id'),
     archivedAt: optional(row, 'archived_at') ?? null,
     agentId: required(row, 'agent_id'), modelId: optional(row, 'model_id') ?? null, createdAt: required(row, 'created_at'),
-    historyMode: required(row, 'history_mode') as Session['historyMode'], protocolId: optional(row, 'protocol_id') ?? null,
+    toolSelection: row.tool_selection_json === null ? legacyToolSelection : Object.freeze(JSON.parse(required(row, 'tool_selection_json')) as ToolSelectionSnapshot),
+    historyMode, protocolId: optional(row, 'protocol_id') ?? null,
   })
 }
 
@@ -507,6 +551,19 @@ export async function openSqliteSessionRecords(
   })
 
   const records: SessionRecords = {
+    getAgentTools: agentId => db.read(reader => readAgentTools(reader, agentId)),
+    setAgentTools(agentId, input) {
+      return db.transaction(tx => {
+        const current = readAgentTools(tx, agentId)
+        if (current.revision !== input.expectedRevision) throw agentToolsConflict()
+        const selection = createToolSelection(input.toolIds), toolIds = selection.tools.map(tool => tool.toolId)
+        const revision = current.revision + 1
+        tx.execute(`INSERT INTO harness_agent_tool_settings (agent_id, tool_ids_json, revision) VALUES (?, ?, ?)
+          ON CONFLICT(agent_id) DO UPDATE SET tool_ids_json = excluded.tool_ids_json, revision = excluded.revision`,
+          [agentId, serialize(toolIds), revision])
+        return Object.freeze({ agentId, toolIds: Object.freeze(toolIds), revision })
+      })
+    },
     getSessionDefaults: agentId => db.read(reader => readSessionDefaults(reader, agentId)),
     setSessionDefaults(agentId, modelId, expectedRevision) {
       return db.transaction(tx => {
@@ -524,57 +581,58 @@ export async function openSqliteSessionRecords(
           throw new Error(`unknown project ${projectId}`)
         }
         const modelId = resolveSessionModel(requestedModelId, readSessionDefaults(tx, agentId).modelId, fallbackModelId)
-        const session = createSession(id, projectId, agentId, now, modelId)
-        tx.execute("INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode) VALUES (?, ?, ?, ?, ?, 'native-local-v1')",
-          [id, projectId, agentId, now, modelId])
+        const toolSelection = createToolSelection(readAgentTools(tx, agentId).toolIds)
+        const session = createSession(id, projectId, agentId, now, modelId, toolSelection)
+        tx.execute("INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json) VALUES (?, ?, ?, ?, ?, 'native-local-v1', ?)",
+          [id, projectId, agentId, now, modelId, serialize(toolSelection)])
         return session
       })
     },
     selectSessionModel(sessionId, modelId, protocolId) {
       return db.transaction(tx => {
         requireSession(tx, sessionId)
-        const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!)
+        const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!, tx)
         if (session.archivedAt !== null) throw treeError('session-archived')
         if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
         if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
         tx.execute('UPDATE harness_sessions SET model_id = ? WHERE id = ?', [modelId, sessionId])
-        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!)
+        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!, tx)
       })
     },
     archiveSession(id) {
       return db.transaction(tx => {
         requireSession(tx, id)
-        const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!)
+        const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!, tx)
         if (session.archivedAt !== null) return session
         if (tx.get("SELECT id FROM harness_runs WHERE session_id = ? AND status IN ('running', 'cancelling') LIMIT 1", [id])) {
           throw treeError('session-has-active-runs')
         }
         tx.execute('UPDATE harness_sessions SET archived_at = ? WHERE id = ?', [inputs.now(), id])
-        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!)
+        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!, tx)
       })
     },
     restoreSession(id) {
       return db.transaction(tx => {
         requireSession(tx, id)
         tx.execute('UPDATE harness_sessions SET archived_at = NULL WHERE id = ?', [id])
-        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!)
+        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!, tx)
       })
     },
     listArchivedSessions() {
       return db.read(reader => Object.freeze(reader.all(
         'SELECT * FROM harness_sessions WHERE archived_at IS NOT NULL ORDER BY archived_at DESC, id',
-      ).map(sessionFromRow)))
+      ).map(row => sessionFromRow(row, reader))))
     },
     getSession(id) {
       return db.read(reader => {
         const row = reader.get('SELECT * FROM harness_sessions WHERE id = ?', [id])
-        return row ? sessionFromRow(row) : undefined
+        return row ? sessionFromRow(row, reader) : undefined
       })
     },
     listSessions(projectId) {
       return db.read(reader => Object.freeze(reader.all(
         'SELECT * FROM harness_sessions WHERE project_id = ? AND archived_at IS NULL ORDER BY created_at, id', [projectId],
-      ).map(sessionFromRow)))
+      ).map(row => sessionFromRow(row, reader))))
     },
     getNode(sessionId, id) {
       return db.read(reader => {
@@ -617,10 +675,11 @@ export async function openSqliteSessionRecords(
       const result = await db.transaction(tx => {
         const prior = accepted(tx, input)
         if (prior) return { run: prior, created: false }
-        const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [input.sessionId])!)
+        const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [input.sessionId])!, tx)
         if (session.archivedAt !== null) throw treeError('session-archived')
         if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
         if (!native || model.schemaVersion !== 3) throw treeError('invalid-history')
+        if (native.initialization.schemaVersion === 2 && !isDeepStrictEqual(native.initialization.toolSelection, session.toolSelection)) throw treeError('history-incompatible')
         const binding = checkedBinding(native.binding)
         if (binding.protocolId !== model.protocolId || (session.protocolId && session.protocolId !== binding.protocolId)) throw treeError('protocol-mismatch')
         nodePath(tx, input.sessionId, input.parentNodeId)
@@ -678,7 +737,8 @@ export async function openSqliteSessionRecords(
       const result = await db.transaction(tx => {
         const run = getRun(tx, runId)
         if (!run) throw new Error(`unknown run ${runId}`)
-        if (run.status !== 'running') return undefined
+        if (operation.cleanup !== undefined && (operation.cleanup !== true || operation.kind !== 'operation')) throw treeError('invalid-history')
+        if (run.status !== 'running' && !(run.status === 'cancelling' && operation.cleanup === true)) return undefined
         if (run.contextVersion !== 'native-local-v1' || !operation.id || !['model', 'operation', 'tool'].includes(operation.kind)) throw treeError('invalid-history')
         if (operation.kind === 'tool' && !operation.tool) throw new Error('missing tool request')
         tx.execute('INSERT INTO harness_run_operations (run_id, id, kind, intent_json, tool_json, status) VALUES (?, ?, ?, ?, ?, ?)',
@@ -696,6 +756,9 @@ export async function openSqliteSessionRecords(
         const run = getRun(tx, runId)
         const operation = tx.get('SELECT * FROM harness_run_operations WHERE run_id = ? AND id = ?', [runId, operationId])
         if (!run || !operation || required(operation, 'status') !== 'started' || (run.status !== 'running' && run.status !== 'cancelling')) throw new Error('invalid operation observation')
+        if (observation.tool && 'images' in observation.tool && observation.tool.images?.length) {
+          images.retainIn(tx, run.sessionId, `run-tool:${runId}:${operationId}`, observation.tool.images)
+        }
         insertRecords(tx, run, observation.records)
         tx.execute('UPDATE harness_run_operations SET status = ?, observation_json = ? WHERE run_id = ? AND id = ?',
           [observation.kind, serialize(observation), runId, operationId])
@@ -704,12 +767,14 @@ export async function openSqliteSessionRecords(
         const toolJson = optional(operation, 'tool_json')
         if (toolJson) {
           const tool = JSON.parse(toolJson) as import('../run/domain.js').ValidatedToolRequest
+          if (observation.tool && observation.tool.name !== tool.name) throw new Error('tool observation mismatch')
           if (observation.kind === 'value' && observation.tool) event = { kind: 'tool-observed', requestId: tool.id, ...observation.tool }
           else event = { kind: 'tool-failed', requestId: tool.id, name: tool.name,
             category: observation.errorCategory ?? 'tool-unavailable',
-            ...(observation.tool?.name === 'apply_patch' ? { result: observation.tool.result } : {}) }
-        } else event = observation.kind === 'value' ? { kind: 'operation-observed', operationId }
-          : { kind: 'operation-failed', operationId, category: observation.errorCategory ?? 'provider-failure' }
+            ...(observation.tool ? { result: observation.tool.result } : {}),
+            ...(observation.tool && 'images' in observation.tool && observation.tool.images?.length ? { images: observation.tool.images } : {}) }
+        } else event = observation.kind === 'value' ? { kind: 'operation-observed', operationId, ...(observation.result === undefined ? {} : { result: observation.result }) }
+          : { kind: 'operation-failed', operationId, category: observation.errorCategory ?? 'provider-failure', ...(observation.result === undefined ? {} : { result: observation.result }) }
         appendEvent(tx, runId, event, at)
         return getRun(tx, runId)!
       })
