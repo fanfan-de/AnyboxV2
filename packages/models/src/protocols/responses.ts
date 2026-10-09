@@ -38,10 +38,34 @@ function commit(state: NativeObject, intent: NativeObject, response: NativeObjec
   const value = validateResponse(response), next = conversation(state, intent, 'input', ['tools', 'instructions']);
   return native({ ...next, input: [...array(next.input), ...array(value.output)] });
 }
+function readGeneratedText(response: NativeObject): string {
+  const value = validateResponse(response), text: string[] = [];
+  if (value.status === 'incomplete' && value.incomplete_details != null) {
+    const details = object(value.incomplete_details);
+    if (details.reason === 'content_filter') throw modelsError('refused-response');
+  }
+  for (const entry of array(value.output)) {
+    const item = object(entry), type = string(item.type);
+    if (type === 'reasoning') continue;
+    if (type.endsWith('_call') || type === 'mcp_approval_request') throw modelsError('capability-unsupported');
+    if (type !== 'message' || item.role !== 'assistant') throw modelsError('invalid-response');
+    if (item.status !== undefined && item.status !== 'completed') throw modelsError('incomplete-response');
+    for (const entry of array(item.content)) {
+      const block = object(entry);
+      if (block.type === 'refusal') throw modelsError('refused-response');
+      if (block.type !== 'output_text') throw modelsError('invalid-response');
+      text.push(string(block.text));
+    }
+  }
+  if (value.status !== 'completed') throw modelsError('incomplete-response');
+  const result = text.join('\n');
+  if (!result.trim()) throw modelsError('invalid-response');
+  return result;
+}
 export function createResponsesProtocol(options: ProtocolOptions = {}): NativeProtocol {
   options = captureOptions(options);
   return {
-    descriptor: { id: 'responses', version: '2.1.0', name: 'Responses', connectionFields,
+    descriptor: { id: 'responses', version: '2.2.0', name: 'Responses', connectionFields, responseModes: ['stream', 'complete'],
       modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 },
         { key: 'max_output_tokens', label: 'Maximum output tokens', type: 'number', min: 1, integer: true },
         { key: 'reasoning.effort', label: 'Reasoning effort', type: 'enum', values: reasoningEfforts },
@@ -55,7 +79,12 @@ export function createResponsesProtocol(options: ProtocolOptions = {}): NativePr
     },
     effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, options.reasoning !== undefined && object(options.reasoning).effort === 'none', true), imageInput: declared.imageInput.support === 'supported' }),
     recordFormatVersion: 2,
-    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0' || version === '2.2.0',
+    textGeneration: {
+      createIntent: input => native({ input: [{ role: 'user', content: input.input }], ...(input.instruction === undefined ? {} : { instructions: input.instruction }) }),
+      validateParameters: parameters => { if (parameters.tools !== undefined && array(parameters.tools).length) throw modelsError('capability-unsupported'); },
+      readText: readGeneratedText,
+    },
     resourceIds: responsesImages.ids,
     restore: records => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
@@ -68,7 +97,8 @@ export function createResponsesProtocol(options: ProtocolOptions = {}): NativePr
       const next = conversation(input.state, input.intent, 'input', ['tools', 'instructions']);
       const tools = mergeTools(next.tools, input.parameters.tools);
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(tool.parameters); }
-      return native({ ...input.parameters, model: input.remoteModelId, input: next.input, store: false, stream: input.capabilities.streaming,
+      const streaming = input.responseMode === undefined ? input.capabilities.streaming : input.responseMode === 'stream';
+      return native({ ...input.parameters, model: input.remoteModelId, input: next.input, store: false, stream: streaming,
         include: ['reasoning.encrypted_content'], ...(next.instructions === undefined ? {} : { instructions: next.instructions }), ...(tools.length ? { tools } : {}) });
     },
     exchange(input) {

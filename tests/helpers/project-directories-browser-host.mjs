@@ -4,25 +4,24 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { Context } from '@nya/core'
-import { createHarness } from '../../dist/harness/index.js'
-import { createImageAssetsComponent } from '../../dist/harness/image/component.js'
+import { createTestHarnessServerCore } from './harness-server-core.mjs'
+import { createImageAssetsComponent } from '../../dist/applications/harness/core/image/component.js'
 import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
 import { createHostAccessComponent } from '../../dist/host/access.js'
-import { createHarnessApiComponent } from '../../dist/host/component.js'
-import { createConnectionsComponent } from '../../dist/host/client/connections.js'
-import { createClientGatewayComponent } from '../../dist/host/client/gateway.js'
-import { createDirectoryPickerComponent } from '../../dist/host/directory-picker.js'
+import { createFixtureApplicationApiComponent } from './application-api.mjs'
+import { createClientHost } from '../../dist/entrypoints/client-main.js'
 import { installManagedModels } from './managed-models.mjs'
 
 const directory = await mkdtemp(join(tmpdir(), 'anybox-directory-browser-'))
 const shared = join(directory, 'shared-project')
 await mkdir(shared)
-const hosts = [], values = new Map(), client = new Context()
+const hosts = [], values = new Map()
+let client
 let stopping
 async function stop() {
   if (stopping) return stopping
   stopping = (async () => {
-    await client.fiber.dispose()
+    await client?.close()
     for (const host of hosts) await host.harness.close()
     for (const host of hosts) await chmod(join(host.home, 'restricted'), 0o700)
     await rm(directory, { recursive: true, force: true })
@@ -45,26 +44,26 @@ try {
     await root.installComponent(createLocalSqliteComponent(join(data, 'harness.sqlite')))
     await root.installComponent(createHostAccessComponent(name))
     await root.installComponent(createImageAssetsComponent({ directory: join(data, 'images') }))
-    const harness = await createHarness(root, { agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }],
+    const harness = await createTestHarnessServerCore(root, { agents: [{ id: 'assistant', modelId: 'default', instructions: 'Test' }],
       ...(index < 2 ? { projectDirectoryHome: home } : {}) })
     const host = { root, harness, home, name }; hosts.push(host)
-    await root.installComponent(createHarnessApiComponent(harness.listAgents(), 0, { authenticated: true }))
+    await root.installComponent(createFixtureApplicationApiComponent(root, harness.listAgents(), 0, { authenticated: true }))
     host.instanceId = root.get('host.access').instance.instanceId
   }
-  await client.installComponent(createLocalSqliteComponent(join(directory, 'client.sqlite')))
-  await client.installComponent(createConnectionsComponent({ openEntry: (_namespace, id) => ({
-    async getPassword() { return values.get(id) }, async setPassword(value) { values.set(id, value) },
-    async deleteCredential() { return values.delete(id) },
-  }) }))
-  // The launcher-confirmed local identity and native process are controlled test substitutes.
-  await client.installComponent(createDirectoryPickerComponent({ platform: 'darwin', runDialog: async () => shared }))
-  await client.installComponent(createClientGatewayComponent({ localInstanceId: hosts[0].instanceId }))
+  client = await createClientHost({ path: join(directory, 'client.sqlite'), localInstanceId: hosts[0].instanceId,
+    picker: { platform: 'darwin', runDialog: async () => shared },
+    openEntry: (_namespace, id) => ({
+      async getPassword() { return values.get(id) }, async setPassword(value) { values.set(id, value) },
+      async deleteCredential() { return values.delete(id) },
+    }),
+  })
+  await client.products.open('agent')
   for (const host of hosts) {
     const token = await host.root.get('host.access').issue('Disposable browser test')
-    host.connection = await client.get('client.connections').save({ name: host.name,
-      endpoint: host.root.get('host.harness-api').url, token: token.token })
+    host.connection = await client.root.get('client.connections').save({ name: host.name,
+      endpoint: host.root.get('host.http').url, token: token.token })
   }
-  console.log(JSON.stringify({ url: client.get('client.gateway').url, shared,
+  console.log(JSON.stringify({ url: client.url, shared,
     hosts: hosts.map(({ name, home, instanceId, connection }) => ({ name, home, instanceId, connectionId: connection.id })) }))
   const input = createInterface({ input: process.stdin })
   input.on('line', line => {

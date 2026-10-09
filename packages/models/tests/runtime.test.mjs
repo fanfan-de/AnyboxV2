@@ -4,6 +4,32 @@ import { capabilities, code, complete, deferred, exchange, fakeProtocol, fixture
 const input = content => ({ messages: [{ role: 'user', content }] })
 const tracked = promise => { const state = { settled: false }; promise.then(() => { state.settled = true }, () => { state.settled = true }); return state }
 
+test('native protocol identities do not collide with compatibility dictionary prototype names', async () => {
+  const f = await fixture({ protocols: [fakeProtocol('constructor'), fakeProtocol('toString')] })
+  try {
+    assert.deepEqual(f.settings.protocols().map(item => item.id), ['constructor', 'toString'])
+    for (const protocolId of ['constructor', 'toString']) {
+      const lease = f.registry.acquire(protocolId)
+      assert.equal(lease.protocolId, protocolId)
+      lease.release()
+    }
+  } finally { await f.close() }
+})
+
+test('malformed restore metadata fails with a fixed error before reading credentials', async () => {
+  const f = await fixture()
+  try {
+    await f.add({ key: 'private-key' })
+    const reads = f.vault.reads.length
+    for (const restore of [{}, { protocolId: 'test', records: [] },
+      { protocolId: 'test', modelSnapshot: null, records: [] },
+      { protocolId: 'test', modelSnapshot: { schemaVersion: 3, protocolId: 'test', parameters: null }, records: [] }]) {
+      await assert.rejects(f.open({ modelId: 'model', restore }), code('invalid-config'))
+    }
+    assert.equal(f.vault.reads.length, reads)
+  } finally { await f.close() }
+})
+
 test('independent native executions retain their own configuration, credential and protocol generation', async () => {
   const f = await fixture(), protocol = f.protocols[0]
   try {
@@ -91,6 +117,72 @@ test('unknown required capabilities and per-open overrides fail before credentia
     await f.add({ capabilityDeclarations: capabilities({ reasoning: { support: 'unknown' } }) })
     await assert.rejects(f.open({ modelId: 'model', requirements: { reasoning: true } }), code('capability-unsupported'))
     await assert.rejects(f.open({ modelId: 'model', options: { temperature: 0.2 } }), code('invalid-config')); assert.equal(f.protocols[0].calls.length, 0)
+  } finally { await f.close() }
+})
+
+for (const enabled of [false, true]) test(`unknown streaming respects the protocol decision (${enabled})`, async () => {
+  const protocol = fakeProtocol()
+  const effective = protocol.effectiveCapabilities
+  protocol.effectiveCapabilities = declared => ({ ...effective(declared), streaming: enabled })
+  const f = await fixture({ protocols: [protocol] })
+  try {
+    await f.add({ capabilityDeclarations: capabilities({ streaming: { support: 'unknown' } }) })
+    if (!enabled) {
+      await assert.rejects(f.open({ modelId: 'model', requirements: { streaming: true } }), code('capability-unsupported'))
+      assert.equal(f.vault.reads.length, 0)
+      assert.equal(protocol.calls.length, 0)
+    }
+    const execution = await f.open({ modelId: 'model', ...(enabled ? { requirements: { streaming: true } } : {}) })
+    assert.equal(execution.capabilities.streaming, enabled)
+    await execution.close()
+  } finally { await f.close() }
+})
+
+for (const firstSupport of ['supported', 'unsupported']) test(`native restore preserves context when streaming changes from ${firstSupport}`, async () => {
+  const f = await fixture()
+  try {
+    const { model } = await f.add({ capabilityDeclarations: capabilities({ streaming: { support: firstSupport } }) })
+    const first = await f.open({ modelId: 'model' })
+    f.protocols[0].next(call => call.succeed({ text: 'first answer', signature: 'kept signature' }))
+    await exchange(first, input('first')).result
+    const report = await first.close(), restore = { ...report.restoreState, records: report.records }
+    const history = JSON.stringify(restore)
+    const nextSupport = firstSupport === 'supported' ? 'unsupported' : 'supported'
+    await f.settings.updateConfiguration(model.id, { capabilities: capabilities({ streaming: { support: nextSupport } }) }, model.revision)
+    const second = await f.open({ modelId: 'model', restore })
+    assert.equal(second.capabilities.streaming, nextSupport === 'supported')
+    await exchange(second, input('second')).result
+    assert.deepEqual(f.protocols[0].calls[1].input.request.messages.map(message => message.content), ['first', 'first answer', 'second'])
+    assert.equal(f.protocols[0].calls[1].input.request.previousResponse.signature, 'kept signature')
+    assert.equal(JSON.stringify(restore), history)
+    await second.close()
+    for (const changes of [{ tools: false }, { webSearch: true }, { reasoning: { support: 'unsupported' } },
+      ...[undefined, null, 'true', {}].map(streaming => ({ streaming }))]) {
+      const incompatible = { ...restore, modelSnapshot: { ...restore.modelSnapshot, capabilities: { ...restore.modelSnapshot.capabilities, ...changes } } }
+      await assert.rejects(f.open({ modelId: 'model', restore: incompatible }), code('invalid-config'))
+    }
+  } finally { await f.close() }
+})
+
+test('existing unknown configurations keep their history when the protocol enables streaming by default', async () => {
+  const legacy = fakeProtocol(), f = await fixture({ protocols: [legacy] })
+  try {
+    const { model } = await f.add({ capabilityDeclarations: capabilities({ streaming: { support: 'unknown' } }) })
+    const first = await f.open({ modelId: 'model' })
+    assert.equal(first.capabilities.streaming, false)
+    await exchange(first, input('first')).result
+    const report = await first.close(), restore = { ...report.restoreState, records: report.records }
+    const savedConfiguration = JSON.stringify(f.store.configuration(model.id)), savedHistory = JSON.stringify(restore)
+    await f.registrations[0].unregister()
+    const upgraded = { ...legacy, effectiveCapabilities: declared => ({ ...legacy.effectiveCapabilities(declared), streaming: declared.streaming.support !== 'unsupported' }) }
+    f.registrations.push(f.registry.register(upgraded))
+    const second = await f.open({ modelId: 'model', restore, requirements: { streaming: true } })
+    await exchange(second, input('second')).result
+    assert.equal(second.capabilities.streaming, true)
+    assert.deepEqual(legacy.calls[1].input.request.messages.map(message => message.content), ['first', 'answer', 'second'])
+    assert.equal(JSON.stringify(f.store.configuration(model.id)), savedConfiguration)
+    assert.equal(JSON.stringify(restore), savedHistory)
+    await second.close()
   } finally { await f.close() }
 })
 

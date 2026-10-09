@@ -1,4 +1,4 @@
-import { modelsError, normalizeError } from '../errors.js';
+import { modelsError, normalizeError, type ModelsErrorCode } from '../errors.js';
 import { abortLink, deferred, joinOperation, throwAborted } from '../lifecycle.js';
 import type { DiscoveredModel, ProtocolConnection, ProtocolOperation } from '../types.js';
 import { array, object, parseJson, string, type ProtocolOptions } from './shared.js';
@@ -11,6 +11,8 @@ interface Reader {
 export interface RequestOptions {
   readonly headers?: Readonly<Record<string, string>>;
   readonly authHeader?: 'bearer' | 'google-api-key' | 'anthropic-api-key';
+  /** Optional driver-owned projection; the raw error body is never returned or recorded. */
+  readonly classifyHttpError?: (body: unknown) => ModelsErrorCode | undefined;
 }
 /** Own the fetch, reader, abort listener and asynchronous stream cancellation. */
 export function request<T>(options: ProtocolOptions, connection: ProtocolConnection, path: string, body: unknown | undefined, parse: (reader: Reader) => Promise<T>, requestOptions: RequestOptions = {}): ProtocolOperation<T> {
@@ -57,7 +59,7 @@ export function request<T>(options: ProtocolOptions, connection: ProtocolConnect
       });
       reader = response.body?.getReader();
       if (controller.signal.aborted) throw modelsError('cancelled');
-      if (!response.ok) throw modelsError('provider-failure');
+      if (!response.ok && (!requestOptions.classifyHttpError || !reader)) throw modelsError('provider-failure');
       if (!reader) throw modelsError('invalid-response');
       const consume = async (onText: (text: string, final: boolean) => boolean | void) => {
         const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -85,7 +87,7 @@ export function request<T>(options: ProtocolOptions, connection: ProtocolConnect
           if (onText(text, false)) return;
         }
       };
-      const outcome = await parse({
+      const responseReader: Reader = {
         async json() {
           let text = '';
           await consume(chunk => { text += chunk; });
@@ -119,7 +121,14 @@ export function request<T>(options: ProtocolOptions, connection: ProtocolConnect
             if (final && (buffer.length || data.length)) throw modelsError('invalid-response');
           });
         },
-      });
+      };
+      if (!response.ok) {
+        let code: ModelsErrorCode | undefined;
+        try { code = requestOptions.classifyHttpError!(await responseReader.json()); }
+        catch { /* Malformed or unreadable HTTP errors retain the existing projection. */ }
+        throw modelsError(code ?? 'provider-failure');
+      }
+      const outcome = await parse(responseReader);
       if (controller.signal.aborted) throw modelsError('cancelled');
       resolveResult(outcome);
     } catch (error) {

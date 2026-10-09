@@ -1,0 +1,4 @@
+.test-application { height: 100%; padding: 24px; overflow: auto; }
+.test-application label { display: block; margin: 16px 0; }
+.test-application button { margin: 0 8px 12px 0; }
+.test-application .test-scroll { height: 240px; overflow: auto; border: 1px solid #ccc; padding: 10px; }

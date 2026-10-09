@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createPendingStore, createSessionController } from '../dist/client/session-client.js'
+import { createPendingStore, createSessionController } from '../dist/applications/harness/web/session-client.js'
+
+const exchange = (id, text) => ({ id, blocks: [{ id: 'item-0', type: 'responses.message', content: [{ id: 'item-0:part-0', type: 'output_text', text }] }] })
 
 function fixture() {
   const storage = new Map(), writes = [], timers = new Map(), runs = [], views = new Map()
@@ -62,14 +64,14 @@ test('unaccepted older pending submissions require an explicit model selection b
 test('provisional model text is bounded, never persisted, and cleared by terminal reconciliation', async () => {
   const f = fixture(); await f.load(); await f.controller.setModel('a'); await f.controller.refresh()
   f.controller.setDraft('hello'); await f.controller.submit(); await f.controller.refresh()
-  f.controller.protocolView({ envelopeVersion: 1, viewSchemaVersion: 1, protocolId: 'responses', sessionId: 's', runId: 'r', viewRevision: 1, status: 'provisional', exchanges: [{ id: 'e', blocks: [{ id: 'b', kind: 'text', text: 'x'.repeat(65_536) }] }] })
-  assert.equal(f.controller.snapshot().views.get('r').exchanges[0].blocks[0].text.length, 65_536)
+  f.controller.protocolView({ envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'responses', sessionId: 's', runId: 'r', viewRevision: 1, status: 'provisional', exchanges: [exchange('e', 'x'.repeat(65_536))] })
+  assert.equal(f.controller.snapshot().views.get('r').exchanges[0].blocks[0].content[0].text.length, 65_536)
   assert.equal(f.pending.get('s'), undefined)
   f.runs[0].status = 'failed'; f.runs[0].revision++
   await f.controller.refresh()
   assert.equal(f.controller.snapshot().views.size, 0)
   assert.match(f.controller.snapshot().notice, /运行失败/)
-  f.controller.protocolView({ envelopeVersion: 1, viewSchemaVersion: 1, protocolId: 'responses', sessionId: 's', runId: 'r', viewRevision: 2, status: 'provisional', exchanges: [] })
+  f.controller.protocolView({ envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'responses', sessionId: 's', runId: 'r', viewRevision: 2, status: 'provisional', exchanges: [] })
   assert.equal(f.controller.snapshot().views.size, 0)
   f.controller.detach()
 })
@@ -117,11 +119,11 @@ test('reconnect queries a complete active projection and terminal facts reject l
   const f = fixture()
   await f.load(); await f.controller.setModel('a'); await f.controller.refresh()
   f.controller.setDraft('hello'); await f.controller.submit(); await f.controller.refresh()
-  f.runs[0].protocolBinding = { protocolId: 'responses', viewSchemaVersion: 1 }
-  const initial = { envelopeVersion: 1, viewSchemaVersion: 1, protocolId: 'responses', sessionId: 's', runId: 'r', viewRevision: 1, status: 'provisional', exchanges: [{ id: 'first', blocks: [{ id: 'text', kind: 'text', text: 'Beginning' }] }] }
+  f.runs[0].protocolBinding = { protocolId: 'responses', viewSchemaVersion: 2 }
+  const initial = { envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'responses', sessionId: 's', runId: 'r', viewRevision: 1, status: 'provisional', exchanges: [exchange('first', 'Beginning')] }
   f.controller.protocolView(initial)
   f.controller.setLive(false)
-  const recovered = { ...initial, viewRevision: 8, exchanges: [...initial.exchanges, { id: 'second', blocks: [{ id: 'text', kind: 'text', text: 'Recovered later exchange' }] }] }
+  const recovered = { ...initial, viewRevision: 8, exchanges: [...initial.exchanges, exchange('second', 'Recovered later exchange')] }
   f.views.set('r', recovered)
   f.controller.setLive(true); await f.controller.refresh()
   assert.deepEqual(f.controller.snapshot().views.get('r'), recovered)
@@ -149,7 +151,7 @@ test('unknown Web protocols cannot be selected, submitted, regenerated or decode
   assert.equal(f.controller.snapshot().draft, 'Keep {{input}} literally')
   assert.equal(f.pending.get('s'), undefined)
   assert.equal(f.writes.length, 0)
-  f.controller.protocolView({ envelopeVersion: 1, viewSchemaVersion: 1, protocolId: 'new-provider-protocol', sessionId: 's', runId: 'r', viewRevision: 1, status: 'provisional', exchanges: [] })
+  f.controller.protocolView({ envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'new-provider-protocol', sessionId: 's', runId: 'r', viewRevision: 1, status: 'provisional', exchanges: [] })
   assert.equal(f.controller.snapshot().views.size, 0)
   assert.match(f.controller.snapshot().notice, /展示组件尚不可用/)
   f.controller.detach()

@@ -1,24 +1,26 @@
-import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
-import { createSessionComponent } from '../dist/harness/session/component.js'
-import { sessionServiceKey, sessionRunServiceKey } from '../dist/harness/session/port.js'
-import { createApplyPatchComponent } from '../dist/harness/tool/apply-patch-component.js'
+import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
+import { createApplyPatchComponent } from '../dist/applications/harness/core/tool/apply-patch-component.js'
+import { createFileToolsComponent } from '../dist/applications/harness/core/tool/files-component.js'
+import { createProcessToolsComponent } from '../dist/applications/harness/core/tool/process-component.js'
 import assert from 'node:assert/strict'
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createHarness } from '../dist/harness/index.js'
-import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/harness/agent/prompt-binding-component.js'
-import { createRunComponent, runServiceKey } from '../dist/harness/run/component.js'
-import { createRunRuntimeComponent } from '../dist/harness/run/runtime-component.js'
-import { createBashComponent } from '../dist/harness/tool/bash-component.js'
-import { createProjectComponent, projectServiceKey } from '../dist/harness/project/component.js'
-import { createPromptComponent, promptServiceKey } from '../dist/harness/prompt/component.js'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
+import { agentPromptServiceKey, createAgentPromptComponent } from '../dist/applications/harness/core/agent/prompt-binding-component.js'
+import { createRunComponent, runServiceKey } from '../dist/applications/harness/core/run/component.js'
+import { createRunRuntimeComponent } from '../dist/applications/harness/core/run/runtime-component.js'
+import { createBashComponent } from '../dist/applications/harness/core/tool/bash-component.js'
+import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
+import { createPromptComponent, promptServiceKey } from '../dist/applications/harness/core/prompt/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/harness/storage/port.js'
+import { localStorageServiceKey } from '../dist/storage/port.js'
 import { controlledModels, ids } from './helpers/controlled-models.mjs'
 
 /** The application installs its LLM API component and SQLite before the Harness. */
@@ -31,7 +33,7 @@ async function createHostHarness({ llm, databasePath, ...options }) {
     await root.installComponent(createImageAssetsComponent({ directory: (databasePath) + ".images" }))
     await provider
     await database
-    return await createHarness(root, options)
+    return await createTestHarnessServerCore(root, options)
   } catch (error) { await root.fiber.dispose(); throw error }
 }
 
@@ -85,7 +87,12 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
     assert.deepEqual(llm.calls[0].input.messages[0], { role: 'system', content: 'Default instruction.' })
     assert.deepEqual(llm.calls[1].input.messages[0], { role: 'system', content: 'Published instruction.' })
     assert.notDeepEqual(first.promptVersionIds, second.promptVersionIds)
-    assert.equal(JSON.stringify(await harness.getRun(second.id)).includes('Published instruction.'), false)
+    const acceptedRun = await harness.getRun(second.id)
+    // Trusted Session facts retain accepted prompts; browser Run DTOs use a separate whitelist.
+    assert.deepEqual(acceptedRun.promptSnapshots, [{ versionId: version.id, documentId: document.id,
+      kind: 'agent-instruction', role: 'system', content: 'Published instruction.' }])
+    assert.deepEqual((await harness.getRun(first.id)).promptSnapshots.map(prompt => prompt.content), ['Default instruction.'])
+    assert.doesNotMatch(JSON.stringify(acceptedRun), /credentialRef|apiKey|Authorization|encrypted_content|signature/)
 
     const revised = await harness.editPrompt('alice', document.id, 2, { content: 'Later instruction.' })
     await assert.rejects(harness.editPrompt('alice', document.id, 2, { content: 'Lost edit.' }), /revision conflict/)
@@ -95,6 +102,8 @@ test('editing and activating a prompt changes new runs while accepted runs keep 
     await harness.bindPrompt('alice', 'assistant', later.id)
     assert.equal((await harness.startRun(secondInput)).id, second.id)
     assert.equal(llm.calls.length, 2)
+    assert.deepEqual((await harness.getRun(second.id)).promptSnapshots, acceptedRun.promptSnapshots)
+    assert.doesNotMatch(JSON.stringify((await harness.getRun(second.id)).promptSnapshots), /Later instruction/)
 
     for (const call of llm.calls) { call.result.resolve('Answer'); call.done.resolve() }
     assert.equal((await harness.waitRun(first.id)).status, 'completed')
@@ -324,6 +333,8 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())
   root.installComponent(createApplyPatchComponent())
+  root.installComponent(createFileToolsComponent())
+  root.installComponent(createProcessToolsComponent())
   const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await databaseFiber

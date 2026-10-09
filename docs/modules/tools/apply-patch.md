@@ -8,9 +8,9 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 
 | 项目 | 定义 |
 | --- | --- |
-| 组件入口 | [apply-patch-component.ts](../../../src/harness/tool/apply-patch-component.ts) |
-| 纯领域逻辑 | [apply-patch-domain.ts](../../../src/harness/tool/apply-patch-domain.ts)：`parsePatch`、`validatePatchText`、`applyPatchText` |
-| 项目自有类型 | [apply-patch-types.ts](../../../src/harness/tool/apply-patch-types.ts) |
+| 组件入口 | [apply-patch-component.ts](../../../src/applications/harness/core/tool/apply-patch-component.ts) |
+| 纯领域逻辑 | [apply-patch-domain.ts](../../../src/applications/harness/core/tool/apply-patch-domain.ts)：`parsePatch`、`validatePatchText`、`applyPatchText` |
+| 项目自有类型 | [apply-patch-types.ts](../../../src/applications/harness/core/tool/apply-patch-types.ts) |
 | 工厂 / Nya 名称 | `createApplyPatchComponent(options?)` / `apply-patch-tool` |
 | 服务 / `inject` | `tools.apply-patch: ApplyPatchPort` / `harness.projects` |
 | 工具名 / 消费方 | `apply_patch` / [RunRuntime](../execution/run-runtime.md) |
@@ -20,6 +20,8 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 唯一工厂选项为 `filesystem?: Partial<ApplyPatchFileSystem>`，按方法覆盖默认 `node:fs/promises` 实现，主要用于可控故障与取消测试。文件系统端口包括 `lstat`、`realpath`、`readFile`、`mkdir`、`mkdtemp`、`writeFile`、`chmod`、`link`、`rename`、`unlink`、`rmdir`；替身必须维持各方法的完成时间和文件事实，不能只返回成功值而跳过副作用。
 
 `ApplyPatchPort.definition` 声明唯一必填字符串参数 `patch`，禁止额外属性。宿主调用 `execute({ projectId, patch }): OwnedCall<ApplyPatchResult>`，项目 ID 来自执行上下文。服务先同步验证项目 ID 和 patch 类型；语法错误在队列内解析为诊断结果。
+
+文件工具另调用 `mutateText({projectId,path,mutation})`：`mutation` 为整文件 `write` 或 `oldString/newString/replaceAll` 的精确 `edit`。它在同一队列内部读取最新快照并规划变更，共享全部文本校验、文件预检、逐文件提交及清理；不是第二个写入提供方。纯 `applyTextMutation` 保留显式文本、BOM 和末尾换行，不添加补丁 Add 的隐含换行。
 
 | 结果字段 | 含义 |
 | --- | --- |
@@ -79,6 +81,6 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 - [apply-patch-domain.test.mjs](../../../tests/apply-patch-domain.test.mjs)：语法、精确匹配、锚点/EOF、Unicode/BOM、换行、大文件匹配。
 - [apply-patch-component.test.mjs](../../../tests/apply-patch-component.test.mjs)：全部预检、跨项目队列、路径别名、并发外部编辑、部分提交、Move 事实、取消及清理失败。
 - [apply-patch-loop.test.mjs](../../../tests/apply-patch-loop.test.mjs)：混合工具顺序、失败后修正、参数预检、旧事件读取及在途补丁恢复为 interrupted。
-- [web-server.test.mjs](../../../tests/web-server.test.mjs)、[tool-trace.test.mjs](../../../tests/tool-trace.test.mjs)：浏览器补丁预览截断与部分/取消结果展示。
+- [harness-server-http.test.mjs](../../../tests/harness-server-http.test.mjs)、[tool-trace.test.mjs](../../../tests/tool-trace.test.mjs)：浏览器补丁预览截断与部分/取消结果展示。
 
 完整验收运行 `npm run check`。

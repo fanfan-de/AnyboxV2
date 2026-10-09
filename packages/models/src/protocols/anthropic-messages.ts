@@ -39,6 +39,20 @@ function commit(state: NativeObject, intent: NativeObject, response: NativeObjec
   const message = validateResponse(response), next = conversation(state, intent, 'messages', ['system', 'tools']);
   return native({ ...next, messages: [...array(next.messages), { role: 'assistant', content: message.content }] });
 }
+function readGeneratedText(response: NativeObject): string {
+  const message = validateResponse(response);
+  if (message.stop_reason === 'refusal') throw modelsError('refused-response');
+  const text: string[] = [];
+  for (const value of array(message.content)) {
+    const block = object(value);
+    if (block.type === 'text') text.push(string(block.text));
+    else if (['tool_use', 'server_tool_use', 'web_search_tool_result'].includes(string(block.type))) throw modelsError('capability-unsupported');
+    else if (block.type !== 'thinking' && block.type !== 'redacted_thinking') throw modelsError('invalid-response');
+  }
+  if (message.stop_reason === 'tool_use') throw modelsError('capability-unsupported');
+  if (message.stop_reason !== 'end_turn' && message.stop_reason !== 'stop_sequence') throw modelsError('incomplete-response');
+  return nonempty(text.join('\n'));
+}
 function parsePage(raw: unknown): { models: readonly DiscoveredModel[]; nextPath?: string } {
   const page = object(raw);
   if (typeof page.has_more !== 'boolean') throw modelsError('invalid-response');
@@ -80,7 +94,7 @@ function parsePage(raw: unknown): { models: readonly DiscoveredModel[]; nextPath
 export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): NativeProtocol {
   options = captureOptions(options);
   return {
-    descriptor: { id: protocolId, version: '2.1.0', name: 'Anthropic Messages', connectionFields,
+    descriptor: { id: protocolId, version: '2.2.0', name: 'Anthropic Messages', responseModes: ['stream', 'complete'], connectionFields,
       modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 1 }, { key: 'max_tokens', label: 'Maximum output tokens', type: 'number', min: 1, integer: true, required: true, defaultValue: 4096 },
         { key: 'thinking.type', label: 'Thinking mode', type: 'enum', values: modes }, { key: 'thinking.budget_tokens', label: 'Thinking token budget', type: 'number', min: 1024, integer: true },
         { key: 'thinking.display', label: 'Thinking display', type: 'enum', values: ['summarized', 'omitted'] }, { key: 'output_config.effort', label: 'Reasoning effort', type: 'enum', values: efforts }], supportsDiscovery: true, supportsCheck: true },
@@ -100,7 +114,12 @@ export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): 
     },
     effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, options.thinking !== undefined && object(options.thinking).type === 'disabled', true), imageInput: declared.imageInput.support === 'supported' }),
     recordFormatVersion: 2,
-    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0' || version === '2.2.0',
+    textGeneration: {
+      createIntent: input => native({ messages: [{ role: 'user', content: [{ type: 'text', text: input.input }] }], ...(input.instruction === undefined ? {} : { system: [{ type: 'text', text: input.instruction }] }) }),
+      validateParameters: parameters => { if (parameters.tools !== undefined && array(parameters.tools).length) throw modelsError('capability-unsupported'); },
+      readText: readGeneratedText,
+    },
     resourceIds: anthropicImages.ids,
     restore: records => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
@@ -114,7 +133,7 @@ export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): 
       for (const value of array(next.messages)) { const message = object(value); if (!['user', 'assistant'].includes(string(message.role))) throw modelsError('invalid-config'); if (typeof message.content !== 'string') array(message.content); }
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== undefined) throw modelsError('invalid-config'); nonempty(tool.name); object(tool.input_schema); }
       const tools = mergeTools(next.tools, input.parameters.tools);
-      return native({ ...input.parameters, messages: next.messages, ...(next.system === undefined ? {} : { system: next.system }), ...(tools.length ? { tools } : {}), model: input.remoteModelId, stream: input.capabilities.streaming });
+      return native({ ...input.parameters, messages: next.messages, ...(next.system === undefined ? {} : { system: next.system }), ...(tools.length ? { tools } : {}), model: input.remoteModelId, stream: input.responseMode === undefined ? input.capabilities.streaming : input.responseMode === 'stream' });
     },
     exchange(input) {
       return withImages(anthropicImages, input, (wire, signal) => request(options, { ...input, signal }, 'messages', wire, async reader => {

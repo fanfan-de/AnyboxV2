@@ -152,18 +152,21 @@ test('a stale admitted baseline batch retries against the latest source target w
   const { f, provider } = await setup()
   try {
     const connection = await f.settings.createConnection(account(provider))
-    const original = f.store.commit.bind(f.store), entered = deferred(), release = deferred(); let hold = true
+    const original = f.store.commit.bind(f.store), entered = deferred(), release = deferred(), latestCommitted = deferred(); let hold = true
     f.store.commit = async change => {
       if (hold && change.configurations?.length) { hold = false; entered.resolve(); await release.promise }
-      return original(change)
+      await original(change)
+      if (change.sources?.some(source => source.fetchedAt === 3)) latestCommitted.resolve()
     }
     const earlier = f.sourceData.accept(snapshot([rawModel('a'), rawModel('b'), rawModel('c')], 2))
     await entered.promise
     const latest = snapshot([rawModel('a'), rawModel('b'), rawModel('c'), rawModel('d')], 3)
     const later = f.sourceData.accept(latest)
-    await tick()
-    assert.equal(f.store.syncState(connection.id).targetSourceVersion, latest.snapshotVersion)
-    release.resolve(); await Promise.all([earlier, later])
+    try {
+      await latestCommitted.promise
+      assert.equal(f.store.syncState(connection.id).targetSourceVersion, latest.snapshotVersion)
+    } finally { release.resolve() }
+    await Promise.all([earlier, later])
     assert.equal(f.models.list().length, 4)
     assert.equal(f.store.syncState(connection.id).state, 'ready')
     assert.equal(f.store.syncState(connection.id).syncedSourceVersion, latest.snapshotVersion)

@@ -200,9 +200,11 @@ test('a concurrent Key rotation and source update serialize one additive model b
   const f = await sourceFixture({ vault }); t.after(() => f.close());
   const provider = f.settings.providers()[0], connection = await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'original-key' }));
   const first = f.models.list()[0];
+  const sourceCommitted = deferred(), commit = f.store.commit.bind(f.store);
+  f.store.commit = async change => { await commit(change); if (change.sources?.some(state => state.fetchedAt === 2)) sourceCommitted.resolve(); };
   const changingKey = f.settings.setApiKey(connection.id, 'rotated-key', connection.revision); await started.promise;
   const updatingSource = f.sourceData.accept(imported({ first: { id: 'first', name: 'First' }, later: { id: 'later', name: 'Later' } }, 2));
-  await tick(); assert.equal(f.settings.models().length, 2); assert.equal(f.models.list().length, 1);
+  await sourceCommitted.promise; assert.equal(f.settings.models().length, 2); assert.equal(f.models.list().length, 1);
   const changingParams = f.settings.updateConfiguration(first.id, { parameters: params('chat-completions', { temperature: 0.4 }) }, first.revision);
   gate.resolve(); await Promise.all([changingKey, updatingSource, changingParams]);
   assert.equal(f.models.list({ available: true }).length, 2);

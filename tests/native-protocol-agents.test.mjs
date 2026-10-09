@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,14 +8,13 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createAnthropicMessagesProtocol, createChatCompletionsProtocol, createGeminiInteractionsProtocol } from '@anybox/models'
-import { createDeepSeekProtocol, convertLegacyDeepSeekParameters } from '../dist/host/deepseek-protocol.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHarness } from '../dist/harness/index.js'
-import { projectProtocolRecords } from '../dist/harness/protocol-agents/projection.js'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
+import { projectProtocolRecords } from '../dist/applications/harness/core/protocol-agents/projection.js'
+import { decodeProtocolView } from '../dist/applications/harness/core/view/decode.js'
 
 const factories = { responses: createResponsesProtocol, 'anthropic-messages': createAnthropicMessagesProtocol,
-  'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol,
-  'deepseek-chat-completions': createDeepSeekProtocol }
+  'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol }
 const json = value => new Response(JSON.stringify(value), { headers: { 'content-type': 'application/json' } })
 function answer(protocolId, text) {
   if (protocolId === 'responses') return { id: `response-${text}`, status: 'completed', output: [
@@ -40,8 +39,7 @@ function toolResponse(protocolId) {
 }
 async function host(directory, protocolId, state, { search = false, images = false, legacy = false } = {}) {
   const root = new Context()
-  await root.installComponent(createModelsStoreComponent({ path: join(directory, 'models.sqlite'),
-    legacyParameterConverters: { 'deepseek-chat-completions': convertLegacyDeepSeekParameters } }))
+  await root.installComponent(createModelsStoreComponent({ path: join(directory, 'models.sqlite') }))
   await root.installComponent(createModelsVaultComponent({ namespace: 'native-app-test', openEntry(_namespace, id) {
     return { async getPassword() { return state.secrets.get(id) }, async setPassword(value) { state.secrets.set(id, value) }, async deleteCredential() { return state.secrets.delete(id) } }
   } }))
@@ -71,12 +69,12 @@ async function host(directory, protocolId, state, { search = false, images = fal
   }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'sessions.sqlite')) + ".images" }))
-  const harness = await createHarness(root, { agents: [{ id: 'assistant', instructions: 'Root instructions', modelId: 'default' }] })
+  const harness = await createTestHarnessServerCore(root, { agents: [{ id: 'assistant', instructions: 'Root instructions', modelId: 'default' }] })
   if (legacy) {
     const registry = root.get('harness.protocol-agents'), prepare = registry.prepare.bind(registry)
     registry.prepare = async input => {
       const program = await prepare(input)
-      return { ...program, binding: { ...program.binding, loopVersion: '1.0.0' } }
+      return { ...program, binding: { ...program.binding, loopVersion: '1.0.0', viewSchemaVersion: 1 } }
     }
   }
   const project = await harness.openProject(directory)
@@ -88,6 +86,62 @@ async function run(f, sessionId, parentNodeId, input, key = input) {
   assert.equal(settled.status, 'completed', JSON.stringify(settled))
   return settled
 }
+
+for (const protocolId of Object.keys(factories)) test(`${protocolId}: live request inputs match committed deltas and keep inherited prompts out of new requests`, async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-native-input-view-'))
+  const state = { secrets: new Map(), requests: [], responses: [answer(protocolId, 'ROOT')] }
+  const f = await host(directory, protocolId, state), releases = []
+  const gateNextResponse = () => {
+    let enter, release
+    const entered = new Promise(resolve => { enter = resolve }), waiting = new Promise(resolve => { release = resolve })
+    state.beforeResponse = () => { enter(); return waiting }
+    releases.push(release)
+    return { entered, release }
+  }
+  try {
+    const bind = async (kind, role, content) => {
+      const document = await f.harness.createPrompt('owner', { name: kind, kind, role, content })
+      await f.harness.bindPrompt('owner', 'assistant', (await f.harness.publishPrompt('owner', document.id)).id)
+    }
+    await bind('context', 'user', 'Literal {{input}} context')
+    await bind('task-template', 'user', 'TASK:{{input}}')
+    const session = await f.harness.createSession(f.project.id, 'assistant', 'default'), rootGate = gateNextResponse()
+    const accepted = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'root', idempotencyKey: 'root' })
+    await rootGate.entered
+    const live = decodeProtocolView(f.harness.getView(accepted.id))
+    assert.equal(accepted.protocolBinding.viewSchemaVersion, 2)
+    assert.equal(live.envelopeVersion, 1)
+    assert.equal(live.viewSchemaVersion, 2)
+    assert.equal(live.status, 'provisional')
+    assert.deepEqual(live.exchanges[0].inputs.map(({ role, text }) => ({ role, text })), [
+      { role: 'system', text: 'Root instructions' }, { role: 'context', text: 'Literal {{input}} context' },
+      { role: 'user', text: 'TASK:root' },
+    ])
+    assert.deepEqual(live.exchanges[0].blocks, [])
+    rootGate.release()
+    const first = await f.harness.waitRun(accepted.id)
+    assert.equal(first.status, 'completed')
+    const recorded = projectProtocolRecords(protocolId, await f.harness.getRunRecords(first.id), first.promptSnapshots)
+    assert.deepEqual(recorded[0].inputs, live.exchanges[0].inputs)
+    assert.doesNotMatch(JSON.stringify([live, recorded]), /private-api-key|signature|base64|credential/)
+
+    await bind('context', 'user', 'Current context changed')
+    state.responses.push(answer(protocolId, 'CHILD'))
+    const childGate = gateNextResponse()
+    const child = await f.harness.startRun({ sessionId: session.id, parentNodeId: first.resultNodeId,
+      input: 'Literal {{input}} context', idempotencyKey: 'child' })
+    await childGate.entered
+    const childLive = decodeProtocolView(f.harness.getView(child.id))
+    assert.deepEqual(childLive.exchanges[0].inputs, [{ id: 'input-0', role: 'user', text: 'TASK:Literal {{input}} context' }])
+    childGate.release()
+    const childSettled = await f.harness.waitRun(child.id)
+    assert.equal(childSettled.status, 'completed')
+    assert.equal(childSettled.promptSnapshots.find(item => item.kind === 'context').content, 'Literal {{input}} context')
+    const childRecorded = projectProtocolRecords(protocolId, await f.harness.getRunRecords(child.id), childSettled.promptSnapshots)
+    assert.deepEqual(childRecorded[0].inputs, childLive.exchanges[0].inputs)
+    assert.equal(childRecorded[0].inputs.length, 1)
+  } finally { releases.forEach(release => release()); await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
 
 for (const protocolId of Object.keys(factories)) test(`${protocolId}: native tool history survives Runs, restart and isolated branches`, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-native-history-'))
@@ -102,6 +156,19 @@ for (const protocolId of Object.keys(factories)) test(`${protocolId}: native too
     assert.doesNotMatch(JSON.stringify(rootRecords), /private-api-key|Authorization|credentialRef/)
     const safeView = projectProtocolRecords(protocolId, rootRecords)
     assert.doesNotMatch(JSON.stringify(safeView), /private-(encrypted|thinking|redacted|thought)/)
+    assert.ok(safeView.every(exchange => !exchange.id.startsWith('tools-')), 'tool observations stay in durable events')
+    const expectedTypes = {
+      responses: ['responses.reasoning', 'responses.function_call'],
+      'anthropic-messages': ['anthropic.thinking', 'anthropic.redacted_thinking', 'anthropic.tool_use'],
+      'gemini-interactions': ['gemini.thought', 'gemini.function_call'],
+      'chat-completions': ['chat.content', 'chat.tool_call'],
+    }
+    assert.deepEqual(safeView[0].blocks.map(block => block.type), expectedTypes[protocolId])
+    const call = safeView[0].blocks.find(block => block.requestId === 'call-1')
+    assert.equal(call.name, 'bash')
+    assert.notEqual(call.id, call.requestId, 'presentation identity does not reuse the native call ID')
+    assert.equal(safeView[0].nativeState.type, { responses: 'responses.state', 'anthropic-messages': 'anthropic.state',
+      'gemini-interactions': 'gemini.state', 'chat-completions': 'chat.state' }[protocolId])
     const history = await f.root.get('harness.session-runs').loadNativeHistory(session.id, first.resultNodeId)
     for (const checkpoint of [null, { ...history.checkpoint, recordFormatVersion: 99 }, { ...history.checkpoint, modelSnapshot: {} }]) {
       await assert.rejects(f.root.get('harness.protocol-agents').prepare({ runId: 'invalid-restore', sessionId: session.id, modelId: 'default',
@@ -111,6 +178,12 @@ for (const protocolId of Object.keys(factories)) test(`${protocolId}: native too
     await assert.rejects(f.root.get('harness.protocol-agents').prepare({ runId: 'invalid-driver-binding', sessionId: session.id, modelId: 'default',
       signal: new AbortController().signal, initialization: history.initialization, input: { schemaVersion: 1, raw: 'never', text: 'never', template: null },
       history: { ...history, binding: { ...history.binding, driverVersion: 'unknown-version' } } }), { category: 'unsupported-request' })
+    for (const mismatch of [{ binding: { ...history.binding, protocolId: 'retired-protocol' } },
+      { records: history.records.map((record, index) => index ? record : { ...record, protocolId: 'retired-protocol' }) }]) {
+      await assert.rejects(f.root.get('harness.protocol-agents').prepare({ runId: 'invalid-protocol-history', sessionId: session.id, modelId: 'default',
+        signal: new AbortController().signal, initialization: history.initialization, input: { schemaVersion: 1, raw: 'never', text: 'never', template: null },
+        history: { ...history, ...mismatch } }), { category: 'unsupported-request' })
+    }
     state.responses.push(answer(protocolId, 'CHILD-ANSWER'))
     const child = await run(f, session.id, first.resultNodeId, 'CHILD-INPUT')
     assert.equal((JSON.stringify(state.requests.at(-1)).match(/CHILD-INPUT/g) ?? []).length, 1)
@@ -166,6 +239,10 @@ for (const images of [false, true]) test(`Anthropic server search resumes across
     const records = await f.harness.getRunRecords(first.id), view = projectProtocolRecords(protocolId, records)
     assert.match(JSON.stringify(view), /https:\/\/example.com\/source/)
     assert.doesNotMatch(JSON.stringify(view), /private-search/)
+    assert.equal(view[0].nativeState.stopReason, 'pause_turn')
+    assert.equal(view[0].blocks[0].type, 'anthropic.server_tool_use')
+    assert.equal(view[1].nativeState.stopReason, 'end_turn')
+    assert.deepEqual(view[1].blocks.map(block => block.type), ['anthropic.web_search_tool_result', 'anthropic.text'])
     await f.close(); f = await host(directory, protocolId, state)
     state.responses.push(answer(protocolId, 'Restored search'))
     await run(f, session.id, first.resultNodeId, 'Continue')
@@ -187,7 +264,10 @@ test('Responses search records native citations while safe projection exposes cl
     assert.ok(state.requests[0].tools.some(tool => tool.type === 'web_search'))
     assert.equal(state.requests[0].store, false)
     const view = projectProtocolRecords(protocolId, await f.harness.getRunRecords(first.id))
-    assert.equal(view[0].blocks.find(block => block.kind === 'text').citations[0].url, 'https://example.com/source')
+    const message = view[0].blocks.find(block => block.type === 'responses.message')
+    assert.equal(message.phase, 'final_answer')
+    assert.equal(message.content[0].citations[0].url, 'https://example.com/source')
+    assert.equal(view[0].nativeState.status, 'completed')
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -242,7 +322,6 @@ for (const protocolId of Object.keys(factories)) test(`${protocolId}: images per
     assert.deepEqual(imageUrls(state.requests[0]), [red.wire])
     assert.deepEqual(imageUrls(state.requests[1]), [red.wire])
     assert.equal(requestMessages(state.requests[0]).at(-1).content[0].text, 'Inspect:$&{{input}}')
-    if (protocolId.startsWith('deepseek')) assert.deepEqual(state.requests[0].thinking, { type: 'disabled' })
     const node = await f.harness.getNode(session.id, first.resultNodeId)
     assert.deepEqual(node.images.map(image => image.assetId), [red.image.assetId])
     assert.equal(node.images[0].expiresAt, undefined)
@@ -313,15 +392,19 @@ for (const protocolId of Object.keys(factories)) test(`${protocolId}: v1 text hi
     assert.equal(first.modelSnapshot.capabilities.imageInput, false)
     assert.equal(first.protocolBinding.loopVersion, '1.0.0')
     assert.equal(first.protocolBinding.driverVersion, '2.0.0')
+    assert.equal(first.protocolBinding.viewSchemaVersion, 1)
     const original = await f.harness.getRunRecords(first.id)
     assert.ok(original.every(record => record.formatVersion === 1))
     await f.close(); f = await host(directory, protocolId, state)
     const picture = await importPicture(f, session.id)
     state.responses.push(answer(protocolId, 'AFTER'))
     const next = await f.harness.startRun({ sessionId: session.id, parentNodeId: first.resultNodeId, input: '', images: [{ assetId: picture.image.assetId }], idempotencyKey: 'after' })
+    assert.equal(next.protocolBinding.viewSchemaVersion, 2, 'display version does not prevent native continuation')
     assert.equal((await f.harness.waitRun(next.id)).status, 'completed')
     assert.deepEqual(imageUrls(state.requests.at(-1)), [picture.wire])
     assert.deepEqual(await f.harness.getRunRecords(first.id), original)
+    assert.equal((await f.harness.getRun(first.id)).protocolBinding.viewSchemaVersion, 1, 'old bindings are never rewritten')
+    assert.ok(projectProtocolRecords(protocolId, original).some(exchange => exchange.blocks.length), 'old native records project into current dedicated content')
     const history = await f.root.get('harness.session-runs').loadNativeHistory(session.id, (await f.harness.getRun(next.id)).resultNodeId)
     assert.deepEqual([...new Set(history.records.map(record => record.formatVersion))], [1, 2])
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
@@ -347,6 +430,7 @@ for (const protocolId of ['responses', 'anthropic-messages', 'gemini-interaction
   try {
     const session = await f.harness.createSession(f.project.id, 'assistant', 'default'), picture = await importPicture(f, session.id)
     const accepted = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: '', images: [{ assetId: picture.image.assetId }], idempotencyKey: 'image' })
+    assert.equal((await f.harness.listSessions(f.project.id))[0].title, '1 张图片')
     if (cancel) { await entered; await f.harness.cancelRun(accepted.id); release() }
     const settled = await f.harness.waitRun(accepted.id)
     assert.equal(settled.status, cancel ? 'cancelled' : 'failed'); assert.equal(settled.resultNodeId, undefined)
@@ -356,6 +440,9 @@ for (const protocolId of ['responses', 'anthropic-messages', 'gemini-interaction
     const record = (await f.harness.getRunRecords(accepted.id)).find(record => record.kind === 'request')
     assert.equal(record.resourceRefs[0].id, picture.image.assetId)
     assert.doesNotMatch(JSON.stringify(record), /base64|data:image/)
+    const view = projectProtocolRecords(protocolId, await f.harness.getRunRecords(accepted.id), settled.promptSnapshots)
+    assert.ok(view.some(exchange => exchange.inputs?.some(input => input.role === 'user' && input.text === '')))
+    assert.doesNotMatch(JSON.stringify(view), /base64|data:image|private-api-key/)
   } finally { release(); await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -417,6 +504,9 @@ for (const cancel of [false, true]) test(`project files remain retained after ${
     assert.equal(settled.status, cancel ? 'cancelled' : 'failed'); assert.equal(settled.resultNodeId, undefined)
     const sent = state.requests[0].messages.at(-1).content
     assert.match(sent, /^TASK:question/); assert.match(sent, /literal \{\{input\}\}/)
+    const view = projectProtocolRecords(protocolId, await f.harness.getRunRecords(accepted.id), settled.promptSnapshots)
+    assert.equal(view[0].inputs.find(input => input.role === 'user').text, sent)
+    assert.deepEqual(view[0].blocks, [])
     const read = f.harness.getFileSnapshot(session.id, ref.snapshotId)
     const content = await read.result; await read.done
     assert.equal(content.file.expiresAt, undefined); assert.equal(content.text, 'literal {{input}}')

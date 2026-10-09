@@ -8,7 +8,7 @@ Bash 组件在选定项目目录中执行本机命令，独占每次调用的子
 
 | 项目 | 定义 |
 | --- | --- |
-| 源码 | [bash-component.ts](../../../src/harness/tool/bash-component.ts) |
+| 源码 | [bash-component.ts](../../../src/applications/harness/core/tool/bash-component.ts) |
 | 工厂 | `createBashComponent(options?: BashOptions)` |
 | Nya 名称 | `bash-tool` |
 | 提供服务 | `tools.bash`，类型 `BashPort` |
@@ -65,6 +65,6 @@ Bash 组件在选定项目目录中执行本机命令，独占每次调用的子
 
 - [bash-component.test.mjs](../../../tests/bash-component.test.mjs)：项目 cwd、最小环境、非零退出、合并输出上限、输入拒绝、超时先于退出、取消与卸载等待、项目查询期间的取消。
 - [tool-loop.test.mjs](../../../tests/tool-loop.test.mjs)：工具调用与 Run 观察/结算的集成行为。
-- [web-server.test.mjs](../../../tests/web-server.test.mjs)：Bash 事件的有界浏览器投影以及取消等待。
+- [harness-server-http.test.mjs](../../../tests/harness-server-http.test.mjs)：Bash 事件的有界浏览器投影以及取消等待。
 
 从仓库根目录运行 `npm run check`；仅定位 Bash 行为时可在构建后运行 `node --test tests/bash-component.test.mjs`。

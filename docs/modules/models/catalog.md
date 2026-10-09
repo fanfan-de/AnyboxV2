@@ -33,6 +33,8 @@
 
 随包加载校验原始文件 SHA-256、provenance 中的固定源地址、格式及时间，然后规范化。素材在 `packages/models/assets/`，带上游许可；只有 `npm --prefix packages/models run catalog:update` 显式下载更新，普通构建与测试不更新快照。
 
+目录初始化与来源接纳在准备阶段之间主动让出事件循环，使常驻产品管理入口能够响应。让出点均在存储原子提交之外；已接纳的准备/写入仍由关闭流程等待。内部只复用本模块复制并深度冻结的普通 JSON 快照及其验证结果；外部即便自行冻结输入也仍需复制和校验，缓存使用 WeakSet，不持有退出后的快照。
+
 ## 刷新、接纳与状态
 
 获取阶段使用私有控制器链接调用者信号和超时，向来源发送匹配内容的 ETag。先等待来源 `result` 和 `done` 实际退出，再检查取消与组件准入状态。
@@ -56,5 +58,7 @@ Effect 关闭同步停止新刷新、清掉调度器、取消当前获取，等�
 ## 测试与扩展
 
 [catalog.test.mjs](../../../packages/models/tests/catalog.test.mjs) 覆盖启动来源优先级、防降级、ETag/304、时钟调度、取消/超时、持久写入等待、依赖替换和缓存重放；[source-definitions.test.mjs](../../../packages/models/tests/source-definitions.test.mjs) 验证接纳与补齐并发。Web 集成见 [models-directory-web.test.mjs](../../../tests/models-directory-web.test.mjs)。
+
+[catalog-responsiveness.test.mjs](../../../packages/models/tests/catalog-responsiveness.test.mjs) 验证接纳期间宿主获得执行机会、来源原子可见性、批次后段失败回滚，以及不可信可变输入不能命中验证缓存。
 
 可替换来源、缓存及 scheduler；来源查询统一走 Settings，不因扩展目录重新建立模型定义副本。参见 [目录来源](catalog-source.md)、[目录缓存](catalog-cache.md)、[Models 协调服务](models.md) 和 [目录验证记录](../../models-catalog-validation.md)。

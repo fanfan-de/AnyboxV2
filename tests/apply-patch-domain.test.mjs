@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyPatchText, parsePatch, validatePatchText } from '../dist/harness/tool/apply-patch-domain.js'
-import { patchDiagnostic } from '../dist/harness/tool/apply-patch-types.js'
+import { applyPatchText, parsePatch, validatePatchText } from '../dist/applications/harness/core/tool/apply-patch-domain.js'
+import { patchDiagnostic } from '../dist/applications/harness/core/tool/apply-patch-types.js'
 
 const patch = (...lines) => ['*** Begin Patch', ...lines, '*** End Patch'].join('\n')
 const chunks = (...lines) => parsePatch(patch('*** Update File: example.txt', ...lines))[0].chunks

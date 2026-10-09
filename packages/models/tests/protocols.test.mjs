@@ -25,10 +25,78 @@ for (const streaming of [false, true]) test(`Chat keeps native multiple calls, f
   await run(execution, { messages: calls.map(call => ({ role: 'tool', tool_call_id: call.id, content: 'done' })) }); assert.equal(sent[1].messages.length, 5); assert.equal(sent[1].messages[2].tool_calls[0].id, 'a'); await execution.close()
 })
 
-test('Chat extension policy makes DeepSeek differences explicit without wrapping transport', async () => {
-  let sent; const protocol = createChatCompletionsProtocol({ fetch: async (_url, init) => { sent = JSON.parse(init.body); return jsonResponse(chatReply()) } }, { protocolId: 'deepseek-chat-completions', name: 'DeepSeek', maxTokensField: 'max_tokens', disableThinking: true, allowDeveloper: false })
-  const execution = nativeSession(protocol, { parameters: { max_tokens: 75 } }); assert.throws(() => execution.prepareExchange({ messages: [{ role: 'developer', content: 'forbidden' }] }), { code: 'invalid-config' })
-  await run(execution, { messages: [{ role: 'user', content: 'hello' }] }); assert.equal(sent.max_tokens, 75); assert.deepEqual(sent.thinking, { type: 'disabled' }); assert.equal(sent.max_completion_tokens, undefined); await execution.close()
+for (const streaming of [false, true]) test(`Chat sends and restores explicit compatible token and thinking parameters (${streaming ? 'SSE' : 'JSON'})`, async () => {
+  const sent = [], parameters = { max_tokens: 75, thinking: { type: 'disabled' } }
+  const protocol = createChatCompletionsProtocol({ fetch: async (_url, init) => {
+    sent.push(JSON.parse(init.body))
+    return streaming ? sse([chatChunk({ role: 'assistant', content: 'answer' }, 'stop'), '[DONE]']) : jsonResponse(chatReply())
+  } })
+  const execution = nativeSession(protocol, { streaming, parameters })
+  await run(execution, { messages: [{ role: 'system', content: 'instruction' }, { role: 'user', content: 'hello' }] })
+  assert.equal(execution.snapshot.protocolId, 'chat-completions'); assert.equal(execution.snapshot.capabilities.reasoning.support, 'unsupported')
+  assert.equal(sent[0].max_tokens, 75); assert.deepEqual(sent[0].thinking, { type: 'disabled' }); assert.equal(sent[0].max_completion_tokens, undefined)
+  const archive = await execution.close(), restore = { ...archive.restoreState, records: archive.records }
+  const restored = nativeSession(protocol, { streaming, parameters, restore })
+  await run(restored, { messages: [{ role: 'user', content: 'continue' }] })
+  assert.equal(sent[1].messages[0].role, 'system'); assert.equal(sent[1].messages.length, 4); assert.equal(sent[1].max_tokens, 75); assert.deepEqual(sent[1].thinking, { type: 'disabled' })
+  assert.ok(archive.records.every(record => record.protocolId === 'chat-completions')); await restored.close()
+})
+
+test('Chat sends enabled thinking and leaves omitted native parameters to the provider', async () => {
+  const sent = [], protocol = createChatCompletionsProtocol({ fetch: async (_url, init) => { sent.push(JSON.parse(init.body)); return jsonResponse(chatReply()) } })
+  const enabled = nativeSession(protocol, { parameters: { max_completion_tokens: 90, thinking: { type: 'enabled' }, reasoning_effort: 'high' } })
+  await run(enabled, { messages: [{ role: 'developer', content: 'instruction' }, { role: 'user', content: 'hello' }] }); await enabled.close()
+  assert.equal(sent[0].max_completion_tokens, 90); assert.equal(sent[0].max_tokens, undefined); assert.deepEqual(sent[0].thinking, { type: 'enabled' }); assert.equal(sent[0].reasoning_effort, 'high')
+  const omitted = nativeSession(protocol)
+  await run(omitted, { messages: [{ role: 'user', content: 'hello' }] }); await omitted.close()
+  for (const key of ['max_tokens', 'max_completion_tokens', 'thinking', 'reasoning_effort']) assert.equal(sent[1][key], undefined)
+})
+
+test('Chat accumulates fragmented native reasoning through tools and restores complete assistant messages', async () => {
+  const sent = [], parameters = { max_tokens: 150, thinking: { type: 'enabled' }, reasoning_effort: 'high' }
+  const protocol = createChatCompletionsProtocol({ fetch: async (_url, init) => {
+    sent.push(JSON.parse(init.body))
+    if (sent.length === 1) return sse([
+      chatChunk({ role: 'assistant', reasoning_content: '先检查🙂' }),
+      chatChunk({ reasoning_content: '再调用工具', tool_calls: [{ index: 0, id: 'lookup', type: 'function', function: { name: 'lookup', arguments: '{"query":' } }] }),
+      chatChunk({ reasoning_content: null, tool_calls: [{ index: 0, function: { arguments: '"甲"}' } }] }, 'tool_calls'), '[DONE]',
+    ])
+    return sse([chatChunk({ role: 'assistant', reasoning_content: '根据' }),
+      chatChunk({ reasoning_content: '工具结果', content: 'Answer' }, 'stop'), '[DONE]'])
+  } })
+  const execution = nativeSession(protocol, { streaming: true, parameters })
+  const first = await run(execution, { messages: [{ role: 'user', content: 'question' }], tools: [{ type: 'function', function: { name: 'lookup', parameters: { type: 'object' } } }] })
+  assert.equal(first.choices[0].message.reasoning_content, '先检查🙂再调用工具')
+  assert.deepEqual(first.choices[0].message.tool_calls[0].function, { name: 'lookup', arguments: '{"query":"甲"}' })
+  const second = await run(execution, { messages: [{ role: 'tool', tool_call_id: 'lookup', content: 'result' }] })
+  assert.equal(sent[1].messages[1].reasoning_content, '先检查🙂再调用工具')
+  assert.equal(sent[1].messages[1].tool_calls[0].id, 'lookup')
+  assert.equal(second.choices[0].message.reasoning_content, '根据工具结果')
+  const archive = await execution.close(), before = structuredClone(archive)
+  const restored = nativeSession(protocol, { streaming: true, parameters, restore: { ...archive.restoreState, records: archive.records } })
+  await run(restored, { messages: [{ role: 'user', content: 'continue' }] })
+  assert.equal(sent[2].messages[1].reasoning_content, '先检查🙂再调用工具')
+  assert.equal(sent[2].messages[3].reasoning_content, '根据工具结果')
+  assert.equal(sent[2].messages[4].content, 'continue')
+  assert.deepEqual(archive, before); await restored.close()
+})
+
+test('Chat validates token alternatives and declared thinking capabilities before transport', () => {
+  const protocol = createChatCompletionsProtocol()
+  for (const parameters of [
+    { max_tokens: 1, max_completion_tokens: 1 }, { max_tokens: 0 }, { max_tokens: 1.5 }, { max_completion_tokens: -1 },
+    { thinking: {} }, { thinking: { type: 'adaptive' } }, { thinking: { type: 'enabled', budget_tokens: 1024 } },
+    { thinking: { type: 'disabled' }, reasoning_effort: 'high' }, { thinking: { type: 'disabled' }, reasoning_effort: 'none' },
+    { thinking: { type: 'enabled' }, reasoning_effort: 'none' },
+  ]) assert.throws(() => protocol.validateParameters(parameters, declared), { code: 'invalid-config' })
+  for (const reasoning of [{ support: 'unknown' }, { support: 'unsupported' }, { support: 'supported' }, { support: 'supported', modes: ['disabled'] }]) {
+    const declaration = { ...declared, reasoning }
+    assert.throws(() => protocol.validateParameters({ thinking: { type: 'enabled' } }, declaration), { code: 'capability-unsupported' })
+    protocol.validateParameters({ max_tokens: 75, thinking: { type: 'disabled' } }, declaration)
+    assert.equal(protocol.effectiveCapabilities(declaration, { thinking: { type: 'disabled' } }).reasoning.support, 'unsupported')
+  }
+  protocol.validateParameters({ thinking: { type: 'enabled' } }, declared)
+  assert.throws(() => protocol.validateParameters({ reasoning_effort: 'low' }, { ...declared, reasoning: { support: 'supported', efforts: ['high'] } }), { code: 'capability-unsupported' })
 })
 
 test('parameter validation rejects unimplemented fields and requires explicit server-search support', () => {

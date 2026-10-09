@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { test } from 'node:test'
-import { openRunChangeStream } from '../dist/host/run-change-stream.js'
+import { openRunChangeStream } from '../dist/applications/harness/http/run-change-stream.js'
 
 function response() {
   return Object.assign(new EventEmitter(), {
@@ -51,8 +51,9 @@ test('replacement views coalesce by Run under backpressure and retain independen
   const res = response(); res.writable = false
   const stream = openRunChangeStream(res, new Set(['a', 'b']))
   const publish = (sessionId, runId, viewRevision) => stream.publishProtocolView({ sessionId, runId,
-    snapshot: { envelopeVersion: 1, viewSchemaVersion: 1, protocolId: 'responses', sessionId, runId, viewRevision,
-      status: 'provisional', exchanges: [{ id: 'e', blocks: [{ id: 'text', kind: 'text', text: 'x'.repeat(20_000) }] }] } })
+    snapshot: { envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'responses', sessionId, runId, viewRevision,
+      status: 'provisional', exchanges: [{ id: 'e', blocks: [{ id: 'item-0', type: 'responses.message', content: [
+        { id: 'item-0:part-0', type: 'output_text', text: 'x'.repeat(20_000) }] }] }] } })
   try {
     for (let revision = 0; revision < 1000; revision++) publish('a', 'run-a', revision)
     publish('b', 'run-b', 7)

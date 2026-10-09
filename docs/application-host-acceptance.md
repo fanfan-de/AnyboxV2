@@ -1,0 +1,69 @@
+# 通用应用宿主验收（2026-09-30）
+
+分支：`codex/application-host`。沿用实施前工作树改动；未修改 NyaCore 公共 API。设计见[应用宿主](products-v1.md)，新增应用步骤见[开发者接入](application-development.md)。
+
+## 自动化验证
+
+根 `npm run check` 完成 TypeScript strict 检查、构建、登记资源图检查及行为测试：719 项，706 通过、0 失败、13 条件跳过。跳过项为真实系统凭据/平台与远端模型测试，本次未启用它们。
+
+- `application-host.test.mjs`：空目录、独立应用服务/持久数据、并发与失败隔离、重启目标恢复、目录删除保留数据、路由资源冲突、操作准入与真实退出、关闭异常聚合。
+- `harness-server-runtime.test.mjs`、`product-control-races.test.mjs`、`products*.test.mjs`：部分装配失败清理、清理失败隔离、缺依赖恢复、Run 准备保护、事务失败解冻、旧目标库迁移、HTTP 断连与关闭。
+- `application-workspace.test.mjs`：标签顺序/局部路由恢复、无效记录过滤、关闭后的右侧/左侧选择、正式浏览器依赖图。
+- 既有 Models、Anybox Harness、存储、图片/文件、会话树、原生协议及部署测试一并运行。
+
+另将 `dist/`、`web/` 复制到临时发行目录，执行 `verifyDefaultWebAssets(root, copiedDirectory)`，确认复制后的入口、相对依赖、模板和样式全部可解析；`git diff --check` 通过。
+
+## 实际浏览器验证
+
+运行 `tests/helpers/products-browser-host.mjs`，使用临时 SQLite、内存凭据、本地受控模型与禁用外部网络的目录来源。Notes 仅通过正式 `ApplicationRegistration` 加入测试目录，拥有自己的 Nya 服务、迁移数据、HTTP 和 Web 入口；正式目录仍只登记 Anybox Harness。
+
+| 场景 | 观察结果 |
+| --- | --- |
+| 多应用打开/切换 | Notes 与 Anybox Harness 同时运行，每应用只有一个标签；后台容器 hidden/inert，切换保留输入 |
+| Anybox Harness 分屏与刷新 | 两个会话面板、草稿和选中位置在切换及刷新后保持；隐藏尺寸不覆盖分屏 |
+| Notes 滚动与路由 | 可见时滚动位置往返保持；后台导航只修改自己的记录，不抢当前地址 |
+| 未保存保护与焦点 | 未保存 Notes 阻止关闭；保存后可关闭；方向键切换并移动焦点 |
+| 异步退出与重选 | 延迟退出期间重新选中 Notes 不触发重挂载；退出完成后移除标签并选择相邻标签 |
+| 显式停止应用 | 停止 Notes 后移除它的标签并聚焦 Anybox Harness；Anybox Harness 页面和服务继续工作 |
+| 浏览器前进/后退 | Notes 局部导航后切到 Anybox Harness，后退恢复 Notes 原路由，前进恢复 Anybox Harness |
+| 连接修改 | 编辑测试连接只重建 Anybox Harness，Notes 草稿和滚动仍在 |
+| 已停止 Agent 恢复 | 明确停止后，切换和刷新仍显示未启动；未隐式装配 |
+| 界面模块失败 | 注入入口加载错误后后台仍为 running；恢复文件并点击重新加载界面成功，无须重启后台 |
+| Run 忙碌停止 | 受控模型等待期间停止执行 Agent 被拒绝，标签和运行目标保留 |
+| 关闭标签后 Run | 关闭 Anybox Harness 标签后，重新打开仍可看到原 Run；释放受控响应后生成持久成功节点与回答 |
+
+Run 验证中的一次人为长暂停触发了模型超时；缩短暂停后完成成功路径。测试没有使用真实模型服务、用户凭据或现有业务数据库。
+
+## 复验
+
+先运行 `npm run check`，再运行 `node tests/helpers/products-browser-host.mjs`。控制台输出临时地址，交互命令包括 `hold-model` / `release-model`（控制响应）、`fail-ui` / `restore-ui`（只改临时 Notes 入口）、`state`（查看执行端状态）。输入 `quit` 关闭两端根并删除临时数据。
+
+页面的“后台导航”和“延迟退出”用于验证后台路由与异步前端清理；业务运行目标独立于前端标签。测试结束后关闭测试浏览器页，不保留临时监听器。
+
+## 宿主与应用目录分离复验（2026-10-01）
+
+Anybox 通用宿主归入 `src/host/`，完整 Anybox Harness 应用归入 `src/applications/harness/`，正式默认目录与进程启动归入 `src/entrypoints/`。通用客户端和执行端工厂显式接收注册目录，支持空目录；Anybox Harness 的配置、Models 装配、HTTP、连接网关和界面均由应用持有。未修改 NyaCore，业务 API、路由、迁移账本和持久数据格式沿用当前契约。
+
+根 `npm run check` 完成 strict 检查、构建、资源图与行为测试：722 项，709 通过、0 失败、13 条件跳过。新 `application-boundaries.test.mjs` 解析含 type-only 边的传递依赖，验证通用宿主与存储不依赖具体应用或 Models，harness server 核心不依赖适配层，浏览器不引入原生实现。通用宿主测试直接运行空目录和独立 Notes，验证资源、认证、持久目标及注册能力归属；未启动应用也可发现其静态声明，空目录不宣称 Anybox Harness 能力。
+
+将 `dist/`、`web/` 复制到临时发行目录后，`verifyDefaultWebAssets` 再次通过，确认新的 `/host/web/` 和 `/applications/harness/` JavaScript 层级可解析；启动脚本和部署示例使用 `dist/entrypoints/`。`git diff --check` 通过。
+
+临时浏览器复验确认：外壳、Anybox Harness 和 Notes 均能加载，Anybox Harness 能打开本地测试 Agent 和项目工作区，两应用往返切换后 Notes 草稿保留，浏览器无错误或警告日志。此轮只复验目录迁移相关加载与切换，不重复声称上方所有人工场景均已重新运行。临时页面、监听器、数据库和凭据替身已清理。
+
+## 左侧应用导航复验（2026-10-01）
+
+应用入口统一在最左侧窄条，取消顶部应用标签栏；顶部“关闭界面”沿用只等待前端清理的契约，显式停止独立控制后台。工作区继续读取原有 `anybox.apps.workspace.v1` 与 `tabs` 字段。根 `npm run check` 通过：722 项，709 通过、0 失败、13 条件跳过。
+
+使用同一临时双应用宿主复验：左侧始终显示 Anybox Harness 与 Notes，当前应用标记随切换更新；Notes 草稿与内部路由往返保留，未保存内容阻止关闭，保存后重新打开能读取持久数据。关闭 Notes 的延迟清理期间切换 Anybox Harness，清理完成后活动应用与焦点仍留在 Anybox Harness。显式停止 Notes 后入口仍保留。停止执行 Agent 后，切回 Anybox Harness 及刷新均保持未启动状态。上/下方向键只移动入口焦点。窄屏与桌面宽度均显示应用入口并取消旧标签栏。
+
+此轮未重新执行前述模型 Run、连接编辑、故障注入与全部键盘场景；历史验收结果仍归各自记录。
+
+## 应用完整内容区复验（2026-10-01）
+
+移除宿主 Anybox 顶部栏，右侧仅保留应用挂载容器。关闭界面与停止应用位于左侧窄条底部；“我的应用”使用管理浮层承载列表、状态、通知与界面重载。运行 `npm run check`：722 项，709 通过、0 失败、13 条件跳过。
+
+临时双应用宿主中确认 Anybox Harness 与 Notes 的面板顶部均为 0，右侧主容器只包含应用面板，宿主通知不进入应用内容。Notes 草稿与局部路由在打开管理浮层后保留，未保存关闭提示出现在浮层；保存并关闭最后一个界面后右侧留空，后台目标保留。窄条停止操作成功关闭 Notes，应用入口仍在。
+
+已停止 Anybox Harness 的深链接只恢复空挂载容器与管理浮层，没有自动启动；手动关闭浮层后跨越一次三秒目录刷新仍保持关闭。注入临时 Notes 入口错误后，右侧没有宿主错误页面，管理浮层提供“重新加载界面”；恢复文件并重载后能读取已保存数据，提示清除，后台目标保持运行。明确打开 Anybox Harness 后成功呈现完整工作区并自动收起管理浮层。
+
+此次只复验上述布局与管理入口场景，没有重复执行模型 Run、取消、连接编辑及全部键盘场景。测试使用临时数据库和凭据替身，结束后关闭临时页面与两端宿主。

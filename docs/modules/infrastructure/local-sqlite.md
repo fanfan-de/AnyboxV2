@@ -8,7 +8,7 @@ Local SQLite 为业务领域提供独占的文件数据库，集中管理连接�
 
 | 项目 | 定义 |
 | --- | --- |
-| 实现 / 端口 | [sqlite.ts](../../../src/storage/sqlite.ts) / [port.ts](../../../src/harness/storage/port.ts) |
+| 实现 / 端口 | [sqlite.ts](../../../src/storage/sqlite.ts) / [port.ts](../../../src/storage/port.ts) |
 | 工厂 | `createLocalSqliteComponent(file: string)` |
 | Nya 名称 / 服务 | `local-sqlite` / `local-storage: LocalStoragePort` |
 | `inject` | 无 |
@@ -42,7 +42,7 @@ reader/transaction 仅在回调生命周期内有效，即使回调异步等待�
 
 不同领域的版本独立。数据库记录的领域版本高于应用提供的迁移数量时返回 `schema-version`，禁止用旧代码打开更新的领域结构。Session 的 `run-state` 账本、Prompt 和 Projects 表结构由各自组件解释，不写死在本组件工厂中。
 
-当前附件同样复用本连接：[Image Assets](../images/image-assets.md) 登记 `image-assets` v1，保存图片元数据及保留凭证；[Project Files](../sessions/project-files.md) 登记 `project-files` v1，保存文本 BLOB、准备批次及保留凭证。[Session](../sessions/session.md) 的 `run-state` 当前为 v7，归档增加列和索引，不新建存储组件。接受 Run 时，同一事务调用两个资源组件的同步 retainIn，附件引用与 Run 一起提交或回滚；通用存储不解释这些领域规则。
+当前附件同样复用本连接：[Image Assets](../images/image-assets.md) 登记 `image-assets` v1，保存图片元数据及保留凭证；[Project Files](../sessions/project-files.md) 登记 `project-files` v1，保存文本 BLOB、准备批次及保留凭证。[Session](../sessions/session.md) 的 `run-state` 当前为 v8，v7 为归档增加列和索引，v8 增加按 Agent 保存的新会话默认模型，不新建存储组件。接受 Run 时，同一事务调用两个资源组件的同步 retainIn，附件引用与 Run 一起提交或回滚；通用存储不解释这些领域规则。
 
 ## 准入、取消与关闭
 

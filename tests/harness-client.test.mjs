@@ -1,13 +1,37 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createHarnessClient, scopedId, splitScopedId, connectionResourceURL, mapResourceIds } from '../dist/client/harness-client.js'
-import { migrateLegacyState } from '../dist/client/legacy-state.js'
-import { emptyWorkspace, splitSession, openSession, panes, restoreWorkspace, waitForProjectSnapshot } from '../dist/client/workspace-layout.js'
-import { createPendingStore } from '../dist/client/session-client.js'
-import { createDraftStore } from '../dist/client/draft-client.js'
+import { createHarnessClient, scopedId, splitScopedId, connectionResourceURL, mapResourceIds } from '../dist/applications/harness/web/harness-client.js'
+import { migrateLegacyState } from '../dist/applications/harness/web/legacy-state.js'
+import { emptyWorkspace, splitSession, openSession, panes, restoreWorkspace, waitForProjectSnapshot } from '../dist/applications/harness/web/workspace-layout.js'
+import { createPendingStore } from '../dist/applications/harness/web/session-client.js'
+import { createDraftStore } from '../dist/applications/harness/web/draft-client.js'
 const a = '11111111-1111-4111-8111-111111111111', b = '22222222-2222-4222-8222-222222222222'
-const connections = [{ id: 'a', name: 'Laptop', instanceId: a }, { id: 'b', name: 'Server', instanceId: b }]
+const connections = [{ id: 'a', name: 'Laptop', instanceId: a, revision: 1 }, { id: 'b', name: 'Server', instanceId: b, revision: 1 }]
 const store = () => { const map = new Map(); return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value) } }
+
+test('session default model IDs remain scoped to their execution device while fixed settings clients use local IDs', async t => {
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options })
+    return Response.json({ agentId: 'assistant', modelId: 'chosen', fallbackModelId: 'startup', effectiveModelId: 'chosen', revision: 2 })
+  })
+  const api = createHarnessClient(connections, 'a')
+  try {
+    const defaults = await api(`/agents/${encodeURIComponent(scopedId(b, 'assistant'))}/session-defaults`)
+    assert.deepEqual(defaults, { agentId: scopedId(b, 'assistant'), modelId: scopedId(b, 'chosen'),
+      fallbackModelId: scopedId(b, 'startup'), effectiveModelId: scopedId(b, 'chosen'), revision: 2 })
+    assert.equal(calls.at(-1).url, '/api/connections/b/v1/agents/assistant/session-defaults')
+    await api(`/agents/${encodeURIComponent(scopedId(b, 'assistant'))}/session-defaults`, { modelId: scopedId(b, 'chosen'), expectedRevision: 2 })
+    assert.deepEqual(JSON.parse(calls.at(-1).options.body), { modelId: 'chosen', expectedRevision: 2 })
+    const count = calls.length
+    await assert.rejects(api(`/agents/${encodeURIComponent(scopedId(b, 'assistant'))}/session-defaults`,
+      { modelId: scopedId(a, 'chosen'), expectedRevision: 2 }), { code: 'cross-instance-input' })
+    assert.equal(calls.length, count)
+    assert.equal((await api.forConnection('b')('/agents/assistant/session-defaults')).effectiveModelId, 'chosen')
+    assert.deepEqual(mapResourceIds({ modelId: null, fallbackModelId: null, effectiveModelId: null }, id => scopedId(a, id)),
+      { modelId: null, fallbackModelId: null, effectiveModelId: null })
+  } finally { await api.dispose() }
+})
 
 test('same resource IDs are scoped across projects, archives, models, files, images, commands and fixed settings clients', async t => {
   const calls = []
@@ -29,7 +53,11 @@ test('same resource IDs are scoped across projects, archives, models, files, ima
   await assert.rejects(api(`/sessions/${scopedId(b, 'same')}/runs`, { modelId: scopedId(a, 'same') }), { code: 'cross-instance-input' })
   await assert.rejects(api('/sessions/legacy/runs', { input: 'never to selected instance' }), { code: 'instance-unavailable' })
   assert.equal(calls.length, count)
-  assert.equal(connectionResourceURL(scopedId(b, 'same'), `/sessions/${scopedId(b, 'same')}/images/${scopedId(b, 'image')}/content`), '/api/connections/b/v1/sessions/same/images/image/content')
+  const resource = new URL(connectionResourceURL(scopedId(b, 'same'), `/sessions/${scopedId(b, 'same')}/images/${scopedId(b, 'image')}/content`), 'http://local')
+  assert.equal(resource.pathname, '/api/connections/b/v1/sessions/same/images/image/content')
+  assert.equal(resource.searchParams.get('__anyboxProductId'), 'agent')
+  assert.equal(resource.searchParams.get('__anyboxInstanceId'), b)
+  assert.equal(resource.searchParams.get('__anyboxConnectionRevision'), '1')
   await api.forConnection('b')('/models')
   assert.equal(calls.at(-1).url, '/api/connections/b/v1/models')
   api.dispose(); await assert.rejects(api('/projects'), /client-disposed/)
@@ -49,6 +77,26 @@ test('four panes and persistent pending/drafts with equal server IDs retain sepa
   assert.equal(createPendingStore(storage).get(scopedId(a, 's')).input, a)
   assert.equal(createPendingStore(storage).get(scopedId(b, 's')).input, b)
   assert.equal(createDraftStore(storage).get(scopedId(b, 's'), scopedId(b, 'node')).text, b)
+})
+
+test('incompatible stream views keep session and Run identities scoped to the notifying device', async t => {
+  const streams = new Map(), incompatible = [], refreshed = [], views = []
+  t.mock.method(globalThis, 'fetch', async url => new Response(new ReadableStream({
+    start(controller) { streams.set(url.includes('/a/') ? 'a' : 'b', controller) },
+  }), { headers: { 'Content-Type': 'text/event-stream' } }))
+  const api = createHarnessClient(connections), changes = api.changes({
+    refresh: id => refreshed.push(id), view: snapshot => views.push(snapshot), connected() {},
+    incompatibleView: (...ids) => incompatible.push(ids),
+  })
+  t.after(async () => { for (const controller of streams.values()) controller.close(); changes.dispose(); await api.dispose() })
+  changes.update([scopedId(a, 'same'), scopedId(b, 'same')])
+  await new Promise(resolve => setImmediate(resolve))
+  const send = (device, version, runId = 'run', sessionId = 'same') => streams.get(device).enqueue(new TextEncoder().encode(
+    `event: protocol-view\ndata: ${JSON.stringify({ sessionId, runId, snapshot: { envelopeVersion: 1, viewSchemaVersion: version, sessionId, runId } })}\n\n`))
+  send('a', 1); send('a', 99); send('a', 1, 'outside', 'not-subscribed'); send('b', 0)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.deepEqual(incompatible, [[scopedId(a, 'same'), scopedId(a, 'run')], [scopedId(b, 'same'), scopedId(b, 'run')]])
+  assert.deepEqual(refreshed, []); assert.deepEqual(views, [])
 })
 
 test('legacy state stays untouched until launcher identity and remote session ownership are confirmed', async () => {
@@ -129,6 +177,31 @@ test('project selection captures connection identity and revision for browse, na
   assert.equal(calls.at(-1).options.headers['X-Anybox-Connection-Revision'], '4')
   assert.equal(Object.isFrozen(bound.connection), true)
   api.dispose()
+})
+
+test('a selected inactive or missing device never redirects new work to another active device', async t => {
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options })
+    return Response.json({ id: 'run', sessionId: 'session' })
+  })
+  for (const selectedId of ['b', 'removed-connection']) {
+    const api = createHarnessClient([connections[0]], selectedId)
+    try {
+      assert.equal(api.directoryTarget(), undefined, 'new-project selection must stay unavailable')
+      assert.equal(api.directoryTarget('a').connection.instanceId, a, 'an explicit healthy-device choice is still usable')
+      const count = calls.length
+      await assert.rejects(api('/projects', { path: '/workspace' }), { code: 'instance-unavailable' })
+      assert.equal(calls.length, count, 'no registration may reach the other active device')
+      const result = await api(`/sessions/${scopedId(a, 'session')}/runs`, { parentNodeId: null, input: 'Continue the healthy conversation' })
+      assert.equal(result.id, scopedId(a, 'run'))
+      assert.equal(calls.at(-1).url, '/api/connections/a/v1/sessions/session/runs')
+      assert.equal(calls.at(-1).options.headers['X-Anybox-Expected-Instance-Id'], a)
+    } finally { await api.dispose() }
+  }
+  const unselected = createHarnessClient([connections[0]])
+  try { assert.equal(unselected.directoryTarget().connection.instanceId, a) }
+  finally { await unselected.dispose() }
 })
 
 test('partial device lists preserve a pending project route while healthy projects remain usable', async t => {

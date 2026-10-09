@@ -10,6 +10,6 @@
 
 [Session](../sessions/session.md)、[Projects](../sessions/projects.md)、[Prompts](../prompts/prompts.md) 和 [Agent Prompts](../prompts/agent-prompts.md) 通过 `LocalStoragePort` 使用此连接，各自持有领域表与迁移。通用存储只管理 `schema_migrations` 账本及其布局版本，不接收预先拼装的领域迁移列表，也不解释会话、模型或 Prompt 语义。
 
-Models 配置库与目录缓存库由 [Models 模块](../models/README.md) 中的组件分别独占，不借用 `local-storage` 连接。三套文件路径必须分离。系统凭据由 Models Vault 保管，不能以业务 SQLite 作为密钥后备。
+Models 的 JSON 配置文件与 SQLite 目录缓存由 [Models 模块](../models/README.md) 中的组件分别独占，不借用 `local-storage` 连接。JSON、旧配置导入源、目录缓存与业务库路径必须分离。系统凭据由 Models Vault 保管，不能以业务 SQLite 或 JSON 作为密钥后备。
 
-全部组件安装在应用唯一 Nya 根 Context 上。资源关闭顺序由真实依赖和 Effect 决定；`harness.close()` 是当前应用的关闭入口。具体业务存储逻辑、迁移兼容与领域恢复见各消费者文档。
+全部组件安装在应用唯一 Nya 根 Context 上。资源关闭顺序由真实依赖和 Effect 决定；应用宿主 `close()` 是整根关闭入口，产品停用保留常驻业务库。具体业务存储逻辑、迁移兼容与领域恢复见各消费者文档。

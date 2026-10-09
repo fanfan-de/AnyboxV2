@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { closePane, emptyWorkspace, fitRatios, fits, minimumSize, openSession, panes, parseRoute,
-  ratioBounds, resizeSplit, restoreWorkspace, sessionHash, splitSession } from '../dist/client/workspace-layout.js'
+  ratioBounds, resizeSplit, restoreWorkspace, sessionHash, splitSession } from '../dist/applications/harness/web/workspace-layout.js'
 
 const ref = (sessionId, projectId = 'project') => ({ sessionId, projectId })
 const one = () => openSession(emptyWorkspace, ref('a'))

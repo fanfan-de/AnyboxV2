@@ -1,6 +1,6 @@
-import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
-import { imageAssetsServiceKey } from '../dist/harness/image/port.js'
+import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
+import { imageAssetsServiceKey } from '../dist/applications/harness/core/image/port.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -8,17 +8,19 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createSessionComponent } from '../dist/harness/session/component.js'
-import { sessionServiceKey, sessionRunServiceKey } from '../dist/harness/session/port.js'
-import { createProjectComponent, projectServiceKey } from '../dist/harness/project/component.js'
+import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
+import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/harness/storage/port.js'
-import { createPromptComponent } from '../dist/harness/prompt/component.js'
-import { createAgentPromptComponent } from '../dist/harness/agent/prompt-binding-component.js'
-import { createRunRuntimeComponent } from '../dist/harness/run/runtime-component.js'
-import { createRunComponent, runServiceKey } from '../dist/harness/run/component.js'
-import { createBashComponent } from '../dist/harness/tool/bash-component.js'
-import { createApplyPatchComponent } from '../dist/harness/tool/apply-patch-component.js'
+import { localStorageServiceKey } from '../dist/storage/port.js'
+import { createPromptComponent } from '../dist/applications/harness/core/prompt/component.js'
+import { createAgentPromptComponent } from '../dist/applications/harness/core/agent/prompt-binding-component.js'
+import { createRunRuntimeComponent } from '../dist/applications/harness/core/run/runtime-component.js'
+import { createRunComponent, runServiceKey } from '../dist/applications/harness/core/run/component.js'
+import { createBashComponent } from '../dist/applications/harness/core/tool/bash-component.js'
+import { createApplyPatchComponent } from '../dist/applications/harness/core/tool/apply-patch-component.js'
+import { createFileToolsComponent } from '../dist/applications/harness/core/tool/files-component.js'
+import { createProcessToolsComponent } from '../dist/applications/harness/core/tool/process-component.js'
 import { modelsServiceKey } from '@anybox/models'
 import { controlledModels, deferred, ids } from './helpers/controlled-models.mjs'
 
@@ -43,6 +45,8 @@ async function fixture(execution = false, imagePort) {
       await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
       await root.installComponent(createBashComponent())
       await root.installComponent(createApplyPatchComponent())
+      await root.installComponent(createFileToolsComponent())
+      await root.installComponent(createProcessToolsComponent())
       await root.installComponent(createRunRuntimeComponent(inputs))
       await installTestProtocolAgents(root)
       await root.installComponent(createRunComponent(inputs, agents))
@@ -192,7 +196,7 @@ test('Session revocation joins executing consumers and a new owner preserves con
     await ready(f.root, runServiceKey)
     const current = f.root.get(sessionServiceKey)
     assert.notEqual(current, sessions)
-    assert.deepEqual(await current.getSession(session.id), { ...session, protocolId: 'chat-completions' })
+    assert.deepEqual(await current.getSession(session.id), { ...session, title: 'First', protocolId: 'chat-completions' })
     assert.deepEqual(await current.getRun(second.id), interrupted)
     assert.equal((await current.getRunEvents(second.id)).at(-1).status, 'failed')
     assert.deepEqual((await current.getNodePath(session.id, completed.resultNodeId)).map(node => node.output), ['Saved answer'])

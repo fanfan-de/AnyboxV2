@@ -1,8 +1,12 @@
 # Models 模块架构
 
-> 本文图示保留原生协议迁移前的架构记录。当前调用接口、资源归属与持久化以 [Harness组件说明](../harness-components.md) 和 [原生协议设计](../native-protocol-agent-framework-design.md) 为准。
+> 本页为历史架构快照；文中链接指向当前入口，图源节点和已导出的 SVG/PNG 保留绘制时的命名及结构。当前三层命名以 [命名规范](../naming.md) 为准。
 
-对应 `packages/models` 与当前 Harness/Web 接入的实际实现。实线表示调用或资源访问，虚线表示协议注册。图中的协议组件组包含可同时安装的多个 Nya 组件。
+> 本文图示保留原生协议迁移前的架构记录。当前调用接口、资源归属与持久化以 [harness server 组件说明](../harness-server-components.md) 和 [原生协议设计](../native-protocol-agent-framework-design.md) 为准。
+
+当前 Anybox Harness 的 Models 非秘密配置直接保存在 `models.json`，使用 [JSON 配置存储](../modules/models/json-store.md)；本文原 SQLite Store 图保留为历史快照与可替换提供方说明。目录缓存和 Session/Run 业务库仍为独立 SQLite，密钥始终保存在系统 Vault。能力在界面只读展示，人工修正需停止执行设备的 Agent 后编辑实际 JSON 配置，再重新启动。
+
+对应 `packages/models` 与当前 Anybox Harness/Web 接入的实际实现。实线表示调用或资源访问，虚线表示协议注册。图中的协议组件组包含可同时安装的多个 Nya 组件。
 
 完整模块框架图保存在模块自己的文档目录：[高清 PNG](../../packages/models/docs/architecture.png) · [SVG](../../packages/models/docs/architecture.svg) · [可编辑 draw.io（两页）](../../packages/models/docs/architecture.drawio)。主图包含 10 个内置 Nya 组件：Models、Store、Vault、四种原生协议，以及可选目录的来源、缓存和目录服务。Models 核心提供四个服务端口，其中 `models.source-data` 是受信接纳端口，不是额外组件；目录通过它接纳统一定义并等待连接初始化。配置者选择 Provider 定义、保存连接与 Key，调用者选择稳定的执行配置 ID。主图标注实际 Nya 依赖、自动基础配置规则及执行资源边界；第二页展开定义、连接与执行配置的数据关系。
 
@@ -126,11 +130,11 @@ flowchart LR
 
 Responses 私有保存 reasoning、加密内容和 phase；Anthropic 保存完整有序内容块、thinking 签名与 redacted thinking；Gemini 保存原生步骤、thought 摘要与签名。两套新协议把原生工具 ID 留在续轮上下文，公共 ID 在增量与最终结果中保持一致。新增消息只在实际退出成功后写入私有上下文；Session 只保存文本契约与模型选择，重开 execution 不恢复进程内原生状态。
 
-当前执行契约包含文本、用户定义函数工具，以及 Chat/DeepSeek 显式声明的本地图片输入；Responses、Anthropic、Gemini 的有效图片能力仍为 false。图片读取端口按 execution 固定，原生记录只保存资源引用，实际请求在 start 后编码。完整设计见 [图片输入链路](../multimodal-image-input-design.md)。参数省略保留原生 API 默认值；描述符的 `defaultValue` 用于初始化表单和自动基础配置，保存的值才进入执行快照。Anthropic 必须显式保存 `max_tokens`（默认 `4096`，受模型输出上限约束），使用固定版本头与通过 `x-api-key` 传入的 workspace-scoped API key；Gemini 使用原生 Interactions、`x-goog-api-key` 和 `store: false`。各协议支持的推理控制与约束见模块 README。
+当前执行契约包含文本、用户定义函数工具，以及 Responses、Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议显式声明的本地图片输入。DeepSeek 是标准 Chat Completions 的 Provider，不单独注册驱动。图片读取端口按 execution 固定，原生记录只保存资源引用，实际请求在 start 后编码。完整设计见 [图片输入链路](../multimodal-image-input-design.md)。参数省略保留原生 API 默认值；描述符的 `defaultValue` 用于初始化表单和自动基础配置，保存的值才进入执行快照。Anthropic 必须显式保存 `max_tokens`（默认 `4096`，受模型输出上限约束），使用固定版本头与通过 `x-api-key` 传入的 workspace-scoped API key；Gemini 使用原生 Interactions、`x-goog-api-key` 和 `store: false`。各协议支持的推理控制与约束见模块 README。
 
 源码入口：[公共契约](../../packages/models/src/types.ts)、[目录契约](../../packages/models/src/catalog-types.ts)、[目录服务](../../packages/models/src/catalog.ts)、[目录来源](../../packages/models/src/catalog-source.ts)、[目录缓存](../../packages/models/src/catalog-cache.ts)、[模型服务](../../packages/models/src/component.ts)、[执行上下文](../../packages/models/src/execution.ts)、[配置存储](../../packages/models/src/store.ts)、[系统凭据](../../packages/models/src/vault.ts)、[协议组件注册](../../packages/models/src/protocols/shared.ts)。独立宿主的根组件装配示例见 [模块 README](../../packages/models/README.md)。
 
-## Harness 与 Web 接入
+## Anybox Harness 与 Web 接入
 
 ```mermaid
 flowchart LR
@@ -148,6 +152,6 @@ flowchart LR
     sse -.->|订阅| web
 ```
 
-Models 配置库、目录缓存和 Harness 业务库分别持有独立 SQLite 连接与资源所有权。宿主的 `ANYBOX_MODELS_CATALOG_DATABASE` 默认位于 Models 配置文件旁的 `models-catalog.sqlite`，三个路径不得相同。会话只保存所选 `modelId`，Run 固定版本快照；切换会话模型、编辑配置、目录刷新和轮换密钥都不改变已打开的 execution。Web 同时安装 Responses、标准 Chat Completions、Anthropic Messages、Gemini Interactions 和宿主的 DeepSeek 非推理扩展。没有有效工具能力时允许纯文本调用。
+Models 配置库、目录缓存和 harness server 业务库分别持有独立 SQLite 连接与资源所有权。宿主的 `ANYBOX_MODELS_CATALOG_DATABASE` 默认位于 Models 配置文件旁的 `models-catalog.sqlite`，三个路径不得相同。会话只保存所选 `modelId`，Run 固定版本快照；切换会话模型、编辑配置、目录刷新和轮换密钥都不改变已打开的 execution。Web 同时安装 Responses、标准 Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议。没有有效工具能力时允许纯文本调用。
 
 新的 execution 快照包含 `schemaVersion: 2` 与定义身份；`modelId/providerId` 继续表示执行配置/连接。Session 读取兼容旧快照，不改写已有选择或历史 Run JSON。Web 选择器按连接分组；删除 Key 或停用连接使该组新执行不可用。旧 `ANYBOX_LLM_*` 初始化检查连接与执行配置数量，公共定义不会阻止兼容导入。

@@ -6,14 +6,6 @@ import { array, captureOptions, connectionFields, conversation, effectiveCapabil
 import { check, discover, request } from './transport.js';
 import { parseNativeImageResourceUri } from '../resources.js';
 import { chatImages, withImages } from './images.js';
-export interface ChatCompletionsRequestPolicy {
-  readonly protocolId: string;
-  readonly name: string;
-  readonly maxTokensField?: 'max_completion_tokens' | 'max_tokens';
-  readonly disableThinking?: boolean;
-  readonly allowDeveloper?: boolean;
-  readonly sourceMappings?: import('../types.js').ProtocolDescriptor['sourceMappings'];
-}
 function validateIntent(intent: NativeObject, images = true): void {
   for (const value of array(intent.messages)) {
     const item = object(value); if (!['system', 'developer', 'user', 'tool'].includes(string(item.role))) throw modelsError('capability-unsupported');
@@ -37,6 +29,7 @@ function validateResponse(raw: unknown): NativeObject {
   const choice = object(choices[0]), message = object(choice.message);
   if (!['stop', 'tool_calls', 'length', 'content_filter'].includes(string(choice.finish_reason)) || message.role !== 'assistant') throw modelsError('invalid-response');
   if (message.content != null && typeof message.content !== 'string') throw modelsError('invalid-response');
+  if (message.reasoning_content != null) string(message.reasoning_content);
   if (message.refusal != null) string(message.refusal);
   const ids = new Set<string>();
   const calls = message.tool_calls === undefined ? [] : array(message.tool_calls);
@@ -53,21 +46,47 @@ function commit(state: NativeObject, intent: NativeObject, response: NativeObjec
   const value = validateResponse(response), next = conversation(state, intent, 'messages', ['tools']);
   return native({ ...next, messages: [...array(next.messages), object(array(value.choices)[0]).message] });
 }
-/** Extensions select explicit wire differences; transport, SSE and native history remain shared. */
-export function createChatCompletionsProtocol(options: ProtocolOptions = {}, policy: ChatCompletionsRequestPolicy = { protocolId: 'chat-completions', name: 'Chat Completions' }): NativeProtocol {
-  options = captureOptions(options); policy = Object.freeze({ ...policy });
-  const protocolId = policy.protocolId, tokenField = policy.maxTokensField ?? 'max_completion_tokens';
+function readGeneratedText(response: NativeObject): string {
+  const value = validateResponse(response), choice = object(array(value.choices)[0]), message = object(choice.message);
+  if (choice.finish_reason === 'content_filter' || message.refusal != null) throw modelsError('refused-response');
+  if (choice.finish_reason === 'tool_calls' || message.tool_calls !== undefined && array(message.tool_calls).length) throw modelsError('capability-unsupported');
+  if (choice.finish_reason !== 'stop') throw modelsError('incomplete-response');
+  const result = string(message.content);
+  if (!result.trim()) throw modelsError('invalid-response');
+  return result;
+}
+export function createChatCompletionsProtocol(options: ProtocolOptions = {}): NativeProtocol {
+  options = captureOptions(options);
+  const protocolId = 'chat-completions';
   return {
-    descriptor: { id: protocolId, version: '2.1.0', name: policy.name, connectionFields,
-      modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 }, { key: tokenField, label: 'Maximum output tokens', type: 'number', min: 1, integer: true },
-        ...(!policy.disableThinking ? [{ key: 'reasoning_effort', label: 'Reasoning effort', type: 'enum' as const, values: reasoningEfforts }] : [])],
-      supportsDiscovery: true, supportsCheck: true, ...(policy.sourceMappings ? { sourceMappings: policy.sourceMappings } : {}) },
+    descriptor: { id: protocolId, version: '2.2.0', name: 'Chat Completions', connectionFields, responseModes: ['stream', 'complete'],
+      modelFields: [{ key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 },
+        { key: 'max_completion_tokens', label: 'Maximum completion tokens', type: 'number', min: 1, integer: true },
+        { key: 'max_tokens', label: 'Maximum output tokens', type: 'number', min: 1, integer: true },
+        { key: 'thinking.type', label: 'Thinking mode', type: 'enum', values: ['disabled', 'enabled'] },
+        { key: 'reasoning_effort', label: 'Reasoning effort', type: 'enum', values: reasoningEfforts }],
+      supportsDiscovery: true, supportsCheck: true },
     validateProvider: provider => validateProvider(provider, protocolId),
-    validateParameters(options, declared) { optionKeys(options, ['temperature', tokenField, ...(!policy.disableThinking ? ['reasoning_effort'] : [])]); numberOption(options.temperature, 0, 2); numberOption(options[tokenField], 1, Number.MAX_SAFE_INTEGER, true); effortOption(options.reasoning_effort, declared, reasoningEfforts); },
+    validateParameters(options, declared) {
+      optionKeys(options, ['temperature', 'max_completion_tokens', 'max_tokens', 'thinking', 'reasoning_effort']);
+      numberOption(options.temperature, 0, 2); numberOption(options.max_completion_tokens, 1, Number.MAX_SAFE_INTEGER, true); numberOption(options.max_tokens, 1, Number.MAX_SAFE_INTEGER, true);
+      assert(options.max_completion_tokens === undefined || options.max_tokens === undefined);
+      if (options.thinking !== undefined) {
+        const thinking = object(options.thinking); optionKeys(thinking, ['type']); assert(thinking.type === 'disabled' || thinking.type === 'enabled');
+        assert(thinking.type === 'disabled' ? options.reasoning_effort === undefined : options.reasoning_effort !== 'none');
+        if (thinking.type === 'enabled' && (declared.reasoning.support !== 'supported' || !declared.reasoning.modes?.includes('enabled'))) throw modelsError('capability-unsupported');
+      }
+      effortOption(options.reasoning_effort, declared, reasoningEfforts);
+    },
     recordFormatVersion: 2,
-    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0',
+    canRestoreVersion: version => version === '2.0.0' || version === '2.1.0' || version === '2.2.0',
+    textGeneration: {
+      createIntent: input => native({ messages: [...(input.instruction === undefined ? [] : [{ role: 'system', content: input.instruction }]), { role: 'user', content: input.input }] }),
+      validateParameters: () => {},
+      readText: readGeneratedText,
+    },
     resourceIds: chatImages.ids,
-    effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, policy.disableThinking || options.reasoning_effort === 'none'), imageInput: declared.imageInput.support === 'supported' }),
+    effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, options.thinking !== undefined && object(options.thinking).type === 'disabled' || options.reasoning_effort === 'none'), imageInput: declared.imageInput.support === 'supported' }),
     restore: records => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
       return restoreRecords(protocolId, records, commit, [1, 2]);
@@ -76,10 +95,10 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}, pol
       validateIntent(input.intent); requireLocalTools(input.intent.tools, input.capabilities.tools);
       if (chatImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
       const next = conversation(input.state, input.intent, 'messages', ['tools']);
-      if (policy.allowDeveloper === false && array(next.messages).some(item => object(item).role === 'developer')) throw modelsError('invalid-config');
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(object(tool.function).parameters); }
-      return native({ ...input.parameters, ...next, model: input.remoteModelId, stream: input.capabilities.streaming,
-        ...(input.capabilities.streaming ? { stream_options: { include_usage: true } } : {}), ...(policy.disableThinking ? { thinking: { type: 'disabled' } } : {}) });
+      const streaming = input.responseMode === undefined ? input.capabilities.streaming : input.responseMode === 'stream';
+      return native({ ...input.parameters, ...next, model: input.remoteModelId, stream: streaming,
+        ...(streaming ? { stream_options: { include_usage: true } } : {}) });
     },
     exchange(input) {
       return withImages(chatImages, input, (wire, signal) => request(options, { ...input, signal }, 'chat/completions', wire, async reader => {
@@ -97,7 +116,7 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}, pol
           const delta = object(choice.delta);
           for (const [key, value] of Object.entries(delta)) {
             if (key === 'tool_calls') continue;
-            if (key === 'content' || key === 'refusal') { if (value != null) message[key] = string(message[key] ?? '') + string(value); }
+            if (key === 'content' || key === 'refusal' || key === 'reasoning_content') { if (value != null) message[key] = string(message[key] ?? '') + string(value); }
             else message[key] = value;
           }
           for (const value of delta.tool_calls === undefined ? [] : array(delta.tool_calls)) {

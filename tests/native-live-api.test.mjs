@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -9,23 +9,23 @@ import {
   createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createChatCompletionsProtocol, createAnthropicMessagesProtocol, createGeminiInteractionsProtocol,
 } from '@anybox/models'
-import { createDeepSeekProtocol } from '../dist/host/deepseek-protocol.js'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHarness } from '../dist/harness/index.js'
-import { projectProtocolRecords } from '../dist/harness/protocol-agents/projection.js'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
+import { projectProtocolRecords } from '../dist/applications/harness/core/protocol-agents/projection.js'
 import sharp from 'sharp'
 
 // Live text/image/restart smoke; this is not live tool, search, streaming or OS Keyring acceptance.
 // Nothing runs unless BOTH gates are explicit:
 //   ANYBOX_NATIVE_API_TESTS=1
-//   ANYBOX_NATIVE_API_PROTOCOLS=responses,chat-completions,anthropic-messages,gemini-interactions,deepseek-chat-completions
+//   ANYBOX_NATIVE_API_PROTOCOLS=responses,chat-completions,anthropic-messages,gemini-interactions
 // Select only the protocols to exercise. For EACH selected ID, uppercase it and replace '-' with '_':
 //   ANYBOX_NATIVE_API_<ID>_ENDPOINT    Exact API base URL (no inferred provider/hostname/default).
 //   ANYBOX_NATIVE_API_<ID>_MODEL       Exact remote model ID.
 //   ANYBOX_NATIVE_API_<ID>_KEY         API key, kept only in the test's in-memory Vault.
 //   ANYBOX_NATIVE_API_<ID>_PARAMETERS  Native JSON object, with an explicit positive output-token limit.
-// Limit paths: Responses max_output_tokens; Chat max_completion_tokens; Anthropic/DeepSeek max_tokens;
+// Limit paths: Responses max_output_tokens; Chat max_completion_tokens OR max_tokens; Anthropic max_tokens;
 // Gemini generation_config.max_output_tokens. No tools or reasoning controls are enabled by this smoke.
+// DeepSeek uses chat-completions with explicit PARAMETERS such as {"max_tokens":128,"thinking":{"type":"disabled"}}.
 // After npm run build: node --test tests/native-live-api.test.mjs
 // Additionally set ANYBOX_NATIVE_API_IMAGES=1 to exercise images for selected models.
 const factories = {
@@ -33,7 +33,6 @@ const factories = {
   'chat-completions': createChatCompletionsProtocol,
   'anthropic-messages': createAnthropicMessagesProtocol,
   'gemini-interactions': createGeminiInteractionsProtocol,
-  'deepseek-chat-completions': createDeepSeekProtocol,
 }
 const enabled = process.env.ANYBOX_NATIVE_API_TESTS === '1'
 const selected = enabled ? new Set((process.env.ANYBOX_NATIVE_API_PROTOCOLS ?? '').split(',').map(value => value.trim()).filter(Boolean)) : new Set()
@@ -58,7 +57,7 @@ function configuration(protocolId) {
   try { parameters = JSON.parse(raw) } catch { throw new Error(`${prefix}_PARAMETERS must be a native JSON object.`) }
   if (!parameters || typeof parameters !== 'object' || Array.isArray(parameters)) throw new Error(`${prefix}_PARAMETERS must be a native JSON object.`)
   const tokenLimit = protocolId === 'responses' ? parameters.max_output_tokens
-    : protocolId === 'chat-completions' ? parameters.max_completion_tokens
+    : protocolId === 'chat-completions' ? parameters.max_completion_tokens ?? parameters.max_tokens
       : protocolId === 'gemini-interactions' ? parameters.generation_config?.max_output_tokens : parameters.max_tokens
   if (!Number.isSafeInteger(tokenLimit) || tokenLimit < 1) throw new Error(`${prefix}_PARAMETERS requires an explicit positive native output-token limit.`)
   if ('tools' in parameters) throw new Error(`${prefix}_PARAMETERS cannot enable tools in this text smoke.`)
@@ -101,7 +100,7 @@ async function host(directory, protocolId, config, secrets) {
     }
     await install(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
     await install(createImageAssetsComponent({ directory: (join(directory, 'sessions.sqlite')) + ".images" }))
-    const harness = await createHarness(root, { agents: [{ id: 'live-assistant', modelId: 'live-model', instructions: 'Follow the user exactly. Reply with the single requested word only, without punctuation or explanations.' }] })
+    const harness = await createTestHarnessServerCore(root, { agents: [{ id: 'live-assistant', modelId: 'live-model', instructions: 'Follow the user exactly. Reply with the single requested word only, without punctuation or explanations.' }] })
     const project = await harness.openProject(directory)
     return { harness, project }
   } catch {
@@ -117,7 +116,12 @@ async function completedRun(current, protocolId, config, sessionId, parentNodeId
   const records = await current.harness.getRunRecords(accepted.id)
   assert.ok(records.some(record => record.kind === 'response'), 'Live Run must persist a native response.')
   assert.ok(!JSON.stringify(records).includes(config.key), 'Native records must exclude the API credential.')
-  const text = projectProtocolRecords(protocolId, records).flatMap(exchange => exchange.blocks).filter(block => block.kind === 'text').map(block => block.text).join('')
+  const text = projectProtocolRecords(protocolId, records).flatMap(exchange => exchange.blocks).flatMap(block => {
+    if (block.type === 'responses.message') return block.content.filter(part => part.type === 'output_text').map(part => part.text)
+    if (block.type === 'gemini.model_output') return block.content.map(part => part.text)
+    if (block.type === 'anthropic.text' || block.type === 'chat.content') return [block.text]
+    return []
+  }).join('')
   // Do not include actual provider output or raw errors in test assertions/logs.
   assert.ok(text.trim() === expected, 'Live response must match the requested one-word answer.')
   assert.ok(!(await current.harness.getRunEvents(accepted.id)).some(event => event.kind === 'tool-started'), 'This smoke must not execute local tools.')

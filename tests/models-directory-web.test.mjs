@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { access } from 'node:fs/promises'
 import { join } from 'node:path'
-import { runViewEvent } from '../dist/harness/run/notifications.js'
+import { runViewEvent } from '../dist/applications/harness/core/run/notifications.js'
 import { catalogModelsData, startCatalogModelsHost } from './helpers/catalog-models-host.mjs'
 import { deferred } from './helpers/controlled-models.mjs'
 
@@ -297,7 +297,7 @@ test('Disconnecting a Web refresh aborts its source and waits for reader cancell
   assert.equal((await accepted(host, 'POST', '/models/catalog/refresh', {})).snapshotVersion, before.snapshotVersion)
 });
 
-test('Closing the Web host aborts a directory refresh and joins actual HTTP reader exit before deleting owned SQLite files', { timeout: 15_000 }, async t => {
+test('Closing the Web host aborts a directory refresh and joins actual HTTP reader exit before deleting owned storage files', { timeout: 15_000 }, async t => {
   const host = await startCatalogModelsHost(), controlled = controlledRefresh(host)
   t.after(() => { controlled.release.resolve(); return host.close() })
   const pending = request(host, 'POST', '/models/catalog/refresh', {}).catch(error => ({ error }))
@@ -309,7 +309,7 @@ test('Closing the Web host aborts a directory refresh and joins actual HTTP read
     await tick()
     assert.equal(signal.aborted, true)
     assert.equal(closed, false)
-    await access(join(host.directory, 'models.sqlite'))
+    await access(host.config.modelsConfigPath)
     await access(join(host.directory, 'models-catalog.sqlite'))
     await access(join(host.directory, 'harness.sqlite'))
   } finally { controlled.release.resolve(); await closing; await pending }

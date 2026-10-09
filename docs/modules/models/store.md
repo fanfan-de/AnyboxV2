@@ -4,7 +4,7 @@
 
 ## 定位与装配
 
-源码：[store.ts](../../../packages/models/src/store.ts)，契约：[types.ts](../../../packages/models/src/types.ts)。工厂 `createModelsStoreComponent(options)`，组件名 `models-store`，提供 `models.store: ModelsStore`，无注入依赖。它独占 Models 配置 SQLite，供 [协调服务](models.md)使用，不承担业务 Session 数据和公共目录缓存。
+源码：[store.ts](../../../packages/models/src/store.ts)，契约：[types.ts](../../../packages/models/src/types.ts)。工厂 `createModelsStoreComponent(options)`，组件名 `models-store`，提供 `models.store: ModelsStore`，无注入依赖。它独占 Models 配置 SQLite，供 [协调服务](models.md)使用，不承担业务 Session 数据和公共目录缓存。该提供方保留给需要 SQLite 的独立宿主，并用于读取旧配置；当前 Anybox Harness 使用同一服务契约的 [JSON 配置存储](json-store.md)。两种提供方按宿主选择安装其一。
 
 `ModelsStoreOptions` 包含必填文件 `path`，以及可选 `legacyParameterConverters: Record<protocolId, converter>`。路径必须非空且不能为 `:memory:`；组件规范化真实路径，创建权限为 `0700` 的父目录。数据库采用 `busy_timeout=0`、外键约束和 `locking_mode=EXCLUSIVE`，并在独占事务中迁移。
 
@@ -24,6 +24,8 @@
 ## 原子提交与约束
 
 `commit()` 在准入时校验并复制输入，进入组件独占串行队列后执行 `BEGIN IMMEDIATE`。批次可同时修改定义、连接、配置、来源账本、同步状态与凭据意图；任一约束失败回滚整个批次。
+
+存储复用内部固定 SQL 的 prepared statements，避免目录批量接纳时为每个模型重复编译语句；关闭连接时清空该缓存。事务内部不让出事件循环，读者只能观察完整批次，不能看见尚未提交的部分来源。
 
 - `expectedRevision: null` 表示创建，数字表示更新；当前版本不匹配返回 `conflict`，新 revision 必须恰好递增一次，`createdAt` 保持不变。
 - 外部身份按来源命名空间和原始 Provider/Model ID 唯一，已有来源身份、Model 的父 Provider、连接协议和关联定义不得更换。

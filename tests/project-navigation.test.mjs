@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createProjectSessionIndex } from '../dist/client/workspace-client.js'
+import { createProjectSessionIndex, projectSidebar } from '../dist/applications/harness/web/workspace-client.js'
+import { scopedId } from '../dist/applications/harness/web/harness-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 function fixture() {
@@ -103,4 +104,100 @@ test('a failed project refresh preserves sessions and can retry while another pr
   assert.deepEqual(f.index.get('project-a'), { sessions: newSessions, loading: false })
   assert.deepEqual(f.index.get('project-b'), { sessions: otherSessions, loading: false })
   f.index.dispose()
+})
+
+const localInstance = '11111111-1111-1111-1111-111111111111'
+const remoteInstance = '22222222-2222-2222-2222-222222222222'
+const offlineInstance = '33333333-3333-3333-3333-333333333333'
+const project = (instanceId, id, extra = {}) => ({
+  id: scopedId(instanceId, id), instanceId, name: '同名项目', path: `/projects/${id}`, ...extra,
+})
+
+test('switching execution device filters same-named projects and selects a project for its new session', () => {
+  const remote = Object.freeze(project(remoteInstance, 'same-id'))
+  const local = Object.freeze(project(localInstance, 'same-id'))
+  const localSecond = Object.freeze(project(localInstance, 'another-id'))
+  const allProjects = Object.freeze([remote, local, localSecond])
+
+  const initial = projectSidebar(allProjects, remoteInstance, remote.id, true)
+  assert.deepEqual(initial, { projects: [remote], selectedProjectId: remote.id })
+
+  const switched = projectSidebar(allProjects, localInstance, initial.selectedProjectId, true)
+  assert.deepEqual(switched, { projects: [local, localSecond], selectedProjectId: local.id })
+  const selected = projectSidebar(allProjects, localInstance, localSecond.id, true)
+  assert.equal(selected.selectedProjectId, localSecond.id)
+
+  const switchedBack = projectSidebar(allProjects, remoteInstance, selected.selectedProjectId, true)
+  assert.deepEqual(switchedBack, initial)
+  assert.deepEqual(allProjects, [remote, local, localSecond], 'foreign projects stay available to existing cross-device panes')
+  assert.notEqual(switched.projects, allProjects)
+})
+
+test('scoped project identity filters retained snapshots without explicit device metadata', () => {
+  const remote = { id: scopedId(remoteInstance, 'same-id'), name: '同名项目', path: '/remote/project' }
+  const local = { id: scopedId(localInstance, 'same-id'), name: '同名项目', path: '/local/project' }
+  const legacy = { id: 'unscoped-project', name: '旧项目', path: '/legacy/project' }
+
+  assert.deepEqual(projectSidebar([remote, local, legacy], localInstance, remote.id, true), {
+    projects: [local], selectedProjectId: local.id,
+  })
+})
+
+test('a saved project waits for its selected device snapshot and resolves missing only after aggregation settles', () => {
+  const remote = project(remoteInstance, 'remote-project')
+  const firstLocal = project(localInstance, 'first-local')
+  const savedLocal = project(localInstance, 'saved-local')
+  const partial = [remote, firstLocal]
+
+  assert.deepEqual(projectSidebar(partial, localInstance, savedLocal.id, false), {
+    projects: [firstLocal], selectedProjectId: savedLocal.id,
+  })
+  assert.deepEqual(projectSidebar([...partial, savedLocal], localInstance, savedLocal.id, false), {
+    projects: [firstLocal, savedLocal], selectedProjectId: savedLocal.id,
+  })
+  assert.deepEqual(projectSidebar(partial, localInstance, savedLocal.id, true), {
+    projects: [firstLocal], selectedProjectId: firstLocal.id,
+  })
+
+  const foreignPending = scopedId(remoteInstance, 'not-returned-yet')
+  assert.deepEqual(projectSidebar(partial, localInstance, foreignPending, false), {
+    projects: [firstLocal], selectedProjectId: firstLocal.id,
+  }, 'a slow foreign device cannot postpone selection on the selected device')
+})
+
+test('offline placeholders belong to their device and an empty device never falls back to another device project', () => {
+  const remote = project(remoteInstance, 'remote-project')
+  const local = project(localInstance, 'local-project')
+  const unavailable = project(offlineInstance, 'retained-project', {
+    name: '暂不可用的项目', path: '', available: false,
+  })
+  const allProjects = [remote, unavailable, local]
+
+  assert.deepEqual(projectSidebar(allProjects, localInstance, unavailable.id, true), {
+    projects: [local], selectedProjectId: local.id,
+  })
+  assert.deepEqual(projectSidebar(allProjects, offlineInstance, unavailable.id, true), {
+    projects: [unavailable], selectedProjectId: unavailable.id,
+  })
+  assert.deepEqual(projectSidebar([remote, local], offlineInstance, remote.id, true), {
+    projects: [], selectedProjectId: null,
+  })
+  assert.deepEqual(projectSidebar([remote], localInstance, null, false), {
+    projects: [], selectedProjectId: null,
+  })
+})
+
+test('legacy single-device workspaces keep unscoped project selection when no device is supplied', () => {
+  const first = { id: 'first-project', name: '第一个项目', path: '/projects/first' }
+  const preferred = { id: 'preferred-project', name: '选中的项目', path: '/projects/preferred' }
+
+  assert.deepEqual(projectSidebar([first, preferred], undefined, preferred.id, true), {
+    projects: [first, preferred], selectedProjectId: preferred.id,
+  })
+  assert.deepEqual(projectSidebar([first], undefined, preferred.id, false), {
+    projects: [first], selectedProjectId: preferred.id,
+  })
+  assert.deepEqual(projectSidebar([first], undefined, preferred.id, true), {
+    projects: [first], selectedProjectId: first.id,
+  })
 })

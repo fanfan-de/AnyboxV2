@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { projectServiceKey } from '../dist/harness/project/component.js'
-import { applyPatchServiceKey, createApplyPatchComponent, isApplyPatchFailure } from '../dist/harness/tool/apply-patch-component.js'
+import { projectServiceKey } from '../dist/applications/harness/core/project/component.js'
+import { applyPatchServiceKey, createApplyPatchComponent, isApplyPatchFailure } from '../dist/applications/harness/core/tool/apply-patch-component.js'
 
 function deferred() {
   let resolve
@@ -484,4 +484,43 @@ test('component disposal waits for an accepted project lookup and prevents later
     await closing
     await assert.rejects(fs.stat(join(f.project, 'file')), error => error.code === 'ENOENT')
   } finally { release.resolve(); await f.close() }
+})
+
+test('literal mutations and patches share one queue and observe the latest committed file', async () => {
+  const entered = deferred(), release = deferred()
+  let first = true
+  const f = await fixture({ async writeFile(path, bytes, options) {
+    if (first) { first = false; entered.resolve(); await release.promise }
+    await fs.writeFile(path, bytes, options)
+  } })
+  try {
+    const write = f.service.mutateText({ projectId: 'project-1', path: 'file', mutation: { kind: 'write', content: 'old\n' } })
+    await entered.promise
+    const edit = f.service.mutateText({ projectId: 'project-1', path: 'file', mutation: { kind: 'edit', oldString: 'old', newString: 'new' } })
+    const patchCall = f.call(patch(update('file', 'new', 'final')))
+    release.resolve()
+    assert.equal((await write.result).status, 'applied')
+    assert.equal((await edit.result).status, 'applied')
+    assert.equal((await patchCall.result).status, 'applied')
+    await Promise.all([write.done, edit.done, patchCall.done])
+    assert.equal(await fs.readFile(join(f.project, 'file'), 'utf8'), 'final\n')
+    await assertNoTemporaryFiles(f.project)
+  } finally { release.resolve(); await f.close() }
+})
+
+test('literal mutations reject concurrent external writes using the existing commit recheck', async () => {
+  let source
+  const f = await fixture({ async writeFile(path, bytes, options) {
+    await fs.writeFile(path, bytes, options)
+    await fs.writeFile(source, 'external')
+  } })
+  source = join(f.project, 'file')
+  try {
+    await fs.writeFile(source, 'old')
+    const call = f.service.mutateText({ projectId: 'project-1', path: 'file', mutation: { kind: 'write', content: 'new' } })
+    assert.equal((await call.result).diagnostic.code, 'file-changed')
+    await call.done
+    assert.equal(await fs.readFile(source, 'utf8'), 'external')
+    await assertNoTemporaryFiles(f.project)
+  } finally { await f.close() }
 })

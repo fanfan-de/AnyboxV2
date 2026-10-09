@@ -1,19 +1,19 @@
-import { createProjectFilesComponent } from '../dist/harness/project-files/component.js'
-import { createImageAssetsComponent } from '../dist/harness/image/component.js'
+import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
+import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
-import { createSessionComponent } from '../dist/harness/session/component.js'
-import { sessionServiceKey, sessionRunServiceKey } from '../dist/harness/session/port.js'
+import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
+import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createHarness } from '../dist/harness/index.js'
+import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/harness/storage/port.js'
-import { createProjectComponent, projectServiceKey } from '../dist/harness/project/component.js'
-import { applyPatchServiceKey } from '../dist/harness/tool/apply-patch-component.js'
+import { localStorageServiceKey } from '../dist/storage/port.js'
+import { createProjectComponent, projectServiceKey } from '../dist/applications/harness/core/project/component.js'
+import { applyPatchServiceKey } from '../dist/applications/harness/core/tool/apply-patch-component.js'
 import { controlledModels, modelSnapshot, deferred, ids } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', instructions: 'Use the available tools.', modelId: 'default' }]
@@ -27,7 +27,7 @@ async function fixture(t) {
   await root.installComponent(llm.component())
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
-  const harness = await createHarness(root, { agents })
+  const harness = await createTestHarnessServerCore(root, { agents })
   const project = await harness.openProject(directory)
   const session = await harness.createSession(project.id, 'assistant')
   t.after(async () => {

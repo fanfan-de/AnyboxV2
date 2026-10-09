@@ -38,7 +38,7 @@ export function effortOption(value: unknown, declared: DeclaredCapabilities, all
   if (declared.reasoning.support !== 'supported' || !declared.reasoning.efforts?.includes(value)) throw modelsError('capability-unsupported');
 }
 export function effectiveCapabilities(declared: DeclaredCapabilities, disabled = false, search = false): EffectiveCapabilities {
-  return { tools: declared.tools.support === 'supported', streaming: declared.streaming.support === 'supported', imageInput: false,
+  return { tools: declared.tools.support === 'supported', streaming: declared.streaming.support !== 'unsupported', imageInput: false,
     webSearch: search && declared.webSearch?.support === 'supported', reasoning: disabled ? { support: 'unsupported' } : declared.reasoning };
 }
 export function validateServerTools(value: JsonValue | undefined, declared: DeclaredCapabilities, protocolId: string): void {

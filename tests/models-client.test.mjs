@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { canUseModel, createModelsCatalog, nativeParameterValues, initialNativeParameters, settingsConnectionSelection, settingsModelEditorSelection } from '../dist/client/models-client.js'
-import { catalogSupportsText, catalogMatchesConnection, createModelsDirectory } from '../dist/client/models-directory-client.js'
+import { canUseModel, createModelsCatalog, nativeParameterValues, initialNativeParameters, settingsConnectionSelection, settingsModelEditorSelection } from '../dist/applications/harness/web/models-client.js'
+import { catalogSupportsText, catalogMatchesConnection, createModelsDirectory } from '../dist/applications/harness/web/models-directory-client.js'
 
 const fields = [
   { key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 },
@@ -302,4 +302,20 @@ test('shared catalog ignores older refreshes and preserves current model records
   unsubscribe(); const count = emitted.length
   const after = catalog.refresh(); requests[6].resolve([]); requests[7].resolve([]); await after
   assert.equal(emitted.length, count)
+})
+
+test('disposing a page catalog releases subscriptions and ignores late data without issuing new requests', async () => {
+  const pending = [], subscriptions = new Map(), removed = []
+  const api = path => new Promise(resolve => pending.push({ path, resolve }))
+  api.subscribeList = (path, listener) => { subscriptions.set(path, listener); return () => removed.push(path) }
+  const catalog = createModelsCatalog(api, () => 'offline'), updates = []
+  catalog.subscribe(() => updates.push(catalog.snapshot()))
+  const read = catalog.refresh()
+  catalog.dispose()
+  const count = updates.length
+  subscriptions.get('/models')([{ id: 'stale' }])
+  pending.forEach(call => call.resolve([{ id: 'late' }]))
+  await read; await catalog.refresh()
+  assert.deepEqual(removed.sort(), ['/models', '/models/connections'])
+  assert.equal(updates.length, count); assert.deepEqual(catalog.snapshot().models, []); assert.equal(pending.length, 2)
 })

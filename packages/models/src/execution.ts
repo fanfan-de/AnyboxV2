@@ -5,7 +5,7 @@ import { nativeDiagnostic, sanitizeDiagnostic } from './diagnostics.js';
 import { abortLink, deferred, joinOperation } from './lifecycle.js';
 import { addResourceRefs, captureResourceRefs, captureResourceResolver, requireResourceSet, restoreResourceRefs } from './resources.js';
 import type { EffectiveCapabilities, ProtocolOperation, ProviderConnectionInput } from './types.js';
-import type { NativeExecution, NativeExitReport, NativeModelSnapshot, NativeObject, NativeProtocol, NativeRecordDraft, NativeReply, NativeRestoreState, NativeResourceResolver } from './native-types.js';
+import type { NativeExchangeOptions, NativeExecution, NativeExitReport, NativeModelSnapshot, NativeObject, NativeProtocol, NativeRecordDraft, NativeReply, NativeRestoreState, NativeResourceResolver } from './native-types.js';
 
 export interface ExecutionResources {
   readonly protocol: NativeProtocol;
@@ -58,16 +58,20 @@ export function createExecution(input: ExecutionResources): NativeExecution {
   const onAbort = () => { void close(); };
   input.controller.signal.addEventListener('abort', onAbort, { once: true });
   return Object.freeze({ snapshot, capabilities, recordFormatVersion, signal: input.controller.signal, close,
-    prepareExchange(intent, options = {}) {
+    prepareExchange(intent, options: NativeExchangeOptions = {}) {
       if (state !== 'open' || input.controller.signal.aborted) throw modelsError('closed');
       if (active || prepared) throw modelsError('busy');
       assert(json(intent)); const captured = immutable(intent);
-      keys(options, ['resourceRefs']); const addedRefs = captureResourceRefs(options.resourceRefs);
+      keys(options, ['resourceRefs', 'responseMode']);
+      const responseMode = options.responseMode;
+      assert(responseMode === undefined || responseMode === 'stream' || responseMode === 'complete');
+      if (responseMode !== undefined && (!input.protocol.descriptor.responseModes?.includes(responseMode) || responseMode === 'stream' && !capabilities.streaming)) throw modelsError('capability-unsupported');
+      const addedRefs = captureResourceRefs((options as NativeExchangeOptions).resourceRefs);
       requireResourceSet(input.protocol.resourceIds?.(captured) ?? [], addedRefs);
       if (addedRefs.length && !capabilities.imageInput) throw modelsError('capability-unsupported');
       assert(recordFormatVersion === 2 || addedRefs.length === 0);
       const nextRefs = new Map(resourceRefs); addResourceRefs(nextRefs, addedRefs);
-      const requestBody = immutable(input.protocol.prepare({ state: context, intent: captured, remoteModelId: snapshot.remoteModelId, parameters: snapshot.parameters.value, capabilities }));
+      const requestBody = immutable(input.protocol.prepare({ state: context, intent: captured, remoteModelId: snapshot.remoteModelId, parameters: snapshot.parameters.value, capabilities, ...(responseMode === undefined ? {} : { responseMode }) }));
       assert(json(requestBody));
       const requestRefs = [...new Set(input.protocol.resourceIds?.(requestBody) ?? [])].map(id => { const ref = nextRefs.get(id); assert(ref); return ref; });
       if (requestRefs.length && !capabilities.imageInput) throw modelsError('capability-unsupported');
@@ -143,8 +147,10 @@ export function validateRestore(restore: NativeRestoreState, snapshot: NativeMod
   const old = restore.modelSnapshot; assert(old?.schemaVersion === 3);
   for (const key of ['modelId', 'modelDefinitionId', 'providerDefinitionId', 'modelDefinitionVersionId', 'remoteModelId', 'providerId', 'protocolId', 'historyScopeEpoch'] as const) assert(old[key] === snapshot[key]);
   assert(protocol.canRestoreVersion ? protocol.canRestoreVersion(old.protocolVersion) : old.protocolVersion === snapshot.protocolVersion);
-  const { imageInput: oldImage, ...oldCapabilities } = old.capabilities;
-  const { imageInput: nextImage, ...nextCapabilities } = snapshot.capabilities;
+  // Streaming changes transport delivery, not the archived native context.
+  const { imageInput: oldImage, streaming: oldStreaming, ...oldCapabilities } = old.capabilities;
+  const { imageInput: nextImage, streaming: nextStreaming, ...nextCapabilities } = snapshot.capabilities;
+  assert(typeof oldStreaming === 'boolean' && typeof nextStreaming === 'boolean');
   const additiveImages = oldImage === false && nextImage === true && restore.records.every(item => !item.resourceRefs?.length &&
     (item.kind !== 'request' || !(protocol.resourceIds?.(item.payload as NativeObject) ?? []).length));
   assert(equalJson(old.parameters, snapshot.parameters) && equalJson(oldCapabilities, nextCapabilities) && (oldImage === nextImage || additiveImages));

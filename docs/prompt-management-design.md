@@ -69,7 +69,7 @@ Prompt 创建、编辑、发布与 Agent Prompt 绑定现在是异步操作；�
 
 ## 生命周期与验收
 
-当前组件都安装在同一 Nya 根；依赖为 SQLite → Prompt → Agent Prompt → Run，Models → 协议应用绑定 → Run，以及 Session/工具 → RunRuntime → Run。普通发布和绑定不触发组件重启或取消在途 Run。依赖撤销时 Nya 先停止 Run 准入并通过 Runtime 取消、等待操作与 program 退出，再让 Prompt/Session/存储完成已接受写入。`harness.close()` 关闭根的全部组件；重启恢复文档、版本、绑定、原生会话记录与幂等键，遗留活动 Run 标为 interrupted，不重放副作用。
+当前组件都安装在同一 Nya 根；依赖为 SQLite → Prompt → Agent Prompt → Run，Models → 协议应用绑定 → Run，以及 Session/工具 → RunRuntime → Run。普通发布和绑定不触发组件重启或取消在途 Run。依赖撤销时 Nya 先停止 Run 准入并通过 Runtime 取消、等待操作与 program 退出，再让 Prompt/Session/存储完成已接受写入。应用宿主 `close()` 关闭根的全部组件；Prompt 管理属于 Anybox Harness 内部功能，停止 harness server 时一并清理其组件并保留数据；重启恢复文档、版本、绑定、原生会话记录与幂等键，遗留活动 Run 标为 interrupted，不重放副作用。
 
 行为测试已覆盖：用户创建草稿、编辑内容并发布新版本；草稿修订冲突与越权操作无副作用；不同类型与角色组合校验；结构化模型输入保留消息角色与顺序；发布但未激活不改变新 Run；激活后新 Run 用新版本，旧 Run 保持原快照；同键重试不重新选择；提供方撤销等待模型调用实际退出；存储关闭重开恢复和单实例排他。修改取消、生命周期或资源归属时同步更新行为测试，并运行 `npm run check`。
 

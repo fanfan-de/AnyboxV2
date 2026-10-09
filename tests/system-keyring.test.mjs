@@ -36,7 +36,7 @@ async function readInChildProcess(namespace, id) {
 test('the platform credential store writes, reads across processes, and deletes under a private namespace',
   { skip: skipUnless(enabled && !expectNoStore) }, async () => {
     const namespace = `anybox-test-${randomUUID()}`
-    const id = 'llm/deepseek-chat-completions/test'
+    const id = 'llm/chat-completions/test'
     const root = new Context()
     const fiber = root.installComponent(createModelsVaultComponent({ namespace }))
     await fiber

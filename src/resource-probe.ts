@@ -1,5 +1,5 @@
 import type { Component } from '@nya/core'
-import type { OwnedCall } from './harness/contracts.js'
+import type { OwnedCall } from './applications/harness/core/contracts.js'
 
 export const modelServiceKey = 'h0.model'
 export const runServiceKey = 'h0.runs'
@@ -8,7 +8,7 @@ export interface RunProbePort {
   start(prompt: string): OwnedCall<string>
 }
 
-/** H0 deliberately retains its original string input while the Harness model port evolves. */
+/** H0 deliberately retains its original string input while the harness server model port evolves. */
 export interface ProbeModelPort {
   call(prompt: string): OwnedCall<string>
 }

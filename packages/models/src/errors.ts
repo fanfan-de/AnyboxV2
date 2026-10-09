@@ -1,5 +1,5 @@
 import { nativeDiagnostic, withNativeDiagnostic } from './diagnostics.js';
-export type ModelsErrorCode = 'invalid-config' | 'conflict' | 'not-found' | 'unavailable' | 'protocol-unavailable' | 'capability-unsupported' | 'credential-missing' | 'credential-unavailable' | 'cancelled' | 'timeout' | 'provider-failure' | 'invalid-response' | 'cleanup-failure' | 'closed' | 'busy' | 'storage-unavailable' | 'resource-unavailable' | 'invalid-resource' | 'request-too-large';
+export type ModelsErrorCode = 'invalid-config' | 'conflict' | 'not-found' | 'unavailable' | 'protocol-unavailable' | 'capability-unsupported' | 'credential-missing' | 'credential-unavailable' | 'cancelled' | 'timeout' | 'provider-failure' | 'invalid-response' | 'refused-response' | 'incomplete-response' | 'cleanup-failure' | 'closed' | 'busy' | 'storage-unavailable' | 'resource-unavailable' | 'invalid-resource' | 'request-too-large';
 export interface ModelsError extends Error { readonly code: ModelsErrorCode }
 const messages: Record<ModelsErrorCode, string> = {
   'invalid-config': 'Invalid model configuration or input.', conflict: 'Configuration revision conflict.',
@@ -9,6 +9,7 @@ const messages: Record<ModelsErrorCode, string> = {
   'credential-missing': 'A required credential is missing.', 'credential-unavailable': 'The credential store is unavailable.',
   cancelled: 'Model operation was cancelled.', timeout: 'Model operation timed out.',
   'provider-failure': 'The model provider request failed.', 'invalid-response': 'The model provider returned an invalid response.',
+  'refused-response': 'The model provider refused the response.', 'incomplete-response': 'The model provider response is incomplete.',
   'cleanup-failure': 'Model resources could not be released.', closed: 'Model service or execution is closed.',
   busy: 'An execution already has an active call.', 'storage-unavailable': 'Model configuration storage is unavailable.',
   'resource-unavailable': 'An input resource is unavailable.', 'invalid-resource': 'An input resource failed validation.', 'request-too-large': 'The model request exceeds the wire size limit.',

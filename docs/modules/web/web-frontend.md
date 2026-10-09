@@ -1,164 +1,45 @@
-# Harness API 组件
+# Application HTTP 监听组件
 
-[宿主与客户端模块](README.md) · [部署](../../harness-deployment.md)
+[宿主模块](README.md) · [harness server 业务适配器](harness-http.md)
 
-`src/host/component.ts` 的 `createHarnessApiComponent(agents, port, {authenticated,host})` 创建 `host-harness-api` 并提供 `host.harness-api: HarnessApiPort`。生产执行入口启用认证；该组件不提供静态页面。内部 `startHarnessApiServer` 拥有唯一监听器、HTTP 请求与 SSE；`models-api.ts` 是内部 Models 路由函数，不新增组件。默认无认证选项仅用于受信的进程内行为测试，生产组合根始终注入访问管理。
+`src/host/component.ts` 的 `createApplicationApiComponent(root,catalog,port,{authenticated,host})` 创建 `host-application-api`，提供 `host.http: ApplicationHttpServer`（url、幂等 close）。注入 app.products、app.activity，以及认证模式的 host.access。它不导入 Anybox Harness/Models 类型，应用失败或缺依赖时仍提供目录和控制。
 
-inject `harness.sessions`、`harness.runs`、`harness.projects`、`harness.prompts`、`harness.agent-prompts`、`models`、`models.settings`、`models.catalog` 与 `host.access`。通过本轮 deps 快照调用服务；依赖重启先关闭旧监听器再重新安装。Agent 列表是只读启动配置。
+内部 `startApplicationHttpServer` 是客户端和执行端共用的监听器实现。执行端使用 `/api/v1`；客户端 Shell 使用 `/api/client/v1`。组件持有监听 socket、请求集合、监听器生命周期信号及撤销订阅。注册目录拥有精确静态地址与业务前缀；静态文件只从映射读取，不遍历任意路径。
 
-所有生产请求需要 Bearer。实例信息接口认证后返回 instanceId/名称/API 版本/能力，其他业务先检查期望实例头。身份始终映射 `local-web-user`，设备令牌不是业务用户，代理头不影响授权。默认监听回环，远端 TLS 由反向代理终止。客户端网关另外执行 Host/Origin/CSRF 约束。令牌发行、元数据与撤销见 [Host Access](host-access.md)。
+生产执行端认证 Bearer 和 instanceId；无认证客户端校验 Host、Origin 和 Sec-Fetch-Site。设置 CSP/no-store。产品控制保持既有接口，已接受控制不因断连取消。业务归属由目录路由固定，身份头仅能与归属一致。授权、Activity 登记、根上当前适配器捕获均在首次异步业务工作前完成。
 
-浏览器只接收安全 DTO；私有原生记录由组件内部读取并白名单投影，不公开原生恢复句柄、凭据引用或 execution。JSON 字段与大小、图片 MIME/字节以及原有业务校验保持不变。终态由 Session 持久事实决定，流式展示是临时提示。
+桌面客户端额外配置私有 `transportSecret` 时，监听器先以常量时间摘要比较校验 `X-Anybox-Desktop-Transport`，再执行原 Host/Origin 及目录规则。校验覆盖静态资源和全部 API，不能以回环地址替代桥接授权；凭证由桌面受信进程在转发时添加，页面脚本不持有它。执行端访问令牌与此传输凭证的职责和归属独立，普通 Web 监听行为不变。
 
-Effect 先停止监听准入，取消并等待尚未完成的请求体、目录/Models/资源操作，结束等待响应与 SSE，等待所有请求处理完成并释放监听器。关闭 API 或撤销令牌只结束观察，已经被 Runtime 接管的 Run 由执行域负责。整根退出由 `harness.close()` 先同步禁止新 Run，再交给 Nya 依赖清理；不存在远程关闭入口。
+ApplicationHttpContext 提供 appId、actorId、signal 和 retainUntil。handle Promise 代表请求/流实际退出；finally 等待 retainUntil 保留操作退出后释放租约和 HTTP 任务。监听器关闭会等待这些已受理任务，宿主必须与根资源取消同时排空。GET 是可取消观察，写入默认为阻塞活动。资源或 SSE 应响应 signal 并等待实际退出。接口说明见 src/host/applications/registration.ts。
 
-测试使用 `tests/web-server.test.mjs` 保持既有路由行为，`tests/remote-harness.test.mjs` 验证认证、实例、网关和撤销，`tests/deployment-boundaries.test.mjs` 验证根与启动清理。运行 `npm run check`。
+close 同步停止 HTTP 准入、发送关闭信号并取消未完成请求体，等待已接受处理完成和 socket 释放；已接受普通写入可完成响应。令牌撤销关闭其活动响应。应用业务取消、DTO 和通知属于应用适配器。Effect 调用同一 close 并报告故障；宿主聚合 HTTP 与 Nya 清理错误。
 
-## API：项目、会话与 Run
+通用客户端与执行宿主的 `prepareClose()` 同步开始监听器关闭，同时停止产品控制和应用运行时准入；它等待控制与装配退出，保留组件与存储直到宿主 `close()` 卸载整根。HTTP 排空还等待 `retainUntil()` 保留操作及租约实际退出，因此只在 `close()` 中与 Nya 根清理一起等待，避免 Run 需要根清理取消而 HTTP 先等待 Run 的死锁。执行端的 `closing` 从准备阶段开始即为 true，Run 准备同步关闭；已接纳运行的取消与实际退出仍由后续根清理负责。两个方法均幂等，准备失败不跳过后续资源清理。
 
-以下路径统一以 `/api/v1` 为前缀，动态 ID 经 URL 编解码。
+浏览器入口归各应用静态资源。Anybox Harness 只挂载项目与会话工作区，侧栏底部将一处紧凑设备选择器与设置图标放在同一行，连接、模型与 Prompt 在工作区设置的分类面板中管理；设备的“启动 Agent”“停止 Agent”位于“管理连接”分类。此布局不改变宿主监听器、HTTP 分派和应用启停契约，具体展示与恢复见[Web 客户端设计](../../web-client-design.md)和[宿主设计](../../products-v1.md)。
 
-| 方法 / 路径 | 输入或行为 |
-| --- | --- |
-| `GET /agents` | 可选 Agent ID 列表 |
-| `GET /projects` | 项目列表 |
-| `POST /projects` | `{path}`，目标端绝对目录，经 Projects 校验、规范化和登记 |
-| `POST /projects/directories/browse` | `{action:"open",path?,query?,showHidden?}` 预留会话；`{action:"page",browseId,page}` 分页浏览 |
-| `POST /projects/directories/close` | `{browseId}`，幂等关闭并等待清理 |
-| `GET /projects/:id/sessions` | 项目下未归档会话 |
-| `POST /sessions` | `{ projectId, agentId, modelId? }` |
-| `GET /sessions/archived` | 跨项目归档列表，按归档时间倒序 |
-| `GET /sessions/:id` | 会话 DTO |
-| `POST /sessions/:id/archive`、`POST /sessions/:id/restore` | `{}`；幂等归档 / 恢复，归档要求没有活动 Run |
-| `POST /sessions/:id/model` | `{ modelId }`，持久选择配置并校验协议 |
-| `GET /sessions/:id/nodes` | 必填 `parentNodeId`，根用 `root`；可选 `cursor`、`limit`（1..100，默认领域值 50） |
-| `GET /sessions/:id/nodes/:nodeId` | 查询一个完整节点 |
-| `GET /sessions/:id/nodes/:nodeId/path` | 查询该节点成功祖先路径，`nodeId=root` 表示空路径 |
-| `GET /sessions/:id/runs` | 可选 `status=active`、`parentNodeId`（根用 `root`） |
-| `GET /sessions/:id/runs/by-key/:key` | 按已接受幂等键只读查询 |
-| `POST /sessions/:id/runs` | `{ parentNodeId, input, images?: [{ assetId }], files?: [{ snapshotId }], idempotencyKey, modelId? }`；显式父节点 ID 或 `null`；文本/图片/文件至少一项非空，附件由 Session 校验和原子保留 |
-| `POST /sessions/:id/images` | 单图二进制流；返回 201 与受信 `ImageRef`，不接受远端 URL 或本地路径 |
-| `GET /sessions/:id/images/:assetId/content` | 核对会话归属后读取原字节，返回真实 MIME，拒绝跨 origin / cross-site 请求 |
-| `POST /sessions/:id/images/renew` | `{ assetIds }`（最多 8 项）；返回 `{ valid, invalid }`，不复活已过期图片 |
-| `GET /runs/:id` | 已提交 Run 状态 DTO |
-| `GET /runs/:id/view` | 原生白名单视图；运行中可为 provisional，结束后为 committed |
-| `GET /runs/:id/events` | 可选非负安全整数 `afterSeq`，默认 0 |
-| `GET /runs/:id/wait` | 可选 `timeoutMs`（0..25000，默认 25000）；返回 `{ done, timedOut, run }` |
-| `POST /runs/:id/cancel` | `{}`；请求取消并返回当前状态，实际结束由 wait/查询确认 |
-| `GET /changes` | 重复 `sessionId` 参数，订阅 1..4 个不同会话的 SSE |
+项目会话列表与已归档列表使用 Session 返回的 `title`，无需打开会话或加载对话历史。标题由 Session 从首次已接受输入派生；打开不同分支、关闭面板或刷新页面不改变名称。空会话继续显示短 ID；新会话首次发送后，面板读取 Session 时同步更新列表标题，不再从当前路径或临时 Run 列表缓存名称。
 
-目录浏览公开 DTO、分页上限、错误码与生命周期见[项目目录选择](../../project-directory-picker.md)。API v1 的 projects.browse 能力由实际 Projects 配置决定；浏览会话绑定认证令牌，目录操作不写项目表。旧无认证测试宿主保留的原生 pick 路由不属于生产浏览流程。
+工作区设置的“Agent 工具”读取所选执行设备的统一目录与 Agent 工具配置，支持单项复选、名称/功能搜索、功能分类和来源过滤，可自由跨来源组合。来源只是显示标签，明确依赖显示为待补选工具；保存与重新加载都固定设备与 Agent，CAS 冲突保留草稿，未保存或正在保存时参与 canLeave 检查。`tools-client.ts` 属于现有 Web 生命周期，不新增 Nya 组件或数据库。关闭组件取消目录/配置读，等待已提交设置写入。会话输入区只读显示创建时固定的原始工具名称与来源，修改 Agent 不变更已打开会话。
 
-等待超时只取消本次 waiter，不取消 Run；HTTP 断开也是如此。兄弟 Run 可以并发，浏览器必须选择明确父节点，服务端不推断 head。幂等恢复、成功节点创建条件及旧 Session 只读规则见 [Session](../sessions/session.md) 与 [Run](../execution/run.md)。
+Codex、Claude Code 和 DeepSeek Harness 工具使用独立调用名，轨迹和协议工具卡通过真实观察显示命令、进程 ID/退出码/信号、输出、文件内容、实际文件变更、未完成项和搜索结果，原始参数/结果保留为可展开的字面 JSON。工具读取的图片使用本会话保留引用生成已有认证资源 URL，显示可打开原图的缩略图；不从工具提供的任意 URL 加载图片。每个 Run 的轨迹组展示最后一份已提交计划或 todo 完整列表；只有 tool-observed 更新列表，空列表明确清空，尚未执行的请求不成为计划事实。Run 关闭的通用操作事件只公开进程退出字段，按 process session ID 补充 Codex exec/stdin 卡的最终输出与状态，包括取消时实际终止事实。cleanup-failed 仍保留已有结果、部分文件变更及图片引用。工具事实继续按模型 exchange、requestId 与出现位置隔离；未知工具请求不从任意字段猜测执行动作。测试入口为 `tests/tools-client.test.mjs`、`tests/agent-tools.test.mjs` 和工具轨迹/摘要测试。
 
-## API：项目文件快照
+会话顶部“分支”提供覆盖式总览，线性对话保留当前祖先路径，轮次旁可切换同父成功分支。内部 `conversation-tree.ts` 只从已查询的成功结果关系与真实节点派生展示索引，`conversation-tree-view.ts` 持有各面板独立的折叠、滚动、焦点及可撤销 DOM 监听，不新增 Nya 组件、HTTP 或持久资源。进行中 Run 以独立状态行进入轨迹；旧历史不补造关系，归档与旧会话仍只读。关闭面板清理监听，隐藏面板不进行零尺寸布局写入。规则和验收入口见[对话树](../../session-conversation-tree.md#查询与-web)。
 
-以下路径也使用 `/api/v1` 前缀。所有读取与准备均经 Session 验证归属，GET 也检查 Origin 与 Sec-Fetch-Site；浏览器不能提供绝对路径。
+Anybox Harness 对话与轨迹明细共同挂载四协议各自的展示 v2 内容组件。共享容器管理 exchange 顺序、稳定 mount/update/dispose 以及输入；Markdown、引用、折叠和工具事实为基础 UI，不建立通用原生内容类型或新增 Nya 组件。推理摘要/思考内容/推理内容默认折叠，标题显示生成状态；推理、工具与工具组共用折叠箭头、固定图标槽和标题行样式，左侧对齐，推理竖线仅显示在展开正文中。各面板独立保留手动展开、焦点、滚动及轨迹选中行，刷新后恢复默认。轨迹列表只使用派生摘要和搜索文本，每个模型调用仍只有一个真实计时行。
 
-| 方法 / 路径 | 输入或行为 |
-| --- | --- |
-| `GET /sessions/:id/project-files/search` | 可选 `q`，返回相对 paths 和 incomplete |
-| `POST /sessions/:id/project-files/preview` | `{ path, range?: { start, end } }`，有界当前内容预览；不保存快照 |
-| `POST /sessions/:id/project-files/prepare` | `{ preparationKey, selections }`，原子准备最多 8 个有序快照，返回 FileRef 数组 |
-| `GET /sessions/:id/project-files/snapshots/:snapshotId` | 返回 `{ file, text }`，只读取保存内容 |
-| `POST /sessions/:id/project-files/renew` | `{ snapshotIds }`（最多 8 项），返回 `{ valid, invalid }` |
+对话使用 `presentation:'compact'`，推理、工具与工具组的折叠标题行高 28px、上下外边距 2px，保留字号与展开正文、最终回复的阅读间距。Chat Completions 的空白正文块保留挂载身份与原生记录，但隐藏整个显示块，避免正文外边距撑开过程行；流式更新为非空文字时原地恢复显示。工具摘要行呈现名称、动作、真实状态及有效耗时；异常增加一行事实原因。工具摘要纯函数位于 `tool-call-view.ts`，已知命令、状态和补丁变更以持久执行事实为准，无事实只解析完整已知参数；待同步、缺失和读取失败明确区分，不推断执行成功。`protocols/primitives.ts` 持有稳定摘要按钮、原地详情与默认收起的原始参数；详情单一滚动区最多 320px，复制原文并保留截断提示。事实、流式帧和终态同步不重建按钮或丢失焦点、展开与详情滚动。
 
-selection 为 `{ kind: 'project-file', path, range? }` 或 `{ kind: 'snapshot', snapshotId }`；后者复用原内容。归档会话拒绝新的 prepare，历史读取和续期保留。单源 10 MiB、单引用 64 KiB、每轮合计 256 KiB，编码资料 1 MiB；完整限制、幂等批次、过期和退出语义见 [Project Files](../sessions/project-files.md)。
+`protocols/view.ts` 只根据挂载对象的本地工具展示标记排列同一 exchange 内相邻工具，两个及以上显示稳定折叠组；文本、思考、拒绝、服务端工具及截断提示打断分组。组收起仍显示需关注数量和首个异常原因，不累加耗时。单工具增长为组时保留已展开详情或组内焦点，之后尊重用户选择。服务端工具的独立摘要由协议模块解释，不加入本地分组。轨迹模型明细采用 `presentation:'detail'`（默认），工具行打开完整详情。对话和轨迹的交互选择按面板独立保留至关闭；折叠及复制监听随 block、exchange 或面板 `dispose()` 撤销。HTTP、SSE、持久协议和 Nya 生命周期合约保持不变。
 
-## API：Models 与目录
+协议工具卡仅由请求层展示一处“原始参数”，优先展示和复制模型请求的原始 JSON 字符串；请求展示不完整且已有库工具执行事实时，使用执行记录中的参数并明确标注来源。嵌入的执行详情省略参数披露项，继续展示原始结果与实际执行事实。独立轨迹工具详情仍展示执行记录中的参数，避免去重后失去入口。
 
-| 方法 / 路径 | 输入或行为 |
-| --- | --- |
-| `GET /models` | 执行配置及可用状态 |
-| `GET /models/templates`、`GET /models/protocols` | 宿主连接模板、注册协议与字段说明 |
-| `GET /models/catalog` | 目录刷新状态 |
-| `POST /models/catalog/refresh` | `{}`；可取消并等待的目录刷新 |
-| `GET /models/providers`、`GET /models/definitions` | 统一 Provider/Model 定义及显式协议映射产生的连接建议 |
-| `POST /models/providers`、`POST /models/definitions` | 分别创建 `ProviderInput`、`ModelInput` 用户定义 |
-| `POST /models/providers/:id`、`POST /models/definitions/:id` | `{ patch, expectedRevision }` |
-| `GET /models/providers/:id/history`、`GET /models/definitions/:id/history` | 定义历史 |
-| `GET /models/connections`、`POST /models/connections` | 列表 / 用 `ProviderConnectionInput` 创建连接，可带 `apiKey` |
-| `POST /models/connections/:id` | `{ patch, expectedRevision }` |
-| `GET /models/connections/:id/history`、`GET /models/connections/:id/models` | 连接历史 / 该连接全部模型的可用与不可用原因 |
-| `POST /models/connections/:id/key` | `{ apiKey, expectedRevision }` |
-| `POST /models/connections/:id/key/delete`、`POST /models/connections/:id/delete` | `{ expectedRevision }`；删 Key / 删连接 |
-| `POST /models/connections/:id/retry` | `{}`；重试基础配置同步 |
-| `POST /models/connections/:id/discover`、`POST /models/connections/:id/check` | `{}`；可取消的远端模型发现 / 连通性检查 |
-| `GET /models/configurations` | 可选 `connectionId` 过滤 |
-| `POST /models/configurations` | `ModelConfigurationInput`，可指定原生 `parameters`、能力和 `baseline` |
-| `POST /models/configurations/:id` | `{ patch, expectedRevision }` |
-| `GET /models/configurations/:id/history` | 执行配置历史 |
+事件读取已完成但活动 Run 尚未取得匹配工具事实时，摘要仍为中性的“执行事实待同步”；终态且事件已读取才把缺失事实列为需关注。读取失败独立提示。请求内容和持久结果切换时，先把将被隐藏的复制按钮焦点移到稳定详情区域，保留用户展开和阅读位置。
 
-定义查询接受 `sourceId`、`providerId`、`search` 和字符串布尔值 `includeDeprecated`、`includeMissing`、`textOnly`。写操作的主字段白名单与完整类型以 [server.ts](../../../src/host/server.ts) 及 [Models 模块](../models/README.md) 为准。`expectedRevision` 必须为大于零的安全整数，并交由领域服务执行版本冲突检查。
+原生对话与轨迹明细只展示受 48KiB 预算约束的 v2 投影及截断提示，缺少投影时显示读取或不可用状态，不以保存的聚合回复降级；完整聚合文本只参与轨迹摘要与搜索，旧 dialogue-v1 的只读文本展示继续保留。
 
-Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返回 Key 内容的 GET 接口。目录建议来自定义与显式 sourceMappings，不按 hostname 猜协议。保存连接/Key 后适用模型的基础配置补齐、失败重试和来源删除保留既有配置均由 Models 负责。
+客户端、执行设备和 Web 静态资源同步升级到展示 v2，旧或未知展示格式明确显示不兼容；旧原生记录 v1/v2 和旧绑定版本仍在服务端重新投影，不增加数据库迁移。旧 dialogue-v1 继续只读。
 
-## API：Prompt 与 Agent 绑定
+协议展示的行为入口为 `tests/tool-call-view.test.mjs`、`tests/protocol-web-modules.test.mjs`、`tests/session-view.test.mjs` 与 `tests/trajectory.test.mjs`。运行 `node tests/helpers/native-view-browser-host.mjs` 可启动隔离浏览器验收宿主，使用内存样本复验四协议内容、1→2→3 工具增长和终态更新、长输出/失败/部分补丁、默认紧凑与详细模式以及约 320px/四分屏布局；不访问真实模型、凭据或工作区数据库。
 
-| 方法 / 路径 | 输入或行为 |
-| --- | --- |
-| `GET /prompts`、`GET /prompts/:id` | Prompt 列表 / 文档 |
-| `POST /prompts` | `{ name, description?, kind, role, content }`，用途与角色组合由领域校验 |
-| `POST /prompts/:id` | 可编辑字段及 `expectedRevision` |
-| `GET /prompts/:id/versions` | 已发布版本 |
-| `POST /prompts/:id/publish` | `{ expectedRevision }` |
-| `GET /agents/:id/prompts` | 已绑定 Prompt 快照 |
-| `POST /agents/:id/prompts` | `{ versionId }`，绑定已发布版本 |
-
-发布前校验浏览器所见草稿 revision；权限由宿主固定身份对应的领域访问规则执行。Prompt 内容展开与首次 Run 固定 instruction/context 的行为分别由 [Prompts](../prompts/prompts.md)、[Agent Prompts](../prompts/agent-prompts.md)、Session 和 Run 决定。浏览器发送原始本次文本、有序图片及文件快照引用，不提前扩展 task-template。模板仅对文本替换 `{{input}}` 一次，随后附加用户文件资料，最后依次排列图片，不支持任意文本图片交错。五种协议均允许纯文件或纯图片消息；有图片时所选模型必须具备有效图片能力，无图片时沿用原文本编码。
-
-## 图片草稿与保留
-
-图片字节归根上的 `harness.image-assets` 组件，Web 仅经 `harness.sessions` 导入、读取和续期，不直接操作图片目录或资源表。宿主在业务存储之后、Harness 之前安装图片组件；`ANYBOX_IMAGE_ASSETS_DIRECTORY` 默认是 `${ANYBOX_HARNESS_DATABASE}.images`。应用关闭由 Harness 统一卸载根组件。Web 不提供通用文件管理、远端 URL 抓取、格式转换、缩略图持久缓存或删除已接受历史的入口。
-
-`image-client.ts` 统一处理文件选择、粘贴文件与拖入文件，最多同时上传两张，先分配槽位再上传以固定顺序。图片限制与宿主共享 `image/limits.ts`：静态 JPEG/PNG/WebP，每张 10 MiB、宽高各不超过 4096 像素；一条消息最多 8 张、合计 20 MiB。真正格式和完整解码由图片组件验证，不能相信扩展名、浏览器 MIME 或客户端尺寸。预览使用同源内容 URL，CSP 不开放远端图片或 data/blob URL。
-
-草稿按 Session 与显式父节点保存文本、图片引用、文件选择和状态到 `sessionStorage`，没有图片字节/base64或文件正文；未完成上传刷新后保留失败占位，不能静默丢图后发送。当前 `PendingSubmission` v3 保存完整图片引用与文件准备状态，发往 Run 的附件 JSON 仅含 assetId/snapshotId；旧 v1 文本及 v2 图片记录仍可读取，未知或破损附件格式只恢复为待确认草稿。幂等恢复先查询已接受键，再检查当前模型与附件有效性。编辑重发与重新生成保留原图和顺序；图片未就绪、过期或模型不支持时禁止发送，纯图片可以发送。
-
-幂等键确认未接受后，若当前能力或协议校验失败，pending 恢复到原父节点草稿并解除提交锁定。原位置已有新草稿时保留双方文字及有序图片并明确提示确认；合并草稿即使超过图片上限也可刷新恢复，但发送前必须删减到数量和字节限制以内。
-
-未接受图片有 24 小时 TTL；工作区每 5 分钟及页面重新可见时续期所有父节点草稿和 pending 图片，每批最多 8 个，不依赖面板是否挂载或可见。提交前再续期；失效图片保留明确占位，要求用户重新添加。关闭面板只移除视图；整个工作区销毁才取消上传与保活。已接受 Run 的永久引用由 Session 事务固定，Web 移除草稿图片只停止续期，不能删掉历史资源。
-
-## SSE 与原生视图
-
-组件监听 Nya `runChangedEvent` 和 `runViewEvent`，转发到当前 HTTP 服务。每条流先发 `ready`，随后发 `run-changed` 刷新提示和 `protocol-view` 完整替换视图；每 15 秒空闲心跳。没有持久重放游标，初次连接/重连必须通过查询校准。
-
-一条流订阅 1..4 个不同 Session，服务最多同时 64 条流。背压时每个 Session 仅保留最新变更提示，原生视图按 Session/Run 替换；最多缓存 128 个视图、262144 字节，超过上限或 15 秒未 drain 就关闭该流。慢浏览器不会阻塞模型回调。
-
-运行中 `getRunView` 先使用 Run 的有效临时视图，核对会话、Run 和协议；否则从 Session 的原生记录生成投影。结束后读取持久记录生成 committed 视图。浏览器协议模块只接纳支持的协议与 `viewSchemaVersion=1`，白名单解析 text/reasoning/tool/status 和安全 HTTP(S) 引用，不用未知协议的通用降级来解释原生内容。临时帧可能合并或丢失，不能作为恢复事实或成功终态证据。
-
-## 关闭、依赖重启与故障
-
-`apply` 在启动监听后返回。它预先登记 server 清理 Effect，并用 `ctx.on` 注册本轮事件监听；Nya 停止本轮组件时取消监听并等待 HTTP 关闭。整个应用根关闭时，依赖提供方在 Web 等消费者退出后再清理；单独卸载 Web 不负责关闭其依赖组件。同一组件依赖重启后在原端口重新监听，不复用旧服务引用。
-
-`HarnessApiServer.close()` 幂等：先停止准入，中止目录选择、图片上传/读取、项目文件搜索/预览/准备/读取和正在等待远端的 Models 请求，释放所有 Run waiters，关闭 SSE，然后等待 SSE 退出、已登记 Models 与附件任务实际结束和 HTTP listener 的在途请求排空。文件操作复用附件请求的取消与等待包装。普通已接受的 Prompt/配置写入、归档/恢复及附件续期由所属服务完成，HTTP 关闭等待对应请求结束。附件请求断开会显式取消 `OwnedCall`；HTTP 成功响应和关闭都等待 `result` 与 `done`，不能以结果已就绪代替真实退出。
-
-单独替换/卸载 Web 不取消已经接受的 Run；完整宿主 `harness.close()` 先同步关闭准入并取消准备，再由 Nya 卸载 Run 组件、取消并等待执行。模型发现、连通性检查和目录刷新因请求断开而取消；普通等待断开只释放 waiter。目录选择的具体退出保证见 [Directory Picker](directory-picker.md)。
-
-HTTP 只返回安全 `{ error: { code, fileIndex? } }`，fileIndex 仅在有效文件位置错误时返回：非法输入 400，JSON 类型 415，体积上限 413，不存在 404，revision/幂等/协议/历史冲突及归档限制通常 409，超时 504，不可用 503，未知异常 500 `internal-error`。已发头后的异常直接关闭响应，避免追加不匹配的 JSON。原始内部异常不直接发送到浏览器。
-
-## 测试与替换边界
-
-- [image-client.test.mjs](../../../tests/image-client.test.mjs)：上传保序、并发、取消、草稿恢复、跨父节点续期与批量上限。
-- [session-client.test.mjs](../../../tests/session-client.test.mjs)：纯图片/文件提交、pending v3 与旧记录恢复、编辑/重新生成、过期引用、归档只读及已接受幂等键恢复。
-- [archive-client.test.mjs](../../../tests/archive-client.test.mjs)：归档列表、恢复、读请求取消和过期响应隔离。
-- [web-server.test.mjs](../../../tests/web-server.test.mjs)：HTTP 约束、Prompt 固定身份、秘密过滤、会话树、等待与取消、SSE、依赖重启、前端替换和关闭等待。
-- [run-change-stream.test.mjs](../../../tests/run-change-stream.test.mjs)、[run-change-client.test.mjs](../../../tests/run-change-client.test.mjs)：背压、有界帧、断开、重连和计时器清理。
-- [models-directory-web.test.mjs](../../../tests/models-directory-web.test.mjs)：目录建议、自动基础配置、多协议执行、刷新断开及真实读流退出等待。
-- [protocol-web-modules.test.mjs](../../../tests/protocol-web-modules.test.mjs)、[protocol-view-client.test.mjs](../../../tests/protocol-view-client.test.mjs)：协议隔离、白名单、替换视图顺序与不兼容拒绝。
-
-`startHarnessApiServer` 可通过 `HarnessApiCommands` 测试替身独立验证；替换浏览器或 HTTP 实现时保持显式父节点、幂等键、临时/持久状态区分和清理语义。完整验收运行 `npm run check`。
-
-## 项目文件引用
-
-输入框支持 @ 搜索或“引用项目文件”，默认整文件，预览可选择闭区间行范围。搜索包含点文件及 ignore 文件，仅排除元数据和依赖目录。发送时通过 Session 准备不可变快照，再以 ID 提交 Run。pending v3 先保存准备键，取得快照后先保存 ID，再发送；重试和重新生成默认复用快照。历史预览读取快照，编辑可显式更新为当前文件。
-
-HTTP 路由见上方接口表，跨组件恢复规则见[文件引用设计](../../project-file-references-design.md)。文件操作使用既有请求取消/实际退出包装，错误只暴露固定 code 及可选 fileIndex。[draft-client](../../../src/client/draft-client.ts) 是通用草稿存储，[file-client](../../../src/client/file-client.ts) 管理文件待提交和 5 分钟租期，[file-view](../../../src/client/file-view.ts) 拥有各面板的候选查询与预览；组件关闭/面板卸载取消对应操作。
-
-## 会话归档
-
-公开 `GET /api/v1/sessions/archived`、`POST /api/v1/sessions/:id/archive` 和 `POST /api/v1/sessions/:id/restore`；静态归档路由先于 ID 路由，投影包含可空 archivedAt。不存在返回 404，`session-archived` / `session-has-active-runs` 返回 409。继续通过注入的 Session 服务执行，不新增组件或数据库。
-
-项目菜单提供归档；侧栏统一对话框跨项目查看和恢复。成功归档关闭对应分屏并保存布局，保留草稿与位置；归档历史可显式打开或通过直达链接只读查看。恢复刷新列表及已打开面板，不自动打开未显示会话。控制器和视图共同禁止输入、附件添加、选模和重跑；附件历史仍可读取。会话轮询发现未归档→已归档时关闭面板，页面重新可见刷新列表；不新增 SSE 事件。未知提交先查幂等结果，未接受输入合并回原位置草稿，不自动重发。
-
-内部 `archive-client.ts` 管理归档列表读请求、过期响应隔离及对话框，归 Workspace 关闭，不是 Nya 组件。[HTTP 测试](../../../tests/web-server.test.mjs)、[控制器测试](../../../tests/session-client.test.mjs) 和 [归档列表测试](../../../tests/archive-client.test.mjs) 覆盖入口、只读、草稿恢复和请求乱序。
+验证：tests/desktop-host-boundaries.test.mjs、tests/products-api.test.mjs、tests/application-host.test.mjs、tests/remote-harness-server.test.mjs、tests/deployment-boundaries.test.mjs；npm run check。
