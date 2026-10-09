@@ -60,6 +60,10 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 
 [整体架构图](./architecture/current-framework.md) 与 [Models 架构图](./architecture/models-module.md) 保留原生协议迁移前的图示，不能用其中的旧执行接口代替当前组件契约。当前行为以源码、对应行为测试和组件手册为依据；发现差异应同步修正文档。
 
+## 外部参考
+
+- [下一道扩展难题（Tetral，中文译文）](./references/tetral-the-next-scaling-problem.zh-CN.md)：Yang Li 关于智能体运行时、持久化执行与按需计算机资源的文章，含原文配图。
+
 ## 维护约定
 
 新增组件时，在所属模块目录新增一篇组件文档并更新模块 README 和 [组件清单](./modules/README.md)。新增内聚模块时再建立目录；模块分组只表达职责，不创建新的 Nya Context，也不要求移动源码。
