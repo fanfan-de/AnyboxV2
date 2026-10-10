@@ -39,6 +39,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | [Anybox 宿主与 Anybox Harness 应用边界](./harness-module-boundary.md) | 当前目录、宿主与应用依赖方向、组合入口与资源归属 |
 | [harness server 组件协作总览](./harness-server-components.md) | 单根装配、资源所有权与关键调用路径 |
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
+| [Computer 资源设计](./computer-resource-design.md) | 按需激活、Nya 依赖与持久边界、Runtime 重启接续、跨机器工作区及分阶段验收，待实施 |
 | [工具库设计](./tools-library-design.md) | 来源工具混选、不可变会话快照、Run 进程清理和原生工具图片 |
 | [多模态图片输入设计](./multimodal-image-input-design.md) | 四种原生协议图片输入的端到端链路、历史升级兼容与验收 |
 | [项目目录选择](./project-directory-picker.md) | 多实例目录浏览、固定连接、分页清理和旧版兼容 |
