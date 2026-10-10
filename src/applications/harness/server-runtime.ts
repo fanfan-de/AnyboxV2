@@ -29,7 +29,7 @@ export function createHarnessServerRuntime(root: Context, config: HarnessServerC
     }), 'unregister harness server stop protection')
     await installHarnessServerModels(root, config, options.models, installation.track)
     const hasDefault = root.get<ModelsSettingsService>(modelsSettingsServiceKey)?.configurations().some(model => model.id === 'default') ?? false
-    const serverCoreOptions: HarnessServerCoreOptions = { ...options, initialProjects: options.projects ?? options.initialProjects,
+    const serverCoreOptions: HarnessServerCoreOptions = { ...options, localWorkerDirectory: options.localWorkerDirectory ?? `${config.harnessDatabasePath}.computer-worker`, initialProjects: options.projects ?? options.initialProjects,
       agents: options.agents ?? definitions.map(agent => ({ ...agent, ...(hasDefault ? { modelId: 'default' } : {}) })) }
     for (const component of [...createHarnessServerPromptComponents(serverCoreOptions), createImageAssetsComponent({ directory: config.imageAssetsDirectory }),
       ...createHarnessServerAgentComponents(root, serverCoreOptions, installation), createHarnessServerHttpComponent(root, definitions, { authenticated: options.authenticated ?? true })]) installation.install(component)

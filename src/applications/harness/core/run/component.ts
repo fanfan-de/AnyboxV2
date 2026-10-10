@@ -16,11 +16,12 @@ import { treeError } from '../session/domain.js'
 import type { Run, RunInput } from './domain.js'
 import { runRuntimeServiceKey } from './runtime-component.js'
 import type { RunRuntimePort, RunCancelReason } from './runtime-component.js'
-import { protocolAgentServiceKey } from './program.js'
-import type { ProtocolAgentPort, PreparedRunProgram, NativeInitialization, NativeRunInput } from './program.js'
+import { protocolAgentServiceKey, runResumeCheckpoint } from './program.js'
+import type { ProtocolAgentPort, PreparedRunProgram, NativeInitialization, NativeRunInput, RunResumeRecord } from './program.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../session/port.js'
 import type { SessionPort, SessionRunPort } from '../session/port.js'
 import { createWaiters } from './waiters.js'
+import { computerOperationsServiceKey, type ComputerOperationsPort } from '../computer/operations-port.js'
 
 export const runServiceKey = 'harness.runs'
 export const runAdmissionServiceKey = 'harness.run-admission'
@@ -47,20 +48,70 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
   [protocolAgentServiceKey]: ProtocolAgentPort
   [runRuntimeServiceKey]: RunRuntimePort
   [projectServiceKey]: ProjectPort
+  [computerOperationsServiceKey]: ComputerOperationsPort
 }> {
   return {
     name: 'harness-runs',
-    inject: [sessionServiceKey, sessionRunServiceKey, agentPromptServiceKey, modelsServiceKey, protocolAgentServiceKey, runRuntimeServiceKey, projectServiceKey],
+    inject: [sessionServiceKey, sessionRunServiceKey, agentPromptServiceKey, modelsServiceKey, protocolAgentServiceKey, runRuntimeServiceKey, projectServiceKey, computerOperationsServiceKey],
     apply(ctx, _config, deps) {
       const sessions = deps[sessionServiceKey], records = deps[sessionRunServiceKey], prompts = deps[agentPromptServiceKey]
       const models = deps[modelsServiceKey], protocols = deps[protocolAgentServiceKey], runtime = deps[runRuntimeServiceKey], projects = deps[projectServiceKey]
-      const owned = new Set<string>(), admissions = new Set<Promise<Run>>(), opening = new Set<AbortController>()
+      const owned = new Set<string>(), admissions = new Set<Promise<unknown>>(), opening = new Set<AbortController>()
       const cleanupFailures: unknown[] = []
       const requests = new Map<string, { input: RunInput; result: Promise<Run> }>()
       const handoffs = new Map<string, Promise<Run>>()
       const untransferred = new Map<string, AbortController>()
       const waitFor = createWaiters<Run>()
+      const waitForRecoveryReady = createWaiters<readonly Promise<unknown>[]>()
       let accepting = true, pauseCount = 0
+      const resumeOne = async (candidate: RunResumeRecord): Promise<Run> => {
+        const id = candidate.run.id, controller = new AbortController()
+        opening.add(controller); owned.add(id)
+        let program: PreparedRunProgram | undefined, transferred = false, resumed: RunResumeRecord | undefined
+        try {
+          resumed = await records.claimRunResume(id, candidate.state.runOwnerEpoch, inputs.now())
+          await deps[computerOperationsServiceKey].authorizeRun(id,resumed.state.runOwnerEpoch,controller.signal)
+          if (resumed.state.conclusion && ['cleanup','settling'].includes(resumed.state.stage) || resumed.run.status === 'cancelling') {
+            const snapshot = resumed.run.modelSnapshot, binding = resumed.run.protocolBinding, input = resumed.run.nativeInput
+            if (snapshot?.schemaVersion !== 3 || !binding || !input) throw modelFailure('model-unavailable')
+            const checkpoint = runResumeCheckpoint(resumed)
+            program = { binding, modelSnapshot: snapshot, initialization: resumed.initialization, input, signal: controller.signal,
+              async execute() { throw modelFailure('dependency-unavailable') },
+              async close() { return { records: [], checkpoint, cleanup: 'completed' } }, release() {} }
+          } else program = await protocols.prepareResume({resume: resumed, signal: controller.signal})
+          if (!program) throw modelFailure('model-unavailable')
+          const started = runtime.start({runId:id, program, resume:resumed}); transferred = true
+          void runtime.wait(id).finally(() => owned.delete(id)).catch(() => {})
+          return await started
+        } catch (error) {
+          if (program && !transferred) { try { await program.close() } finally { program.release() } }
+          if (resumed && !transferred) {
+            const snapshot = resumed.run.modelSnapshot, binding = resumed.run.protocolBinding, input = resumed.run.nativeInput
+            if (snapshot?.schemaVersion === 3 && binding && input) {
+              const failed: PreparedRunProgram = { binding,modelSnapshot:snapshot,initialization:resumed.initialization,input,signal:controller.signal,
+                async execute() { return {kind:'failed',category:'dependency-unavailable',error:'accepted Run cannot resume with the available protocol execution'} },
+                async close() { return {records:[],checkpoint:runResumeCheckpoint(resumed!),cleanup:'completed'} }, release() {} }
+              const started = runtime.start({runId:id,program:failed,resume:resumed}); transferred = true
+              void runtime.wait(id).finally(() => owned.delete(id)).catch(() => {})
+              return await started
+            }
+          }
+          throw error
+        } finally { opening.delete(controller); if (!transferred) owned.delete(id) }
+      }
+      // Initialization returns immediately; recovery is owned by the same admission/exit barriers as new Runs.
+      const recoveryReady = Promise.resolve().then(async () => {
+        const candidates = await records.listRunResumes()
+        const tasks = candidates.map(candidate => {
+          const task = resumeOne(candidate); handoffs.set(candidate.run.id,task)
+          void task.finally(() => handoffs.delete(candidate.run.id)).catch(() => {})
+          return task
+        })
+        return [deps[computerOperationsServiceKey].recoverCancelledRuns(candidates.map(candidate => candidate.run.id)), ...tasks]
+      })
+      const recovery = recoveryReady.then(tasks => Promise.all(tasks)).then(() => {})
+      admissions.add(recovery)
+      void recovery.finally(() => admissions.delete(recovery)).catch(error => { cleanupFailures.push(error) })
       const stopPreparing = () => { for (const controller of opening) controller.abort() }
       ctx.effect(() => {
         closingSignal?.addEventListener('abort', stopPreparing)
@@ -204,6 +255,7 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
         },
         async waitRun(id, signal) {
           signal?.throwIfAborted()
+          await waitForRecoveryReady(recoveryReady, signal)
           const handoff = handoffs.get(id)
           if (handoff) await waitFor(handoff, signal)
           return runtime.wait(id, signal)

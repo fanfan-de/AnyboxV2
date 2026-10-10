@@ -23,17 +23,20 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 | `openProject(path)` | 只接受非空绝对目录路径；realpath 后按规范路径去重，返回 available=true 的项目 |
 | `listProjects()` | 按 createdAt、id 排序返回所有项目，并并行检查每个目录当前可用性 |
 | `getProject(id)` | 不存在返回 undefined；存在则重新检查目录 |
+| `getIn(reader,id)` | 受信同步事务参与接口，仅返回稳定项目元数据，available=false；不检查目录、不激活计算资源 |
 | `requireAvailable(id)` | 不存在抛 unknown project；不可用抛 `ProjectUnavailableError`，code 为 project-unavailable |
 
 浏览服务还提供 `directoryBrowsingSupported`、`openDirectoryBrowse(owner,input,signal?)`、`readDirectoryPage(owner,browseId,page,signal?)` 与 `closeDirectoryBrowse(owner,browseId)`。`directoryCreationSupported` 声明子目录创建能力，`createDirectory(owner,browseId,name,signal?)` 在同一 owner 的已加载浏览目录下创建一个子目录，返回 `OwnedCall<{path:string}>`。open/page 同样返回 OwnedCall，close 幂等并等待实际退出；owner 由受信宿主提供。`onDirectoryBrowseRetired(listener)` 在实际清理后通知宿主移除认证归属跟踪，并返回取消订阅函数。预留、浏览和创建不登记项目，所有 DTO 见[公开协议](../../project-directory-picker.md#api-v1-与公开-dto)。
 
-harness server API 提供登记、查询与浏览接口；`requireAvailable` 供 Session、Run 和工具的依赖校验使用。
+harness server API 提供登记、查询与浏览接口；`getIn` 只供受信组件事务使用，不进入 HTTP 或公开门面。`requireAvailable` 供 Session、Run、Workspaces 准备及未指定固定路径的工具兼容调用使用。
 
 ## 业务流程与持久归属
 
 openProject 首先 realpath 解析目录别名，并确认目标是目录；文件、已删除路径或权限导致不可达的路径被拒绝。随后在事务内查询 `harness_projects.path`，已存在则复用同一 ID，否则插入新 ID、目录名和时间。数据库的 UNIQUE(path) 保证规范路径身份唯一，打开同一目录的不同路径表示不会创建多个项目。
 
 `harness_projects` 表由本组件的 projects 迁移域拥有；SQLite 连接归存储组件。本组件不打开额外连接，不建立每项目数据库或 Nya Context。目录失效只影响 available 和新操作准入，不删除项目记录及其 Session 历史。
+
+[Workspaces](../computers/workspaces.md) 按需读取 Projects.getIn，为旧项目建立独立 pinned-local 身份；只有计算工具执行前才通过 requireAvailable 准备 binding。Projects 不依赖 Workspaces、Computers 或 Operations，项目登记和会话创建不会因此激活 computer。本阶段仍保留本机绝对路径与共享目录语义，不承诺项目目录跨机器迁移。
 
 ## 取消、清理与限制
 
@@ -45,7 +48,7 @@ openProject 首先 realpath 解析目录别名，并确认目标是目录；文�
 
 浏览只处理当前层，允许有效目录链接并在进入后 realpath；断链、链接循环和权限不足返回固定原因，不继承 Project Files 的链接禁用或目录排除规则。
 
-可用性是检查时的状态，不保证未来文件操作一定成功；Bash 与 Apply Patch 仍负责各自执行时检查。项目路径不是访问控制或路径沙箱，不能把选择项目当作权限限制。服务没有遗留项目格式导入逻辑，迁移由通用存储按已登记版本执行。
+可用性是检查时的状态，不保证未来文件操作一定成功。工具使用固定 workspacePath 时继续负责实际进程启动、文件打开及补丁预检；省略时保留原目录查询。项目路径不是访问控制或路径沙箱，不能把选择项目当作权限限制。服务没有遗留项目格式导入逻辑，迁移由通用存储按已登记版本执行。
 
 ## 验证
 

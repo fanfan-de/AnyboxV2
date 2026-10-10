@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
@@ -139,6 +140,7 @@ async function stateHost(directory) {
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
   await root.installComponent(createProjectComponent(inputs))
   await root.installComponent(createProjectFilesComponent(inputs))
+  await installComputerServices(root, inputs)
   await root.installComponent(createSessionComponent(inputs, agents))
   return { root, records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey), db: root.get(localStorageServiceKey), projects: root.get(projectServiceKey) }
 }
@@ -199,9 +201,11 @@ test('an in-flight Apply Patch intent is interrupted on restart without replayin
   let second
   t.after(async () => { await second?.root.fiber.dispose(); await first.root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) })
   const project = await first.projects.openProject(directory)
+  await first.sessions.setAgentTools('assistant', { toolIds: ['anybox.apply_patch'], expectedRevision: 0 })
   const session = await first.sessions.createSession(project.id, 'assistant')
   await registerNativeRun(first.records, 'r', { sessionId: session.id, parentNodeId: null, input: 'edit', idempotencyKey: 'one' }, 'old', [],
-    modelSnapshot())
+    modelSnapshot(), { schemaVersion: 2, prompts: [], toolContractVersion: 'tool-library-v1', toolSelection: session.toolSelection,
+      tools: session.toolSelection.tools.map(tool => tool.definition) })
   const call = patch('patch', add('marker', 'would overwrite'))
   await first.records.startOperation('r', { id: 'patch-operation', kind: 'tool', tool: call, intent: call }, 'old')
   writeFileSync(join(directory, 'marker'), 'already written')

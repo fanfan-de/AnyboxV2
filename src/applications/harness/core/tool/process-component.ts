@@ -17,8 +17,8 @@ export interface ProcessRunScope {
   close(): OwnedCall<JsonValue>
 }
 export interface ProcessToolsPort {
-  /** Acquires ownership synchronously; no project lookup precedes the Run scope. */
-  openRun(input: { readonly runId: string; readonly projectId: string }): ProcessRunScope
+  /** Acquires ownership synchronously; a trusted workspacePath fixes the base for every process in this scope. */
+  openRun(input: { readonly runId: string; readonly projectId: string; readonly workspacePath?: string }): ProcessRunScope
 }
 export interface ProcessOptions {
   readonly timeoutMs?: number
@@ -115,9 +115,10 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
       if (failures.size) throw new AggregateError([...failures], 'process tool cleanup failed')
     }, 'cancel and join Run process scopes')
     const service: ProcessToolsPort = {
-      openRun({ runId, projectId }) {
+      openRun({ runId, projectId, workspacePath }) {
         if (!accepting) throw new ProcessFailure('unavailable')
-        if (typeof runId !== 'string' || !runId.trim() || typeof projectId !== 'string' || !projectId.trim() || scopes.has(runId)) throw new ProcessFailure('invalid-request')
+        if (typeof runId !== 'string' || !runId.trim() || typeof projectId !== 'string' || !projectId.trim() || scopes.has(runId) ||
+          workspacePath !== undefined && (typeof workspacePath !== 'string' || !isAbsolute(workspacePath) || workspacePath.includes('\0'))) throw new ProcessFailure('invalid-request')
         const processes = new Map<number, ProcessEntry>()
         const calls = new Set<OwnedCall<JsonValue>>()
         let open = true, closing: OwnedCall<JsonValue> | undefined
@@ -138,7 +139,7 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
           if (signal.aborted || !open || !accepting) throw new ProcessFailure('cancelled')
           if ([...processes.values()].filter(entry => !entry.exited).length >= maxProcessesPerRun) throw new ProcessFailure('unavailable')
           let projectPath: string
-          try { projectPath = (await deps[projectServiceKey].requireAvailable(projectId)).path }
+          try { projectPath = workspacePath ?? (await deps[projectServiceKey].requireAvailable(projectId)).path }
           catch { throw new ProcessFailure('unavailable') }
           if (signal.aborted || !open || !accepting) throw new ProcessFailure('cancelled')
           const cwd = input.workdir ? isAbsolute(input.workdir) ? input.workdir : resolve(projectPath, input.workdir) : projectPath

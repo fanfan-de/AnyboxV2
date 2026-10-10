@@ -10,7 +10,7 @@ import { createProductActivityComponent } from '../dist/host/applications/activi
 import { createApplicationRuntime } from '../dist/host/applications/runtime.js'
 import { createHarnessServerRuntime } from '../dist/applications/harness/server-runtime.js'
 import { parseHarnessServerConfig } from '../dist/applications/harness/server-config.js'
-import { installHarnessServerCore } from '../dist/applications/harness/core/index.js'
+import { installHarnessServerCore, createHarnessServerAgentComponents } from '../dist/applications/harness/core/index.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { runAdmissionServiceKey } from '../dist/applications/harness/core/run/component.js'
 import { controlledModels, deferred } from './helpers/controlled-models.mjs'
@@ -34,21 +34,32 @@ async function fixture(t) {
 
 test('harness server owns its full installation and reopening preserves data in the host database', async t => {
   const { root, config, runtime } = await fixture(t)
+  const workerDirectory = `${config.harnessDatabasePath}.computer-worker`
   assert.equal(runtime.inspect(), 'disabled')
   assert.equal(existsSync(config.modelsDatabasePath), false)
   await runtime.open()
   assert.equal(runtime.inspect(), 'active')
-  for (const key of ['models', 'models.catalog', 'harness.prompts', 'harness.sessions', 'tools.bash', 'harness.http']) assert.ok(root.get(key), key)
+  for (const key of ['models', 'models.catalog', 'harness.prompts', 'harness.sessions', 'harness.computers', 'harness.workspaces', 'harness.computer-operations', 'computer.worker', 'harness.http']) assert.ok(root.get(key), key)
+  for (const key of ['tools.bash', 'tools.apply-patch', 'tools.processes', 'tools.files']) assert.equal(root.get(key), undefined, `${key} is owned by the independent worker`)
+  const components = createHarnessServerAgentComponents(root, { agents }, { isClosing: () => false })
+  assert.deepEqual(components.find(component => component.name === 'harness-run-runtime').inject, ['harness.session-runs', 'harness.computer-operations'])
+  assert.ok(components.find(component => component.name === 'harness-computer-operations').inject.includes('computer.worker'))
+  assert.equal(components.some(component => component.inject?.some(key => key.startsWith('tools.'))), false, 'Authority execution depends on durable operations, not worker tool services')
+  assert.equal(existsSync(workerDirectory), false, 'opening Authority installs the proxy without activating a worker')
   const models = root.get('models'), prompts = root.get('harness.prompts')
   const prompt = await prompts.createPrompt('owner', { name: 'Remember', kind: 'context', role: 'user', content: 'Keep this content' })
   await runtime.open(); assert.equal(root.get('models'), models)
   await runtime.stop()
   assert.equal(runtime.inspect(), 'disabled'); assert.equal(root.get('models'), undefined)
   assert.equal(root.get('harness.sessions'), undefined); assert.equal(root.get('harness.http'), undefined)
+  assert.equal(root.get('computer.worker'), undefined); assert.equal(root.get('harness.computer-operations'), undefined)
+  assert.equal(existsSync(workerDirectory), false)
   assert.ok(root.get('local-storage')); assert.equal(root.fiber.state, FiberState.ACTIVE)
   await runtime.open()
   assert.notEqual(root.get('models'), models)
   assert.equal(root.get('harness.prompts').getPrompt('owner', prompt.id).draft.content, 'Keep this content')
+  assert.ok(root.get('computer.worker')); assert.ok(root.get('harness.computer-operations'))
+  assert.equal(existsSync(workerDirectory), false, 'reopening Authority still does not allocate execution resources')
 })
 
 test('Run admission protects preparation and real exit, and installation close leaves the root dependencies alive', async t => {
@@ -58,7 +69,11 @@ test('Run admission protects preparation and real exit, and installation close l
   await root.installComponent(models.component())
   await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
-  const installation = await installHarnessServerCore(root, { agents }), harness = installation.api
+  const workerDirectory = join(directory, 'computer-worker')
+  const installation = await installHarnessServerCore(root, { agents, localWorkerDirectory: workerDirectory }), harness = installation.api
+  const computerOperations = root.get('harness.computer-operations'), workerProxy = root.get('computer.worker')
+  assert.ok(computerOperations); assert.ok(workerProxy)
+  for (const key of ['tools.bash', 'tools.apply-patch', 'tools.processes', 'tools.files']) assert.equal(root.get(key), undefined)
   t.after(async () => {
     releaseOpen.resolve()
     for (const call of models.calls) { call.result.resolve('done'); call.done.resolve() }
@@ -80,6 +95,11 @@ test('Run admission protects preparation and real exit, and installation close l
   assert.equal(control.pauseIfIdle(), undefined)
   models.calls[0].done.resolve()
   await harness.waitRun(run.id)
+  assert.strictEqual(root.get('harness.computer-operations'), computerOperations)
+  assert.strictEqual(root.get('computer.worker'), workerProxy)
+  assert.equal(existsSync(workerDirectory), false, 'model preparation, streaming and completion never activate the worker')
+  assert.deepEqual(await root.get('harness.computers').list(), [])
+  assert.equal(await root.get('harness.workspaces').getForProject(project.id), undefined)
   await new Promise(resolve => setImmediate(resolve))
   const resume = control.pauseIfIdle(), nestedResume = control.pauseIfIdle()
   assert.equal(typeof resume, 'function'); assert.equal(typeof nestedResume, 'function')
@@ -92,6 +112,7 @@ test('Run admission protects preparation and real exit, and installation close l
   await installation.close()
   assert.ok(root.get('models')); assert.ok(root.get('harness.image-assets'))
   assert.equal(root.get('harness.runs'), undefined)
+  assert.equal(root.get('computer.worker'), undefined); assert.equal(root.get('harness.computer-operations'), undefined)
   assert.equal(root.fiber.state, FiberState.ACTIVE)
 })
 

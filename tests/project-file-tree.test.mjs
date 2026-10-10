@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -192,6 +193,7 @@ test('Session restart retires accepted idle tree cursors while captured close re
     return { async verify() {}, async read() { return { name: 'file', path: 'file', kind: 'file' } }, async close() { closing.resolve(); await exit.promise } }
   } } } })
   await f.root.installComponent(createImageAssetsComponent({ directory: join(f.directory, 'images') }))
+  await installComputerServices(f.root, f.inputs)
   const sessionFiber = f.root.installComponent(createSessionComponent(f.inputs, [{ id: 'assistant' }])); await sessionFiber
   const sessions = f.root.get('harness.sessions'), session = await sessions.createSession(f.project.id, 'assistant')
   const page = await joined(sessions.openProjectFileTree(session.id, '', 'actor'))

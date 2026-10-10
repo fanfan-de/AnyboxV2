@@ -6,7 +6,7 @@
 
 `createProcessToolsComponent(options?: ProcessOptions)` 安装根上的 `process-tools` 组件，提供 `tools.processes` / `ProcessToolsPort`，通过 `inject` 消费本轮 `harness.projects`。它持有每个 Run 的管道进程组、stdin 写入顺序、增量输出、等待计时器和清理；不解释原生协议，也不自己写 Session。前台 Claude Code / DeepSeek Harness 命令和 Codex 的进程会话共用此资源边界。
 
-`openRun({runId, projectId}): ProcessRunScope` 同步接管 Run 所有权，随后才允许异步项目查询。相同活跃 Run ID 重复打开会拒绝。返回 scope 支持：
+`openRun({runId, projectId, workspacePath?}): ProcessRunScope` 同步接管 Run 所有权，随后才允许异步项目查询。相同活跃 Run ID 重复打开会拒绝。独立 worker 的执行适配器传入固定 workspacePath，scope 全部进程复用此基准，省略时保留 Projects.requireAvailable 查询行为。返回 scope 支持：
 
 - `execute('codex_exec_command' | 'codex_write_stdin', args): OwnedCall<JsonValue>`。
 - `foreground({command, timeoutMs?, maxOutputTokens?, workdir?}): OwnedCall<JsonValue>`，用于其他来源的前台命令适配。
@@ -35,7 +35,7 @@
 
 scope 关闭和 Nya Effect 卸载先阻止新调用，再取消所有已接收调用，向存活进程组发 SIGTERM，宽限后发 SIGKILL，最后等待进程、管道和调用退出。shell 已退出的遗留子进程也会清理，包括重定向了输出的子进程。关闭业务结果保存全部进程的实际退出、剩余输出、截断、超时和终止事实；无法确认清理时，结果含 `cleanup: failed`，`done` 以 `cleanup-failure` 拒绝。正常 Run 结束调用这个入口属于资源清理，不等于用户取消 Run。
 
-信号发送可能与进程正常退出竞争，最终以观察到进程组确实消失为清理成功依据。RunRuntime 在关闭 scope 并等待 `done` 后才持久化清理观察和结算；失败不得生成成功节点。应用关闭等待组件所有 scope，并聚合已观察到的清理错误。
+信号发送可能与进程正常退出竞争，最终以观察到进程组确实消失为清理成功依据。进程 scope 由独立 worker 的内部执行适配器持有；computer scope 等它实际退出后，才原子释放实例 pin 与工作区 reservation。RunRuntime 等待 computer scope 的 `done` 后持久化清理观察并结算；失败不得生成成功节点。应用关闭通过持久 Run 控制等待所属 scope；停止 worker 服务等待此组件的全部 scope，并聚合清理错误。
 
 ## 内部纯目录与选择契约
 

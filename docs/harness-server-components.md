@@ -2,15 +2,15 @@
 
 多实例部署已实现，当前目录与 HTTP/客户端边界见 [Anybox Harness 模块边界](harness-module-boundary.md)；独立启动和凭据/恢复见[部署说明](harness-server-deployment.md)。每个执行进程保留以下单根组件关系，客户端使用独立根。
 
-本文以 harness server 的服务端核心为主，附列客户端与通用宿主组件以说明调用和资源边界；它们分别位于各自进程根。本文保留跨组件协作总览；逐个组件的完整说明见 [模块与组件手册](./modules/README.md)，按 Models、执行、项目与会话、图片、Prompt、工具、存储、Web 和资源验证分目录。新增组件或调整接口、依赖和清理行为时，同步更新相应独立文档。
+本文以 harness server 的服务端核心为主，附列客户端与通用宿主组件以说明调用和资源边界；它们分别位于各自进程根。本文保留跨组件协作总览；逐个组件的完整说明见 [模块与组件手册](./modules/README.md)，按 Models、执行、Computer 资源、项目与会话、图片、Prompt、工具、存储、Web 和资源验证分目录。新增组件或调整接口、依赖和清理行为时，同步更新相应独立文档。
 
-状态：2026-10-04，已按四种协议图片输入、工具库与 Agent 工具选择、项目文件引用及会话归档/恢复核对。组件契约见本文与 [会话树](./session-conversation-tree.md)、[Models 模块](../packages/models/README.md)，具体行为以当前源码及行为测试为依据。迁移决策和验收矩阵见 [原生协议设计](./native-protocol-agent-framework-design.md)。
+状态：2026-10-10，已接入本机按需资源、pinned-local 工作区、独立耐久 worker 和模型响应已保存后的工具等待重启接续；跨机器迁移及独立模型 exchange 尚未实现。组件契约见本文、[Computer 模块](./modules/computers/README.md)、[会话树](./session-conversation-tree.md)与[Models 模块](../packages/models/README.md)，具体行为以当前源码及行为测试为依据。后续演进见[资源设计](./computer-resource-design.md)。
 
 Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录边界](./harness-module-boundary.md)。通用宿主位于 `src/host/`，Anybox Harness 的注册、核心、HTTP、客户端和界面集中在 `src/applications/harness/`，默认组合在 `src/entrypoints/`。目录拆分不增加 Nya Context 或组件，本文记录现有单根装配和实际生命周期。
 
 ## 根、服务与资源归属
 
-应用只使用一个 Nya 根 Context。Models、业务 SQLite、图片资源、Projects、Project Files、Prompt、Session、协议应用绑定、RunRuntime、Run 和 Web 直接安装在根上；Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/applications/harness/core/index.ts` 提供 Prompt/Agent 组件分组和受信门面，`src/applications/harness/server-runtime.ts` 根据该设备的 Anybox Harness 打开目标保留根级 Fiber 句柄；Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
+每个进程只使用一个 Nya 根 Context。Authority 与 Runtime 当前同进程：Models、业务 SQLite、图片资源、Projects、Project Files、Computer 协调及 worker 客户端、Prompt、Session、协议绑定、RunRuntime、Run 和 Web 直接安装在其根上；独立 worker 在自己的根安装执行器、固定项目绑定、独占存储、图片与四工具。Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/applications/harness/core/index.ts` 提供 Prompt/Agent 组件分组和受信门面，`src/applications/harness/server-runtime.ts` 根据该设备的 Anybox Harness 打开目标保留根级 Fiber 句柄；Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
 
 | 组件 | 服务 / 主要依赖 | 独占资源与关闭行为 |
 | --- | --- | --- |
@@ -25,16 +25,23 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | 图片资源 | `harness.image-assets`；注入 local-storage | 排他图片目录、校验队列、临时文件、读取与 GC；取消并等待实际退出 |
 | Projects | `harness.projects`；注入 local-storage | 项目目录身份、目录检查与记录、有界浏览会话/目录句柄及取消清理 |
 | Project Files | `harness.project-files`；注入 local-storage/projects | 文件搜索、读取、SQLite 快照、准备批次与保留凭证；取消并等待文件和数据库操作 |
+| 本机 worker 客户端 | `computer.worker`；无 inject | 惰性连接或启动独立 worker；Effect 只取消并等待本地 HTTP 观察 |
+| 本机实例提供方 | `computer.instance-provider`；注入 computer.worker | 按需确认 workerId/bootId、平台及架构；不销毁用户设备 |
+| Computers | `harness.computers`；注入 local-storage/instance-provider | 逻辑资源、按需共享激活、实例代次和 pin；取消并等待提供方实际退出 |
+| Workspaces | `harness.workspaces`；注入 projects/local-storage | pinned-local 映射、scope reservation 与固定 binding；取消并等待准备和查询 |
+| Computer Operations | `harness.computer-operations`；注入 computers/workspaces/local-storage/worker/image-assets | 声明、receipt、结果、scope 与固定引用；Effect 取消并等待本代观察 |
+| worker 固定项目绑定 | worker 根的 `harness.projects`；无 inject | 仅接受 fixed workspacePath 的工具兼容端口，不反查 Authority |
+| worker 执行器 | worker 根的 `computer.worker`；注入 worker 存储/四工具/图片 | 独立账本、工具调用及 Run 进程 scope；关闭 worker 服务才取消并等待此根 |
 | Bash / Apply Patch | `tools.bash` / `tools.apply-patch`；注入 projects | 既有前台命令 / 跨项目文件队列与临时资源；取消后等实际退出 |
 | 进程工具 | `tools.processes`；注入 projects | 每 Run 的管道进程组、stdin 与增量输出；正常结束也关闭 scope 并等实际退出 |
 | 文件工具 | `tools.files`；注入 projects/image-assets/apply-patch | 读取 handle、搜索进程、图片导入和共享文本提交；取消并等待 |
 | Prompt | `harness.prompts`；注入 local-storage | 草稿、不可变发布版本及已接纳写入 |
 | Agent Prompt | `harness.agent-prompts`；注入 prompts/local-storage | Agent 绑定及 Prompt 快照解析 |
-| Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets/project-files | 新会话默认值、Agent 工具配置及会话不可变选择、归档状态、Run、节点、原生记录与事务；取消并等待附件调用，等已接受写入与通知 |
+| Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets/project-files/computer-operations | 新会话默认值、Agent 工具配置及会话不可变选择、归档状态、Run、节点、原生记录与事务；计算工具意图/观察同事务参与；等已接受写入与通知 |
 | 协议应用注册 | `harness.protocol-agents`；注入 models/models.protocols/image-assets | 固定驱动与 Loop 组合、准备中的资源、Run 租约；撤销后等 program 释放 |
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
-| RunRuntime | `harness.run-runtime`；注入 session-runs/bash/apply-patch/processes/files | 活动 program、所有受管操作、取消/等待者和临时视图；退出后结算 |
-| Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime | 准入、幂等和交接前资源；停止准入并等交接与在途 Run |
+| RunRuntime | `harness.run-runtime`；注入 session-runs/computer-operations | program、工具观察、owner、取消/等待者和临时视图；worker scope 与 program 退出后结算 |
+| Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime/computer-operations | 准入、幂等和交接前资源；停止准入并等交接与在途 Run |
 | 执行访问管理 | `host.access` | 既有业务库中的实例身份与令牌摘要；撤销观察连接 |
 | 客户端连接 | `client.connections` | 独立 client.sqlite 与系统凭据意图日志 |
 | 客户端外壳 | `app.client-http` | 常驻回环监听器、静态页面与应用控制 |
@@ -69,7 +76,7 @@ Models JSON 配置文件、旧配置导入源、目录缓存与业务数据库�
 | Chat Completions | 原生 messages、assistant/tool_calls、tool 消息与 finish_reason | 互斥的 `max_completion_tokens` / `max_tokens`、reasoning_effort、显式 thinking；无统一消息恢复来源 |
 | Gemini Interactions | 按时间顺序保留 steps、thought signature、函数身份与结果 | generation_config；`store:false`；不用 previous_interaction_id 或后台任务 |
 
-四种协议使用驱动 2.1.0、Loop 1.2.0、记录 v2，兼容 Loop 1.0.0/1.1.0 及旧文本 v1，均支持 JSON、流式消费、客户端工具往返、持久记录、跨 Run/重启恢复和安全 Turn 展示，也均支持显式声明能力的静态 JPEG/PNG/WebP 本地图片输入和项目文本文件资料。工具读图通过文本工具结果后的用户图片块复用原生图片编码；音频、模型图片输出、用户交互等待、远端后台任务、PTY 及并行工具调度不在本期范围。图片及搜索能力必须由配置明确声明，不按协议 ID 推断模型能力。
+四种协议使用驱动 2.1.0、Loop 1.3.0、记录 v2，兼容 Loop 1.0.0/1.1.0 及旧文本 v1，均支持 JSON、流式消费、客户端工具往返、持久记录、跨 Run/重启恢复和安全 Turn 展示，也均支持显式声明能力的静态 JPEG/PNG/WebP 本地图片输入和项目文本文件资料。工具读图通过文本工具结果后的用户图片块复用原生图片编码；音频、模型图片输出、用户交互等待、远端后台任务、PTY 及并行工具调度不在本期范围。图片及搜索能力必须由配置明确声明，不按协议 ID 推断模型能力。
 
 原生恢复记录可包含签名与加密 continuation，但不含密钥、认证头、Vault 引用或句柄。它们是受信服务端数据。浏览器从白名单投影读取文本、摘要、工具状态和安全 http(s) 引用，不能下载任意原生记录。
 
@@ -88,7 +95,11 @@ Models JSON 配置文件、旧配置导入源、目录缓存与业务数据库�
 
 Runtime 不包含“模型→工具→模型”的协议阶段机。`RunHost.perform()` 顺序固定为：提交启动意图及请求配方 → 检查停止 → 同步启动并登记句柄 → 立即观察 result/done → 等实际退出 → 提交观察 → 返回协议 Loop。任何持久化失败立即关闭新操作准入；启动意图失败时零外部操作，观察失败时不能开始下一项操作。
 
+计算工具接纳时，Session 在同一业务事务复核固定声明，调用 Computer Operations.acceptIn 保存声明及逻辑 computer/workspace 需求；观察事务同时提交 observed 标记。Operations 依赖 Computers、Workspaces、存储、worker 代理及图片资源；Computers 不反查 Operations，Projects 不反向依赖 Workspaces。四工具由独立 worker 执行器持有，Operations 首次按需准备 binding 并同事务建立实例 pin，后续工具复用固定路径与代次。纯模型和计划调用不激活 computer。
+
 工具整批校验名称、ID 与参数，再逐个通过同一屏障执行。Apply Patch 的补丁业务校验由工具处理；可修正结果回到协议 Loop。取消不会撤销已发生的工具事实；当前文件发布与临时资源清理仍需等待。Runtime 保存真实观察，包括清理失败前返回的部分提交，随后关闭 Run 进程 scope，并通过 intent.kind=tool-process-cleanup 的通用 operation 持久化最终退出、剩余输出与清理结果；正常结束也执行这一步，之后关闭 program。资源清理失败、模型拒绝/截断或持久化失败不能创建成功节点。
+
+Computer scope 持有实例 pin 与工作区 reservation 至所有调用和长进程实际退出；worker 保存关闭凭证后同事务释放，未知执行或清理失败保留引用。Runtime 进程 SIGKILL/异常重启后，Run 原子提升 owner 并先授权 worker，再从独立游标接续 response、cleanup 或 settling。无新凭证的旧 Run 和未保存模型响应的 model-pending 仍 interrupted，不重发副作用；此前已接纳的长进程仍取消并排空。显式 Nya 组件撤销仍取消所属 Run，独立 idle worker 不随应用关闭退出。
 
 Session 独占 Run 终态事务；Runtime 仅提议完成、失败或取消。`ProtocolConclusion` 是应用结束提案和结果记录引用，不是每次 API 响应归一化。成功结果还需通过输出上限和资源退出检查。结算结束后才释放应用/驱动租约和等待者。
 
@@ -98,9 +109,9 @@ Session 独占 Run 终态事务；Runtime 仅提议完成、失败或取消。`P
 
 Session 同时管理该执行设备按 Agent 保存的新会话默认模型配置 ID，通过 `getSessionDefaults` / `setSessionDefaults` 查询和 CAS 修改。创建事务按显式模型、持久覆盖、启动只读 Agent 默认、null 的顺序复制 modelId；修改默认不改已有会话，本会话选模也不改默认。harness server API 和 HTTP 在保存新覆盖时验证 Models 当前可用状态；已保存但后来不可用的引用保留，禁止静默更换账号或协议。复用既有组件、业务存储及关闭等待，不新增 Models 属性、Nya 组件或项目级继承。
 
-`run-state` v9 保存（v5 原生结构、v6 通用资源引用列、v7 会话归档状态及索引、v8 默认模型、v9 Agent 工具配置与不可变 Session 工具选择）：Session 默认值、历史模式和协议绑定；版本化原始输入、根初始化与 schemaVersion 3 模型快照；增量请求/响应记录；公共操作账本；不可变上下文链节；节点结果引用。请求配方引用前驱和本次增量；链节引用父链与本 Run 记录，不存从根开始的 ID 数组或重复完整历史。恢复时 codec 才在内存中重建原生请求。
+`run-state` v10 保存（v5 原生结构、v6 通用资源引用列、v7 会话归档状态及索引、v8 默认模型、v9 工具选择、v10 独立 resume 状态及 owner）：Session 默认值、历史模式和协议绑定；版本化原始输入、根初始化与 schemaVersion 3 模型快照；增量请求/响应记录；公共操作账本；不可变上下文链节；节点结果引用。请求配方引用前驱和本次增量；链节引用父链与本 Run 记录，不存从根开始的 ID 数组或重复完整历史。恢复时 codec 才在内存中重建原生请求。
 
-成功终态、最终记录、恢复引用、完整节点、结果引用和终态事件在同一事务提交。失败、取消、清理失败只能归档事实与诊断，不发布可继续节点。重启将遗留活动 Run 标为 interrupted，不重放网络或工具。只恢复所选父链；同父并发、编辑和重新生成均不包含兄弟或被替换节点。
+成功终态、最终记录、恢复引用、完整节点、结果引用和终态事件在同一事务提交。失败、取消、清理失败只能归档事实与诊断，不发布可继续节点。重启保留有凭证及有效游标的活动 Run 供接管；其余遗留 Run 标为 interrupted，不重放网络或未知工具。只恢复所选父链；同父并发、编辑和重新生成均不包含兄弟或被替换节点。
 
 旧 Session、节点、事件和 schemaVersion 1/2 或 profile 快照保留读取兼容，旧 JSON 不重写，不保留旧写入器。编辑/重新生成取原始输入与原节点父引用，不能将已套模板的文本再次套模板。首次绑定后取消或失败不会解除 Session 协议。
 
@@ -126,15 +137,17 @@ Bash 保留既有前台契约；进程工具持有按 Run 的管道命令会话�
 
 ## 本地升级与验证
 
-Models JSON schema 1 保存当前配置与全部不可变版本，首次不存在时兼容导入旧 SQLite schema v3；配置保存与业务库中的各领域迁移独立提交；业务库当前包含 `run-state` v9、`image-assets` v1 和 `project-files` v1，不能用 Session 的迁移版本代表通用存储版本。不建立跨库事务；任一必需组件启动失败均阻止 Run 准入。升级真实数据前先调用应用宿主 `close()` 等全部资源退出，备份 Models JSON、旧配置库、业务库及图片原字节目录，再启动新组合根。代码回退须同时恢复备份，旧代码不能读取新 JSON，也不能直接打开升级业务库。
+Models JSON schema 1 保存当前配置与全部不可变版本，首次不存在时兼容导入旧 SQLite schema v3；配置保存与业务库中的各领域迁移独立提交；业务库当前包含 `run-state` v10、`image-assets` v1、`project-files` v1、`computers` v1、`workspaces` v1 与 `computer-operations` v2；worker 使用另一连接的 `computer-worker` v1，不能用 Session 的迁移版本代表通用存储版本。不建立跨库事务；任一必需组件启动失败均阻止 Run 准入。升级真实数据前先调用应用宿主 `close()` 等全部资源退出，备份 Models JSON、旧配置库、业务库及图片原字节目录，再启动新组合根。代码回退须同时恢复备份，旧代码不能读取新 JSON，也不能直接打开升级业务库。
 
-根 `npm run check` 覆盖 Models 与应用行为测试。测试使用临时 SQLite、内存凭据和模拟 HTTP；真实模型 API 与各平台系统凭据仍需分别门控验收，本地模拟不能替代这些结论。
+worker 账本升级或完整备份还需在所属 Run 排空后明确停止 worker 服务，另行备份其独占目录；应用 close 不等于 idle worker 退出。Authority 和 worker 的两个 SQLite 连接不能共用同一文件，恢复时使用相配的业务库及 worker 目录。
+
+根 `npm run check` 覆盖 Models 与应用行为测试。协议使用临时 SQLite、内存凭据和模拟 HTTP；Computer 故障注入使用真实 Linux worker/Runtime 进程。真实模型 API、各平台系统凭据与 systemd 部署仍需分别门控验收，本地测试不能替代这些结论。
 
 ## 图片资源与原生请求
 
 完整契约见[图片输入设计](./multimodal-image-input-design.md)。图片组件保存原始字节，并在与 Run 共用的业务事务中保留引用；当前 NativeRunInput v3 与原生 v2 请求只存图片元数据和引用，不含 base64。四种协议的 execution 固定作用域读取端口，只有操作意图持久化且 start 登记后才读取、校验并编码请求：Responses 与 Chat Completions 使用 data URL，Anthropic 使用 base64 source，Gemini 使用 data/mime_type。工具续轮和重启从所选父路径恢复引用。读失败、摘要不符和超限都明确失败；不退回纯文本。
 
-四种协议驱动均为 2.1.0、Loop 为 1.2.0、新记录为 v2，兼容旧 2.0.0/1.0.0 的 v1 文本历史及混合父链。只有验证整条父路径无图片时允许有效 imageInput 从 false 变 true；streaming 只改变传输方式，允许两向切换后续接。账户 epoch、模型定义版本、参数和其他执行语义能力仍严格比较。内置协议的 streaming 默认开启，配置 unknown 不阻止流式，显式 unsupported 关闭；已有 unknown 配置不需要迁移。
+四种协议驱动均为 2.1.0、Loop 为 1.3.0、新记录为 v2，读取 Loop 1.0/1.1/1.2/1.3、旧 v1 文本历史及混合父链。只有验证整条父路径无图片时允许有效 imageInput 从 false 变 true；streaming 只改变传输方式，允许两向切换后续接。账户 epoch、模型定义版本、参数和其他执行语义能力仍严格比较。内置协议的 streaming 默认开启，配置 unknown 不阻止流式，显式 unsupported 关闭；已有 unknown 配置不需要迁移。
 
 ## 项目文件引用
 

@@ -1,10 +1,26 @@
 import { installHarnessServerCore } from '../../dist/applications/harness/core/index.js'
 import { runAdmissionServiceKey } from '../../dist/applications/harness/core/run/component.js'
+import { createBashComponent } from '../../dist/applications/harness/core/tool/bash-component.js'
+import { createApplyPatchComponent } from '../../dist/applications/harness/core/tool/apply-patch-component.js'
+import { createProcessToolsComponent } from '../../dist/applications/harness/core/tool/process-component.js'
+import { createFileToolsComponent } from '../../dist/applications/harness/core/tool/files-component.js'
+import { createControlledComputerWorker } from './computer-services.mjs'
 
 /** Test application host: its close owns the root; the Harness facade has no close method. */
 export async function createTestHarnessServerCore(root, options, { legacyTools = true } = {}) {
   let installation
-  try { installation = await installHarnessServerCore(root, options) }
+  try {
+    // These providers belong to the fixture worker. Install without waiting for
+    // Projects, which the application composition supplies on this same root.
+    if (!root.get('computer.worker')) {
+      const fibers = [createBashComponent(), createApplyPatchComponent(), createProcessToolsComponent(), createFileToolsComponent()]
+        .map(component => root.installComponent(component))
+      for (const fiber of fibers) void Promise.resolve(fiber).catch(() => {})
+      const worker = createControlledComputerWorker(root)
+      await root.installComponent(worker.component)
+    }
+    installation = await installHarnessServerCore(root, options)
+  }
   catch (error) {
     try { await root.fiber.dispose() } catch (cleanup) { throw new AggregateError([error, cleanup], 'Test application startup and cleanup failed') }
     throw error

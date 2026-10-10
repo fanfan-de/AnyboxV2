@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
@@ -258,10 +259,11 @@ test('removing the Models component waits for the run consumer and its call', as
   root.installComponent(createApplyPatchComponent())
   root.installComponent(createFileToolsComponent())
   root.installComponent(createProcessToolsComponent())
-  const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await database
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
+  await installComputerServices(root, inputs)
+  const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const prompts = root.installComponent(createPromptComponent(inputs))
   const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const api = root.installComponent(llm.component())
@@ -354,10 +356,11 @@ test('RunRuntime owns in-flight calls while Session and Run state survive its re
   root.installComponent(createApplyPatchComponent())
   root.installComponent(createFileToolsComponent())
   root.installComponent(createProcessToolsComponent())
-  const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const database = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await database
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
+  await installComputerServices(root, inputs)
+  const sessions = root.installComponent(createSessionComponent(inputs, agents))
   const prompts = root.installComponent(createPromptComponent(inputs))
   const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const api = root.installComponent(llm.component())

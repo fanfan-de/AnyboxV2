@@ -49,8 +49,8 @@ export interface ExchangeRunner {
 /** Common resource plumbing contains no protocol flow decisions. */
 export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string },
   initialResources: readonly NativeImageResourceRef[] = [], prompts?: readonly PromptSnapshot[],
-  acceptResources?: (refs: readonly NativeImageResourceRef[]) => void, allowedTools?: readonly ToolDefinition[]): ExchangeRunner {
-  let initial = true
+  acceptResources?: (refs: readonly NativeImageResourceRef[]) => void, allowedTools?: readonly ToolDefinition[], replay?: NativeReply): ExchangeRunner {
+  let initial = replay === undefined, replayReply = replay, latestExchangeId: string | undefined
   let nextResources: readonly NativeImageResourceRef[] = []
   let exchanges: readonly ProtocolViewExchange[] = []
   let revision = 0
@@ -68,6 +68,14 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
   return {
     async call(intent) {
       host.signal.throwIfAborted()
+      if (replayReply) {
+        const reply = replayReply
+        replayReply = undefined
+        latestExchangeId = reply.exchangeId
+        update({ id: reply.exchangeId, ...projectNativeExchange(execution.snapshot.protocolId, reply.response) })
+        publish(reply.exchangeId)
+        return reply
+      }
       const resources = initial ? initialResources : nextResources
       const prepared = execution.prepareExchange(intent, resources.length ? { resourceRefs: resources } : undefined)
       nextResources = []
@@ -76,7 +84,8 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
       update({ id: prepared.exchangeId, ...(inputs.length ? { inputs } : {}), blocks: [] })
       publish(prepared.exchangeId)
       const reply = await host.perform({ id: prepared.exchangeId, kind: 'model', intent: serializable(prepared.request),
-        records: [toProtocolRecord(prepared.record)], observe: reply => ({ records: reply.records.map(toProtocolRecord) }) },
+        records: [toProtocolRecord(prepared.record)], observe: reply => ({ records: reply.records.map(toProtocolRecord),
+          protocolCursor: { schemaVersion: 1, protocolId: execution.snapshot.protocolId, exchangeId: reply.exchangeId } }) },
       () => prepared.start(event => {
         const previous = exchanges.find(item => item.id === prepared.exchangeId) ?? { id: prepared.exchangeId, blocks: [] }
         update(reduceNativeExchange(execution.snapshot.protocolId, previous, event))
@@ -84,12 +93,13 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
       }))
       update({ id: prepared.exchangeId, ...projectNativeExchange(execution.snapshot.protocolId, reply.response) })
       publish(prepared.exchangeId)
+      latestExchangeId = reply.exchangeId
       return reply
     },
     async tools(calls) {
       if (!execution.capabilities.tools) throw modelFailure('unsupported-request')
       const validated = validateToolBatch(calls, allowedTools)
-      const results = await host.executeTools(validated, 'serial')
+      const results = await host.executeTools(validated, 'serial', latestExchangeId)
       const images = results.flatMap(result => 'images' in result ? result.images ?? [] : [])
       validateImageBatch(images)
       nextResources = [...new Map(images.map(image => [image.assetId, { id: image.assetId, sha256: image.sha256,

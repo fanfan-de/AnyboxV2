@@ -15,6 +15,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | 应用生命周期 | [products](./modules/products/README.md) | 受信注册目录、按需打开和停止如何对应实际资源 |
 | Models | [models](./modules/models/README.md) | 定义、连接、配置、凭据、目录与原生协议如何协作 |
 | 执行 | [execution](./modules/execution/README.md) | Run 如何准入、选择协议 Loop、执行操作并等待资源退出 |
+| Computer 资源 | [computers](./modules/computers/README.md) | 本机按需实例、固定工作区、工具声明接纳和实际 scope 退出 |
 | 项目与会话 | [sessions](./modules/sessions/README.md) | 项目身份、文件快照、对话树、归档与运行事实归谁所有 |
 | 图片资源 | [images](./modules/images/README.md) | 上传验证、原字节保存、草稿续期、原子保留与回收 |
 | Prompt | [prompts](./modules/prompts/README.md) | 草稿、发布版本、Agent 绑定与运行快照如何生效 |
@@ -39,7 +40,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | [Anybox 宿主与 Anybox Harness 应用边界](./harness-module-boundary.md) | 当前目录、宿主与应用依赖方向、组合入口与资源归属 |
 | [harness server 组件协作总览](./harness-server-components.md) | 单根装配、资源所有权与关键调用路径 |
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
-| [Computer 资源设计](./computer-resource-design.md) | 按需激活、Nya 依赖与持久边界、Runtime 重启接续、跨机器工作区及分阶段验收，待实施 |
+| [Computer 资源设计](./computer-resource-design.md) | 本机按需资源、独立 worker 与工具等待重启接续；跨机器工作区及独立模型 exchange 按后续阶段实施 |
 | [工具库设计](./tools-library-design.md) | 来源工具混选、不可变会话快照、Run 进程清理和原生工具图片 |
 | [多模态图片输入设计](./multimodal-image-input-design.md) | 四种原生协议图片输入的端到端链路、历史升级兼容与验收 |
 | [项目目录选择](./project-directory-picker.md) | 多实例目录浏览、固定连接、分页清理和旧版兼容 |

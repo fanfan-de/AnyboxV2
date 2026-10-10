@@ -1,28 +1,29 @@
 import type { Component } from '@nya/core'
 import type { JsonValue } from '@anybox/models'
 import type { OwnedCall, RuntimeInputs } from '../contracts.js'
-import { BashFailure, bashServiceKey } from '../tool/bash-component.js'
-import type { BashPort, BashResult } from '../tool/bash-component.js'
-import { applyPatchServiceKey, isApplyPatchFailure } from '../tool/apply-patch-component.js'
-import type { ApplyPatchPort } from '../tool/apply-patch-component.js'
+import { BashFailure } from '../tool/bash-component.js'
+import type { BashResult } from '../tool/bash-component.js'
+import { isApplyPatchFailure } from '../tool/apply-patch-component.js'
 import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 import { RunFailure, runLimits, toolOutputBytes, validateToolBatch } from './domain.js'
 import type { Run, RunOutcome, ToolObservation, ValidatedToolRequest, RunFailureCategory } from './domain.js'
 import { modelFailure, normalizeModelFailure, isModelFailure } from './model.js'
 import { sessionRunServiceKey } from '../session/port.js'
 import type { SessionRunPort, RunOperationStart, RunOperationObservation } from '../session/port.js'
-import type { PreparedRunProgram, RunHost, ProgramExitReport, OperationDescriptor } from './program.js'
+import type { PreparedRunProgram, RunHost, ProgramExitReport, OperationDescriptor, RunResumeRecord } from './program.js'
 import { runViewEvent } from './notifications.js'
 import { createWaiters } from './waiters.js'
-import { processToolsServiceKey, ProcessFailure, type ProcessToolsPort, type ProcessRunScope } from '../tool/process-component.js'
-import { fileToolsServiceKey, type FileToolsPort } from '../tool/files-component.js'
+import { ProcessFailure } from '../tool/process-component.js'
 import { updateToolPlan } from '../tool/plan-domain.js'
+import { computerOperationsServiceKey } from '../computer/operations-port.js'
+import type { ComputerOperationsPort, ComputerRunScope } from '../computer/operations-port.js'
+import { needsComputer } from '../computer/operations-domain.js'
 
 export const runRuntimeServiceKey = 'harness.run-runtime'
 export type RunCancelReason = 'user-requested' | 'owner-disposed' | 'dependency-unavailable'
 export interface RunRuntimePort {
   /** Ownership is acquired synchronously. A synchronous refusal acquires nothing. */
-  start(input: { readonly runId: string; readonly program: PreparedRunProgram }): Promise<Run>
+  start(input: { readonly runId: string; readonly program: PreparedRunProgram; readonly resume?: RunResumeRecord }): Promise<Run>
   cancel(runId: string, reason: RunCancelReason): Promise<void>
   wait(runId: string, signal?: AbortSignal): Promise<Run | undefined>
   getView(runId: string): JsonValue | undefined
@@ -46,6 +47,7 @@ async function observe<T>(call: OwnedCall<T>): Promise<Observed<T>> {
   return await exited ? value : { kind: 'cleanup-failed', ...available }
 }
 function toolFailure(error: unknown): RunFailure {
+  if (error instanceof RunFailure) return error
   if (error instanceof ProcessFailure) {
     if (error.category === 'cancelled') return new RunFailure('tool-cancelled')
     if (error.category === 'cleanup-failure') return new RunFailure('tool-cleanup-failure')
@@ -69,22 +71,15 @@ function toolObservation(request: ValidatedToolRequest, value: unknown): ToolObs
   if (request.name === 'apply_patch') return { name: 'apply_patch', result: value as ApplyPatchResult }
   return { name: request.name, result: value as JsonValue }
 }
-function mapCall<T>(call: OwnedCall<T>, convert: (value: T) => ToolObservation): OwnedCall<ToolObservation> {
-  return { result: call.result.then(convert), done: call.done, cancel: reason => call.cancel(reason) }
-}
-
 /** Owns Run resource trees and durable operation barriers, without interpreting protocol state. */
 export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Object<void, {
   [sessionRunServiceKey]: SessionRunPort
-  [bashServiceKey]: BashPort
-  [applyPatchServiceKey]: ApplyPatchPort
-  [processToolsServiceKey]: ProcessToolsPort
-  [fileToolsServiceKey]: FileToolsPort
+  [computerOperationsServiceKey]: ComputerOperationsPort
 }> {
   return {
-    name: 'harness-run-runtime', inject: [sessionRunServiceKey, bashServiceKey, applyPatchServiceKey, processToolsServiceKey, fileToolsServiceKey],
+    name: 'harness-run-runtime', inject: [sessionRunServiceKey, computerOperationsServiceKey],
     apply(ctx, _config, deps) {
-      const records = deps[sessionRunServiceKey], bash = deps[bashServiceKey], patch = deps[applyPatchServiceKey]
+      const records = deps[sessionRunServiceKey]
       const active = new Map<string, ActiveRun>()
       const rejected = new Map<string, { program: PreparedRunProgram; finished: Promise<Run> }>()
       const views = new Map<string, JsonValue>()
@@ -102,7 +97,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
       }, 'cancel and join Run resource owners')
 
       const service: RunRuntimePort = {
-        start({ runId, program }) {
+        start({ runId, program, resume }) {
           const existing = active.get(runId) ?? rejected.get(runId)
           if (existing) {
             if (existing.program !== program) throw modelFailure('model-unavailable')
@@ -117,6 +112,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
             return task
           }
           const operations = new Map<string, { call: OwnedCall<unknown>; kind: 'model' | 'operation' | 'tool' }>()
+          const acceptedTools = new Set<string>()
           let resolveStarted!: (run: Run) => void, rejectStarted!: (error: unknown) => void
           const started = new Promise<Run>((resolve, reject) => { resolveStarted = resolve; rejectStarted = reject })
           let reason: RunCancelReason | undefined
@@ -124,29 +120,18 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
           let cleanupCategory: RunFailureCategory | undefined
           let stateFailed = false
           let finalOutputExceeded = false
-          let sequence = 0, totalToolBytes = 0
+          const ownerEpoch = resume?.state.runOwnerEpoch ?? 1
+          let sequence = 0, totalToolBytes = resume?.state.totalToolOutputBytes ?? 0
           let run: Run | undefined
           let closing: Promise<ProgramExitReport> | undefined
-          let processScope: ProcessRunScope | undefined
+          let computerScope: ComputerRunScope | undefined
           let processClosing: Promise<void> | undefined
-          const scope = () => processScope ??= deps[processToolsServiceKey].openRun({ runId, projectId: projectId! })
-          const executeTool = (request: ValidatedToolRequest): OwnedCall<ToolObservation> => {
-            if (request.name === 'bash') return mapCall(bash.execute({ projectId: projectId!, command: request.arguments.command }), value => ({ name: 'bash', result: value }))
-            if (request.name === 'apply_patch') return mapCall(patch.execute({ projectId: projectId!, patch: request.arguments.patch }), value => ({ name: 'apply_patch', result: value }))
-            const args = request.arguments
-            const name = request.name
-            if (name === 'codex_exec_command' || name === 'codex_write_stdin') return mapCall(scope().execute(name, args), result => ({ name, result }))
-            if (name === 'claude_code_Bash' || name === 'deepseek_harness_bash') return mapCall(scope().foreground({
-              command: String(args.command), ...(typeof (args.timeout ?? args.timeoutMs) === 'number' ? { timeoutMs: Number(args.timeout ?? args.timeoutMs) } : {}),
-              ...(typeof args.workdir === 'string' ? { workdir: args.workdir } : {}),
-            }), result => ({ name, result }))
-            if (name === 'codex_apply_patch') return mapCall(patch.execute({ projectId: projectId!, patch: String(args.patch) }), result => ({ name, result: JSON.parse(JSON.stringify(result)) as JsonValue }))
-            if (name === 'codex_update_plan' || name === 'claude_code_TodoWrite' || name === 'deepseek_harness_todo_write') {
-              const result = updateToolPlan(name, args)
-              return { result: Promise.resolve({ name, result }), done: Promise.resolve(), cancel() {} }
-            }
-            return mapCall(deps[fileToolsServiceKey].execute({ runId, sessionId: run!.sessionId, projectId: projectId!, name, args,
-              signal: controller.signal, imageInput: program.modelSnapshot.capabilities.imageInput }), value => ({ name, ...value }))
+          const scope = () => computerScope ??= deps[computerOperationsServiceKey].openRun({ runId, runOwnerEpoch: ownerEpoch,
+            imageInput: program.modelSnapshot.capabilities.imageInput === true })
+          const executeTool = (request: ValidatedToolRequest, operationId: string): OwnedCall<ToolObservation> => {
+            if (needsComputer(request)) return scope().execute(operationId)
+            const result = updateToolPlan(request.name, request.arguments)
+            return { result: Promise.resolve({ name: request.name, result } as ToolObservation), done: Promise.resolve(), cancel() {} }
           }
           const markCleanup = (category: RunFailureCategory) => {
             if (!cleanupCategory) { cleanupCategory = category; failures.push(modelFailure('cleanup-failure')) }
@@ -169,7 +154,23 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
           }
           const perform = async <T>(operation: RunOperationStart, start: () => OwnedCall<T>, observeValue: (value: T) => RunOperationObservation): Promise<T> => {
             ensureRunning()
-            if (!await persist(() => records.startOperation(runId, operation, inputs.now()))) throw modelFailure('dependency-unavailable')
+            const prior = await persist(() => records.getRunOperation(runId, operation.id))
+            if (prior?.observation) {
+              if (JSON.stringify(prior.start.intent) !== JSON.stringify(operation.intent)) throw new RunFailure('state-write-failure')
+              if (prior.observation.kind === 'value') return (prior.observation.tool ?? prior.observation.result) as T
+              if (prior.observation.kind === 'cleanup-failed') { markCleanup(operation.kind === 'tool' ? 'tool-cleanup-failure' : 'cleanup-failure'); throw modelFailure('cleanup-failure') }
+              const category = prior.observation.errorCategory
+              if (category && ['invalid-tool-request','limit-exceeded','tool-unavailable','tool-timeout','tool-cancelled','tool-cleanup-failure','state-write-failure'].includes(category)) throw new RunFailure(category as ConstructorParameters<typeof RunFailure>[0])
+              throw modelFailure(category as Parameters<typeof modelFailure>[0] ?? 'dependency-unavailable')
+            }
+            let accepted: boolean
+            try { accepted = await records.startOperation(runId, operation, inputs.now(), ownerEpoch) }
+            catch (error) {
+              const committed = await records.getRunOperation(runId, operation.id)
+              if (!committed || JSON.stringify(committed.start.intent) !== JSON.stringify(operation.intent)) { stateFailed = true; controller.abort(); throw error }
+              accepted = true
+            }
+            if (!accepted) throw modelFailure('dependency-unavailable')
             ensureRunning()
             let call: OwnedCall<T>
             try {
@@ -178,7 +179,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
               operations.set(operation.id, { call, kind: operation.kind })
             } catch (error) {
               const failure = operation.kind === 'tool' ? toolFailure(error) : normalizeModelFailure(error)
-              await persist(() => records.observeOperation(runId, operation.id, { kind: 'error', errorCategory: failure.category }, inputs.now()))
+              await persist(() => records.observeOperation(runId, operation.id, { kind: 'error', errorCategory: failure.category }, inputs.now(), ownerEpoch))
               throw failure
             }
             const observing = observe(call)
@@ -194,7 +195,11 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
                 ...(operation.tool && observed.value !== undefined ? { tool: toolObservation(operation.tool, observed.value) } : {}) }
             } else observation = { kind: 'error', errorCategory: operation.kind === 'tool' ? toolFailure(observed.error).category : normalizeModelFailure(observed.error).category }
             // Actual observations survive cancellation; only new operation admission is closed.
-            await persist(() => records.observeOperation(runId, operation.id, observation, inputs.now()))
+            try { await records.observeOperation(runId, operation.id, observation, inputs.now(), ownerEpoch) }
+            catch (error) {
+              const committed = await records.getRunOperation(runId, operation.id)
+              if (JSON.stringify(committed?.observation) !== JSON.stringify(observation)) { stateFailed = true; controller.abort(); throw error }
+            }
             if (observed.kind === 'cleanup-failed') throw modelFailure('cleanup-failure')
             if (observed.kind === 'error') throw operation.kind === 'tool' ? toolFailure(observed.error) : normalizeModelFailure(observed.error)
             ensureRunning()
@@ -205,16 +210,21 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
             perform<T>(descriptor: OperationDescriptor<T>, start: () => OwnedCall<T>) {
               return track(perform(descriptor, start, value => ({ kind: 'value', ...descriptor.observe(value) })))
             },
-            async executeTools(requests, scheduling = 'serial') {
+            async executeTools(requests, scheduling = 'serial', batchId) {
               if (scheduling !== 'serial') throw new RunFailure('invalid-tool-request')
               const batch = validateToolBatch(requests, program.initialization.tools), output: ToolObservation[] = []
-              for (const request of batch) {
-                const operation: RunOperationStart = { id: inputs.newId(), kind: 'tool', tool: request,
+              // Own a local scope before an intent can commit, so cancellation before dispatch releases its reservation.
+              if (batch.some(needsComputer)) scope()
+              const ids = batch.map((_request, index) => batchId ? `${runId}:tool:${batchId}:${index}` : inputs.newId())
+              if (batchId) await persist(() => records.saveRunResume(runId, ownerEpoch, { batch: { id: batchId, requests: batch, operationIds: ids } }, inputs.now()))
+              for (const [index, request] of batch.entries()) {
+                const operation: RunOperationStart = { id: ids[index]!, kind: 'tool', tool: request,
                   intent: { name: request.name, requestId: request.id, arguments: request.arguments } }
-                const value = await track(perform<ToolObservation>(operation, () => executeTool(request),
+                acceptedTools.add(operation.id)
+                const value = await track(perform<ToolObservation>(operation, () => executeTool(request, operation.id),
                   value => ({ kind: 'value', tool: value })))
                 const observation = toolObservation(request, value)
-                totalToolBytes += toolOutputBytes(observation)
+                totalToolBytes = (await records.loadRunResume(runId))?.state.totalToolOutputBytes ?? totalToolBytes + toolOutputBytes(observation)
                 if (totalToolBytes > runLimits.totalToolOutputBytes) throw new RunFailure('limit-exceeded')
                 output.push(observation)
               }
@@ -239,13 +249,16 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
             const context = await persist(() => records.loadRunContext(runId))
             if (!context) throw new Error('missing accepted Run context')
             projectId = context.projectId
+            if (resume && await deps[computerOperationsServiceKey].hasRunResources(runId)) scope()
             let outcome: RunOutcome
             try {
               if (run.status === 'cancelling') { reason ??= 'user-requested'; controller.abort() }
               ensureRunning()
-              if (run.contextVersion !== 'native-local-v1' || run.protocolBinding?.generationId !== program.binding.generationId ||
+              if (run.contextVersion !== 'native-local-v1' || (!resume && run.protocolBinding?.generationId !== program.binding.generationId) || run.protocolBinding?.protocolId !== program.binding.protocolId ||
                 run.modelSnapshot?.schemaVersion !== 3 || JSON.stringify(run.modelSnapshot) !== JSON.stringify(program.modelSnapshot)) throw modelFailure('model-unavailable')
-              const conclusion = await program.execute(host)
+              if (resume?.state.settlement && resume.state.stage === 'settling') return finish(resume.state.settlement)
+              const conclusion = resume?.state.conclusion && ['cleanup','settling'].includes(resume.state.stage) ? resume.state.conclusion : await program.execute(host)
+              await persist(() => records.saveRunResume(runId, ownerEpoch, {stage: 'cleanup', conclusion}, inputs.now()))
               if (conclusion.kind === 'completed' && (typeof conclusion.output !== 'string' || Buffer.byteLength(conclusion.output, 'utf8') > runLimits.finalBytes)) throw new RunFailure('limit-exceeded')
               outcome = conclusion.kind === 'completed'
                 ? { kind: 'completed', output: conclusion.output, resultRecordIds: conclusion.resultRecordIds }
@@ -278,34 +291,47 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
               try { await operation.call.done } catch { markCleanup(operation.kind === 'tool' ? 'tool-cleanup-failure' : 'cleanup-failure') }
             }))
             await Promise.allSettled([...managed])
-            if (processScope) {
+            if (computerScope) {
+              if (proposed.kind !== 'completed' || reason) {
+                try { await computerScope.cancel() } catch { markCleanup('tool-cleanup-failure') }
+              }
+              // A cancelling or unresumable program still owns the already-accepted tool facts.
+              const savedResume = await records.loadRunResume(runId)
+              for (const id of new Set([...acceptedTools,...(savedResume?.state.batch?.operationIds ?? [])])) {
+                const prior = await records.getRunOperation(runId,id)
+                if (!prior?.start.tool || prior.observation || !needsComputer(prior.start.tool) || stateFailed) continue
+                const observed = await observe(computerScope.execute(id))
+                if (observed.kind === 'cleanup-failed') markCleanup('tool-cleanup-failure')
+                const fact: RunOperationObservation = observed.kind === 'value' ? {kind:'value',tool:observed.value}
+                  : observed.kind === 'cleanup-failed' ? {kind:'cleanup-failed',errorCategory:'tool-cleanup-failure',...(observed.value ? {tool:observed.value} : {})}
+                  : {kind:'error',errorCategory:toolFailure(observed.error).category}
+                try { await records.observeOperation(runId,id,fact,inputs.now(),ownerEpoch) }
+                catch (error) {
+                  const saved = await records.getRunOperation(runId,id)
+                  if (JSON.stringify(saved?.observation) !== JSON.stringify(fact)) { stateFailed=true; controller.abort() }
+                }
+              }
               processClosing ??= (async () => {
-                const id = inputs.newId()
+                const id = `${runId}:computer-scope-close`
                 let recorded = false
                 if (!stateFailed) {
-                  try { recorded = await persist(() => records.startOperation(runId, { id, kind: 'operation', cleanup: true, intent: { kind: 'tool-process-cleanup' } }, inputs.now())) }
+                  try {
+                    const prior = await records.getRunOperation(runId,id)
+                    recorded = await persist(() => records.startOperation(runId, prior?.start ?? { id, kind: 'operation', cleanup: true, intent: { kind: computerScope!.hasProcesses() ? 'tool-process-cleanup' : 'computer-scope-cleanup' } }, inputs.now(), ownerEpoch))
+                  }
                   catch { /* Cleanup must still run after storage failure. */ }
                 }
-                const call = processScope!.close()
+                const call = computerScope!.close()
                 const closed = await observe(call)
                 if (closed.kind !== 'value') markCleanup('tool-cleanup-failure')
-                const fact = closed.kind === 'value' || closed.kind === 'cleanup-failed' ? closed.value : undefined
-                if (fact && typeof fact === 'object' && !Array.isArray(fact)) {
-                  const summaries = (fact as Readonly<Record<string, JsonValue>>).processes
-                  if (Array.isArray(summaries)) for (const summary of summaries) {
-                    if (summary && typeof summary === 'object' && !Array.isArray(summary)) {
-                      const output = (summary as Readonly<Record<string, JsonValue>>).output
-                      if (typeof output === 'string') totalToolBytes += Buffer.byteLength(output, 'utf8')
-                    }
-                  }
-                  finalOutputExceeded = totalToolBytes > runLimits.totalToolOutputBytes
-                }
                 if (recorded && !stateFailed) {
                   try { await persist(() => records.observeOperation(runId, id, closed.kind === 'value'
                     ? { kind: 'value', result: closed.value }
-                    : { kind: 'cleanup-failed', errorCategory: 'tool-cleanup-failure', ...(closed.kind === 'cleanup-failed' && closed.value !== undefined ? { result: closed.value } : {}) }, inputs.now())) }
+                    : { kind: 'cleanup-failed', errorCategory: 'tool-cleanup-failure', ...(closed.kind === 'cleanup-failed' && closed.value !== undefined ? { result: closed.value } : {}) }, inputs.now(), ownerEpoch)) }
                   catch { /* The final settlement reports a state-write failure. */ }
                 }
+                totalToolBytes = (await records.loadRunResume(runId))?.state.totalToolOutputBytes ?? totalToolBytes
+                finalOutputExceeded = totalToolBytes > runLimits.totalToolOutputBytes
               })().catch(() => { markCleanup('tool-cleanup-failure') })
               await processClosing
             }
@@ -317,7 +343,9 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
             else if (finalOutputExceeded) outcome = { kind: 'failed', category: 'limit-exceeded', error: 'tool output limit exceeded' }
             else if (reason) outcome = reason === 'dependency-unavailable'
               ? { kind: 'failed', category: 'dependency-unavailable', error: 'model dependency is unavailable' } : { kind: 'cancelled' }
-            return records.settleRun(runId, { ...outcome, records: report.records, checkpoint: report.checkpoint }, inputs.now())
+            const settlement = resume?.state.settlement ?? { ...outcome, records: report.records, checkpoint: report.checkpoint }
+            if (!stateFailed) await records.saveRunResume(runId, ownerEpoch, {stage: 'settling',settlement}, inputs.now())
+            return records.settleRun(runId, settlement, inputs.now(), ownerEpoch)
           }
           const entry: ActiveRun = {
             program, started, finished,

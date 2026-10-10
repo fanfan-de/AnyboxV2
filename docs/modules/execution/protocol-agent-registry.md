@@ -17,18 +17,21 @@
 | `protocolForModel(modelId)` | 从 Models 执行配置的原生参数协议取 ID；模型不存在时报 model-unavailable |
 | `register(protocolId, driverLease)` | 注册受支持的驱动/Loop 配对，返回本绑定代 `generationId` 和异步 `unregister()` |
 | `prepare(input)` | 获取同代驱动租约，打开原生 execution，返回只能执行一次的 program |
+| `prepareResume({resume,signal})` | 从已接受快照、指定成功父链与本 Run 记录重建 execution，使用协议游标回放最后已保存响应 |
 
 支持的协议为 `responses`、`anthropic-messages`、`chat-completions`、`gemini-interactions`。DeepSeek 使用标准 `chat-completions` 与 `runChat`，没有单独绑定或旧协议别名；旧协议历史可查看但不能准备或续接 Run。注册表不是任意脚本或 SDK 的动态加载器。
 
 `PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input，以及可选 history 和 fileContents。新 initialization 使用 `schemaVersion: 2`、`tool-library-v1`、Prompt 快照、实际工具定义与 Session 不可变 toolSelection；声明必须属于已选择的稳定 ID/版本，且完整定义精确匹配。旧 schemaVersion 1/known-tools-v1 仅接纳原 Bash/Apply Patch 定义，原 JSON 不改写；均不允许重名。新 input v3 保存 raw、text、template、有序 images 和 files 引用；旧 v1 无附件，v2 按 files=[] 读取。fileContents 是受管读取的本轮文件正文，编码前核对其引用与 input.files 一致，仅忽略会变化的 expiresAt。
 
-`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（四种协议均为 1.2.0）、execution 实际记录格式（四种协议均为 2）和新 Run 的 `viewSchemaVersion: 2`。驱动、Loop 与记录格式用于恢复兼容判断；展示版本不是原生恢复的新门槛。旧 binding 的展示版本保留原值，旧原生记录在查询时重新投影为展示 v2，不改写历史 JSON。
+`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（四种协议均为 1.3.0）、execution 实际记录格式（四种协议均为 2）和新 Run 的 `viewSchemaVersion: 2`。驱动、Loop 与记录格式用于恢复兼容判断；展示版本不是原生恢复的新门槛。旧 binding 的展示版本保留原值，旧原生记录在查询时重新投影为展示 v2，不改写历史 JSON。
 
 ## 准备与执行
 
 prepare 先验证历史的协议、Loop 版本、记录格式和工具契约；checkpoint 必须是对象，其 protocolId、recordFormatVersion 与 modelSnapshot 必须与历史一致。随后获取 Models 协议租约并核对它仍等于绑定保存的驱动代，防止准备中途切到新驱动。
 
 每个 program 合并调用方、绑定代、owner 与驱动的取消信号。历史被转换为 `NativeRestoreState` 交给 `models.openNative`；Models 负责连接、账户作用域和执行参数的恢复兼容检查。若固定工具不为空而实际 execution 不具备工具能力，则拒绝准备。
+
+活跃 Run 恢复使用独立版本化 protocolCursor，由对应 Loop 解释。prepareResume 不重新套模板、不读取当前 Prompt；重建 execution 的完整本 Run 记录后，首次 runner.call 仅回放最后耐久响应。已观察工具按原顺序形成下一增量请求，原请求与工具结果固定后才发出下一模型调用。没有保存响应的 model-pending 不经此接口重发；任意模型阶段接续属于后续独立 exchange owner。
 
 首次执行按协议编码固定 Prompt、当前输入与工具声明；有父历史时只编码新增输入，工具和原生上下文由恢复状态提供。program 的 `execute(host)` 最多调用一次，通过 `createExchangeRunner` 运行协议 Loop。共享管道只负责准备交换、把请求和结果交给 host.perform、串行工具及安全展示，不决定停止语义。
 
@@ -56,8 +59,8 @@ program 的 `close()` 缓存关闭 Promise，等待 execution 退出，返回原
 
 各协议把模板文本与图片资源 URI 编码为同一个用户 content 数组（Gemini 使用 user_input）；每个 exchange 携带其增量 intent 中图片的匹配 resourceRefs，工具续轮不重复声明无关祖先资源。注册表始终提供 execution 私有读取端口，初始许可仅包含本轮与所选成功父路径资源；工具图片必须先随 Session 工具观察同事务保留，再由 program 接纳引用。作用域固定为当前 Session。Models 在受管 start 后读取字节并生成实际请求。Session 不解释协议 URI，Runtime 不解释图片块。
 
-四种协议均接受 Loop 1.0.0/1.1.0/1.2.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。
+四种协议均接受 Loop 1.0.0/1.1.0/1.2.0/1.3.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。
 
 ## 项目文件资料
 
-PrepareRunInput.fileContents 是 Run 从 Session 读取的本轮文件内容。注册表将相对路径、实际行范围和正文按 project-file-context v1 JSON 附加在本轮用户文本之后、图片之前。文件正文不参与 task-template，不成为系统提示词；NativeRunInput v3 只保存引用，原生请求记录保存实际资料文本。父链恢复直接复用原生记录，不读取源文件、不重复附加祖先文件。四种协议复用现有文本编码和 Models 图片 resourceRefs；工具库使新初始化升级为 v2、Loop 为 1.2.0，驱动 2.1.0 与原生记录 v2 不变。
+PrepareRunInput.fileContents 是 Run 从 Session 读取的本轮文件内容。注册表将相对路径、实际行范围和正文按 project-file-context v1 JSON 附加在本轮用户文本之后、图片之前。文件正文不参与 task-template，不成为系统提示词；NativeRunInput v3 只保存引用，原生请求记录保存实际资料文本。父链恢复直接复用原生记录，不读取源文件、不重复附加祖先文件。四种协议复用现有文本编码和 Models 图片 resourceRefs；新初始化为 v2，活跃游标绑定 Loop 1.3.0，驱动 2.1.0 与原生记录 v2 不变。

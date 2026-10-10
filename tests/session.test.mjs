@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { imageAssetsServiceKey } from '../dist/applications/harness/core/image/port.js'
@@ -37,6 +38,7 @@ async function fixture(execution = false, imagePort) {
       : createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
+    await installComputerServices(root, inputs)
     const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
     await sessionFiber
     if (execution) {
@@ -150,6 +152,7 @@ test('Session shutdown joins accepted creation through project validation and re
     release.resolve()
     const session = await creating
     await stopping
+    await installComputerServices(f.root, f.inputs)
     await f.root.installComponent(createSessionComponent(f.inputs, agents))
     assert.deepEqual(await f.root.get(sessionServiceKey).getSession(session.id), session)
     assert.deepEqual(await f.root.get(sessionServiceKey).listRuns(session.id), [])
@@ -192,6 +195,7 @@ test('Session revocation joins executing consumers and a new owner preserves con
     assert.equal(f.root.get(localStorageServiceKey), storage)
     assert.deepEqual(f.llm.events, [])
 
+    await installComputerServices(f.root, f.inputs)
     await f.root.installComponent(createSessionComponent(f.inputs, agents))
     await ready(f.root, runServiceKey)
     const current = f.root.get(sessionServiceKey)
@@ -225,6 +229,7 @@ test('Session shutdown waits for accepted archive writes and replacement sees co
     release.resolve()
     const archived = await archiving; await stopping
     db.transaction = transaction
+    await installComputerServices(f.root, f.inputs)
     await f.root.installComponent(createSessionComponent(f.inputs, agents))
     assert.deepEqual(await f.root.get(sessionServiceKey).listArchivedSessions(), [archived])
   } finally { release.resolve(); db.transaction = transaction; await f.close() }

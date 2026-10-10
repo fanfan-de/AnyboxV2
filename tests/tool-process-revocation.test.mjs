@@ -1,3 +1,4 @@
+import { installComputerServices, createControlledComputerWorker } from './helpers/computer-services.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
@@ -30,7 +31,7 @@ async function until(predicate) {
   assert.fail('the expected revocation state was not reached')
 }
 
-test('process dependency revocation joins the next model call and yielded process before durable settlement', { timeout: 15000 }, async () => {
+test('worker dependency revocation joins the next model call and yielded process before durable settlement', { timeout: 15000 }, async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-process-revoke-')))
   const root = new Context(), llm = controlledModels()
   const inputs = { now: () => '2026-10-04T00:00:00.000Z', newId: ids() }
@@ -41,15 +42,17 @@ test('process dependency revocation joins the next model call and yielded proces
     await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
-    await root.installComponent(createSessionComponent(inputs, agents))
-    await root.installComponent(createPromptComponent(inputs))
-    await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
     await root.installComponent(llm.component())
     await root.installComponent(createBashComponent())
     await root.installComponent(createApplyPatchComponent())
     const processFiber = root.installComponent(createProcessToolsComponent({ terminationGraceMs: 1000 }))
     await processFiber
     await root.installComponent(createFileToolsComponent())
+    const worker = createControlledComputerWorker(root, { inject: ['tools.processes'] })
+    const { workerFiber } = await installComputerServices(root, inputs, { worker })
+    await root.installComponent(createSessionComponent(inputs, agents))
+    await root.installComponent(createPromptComponent(inputs))
+    await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
     await root.installComponent(createRunRuntimeComponent(inputs))
     await installTestProtocolAgents(root)
     await root.installComponent(createRunComponent(inputs, agents))
@@ -75,7 +78,7 @@ test('process dependency revocation joins the next model call and yielded proces
     process.kill(pid, 0)
 
     let disposed = false
-    stopping = processFiber.dispose().then(() => { disposed = true })
+    stopping = workerFiber.dispose().then(() => { disposed = true })
     await llm.calls[1].cancelled.promise
     assert.equal(disposed, false, 'dependency disposal must join the model actual-exit barrier')
     assert.equal(settled, false)
@@ -94,7 +97,7 @@ test('process dependency revocation joins the next model call and yielded proces
     assert.equal(existsSync(join(directory, 'stopped')), true)
     assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH')
     assert.equal(llm.calls.length, 2, 'revocation must not admit a further model exchange')
-    assert.deepEqual((await sessions.listNodes(session.id, null)).nodes, [])
+    assert.deepEqual(await root.get(localStorageServiceKey).read(reader => reader.all('SELECT id FROM harness_nodes WHERE session_id=?', [session.id])), [])
 
     const cleanup = await root.get(localStorageServiceKey).read(reader => reader.all(
       "SELECT intent_json, observation_json FROM harness_run_operations WHERE run_id = ? AND kind = 'operation'", [run.id]))

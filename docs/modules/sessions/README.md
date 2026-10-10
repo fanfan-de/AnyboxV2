@@ -12,9 +12,9 @@
 
 ## 依赖与职责
 
-Projects 注入 [本地 SQLite](../infrastructure/local-sqlite.md)；Project Files 注入本地 SQLite 和 Projects，独占文件搜索、读取和文本快照；Session 注入本地 SQLite、Projects、Image Assets 和 Project Files。组件都安装在应用根 Context，项目仅是数据归属边界，不创建项目 Context。Session 的内部 SQLite records 实现没有独立组件和独立数据库连接；数据库排他所有权归存储组件，领域表与迁移归这里。
+Projects 注入 [本地 SQLite](../infrastructure/local-sqlite.md)；Project Files 注入本地 SQLite 和 Projects，独占文件搜索、读取和文本快照；Session 注入本地 SQLite、Projects、Image Assets、Project Files 和 [Computer Operations](../computers/computer-operations.md)。后者通过同步事务端口参加工具意图与观察提交。Projects 向 Workspaces 提供稳定身份，不反向依赖 Computer 模块。组件都安装在应用根 Context，项目仅是数据归属边界，不创建项目 Context。Session 的内部 SQLite records 实现没有独立组件和独立数据库连接；数据库排他所有权归存储组件，领域表与迁移归各领域组件。
 
-外部使用 harness server API 的 `openProject`、`createSession`、节点及 Run 查询方法。[执行模块](../execution/README.md) 使用 Session 的受信执行记录端口进行准入、操作观察和结算；RunRuntime 独占运行期资源。服务名称用于依赖声明，不构成授权边界。
+外部使用 harness server API 的 `openProject`、`createSession`、节点及 Run 查询方法。[执行模块](../execution/README.md) 使用 Session 的受信执行记录端口进行准入、操作观察和结算；RunRuntime 独占协议程序与观察，独立 worker 持有工具资源和进程 scope。服务名称用于依赖声明，不构成授权边界。
 
 ## 数据路径
 
@@ -27,7 +27,7 @@ Projects 注入 [本地 SQLite](../infrastructure/local-sqlite.md)；Project Fil
 
 ## 恢复与关闭
 
-业务库重新打开时，Session 将仍处于 running/cancelling 的 Run 结算为 interrupted，并记录中断事件；不会重放工具或网络副作用。项目目录暂时不可用不隐藏既有历史，但创建 Session 和启动新 Run 必须再次确认目录可用。
+业务库重新打开时，Session 保留有有效 response/cleanup/settling 游标的活动 Run 供新 owner 接管原 worker；无新凭证的旧 Run、未保存模型响应的 model-pending 结算 interrupted，不重发网络或未知工具。已有 worker scope 仍需独立取消并等待实际退出。项目目录暂时不可用不隐藏既有历史，但创建 Session 和启动新 Run 必须再次确认目录可用。
 
 组件 Effect 停止新调用并等待已接收的数据操作；Nya 按实际依赖关闭执行消费者后，再释放 Session、Projects 和存储。旧 `dialogue-v1` Session、旧事件和节点保留只读兼容，不继续执行旧路径。
 

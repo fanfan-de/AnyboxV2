@@ -7,10 +7,10 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 ## 实现与装配
 
 - 源码：[组件](../../../src/applications/harness/core/run/component.ts)、[输入和状态转换](../../../src/applications/harness/core/run/domain.ts)、[程序契约](../../../src/applications/harness/core/run/program.ts)、[等待者](../../../src/applications/harness/core/run/waiters.ts)。
-- 工厂：`createRunComponent(inputs, agents, isHarnessServerClosing?)`；组件名：`harness-runs`；配置类型：`void`。
+- 工厂：`createRunComponent(inputs, agents, isHarnessServerClosing?, closingSignal?)`；组件名：`harness-runs`；配置类型：`void`。
 - `inputs` 提供 `now()`、`newId()`；`agents` 是已验证的只读 Agent 定义；可选 `isHarnessServerClosing()` 默认为 false，用于区分整个应用关闭与依赖失效。
 - 提供 `harness.runs: RunPort` 和受信宿主控制服务 `harness.run-admission: RunAdmissionPort`。
-- 注入 `harness.sessions`、`harness.session-runs`、`harness.agent-prompts`、`models`、`harness.protocol-agents`、`harness.run-runtime`、`harness.projects`。
+- 注入 `harness.sessions`、`harness.session-runs`、`harness.agent-prompts`、`models`、`harness.protocol-agents`、`harness.run-runtime`、`harness.projects`、`harness.computer-operations`。
 
 ## 服务接口
 
@@ -18,7 +18,7 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 | --- | --- |
 | `startRun(input)` | 接受并启动 Run；返回已启动或提前结算的 Run，不承诺执行已经完成 |
 | `cancelRun(id)` | 对准备交接中的 program 或 Runtime 发出取消，并返回当前 Run；未知 ID 可返回 undefined |
-| `waitRun(id, signal?)` | 等待准入交接及实际结束，返回 Run；中止 signal 只退出此次等待 |
+| `waitRun(id, signal?)` | 等待恢复候选登记、本 Run 准入交接及实际结束，返回 Run；中止 signal 只退出此次等待 |
 | `getView(id)` | 获取当前有界临时展示快照；结束后通常为 undefined |
 
 `RunInput` 必须包含非空 `sessionId`、`idempotencyKey`，以及显式的 `parentNodeId: string | null`；可选非空 `modelId` 是 Models 执行配置 ID。`input` 是文本字符串，`images?: { assetId }[]` 为有序图片引用，`files?: { snapshotId }[]` 为已准备的有序文件快照引用；三者至少一项非空，支持纯图片或纯文件输入。不能直接传文件路径或正文代替 snapshotId。旧 `modelProfileId`、`model`、`selection`、`llmPlan` 参数被拒绝。
@@ -35,9 +35,13 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 
 ## 所有权、取消和关闭
 
+启动恢复不阻塞 apply：组件异步读取 Session.listRunResumes，CAS 提升 owner，同事务更新 Operations 授权，再通过 authorizeRun 在原 worker 安装栅栏；最后调用协议注册表 prepareResume 并交给 Runtime。恢复使用已接受模型、初始化、原始输入及记录，不读取当前 Prompt、不重新接受 Run。取消状态先持久登记，未派发工具不因此激活 worker。
+
+恢复准备因账户 epoch/协议不兼容被拒绝时，仍交给只清理的 Runtime：持久取消原 worker scope、保存已发生事实、等待实际退出及引用释放，再结算失败。启动还调用 recoverCancelledRuns 排空已结算 interrupted 的遗留 scope，独立于是否能继续协议。
+
 Run 持有尚未交接的 program 和准备阶段 AbortController。`runtime.start()` 必须同步接受所有权：同步抛出表示没有接管，由 Run 关闭 program 并结算；成功返回 Promise 后，无论其后成功或失败，都由 Runtime 清理。
 
-取消未交接 Run 会中止它的 controller，并记录 `cancelling`。取消已交接 Run 使用 Runtime 的 `user-requested` 原因。`waitRun` 先等待正在进行的持久接受交接，避免在记录刚提交但 Runtime 尚未读取时过早返回。
+取消未交接 Run 会中止它的 controller，并记录 `cancelling`。取消已交接 Run 使用 Runtime 的 `user-requested` 原因。`waitRun` 先等待恢复候选及 handoff 登记就绪，再等待本 Run 的持久接受交接，避免在记录刚提交但 Runtime 尚未读取时过早返回。其他 Run 的 worker 授权暂时失联或遗留 scope 排空不阻塞本 Run 的等待；signal 在候选登记、交接及运行观察期间均可中止此次等待，不取消 worker 原操作。
 
 Effect 清理先关闭新准入、中止正在准备的 execution，取消已接管的 Run，再等待全部准入和所有已接受 Run 实际结束。harness server 关闭使用 `owner-disposed`；依赖替换使用 `dependency-unavailable`。未接管 program 的清理失败显式结算为 `cleanup-failed`，关闭时会传播清理错误；不会创建成功节点。
 
@@ -47,7 +51,7 @@ Effect 清理先关闭新准入、中止正在准备的 execution，取消已接
 
 ## 验证
 
-[harness server 核心测试](../../../tests/harness-server-core.test.mjs) 验证幂等、未知模型、同步交接拒绝、快照不匹配、依赖替换与关闭；[会话树测试](../../../tests/conversation-tree.test.mjs) 验证同父并发、启动窗口取消、等待者中止与分支隔离；[原生 Session 测试](../../../tests/native-session.test.mjs) 验证父引用二次检查和首次初始化竞争。统一执行 `npm run check`。
+[harness server 核心测试](../../../tests/harness-server-core.test.mjs) 验证幂等、未知模型、同步交接拒绝、快照不匹配、依赖替换与关闭；[会话树测试](../../../tests/conversation-tree.test.mjs) 验证同父并发、启动窗口取消、等待者中止与分支隔离；[原生 Session 测试](../../../tests/native-session.test.mjs) 验证父引用二次检查和首次初始化竞争；[恢复等待测试](../../../tests/computer-run-wait.test.mjs) 验证跨 Run 等待隔离、观察中止不取消原操作，以及 Effect 仍等待全部恢复与遗留 scope 实际退出。统一执行 `npm run check`。
 
 项目文件只接受已准备的 snapshotId，幂等比较包含 ID 及顺序。新 Run 经 session-runs.readFileSnapshots 获取并校验有界文本，取消使用准入 AbortController，读取后等待 done；协议绑定在模板处理之后附加用户文件资料。已接受幂等请求不重新查草稿期限或源路径，详见[文件引用设计](../../project-file-references-design.md)。
 

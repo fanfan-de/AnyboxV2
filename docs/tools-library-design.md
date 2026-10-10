@@ -1,6 +1,6 @@
 # Anybox Harness 工具库
 
-状态：2026-10-04，内置工具目录、按 Agent 混选、不可变 Session 快照、四种协议工具图片及按 Run 的管道进程已接入。组件入口见[工具模块](./modules/tools/README.md)。
+状态：2026-10-10，独立 computer worker 已承担实际工具执行；内置工具目录、按 Agent 混选、不可变 Session 快照、四种协议工具图片及按 Run 的管道进程已接入。组件入口见[工具模块](./modules/tools/README.md)。
 
 ## 产品与来源契约
 
@@ -23,15 +23,15 @@ API 提供 `listTools()`、`getAgentTools(agentId)`、`setAgentTools(agentId, {t
 
 创建 Session 的事务复制 `ToolSelectionSnapshot {schemaVersion:1, tools:[{toolId,version,definition}]}`，数据库禁止之后修改。Agent 配置更新只影响新 Session；已有会话、所有分支、历史编辑/重新生成和在途 Run 保持原选择。首次接受 Run 固定 `NativeInitialization` v2 / `tool-library-v1`，包含 Prompt、实际声明与会话快照。无有效工具能力的模型使用空声明，快照仍保留。
 
-Session 的 `run-state` v9 增加 Agent 工具设置和 Session 不可变选择。旧会话迁入明确的 Anybox 两工具选择；旧 `NativeInitialization` v1 / `known-tools-v1`、定义、原生记录和历史 JSON 保持原样。新 Loop 1.2.0 兼容 1.0.0/1.1.0，Models 驱动仍为 2.1.0、原生记录仍为 v2。身份、账户 epoch、模型及执行语义的恢复约束继续生效。
+Session 的 `run-state` v9 增加 Agent 工具设置和 Session 不可变选择。旧会话迁入明确的 Anybox 两工具选择；旧 `NativeInitialization` v1 / `known-tools-v1`、定义、原生记录和历史 JSON 保持原样。当前 run-state v10 增加独立 Run 恢复状态；Loop 1.3.0 兼容 1.0.0/1.1.0/1.2.0，Models 驱动仍为 2.1.0、原生记录仍为 v2。身份、账户 epoch、模型及执行语义的恢复约束继续生效。
 
 ## 执行和资源所有权
 
-工具按资源拆为四个根级 Nya 组件：既有 Bash、共享 Apply Patch、Run 管道进程和文件工具。选择、参数验证与来源适配保持纯函数；不新增项目、任务或工具 Context。RunRuntime 使用本轮注入的执行器，只运行初始化实际声明的工具，完整批次在任何副作用前验证。
+工具按资源拆为四个独立 worker 根的 Nya 组件：既有 Bash、共享 Apply Patch、Run 管道进程和文件工具。选择、参数验证与来源适配保持纯函数；不新增项目、任务或工具 Context。RunRuntime 通过 Computer Operations 保存声明并观察结果，worker 执行器使用本代四工具依赖，只运行初始化实际声明的工具；完整批次在任何副作用前验证。
 
 每次调用仍遵循持久意图、停止检查、同步启动登记、等待 result/done、持久观察的顺序。文件 Write/Edit 共用 Apply Patch 的跨项目串行队列、文件预检和真实部分提交事实。计划/todo 工具替换完整列表形成持久工具观察，不启动后台任务。
 
-Codex exec 可以返回仍运行的管道会话，write_stdin 只能访问同 Run 的单调会话 ID；实际进程句柄留在内存。每次调用 done 只等待该操作退出，scope 独立持有进程。正常模型结束、取消和应用关闭都终止并等待全部组、流和操作；Runtime 以 `intent.kind=tool-process-cleanup` 的通用 operation 保存最终退出、剩余输出和清理状态，之后才结算。正常清理不把 Run 改为用户取消，清理失败不发布成功节点。重启不恢复运行句柄或重放命令。
+Codex exec 可以返回仍运行的管道会话，write_stdin 只能访问同 Run 的单调会话 ID；实际进程句柄留在内存。每次调用 done 只等待该操作退出，scope 独立持有进程。正常模型结束、取消和应用关闭都终止并等待全部组、流和操作；Runtime 以 `intent.kind=tool-process-cleanup` 的通用 operation 保存最终退出、剩余输出和清理状态，之后才结算。正常清理不把 Run 改为用户取消，清理失败不发布成功节点。worker 存活时，Runtime 进程异常重启从原 ProcessRef 与 operation receipt 接续，stdin/输出领取去重；worker 自身故障不能凭 PID 恢复 OS 管道，未知命令不重放。idle worker 不随应用正常关闭退出。详见 [Computer 资源设计](computer-resource-design.md)。
 
 图片工具通过既有 Image Assets 导入不可变原字节；Session 在工具观察同一业务事务保留引用。只有提交后 program 私有 resolver 才接纳该引用，四种 Loop 将普通文本工具结果回填后追加原生用户图片块；下一次增量交换传匹配 resourceRefs。完整原生请求继续受 32 MiB 限制，base64 只在受管操作中物化，不进历史。文本模型得到结构化不支持结果，其他工具仍可使用。
 

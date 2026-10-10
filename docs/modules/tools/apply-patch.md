@@ -13,15 +13,17 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 | 项目自有类型 | [apply-patch-types.ts](../../../src/applications/harness/core/tool/apply-patch-types.ts) |
 | 工厂 / Nya 名称 | `createApplyPatchComponent(options?)` / `apply-patch-tool` |
 | 服务 / `inject` | `tools.apply-patch: ApplyPatchPort` / `harness.projects` |
-| 工具名 / 消费方 | `apply_patch` / [RunRuntime](../execution/run-runtime.md) |
+| 工具名 / 消费方 | `apply_patch` / 独立 [worker 执行器](../computers/worker-executor.md) |
 
 ## 配置、接口与结果
 
 唯一工厂选项为 `filesystem?: Partial<ApplyPatchFileSystem>`，按方法覆盖默认 `node:fs/promises` 实现，主要用于可控故障与取消测试。文件系统端口包括 `lstat`、`realpath`、`readFile`、`mkdir`、`mkdtemp`、`writeFile`、`chmod`、`link`、`rename`、`unlink`、`rmdir`；替身必须维持各方法的完成时间和文件事实，不能只返回成功值而跳过副作用。
 
-`ApplyPatchPort.definition` 声明唯一必填字符串参数 `patch`，禁止额外属性。宿主调用 `execute({ projectId, patch }): OwnedCall<ApplyPatchResult>`，项目 ID 来自执行上下文。服务先同步验证项目 ID 和 patch 类型；语法错误在队列内解析为诊断结果。
+`ApplyPatchPort.definition` 声明唯一必填字符串参数 `patch`，禁止额外属性。宿主调用 `execute({ projectId, patch, workspacePath? }): OwnedCall<ApplyPatchResult>`，项目 ID 和可选固定绝对路径来自受信执行上下文。服务先同步验证项目 ID、patch 类型和可选路径；语法错误在队列内解析为诊断结果。
 
-文件工具另调用 `mutateText({projectId,path,mutation})`：`mutation` 为整文件 `write` 或 `oldString/newString/replaceAll` 的精确 `edit`。它在同一队列内部读取最新快照并规划变更，共享全部文本校验、文件预检、逐文件提交及清理；不是第二个写入提供方。纯 `applyTextMutation` 保留显式文本、BOM 和末尾换行，不添加补丁 Add 的隐含换行。
+文件工具另调用 `mutateText({projectId,path,mutation,workspacePath?})`：`mutation` 为整文件 `write` 或 `oldString/newString/replaceAll` 的精确 `edit`。它在同一队列内部读取最新快照并规划变更，共享全部文本校验、文件预检、逐文件提交及清理；不是第二个写入提供方。纯 `applyTextMutation` 保留显式文本、BOM 和末尾换行，不添加补丁 Add 的隐含换行。
+
+独立 worker 的内部执行适配器传入固定 binding.path，嵌套文件 Write/Edit 将同一 workspacePath 原样传给 mutateText，不在排队后重新选择项目路径。省略固定路径的直接调用保留 Projects.requireAvailable 兼容行为；文件预检、跨项目队列和实际部分提交规则保持不变。
 
 | 结果字段 | 含义 |
 | --- | --- |
@@ -74,7 +76,7 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 
 语法/文本诊断、符号链接或硬链接拒绝、上下文冲突、目标已存在、权限拒绝及受支持的文件系统错误被归一为 `ApplyPatchResult`，便于模型修正补丁。基础设施错误以固定 `ApplyPatchFailure` 拒绝：`invalid-request`、`unavailable`、`cleanup-failure`。`isApplyPatchFailure` 是公开判别入口，不向调用者传播任意底层异常文本。
 
-替换组件时保持 `ApplyPatchPort`、完整结果事实和 `OwnedCall` 生命周期；纯解析器不能承担临时资源所有权。工具与 Session、协议驱动之间仅通过 [RunRuntime](../execution/run-runtime.md) 协调。
+替换组件时保持 `ApplyPatchPort`、完整结果事实和 `OwnedCall` 生命周期；纯解析器不能承担临时资源所有权。工具不写 Session：当前经 [Computer Operations](../computers/computer-operations.md) 协调的独立 worker 执行，由 [RunRuntime](../execution/run-runtime.md) 提交观察、清理和结算。
 
 ## 验证依据
 

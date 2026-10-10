@@ -6,7 +6,7 @@ import { createDirectoryBrowser } from './directory-browser.js'
 import type { DirectoryBrowserOptions } from './directory-browser.js'
 import type { DirectoryBrowseOpened, DirectoryBrowseOptions, DirectoryCreated, DirectoryPage } from './directories.js'
 import { localStorageServiceKey } from '../../../../storage/port.js'
-import type { LocalStoragePort, StorageMigration, StorageRow } from '../../../../storage/port.js'
+import type { LocalStoragePort, StorageMigration, StorageRow, StorageReader } from '../../../../storage/port.js'
 
 export const projectServiceKey = 'harness.projects'
 
@@ -33,6 +33,8 @@ export function isProjectUnavailableError(error: unknown): error is ProjectUnava
 }
 
 export interface ProjectPort {
+  /** Stable metadata in a caller's business transaction; never checks the filesystem. */
+  getIn(reader: StorageReader, id: string): Project | undefined
   readonly directoryBrowsingSupported: boolean
   readonly directoryCreationSupported: boolean
   openDirectoryBrowse(owner: string, input: DirectoryBrowseOptions, signal?: AbortSignal): OwnedCall<DirectoryBrowseOpened>
@@ -107,6 +109,11 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
       const get = (id: string) => db.read(reader => reader.get(
         'SELECT * FROM harness_projects WHERE id = ?', [id]))
       const service: ProjectPort = {
+        getIn(reader, id) {
+          if (!accepting) throw new Error('project service is closing')
+          const row = reader.get('SELECT * FROM harness_projects WHERE id = ?', [id])
+          return row ? stored(row) : undefined
+        },
         directoryBrowsingSupported: directories.supported,
         directoryCreationSupported: directories.creationSupported,
         openDirectoryBrowse: (owner, input, signal) => directories.open(owner, input, signal),

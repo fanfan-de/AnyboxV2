@@ -377,7 +377,8 @@ test('harness server Responses startup registers its key and exposes the existin
     assert.equal(terminal.output, 'Bash printed web-response.')
     const events = (await request(f.web, 'GET', `/runs/${run.id}/events?afterSeq=0`)).data
     assert.deepEqual(events.map(event => event.kind), [
-      'operation-started', 'operation-observed', 'tool-started', 'tool-observed', 'operation-started', 'operation-observed', 'terminal',
+      'operation-started', 'operation-observed', 'tool-started', 'tool-observed', 'operation-started', 'operation-observed',
+      'operation-started', 'operation-observed', 'terminal',
     ])
     assert.equal(events.find(event => event.kind === 'tool-observed').stdout, 'web-response')
     assert.equal(events.find(event => event.kind === 'tool-started').requestId, 'call-web')
@@ -607,7 +608,8 @@ test('harness server HTTP serves bounded Run events for an active Bash loop and 
     const events = await request(f.web, 'GET', `/runs/${accepted.data.id}/events`)
     assert.equal(events.response.status, 200)
     assert.deepEqual(events.data.map(event => event.kind), [
-      'operation-started', 'operation-observed', 'tool-started', 'tool-observed', 'operation-started', 'operation-observed', 'terminal',
+      'operation-started', 'operation-observed', 'tool-started', 'tool-observed', 'operation-started', 'operation-observed',
+      'operation-started', 'operation-observed', 'terminal',
     ])
     assert.equal(events.data[2].command, "printf '%*s' 5000 '' | tr ' ' a")
     assert.equal(events.data[2].requestId, 'call-1')

@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { registerNativeRun, completeNativeRun, completedOutcome } from './helpers/native-records.mjs'
@@ -59,9 +60,9 @@ async function fixture(t, { expectedCleanupFailure = false } = {}) {
     },
   }
 }
-async function accepted(f, id, parentNodeId = null) {
+async function accepted(f, id, parentNodeId = null, initialization) {
   return (await registerNativeRun(f.records, id, { sessionId: f.session.id, parentNodeId, input: id, idempotencyKey: id }, now(), [],
-    modelSnapshot())).run
+    modelSnapshot(), initialization)).run
 }
 
 test('same-parent Runs enter together, finish out of order, and inherit only their own ancestor path', async t => {
@@ -341,7 +342,7 @@ test('Harness close joins every active branch before releasing SQLite and the mo
   assert.deepEqual(f.llm.events, ['disposed'])
 })
 
-test('persistent settlement failure rejects wait and repeated start; restart interrupts without replay', async () => {
+test('persistent settlement failure rejects wait and repeated start; restart resumes the fixed settlement without replay', async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tree-write-failure-')))
   let f = await host(directory)
   try {
@@ -360,12 +361,13 @@ test('persistent settlement failure rejects wait and repeated start; restart int
     await f.db.transaction(tx => tx.execute('DROP TRIGGER test_fail_settle'))
     await assert.rejects(f.harness.close())
     f = await host(directory)
-    const interrupted = await f.harness.getRun(run.id)
-    assert.equal(interrupted.status, 'interrupted')
-    assert.deepEqual(interrupted.history, { kind: 'tree', parentNodeId: null })
-    assert.equal(interrupted.resultNodeId, undefined)
+    const restored = await f.harness.waitRun(run.id)
+    assert.equal(restored.status, 'completed')
+    assert.deepEqual(restored.history, { kind: 'tree', parentNodeId: null })
+    assert.ok(restored.resultNodeId)
+    assert.equal(restored.output, 'Already executed')
     assert.equal(f.llm.calls.length, 0)
-    assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
+    assert.equal((await f.harness.listNodes(session.id, null)).nodes.length, 1)
   } finally { try { await f.harness.close() } finally { rmSync(directory, { recursive: true, force: true }) } }
 })
 
@@ -378,12 +380,15 @@ test('restart interrupts multiple active Runs independently while retaining thei
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
+    await installComputerServices(root, inputs)
     await root.installComponent(createSessionComponent(inputs, agents))
     const project = await root.get(projectServiceKey).openProject(directory)
     const state = root.get(sessionRunServiceKey), sessions = root.get(sessionServiceKey)
+    await sessions.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: 0 })
     const session = await sessions.createSession(project.id, 'assistant')
     const f = { records: state, session, sessions }
-    await accepted(f, 'seed')
+    await accepted(f, 'seed', null, { schemaVersion: 2, prompts: [], toolContractVersion: 'tool-library-v1', toolSelection: session.toolSelection,
+      tools: session.toolSelection.tools.map(tool => tool.definition) })
     const seed = await completeNativeRun(state, 'seed', 'Saved answer', now())
     const a = await accepted(f, 'a', seed.resultNodeId), b = await accepted(f, 'b', seed.resultNodeId)
     const call = { id: 'bash', name: 'bash', arguments: { command: 'printf uncertain >> marker' } }

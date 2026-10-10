@@ -14,7 +14,7 @@ Bash 组件在选定项目目录中执行本机命令，独占每次调用的子
 | 提供服务 | `tools.bash`，类型 `BashPort` |
 | `inject` | `harness.projects`，本轮 `deps` 中的 `ProjectPort` |
 | 工具名 | `bash` |
-| 消费方 | [RunRuntime](../execution/run-runtime.md) |
+| 消费方 | 独立 [worker 执行器](../computers/worker-executor.md) |
 
 ## 配置与公开接口
 
@@ -26,14 +26,16 @@ Bash 组件在选定项目目录中执行本机命令，独占每次调用的子
 | `maxOutputBytes` | `65536` | stdout 和 stderr 合计保留的字节数 |
 | `terminationGraceMs` | `5000` | SIGTERM 后等待 SIGKILL 的宽限时间 |
 
-`BashPort.definition` 是冻结的 `ToolDefinition`，仅允许一个必填字符串参数 `command`，不允许额外属性。宿主服务使用 `execute({ projectId, command }): OwnedCall<BashResult>`，其中项目 ID 由受信执行上下文提供，不由模型工具参数指定。
+`BashPort.definition` 是冻结的 `ToolDefinition`，仅允许一个必填字符串参数 `command`，不允许额外属性。宿主服务使用 `execute({ projectId, command, workspacePath? }): OwnedCall<BashResult>`，其中项目 ID 和可选固定绝对路径由受信执行上下文提供，不由模型工具参数指定。
+
+独立 worker 的内部执行适配器传入 [Workspaces](../computers/workspaces.md) binding.path，命令以该 workspacePath 为 cwd，不重新查询或选择项目目录。省略该字段的直接调用保留原项目查询行为；组件依赖仍为 Projects，不反向依赖 Computer Operations。
 
 `BashResult` 含 `exitCode: number | null`、`signal: NodeJS.Signals | null`、`stdout`、`stderr`、`truncated`。非零退出码仍返回该结果，由上层观察失败的命令输出；它不是组件异常。
 
 ## 执行流程
 
 1. 同步检查组件仍接受调用、项目 ID 非空、命令非空且不含 NUL；非法输入同步抛出 `BashFailure('invalid-request')`。
-2. 注册调用并通过 `projects.requireAvailable(projectId)` 获取项目路径。查询期间取消的调用会等查询退出，再阻止进程启动。
+2. 注册调用，使用受信 workspacePath；未指定时通过 `projects.requireAvailable(projectId)` 获取项目路径。查询期间取消的调用会等查询退出，再阻止进程启动。
 3. 用 `/bin/bash -c <command>` 启动独立进程组，`cwd` 为项目路径，stdin 忽略，stdout/stderr 使用管道。组件仅支持 Unix 宿主，Windows 在工厂入口被拒绝。
 4. 只继承 `PATH`、`HOME`、`TMPDIR`、`LANG`；缺省分别为 `/usr/bin:/bin`、空字符串、`/tmp`、`C`。其他宿主环境变量不传入子进程。
 5. 按到达顺序共享输出字节预算；超出部分丢弃并置 `truncated: true`，但继续读取管道，避免因输出填满而阻塞退出。

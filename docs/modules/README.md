@@ -11,6 +11,7 @@
 | [products/](./products/README.md) | 固定应用目录、按需装配与活动准入 | 2 |
 | [models/](./models/README.md) | 可复用模型配置、凭据、原生驱动及可选公开目录 | 11 |
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 7 |
+| [computers/](./computers/README.md) | 按需本机资源、独立 worker、固定工作区与耐久工具操作协调 | 7 |
 | [sessions/](./sessions/README.md) | 项目身份与目录浏览、文件快照、会话树、归档、Run 持久事实及恢复 | 3 |
 | [images/](./images/README.md) | 图片导入、不可变字节、草稿续期与事务保留 | 1 |
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
@@ -45,6 +46,13 @@
 | 执行 | [Chat Completions 应用绑定](./execution/chat-completions-agent.md) | `harness-protocol-agent-chat-completions` | 将该驱动代与 Chat Loop 绑定 |
 | 执行 | [Anthropic 应用绑定](./execution/anthropic-agent.md) | `harness-protocol-agent-anthropic-messages` | 将该驱动代与 Anthropic Loop 绑定 |
 | 执行 | [Gemini 应用绑定](./execution/gemini-agent.md) | `harness-protocol-agent-gemini-interactions` | 将该驱动代与 Gemini Loop 绑定 |
+| Computer 资源 | [本机实例提供方](./computers/local-instance-provider.md) | `computer-local-instance-provider` | `computer.instance-provider` |
+| Computer 资源 | [Computers](./computers/computers.md) | `harness-computers` | `harness.computers` |
+| Computer 资源 | [Workspaces](./computers/workspaces.md) | `harness-workspaces` | `harness.workspaces` |
+| Computer 资源 | [Computer Operations](./computers/computer-operations.md) | `harness-computer-operations` | `harness.computer-operations` |
+| Computer 资源 | [本机 worker 客户端](./computers/local-worker-client.md) | `computer-local-worker-client` | Authority 根的 `computer.worker` HTTP 代理 |
+| Computer 资源 | [worker 执行器](./computers/worker-executor.md) | `computer-worker-executor` | worker 独立根的 `computer.worker` |
+| Computer 资源 | [worker 固定项目绑定](./computers/worker-project-bindings.md) | `computer-worker-project-bindings` | worker 根的 `harness.projects` 兼容工具路径端口 |
 | 项目与会话 | [Projects](./sessions/projects.md) | `harness-projects` | `harness.projects` |
 | 项目与会话 | [Project Files](./sessions/project-files.md) | `harness-project-files` | `harness.project-files` |
 | 项目与会话 | [Session](./sessions/session.md) | `harness-sessions` | `harness.sessions`、`harness.session-runs` |
@@ -70,7 +78,7 @@
 1. [Web](./web/web-frontend.md) 或 [harness server API](../../src/applications/harness/core/index.ts) 接收请求，通过当前服务进行调用。
 2. [Run](./execution/run.md) 先检查已接受幂等键，再检查 [Session](./sessions/session.md) 的归档状态、项目、Prompt 与模型选择；新请求经 Session 受管读取已准备的[文件快照](./sessions/project-files.md)。
 3. [协议应用注册](./execution/protocol-agent-registry.md) 在模板后附加文件资料并编码图片引用，固定驱动代与对应 Loop，通过 [Models](./models/models.md) 准备独立 execution/program；Session 在接受事务复核归档状态、协议及父恢复引用，同时永久保留图片与文件引用。
-4. [RunRuntime](./execution/run-runtime.md) 同步接管 program，管理操作意图、实际启动、取消、退出和观察提交。对应协议 Loop 消费原生结果，经 Runtime 使用 [本地工具](./tools/README.md)。
+4. [RunRuntime](./execution/run-runtime.md) 同步接管 program，管理操作意图、实际启动、取消、退出和观察提交。计算工具声明和 resume cursor 由 Session 同事务接纳到 [Computer Operations](./computers/computer-operations.md)，后者按需准备确切实例和工作区，再交独立 [worker](./computers/worker-executor.md) 的工具执行器；纯模型和计划调用不激活 computer。进程异常退出后，新 Runtime 提升 owner，查回原操作与游标。
 5. 工具图片观察与原字节引用同事务保留，随后按用户图片块进入下一次原生请求；进程 scope 退出事实经通用清理操作提交，program 与全部工具退出后，Session 才原子提交成功节点、记录、结果引用和终态。Web 通过安全投影及持久查询呈现结果。
 
 Models 配置库、目录缓存库和业务 SQLite 是三套独立连接，不共享文件。系统凭据留在 Vault，原生恢复记录留在受信 Session，浏览器只接收允许展示的投影。生命周期细节见 [harness server 协作总览](../harness-server-components.md)。
@@ -83,11 +91,12 @@ Models 配置库、目录缓存库和业务 SQLite 是三套独立连接，不�
 | --- | --- | --- |
 | Models 配置库 / 原生参数 | 配置库 v3；参数 `{ protocolId, formatVersion: 1, value }` | 未知扩展保留待迁移状态；历史 JSON 不改写 |
 | 应用目标迁移账本 | `app-products` v2；按注册 ID 保存打开目标 | 执行库首次按 run-state 保留 Agent；旧组合只迁入内置目标；客户端默认关闭 |
-| Session 迁移账本 | `run-state` v9 | v5 原生记录、v6 图片引用、v7 归档、v8 默认模型、v9 Agent 工具配置与不可变会话选择；旧 `dialogue-v1` 只读 |
+| Session 迁移账本 | `run-state` v10 | v10 独立 Run 恢复游标与 owner；保留 v5 原生记录、v6 图片引用、v7 归档、v8 默认模型、v9 工具选择；旧 `dialogue-v1` 只读 |
 | Run 根初始化 | `NativeInitialization` v2 / `tool-library-v1` | 复制 Session 工具快照；旧 v1 / `known-tools-v1` 定义与 JSON 保持原样 |
 | Run 原始输入 | `NativeRunInput` v3，保存 raw/text/template/images/files | v1 无附件，v2 只有图片；文件正文另存快照并进入本轮原生请求 |
-| 四协议驱动 / 应用绑定 | 驱动 2.1.0、Loop 1.2.0、原生记录 v2 | 双读旧文本 v1 与混合父链，仍检查账户、模型和执行语义兼容 |
+| 四协议驱动 / 应用绑定 | 驱动 2.1.0、Loop 1.3.0、原生记录 v2 | 读取 Loop 1.0/1.1/1.2/1.3；双读旧文本 v1，仍检查账户、模型和执行语义兼容 |
 | 资源迁移域 | `image-assets` v1、`project-files` v1 | 使用既有业务连接，与接受 Run 同事务保留；失败和取消不释放已接受引用 |
+| Computer 迁移域 | Authority：`computers` v1、`workspaces` v1、`computer-operations` v2；worker：`computer-worker` v1 | 两端独占连接与接纳/结果账本；工具等待接续，不自动重放未知执行或跨机器迁移 |
 | 浏览器待提交记录 | `PendingSubmission` v3 | 兼容 v1/v2；先查已接受幂等结果，不自动重放未确认的旧提交 |
 
 ## 组件之外的代码

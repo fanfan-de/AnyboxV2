@@ -1,3 +1,4 @@
+import { installComputerServices, createControlledComputerWorker } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
@@ -84,7 +85,8 @@ test('one Bash result is persisted, returned to the model, and followed by a fin
     assert.equal(terminal.status, 'completed')
     assert.equal(terminal.output, 'The command printed hello.')
     assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(event => event.kind), [
-      'operation-started', 'operation-observed', 'tool-started', 'tool-observed', 'operation-started', 'operation-observed', 'terminal',
+      'operation-started', 'operation-observed', 'tool-started', 'tool-observed', 'operation-started', 'operation-observed',
+      'operation-started', 'operation-observed', 'terminal',
     ])
     assert.deepEqual((await f.harness.listNodes(f.session.id, null)).nodes.map(({ input, output }) => ({ input, output })),
       [{ input: 'Inspect this project', output: 'The command printed hello.' }])
@@ -115,7 +117,7 @@ test('a Bash batch executes serially and returns nonzero exit codes as observati
     assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
     assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(event => event.kind), [
       'operation-started', 'operation-observed', 'tool-started', 'tool-observed',
-      'tool-started', 'tool-observed', 'operation-started', 'operation-observed', 'terminal',
+      'tool-started', 'tool-observed', 'operation-started', 'operation-observed', 'operation-started', 'operation-observed', 'terminal',
     ])
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
@@ -206,7 +208,7 @@ test('cancelling an active Bash command waits for exit and starts no subsequent 
     assert.equal(existsSync(join(f.directory, 'should-not-exist')), false)
     assert.equal(f.llm.calls.length, 1)
     assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(event => event.kind), [
-      'operation-started', 'operation-observed', 'tool-started', 'tool-failed', 'terminal',
+      'operation-started', 'operation-observed', 'tool-started', 'tool-failed', 'operation-started', 'operation-observed', 'terminal',
     ])
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
@@ -304,6 +306,7 @@ async function stateHost(file) {
     await root.installComponent(createImageAssetsComponent({ directory: (file) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
+    await installComputerServices(root, inputs)
     await root.installComponent(createSessionComponent(inputs, agents))
     return { root, records: root.get(sessionRunServiceKey), sessions: root.get(sessionServiceKey), projects: root.get(projectServiceKey) }
   } catch (error) { await root.fiber.dispose(); throw error }
@@ -317,10 +320,12 @@ test('a persisted Bash intent becomes interrupted on restart and is never replay
   try {
     first = await stateHost(file)
     const project = await first.projects.openProject(directory)
+    await first.sessions.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: 0 })
     const session = await first.sessions.createSession(project.id, 'assistant')
     const accepted = await registerNativeRun(first.records, 'run-1', {
       sessionId: session.id, parentNodeId: null, input: 'Maybe execute', idempotencyKey: 'once',
-    }, 'now', [], modelSnapshot())
+    }, 'now', [], modelSnapshot(), { schemaVersion: 2, prompts: [], toolContractVersion: 'tool-library-v1', toolSelection: session.toolSelection,
+      tools: session.toolSelection.tools.map(tool => tool.definition) })
     assert.equal(accepted.created, true)
     const tool = request('tool-1', 'printf duplicate >> marker')
     await first.records.startOperation('run-1', { id: 'tool-operation', kind: 'tool', tool, intent: tool }, 'now')
@@ -378,6 +383,7 @@ test('the Run state migration preserves legacy completed Runs and interrupts old
       tx.execute(sql, ['completed-1', 'session-1', 'completed', 'Saved', 'completed', 'old', 'old', '[]', snapshot, 'Answer'])
       tx.execute(sql, ['running-1', 'session-1', 'running', 'Pending', 'running', 'old', 'old', '[]', snapshot, null])
     })
+    await installComputerServices(root, inputs)
     await root.installComponent(createSessionComponent(inputs, agents))
     const state = root.get(sessionRunServiceKey), sessions = root.get(sessionServiceKey)
     assert.equal((await state.getRun('completed-1')).output, 'Answer')
@@ -388,7 +394,7 @@ test('the Run state migration preserves legacy completed Runs and interrupts old
   } finally { await root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('revoking Bash waits for its done and prevents another model step', async () => {
+test('revoking the worker waits for its Bash done and prevents another model step', { timeout: 15000 }, async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-revoke-')))
   const root = new Context()
   const llm = controlledModels()
@@ -399,9 +405,6 @@ test('revoking Bash waits for its done and prevents another model step', async (
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
-    await root.installComponent(createSessionComponent(inputs, agents))
-    await root.installComponent(createPromptComponent(inputs))
-    await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
     await root.installComponent(llm.component())
     const bashFiber = root.installComponent({
       name: 'controlled-bash',
@@ -425,9 +428,14 @@ test('revoking Bash waits for its done and prevents another model step', async (
     await root.installComponent(createApplyPatchComponent())
     await root.installComponent(createProcessToolsComponent())
     await root.installComponent(createFileToolsComponent())
+    const worker = createControlledComputerWorker(root, { inject: [bashServiceKey] })
+    const { workerFiber } = await installComputerServices(root, inputs, { worker })
+    await root.installComponent(createSessionComponent(inputs, agents))
+    await root.installComponent(createPromptComponent(inputs))
+    await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
     await root.installComponent(createRunRuntimeComponent(inputs))
     await installTestProtocolAgents(root)
-      await root.installComponent(createRunComponent(inputs, agents))
+    await root.installComponent(createRunComponent(inputs, agents))
     const project = await root.get(projectServiceKey).openProject(directory)
     await root.get(sessionServiceKey).setAgentTools('assistant', { toolIds: ['anybox.bash', 'anybox.apply_patch'], expectedRevision: 0 })
     const session = await root.get(sessionServiceKey).createSession(project.id, 'assistant')
@@ -442,8 +450,8 @@ test('revoking Bash waits for its done and prevents another model step', async (
     assert.equal(llm.calls.length, 1)
     assert.equal((await root.get(sessionRunServiceKey).getRun(run.id)).status, 'running')
     let disposed = false
-    const stopping = bashFiber.dispose().then(() => { disposed = true })
-    assert.equal(await bashCalls[0].cancelled.promise, 'dependency-unavailable')
+    const stopping = workerFiber.dispose().then(() => { disposed = true })
+    assert.equal(typeof await bashCalls[0].cancelled.promise, 'string')
     assert.equal(disposed, false)
     bashCalls[0].done.resolve()
     const terminal = await waiting

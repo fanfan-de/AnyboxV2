@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
+import { isAbsolute } from 'node:path'
 import type { Component } from '@nya/core'
 import type { OwnedCall } from '../contracts.js'
 import type { ToolDefinition } from './definition.js'
@@ -18,7 +19,8 @@ export interface BashResult {
 
 export interface BashPort {
   readonly definition: ToolDefinition
-  execute(input: { readonly projectId: string; readonly command: string }): OwnedCall<BashResult>
+  /** A trusted workspacePath fixes cwd; omission retains the project lookup compatibility path. */
+  execute(input: { readonly projectId: string; readonly command: string; readonly workspacePath?: string }): OwnedCall<BashResult>
 }
 
 export const bashToolDefinition: ToolDefinition = Object.freeze({
@@ -61,10 +63,11 @@ function positiveInteger(value: number | undefined, fallback: number, name: stri
   return chosen
 }
 
-function validateInput(input: { readonly projectId: string; readonly command: string }): void {
+function validateInput(input: { readonly projectId: string; readonly command: string; readonly workspacePath?: string }): void {
   if (!input || typeof input.projectId !== 'string' || !input.projectId.trim() ||
     typeof input.command !== 'string' || !input.command.trim() ||
-    input.command.includes('\0')) {
+    input.command.includes('\0') || input.workspacePath !== undefined &&
+      (typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0'))) {
     throw new BashFailure('invalid-request')
   }
 }
@@ -122,6 +125,7 @@ export function createBashComponent(options: BashOptions = {}): Component.Object
         execute(input) {
           if (!accepting) throw new BashFailure('unavailable')
           validateInput(input)
+          const workspacePath = input.workspacePath
           let child: ChildProcess | undefined
           let timer: NodeJS.Timeout | undefined
           let killTimer: NodeJS.Timeout | undefined
@@ -145,7 +149,7 @@ export function createBashComponent(options: BashOptions = {}): Component.Object
 
           const operation = (async (): Promise<BashResult> => {
             let path: string
-            try { path = (await projects.requireAvailable(input.projectId)).path }
+            try { path = workspacePath ?? (await projects.requireAvailable(input.projectId)).path }
             catch { throw new BashFailure('unavailable') }
             if (interrupted) throw interrupted
             try {

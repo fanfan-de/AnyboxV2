@@ -3,7 +3,7 @@ import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput, Co
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
 import type { RunEvent, RunExecution } from '../run/execution.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
-import type { ProtocolBindingSnapshot, NativeInitialization, NativeRunInput, NativeHistory, StoredProtocolRecord, ProtocolRecord } from '../run/program.js'
+import type { ProtocolBindingSnapshot, NativeInitialization, NativeRunInput, NativeHistory, StoredProtocolRecord, ProtocolRecord, RunResumeRecord, RunResumePatch } from '../run/program.js'
 import type { ValidatedToolRequest, ToolObservation, RunFailureCategory } from '../run/domain.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { OwnedCall } from '../contracts.js'
@@ -63,13 +63,23 @@ export interface SessionRunPort {
   loadRunContext(id: string): Promise<RunContext | undefined>
   loadNativeInitialization(sessionId: string): Promise<NativeInitialization | undefined>
   loadNativeHistory(sessionId: string, parentNodeId: string | null): Promise<NativeHistory | undefined>
-  startOperation(runId: string, operation: RunOperationStart, at: string): Promise<boolean>
-  observeOperation(runId: string, operationId: string, observation: RunOperationObservation, at: string): Promise<void>
+  loadRunResume(id: string): Promise<RunResumeRecord | undefined>
+  listRunResumes(): Promise<readonly RunResumeRecord[]>
+  claimRunResume(id: string, expectedEpoch: number, at: string): Promise<RunResumeRecord>
+  saveRunResume(id: string, ownerEpoch: number, patch: RunResumePatch, at: string): Promise<RunResumeRecord>
+  getRunOperation(runId: string, id: string): Promise<SavedRunOperation | undefined>
+  startOperation(runId: string, operation: RunOperationStart, at: string, ownerEpoch?: number): Promise<boolean>
+  observeOperation(runId: string, operationId: string, observation: RunOperationObservation, at: string, ownerEpoch?: number): Promise<void>
   getRun(id: string): Promise<Run | undefined>
   getRunExecution(id: string): Promise<RunExecution | undefined>
   requestCancellation(id: string, now: string): Promise<Run | undefined>
   /** Runtime must observe every owned call's actual exit before requesting a successful settlement. */
-  settleRun(id: string, outcome: RunOutcome, now: string): Promise<Run>
+  settleRun(id: string, outcome: RunOutcome, now: string, ownerEpoch?: number): Promise<Run>
+}
+
+export interface SavedRunOperation {
+  readonly start: RunOperationStart
+  readonly observation?: RunOperationObservation
 }
 
 export interface NativeRunRegistration {
@@ -91,6 +101,7 @@ export interface RunOperationObservation {
   readonly result?: JsonValue
   readonly records?: readonly ProtocolRecord[]
   readonly checkpoint?: JsonValue
+  readonly protocolCursor?: JsonValue
   readonly tool?: ToolObservation
   readonly errorCategory?: RunFailureCategory
 }

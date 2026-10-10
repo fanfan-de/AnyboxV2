@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -21,9 +22,10 @@ async function open(directory) {
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
   await root.installComponent(createProjectComponent(inputs))
   await root.installComponent(createProjectFilesComponent(inputs))
+  const { worker } = await installComputerServices(root, inputs)
   await root.installComponent(createSessionComponent(inputs, agents))
   const sessions = root.get('harness.sessions'), project = await root.get('harness.projects').openProject(directory)
-  return { root, sessions, project, db: root.get('local-storage'), close: () => root.fiber.dispose() }
+  return { root, sessions, project, worker, db: root.get('local-storage'), close: () => root.fiber.dispose() }
 }
 async function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-agent-tools-')), f = await open(directory)
@@ -103,14 +105,30 @@ test('tool-read images are retained atomically with their observation and can ap
   const picture = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#336699' } }).png().toBuffer()
   const importing = images.importImage({ scopeId: session.id, bytes: (async function* () { yield picture })() })
   const { expiresAt, ...image } = await importing.result; await importing.done
-  await registerNativeRun(records, 'run', { sessionId: session.id, input: 'image', parentNodeId: null, idempotencyKey: 'image' }, 'now')
+  await registerNativeRun(records, 'run', { sessionId: session.id, input: 'image', parentNodeId: null, idempotencyKey: 'image' }, 'now', [], undefined,
+    { schemaVersion: 2, prompts: [], toolContractVersion: 'tool-library-v1', toolSelection: session.toolSelection,
+      tools: session.toolSelection.tools.map(tool => tool.definition) })
   await records.startOperation('run', { id: 'tool', kind: 'tool', intent: {}, tool: { id: 'tool-call', name: 'codex_view_image', arguments: { path: 'image.png' } } }, 'now')
+  f.worker.setExecution('run', {
+    execute(request, binding) {
+      assert.equal(binding.projectId, f.project.id)
+      return { result: Promise.resolve({ name: request.name, result: { path: 'image.png' }, images: [image] }),
+        done: Promise.resolve(), cancel() {} }
+    },
+    hasProcesses: () => false,
+    close: () => ({ result: Promise.resolve({ processes: [] }), done: Promise.resolve(), cancel() {} }),
+  })
+  const scope = f.root.get('harness.computer-operations').openRun({ runId: 'run' })
+  const reading = scope.execute('tool'); await reading.result; await reading.done
   await assert.rejects(records.observeOperation('run', 'tool', { kind: 'value', tool: { name: 'codex_view_image', result: {}, images: [{ ...image, sha256: 'invalid' }] } }, 'now'))
-  assert.deepEqual(await f.db.read(reader => reader.all('SELECT * FROM harness_image_retentions')), [])
+  assert.deepEqual(await f.db.read(reader => reader.all('SELECT * FROM harness_image_retentions').map(row => ({ ...row }))), [{ asset_id: image.assetId, owner_key: 'computer-operation:tool' }])
   await records.observeOperation('run', 'tool', { kind: 'value', tool: { name: 'codex_view_image', result: { path: 'image.png' }, images: [image] } }, 'now')
-  assert.deepEqual(await f.db.read(reader => reader.all('SELECT * FROM harness_image_retentions').map(row => ({ ...row }))), [{ asset_id: image.assetId, owner_key: 'run-tool:run:tool' }])
+  assert.deepEqual(await f.db.read(reader => reader.all('SELECT * FROM harness_image_retentions ORDER BY owner_key').map(row => ({ ...row }))), [
+    { asset_id: image.assetId, owner_key: 'computer-operation:tool' }, { asset_id: image.assetId, owner_key: 'run-tool:run:tool' },
+  ])
   const ref = { id: image.assetId, sha256: image.sha256, byteLength: image.byteLength, mimeType: image.mediaType }
   await records.startOperation('run', { id: 'model', kind: 'model', intent: {}, records: [{ id: 'next-request', exchangeId: 'model', kind: 'request', formatVersion: 2, payload: { input: [] }, resourceRefs: [ref] }] }, 'now')
   await records.observeOperation('run', 'model', { kind: 'value', result: { process: 'closed' } }, 'now')
   assert.deepEqual((await f.sessions.getRunRecords('run')).find(record => record.id === 'next-request').resourceRefs, [ref])
+  const closing = scope.close(); await closing.result; await closing.done
 })

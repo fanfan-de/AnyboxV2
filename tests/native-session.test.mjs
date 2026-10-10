@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import assert from 'node:assert/strict'
@@ -27,6 +28,7 @@ async function host(t, executing = false) {
   } else {
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
+    await installComputerServices(root, inputs)
     sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
     await sessionFiber
   }
@@ -70,6 +72,7 @@ test('Session titles are available from lists before history loads and retain fi
   assert.equal((await f.sessions.restoreSession(f.session.id)).title, title)
 
   await f.sessionFiber.dispose()
+  await installComputerServices(f.root, f.inputs)
   await f.root.installComponent(createSessionComponent(f.inputs, agents))
   const restarted = f.root.get('harness.sessions')
   assert.equal((await restarted.listSessions(f.session.projectId))[0].title, title)

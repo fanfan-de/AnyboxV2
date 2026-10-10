@@ -6,7 +6,7 @@
 
 ## 组件
 
-四个实际 Nya 组件按资源所有权拆分，全部安装在应用根上：
+四个实际 Nya 组件按资源所有权拆分，全部安装在独立本机 worker 的唯一根上：
 
 | 组件 | Nya 名称 | 服务 | 资源所有权 |
 | --- | --- | --- | --- |
@@ -26,6 +26,8 @@ Session 在业务库保存该执行设备按 Agent 的工具 ID 列表与修订�
 ## 调用和清理契约
 
 工具声明使用 ToolDefinition，各协议 Loop 负责原生编码。RunRuntime 在任何工具资源启动前验证完整调用批次、来源参数及是否确实声明，再按模型顺序串行分派。工具不读取原生可变状态，不持有凭据，也不自己决定 Run 终态。
+
+Session 同事务接纳计算声明及恢复批次，[Computer Operations](../computers/computer-operations.md) 按需准备本机实例与 pinned-local 工作区，提交独立 [worker 执行器](../computers/worker-executor.md)。Bash、补丁、进程和文件工具使用固定 workspacePath，嵌套 Write/Edit 同样传递此路径；原模型工具契约不增加路径参数。worker 的 Projects 兼容端口拒绝隐式查询 Authority 目录，独立工具组件测试仍可直接安装原 Projects。Runtime 进程异常退出后，worker 保留工具与真实结果；worker 自身故障的未知副作用不重放。
 
 OwnedCall 分离 result、cancel 和 done：结果可早于资源退出；取消只发出请求；done 必须等待实际退出及清理。Codex 命令提前返回后的进程由 Run scope 继续持有；正常模型结束也关闭 scope，并经通用 tool-process-cleanup operation 保存最终退出事实后才结算。清理失败不创建成功节点，取消不回滚已发生文件修改。
 

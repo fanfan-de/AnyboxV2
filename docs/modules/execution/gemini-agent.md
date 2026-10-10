@@ -40,12 +40,12 @@ Effect 先等待本注册代 unregister，撤销准入和活跃 program 的信�
 
 ## 兼容限制与验证
 
-支持项目当前的原生 Interactions 文本、显式声明的用户图片输入和已知工具契约。恢复接受 Loop 1.0.0/1.1.0/1.2.0、记录格式 1/2、有效 checkpoint 和 Models 执行语义兼容；不能使用 previous_interaction_id 代替本地历史，也不能跨协议恢复。
+支持项目当前的原生 Interactions 文本、显式声明的用户图片输入和已知工具契约。恢复接受 Loop 1.0.0/1.1.0/1.2.0/1.3.0、记录格式 1/2、有效 checkpoint 和 Models 执行语义兼容；不能使用 previous_interaction_id 代替本地历史，也不能跨协议恢复。
 
 [原生协议测试](../../../tests/native-protocol-agents.test.mjs) 覆盖原生工具、thought 签名、跨 Run/重启恢复、独立分支和截断；[Gemini Loop 测试](../../../tests/gemini-agent.test.mjs) 覆盖可选输出内容、空回复、工具续轮及坏内容在工具执行前拒绝；[Gemini 驱动测试](../../../packages/models/tests/gemini-interactions.test.mjs) 覆盖 steps 顺序、碎片流、预算状态、签名、实际退出和组件注销；[投影测试](../../../tests/native-projection.test.mjs) 覆盖多内容块和 thought 摘要。统一执行 `npm run check`。
 
 ## 工具库初始化与图片
 
-当前绑定使用 Loop 1.2.0。NativeInitialization v2 / tool-library-v1 从 Session 不可变工具快照生成声明，来源前缀不限制模型协议；旧 v1 / known-tools-v1 与旧 Loop 初始化原样兼容。调用批次仅允许实际声明的工具，并在启动任何工具前完成来源参数校验。
+当前绑定使用 Loop 1.3.0。活跃 Run 恢复游标由本协议 Loop 解释；恢复首轮回放最后耐久响应，工具结果从原 operation 领取，不重新调用原模型请求。NativeInitialization v2 / tool-library-v1 从 Session 不可变工具快照生成声明，来源前缀不限制模型协议；旧 v1 / known-tools-v1 与旧 Loop 初始化原样兼容。调用批次仅允许实际声明的工具，并在启动任何工具前完成来源参数校验。
 
 图片工具的不可变字节引用先与实际观察同事务保留，program 私有 resolver 在提交后接纳；下一次增量 exchange 为对应用户图片块传入匹配 resourceRefs。驱动 2.1.0、原生记录 v2 和既有图片 codec 不升级，历史没有 base64。文本模型收到结构化不支持结果。正常模型结束也由 Runtime 关闭 Run 进程 scope、保存最终退出的通用清理观察后再结算；本 Loop 不管理进程句柄或决定清理顺序。验证见 native-tool-library.test.mjs。

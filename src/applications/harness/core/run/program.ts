@@ -6,7 +6,7 @@ import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 export type { NativeModelSnapshot } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
-import type { RunFailureCategory, ToolObservation, ValidatedToolRequest } from './domain.js'
+import type { RunFailureCategory, RunOutcome, ToolObservation, ValidatedToolRequest } from './domain.js'
 
 /** Application-owned serializable boundaries. Protocol SDK objects never cross these interfaces. */
 export interface ProtocolBindingSnapshot {
@@ -85,6 +85,49 @@ export interface NativeHistory {
 export interface OperationObservation {
   readonly records?: readonly ProtocolRecord[]
   readonly checkpoint?: JsonValue
+  /** Interpreted only by the bound protocol Loop. Committed with the response records. */
+  readonly protocolCursor?: JsonValue
+}
+
+export interface RunResumeBatch {
+  readonly id: string
+  readonly requests: readonly ValidatedToolRequest[]
+  readonly operationIds: readonly string[]
+}
+/** Separate from the historical execution phase reader; no credentials or live handles. */
+export interface RunResumeState {
+  readonly schemaVersion: 1
+  readonly runOwnerEpoch: number
+  readonly revision: number
+  readonly stage: 'model-pending' | 'response' | 'cleanup' | 'settling'
+  readonly protocolCursor?: JsonValue
+  readonly batch?: RunResumeBatch
+  readonly totalToolOutputBytes: number
+  readonly conclusion?: ProtocolConclusion
+  /** Final exit facts and outcome, fixed before the terminal transaction; records live in the immutable ledger. */
+  readonly settlement?: RunOutcome
+}
+export interface RunResumeRecord {
+  readonly run: import('./domain.js').Run
+  readonly projectId: string
+  readonly initialization: NativeInitialization
+  readonly history?: NativeHistory
+  readonly records: readonly StoredProtocolRecord[]
+  readonly state: RunResumeState
+}
+export interface RunResumePatch {
+  readonly stage?: RunResumeState['stage']
+  readonly batch?: RunResumeBatch
+  readonly conclusion?: ProtocolConclusion
+  /** Any supplied exit records are committed atomically and omitted from the stored cursor. */
+  readonly settlement?: RunOutcome
+}
+
+/** A complete committed response already proves the native context; no credential or live execution is needed. */
+export function runResumeCheckpoint(resume: RunResumeRecord): JsonValue {
+  const snapshot = resume.run.modelSnapshot, binding = resume.run.protocolBinding
+  if (snapshot?.schemaVersion !== 3 || !binding || snapshot.protocolId !== binding.protocolId) throw new TypeError('invalid accepted Run metadata')
+  return JSON.parse(JSON.stringify({ protocolId: snapshot.protocolId, recordFormatVersion: binding.recordFormatVersion, modelSnapshot: snapshot })) as JsonValue
 }
 
 export interface OperationDescriptor<T> {
@@ -105,7 +148,7 @@ export interface ProtocolViewFrame {
 export interface RunHost {
   readonly signal: AbortSignal
   perform<T>(descriptor: OperationDescriptor<T>, start: () => OwnedCall<T>): Promise<T>
-  executeTools(requests: readonly ValidatedToolRequest[], scheduling?: 'serial'): Promise<readonly ToolObservation[]>
+  executeTools(requests: readonly ValidatedToolRequest[], scheduling?: 'serial', batchId?: string): Promise<readonly ToolObservation[]>
   publish(frame: ProtocolViewFrame): void
 }
 
@@ -142,10 +185,13 @@ export interface PrepareRunInput {
   readonly input: NativeRunInput
   readonly fileContents?: readonly FileContent[]
   readonly history?: NativeHistory
+  /** Trusted active-Run preparation; ordinary callers use prepareResume. */
+  readonly resume?: RunResumeRecord
 }
 
 export const protocolAgentServiceKey = 'harness.protocol-agents'
 export interface ProtocolAgentPort {
   protocolForModel(modelId: string): string
   prepare(input: PrepareRunInput): Promise<PreparedRunProgram>
+  prepareResume(input: { readonly resume: RunResumeRecord; readonly signal: AbortSignal }): Promise<PreparedRunProgram>
 }

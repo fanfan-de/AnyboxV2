@@ -1,5 +1,5 @@
 import * as fs from 'node:fs/promises'
-import { basename, dirname, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { Component } from '@nya/core'
 import type { OwnedCall } from '../contracts.js'
 import type { ToolDefinition } from './definition.js'
@@ -13,8 +13,9 @@ export const applyPatchServiceKey = 'tools.apply-patch'
 
 export interface ApplyPatchPort {
   readonly definition: ToolDefinition
-  execute(input: { readonly projectId: string; readonly patch: string }): OwnedCall<ApplyPatchResult>
-  mutateText(input: { readonly projectId: string; readonly path: string; readonly mutation: TextMutation }): OwnedCall<ApplyPatchResult>
+  /** A trusted workspacePath fixes the relative-path base without resolving the project again. */
+  execute(input: { readonly projectId: string; readonly patch: string; readonly workspacePath?: string }): OwnedCall<ApplyPatchResult>
+  mutateText(input: { readonly projectId: string; readonly path: string; readonly mutation: TextMutation; readonly workspacePath?: string }): OwnedCall<ApplyPatchResult>
 }
 
 export const applyPatchToolDefinition: ToolDefinition = Object.freeze({
@@ -164,15 +165,17 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
         if (failures.size > 1) throw new AggregateError([...failures], 'apply patch cleanup failed')
       }, 'cancel and join patch operations')
 
-      const enqueue = (input: { readonly projectId: string; readonly patch?: string; readonly path?: string; readonly mutation?: TextMutation }): OwnedCall<ApplyPatchResult> => {
+      const enqueue = (input: { readonly projectId: string; readonly patch?: string; readonly path?: string; readonly mutation?: TextMutation; readonly workspacePath?: string }): OwnedCall<ApplyPatchResult> => {
           if (!accepting) throw failure('unavailable')
           if (!input || typeof input.projectId !== 'string' || !input.projectId.trim() ||
+            input.workspacePath !== undefined && (typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0')) ||
             (input.mutation === undefined ? typeof input.patch !== 'string' :
               typeof input.path !== 'string' || !input.path.trim() || input.path.includes('\0') ||
               !['write', 'edit'].includes(input.mutation.kind) || (input.mutation.kind === 'write'
                 ? typeof input.mutation.content !== 'string' : typeof input.mutation.oldString !== 'string' || typeof input.mutation.newString !== 'string'))) {
             throw failure('invalid-request')
           }
+          const workspacePath = input.workspacePath
           let cancelled = false
           const cancellation = Symbol('patch-cancelled')
           const checkpoint = () => { if (cancelled) throw cancellation }
@@ -294,7 +297,7 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
             operations = input.mutation === undefined ? parsePatch(input.patch!) : [Object.freeze({ kind: 'update' as const, path: input.path!, chunks: [] })]
             checkpoint()
             let projectPath: string
-            try { projectPath = (await projects.requireAvailable(input.projectId)).path }
+            try { projectPath = workspacePath ?? (await projects.requireAvailable(input.projectId)).path }
             catch { throw failure('unavailable') }
             checkpoint()
             const planned: PreparedOperation[] = []

@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
@@ -335,10 +336,11 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   root.installComponent(createApplyPatchComponent())
   root.installComponent(createFileToolsComponent())
   root.installComponent(createProcessToolsComponent())
-  const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
   const databaseFiber = root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await databaseFiber
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
+  await installComputerServices(root, inputs)
+  const sessionFiber = root.installComponent(createSessionComponent(inputs, agents))
   const promptFiber = root.installComponent(createPromptComponent(inputs))
   const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const llmFiber = root.installComponent(llm.component())

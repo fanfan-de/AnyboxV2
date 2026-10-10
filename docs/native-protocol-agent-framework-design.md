@@ -1,6 +1,6 @@
 # 原生协议 Agent 框架设计与迁移验收
 
-日期：2026-10-04（原生框架验收保留于文末；图片增量见[图片输入设计](./multimodal-image-input-design.md)）。正式组合根已切换原生框架；本文说明本次交付范围、固定契约和验收方式。最终检查结果见文末。先前草案中尚未采用的交互等待、文本导入和直接 exchange 接口不属于现行契约。
+日期：2026-10-10（原生框架历史验收保留于文末；图片增量见[图片输入设计](./multimodal-image-input-design.md)，独立工具执行与活跃 Run 接续见[Computer 资源设计](computer-resource-design.md)）。正式组合根已切换原生框架；本文说明本次交付范围、固定契约和验收方式。最终检查结果见文末。先前草案中尚未采用的交互等待、文本导入和直接 exchange 接口不属于现行契约。
 
 ## 1. 范围与约束
 
@@ -8,7 +8,7 @@
 
 Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResult 与统一消息执行路径。保留配置、Vault、目录和驱动注册，提供 openNative、原生参数、版本化记录和恢复 codec。旧 dialogue-v1 Session 只读，不导入文本，不提供跨协议或跨账户转换。新 Session 使用 native-local-v1，在第一次接受事务中固定协议，失败和取消不解除绑定。
 
-继续采用单个 Nya 根、Models 独立包、Session 独占业务持久化、受信静态工具目录与按 Session 固定的来源契约判别联合、实际退出后结算和 interrupted 不重放规则。四种协议均支持显式声明能力的静态本地图片输入。工具图片以文本工具结果之后的原生用户图片块支持。当前不包含模型图片输出、音频、PTY、独立远端后台任务、PDF/notebook、并行工具调度、动态插件注册、联网搜索工具或用户交互等待机制。
+继续采用每个进程一个 Nya 根、Models 独立包、Session 独占业务持久化、受信静态工具目录与按 Session 固定的来源契约判别联合、实际退出后结算和 interrupted 不重放规则。四种协议均支持显式声明能力的静态本地图片输入。工具图片以文本工具结果之后的原生用户图片块支持。当前不包含模型图片输出、音频、PTY、独立远端后台任务、PDF/notebook、并行工具调度、动态插件注册、联网搜索工具或用户交互等待机制。
 
 ## 2. 已实现模块与职责
 
@@ -19,7 +19,8 @@ Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResu
 | 协议应用绑定 | `src/applications/harness/core/protocol-agents/registry.ts` | 固定驱动代、Loop、根输入/工具编码、历史策略与 program 闭包 |
 | 四协议 Loop | `src/applications/harness/core/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案 |
 | Run | `src/applications/harness/core/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
-| RunRuntime | `src/applications/harness/core/run/runtime-component.ts` | 全部受管操作、取消、真实退出、持久屏障、视图与结算 |
+| RunRuntime | `src/applications/harness/core/run/runtime-component.ts` | program、模型操作、工具观察、取消/清理协调、持久屏障与结算 |
+| Computer / worker | `src/applications/harness/core/computer/`、`workspace/` | Authority 固定声明/绑定，独立 worker 持有工具及耐久执行账本 |
 | 工具目录与执行器 | `src/applications/harness/core/tool/` | 静态来源契约、参数校验、Run 管道进程、文本读写及搜索；Nya 组件按资源拆分 |
 | 图片资源 | `src/applications/harness/core/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
 | Session | `src/applications/harness/core/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
@@ -76,7 +77,7 @@ Session 创建时复制 Agent 工具选择，首次接受 Run 固定 instruction
 
 ## 6. 持久化与迁移
 
-Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原生历史、v6 增加通用资源引用、v7 增加归档、v8 保存默认模型、v9 保存 Agent 工具配置及不可变 Session 工具选择；图片组件用独立迁移域登记自身表。迁移阶段与行为测试仅使用临时库，未升级用户实际业务数据。三套库不建立跨库事务；任何组件迁移或初始化失败阻止Run准入并清理已安装资源。
+Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原生历史、v6 增加通用资源引用、v7 增加归档、v8 保存默认模型、v9 保存 Agent 工具配置及不可变 Session 工具选择，v10 保存独立活跃 Run 游标/owner、工具批次和清理/结算提案；图片组件用独立迁移域登记自身表。迁移阶段与行为测试仅使用临时库，未升级用户实际业务数据。三套库不建立跨库事务；任何组件迁移或初始化失败阻止Run准入并清理已安装资源。
 
 ### Models v3
 
@@ -93,7 +94,7 @@ Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原
 
 新基础配置、预设、设置表单和旧环境变量初始化都写原生参数。Anthropic新配置显式保存max_tokens:4096；旧配置保留旧值。迁移可重复进入，失败回滚整个本库事务。
 
-### Session v5 至 v9
+### Session v5 至 v10
 
 | 持久对象 | 内容 |
 | --- | --- |
@@ -107,7 +108,7 @@ Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原
 
 请求记录只保存增量intent和版本；操作意图保存带前驱引用的重建配方。父恢复引用指向链节，不保存从根开始的ID数组；恢复时才在内存中展开对应路径。响应块只持久化一次，checkpoint只保存恢复元数据，不复制continuation。
 
-成功终态在一个事务中提交最终记录、链节、Run状态、完整节点、结果引用和事件。失败、取消或cleanup失败只保存事实与诊断。重启将遗留活动Run标为interrupted，保留已提交记录，不重放模型或工具。旧节点、事件、schemaVersion 1/2及profile快照只读，不改写旧JSON。
+成功终态在一个事务中提交最终记录、链节、Run状态、完整节点、结果引用和事件。失败、取消或cleanup失败只保存事实与诊断。Runtime 进程异常重启后，有效 response/cleanup/settling 游标可提升 owner 并接续原 worker 操作；无恢复凭证的旧 Run、响应未保存的 model-pending 仍 interrupted，保留事实并排空已有 scope，不重发模型或未知工具。四协议当前绑定 Loop 1.3.0，读取旧 Loop 1.0/1.1/1.2；驱动 2.1.0 和记录 v2 不变。旧节点、事件、schemaVersion 1/2及profile快照只读，不改写旧JSON。
 
 ## 7. Web、安全展示与资源限制
 

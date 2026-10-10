@@ -12,9 +12,9 @@ export function nativeRegistration(input, snapshot = modelSnapshot(), prompts = 
     initialization: initialization ?? { schemaVersion: 1, prompts: prompts.filter(prompt => prompt.kind !== 'task-template'), tools: [], toolContractVersion: 'known-tools-v1' },
     input: { schemaVersion: 1, raw: input.input, text: input.input, template: null }, parentContextRef }
 }
-export async function registerNativeRun(records, id, input, now, prompts = [], snapshot = modelSnapshot()) {
+export async function registerNativeRun(records, id, input, now, prompts = [], snapshot = modelSnapshot(), suppliedInitialization) {
   const history = await records.loadNativeHistory(input.sessionId, input.parentNodeId)
-  const initialization = history?.initialization ?? await records.loadNativeInitialization(input.sessionId)
+  const initialization = history?.initialization ?? await records.loadNativeInitialization(input.sessionId) ?? suppliedInitialization
   return records.registerRun(id, input, now, prompts, snapshot, nativeRegistration(input, snapshot, prompts, history?.contextRef ?? null, initialization))
 }
 export const completedOutcome = (id, output, snapshot = modelSnapshot()) => ({ kind: 'completed', output, resultRecordIds: [`response:${id}`],

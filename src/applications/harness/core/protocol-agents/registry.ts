@@ -133,6 +133,17 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         if (!model) throw modelFailure('model-unavailable')
         return model.parameters.protocolId
       },
+      prepareResume({ resume, signal }) {
+        const run = resume.run
+        if (!run.protocolBinding || run.modelSnapshot?.schemaVersion !== 3 || !run.nativeInput || !run.modelId ||
+          resume.state.protocolCursor === undefined || resume.state.stage === 'model-pending') throw modelFailure('unsupported-request')
+        const snapshot = run.modelSnapshot
+        const history = { contextRef: resume.history?.contextRef ?? `active:${run.id}`, initialization: resume.initialization,
+          modelSnapshot: snapshot, binding: run.protocolBinding, records: [...(resume.history?.records ?? []), ...resume.records],
+          checkpoint: serializable({ protocolId: snapshot.protocolId, recordFormatVersion: run.protocolBinding.recordFormatVersion, modelSnapshot: snapshot }) }
+        return service.prepare({ runId: run.id, sessionId: run.sessionId, modelId: run.modelId, signal,
+          initialization: resume.initialization, input: run.nativeInput, history, resume })
+      },
       async prepare(input) {
         const protocolId = service.protocolForModel(input.modelId), entry = entries.get(protocolId)
         if (!accepting || !entry?.accepting) throw modelFailure('dependency-unavailable')
@@ -141,7 +152,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         if (input.history && (input.history.binding.protocolId !== protocolId ||
           input.history.binding.protocolId !== input.history.modelSnapshot.protocolId ||
           input.history.records.some(record => record.protocolId !== protocolId) ||
-          !['1.0.0', '1.1.0', '1.2.0'].includes(input.history.binding.loopVersion) ||
+          !['1.0.0', '1.1.0', '1.2.0', '1.3.0'].includes(input.history.binding.loopVersion) ||
           ![1, 2].includes(input.history.binding.recordFormatVersion))) throw modelFailure('unsupported-request')
         if (input.history) {
           const checkpoint = input.history.checkpoint
@@ -191,11 +202,25 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
             resources, ...(permitted.size ? { requirements: { imageInput: true } } : {}), ...(restore ? { restore } : {}) })
           signal.throwIfAborted()
           if (input.initialization.tools.length && !execution.capabilities.tools) throw modelFailure('unsupported-request')
-          const initial = encodeInitial(protocolId, input), owned = execution
+          const initial = input.resume ? {} : encodeInitial(protocolId, input), owned = execution
+          let replay: import('@anybox/models').NativeReply | undefined
+          if (input.resume) {
+            const savedCursor = input.resume.state.protocolCursor
+            if (!savedCursor || typeof savedCursor !== 'object' || Array.isArray(savedCursor)) throw modelFailure('unsupported-request')
+            const cursor = savedCursor as NativeObject
+            if (cursor.schemaVersion !== 1 || cursor.protocolId !== protocolId ||
+              typeof cursor.exchangeId !== 'string') throw modelFailure('unsupported-request')
+            const record = input.resume.records.at(-1)
+            if (!record || record.kind !== 'response' || record.exchangeId !== cursor.exchangeId || record.protocolId !== protocolId ||
+              !record.payload || typeof record.payload !== 'object' || Array.isArray(record.payload)) throw modelFailure('unsupported-request')
+            replay = { exchangeId: cursor.exchangeId, response: record.payload as NativeObject,
+              records: input.resume.records.filter(item => item.exchangeId === cursor.exchangeId).map(item => toNativeRecord(protocolId, item)) }
+          }
+          const acceptedSnapshot = input.resume?.run.modelSnapshot as import('@anybox/models').NativeModelSnapshot | undefined
           const binding: ProtocolBindingSnapshot = { protocolId, generationId: entry.id + ':' + driver.generationId,
-            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.2.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 2 }
+            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.3.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 2 }
           let closing: Promise<ProgramExitReport> | undefined, executed = false
-          const program: PreparedRunProgram = { binding, modelSnapshot: owned.snapshot, initialization: input.initialization, input: input.input,
+          const program: PreparedRunProgram = { binding, modelSnapshot: acceptedSnapshot ?? owned.snapshot, initialization: input.initialization, input: input.input,
             signal,
             async execute(host) {
               if (executed) throw modelFailure('invalid-response')
@@ -207,7 +232,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
                     if (prior && !isDeepStrictEqual(prior, ref)) throw modelFailure('invalid-resource')
                     permitted.set(ref.id, ref)
                   }
-                }, input.initialization.tools), initial) }
+                }, input.initialization.tools, replay), initial) }
               catch (error) {
                 if (host.signal.aborted || program.signal.aborted) throw error
                 const failure = error instanceof RunFailure ? error : normalizeModelFailure(error)
@@ -216,7 +241,10 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
             },
             close() {
               closing ??= owned.close().then(report => ({ records: report.records.map(toProtocolRecord),
-                checkpoint: serializable(report.restoreState ?? null), cleanup: report.cleanup === 'succeeded' ? 'completed' : 'failed' }))
+                checkpoint: serializable(report.restoreState ? { ...report.restoreState, ...(acceptedSnapshot ? { modelSnapshot: acceptedSnapshot } : {}) }
+                  : input.resume && report.cleanup === 'succeeded' && !report.records.length ? {
+                    protocolId, recordFormatVersion: input.resume.run.protocolBinding!.recordFormatVersion, modelSnapshot: acceptedSnapshot,
+                  } : null), cleanup: report.cleanup === 'succeeded' ? 'completed' : 'failed' }))
               return closing
             },
             release: () => owner.release(),

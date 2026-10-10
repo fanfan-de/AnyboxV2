@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
@@ -69,6 +70,7 @@ async function legacyFixture(t, turns = sample.turns) {
 
 test('legacy and archived legacy Sessions can read their project tree/search/current files but cannot prepare or import resources', async t => {
   const f = await legacyFixture(t)
+  await installComputerServices(f.root, f.inputs)
   await f.root.installComponent(createSessionComponent(f.inputs, agents))
   const sessions = f.root.get(sessionServiceKey), state = f.root.get(sessionRunServiceKey), legacy = await sessions.getSession('legacy')
   const native = await sessions.createSession(legacy.projectId, 'assistant')
@@ -106,6 +108,7 @@ test('legacy Session titles come from the first root node and preserve historica
     { input: '  Legacy\n  title  ', output: 'First answer' },
     { input: 'Later input', output: 'Second answer' },
   ])
+  await installComputerServices(f.root, f.inputs)
   const owner = f.root.installComponent(createSessionComponent(f.inputs, agents))
   await owner
   const sessions = f.root.get(sessionServiceKey), legacy = await sessions.getSession('legacy')
@@ -118,6 +121,7 @@ test('legacy Session titles come from the first root node and preserve historica
   assert.equal(archived.title, legacy.title)
   assert.equal((await sessions.listArchivedSessions())[0].title, legacy.title)
   await owner.dispose()
+  await installComputerServices(f.root, f.inputs)
   await f.root.installComponent(createSessionComponent(f.inputs, agents))
   const restarted = f.root.get(sessionServiceKey)
   assert.equal((await restarted.getSession(legacy.id)).title, legacy.title)
@@ -127,6 +131,7 @@ test('legacy Session titles come from the first root node and preserve historica
 
 test('legacy turns migrate in array order; ambiguous Run associations remain explicitly unknown', async t => {
   const f = await legacyFixture(t)
+  await installComputerServices(f.root, f.inputs)
   await f.root.installComponent(createSessionComponent(f.inputs, agents))
   const state = f.root.get(sessionRunServiceKey), sessions = f.root.get(sessionServiceKey)
   const first = (await sessions.listNodes('legacy', null)).nodes[0]
@@ -164,7 +169,7 @@ test('legacy turns migrate in array order; ambiguous Run associations remain exp
   assert.equal((await sessions.getNodePath('legacy', third.id)).length, 3)
   const schema = await f.db.read(reader => reader.all('PRAGMA table_info(harness_sessions)'))
   assert.equal(schema.some(column => column.name === 'turns_json'), false)
-  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 9)
+  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 10)
   assert.deepEqual(await f.db.read(reader => reader.all('SELECT * FROM harness_session_defaults')), [])
   assert.deepEqual(await sessions.getSessionDefaults('assistant'), {
     agentId: 'assistant', modelId: null, fallbackModelId: 'default', effectiveModelId: 'default', revision: 0,
@@ -173,6 +178,7 @@ test('legacy turns migrate in array order; ambiguous Run associations remain exp
 
 test('invalid legacy data rolls back the entire tree migration and its version record', async t => {
   const f = await legacyFixture(t, [sample.turns[0], { input: 'broken', output: null }])
+  await installComputerServices(f.root, f.inputs)
   const installation = f.root.installComponent(createSessionComponent(f.inputs, agents))
   await assert.rejects(Promise.resolve(installation))
   assert.equal(f.root.get(sessionRunServiceKey), undefined)
@@ -197,6 +203,7 @@ test('Session reads historical and version 2 snapshots without rewriting stored 
       [id, 'empty', id, id, 'completed', 'now', 'now', '[]', JSON.stringify(snapshot), 'Answer', null, null,
         JSON.stringify({ ...initialRunExecution, phase: 'terminal' })])
   })
+  await installComputerServices(f.root, f.inputs)
   await f.root.installComponent(createSessionComponent(f.inputs, agents))
   const records = f.root.get(sessionRunServiceKey), sessions = f.root.get(sessionServiceKey)
   for (const [id, snapshot] of samples) {
@@ -210,6 +217,7 @@ test('Session reads historical and version 2 snapshots without rewriting stored 
 
 test('legacy migration adds nullable archive state and preserves read-only history through restore', async t => {
   const f = await legacyFixture(t)
+  await installComputerServices(f.root, f.inputs)
   await f.root.installComponent(createSessionComponent(f.inputs, agents))
   const sessions = f.root.get(sessionServiceKey)
   const before = await sessions.listNodes('legacy', null)

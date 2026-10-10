@@ -54,7 +54,7 @@ Run 的公共状态保持 running/cancelling/completed/cancelled/failed/interrup
 
 ## Runtime、撤销与恢复
 
-Run 负责准入、取消和等待；RunRuntime 拥有交接后的 program、模型与工具操作及清理责任；协议 Loop 决定原生续轮、工具桥接和结束。Runtime 不解释 stop reason，也不要求“模型→工具→模型”的固定阶段机。本期本地工具串行，Apply Patch 继续独占自身跨项目队列。
+Run 负责准入、取消和等待；RunRuntime 拥有交接后的 program、模型操作、本代工具观察及清理协调，独立 worker 持有实际工具调用和进程 scope；协议 Loop 决定原生续轮、工具桥接和结束。Runtime 不解释 stop reason，也不要求“模型→工具→模型”的固定阶段机。本期本地工具串行，Apply Patch 继续独占自身跨项目队列。
 
 `Runtime.start({runId,program})` 在首次异步读取前同步登记所有权。相同 program 的重复 start 共享启动／结束任务；同步拒绝意味着 Run 仍负责关闭未交接 program。`waitRun` 覆盖已经接受但尚未交接的窗口。
 
@@ -64,7 +64,7 @@ Run 负责准入、取消和等待；RunRuntime 拥有交接后的 program、模
 
 单协议绑定注销停止该代准入，撤销初始化与关联 Run，并等待模型、工具、程序和结算后释放租约；其他协议继续运行。Models 驱动注销只负责自己的资源，应用绑定注销负责整个 Run。旧代只能清理自身 entry；lease release 不等待注销整代，避免等待环。
 
-应用关闭先停止外部准入，依靠单根 Nya 的依赖快照和 Effect 顺序等待 Run、Runtime、Session 与存储。重启将遗留 running/cancelling 结算为 interrupted，保留已提交原生记录与工具事实，不自动恢复或重放副作用。新 Run 从成功节点恢复，重新读取当前凭据并检查兼容性。
+应用关闭先停止外部准入，依靠单根 Nya 的依赖快照和 Effect 顺序等待 Run、Runtime、Session 与存储。Runtime 进程异常重启后，带新恢复信封且模型响应已保存的 running/cancelling Run 提升 owner 并查回原 worker 操作、清理或结算；无凭证的旧 Run 和未保存模型响应的 model-pending 仍 interrupted，保留事实并排空已有 scope，不重发未知副作用。显式 Nya 撤销及正常关闭仍取消并等待。详见 [Computer 资源设计](computer-resource-design.md)。新 Run 从成功节点恢复，重新读取当前凭据并检查兼容性。
 
 `waitRun(id,signal?)` 只取消等待者。HTTP 超时、断开和浏览器关闭不取消 Run。
 

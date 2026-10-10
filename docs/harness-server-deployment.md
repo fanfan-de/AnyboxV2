@@ -83,7 +83,17 @@ Models 的非秘密配置直接保存在 JSON，默认路径为 `data/models.jso
 
 远端地址必须是 HTTPS。显式 `127.0.0.1` / `[::1]` 可使用 HTTP；不按域名解析或转发头推断本机身份。TLS 证书由外部反向代理管理，参考发行物中的 `deploy/harness-server.nginx.conf.example`。SSE 必须关闭缓冲、缓存并保持长连接，图片请求大小不能小于 10 MiB。API 不信任代理注入的业务用户身份。
 
-`deploy/harness-server.service.example` 为 Linux 用户级 systemd 示例。按实际 Node 路径和安装目录修改，准备凭据服务后以 `harness-server.service` 安装到 `~/.config/systemd/user/`，再用 `systemctl --user daemon-reload` 和 `systemctl --user enable --now harness-server` 启用。`KillMode=control-group` 清理异常退出后留下的 Bash 子进程；正常停止先关闭应用准入，再等 harness server 取消、实际退出和结算。连接管理中的「停止 Agent」属于运行期控制路径：正在准备或执行 Run、写入或导入时拒绝停用；空闲时等待观察退出并卸载该 harness server 组件。宿主窄条的「停止应用」控制 Anybox Harness 客户端，其生命周期保持独立。超时强杀后的遗留 Run 下次启动标记 `interrupted`，不会重放外部副作用。
+`deploy/harness-server.service.example` 为 Linux 用户级 systemd 示例。按实际 Node 路径和安装目录修改，准备凭据服务后以 `harness-server.service` 安装到 `~/.config/systemd/user/`，再用 `systemctl --user daemon-reload` 和 `systemctl --user enable --now harness-server` 启用。`KillMode=control-group` 保留该服务范围内的强制清理。正常停止先关闭应用准入，持久取消已接受 Run，等待所属 Run 的工具/scope 实际退出和结算；独立 idle worker 保持运行，停止 worker 服务才关闭其根。连接管理中的「停止 Agent」仍保守拒绝忙碌；宿主窄条的「停止应用」控制 Anybox Harness 客户端，其生命周期保持独立。
+
+Computer worker 默认独占 `${harnessDatabasePath}.computer-worker`，内含 worker.sqlite、身份、私有回环 endpoint 和图片/结果资料。它与 Authority 业务库分别使用排他连接，不能共用数据库或目录。运行进程被 SIGKILL 后，业务库 OS 锁释放，新进程从同一目录查回原 worker、声明和结果；模型响应尚未保存或没有新恢复信封的旧 Run 仍 interrupted，不自动重发。
+
+worker 目录固定给一个 Authority，不与其他业务库或设备实例共享。升级/完整备份先正常关闭应用并等所属 Run 实际退出，再明确停止独立 worker 服务及等待它的根清理；分别备份 Authority 业务库/图片目录和 worker 目录。应用关闭本身不会停止 idle worker，不能将此误认为 worker.sqlite 已可按停机文件复制。
+
+开发启动按需 detached 创建 worker，保证只强杀 Runtime 进程时 worker 继续。detached 不脱离 systemd cgroup；生产部署需安装独立的 [computer-worker.service.example](../deploy/computer-worker.service.example)，先启动 worker unit 并确认该目录 endpoint 已就绪，再启动 harness server。两份 unit 的目录必须与同一业务库匹配，且不能通过 PartOf/BindsTo 或共同停止范围把 worker 绑到 Runtime。Authority 的代理会认证并复用该目录已有 endpoint，无须重新执行工具。缺少现有 endpoint 而由 harness server 自动启动的 worker 会留在其 cgroup，不能据此承诺整个 Runtime 服务的重启接续。
+
+独立 worker 自己的 unit 仍用 `KillMode=control-group` 管理其进程组；应用正常关闭会取消并排空所属 Run，停止 worker unit 或共同 cgroup 还会终止执行服务，这些都与 Runtime 进程异常退出不同。worker 永久丢失后 starting/running 操作只能 outcome-unknown，保留已知事实并拒绝重放，不能把这个场景宣传为接续成功。当前故障注入实测的是 Runtime PID 的 SIGKILL 与存活 worker 身份；systemd 服务和真实 macOS 部署需按实际运维环境另行验收。
+
+独立 worker 继承现有 Bash/进程组件的 Unix guard，Linux/macOS 可装配，本次仅 Linux 实测。Windows 可运行纯模型和受控资源契约测试，真实 worker 激活尚未支持；全部文件计算工具也依赖这个根，不能单独绕过平台限制。
 
 ## 令牌管理与恢复
 

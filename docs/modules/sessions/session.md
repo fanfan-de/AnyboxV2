@@ -9,7 +9,7 @@ Session 是会话、新会话初始化默认值、不可变对话节点、Run �
 - 源码：[组件](../../../src/applications/harness/core/session/component.ts)、[完整端口](../../../src/applications/harness/core/session/port.ts)、[领域值与路径校验](../../../src/applications/harness/core/session/domain.ts)、[SQLite 记录实现](../../../src/applications/harness/core/session/sqlite-records.ts)、[Run 事件读写](../../../src/applications/harness/core/run/execution.ts)。
 - 工厂：`createSessionComponent(inputs, agents)`；组件名：`harness-sessions`；配置类型：`void`。
 - `inputs` 注入 now/newId；`agents` 是组合根启动时校验的只读定义，用于创建校验与默认模型。
-- 注入 `local-storage`、`harness.projects`、`harness.image-assets` 和 `harness.project-files`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。
+- 注入 `local-storage`、`harness.projects`、`harness.image-assets`、`harness.project-files` 和 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。
 
 ## 公开查询与会话接口
 
@@ -67,10 +67,20 @@ Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude 
 | `observeOperation(runId, operationId, observation, at)` | 允许 running/cancelling 的已开始操作提交结果、错误或清理失败事实 |
 | `loadRunContext(id)` | 返回已接受 Run 与项目 ID，不含运行期模型计划 |
 | `getRun(id)` / `getRunExecution(id)` | 读取 Run 和执行计数/阶段 |
+| `loadRunResume(id)` / `listRunResumes()` | 查询独立版本化恢复信封与可接管活动 Run |
+| `claimRunResume(id,expectedEpoch,at)` | 同事务 CAS 提升 owner，并调用 Operations.claimRunIn；旧 owner 写入被拒绝 |
+| `saveRunResume(id,ownerEpoch,patch,at)` | 同事务固定批次、游标、清理或结算提案；重复相同 patch 幂等 |
+| `getRunOperation(runId,id)` | 查询原意图与已提交观察，用于重启后复用原事实 |
 | `requestCancellation(id, now)` | 把 running 改为 cancelling；未知 ID 返回 undefined，终态不改变 |
 | `settleRun(id, outcome, now)` | 原子保存终态和成功节点；调用前 Runtime 必须已经等待所有资源实际退出 |
 
 `RunOperationStart` 包含 id、kind（model/operation/tool）、JSON intent、可选 records 与 tool，以及只用于通用 operation 的 cleanup:true 准入标记。Session 不解释 intent 来推断清理，模型或工具操作不能利用该标记在取消后启动。observation 的 kind 为 value/error/cleanup-failed，可携 records、checkpoint、工具事实、通用 JSON result 和失败分类；结果在现有 observation_json 中持久化，不增加事件种类。
+
+计算工具的 startOperation 在同一业务事务中复核固定工具声明，调用 Computer Operations.acceptIn，提交 Session 意图、started 事件、计算声明和逻辑实例/工作区需求。observeOperation 同事务提交真实工具观察、图片保留以及 Operations.observeIn 的 observed 标记。事务内不等待激活、目录检查或实际工具退出；计划和模型 operation 不创建 computer 声明。新增账本仍归各领域组件，Session 不直接读写其表。
+
+run-state v10 新增独立版本化 RunResumeState，不复活旧 Run phase 写入器。接受、模型意图、完整工具批次、工具观察/额度、清理及结算提案与恢复游标原子提交；runOwnerEpoch 是授权，写操作拒绝旧 owner。protocolCursor 由 Loop 解释，Session 只保存不透明 JSON。startOperation、observeOperation 与 settleRun 接受 ownerEpoch，缺省值只用于原 owner 兼容调用。
+
+当前消费事实使用 Operations 的 observed:boolean 及 Session 原观察账本。下一原生请求记录与 stage=model-pending 同事务固定，是工具结果已进入请求的隐含证明；目标三态中的 incorporated 尚无独立持久字段。重复消费不增事件、计数或额度；下一响应未保存时不会从 model-pending 重发请求，任意模型阶段接续仍待独立 exchange owner。
 
 ## 接受、分支与成功结算
 
@@ -82,7 +92,7 @@ Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude 
 
 ## 表、通知与资源归属
 
-迁移继续使用历史 `run-state` 账本，当前版本 9（v6 增加原生记录 resource_refs_json，v7 增加 Session archived_at 和归档列表索引，v8 增加按 Agent 保存的新会话默认模型表，v9 增加 Agent 工具配置和不可变 Session 工具快照；旧 JSON 原样保留）。该组件拥有 `harness_agent_tool_settings`、`harness_session_defaults`、`harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
+迁移继续使用历史 `run-state` 账本，当前版本 10（v10 增加 harness_run_resumes 的 owner、Runtime 状态和协议游标；v6 增加原生记录 resource_refs_json，v7 增加 Session archived_at 和归档列表索引，v8 增加按 Agent 保存的新会话默认模型表，v9 增加 Agent 工具配置和不可变 Session 工具快照；旧 JSON 原样保留）。该组件拥有 `harness_run_resumes`、`harness_agent_tool_settings`、`harness_session_defaults`、`harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
 
 每次 Run 变更提交后发送 `harness.run.changed`，载荷为 sessionId、runId、revision。监听失败只记录警告，不回滚已提交事实。原生记录可能含签名、加密续接和工具原生 ID，属于受信恢复面；浏览器必须使用白名单投影。Key、认证头、凭据引用和运行句柄不得写入历史。
 
@@ -92,7 +102,7 @@ Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude 
 
 Effect 先停止新调用，取消并等待图片及文件搜索/预览/准备/读取的包装调用退出，再等待已接受的记录操作，包括新会话默认值写入、尚在项目检查中的 Session 创建、归档/恢复及附件续期。包装调用同时观察 result/done；done 清理失败必须上报，不能因底层结果悬空而无限等待。图片与文件组件在 Session 之后清理。组件不负责取消模型或工具；Nya 的依赖关系让执行消费者先退出。
 
-打开记录实现时，在事务内把遗留 running/cancelling Run 标为 interrupted，追加中断事件和 revision，不重新执行任何副作用，也不生成成功节点。清理失败或状态写入故障不能被普通取消覆盖；失败、取消、interrupted 的原生诊断可读但不能作为继续节点。
+打开记录实现时，保留带有效恢复状态的 response/cleanup/settling 活动 Run 供 Run 组件提升 owner 后接管。没有新恢复凭证的旧 Run、未保存模型响应的 model-pending 在事务内结算 interrupted，追加中断事件和 revision，不重发模型或未知工具，也不生成成功节点。已留下 worker scope 的 interrupted Run 由 Operations 独立协调耐久取消及真实排空。清理失败或状态写入故障不能被普通取消覆盖；失败、取消、interrupted 的原生诊断可读但不能作为继续节点。
 
 旧 `dialogue-v1` Session 保留查询，不导入或继续执行；历史 turns 迁移为不可变节点。旧模型快照与事件 JSON 保持原样；`bashCalls` 和 `bash-*` 只在读取时归一化为 toolCalls 与 tool-*，不保留旧写入路径。原生恢复不支持跨协议或任意账户/参数转换，具体兼容性由 Models execution 验证。
 

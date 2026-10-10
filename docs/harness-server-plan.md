@@ -1,14 +1,16 @@
 # harness server 重建计划
 
-状态：2026-09-28。本分支直接使用相邻 NyaCore，已完成原生协议执行迁移以及 H0 资源边界、H1 闭环、持久会话树、Prompt 管理、Bash/Apply Patch 工具循环，以及通用 Models 和本机 Web 接入。下方日期验收记录描述各次交付，当前行为以本节与[组件说明](./harness-server-components.md)为准。
+状态：2026-10-10。本分支直接使用相邻 NyaCore，已完成原生协议执行迁移以及 H0 资源边界、H1 闭环、持久会话树、Prompt 管理、Bash/Apply Patch 工具循环、通用 Models 和本机 Web 接入；当前已接入 Computer 本机资源及独立 worker、工具等待重启接续。下方日期验收记录描述各次交付，当前行为以本节与[组件说明](./harness-server-components.md)为准。
 
 ## 当前基线
 
 [通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderConnection 管连接和密钥引用，ModelConfiguration 管执行版本、能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、Anthropic Messages、标准 Chat Completions 和 Gemini Interactions 四种协议可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
 
-所有组件直接安装在一个 Nya 根 Context。Session 独占会话、Run、不可变节点、原生记录和恢复引用；Projects 管项目身份。Run 检查幂等、选模、指定父链和 Prompt，协议绑定准备固定驱动代的 PreparedRunProgram。RunRuntime 同步接管资源，管理意图/观察持久屏障、取消、退出与结算；协议独立 Loop 决定工具回填和续轮。旧 AgentLoop、统一消息和 `models.open()` 已删除。
+每个进程的组件直接安装在唯一 Nya 根；Authority 与 Runtime 同进程，工具执行采用独立 worker 根。Session 独占会话、Run、不可变节点、原生记录和恢复引用；Projects 管项目身份。Run 检查幂等、选模、指定父链和 Prompt，协议绑定准备固定驱动代的 PreparedRunProgram。RunRuntime 同步接管资源，管理意图/观察持久屏障、取消、退出与结算；协议独立 Loop 决定工具回填和续轮。旧 AgentLoop、统一消息和 `models.open()` 已删除。
 
-会话持久保存可空 modelId；新 native-local-v1 Session 首次接受 Run 原子固定协议，旧 dialogue-v1 只读。schemaVersion 3 快照包含定义身份、驱动代、原生参数与非秘密 historyScopeEpoch，不含凭据。根初始化与工具契约沿指定父链继承，每个新 Run 的当前 task-template 仅处理本次原始输入一次。恢复记录增量保存，跨 Run/重启重建本地原生上下文；失败、取消、清理失败没有可继续节点，异常中断只结算 interrupted，不自动重放。
+Computer 安装本机 worker 客户端、实例提供方、Computers、Workspaces 和 Computer Operations。Session 同事务接纳工具声明及独立 resume cursor；Operations 按需激活 worker 并准备 pinned-local binding，worker 固定路径执行、保存 receipt/result 和真实退出。实例 pin 与 reservation 持有到 scope 实际退出；纯模型和计划不激活 computer。Runtime 进程异常退出后接管原工具等待、清理和结算，接纳/消费去重及 owner 栅栏保护副作用和额度；未保存模型响应的 Run 仍 interrupted。远端托管工作区、模型 owner 与弹性提供方按[资源设计](./computer-resource-design.md)后续阶段实施。
+
+会话持久保存可空 modelId；新 native-local-v1 Session 首次接受 Run 原子固定协议，旧 dialogue-v1 只读。schemaVersion 3 快照包含定义身份、驱动代、原生参数与非秘密 historyScopeEpoch，不含凭据。根初始化与工具契约沿指定父链继承，每个新 Run 的当前 task-template 仅处理本次原始输入一次。恢复记录增量保存，跨 Run/重启重建本地原生上下文；失败、取消、清理失败没有可继续节点，有效工具等待游标可接续；无游标或模型响应未保存的异常中断结算 interrupted，不自动重放。
 
 本机 [Web 客户端](./web-client-design.md)通过统一 Provider/Model 目录选提供方、配置 Key 后自动准备适用模型，`models.settings` 提供连接与模型参数编辑、启停、Key 设置/替换/删除、能力和协议参数、发现、检查与历史。每个会话可以独立选模，提交和重试固定显式模型 ID。配置变更只影响新 execution，无需重启。启动环境变量继续校验，但旧 `ANYBOX_LLM_*` 只在空 Models 库初始化时导入，已有设置不会被覆盖。旧密钥复制到新命名空间，原条目保留；系统凭据不可用不会退回明文，也不阻止浏览非秘密配置。
 
@@ -21,7 +23,7 @@ Web 支持显式节点查看、同父节点并发、跨项目四面板和标签�
 - 业务状态转换、输入校验和恢复决策优先写成纯函数，以显式输入产生新状态或变更计划。模型、工具、存储、时钟和 Nya 组件装配是明确的副作用边界。新增业务实现不使用类组织状态。
 - Anybox 自己定义领域数据和组件契约。由 Nya 组合根选择实现，组件通过 `inject` 获取本轮依赖快照；外部请求从根 Context 获取当前服务，不缓存跨组件重启的引用。
 - 生命周期由资源所有者管理。组件初始化完成后返回；Run 的模型和工具调用可以取消，并能等待实际工作与清理结束。关闭先停止接收新任务，再结算和释放已有任务。进程信号与强制退出由宿主处理。
-- Session、Run、幂等键、Prompt 内容及模型可见配置快照由单一 SQLite 实例排他持有。异常退出的在途 Run 在重启时结算为 `interrupted`，不自动重放可能已有外部副作用的工具。
+- Session、Run、幂等键、Prompt 内容及模型可见配置快照由单一 SQLite 实例排他持有。进程异常退出后从有效 resume cursor 接续原 worker 操作；无新凭证或未保存模型响应的 Run 结算 `interrupted`，不自动重放未知外部副作用。
 - 第三方库可以用于阶段性实现，但类型、错误、状态和生命周期留在适配器内部。同一行为与资源清理合约用于验证替代实现。首版可用与最终自研分别验收。
 
 ## 实施顺序
@@ -41,6 +43,22 @@ Web 支持显式节点查看、同父节点并发、跨项目四面板和标签�
 ## 验收与后续
 
 当前检查覆盖 Models 与 harness server 共享契约、配置版本与密钥日志、模型选择和旧数据迁移、工具续轮、取消/卸载等待、临时进展与最终业务结果分离。组件或资源归属变化须同步行为测试，并运行 `npm run check`。后续真实模型 API、各平台系统凭据、远程产品宿主与账号体系分别验收。
+
+### Computer 第二阶段（2026-10-10）
+
+独立本机 worker 已承担实际工具、进程 scope 和耐久执行账本。Authority 保持独占业务库，Computer Operations 升级 v2，Session run-state v10 保存独立 resume 状态与 owner，四协议 Loop 升级 1.3.0；原工具契约、原生记录 v2 与历史 JSON 保持兼容。阶段 1 进程内执行路径及固定宿主提供方已删除，测试替身留在 tests/helpers。
+
+WSL Linux / Node.js 24.16.0 完整 npm run check 退出码 0，类型检查与构建通过；1307 项测试中 1293 项通过、14 项按原门控跳过、0 项失败。新增 36 项第二阶段测试全部通过，无跳过：真实 Runtime/worker 故障 14 项、worker 行为 5 项、取消准入窗口 3 项、恢复等待隔离 1 项、Session 恢复 8 项与四协议恢复 5 项。Runtime PID SIGKILL 后原 Bash 副作用/receipt/result 只一次；两端确认丢失、旧 owner、Codex stdin/output、取消断网、真实部分补丁、清理/结算、账户 epoch 拒绝及未知 worker 事实均覆盖。暂离线授权或遗留排空不阻塞其他 Run 的等待，观察中止不取消原 worker 操作，关闭仍等待实际退出。完整证据与限制见 [资源设计验收记录](computer-resource-design.md#71-阶段退出标准)。
+
+当前恢复限于已保存模型响应的工具等待、消费、清理及结算；model-pending 仍 interrupted，不重发模型，但排空已有 worker scope。显式 Nya 卸载/依赖撤销继续取消并排空 Run，idle worker 作为设备服务独立运行。真实 worker 继承 Unix guard，本次仅 Linux 实测，Windows 真实 worker 尚未支持；systemd/macOS 实际部署、阶段 3 的跨机器托管工作区及阶段 4 模型 exchange 不在此次验收内。
+
+### Computer 第一阶段（2026-10-10，历史交付记录）
+
+资源契约已加入现有单根：Computers 独占 `computers` v1，Workspaces 独占 `workspaces` v1，Computer Operations 独占 `computer-operations` v1；Session 的 run-state v9 和原生历史格式保持不变。本机提供方不持有数据库、网络或虚拟机生命周期，内部工具适配器不是额外组件。
+
+验收重点为纯模型/计划无激活、计算工具按需准备、接纳事务原子性、同 ID 声明冲突、固定 workspacePath、scope 引用持有到实际退出、取消与清理失败、旧项目/工具兼容及依赖无环。资源与工作区的行为测试使用临时业务 SQLite 和受控提供方，无须 Unix Shell；既有实际 Shell 测试继续遵守平台限制。完整检查统一运行 `npm run check`，不将模拟测试视为 worker 重启或真实跨机器验收。
+
+本轮 WSL Linux 完整 `npm run check` 通过：类型检查与构建通过，1271 项测试中 1257 项通过、14 项按原门控跳过、0 项失败。新增 27 项资源/工作区/操作测试也在 Windows 验证通过；本轮未修改 NyaCore，未调用真实模型、系统 Vault 或云资源。
 
 ### 原生协议迁移（2026-09-28）
 

@@ -51,9 +51,9 @@ flowchart LR
   O --> OD[(另一电脑独立数据)]
 ```
 
-每个进程一个应用 Nya 根，不增加模块、项目或任务子 Context。执行宿主常驻通用业务存储、访问管理、产品控制、活动准入和 API；打开该设备上的 Anybox Harness 时装配完整 Models、Prompt 与 Agent 执行能力。Models 包含现有目录，Prompt 包含 Agent Prompt 绑定，Agent 依赖两者并装配 Projects、Session、图片/文件、工具和执行闭环。客户端常驻自己的 SQLite、应用控制和 HTTP 外壳；打开 Anybox Harness 才安装连接、目录窗口和代理，不安装执行服务。选择远程 Agent 不启动本地执行。
+每个进程一个应用 Nya 根，不增加模块、项目或任务子 Context。执行宿主常驻通用业务存储、访问管理、产品控制、活动准入和 API；打开该设备上的 Anybox Harness 时装配完整 Models、Prompt 与 Agent 执行能力。Models 包含现有目录，Prompt 包含 Agent Prompt 绑定，Agent 依赖两者并装配 Projects、Session、图片/文件、Computer 协调及 worker 客户端、执行闭环。四种工具与执行账本安装在独立 computer worker 的唯一根，按需连接或启动；它不共享 Authority 业务 SQLite。客户端常驻自己的 SQLite、应用控制和 HTTP 外壳；打开 Anybox Harness 才安装连接、目录窗口和代理，不安装执行服务。选择远程 Agent 不启动本地执行。
 
-API 监听器及请求由 `host-application-api` 独占，常驻入口只依赖宿主访问、产品控制及活动准入，业务路由按请求取得已启用能力的当前服务；Models 路由仍是内部函数。客户端监听器和静态页面由 app-client-http 独占；Anybox Harness 内部上传、连接和转发流由按需 client-gateway 独占，静态映射不是额外组件。依赖清理顺序由 Nya 决定。宿主 `prepareClose()` 同步关闭产品控制、业务、Run 与 HTTP 准入并等待控制和装配队列；`close()` 同时清理整个根与排空 HTTP 已受理写入、保留租约，避免先等待 Run 而延迟取消 Run。`installHarnessServerCore()` 返回的安装句柄 `close()` 只卸载该次安装的 harness server 核心组件，不关闭宿主提供的 Models、业务库、图片组件或整个根。运行期产品停用通过产品控制服务执行，忙碌时拒绝；直接 Run 服务同样检查关闭状态。网络连接 `dispose()` 只中止客户端读取和观察，不发远程取消或关闭命令。
+API 监听器及请求由 `host-application-api` 独占，常驻入口只依赖宿主访问、产品控制及活动准入，业务路由按请求取得已启用能力的当前服务；Models 路由仍是内部函数。客户端监听器和静态页面由 app-client-http 独占；Anybox Harness 内部上传、连接和转发流由按需 client-gateway 独占，静态映射不是额外组件。依赖清理顺序由 Nya 决定。宿主 `prepareClose()` 同步关闭产品控制、业务、Run 与 HTTP 准入并等待控制和装配队列；`close()` 同时清理整个根与排空 HTTP 已受理写入、保留租约，避免先等待 Run 而延迟取消 Run。`installHarnessServerCore()` 返回的安装句柄 `close()` 只卸载该次安装的 harness server 核心组件，不关闭宿主提供的 Models、业务库、图片组件或整个根。运行期产品停用通过产品控制服务执行，忙碌时拒绝；直接 Run 服务同样检查关闭状态。网络连接 `dispose()` 只中止客户端读取和观察，不发远程取消或关闭命令。应用正常关闭取消并等待所属 Run，独立 idle worker 持续运行；停止 worker 服务才关闭其根。Runtime 进程异常退出后的工具等待接续与系统部署边界见 [Computer 资源设计](computer-resource-design.md)。
 
 ## 身份、请求与状态
 

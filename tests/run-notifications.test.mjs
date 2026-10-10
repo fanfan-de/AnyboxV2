@@ -1,3 +1,4 @@
+import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
@@ -24,6 +25,7 @@ async function fixture() {
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'test.sqlite')) + ".images" }))
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
+    await installComputerServices(root, inputs)
     const stateFiber = root.installComponent(createSessionComponent(inputs, agents)); await stateFiber
     const state = root.get(sessionRunServiceKey), sessions = root.get(sessionServiceKey), project = await root.get(projectServiceKey).openProject(directory)
     const session = await sessions.createSession(project.id, 'assistant')

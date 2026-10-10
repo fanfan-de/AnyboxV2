@@ -17,6 +17,8 @@ import { runChangedEvent } from '../run/notifications.js'
 import { sessionServiceKey, sessionRunServiceKey } from './port.js'
 import type { SessionPort, SessionRunPort } from './port.js'
 import { openSqliteSessionRecords } from './sqlite-records.js'
+import { computerOperationsServiceKey } from '../computer/operations-port.js'
+import type { ComputerOperationsPort } from '../computer/operations-port.js'
 
 /** One owner for every Session's conversation and execution records; execution resources stay in RunRuntime. */
 export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[]): Component.Object<void, {
@@ -24,17 +26,18 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
   [projectServiceKey]: ProjectPort
   [imageAssetsServiceKey]: ImageAssetsPort
   [projectFilesServiceKey]: ProjectFilesPort
+  [computerOperationsServiceKey]: ComputerOperationsPort
 }> {
   return {
     name: 'harness-sessions',
-    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey],
+    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey],
     async apply(ctx, _config, deps) {
       const projects = deps[projectServiceKey], images = deps[imageAssetsServiceKey], files = deps[projectFilesServiceKey]
       const records = await openSqliteSessionRecords(deps[localStorageServiceKey], inputs, async run => {
         const change = Object.freeze({ sessionId: run.sessionId, runId: run.id, revision: run.revision })
         try { await ctx.parallel(runChangedEvent, change) }
         catch { ctx.logger.warn('Run change notification failed after commit', change) }
-      }, images, files)
+      }, images, files, deps[computerOperationsServiceKey])
       let accepting = true
       const pending = new Set<Promise<unknown>>()
       const resourceCalls = new Set<OwnedCall<unknown>>()
@@ -201,13 +204,18 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         registerRun: (id, input, now, prompts, model, native) => track(() => records.registerRun(id, input, now, prompts, model, native)),
         loadNativeInitialization: sessionId => track(() => records.loadNativeInitialization(sessionId)),
         loadNativeHistory: (sessionId, parentNodeId) => track(() => records.loadNativeHistory(sessionId, parentNodeId)),
-        startOperation: (id, operation, at) => track(() => records.startOperation(id, operation, at)),
-        observeOperation: (id, operationId, observation, at) => track(() => records.observeOperation(id, operationId, observation, at)),
+        loadRunResume: id => track(() => records.loadRunResume(id)),
+        listRunResumes: () => track(() => records.listRunResumes()),
+        claimRunResume: (id, epoch, at) => track(() => records.claimRunResume(id, epoch, at)),
+        saveRunResume: (id, epoch, patch, at) => track(() => records.saveRunResume(id, epoch, patch, at)),
+        getRunOperation: (runId, id) => track(() => records.getRunOperation(runId, id)),
+        startOperation: (id, operation, at, epoch) => track(() => records.startOperation(id, operation, at, epoch)),
+        observeOperation: (id, operationId, observation, at, epoch) => track(() => records.observeOperation(id, operationId, observation, at, epoch)),
         loadRunContext: id => track(() => records.loadRunContext(id)),
         getRun: id => track(() => records.getRun(id)),
         getRunExecution: id => track(() => records.getRunExecution(id)),
         requestCancellation: (id, now) => track(() => records.requestCancellation(id, now)),
-        settleRun: (id, outcome, now) => track(() => records.settleRun(id, outcome, now)),
+        settleRun: (id, outcome, now, epoch) => track(() => records.settleRun(id, outcome, now, epoch)),
       }
       ctx.provide(sessionServiceKey, sessions)
       ctx.provide(sessionRunServiceKey, runs)

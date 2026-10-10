@@ -1,5 +1,6 @@
 import { createProjectFilesComponent } from './project-files/component.js'
 import { randomUUID } from 'node:crypto'
+import { resolve } from 'node:path'
 import { Context, FiberState } from '@nya/core'
 import type { Component, Fiber } from '@nya/core'
 import { modelsServiceKey, modelsSettingsServiceKey, modelsError } from '@anybox/models'
@@ -21,15 +22,19 @@ import { createPromptComponent, promptServiceKey } from './prompt/component.js'
 import type { PromptPort } from './prompt/component.js'
 import { createProjectComponent, projectServiceKey } from './project/component.js'
 import type { ProjectPort } from './project/component.js'
-import { createBashComponent } from './tool/bash-component.js'
-import { createApplyPatchComponent } from './tool/apply-patch-component.js'
-import { createProcessToolsComponent } from './tool/process-component.js'
-import { createFileToolsComponent } from './tool/files-component.js'
+import { createWorkerInstanceProviderComponent } from './computer/worker-instance-provider.js'
+import { createLocalComputerWorkerComponent } from './computer/worker-client.js'
+import { computerWorkerServiceKey } from './computer/worker-port.js'
+import { createComputersComponent } from './computer/component.js'
+import { createWorkspacesComponent } from './workspace/component.js'
+import { createComputerOperationsComponent } from './computer/operations-component.js'
 import { listTools } from './tool/catalog.js'
 
 /** The root must provide Models, local storage and image assets before the harness server core starts. */
 export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly agents: readonly AgentDefinition[]
+  /** Stable private directory shared with the independent worker, never a Session path. */
+  readonly localWorkerDirectory?: string
   /** Host-supplied default for its directory picker; omission disables browsing for embedded callers. */
   readonly projectDirectoryHome?: string
   readonly initialProjects?: readonly string[]
@@ -39,7 +44,7 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly canManageAgent?: (actorId: string, agentId: string) => boolean
 }
 
-export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable'>,
+export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable' | 'getIn'>,
   Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly Readonly<{ id: string }>[]
@@ -77,8 +82,10 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   const configuredProtocols = context.get<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
   const protocolComponents = context.get(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
+  const workerComponents = context.get(computerWorkerServiceKey) ? [] : [createLocalComputerWorkerComponent({directory: options.localWorkerDirectory ?? resolve('data/computer-worker')})]
   return [...protocolComponents, createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects }),
-    createProjectFilesComponent(inputs), createBashComponent(), createApplyPatchComponent(), createProcessToolsComponent(), createFileToolsComponent(),
+    createProjectFilesComponent(inputs), ...workerComponents,
+    createWorkerInstanceProviderComponent(), createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
     createSessionComponent(inputs, agents), createRunRuntimeComponent(inputs),
     createRunComponent(inputs, agents, lifetime.isClosing, lifetime.signal)]
 }

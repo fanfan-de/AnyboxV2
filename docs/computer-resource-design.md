@@ -2,7 +2,7 @@
 
 [文档首页](README.md) · [组件手册](modules/README.md) · [原生协议框架](native-protocol-agent-framework-design.md) · [宿主与应用边界](harness-module-boundary.md)
 
-状态：**目标设计，待实施**。整理日期：2026-10-10。本文定义 Anybox Harness 的 computer 资源边界、持久提交协议与分阶段验收，不代表当前已有这些组件、接口或恢复能力。实际组件在实现时再建立源码、迁移及独立组件手册；本次仅新增本文并更新文档导航。
+状态：**目标设计，分阶段实施；阶段 1、2 已落地并通过本期验收，阶段 3–5 待实施**。更新日期：2026-10-10。本文定义 Anybox Harness 的 computer 资源边界、持久提交协议与分阶段验收。独立本机 worker、工具等待接续及 owner/消费账本已实现，真实进程验收在 Linux 完成；托管工作区、跨机器与独立模型 exchange owner 仍为目标能力。实际接口见 [Computer 组件手册](modules/computers/README.md)。
 
 ## 1. 目标、现状与部署边界
 
@@ -14,7 +14,9 @@ Computer 是智能体按需使用的执行资源。Agent 身份、Session、Run 
 2. Runtime 重启接续：已接受操作不依赖 Runtime 存活；新 Runtime 读取恢复记录，观察同一次执行，不重新发出命令。
 3. 跨机器执行：同一 Authority 下保持项目、Session 和 Run 身份，通过更换工作区的执行绑定，让后续操作在其他机器执行。
 
-当前实现已经将 Session 持久事实与临时执行句柄分开，并具有 [RunRuntime 操作屏障](../src/applications/harness/core/run/runtime-component.ts)。但工具仍由 Runtime 同进程直接调用，[进程组件](../src/applications/harness/core/tool/process-component.ts)持有内存 scope；[Session 启动恢复](../src/applications/harness/core/session/sqlite-records.ts)将遗留活动 Run 结算为 interrupted。当前多设备连接是不同完整 harness server 的访问入口，没有工作区同步或执行调度。本文不把这些现状描述为已实现的 computer 服务。
+当前安装 Computers、Workspaces 和 Computer Operations，Session 在工具意图同一业务事务内接纳资源声明、固定工具批次及独立恢复游标。Operations 按需激活本机 worker、准备 pinned-local、固定实例/路径后派发。RunRuntime 不再注入四工具服务；[独立 worker](modules/computers/worker-executor.md)持有工具、进程 scope 及耐久 receipt/result。创建 Session、纯模型 Run 和计划工具不激活 computer。
+
+模型响应已保存后的工具等待、消费、清理及结算在 Runtime 进程异常重启后，由新 Runtime 提升 owner 并先授权 worker，接续原操作；没有恢复信封/游标的旧活动 Run、未保存模型响应的 Run 仍在[Session 启动恢复](../src/applications/harness/core/session/sqlite-records.ts)结算 interrupted。worker 自身故障无法证明执行的 starting/running 操作 outcome-unknown，不重放。显式 Nya 组件卸载/依赖撤销仍按现有 Run 控制取消并排空；目标中的纯观察换代尚未实现。多设备连接仍是不同完整 harness server，没有工作区同步或跨机器调度。
 
 ### 1.1 三种部署角色
 
@@ -51,9 +53,9 @@ flowchart LR
     Executor --> Resources
 ```
 
-此图表达目标部署和调用方向，不表示全部组件已存在，也不表示跨进程能够直接 inject。初期 Authority 与 Runtime 留在当前进程、同一个根；worker 从第二阶段起必须在独立进程及独立服务生命周期中运行。第四阶段让 Runtime 独立部署，Authority 和模型 exchange owner 保持存活。每个进程一个 Nya 根，跨进程通过受信 API 和本地代理服务访问，不建立项目、Session、Run 或 computer 子 Context。
+此图包含后续模型 owner 等目标，不表示跨进程能够直接 inject。当前 Authority 与 Runtime 同进程同根，worker 独立进程；第四阶段让 Runtime 独立部署，Authority 和模型 owner 保持存活。每进程一个 Nya 根，跨进程通过受信 API/代理，不建立项目、Session、Run 或 computer 子 Context。
 
-Authority 业务 SQLite 继续单实例排他持有，worker 和独立 Runtime 不直连它。worker 自己的执行账本使用独立持久存储。Runtime 与 worker 不能放在同一个会被共同终止的 service/cgroup 中；否则强杀 Runtime 仍会杀掉命令。
+Authority 业务 SQLite 单实例排他持有，worker 不直连；worker 账本使用独立存储。开发 detached worker 可在 Runtime PID 的 SIGKILL 后继续，但不脱离 systemd cgroup。生产采用[独立 worker unit](../deploy/computer-worker.service.example)，与 Runtime 分离停止范围；共同杀 service/cgroup 不能保证原命令存活。部署和实测范围见[部署文档](harness-server-deployment.md)。
 
 ### 1.2 接续承诺的范围
 
@@ -80,7 +82,7 @@ SDK 类型、错误、认证句柄和连接留在适配器内。环境要求显�
 
 ## 3. Nya 组件依赖与生命周期
 
-下表的新增组件名和服务名是目标约定。当前 Projects、Session、Models 等组件继续按现有边界工作，实施各阶段时才调整其真实依赖。
+下表表达完整目标依赖。实际 Operations 已增加 worker 代理和图片服务，Workspaces 仍只注入 Projects/存储，本机准备使用目录可用性检查；Runtime 仅依赖 Session/Operations，实际协议服务经 PreparedRunProgram 固定。worker 根已安装独立执行器和四工具，产物提供方、模型 exchange owner 尚未安装。真实依赖与 Effect 以 [组件手册](modules/computers/README.md)为准。
 
 | 目标组件 / 服务 | inject 的服务边界 | 资源所有权、准入与 Effect |
 | --- | --- | --- |
@@ -90,9 +92,9 @@ SDK 类型、错误、认证句柄和连接留在适配器内。环境要求显�
 | 既有 harness-sessions / harness.sessions、harness.session-runs | 现有项目/存储/图片/文件服务，新增 harness.computer-operations；第四阶段增加模型 exchange 事务端口 | 拥有 Run、原生记录、工具观察、恢复游标和 owner；关闭准入并等待已接受状态提交，仍是所有 Session/Run 查询边界 |
 | 既有 harness-run-runtime / harness.run-runtime | harness.session-runs、harness.computer-operations、对应协议服务；第四阶段使用模型 exchange 端口 | 只拥有本代 program、租约、展示和观察；换代阻止本代推进，取消本地观察并等待退出；前期还须清理其本地模型 execution |
 | harness-model-exchanges / harness.model-exchanges（第四阶段） | Models 公共原生服务、local-storage、既有图片资源服务 | 独占模型 execution、驱动租约、请求、原始响应及实际退出；Runtime 换代不卸载它；其自身关闭取消并等待实际模型操作退出 |
-| computer-executor / computer.executor（worker 根） | worker 独占账本、工作区本地解析端口、实际工具端口 | 拥有执行接纳、进程 scope、输出与结果回传；停止领取，取消并等待本机资源，保存真实退出和清理事实后关闭 |
+| computer-worker-executor / computer.worker（worker 根） | worker 独占账本、固定项目绑定、实际工具和图片端口 | 拥有执行接纳、进程 scope、输出与结果回传；停止领取，取消并等待本机资源，保存真实退出和清理事实后关闭 |
 
-提供方拥有网络、凭据、挂载或文件资源时才是实际 Nya 组件；纯映射、选择策略、状态归约器和参数校验不另建组件。worker 根的工具实现只解析已固定的本地 binding，不读取 Authority SQLite，不依赖远端 Session 服务。
+提供方按真实服务替换边界安装 Nya 组件；拥有网络、凭据、挂载或文件资源时，通过自身 Effect 取消并等待退出。本机固定提供方具有独立替换端口，但不虚构机器资源或清理工作；纯映射、选择策略、状态归约器和参数校验不另建组件。worker 根的工具实现只解析已固定的本地 binding，不读取 Authority SQLite，不依赖远端 Session 服务。
 
 ```mermaid
 flowchart TD
@@ -139,7 +141,7 @@ Run 准入与产品 busy/停止 guard 必须基于已接受 Run、未结清 scop
 | 产物提供方 | checkpoint 文件和产物原字节、摘要、传输及保留凭证 | 字节先保存、指针后发布；未发布对象按保留凭证回收 |
 | 模型 exchange owner / model-exchanges（第四阶段） | 已接受 exchange 声明、请求/响应原始记录、结果和退出事实 | 与 Session 接纳同样采用事务参与；execution、凭据和网络句柄只在私有边界 |
 
-领域迁移的具体版本在对应实施阶段分配；本文不提前写迁移、不重写旧原生 JSON。Models JSON、目录缓存、Vault 与业务库的现有所有权不改变。worker 账本不能只保存 PID：PID 可复用，必须能证明原 operation 与实际进程/监督实例的绑定，否则恢复为未知结果。
+实际 Authority 登记 computers v1、workspaces v1、computer-operations v2，Session 使用 run-state v10 独立恢复表；worker 在自己的连接登记 computer-worker v1。旧原生 JSON 保持不变，Models JSON、目录缓存和 Vault 所有权不变。workerId 跨启动稳定、bootId 换代；账本不把 PID 当恢复凭证。worker 死后无法证明原执行时保留未知事实，不假称已接管 OS 进程。
 
 Authority 确认原始结果及其引用耐久可读之后，worker 才可释放结果副本。图片继续保存不可变原字节：工具读图先回传并获得导入凭证，Session 再同事务 retain，worker 不持有 Authority 的事务对象。输出限制、截断和部分变更是结果事实；不能把尚在机器目录里的文件当作已持久化产物。
 
@@ -156,7 +158,7 @@ Authority 确认原始结果及其引用耐久可读之后，worker 才可释放
 | Computer Operations.markObservedIn / markIncorporatedIn | 同步参加消费事务，记录原结果已观察/进入请求，重复相同事实返回既有提交 |
 | Session 执行端口 claimRun / loadRunResume / commitResume | 校验 owner，读取固定输入、本 Run 事实与游标，提交原子推进；不暴露任意表写入 |
 
-这些是目标行为契约，不是当前 API。提交工具仍通过 Session 执行端口复核 Run、工具声明、取消及 owner，再调用 acceptIn；Runtime 不绕过 Session 直接产生执行副作用。同步事务参与沿用既有 [图片 retainIn](../src/applications/harness/core/image/port.ts)与[文件快照 retainIn](../src/applications/harness/core/project-files/port.ts)的方式。等待者取消不等于远端执行取消，本地 OwnedCall.done 不等于远端 operation/scope 已退出。
+这些是完整目标行为契约；实际已增加 Operations.claimRunIn/requestCancelIn/authorizeRun/recoverCancelledRuns、Session.loadRunResume/claimRunResume/saveRunResume、原观察幂等及独立 worker 的 submit/get/control，没有 portable checkpoint 或独立模型 watch。完整工具批次及 operation ID 先保存到 resume；单工具提交经 Session 复核 Run/声明/取消，在同一事务保存意图和 acceptIn 的声明及需求，引用已有游标。Runtime 不绕过事务直接执行。同步参与沿用 [图片 retainIn](../src/applications/harness/core/image/port.ts)与[文件快照 retainIn](../src/applications/harness/core/project-files/port.ts)。本地观察 done 不等于 worker operation/scope 实际退出。
 
 ### 4.3 五个提交边界
 
@@ -370,10 +372,32 @@ worker 没有模型 Key 和 Session 通用写权限，不接受浏览器任意 U
 | 阶段 | 交付范围与接续承诺 | 必须通过的退出标准 |
 | --- | --- | --- |
 | 1：资源契约 | 实体、提供方、内部工具信封和按需需求；旧项目映射 pinned-local。进程内过渡实现不承诺进程崩溃后执行继续 | 创建 Session、纯模型 Run 和计划操作不激活 computer；计算机工具才准备资源；同声明冲突检测；旧项目/工具契约/历史兼容；依赖无环和本代清理等待 |
-| 2：本机持久 worker | 独立 worker、两端接纳/结果账本、scope 与输出 cursor、Session 活跃 Run 恢复。保证已提交模型响应之后的工具等待接续 | Bash 运行时强杀 Runtime，副作用计数为 1，新 Runtime 取得原结果；接纳/消费确认丢失不重复执行或计数；旧 owner 被拒绝；Codex 会话恢复不重复 stdin；cancelling 继续清理；未保存模型响应明确未决；旧 Run 仍 interrupted |
+| 2：本机持久 worker | 独立 worker、两端接纳/结果账本、scope 与输出 cursor、Session 活跃 Run 恢复。保证已提交模型响应之后的工具等待接续 | Bash 运行时强杀 Runtime，副作用计数为 1，新 Runtime 取得原结果；接纳/消费确认丢失不重复执行或计数；旧 owner 被拒绝；Codex 会话恢复不重复 stdin；cancelling 继续清理；未保存模型响应 interrupted 并排空已有 scope；旧 Run 仍 interrupted |
 | 3：远端与托管工作区 | 固定远端 worker、portable-managed、产物保存、排他写租约和安全边界移交；同一 Authority 跨机器后续执行 | 两台真实机器通过认证连接；A 产生未提交文件和产物并发布 checkpoint，A 退出后 B 校验字节/摘要并执行后续操作；旧 A 不能发布新 head；运行中 scope 阻止移交；不同 OS/工具能力不兼容时明确拒绝 |
 | 4：独立模型 exchange | 模型 execution/原始响应移交稳定 owner，Runtime 独立部署；覆盖任意 Runtime 阶段，但不承诺执行 owner 故障后找回丢失网络流 | 模型流式请求中杀 Runtime，owner 继续并返回同一响应；响应保存/Session 接纳确认丢失仅提交一次；工具结果 incorporated 后不重复追加；清理/最终结算窗口重启只创建一个节点；账户 epoch 改变阻止不兼容续接 |
 | 5：弹性提供方 | 按需容器/VM 的创建、恢复、共享激活、容量和闲置回收 | 并发冷调用共享一次激活；提供方创建成功但确认丢失能查回同实例；迟到激活不能覆盖新绑定；取消一个等待者不影响其他需求；已接受任务、长进程和未回收产物阻止提前回收 |
+
+当前保留共享 pinned-local 目录语义，workspaceEpoch 初始为 1，Runtime 接管单调提升 runOwnerEpoch；worker 在接纳端校验 owner、instanceGeneration、workspaceEpoch 及固定 bootId。ProcessRef 和稳定 stdin/output operation 允许原 worker 存活时 Runtime 接续；worker 自身崩溃后进程/管道不恢复。跨机器写权移交仍为阶段 3。
+
+第二阶段当前恢复边界是 Runtime 进程异常退出（实际部署中含同进程 Authority）；显式卸载 Runtime 组件、依赖撤销或应用正常关闭仍取消并等待所属 Run。目标中的仅停止观察的无损 Nya 换代尚未实现。当前消费使用 observed:boolean；下一原生请求记录及 stage=model-pending 的原子提交隐含证明结果进入请求，没有独立 incorporated 字段。未保存下一模型响应时结算 interrupted，不假称完成第四阶段的任意模型阶段接续。
+
+阶段 1 验收记录（2026-10-10）：WSL Linux 完整 npm run check 通过，类型检查和构建通过；1271 项测试中 1257 项通过、14 项按原门控跳过、0 项失败。新增的资源、工作区和操作测试共 27 项，并在 Windows 验证；覆盖无激活调用、共享激活、事务回滚、声明冲突、固定路径/代次、取消窗口、实际退出等待、清理失败、进程引用和未知执行事实不重放。该记录不代替后续独立 worker 或真实跨机器验收。
+
+阶段 2 验收记录（2026-10-10）：WSL Linux / Node.js 24.16.0 完整 npm run check 退出码 0，类型检查与构建通过；1307 项测试中 1293 项通过、14 项按原门控跳过、0 项失败。新增 36 项第二阶段测试均通过且无跳过：真实 Runtime/worker 故障 14 项、worker 行为 5 项、取消准入窗口 3 项、恢复等待隔离 1 项、Session 恢复 8 项及四协议恢复 5 项。使用独立真实进程、临时业务库与 worker 账本、受控模型；未调用真实模型、系统 Vault 或云资源，未修改 NyaCore。
+
+| 已实测窗口 | 退出事实与断言 |
+| --- | --- |
+| Runtime PID SIGKILL，Bash 尚在运行 | worker PID/boot 不变；Authority 已保存原 receipt；新 owner 查回同一结果，Shell 副作用、toolCalls、输出额度各一次 |
+| worker 接纳确认 / Session 消费确认丢失 | 同 ID/摘要复用原 receipt；原观察、事件及额度不重复；旧 owner 的提交、读取、取消及 Session 写入被拒绝 |
+| Codex 长进程 / stdin / 输出领取 | ProcessRef 留在原 worker；重复 stdin operation 不重写，同一输出 receipt 不重复 drain，原 scope 清理退出 |
+| 取消断网、意图到句柄、批次及激活等待窗口 | 持久取消可在新进程继续排空；未派发调用零执行，queued 重领仍 executeCount=0；取消类别与原 receipt 保持一致 |
+| 恢复授权暂离线 / 独立 scope 排空 / 观察中止 | 其他 Run 的等待继续；候选登记及交接观察可中止而不取消原 worker 操作，关闭仍等待所有恢复和排空实际退出 |
+| 部分补丁后 Runtime 退出 | 真实第二文件权限失败保留首文件 changes 与 pending；新 Runtime 消费原部分结果，不重施补丁 |
+| scope 清理 / 最终结算确认丢失 | 查回原关闭结果；仅一个成功节点与终态事件；清理失败保留 partial result，但 done 拒绝且 pins 不释放 |
+| 账户 epoch 不兼容 / 下一模型响应未保存 | 不重新发送原模型；不兼容恢复先排空 Bash 再失败，model-pending 结算 interrupted 后独立排空 Codex；仅释放可证明退出的引用 |
+| worker 自身 SIGKILL、执行事实未知、旧 boot 迟到提交 | 原操作 outcome-unknown，原 executeCount/receipt 保留；旧 boot 新操作及未知 scope 新副作用被拒绝，不伪造安全退出 |
+
+验收入口：[真实故障](../tests/computer-worker-resume.test.mjs)、[worker](../tests/computer-worker.test.mjs)、[取消窗口](../tests/computer-runtime-cancel-window.test.mjs)、[恢复等待](../tests/computer-run-wait.test.mjs)、[Session](../tests/computer-session-resume.test.mjs)、[四协议](../tests/computer-protocol-resume.test.mjs)。当前 Windows 真实 worker 尚未支持；显式 Nya 卸载仍取消并排空，systemd 独立 unit/macOS 部署与跨机器 checkpoint 未实测，不能以这次 Linux PID 强杀验收替代。
 
 每个阶段同时维护对应实际组件手册和导航，并运行 npm run check。普通行为测试使用临时存储、内存凭据、受控模型和提供方，不在构建/测试中隐式创建云资源。真实两机及系统凭据验收单独记录设备、版本、故障注入与退出事实，模拟通过不代替真实跨机器验收。
 
@@ -392,8 +416,8 @@ worker 没有模型 Key 和 Session 通用写权限，不接受浏览器任意 U
 | 新 Runtime 接管，旧 owner 恢复网络 | 旧 owner 的新操作、游标提交和结算被拒绝，原执行事实仍可接纳 | 2 |
 | checkpoint 上传后、发布前退出 | 旧 head 不变，同发布声明可恢复；孤立产物按凭证回收 | 3 |
 | 机器替换后旧 worker 迟到 | 原结果仅归原 operation，不能操作新实例或覆盖新 head | 3 |
-| worker 永久丢失且结果未知 | outcome-unknown，后续副作用停止，无自动新命令尝试 | 3 |
-| 模型响应未保存且 Runtime 消失 | 阶段 2/3 明确未决；阶段 4 查询存活 owner 的原 exchange | 2、4 |
+| worker 永久丢失且结果未知 | outcome-unknown，后续副作用停止，无自动新命令尝试 | 2 |
+| 模型响应未保存且 Runtime 消失 | 阶段 2/3 interrupted，不重发且排空原 scope；阶段 4 查询存活 owner 的原 exchange | 2、4 |
 | 模型响应保存后、Session 接纳前退出 | 原生记录及 continuation 只接纳一次 | 4 |
 | 工具结果 incorporated 后退出 | 重建原待提交请求，不重复追加工具消息 | 4 |
 | scope 退出或成功结算后确认丢失 | 查回原清理/节点，成功节点只创建一次 | 2、4 |
@@ -405,6 +429,6 @@ worker 没有模型 Key 和 Session 通用写权限，不接受浏览器任意 U
 
 本方案不要求新增 npm 包、修改通用宿主的领域分派边界或修改 NyaCore。实际实现继续位于 Anybox Harness 应用职责内，由 entrypoints 选择正式组合。只在阶段实施时创建已有实现需要的目录、组件及服务，不预建未来提供方、分支合并或多 Runtime 集群目录。
 
-本次只保存跨组件目标设计及入口，不把规划组件加入当前模块组件清单。后续每个实际组件补独立 Markdown，明确工厂、服务、inject、资源和迁移归属、取消/退出、兼容边界与测试入口，并同步相关现状文档。
+阶段 1/2 的实际组件与独立 worker 已加入模块组件清单并补齐独立 Markdown；规划中的远端产物提供方、模型 exchange owner 与弹性提供方仍不加入现状清单。后续每个实际组件补独立 Markdown，明确工厂、服务、inject、资源和迁移归属、取消/退出、兼容边界与测试入口，并同步相关现状文档。
 
 设计参考：[Tetral 文章中文译文](references/tetral-the-next-scaling-problem.zh-CN.md)。当前事实入口：[组件协作总览](harness-server-components.md)、[RunRuntime](modules/execution/run-runtime.md)、[进程工具](modules/tools/processes.md)、[Session](modules/sessions/session.md)、[Projects](modules/sessions/projects.md)、[业务存储](modules/infrastructure/local-sqlite.md)、[原生协议框架](native-protocol-agent-framework-design.md)及[部署边界](harness-server-deployment.md)。

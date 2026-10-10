@@ -1,0 +1,18 @@
+# Independent user service. Keep this unit outside the harness server's cgroup.
+# The directory must match ${ANYBOX_HARNESS_DATABASE}.computer-worker.
+[Unit]
+Description=Anybox Harness local computer worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/anybox-app
+ExecStart=/usr/bin/node %h/anybox-app/dist/entrypoints/computer-worker-main.js %h/.local/share/anybox/harness.sqlite.computer-worker
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=90
+UMask=0077
+
+[Install]
+WantedBy=default.target

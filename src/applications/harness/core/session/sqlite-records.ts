@@ -1,6 +1,9 @@
 import type { ProjectFilesPort } from '../project-files/port.js'
 import { validateFileBatch } from '../project-files/domain.js'
 import type { FileRef } from '../project-files/domain.js'
+import type { ComputerOperationsPort } from '../computer/operations-port.js'
+import { needsComputer } from '../computer/operations-domain.js'
+import { validateToolBatch, toolOutputBytes } from '../run/domain.js'
 /** SQLite implementation owned by the Session component; no runtime model plans or Nya services. */
 import type { RuntimeInputs } from '../contracts.js'
 import { isDeepStrictEqual } from 'node:util'
@@ -8,7 +11,7 @@ import type { ImageAssetsPort, ImageRef } from '../image/port.js'
 import { inputImages, inputFiles } from '../run/program.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
-import type { NativeHistory, NativeInitialization, NativeRunInput, ProtocolBindingSnapshot, ProtocolRecord, StoredProtocolRecord } from '../run/program.js'
+import type { NativeHistory, NativeInitialization, NativeRunInput, ProtocolBindingSnapshot, ProtocolRecord, StoredProtocolRecord, RunResumeState, RunResumeRecord } from '../run/program.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow, StorageTransaction } from '../../../../storage/port.js'
 import { assemblePath, treeError, createSession, deriveSessionTitle, resolveSessionModel, sessionDefaultsConflict, agentToolsConflict } from './domain.js'
@@ -219,7 +222,61 @@ const migrations: readonly StorageMigration[] = [{
     tx.execute(`CREATE TRIGGER harness_sessions_tools_immutable BEFORE UPDATE OF tool_selection_json ON harness_sessions
       BEGIN SELECT RAISE(ABORT, 'Session tools are immutable'); END`)
   },
+}, {
+  version: 10,
+  up(tx) {
+    tx.execute(`CREATE TABLE harness_run_resumes (
+      run_id TEXT PRIMARY KEY REFERENCES harness_runs(id), state_json TEXT NOT NULL
+    )`)
+  },
 }]
+
+const initialResumeState: RunResumeState = Object.freeze({ schemaVersion: 1, runOwnerEpoch: 1, revision: 0,
+  stage: 'model-pending', totalToolOutputBytes: 0 })
+
+function resumeError(code: string): Error { return Object.assign(new Error(code), { code }) }
+function resumeState(reader: StorageReader, runId: string): RunResumeState | undefined {
+  const row = reader.get('SELECT state_json FROM harness_run_resumes WHERE run_id = ?', [runId])
+  if (!row) return undefined
+  const value = JSON.parse(required(row, 'state_json')) as RunResumeState
+  if (value.schemaVersion !== 1 || !Number.isSafeInteger(value.runOwnerEpoch) || value.runOwnerEpoch < 1 ||
+    !Number.isSafeInteger(value.revision) || value.revision < 0 || !Number.isSafeInteger(value.totalToolOutputBytes) || value.totalToolOutputBytes < 0 ||
+    !['model-pending', 'response', 'cleanup', 'settling'].includes(value.stage)) throw resumeError('invalid-run-resume')
+  if (value.batch && (!value.batch.id || value.batch.operationIds.length !== value.batch.requests.length ||
+    new Set(value.batch.operationIds).size !== value.batch.operationIds.length || value.batch.operationIds.some(id => typeof id !== 'string' || !id))) throw resumeError('invalid-run-resume')
+  if (value.batch) validateToolBatch(value.batch.requests)
+  return Object.freeze(value)
+}
+function ownedResume(reader: StorageReader, id: string, epoch?: number): RunResumeState | undefined {
+  const state = resumeState(reader, id)
+  if (state && (epoch ?? 1) !== state.runOwnerEpoch) throw resumeError('stale-run-owner')
+  return state
+}
+function updateResume(tx: StorageTransaction, id: string, prior: RunResumeState, patch: Partial<RunResumeState>): RunResumeState {
+  const next = Object.freeze({ ...prior, ...patch, revision: prior.revision + 1 })
+  tx.execute('UPDATE harness_run_resumes SET state_json = ? WHERE run_id = ?', [serialize(next), id])
+  return next
+}
+function runResume(reader: StorageReader, id: string): RunResumeRecord | undefined {
+  const state = resumeState(reader, id), row = reader.get('SELECT * FROM harness_runs WHERE id = ?', [id])
+  if (!state || !row) return undefined
+  const run = runFromRow(row), session = reader.get('SELECT project_id FROM harness_sessions WHERE id = ?', [run.sessionId])!
+  const initialization = reader.get('SELECT payload_json FROM harness_native_initializations WHERE id = ?', [required(row, 'initialization_id')])!
+  const history = run.history.kind === 'tree' ? nativeHistory(reader, run.sessionId, run.history.parentNodeId) : undefined
+  return Object.freeze({ run, projectId: required(session, 'project_id'), initialization: JSON.parse(required(initialization, 'payload_json')) as NativeInitialization,
+    ...(history ? { history } : {}), records: protocolRecords(reader, id), state })
+}
+function cleanupOutputBytes(intent: JsonValue, result?: JsonValue): number {
+  if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
+    !['tool-process-cleanup', 'computer-scope-cleanup'].includes(String((intent as Record<string, JsonValue>).kind)) ||
+    !result || typeof result !== 'object' || Array.isArray(result)) return 0
+  const processes = (result as Record<string, JsonValue>).processes
+  return Array.isArray(processes) ? processes.reduce((total, process) => {
+    if (!process || typeof process !== 'object' || Array.isArray(process)) return total
+    const output = (process as Record<string, JsonValue>).output
+    return total + (typeof output === 'string' ? Buffer.byteLength(output, 'utf8') : 0)
+  }, 0) : 0
+}
 
 function readAgentTools(reader: StorageReader, agentId: string): AgentToolsSelection {
   const row = reader.get('SELECT tool_ids_json, revision FROM harness_agent_tool_settings WHERE agent_id = ?', [agentId])
@@ -533,16 +590,21 @@ export async function openSqliteSessionRecords(
   notify: (run: Pick<Run, 'id' | 'sessionId' | 'revision'>) => Promise<void>,
   images: ImageAssetsPort,
   files: ProjectFilesPort,
+  computers: ComputerOperationsPort,
 ): Promise<SessionRecords> {
   await db.migrate('run-state', migrations)
-  // A previous process cannot own an in-flight call. Never replay its side effects.
+  // Only a committed protocol response authorizes tool-stage takeover. A pending model request cannot be replayed.
   await db.transaction(tx => {
     for (const row of tx.all("SELECT id, execution_json FROM harness_runs WHERE status IN ('running', 'cancelling')")) {
       const id = required(row, 'id')
+      const resume = resumeState(tx, id)
+      if (resume?.protocolCursor !== undefined && resume.stage !== 'model-pending') continue
       const prior = parseRunExecution(required(row, 'execution_json'))
       const at = inputs.now()
       const event = { kind: 'interrupted' as const, previousPhase: prior.phase }
       const next = advanceExecution(prior, event)
+      // The model exchange cannot resume, but any independent computer scope still requires cancellation and exit.
+      computers.requestCancelIn(tx, id)
       tx.execute("UPDATE harness_runs SET status = 'interrupted', updated_at = ?, execution_json = ?, revision = revision + 1 WHERE id = ?",
         [at, JSON.stringify(next), id])
       tx.execute('INSERT INTO harness_run_events (run_id, seq, at, payload_json) VALUES (?, ?, ?, ?)',
@@ -717,6 +779,7 @@ export async function openSqliteSessionRecords(
           serialize(prompts), serialize(model), input.parentNodeId, model.modelId, input.modelId ?? null,
           serialize(binding), serialize(native.input), initializationId, native.parentContextRef, serialize(execution),
         ])
+        tx.execute('INSERT INTO harness_run_resumes (run_id, state_json) VALUES (?, ?)', [id, serialize(initialResumeState)])
         return { run: getRun(tx, id)!, created: true }
       })
       if (result.created) await notify(result.run)
@@ -733,17 +796,88 @@ export async function openSqliteSessionRecords(
     }) },
     loadNativeHistory(sessionId, parentNodeId) { return db.read(reader => nativeHistory(reader, sessionId, parentNodeId)) },
     getRunRecords(id) { return db.read(reader => { if (!getRun(reader, id)) throw new Error(`unknown run ${id}`); return protocolRecords(reader, id) }) },
-    async startOperation(runId, operation, at) {
+    loadRunResume(id) { return db.read(reader => runResume(reader, id)) },
+    listRunResumes() { return db.read(reader => Object.freeze(reader.all(`SELECT r.id FROM harness_runs r
+      JOIN harness_run_resumes c ON c.run_id = r.id WHERE r.status IN ('running', 'cancelling') ORDER BY r.created_at, r.id`)
+      .map(row => runResume(reader, required(row, 'id'))!).filter(resume => resume.state.protocolCursor !== undefined && resume.state.stage !== 'model-pending'))) },
+    claimRunResume(id, expectedEpoch, at) {
+      return db.transaction(tx => {
+        const resume = runResume(tx, id)
+        if (!resume || !['running', 'cancelling'].includes(resume.run.status) || resume.state.protocolCursor === undefined || resume.state.stage === 'model-pending') throw resumeError('run-not-resumable')
+        if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch !== resume.state.runOwnerEpoch) throw resumeError('stale-run-owner')
+        const epoch = expectedEpoch + 1
+        computers.claimRunIn(tx, id, epoch)
+        updateResume(tx, id, resume.state, { runOwnerEpoch: epoch })
+        tx.execute('UPDATE harness_runs SET updated_at = ? WHERE id = ?', [at, id])
+        return runResume(tx, id)!
+      })
+    },
+    saveRunResume(id, ownerEpoch, patch, at) {
+      return db.transaction(tx => {
+        const run = getRun(tx, id), prior = ownedResume(tx, id, ownerEpoch)
+        if (!run || !prior || !['running', 'cancelling'].includes(run.status)) throw resumeError('run-not-resumable')
+        if (patch.stage && !['model-pending', 'response', 'cleanup', 'settling'].includes(patch.stage)) throw resumeError('invalid-run-resume')
+        if (patch.batch) {
+          const batch = patch.batch
+          validateToolBatch(batch.requests)
+          if (!batch.id || batch.operationIds.length !== batch.requests.length || new Set(batch.operationIds).size !== batch.operationIds.length ||
+            batch.operationIds.some(id => typeof id !== 'string' || !id)) throw resumeError('invalid-run-resume')
+          if (prior.batch?.id === batch.id && !isDeepStrictEqual(prior.batch, batch)) throw resumeError('run-resume-conflict')
+        }
+        const savedPatch = { ...patch }
+        if (patch.settlement) {
+          insertRecords(tx, run, patch.settlement.records)
+          const { records: _records, ...settlement } = patch.settlement
+          if (prior.settlement && !isDeepStrictEqual(prior.settlement, settlement)) throw resumeError('run-resume-conflict')
+          savedPatch.settlement = settlement
+          if (settlement.checkpoint !== undefined) tx.execute('UPDATE harness_runs SET protocol_checkpoint_json = ? WHERE id = ?', [serialize(settlement.checkpoint), id])
+        }
+        if (Object.entries(savedPatch).every(([key, value]) => isDeepStrictEqual(prior[key as keyof RunResumeState], value))) return runResume(tx, id)!
+        updateResume(tx, id, prior, savedPatch)
+        tx.execute('UPDATE harness_runs SET updated_at = ? WHERE id = ?', [at, id])
+        return runResume(tx, id)!
+      })
+    },
+    getRunOperation(runId, id) { return db.read(reader => {
+      const row = reader.get('SELECT * FROM harness_run_operations WHERE run_id = ? AND id = ?', [runId, id])
+      if (!row) return undefined
+      return Object.freeze({ start: { id, kind: required(row, 'kind') as 'model' | 'operation' | 'tool', intent: JSON.parse(required(row, 'intent_json')) as JsonValue,
+        ...(optional(row, 'tool_json') ? { tool: JSON.parse(required(row, 'tool_json')) } : {}),
+        ...(required(row, 'kind') === 'operation' && ['tool-process-cleanup', 'computer-scope-cleanup'].includes(JSON.parse(required(row, 'intent_json'))?.kind) ? { cleanup: true as const } : {}) },
+        ...(optional(row, 'observation_json') ? { observation: JSON.parse(required(row, 'observation_json')) } : {}) })
+    }) },
+    async startOperation(runId, operation, at, ownerEpoch) {
       const result = await db.transaction(tx => {
+        const resume = ownedResume(tx, runId, ownerEpoch)
         const run = getRun(tx, runId)
         if (!run) throw new Error(`unknown run ${runId}`)
         if (operation.cleanup !== undefined && (operation.cleanup !== true || operation.kind !== 'operation')) throw treeError('invalid-history')
         if (run.status !== 'running' && !(run.status === 'cancelling' && operation.cleanup === true)) return undefined
         if (run.contextVersion !== 'native-local-v1' || !operation.id || !['model', 'operation', 'tool'].includes(operation.kind)) throw treeError('invalid-history')
         if (operation.kind === 'tool' && !operation.tool) throw new Error('missing tool request')
+        const prior = tx.get('SELECT * FROM harness_run_operations WHERE run_id = ? AND id = ?', [runId, operation.id])
+        if (prior) {
+          if (required(prior, 'kind') !== operation.kind || !isDeepStrictEqual(JSON.parse(required(prior, 'intent_json')), operation.intent) ||
+            !isDeepStrictEqual(optional(prior, 'tool_json') ? JSON.parse(required(prior, 'tool_json')) : null, operation.tool ?? null)) throw resumeError('operation-intent-conflict')
+          insertRecords(tx, run, operation.records)
+          return run
+        }
+        if (operation.tool && needsComputer(operation.tool)) {
+          const initializationRow = tx.get('SELECT payload_json FROM harness_native_initializations WHERE id = (SELECT initialization_id FROM harness_runs WHERE id = ?)', [runId])
+          if (!initializationRow) throw treeError('invalid-history')
+          const initialization = JSON.parse(required(initializationRow, 'payload_json')) as NativeInitialization
+          validateToolBatch([operation.tool], initialization.tools)
+          const selection = initialization.schemaVersion === 2 ? initialization.toolSelection : legacyToolSelection
+          const tool = selection.tools.find(tool => tool.definition.name === operation.tool!.name)
+          if (!tool) throw treeError('invalid-history')
+          const session = tx.get('SELECT project_id FROM harness_sessions WHERE id = ?', [run.sessionId])!
+          computers.acceptIn(tx, { operationId: operation.id, runId, sessionId: run.sessionId,
+            projectId: required(session, 'project_id'), request: operation.tool, tool, runOwnerEpoch: resume?.runOwnerEpoch ?? 1 })
+        }
         tx.execute('INSERT INTO harness_run_operations (run_id, id, kind, intent_json, tool_json, status) VALUES (?, ?, ?, ?, ?, ?)',
           [runId, operation.id, operation.kind, serialize(operation.intent), operation.tool ? serialize(operation.tool) : null, 'started'])
         insertRecords(tx, run, operation.records)
+        if (resume && operation.kind === 'model') updateResume(tx, runId, resume, { stage: 'model-pending' })
         appendEvent(tx, runId, operation.kind === 'tool' ? { kind: 'tool-started', call: operation.tool! }
           : { kind: 'operation-started', operationId: operation.id, operationKind: operation.kind }, at)
         return getRun(tx, runId)!
@@ -751,18 +885,30 @@ export async function openSqliteSessionRecords(
       if (result) await notify(result)
       return result !== undefined
     },
-    async observeOperation(runId, operationId, observation, at) {
+    async observeOperation(runId, operationId, observation, at, ownerEpoch) {
       const result = await db.transaction(tx => {
+        const resume = ownedResume(tx, runId, ownerEpoch)
         const run = getRun(tx, runId)
         const operation = tx.get('SELECT * FROM harness_run_operations WHERE run_id = ? AND id = ?', [runId, operationId])
-        if (!run || !operation || required(operation, 'status') !== 'started' || (run.status !== 'running' && run.status !== 'cancelling')) throw new Error('invalid operation observation')
+        if (!run || !operation) throw new Error('invalid operation observation')
+        if (required(operation, 'status') !== 'started') {
+          if (!isDeepStrictEqual(JSON.parse(required(operation, 'observation_json')), observation)) throw resumeError('operation-observation-conflict')
+          return run
+        }
+        if (run.status !== 'running' && run.status !== 'cancelling') throw new Error('invalid operation observation')
         if (observation.tool && 'images' in observation.tool && observation.tool.images?.length) {
           images.retainIn(tx, run.sessionId, `run-tool:${runId}:${operationId}`, observation.tool.images)
         }
         insertRecords(tx, run, observation.records)
         tx.execute('UPDATE harness_run_operations SET status = ?, observation_json = ? WHERE run_id = ? AND id = ?',
           [observation.kind, serialize(observation), runId, operationId])
+        computers.observeIn(tx, operationId, JSON.parse(serialize(observation)) as JsonValue)
         if (observation.checkpoint !== undefined) tx.execute('UPDATE harness_runs SET protocol_checkpoint_json = ? WHERE id = ?', [serialize(observation.checkpoint), runId])
+        if (resume) {
+          const bytes = (observation.tool ? toolOutputBytes(observation.tool) : 0) + cleanupOutputBytes(JSON.parse(required(operation, 'intent_json')) as JsonValue, observation.result)
+          updateResume(tx, runId, resume, { totalToolOutputBytes: resume.totalToolOutputBytes + bytes,
+            ...(observation.protocolCursor === undefined ? {} : { stage: 'response', protocolCursor: observation.protocolCursor }) })
+        }
         let event: RunEventData
         const toolJson = optional(operation, 'tool_json')
         if (toolJson) {
@@ -825,6 +971,7 @@ export async function openSqliteSessionRecords(
         if (!run) return undefined
         const next = requestCancellation(run, now)
         if (next !== run) {
+          computers.requestCancelIn(tx, id)
           tx.execute('UPDATE harness_runs SET status = ?, updated_at = ?, revision = revision + 1 WHERE id = ?',
             [next.status, next.updatedAt, id])
           changed = true
@@ -834,9 +981,10 @@ export async function openSqliteSessionRecords(
       if (changed && result) await notify(result)
       return result
     },
-    async settleRun(id, outcome, now) {
+    async settleRun(id, outcome, now, ownerEpoch) {
       let changed = false
       const next = await db.transaction(tx => {
+        ownedResume(tx, id, ownerEpoch)
         const run = getRun(tx, id)
         if (!run) throw new Error(`unknown run ${id}`)
         const next = settleRun(run, outcome, now)

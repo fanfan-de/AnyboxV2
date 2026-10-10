@@ -4,7 +4,9 @@
 
 `createFileToolsComponent(options?)` 安装 Nya `file-tools`，提供根上 `tools.files`。通过 `inject` 获取本代 `harness.projects`、`tools.apply-patch` 和 `harness.image-assets`，不持有模型 execution、凭据、独立数据库或文件目录。
 
-服务 `execute({runId,sessionId,projectId,name,args,signal?,imageInput})` 同步返回 `OwnedCall<{result,images?}>`。调用名为 `claude_code_Read/Write/Edit/Glob/Grep`、`deepseek_harness_read/read_image/write/edit/glob/grep` 和 `codex_view_image`。目录、工具声明及来源元数据由组合和执行层提供；组件只执行已经校验的输入，不注册动态第三方工具。
+服务 `execute({runId,sessionId,projectId,workspacePath?,name,args,signal?,imageInput})` 同步返回 `OwnedCall<{result,images?}>`。调用名为 `claude_code_Read/Write/Edit/Glob/Grep`、`deepseek_harness_read/read_image/write/edit/glob/grep` 和 `codex_view_image`。目录、工具声明及来源元数据由组合和执行层提供；组件只执行已经校验的输入，不注册动态第三方工具。
+
+独立 worker 的内部执行适配器提供固定 workspacePath，读取、搜索及图片工具都使用同一 binding 路径；Write/Edit 的嵌套 mutateText 继续传递该路径。未提供时保留本代 Projects.requireAvailable 查询行为；可选路径只存在受信宿主接口，不增加模型参数或跨机器能力。组件依赖仍为 Projects、Apply Patch 和图片资源，不反向注入 Operations。
 
 文本 Read 接受 `file_path`、一基 `offset` 和 `limit`，输出行号、总行数、截断状态和下一位置。默认读取 2000 行，显式行数按目录声明执行；结果默认至多 64 KiB，源文件默认最多 10 MiB。路径相对当前项目或为绝对路径，项目不是沙箱。读取采用 `O_NOFOLLOW`，只接受单硬链接普通文件，核对打开前后 inode、权限、大小及时间。文本采用严格 UTF-8，并沿用 Apply Patch 对 NUL、裸 CR 和混合换行的拒绝规则。
 

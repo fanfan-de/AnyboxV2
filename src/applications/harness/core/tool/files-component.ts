@@ -2,7 +2,7 @@ import { constants } from 'node:fs'
 import type { BigIntStats } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { spawn } from 'node:child_process'
-import { basename, extname, parse, relative, resolve, sep } from 'node:path'
+import { basename, extname, isAbsolute, parse, relative, resolve, sep } from 'node:path'
 import type { Component } from '@nya/core'
 import type { JsonValue } from '@anybox/models'
 import { rgPath } from '@vscode/ripgrep'
@@ -27,6 +27,8 @@ export interface FileToolResult {
 export interface FileToolsPort {
   execute(input: {
     readonly runId: string; readonly sessionId: string; readonly projectId: string
+    /** Trusted binding path, also passed unchanged to nested text mutations. */
+    readonly workspacePath?: string
     readonly name: string; readonly args: Readonly<Record<string, JsonValue>>
     readonly signal?: AbortSignal; readonly imageInput: boolean
   }): OwnedCall<FileToolResult>
@@ -191,9 +193,11 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
       const service: FileToolsPort = {
         execute(input) {
           if (!accepting) throw toolError('unavailable', 'File tools are unavailable.')
-          if (!input || !supportedNames.has(input.name) || !input.projectId || !input.sessionId || !input.runId || !input.args) {
+          if (!input || !supportedNames.has(input.name) || !input.projectId || !input.sessionId || !input.runId || !input.args ||
+            input.workspacePath !== undefined && (typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0'))) {
             throw toolError('invalid-input', 'The file tool request is invalid.')
           }
+          const workspacePath = input.workspacePath
           const controller = new AbortController()
           let nested: OwnedCall<unknown> | undefined
           let cleanupError: unknown
@@ -223,7 +227,7 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
             const signal = controller.signal, args = input.args
             try {
               signal.throwIfAborted()
-              const projectPath = (await deps[projectServiceKey].requireAvailable(input.projectId)).path
+              const projectPath = workspacePath ?? (await deps[projectServiceKey].requireAvailable(input.projectId)).path
               signal.throwIfAborted()
               const claude = input.name.startsWith('claude_code_')
               const name = input.name.replace(/^(claude_code_|deepseek_harness_|codex_)/, '').toLowerCase()
@@ -232,7 +236,7 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
                 const mutation = name === 'write' ? { kind: 'write' as const, content: typeof args.content === 'string' ? args.content : stringArg(args, 'content') }
                   : { kind: 'edit' as const, oldString: stringArg(args, 'old_string'),
                     newString: typeof args.new_string === 'string' ? args.new_string : stringArg(args, 'new_string'), replaceAll: args.replace_all === true }
-                const observed = await ownedValue(deps[applyPatchServiceKey].mutateText({ projectId: input.projectId, path, mutation }))
+                const observed = await ownedValue(deps[applyPatchServiceKey].mutateText({ projectId: input.projectId, workspacePath: projectPath, path, mutation }))
                 return { result: observed as unknown as JsonValue }
               }
               if (name === 'read' || name === 'read_image' || name === 'view_image') {
