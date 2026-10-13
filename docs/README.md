@@ -29,6 +29,8 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | 文档 | 内容 |
 | --- | --- |
 | [命名与边界](naming.md) | 产品、服务端与客户端命名，源码标识及持久兼容约定 |
+| [D2 项目架构图（2026-10-13）](./architecture/d2/README.md) | 当前源码的进程总览、harness server、Models 和 Run 时序；四份可编辑 D2、SVG、PNG 与重绘脚本 |
+| [Unity 架构实验室与 3D 空间（2026-10-13）](./architecture/unity-prototype/README.md) | 二维与三维交互原型；旋转、聚焦与分层理解进程边界，六种 Run 实验演示资源归属、取消、恢复与分支，附 Unity 源码 |
 | [live-panel 框架图（2026-10-04）](./architecture/live-panel/README.md) | 使用 live-panel Skill 的动态总览；独立客户端/执行根、harness server、原生 Loop、Models 与资源归属，含 HTML、MP4 和可编辑 JSON |
 | [动态架构图（2026-10-03）](./architecture/anybox-dynamic-architecture.md) | 可离线打开的终端风格交互 HTML；宿主、Run、Models 与取消退出，支持播放、单步、时间线和源码职责查看 |
 | [通用应用宿主](products-v1.md) | 应用与内部功能边界、本地/远程目标、按需打开和停止及兼容 |
