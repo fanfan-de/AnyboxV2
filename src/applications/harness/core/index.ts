@@ -29,6 +29,10 @@ import { createComputersComponent } from './computer/component.js'
 import { createWorkspacesComponent } from './workspace/component.js'
 import { createComputerOperationsComponent } from './computer/operations-component.js'
 import { listTools } from './tool/catalog.js'
+import { createUnitAttachmentsComponent } from './unit/component.js'
+import { unitAttachmentsServiceKey } from './unit/port.js'
+import type { AttachCodeInput, UnitAttachment, UnitAttachmentsPort } from './unit/port.js'
+import { localComputerUnitId, localModelsUnitId } from './unit/domain.js'
 
 /** The root must provide Models, local storage and image assets before the harness server core starts. */
 export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
@@ -49,6 +53,9 @@ export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly Readonly<{ id: string }>[]
   listTools(): ReturnType<typeof listTools>
+  listUnitAttachments(): Promise<readonly UnitAttachment[]>
+  createUnitAttachCode(input: AttachCodeInput): Promise<{ readonly attachment: UnitAttachment; readonly code: string }>
+  revokeUnitAttachment(attachmentId: string): Promise<UnitAttachment>
 }
 
 function requireActive(fiber: Fiber): void {
@@ -83,7 +90,9 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   const protocolComponents = context.get(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
   const workerComponents = context.get(computerWorkerServiceKey) ? [] : [createLocalComputerWorkerComponent({directory: options.localWorkerDirectory ?? resolve('data/computer-worker')})]
-  return [...protocolComponents, createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects }),
+  // The in-process Models component and this Authority's own worker attach as local units at startup.
+  const attachmentComponents = [createUnitAttachmentsComponent(inputs, { localUnits: [{ unitKind: 'models', unitId: localModelsUnitId }, { unitKind: 'computer', unitId: localComputerUnitId }] })]
+  return [...protocolComponents, ...attachmentComponents, createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects }),
     createProjectFilesComponent(inputs), ...workerComponents,
     createWorkerInstanceProviderComponent(), createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
     createSessionComponent(inputs, agents), createRunRuntimeComponent(inputs),
@@ -133,6 +142,12 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     if (!service) throw new Error('agent prompt service is unavailable')
     return service
   }
+  const currentUnits = (): UnitAttachmentsPort => {
+    if (lifetime.isClosing()) throw new Error('harness server is closing')
+    const service = context.get<UnitAttachmentsPort>(unitAttachmentsServiceKey)
+    if (!service) throw new Error('unit attachment service is unavailable')
+    return service
+  }
   return {
     listAgents: () => {
       if (lifetime.isClosing()) throw new Error('harness server is closing')
@@ -142,6 +157,9 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
       if (lifetime.isClosing()) throw new Error('harness server is closing')
       return listTools()
     },
+    listUnitAttachments: () => currentUnits().list(),
+    createUnitAttachCode: input => currentUnits().createAttachCode(input),
+    revokeUnitAttachment: attachmentId => currentUnits().revoke(attachmentId),
     getAgentTools: agentId => currentSessions().getAgentTools(agentId),
     setAgentTools: (agentId, input) => currentSessions().setAgentTools(agentId, input),
     openProject: path => currentProjects().openProject(path),

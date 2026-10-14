@@ -7,6 +7,7 @@ import { workspacesServiceKey } from '../../dist/applications/harness/core/works
 import { computerOperationsServiceKey } from '../../dist/applications/harness/core/computer/operations-port.js'
 import { createImageAssetsComponent } from '../../dist/applications/harness/core/image/component.js'
 import { computerWorkerServiceKey, workerError } from '../../dist/applications/harness/core/computer/worker-port.js'
+import { installUnitAttachments } from './unit-attachments.mjs'
 
 const immediate = result => ({ result: Promise.resolve(result), done: Promise.resolve(), cancel() {} })
 const map = (call, convert) => ({ ...call, result: call.result.then(convert) })
@@ -85,6 +86,7 @@ export function createControlledComputerWorker(root, { inject = [] } = {}) {
 
 /** Direct component fixtures use the same resource closure as the trusted composition root. */
 export async function installComputerServices(root, inputs, options = {}) {
+  await installUnitAttachments(root, inputs)
   if (!root.get('harness.image-assets')) {
     const file = await root.get('local-storage').read(reader => reader.get('PRAGMA database_list').file)
     await root.installComponent(createImageAssetsComponent({ directory: `${file}.images` }))

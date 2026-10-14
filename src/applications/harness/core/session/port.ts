@@ -8,6 +8,7 @@ import type { ValidatedToolRequest, ToolObservation, RunFailureCategory } from '
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { OwnedCall } from '../contracts.js'
 import type { ImageRef, ImageRenewal } from '../image/port.js'
+import type { RunUnitBindings } from '../unit/domain.js'
 
 export const sessionServiceKey = 'harness.sessions'
 export const sessionRunServiceKey = 'harness.session-runs'
@@ -87,6 +88,8 @@ export interface NativeRunRegistration {
   readonly initialization: NativeInitialization
   readonly input: NativeRunInput
   readonly parentContextRef: string | null
+  /** Unit attachments the Run runs against; re-verified inside the acceptance transaction when present. */
+  readonly units?: RunUnitBindings
 }
 export interface RunOperationStart {
   readonly id: string

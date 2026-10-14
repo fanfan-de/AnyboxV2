@@ -1,7 +1,7 @@
 import { installComputerServices } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
-import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
+import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun, nativeRegistration } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../dist/applications/harness/core/session/port.js'
 import { createApplyPatchComponent } from '../dist/applications/harness/core/tool/apply-patch-component.js'
@@ -87,7 +87,7 @@ test('Runs deduplicate requests and build explicit immutable history', async () 
   const { harness, llm } = f
   try {
     const session = await createSession(harness)
-    assert.equal(session.id, 'id-2')
+    assert.equal(session.id, 'id-3')
     const input = { sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'first' }
     const run = await harness.startRun(input)
     assert.equal(run.status, 'running')
@@ -205,6 +205,63 @@ test('cancellation and close wait until the model call actually exits', async ()
   await closing
   assert.equal(closed, true)
   assert.deepEqual(llm.events, ['disposed'])
+})
+
+test('accepted Runs fix the local unit attachments of this harness server', async () => {
+  const f = await createHarnessServerFixture({ agents, newId: ids() })
+  const { harness, llm } = f
+  try {
+    const session = await createSession(harness)
+    const run = await harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'units' })
+    assert.deepEqual(run.units, { schemaVersion: 1,
+      models: { attachmentId: 'local:models', unitKind: 'models', unitId: 'models-local', epoch: 1, bootId: 'id-1' },
+      computer: { attachmentId: 'local:computer', unitKind: 'computer', unitId: 'computer-local', epoch: 1 } })
+    assert.deepEqual((await harness.getRun(run.id)).units, run.units)
+    assert.deepEqual((await harness.listUnitAttachments()).map(a => [a.attachmentId, a.origin, a.state, a.epoch, a.credential]),
+      [['local:computer', 'local', 'approved', 1, 'none'], ['local:models', 'local', 'approved', 1, 'none']])
+    await assert.rejects(harness.revokeUnitAttachment('local:models'), { code: 'unit-attachment-local' })
+    const issued = await harness.createUnitAttachCode({ unitKind: 'models', scope: { kind: 'models', access: 'execute', configurations: ['default'] } })
+    assert.equal(issued.attachment.state, 'pending')
+    assert.equal((await harness.revokeUnitAttachment(issued.attachment.attachmentId)).state, 'revoked')
+    llm.calls[0].result.resolve('Hi'); llm.calls[0].done.resolve()
+    assert.equal((await harness.waitRun(run.id)).status, 'completed')
+  } finally { await f.close() }
+})
+
+test('a stale unit attachment epoch settles an accepted Run on recovery instead of rebinding it', async () => {
+  const f = await createHarnessServerFixture({ agents })
+  const databasePath = join(f.directory, 'harness.sqlite')
+  try {
+    const session = await createSession(f.harness)
+    const records = f.root.get(sessionRunServiceKey), units = f.root.get('harness.unit-attachments')
+    const bindings = { schemaVersion: 1, models: (await units.local('models')).binding, computer: (await units.local('computer')).binding }
+    const input = { sessionId: session.id, parentNodeId: null, input: 'resume', idempotencyKey: 'resume' }
+    await records.registerRun('resume', input, 'now', [], modelSnapshot(), { ...nativeRegistration(input), units: bindings })
+    const request = { id: 'resume:request', exchangeId: 'resume:exchange', kind: 'request', formatVersion: 1, payload: { messages: [{ role: 'user', content: 'resume' }] } }
+    const response = { id: 'resume:response', exchangeId: 'resume:exchange', kind: 'response', formatVersion: 1,
+      payload: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'saved response' } }] } }
+    await records.startOperation('resume', { id: 'resume:exchange', kind: 'model', intent: {}, records: [request] }, 'now', 1)
+    await records.observeOperation('resume', 'resume:exchange', { kind: 'value', records: [request, response],
+      protocolCursor: { schemaVersion: 1, protocolId: 'chat-completions', exchangeId: 'resume:exchange' } }, 'now', 1)
+    assert.equal((await records.listRunResumes()).length, 1)
+    await f.harness.close()
+    // Only direct ledger edits can invalidate a local attachment; the API refuses to revoke it.
+    const patch = new Context()
+    await patch.installComponent(createLocalSqliteComponent(databasePath))
+    await patch.get(localStorageServiceKey).transaction(tx => tx.execute("UPDATE harness_unit_attachments SET epoch = 2 WHERE attachment_id = 'local:models'"))
+    await patch.fiber.dispose()
+    const next = controlledModels()
+    const reopened = await createHarnessServerCoreHost({ llm: next, agents, databasePath })
+    try {
+      const settled = await reopened.harness.waitRun('resume')
+      assert.equal(settled.status, 'failed')
+      assert.equal(settled.errorCategory, 'dependency-unavailable')
+      assert.match(settled.error, /unit attachment/)
+      assert.equal(next.calls.length, 0, 'no model exchange starts for a Run bound to an invalid attachment')
+      assert.deepEqual(settled.units.models, { ...bindings.models })
+      await reopened.harness.close()
+    } finally { await reopened.root.fiber.dispose() }
+  } finally { await f.close() }
 })
 
 test('closing the application host joins its call, releases Models and storage, and lets a fresh root reopen storage', async () => {

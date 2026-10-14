@@ -19,6 +19,8 @@ import type { SessionPort, SessionRunPort } from './port.js'
 import { openSqliteSessionRecords } from './sqlite-records.js'
 import { computerOperationsServiceKey } from '../computer/operations-port.js'
 import type { ComputerOperationsPort } from '../computer/operations-port.js'
+import { unitAttachmentsServiceKey } from '../unit/port.js'
+import type { UnitAttachmentsPort } from '../unit/port.js'
 
 /** One owner for every Session's conversation and execution records; execution resources stay in RunRuntime. */
 export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[]): Component.Object<void, {
@@ -27,17 +29,18 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
   [imageAssetsServiceKey]: ImageAssetsPort
   [projectFilesServiceKey]: ProjectFilesPort
   [computerOperationsServiceKey]: ComputerOperationsPort
+  [unitAttachmentsServiceKey]: UnitAttachmentsPort
 }> {
   return {
     name: 'harness-sessions',
-    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey],
+    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey],
     async apply(ctx, _config, deps) {
       const projects = deps[projectServiceKey], images = deps[imageAssetsServiceKey], files = deps[projectFilesServiceKey]
       const records = await openSqliteSessionRecords(deps[localStorageServiceKey], inputs, async run => {
         const change = Object.freeze({ sessionId: run.sessionId, runId: run.id, revision: run.revision })
         try { await ctx.parallel(runChangedEvent, change) }
         catch { ctx.logger.warn('Run change notification failed after commit', change) }
-      }, images, files, deps[computerOperationsServiceKey])
+      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey])
       let accepting = true
       const pending = new Set<Promise<unknown>>()
       const resourceCalls = new Set<OwnedCall<unknown>>()

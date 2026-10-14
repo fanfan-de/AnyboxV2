@@ -10,7 +10,7 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 
 ## 根、服务与资源归属
 
-每个进程只使用一个 Nya 根 Context。Authority 与 Runtime 当前同进程：Models、业务 SQLite、图片资源、Projects、Project Files、Computer 协调及 worker 客户端、Prompt、Session、协议绑定、RunRuntime、Run 和 Web 直接安装在其根上；独立 worker 在自己的根安装执行器、固定项目绑定、独占存储、图片与四工具。Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/applications/harness/core/index.ts` 提供 Prompt/Agent 组件分组和受信门面，`src/applications/harness/server-runtime.ts` 根据该设备的 Anybox Harness 打开目标保留根级 Fiber 句柄；Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
+每个进程只使用一个 Nya 根 Context。Authority 与 Runtime 当前同进程：Models、业务 SQLite、图片资源、单元附着、Projects、Project Files、Computer 协调及 worker 客户端、Prompt、Session、协议绑定、RunRuntime、Run 和 Web 直接安装在其根上；独立 worker 在自己的根安装执行器、固定项目绑定、独占存储、图片与四工具。Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/applications/harness/core/index.ts` 提供 Prompt/Agent 组件分组和受信门面，`src/applications/harness/server-runtime.ts` 根据该设备的 Anybox Harness 打开目标保留根级 Fiber 句柄；Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
 
 | 组件 | 服务 / 主要依赖 | 独占资源与关闭行为 |
 | --- | --- | --- |
@@ -25,6 +25,7 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | 图片资源 | `harness.image-assets`；注入 local-storage | 排他图片目录、校验队列、临时文件、读取与 GC；取消并等待实际退出 |
 | Projects | `harness.projects`；注入 local-storage | 项目目录身份、目录检查与记录、有界浏览会话/目录句柄及取消清理 |
 | Project Files | `harness.project-files`；注入 local-storage/projects | 文件搜索、读取、SQLite 快照、准备批次与保留凭证；取消并等待文件和数据库操作 |
+| 单元附着 | `harness.unit-attachments`；注入 local-storage | `unit-attachments` 账本、本机单元的自动附着与本次装配 bootId；停止准入并等待账本操作退出 |
 | 本机 worker 客户端 | `computer.worker`；无 inject | 惰性连接或启动独立 worker；Effect 只取消并等待本地 HTTP 观察 |
 | 本机实例提供方 | `computer.instance-provider`；注入 computer.worker | 按需确认 workerId/bootId、平台及架构；不销毁用户设备 |
 | Computers | `harness.computers`；注入 local-storage/instance-provider | 逻辑资源、按需共享激活、实例代次和 pin；取消并等待提供方实际退出 |
@@ -37,11 +38,11 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | 文件工具 | `tools.files`；注入 projects/image-assets/apply-patch | 读取 handle、搜索进程、图片导入和共享文本提交；取消并等待 |
 | Prompt | `harness.prompts`；注入 local-storage | 草稿、不可变发布版本及已接纳写入 |
 | Agent Prompt | `harness.agent-prompts`；注入 prompts/local-storage | Agent 绑定及 Prompt 快照解析 |
-| Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets/project-files/computer-operations | 新会话默认值、Agent 工具配置及会话不可变选择、归档状态、Run、节点、原生记录与事务；计算工具意图/观察同事务参与；等已接受写入与通知 |
+| Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets/project-files/computer-operations/unit-attachments | 新会话默认值、Agent 工具配置及会话不可变选择、归档状态、Run、节点、原生记录与事务；计算工具意图/观察同事务参与，接受事务复核单元附着引用；等已接受写入与通知 |
 | 协议应用注册 | `harness.protocol-agents`；注入 models/models.protocols/image-assets | 固定驱动与 Loop 组合、准备中的资源、Run 租约；撤销后等 program 释放 |
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
 | RunRuntime | `harness.run-runtime`；注入 session-runs/computer-operations | program、工具观察、owner、取消/等待者和临时视图；worker scope 与 program 退出后结算 |
-| Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime/computer-operations | 准入、幂等和交接前资源；停止准入并等交接与在途 Run |
+| Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime/computer-operations/unit-attachments | 准入、幂等、本机单元附着引用和交接前资源；恢复接管前校验附着引用；停止准入并等交接与在途 Run |
 | 执行访问管理 | `host.access` | 既有业务库中的实例身份与令牌摘要；撤销观察连接 |
 | 客户端连接 | `client.connections` | 独立 client.sqlite 与系统凭据意图日志 |
 | 客户端外壳 | `app.client-http` | 常驻回环监听器、静态页面与应用控制 |

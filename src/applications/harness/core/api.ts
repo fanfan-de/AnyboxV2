@@ -5,7 +5,10 @@ import type { LegacyExecutionSnapshot } from './run/legacy-snapshot.js'
 import type { ApplyPatchResult } from './tool/apply-patch-types.js'
 import type { ImageRef } from './image/port.js'
 import type { ToolSelectionSnapshot } from './tool/catalog.js'
+import type { UnitAttachment } from './unit/domain.js'
 export type { ImageRef } from './image/port.js'
+/** Attachment facts carry no code or credential material, so the ledger record is its own public view. */
+export type UnitAttachmentView = UnitAttachment
 
 export interface AgentView { readonly id: string; readonly harnessName?: string }
 export interface SessionView {

@@ -1,0 +1,39 @@
+# 单元附着组件
+
+[返回可组合单元模块](README.md) · [Session](../sessions/session.md) · [Run](../execution/run.md)
+
+`createUnitAttachmentsComponent(inputs, { localUnits? })` 在 harness server 根安装 `harness-unit-attachments`，提供 `harness.unit-attachments: UnitAttachmentsPort`。inject `local-storage`，在 `apply` 中登记 `unit-attachments` v1 迁移域。源码：[组件](../../../src/applications/harness/core/unit/component.ts)、[纯规则](../../../src/applications/harness/core/unit/domain.ts)、[端口](../../../src/applications/harness/core/unit/port.ts)。
+
+## 配置与接口
+
+`inputs` 提供 `now()` 与 `newId()`；`localUnits` 是组合根声明的本机单元列表，每种 `unitKind`（`models`、`computer`）至多一个，生产组合固定传入 `models-local` 与 `computer-local`。
+
+| 方法 | 行为 |
+| --- | --- |
+| `list()` / `get(id)` / `listEvents(id)` | 读取附着记录与审计事件；记录不含附着码和凭证 |
+| `createAttachCode({ unitKind, scope, ttlMs? })` | 记录 `pending` 附着并返回一次性附着码；有效期默认 10 分钟，允许 1 分钟到 24 小时 |
+| `attach({ code, unitKind, unitId, contractVersion, capabilities?, ceiling })` | 消费附着码：校验未过期、种类一致、同种类同 `unitId` 没有其他 `approved` 附着，并要求请求作用域落在单元上限内；成功后返回一次性单元凭证 |
+| `revoke(id)` | 远端附着幂等撤销并递增 epoch；本机附着返回 `unit-attachment-local` |
+| `local(unitKind)` | 返回该种类的本机附着及其 Run 绑定引用；Models 引用带本次装配 bootId |
+| `requireApprovedIn(tx, binding)` | 同步参加业务事务：引用的附着必须仍为 `approved`、种类与 `unitId` 一致且 epoch 相同，否则 `unit-attachment-mismatch` |
+| `verify(bindings)` | 异步执行同样的校验，供 Run 恢复接管前使用 |
+
+作用域按种类定义：Computer 为允许的项目目录与工具契约集合，Models 为 `manage` 或 `execute` 加允许的模型配置；`all` 表示不限制。纯函数 `scopeWithin` 判定请求作用域是否落在上限内，`manage` 只能落在 `manage` 之下。
+
+## 数据与资源归属
+
+组件拥有 `harness_unit_attachments` 与 `harness_unit_attachment_events` 两张表。附着记录保存种类、来源（`local`/`remote`）、状态（`pending`/`approved`/`revoked`，单调不可逆）、单元身份、契约版本、能力、请求作用域、单元上限、生效作用域、epoch 与时间；附着码与单元凭证只保存 SHA-256 摘要，消费后清除附着码摘要。审计事件记录创建、批准与撤销及其 epoch。
+
+本机附着在启动事务中幂等创建：按种类、`unitId`、来源与 `approved` 状态查找，缺失时插入附着 ID 为 `local:<kind>` 的记录并写入两条事件。Models 本机单元的 bootId 由 `inputs.newId()` 在每次 `apply` 生成，只进入 Run 的绑定引用，不持久保存；Computer 本机单元没有启动期 bootId，实际 workerId/bootId 仍由 Operations 在操作绑定时固定，打开 Authority 不触碰 worker 目录。
+
+## 执行、取消与清理
+
+没有长期任务或网络连接。所有异步入口经本组件的 pending 集合跟踪；Effect 先停止新准入（后续调用返回 `unit-attachments-closed`），再等待已接受的读写实际退出。`requireApprovedIn` 不拥有事务，随调用方事务提交或回滚。
+
+## 失败与兼容边界
+
+本机附着不能经 API 撤销或收紧作用域；直接改写账本使引用失效时，Run 在接受或恢复阶段按 `unit-attachment-mismatch` 拒绝，不自动改绑。附着码过期返回 `unit-code-expired` 并保留 `pending` 记录，可显式撤销。`attach` 校验失败不改变记录状态。组件不实现单元侧消费附着码的网络入口、远端代理或凭证认证，这些随远端 Computer（U1）与远端 Models（U3）加入。
+
+## 验证
+
+[附着账本与 Session 接受事务测试](../../../tests/unit-attachments.test.mjs)、[harness server 核心测试](../../../tests/harness-server-core.test.mjs)中的本机附着固定与恢复栅栏场景、[HTTP 测试](../../../tests/harness-server-http.test.mjs)中的附着路由。完整入口为 `npm run check`。

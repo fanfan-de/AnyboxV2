@@ -169,7 +169,7 @@ test('legacy turns migrate in array order; ambiguous Run associations remain exp
   assert.equal((await sessions.getNodePath('legacy', third.id)).length, 3)
   const schema = await f.db.read(reader => reader.all('PRAGMA table_info(harness_sessions)'))
   assert.equal(schema.some(column => column.name === 'turns_json'), false)
-  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 10)
+  assert.equal((await f.db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'"))).version, 11)
   assert.deepEqual(await f.db.read(reader => reader.all('SELECT * FROM harness_session_defaults')), [])
   assert.deepEqual(await sessions.getSessionDefaults('assistant'), {
     agentId: 'assistant', modelId: null, fallbackModelId: 'default', effectiveModelId: 'default', revision: 0,

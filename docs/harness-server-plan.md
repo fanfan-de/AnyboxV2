@@ -1,6 +1,6 @@
 # harness server 重建计划
 
-状态：2026-10-10。本分支直接使用相邻 NyaCore，已完成原生协议执行迁移以及 H0 资源边界、H1 闭环、持久会话树、Prompt 管理、Bash/Apply Patch 工具循环、通用 Models 和本机 Web 接入；当前已接入 Computer 本机资源及独立 worker、工具等待重启接续。下方日期验收记录描述各次交付，当前行为以本节与[组件说明](./harness-server-components.md)为准。
+状态：2026-10-14。本分支直接使用相邻 NyaCore，已完成原生协议执行迁移以及 H0 资源边界、H1 闭环、持久会话树、Prompt 管理、Bash/Apply Patch 工具循环、通用 Models 和本机 Web 接入；当前已接入 Computer 本机资源及独立 worker、工具等待重启接续，以及可组合单元 U0 的附着登记。下方日期验收记录描述各次交付，当前行为以本节与[组件说明](./harness-server-components.md)为准。
 
 ## 当前基线
 
@@ -111,3 +111,11 @@ Session run-state 写 v9，新 NativeInitialization v2 / tool-library-v1 复制�
 新增根上的进程和文件执行器，分别持有按 Run 的管道命令、stdin/输出及文件读取、搜索和图片导入；来源写入复用 Apply Patch 队列。正常模型结束也终止并等待剩余进程，经通用 tool-process-cleanup 操作保存实际退出后再结算。工具图片与观察同事务保留，再以用户图片块及 resourceRefs 进入下一次增量请求；文本模型返回不支持诊断。
 
 验收入口：tool-catalog、process-tools、file-tools、native-tool-library 及现有 Run/原生协议行为测试，统一执行 npm run check。检查不使用实际业务库、真实模型 API 或系统 Vault；未修改 NyaCore。具体契约和升级边界见[工具库设计](./tools-library-design.md)。
+
+## 可组合单元 U0：附着登记（2026-10-14）
+
+按[可组合部署单元设计](./composable-units-design.md)实施 U0。根上新增 `harness.unit-attachments` 组件，独占 `unit-attachments` v1 迁移域，保存 harness server 与 Models、Computer 单元之间的附着记录和审计事件；附着码与单元凭证只保存 SHA-256 摘要并只返回一次。组合根把同进程 Models（`models-local`）与本机 worker（`computer-local`）登记为本机单元，组件在启动事务中幂等创建附着 ID 固定为 `local:<kind>` 的 approved 附着；本机附着不可经 API 撤销，Models 本机单元的 bootId 每次装配生成，本机 worker 的实际 workerId/bootId 仍只在操作绑定时固定，打开 Authority 不触碰 worker 目录。
+
+Session 注入该组件，run-state 升为 v11，在 `harness_runs` 增加 `unit_bindings_json`；`registerRun` 在接受事务内复核 Run 传入的引用仍为 approved 且 epoch 相同。Run 准入固定本机 Models/Computer 的绑定引用，恢复接管前校验引用，不匹配时交给只清理的 Runtime 并结算 `dependency-unavailable` 失败，不改绑当前单元。HTTP 增加 `/units/attachments`、`/units/attach-codes`、`/units/attachments/:id/revoke` 三条拥有者侧路由，不设旧别名；Run DTO 与 Web 不变。远端拨出、单元侧消费附着码、按附着区分的 worker 授权和远端代理组件属于 U1/U3，不预建。
+
+验收入口：`tests/unit-attachments.test.mjs`、`tests/harness-server-core.test.mjs` 的本机附着固定与恢复栅栏场景、`tests/harness-server-http.test.mjs` 的附着路由；直接装配 Session 的夹具经 `tests/helpers/unit-attachments.mjs` 登记同样的本机单元。macOS / Node.js 24.16.0 上 `npm run check` 类型检查与构建通过，1314 项测试中 1302 项通过、11 项按原门控跳过、1 项失败；该失败是 `tests/computer-worker.test.mjs` 的真实 worker 图片用例，在未改动的 HEAD 上同样失败，属于本机环境既有问题，不由本次引入。未调用真实模型、系统 Vault 或远端单元，未修改 NyaCore。

@@ -22,6 +22,9 @@ import { sessionServiceKey, sessionRunServiceKey } from '../session/port.js'
 import type { SessionPort, SessionRunPort } from '../session/port.js'
 import { createWaiters } from './waiters.js'
 import { computerOperationsServiceKey, type ComputerOperationsPort } from '../computer/operations-port.js'
+import { unitAttachmentsServiceKey } from '../unit/port.js'
+import type { UnitAttachmentsPort, RunUnitBindings } from '../unit/port.js'
+import { isUnitError } from '../unit/domain.js'
 
 export const runServiceKey = 'harness.runs'
 export const runAdmissionServiceKey = 'harness.run-admission'
@@ -49,13 +52,15 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
   [runRuntimeServiceKey]: RunRuntimePort
   [projectServiceKey]: ProjectPort
   [computerOperationsServiceKey]: ComputerOperationsPort
+  [unitAttachmentsServiceKey]: UnitAttachmentsPort
 }> {
   return {
     name: 'harness-runs',
-    inject: [sessionServiceKey, sessionRunServiceKey, agentPromptServiceKey, modelsServiceKey, protocolAgentServiceKey, runRuntimeServiceKey, projectServiceKey, computerOperationsServiceKey],
+    inject: [sessionServiceKey, sessionRunServiceKey, agentPromptServiceKey, modelsServiceKey, protocolAgentServiceKey, runRuntimeServiceKey, projectServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey],
     apply(ctx, _config, deps) {
       const sessions = deps[sessionServiceKey], records = deps[sessionRunServiceKey], prompts = deps[agentPromptServiceKey]
       const models = deps[modelsServiceKey], protocols = deps[protocolAgentServiceKey], runtime = deps[runRuntimeServiceKey], projects = deps[projectServiceKey]
+      const attachments = deps[unitAttachmentsServiceKey]
       const owned = new Set<string>(), admissions = new Set<Promise<unknown>>(), opening = new Set<AbortController>()
       const cleanupFailures: unknown[] = []
       const requests = new Map<string, { input: RunInput; result: Promise<Run> }>()
@@ -71,6 +76,8 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
         try {
           resumed = await records.claimRunResume(id, candidate.state.runOwnerEpoch, inputs.now())
           await deps[computerOperationsServiceKey].authorizeRun(id,resumed.state.runOwnerEpoch,controller.signal)
+          // A revoked or re-scoped unit attachment never rebinds silently; the Run settles instead.
+          if (resumed.run.units) await attachments.verify(resumed.run.units)
           if (resumed.state.conclusion && ['cleanup','settling'].includes(resumed.state.stage) || resumed.run.status === 'cancelling') {
             const snapshot = resumed.run.modelSnapshot, binding = resumed.run.protocolBinding, input = resumed.run.nativeInput
             if (snapshot?.schemaVersion !== 3 || !binding || !input) throw modelFailure('model-unavailable')
@@ -89,7 +96,7 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             const snapshot = resumed.run.modelSnapshot, binding = resumed.run.protocolBinding, input = resumed.run.nativeInput
             if (snapshot?.schemaVersion === 3 && binding && input) {
               const failed: PreparedRunProgram = { binding,modelSnapshot:snapshot,initialization:resumed.initialization,input,signal:controller.signal,
-                async execute() { return {kind:'failed',category:'dependency-unavailable',error:'accepted Run cannot resume with the available protocol execution'} },
+                async execute() { return {kind:'failed',category:'dependency-unavailable',error:isUnitError(error) ? 'accepted Run is bound to a unit attachment that is no longer valid' : 'accepted Run cannot resume with the available protocol execution'} },
                 async close() { return {records:[],checkpoint:runResumeCheckpoint(resumed!),cleanup:'completed'} }, release() {} }
               const started = runtime.start({runId:id,program:failed,resume:resumed}); transferred = true
               void runtime.wait(id).finally(() => owned.delete(id)).catch(() => {})
@@ -169,6 +176,8 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             if (!modelId) throw modelFailure('model-unavailable')
             const protocolId = protocols.protocolForModel(modelId)
             if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
+            // Every Run runs against this harness server's own units until Session or Agent selection exists.
+            const units: RunUnitBindings = Object.freeze({ schemaVersion: 1, models: (await attachments.local('models')).binding, computer: (await attachments.local('computer')).binding })
             const history = await records.loadNativeHistory(session.id, input.parentNodeId)
             const fixedInitialization = history?.initialization ?? await records.loadNativeInitialization(session.id)
             const availableTools = listTools().map(tool => tool.definition)
@@ -206,7 +215,7 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
               if (controller.signal.aborted || program.signal.aborted) throw modelFailure('dependency-unavailable')
               const handoff = Promise.resolve().then(async () => {
                 const accepted = await records.registerRun(id, input, inputs.now(), [...initialization.prompts, ...(template ? [template] : [])], program.modelSnapshot,
-                  { binding: program.binding, initialization: program.initialization, input: program.input, parentContextRef: history?.contextRef ?? null })
+                  { binding: program.binding, initialization: program.initialization, input: program.input, parentContextRef: history?.contextRef ?? null, units })
                 if (!accepted.created) return accepted.run
                 owned.add(id)
                 try {

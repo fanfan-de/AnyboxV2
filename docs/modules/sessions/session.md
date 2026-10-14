@@ -60,7 +60,7 @@ Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude 
 | `findAcceptedRun(input)` | 在解析当前配置之前查已接受幂等键，同时验证原始输入、附件 ID 与顺序、父节点和显式模型一致 |
 | `describeImages(sessionId, assetIds)` | 准备阶段读取受信图片元数据 |
 | `readFileSnapshots(sessionId, ids, signal?)` | 返回受管文件正文读取；只读取保存的快照，不重新打开项目源文件 |
-| `registerRun(id, input, now, prompts, model, native)` | 原子复核并接受 Run，返回 `{ run, created }` |
+| `registerRun(id, input, now, prompts, model, native)` | 原子复核并接受 Run，返回 `{ run, created }`；`native.units` 存在时经单元附着组件 `requireApprovedIn` 复核并固定到 Run |
 | `loadNativeInitialization(sessionId)` | 读取首次接受后固定的 instruction/context 与工具声明 |
 | `loadNativeHistory(sessionId, parentNodeId)` | 校验所选成功路径，临时物化其原生记录、绑定、快照和 checkpoint |
 | `startOperation(runId, operation, at)` | running 接受正常操作；cancelling 仅接受显式 cleanup:true 且 kind:operation 的清理操作；保存 intent、初始记录及 started 事件，返回是否准入 |
@@ -84,7 +84,7 @@ run-state v10 新增独立版本化 RunResumeState，不复活旧 Run phase 写�
 
 ## 接受、分支与成功结算
 
-新 Session 使用 `native-local-v1`。registerRun 在事务内先检查已接受幂等键，再检查归档状态、Session 模式、schemaVersion 3 模型快照、模型/绑定协议、父节点路径以及精确的 parentContextRef，并通过附件组件的 retainIn 保留引用。首次接受原子固定 Session 协议和 initialization；后续根分支和后代必须使用同一初始化，竞争提交不同初始化会拒绝。即使首次 Run 最终失败，已经固定的协议也不撤销。
+新 Session 使用 `native-local-v1`。registerRun 在事务内先检查已接受幂等键，再检查归档状态、Session 模式、schemaVersion 3 模型快照、模型/绑定协议、父节点路径以及精确的 parentContextRef，通过附件组件的 retainIn 保留引用，并由[单元附着](../units/unit-attachments.md)组件复核 Run 固定的 Models/Computer 附着引用仍为 approved 且 epoch 相同。首次接受原子固定 Session 协议和 initialization；后续根分支和后代必须使用同一初始化，竞争提交不同初始化会拒绝。即使首次 Run 最终失败，已经固定的协议也不撤销。
 
 父路径校验拒绝不存在、跨 Session、断链和循环节点。原生恢复还要求每个节点来自 completed 原生 Run，context 的 Session、协议、父引用、initialization 和记录版本一致。只在准备时拼接所选路径记录；数据库保存每个 Run 自己的增量请求/响应和不可变链节，避免每轮复制全部历史。
 
@@ -92,7 +92,7 @@ run-state v10 新增独立版本化 RunResumeState，不复活旧 Run phase 写�
 
 ## 表、通知与资源归属
 
-迁移继续使用历史 `run-state` 账本，当前版本 10（v10 增加 harness_run_resumes 的 owner、Runtime 状态和协议游标；v6 增加原生记录 resource_refs_json，v7 增加 Session archived_at 和归档列表索引，v8 增加按 Agent 保存的新会话默认模型表，v9 增加 Agent 工具配置和不可变 Session 工具快照；旧 JSON 原样保留）。该组件拥有 `harness_run_resumes`、`harness_agent_tool_settings`、`harness_session_defaults`、`harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
+迁移继续使用历史 `run-state` 账本，当前版本 11（v11 在 harness_runs 增加 unit_bindings_json 保存接受时固定的单元附着引用，旧 Run 没有引用时按本机形态解释；v10 增加 harness_run_resumes 的 owner、Runtime 状态和协议游标；v6 增加原生记录 resource_refs_json，v7 增加 Session archived_at 和归档列表索引，v8 增加按 Agent 保存的新会话默认模型表，v9 增加 Agent 工具配置和不可变 Session 工具快照；旧 JSON 原样保留）。该组件拥有 `harness_run_resumes`、`harness_agent_tool_settings`、`harness_session_defaults`、`harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
 
 每次 Run 变更提交后发送 `harness.run.changed`，载荷为 sessionId、runId、revision。监听失败只记录警告，不回滚已提交事实。原生记录可能含签名、加密续接和工具原生 ID，属于受信恢复面；浏览器必须使用白名单投影。Key、认证头、凭据引用和运行句柄不得写入历史。
 

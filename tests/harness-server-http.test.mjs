@@ -1463,3 +1463,32 @@ test('harness server HTTP archive routes enforce read-only state, active conflic
     await f.close(); rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test('unit attachments are listed, attach codes are issued once, and local attachments cannot be revoked over HTTP', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-http-units-')), f = await fixture(directory)
+  const call = (method, path, body) => fetch(`${f.web.url}/api/v1/apps/agent${path}`, { method,
+    headers: method === 'POST' ? { Origin: f.web.url, 'Content-Type': 'application/json' } : undefined, body: method === 'POST' ? JSON.stringify(body) : undefined })
+  try {
+    const listed = await call('GET', '/units/attachments')
+    assert.equal(listed.status, 200)
+    assert.deepEqual((await listed.json()).map(a => [a.attachmentId, a.state, a.origin, a.credential]),
+      [['local:computer', 'approved', 'local', 'none'], ['local:models', 'approved', 'local', 'none']])
+    const created = await call('POST', '/units/attach-codes', { unitKind: 'computer', scope: { kind: 'computer', projects: ['/work'], tools: 'all' } })
+    assert.equal(created.status, 201)
+    const { attachment, code } = await created.json()
+    assert.equal(attachment.state, 'pending'); assert.equal(attachment.unitId, null); assert.equal(typeof code, 'string')
+    assert.ok(!JSON.stringify(await (await call('GET', '/units/attachments')).json()).includes(code), 'listing never returns the code')
+    assert.equal((await call('POST', '/units/attach-codes', { unitKind: 'models', scope: { kind: 'computer', projects: 'all', tools: 'all' } })).status, 400)
+    assert.equal((await call('POST', '/units/attach-codes', { unitKind: 'computer', scope: { kind: 'computer', projects: 'all', tools: 'all' }, ttlMs: 'soon' })).status, 400)
+    assert.equal((await call('POST', '/units/attach-codes', { unitKind: 'computer', scope: { kind: 'computer', projects: 'all', tools: 'all' }, extra: 1 })).status, 400)
+    const local = await call('POST', '/units/attachments/local%3Amodels/revoke', {})
+    assert.equal(local.status, 409); assert.equal((await local.json()).error.code, 'unit-attachment-local')
+    const revoked = await call('POST', `/units/attachments/${encodeURIComponent(attachment.attachmentId)}/revoke`, {})
+    assert.equal(revoked.status, 200)
+    const revokedBody = await revoked.json()
+    assert.equal(revokedBody.state, 'revoked'); assert.equal(revokedBody.epoch, 2)
+    const missing = await call('POST', '/units/attachments/missing/revoke', {})
+    assert.equal(missing.status, 404); assert.equal((await missing.json()).error.code, 'unit-attachment-missing')
+    assert.equal((await fetch(`${f.web.url}/api/v1/units/attachments`)).status, 404, 'new routes have no legacy alias')
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})

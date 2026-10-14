@@ -19,6 +19,7 @@ import { createLocalComputerProviderComponent } from './helpers/fixed-computer-p
 import { createControlledComputerWorker } from './helpers/computer-services.mjs'
 import { deferred, ids } from './helpers/controlled-models.mjs'
 import { registerNativeRun, completedOutcome, completeNativeRun } from './helpers/native-records.mjs'
+import { installUnitAttachments } from './helpers/unit-attachments.mjs'
 
 async function promptly(work) {
   let timer
@@ -40,6 +41,7 @@ test('worker authorization and orphan draining do not block another Run wait; ab
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
   await root.installComponent(createProjectComponent(inputs))
   await root.installComponent(createProjectFilesComponent(inputs))
+  await installUnitAttachments(root, inputs)
   const worker = createControlledComputerWorker(root)
   await root.installComponent(worker.component)
   await root.installComponent(createLocalComputerProviderComponent())

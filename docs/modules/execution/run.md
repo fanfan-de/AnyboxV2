@@ -10,7 +10,7 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 - 工厂：`createRunComponent(inputs, agents, isHarnessServerClosing?, closingSignal?)`；组件名：`harness-runs`；配置类型：`void`。
 - `inputs` 提供 `now()`、`newId()`；`agents` 是已验证的只读 Agent 定义；可选 `isHarnessServerClosing()` 默认为 false，用于区分整个应用关闭与依赖失效。
 - 提供 `harness.runs: RunPort` 和受信宿主控制服务 `harness.run-admission: RunAdmissionPort`。
-- 注入 `harness.sessions`、`harness.session-runs`、`harness.agent-prompts`、`models`、`harness.protocol-agents`、`harness.run-runtime`、`harness.projects`、`harness.computer-operations`。
+- 注入 `harness.sessions`、`harness.session-runs`、`harness.agent-prompts`、`models`、`harness.protocol-agents`、`harness.run-runtime`、`harness.projects`、`harness.computer-operations`、`harness.unit-attachments`。
 
 ## 服务接口
 
@@ -27,15 +27,15 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 
 同一个 Session 和幂等键的并发调用共享一个准备 Promise。相同键但原始输入、图片或文件快照身份/顺序、父节点或显式模型不同会抛出 `idempotency-conflict`。数据库中的已接受 Run 在读取当前 Agent、模型、Prompt 和附件前返回，因此配置更新、归档或草稿过期不会让重复请求重新执行。
 
-首次请求按以下顺序处理：读取 Session，拒绝归档状态和旧历史模式；检查项目目录可用；解析 Agent；以 `input.modelId ?? session.modelId ?? agent.modelId` 选模；检查 Session 固定协议；加载父路径历史和 Session 固定初始化。固定工具声明必须与受信静态目录对应版本精确匹配，Session 工具选择快照也须验证；否则拒绝续接。Agent 工具配置更改只影响新 Session，不替换已有会话或分支的工具。
+首次请求按以下顺序处理：读取 Session，拒绝归档状态和旧历史模式；检查项目目录可用；解析 Agent；以 `input.modelId ?? session.modelId ?? agent.modelId` 选模；检查 Session 固定协议；从[单元附着](../units/unit-attachments.md)解析本机 Models 与 Computer 的绑定引用（当前没有 Session 或 Agent 级单元选择，所有 Run 使用本 harness server 自己的单元）；加载父路径历史和 Session 固定初始化。固定工具声明必须与受信静态目录对应版本精确匹配，Session 工具选择快照也须验证；否则拒绝续接。Agent 工具配置更改只影响新 Session，不替换已有会话或分支的工具。
 
 没有固定初始化时，[Agent Prompt](../prompts/agent-prompts.md) 提供 instruction/context；新 NativeInitialization schemaVersion 2 保存 tool-library-v1 并复制不可变 Session.toolSelection。模型有效 tools 能力为 true 时声明该选择内的全部工具，否则声明为空但选择快照仍保留。旧 schemaVersion 1/known-tools-v1 初始化保持原样。task-template 每次重新解析，但只把 `{{input}}` 替换为本次原始输入一次，并保存 v3 raw/text/template/images/files 快照，图片和文件内容不参与模板替换。历史不重新套用模板。
 
-[协议注册表](protocol-agent-registry.md) 为这些输入创建 `PreparedRunProgram`。Session 的 `registerRun` 事务复核父上下文引用、协议和初始化，并通过图片与项目文件组件的同步 retainIn 固定资源引用，再保存接受结果；引用与 Run 一起提交或回滚。只有 `created: true` 的 Run 会交给 Runtime。事务返回已有幂等结果时，当前多余 program 仍需关闭和释放。
+[协议注册表](protocol-agent-registry.md) 为这些输入创建 `PreparedRunProgram`。Session 的 `registerRun` 事务复核父上下文引用、协议、初始化和单元附着引用（仍为 approved 且 epoch 相同），并通过图片与项目文件组件的同步 retainIn 固定资源引用，再保存接受结果；引用与 Run 一起提交或回滚。只有 `created: true` 的 Run 会交给 Runtime。事务返回已有幂等结果时，当前多余 program 仍需关闭和释放。
 
 ## 所有权、取消和关闭
 
-启动恢复不阻塞 apply：组件异步读取 Session.listRunResumes，CAS 提升 owner，同事务更新 Operations 授权，再通过 authorizeRun 在原 worker 安装栅栏；最后调用协议注册表 prepareResume 并交给 Runtime。恢复使用已接受模型、初始化、原始输入及记录，不读取当前 Prompt、不重新接受 Run。取消状态先持久登记，未派发工具不因此激活 worker。
+启动恢复不阻塞 apply：组件异步读取 Session.listRunResumes，CAS 提升 owner，同事务更新 Operations 授权，再通过 authorizeRun 在原 worker 安装栅栏，并校验 Run 固定的单元附着引用仍然有效；最后调用协议注册表 prepareResume 并交给 Runtime。附着被撤销或 epoch 变化时不改绑当前单元，Run 交给只清理的 Runtime 并结算 `dependency-unavailable` 失败。恢复使用已接受模型、初始化、原始输入及记录，不读取当前 Prompt、不重新接受 Run。取消状态先持久登记，未派发工具不因此激活 worker。
 
 恢复准备因账户 epoch/协议不兼容被拒绝时，仍交给只清理的 Runtime：持久取消原 worker scope、保存已发生事实、等待实际退出及引用释放，再结算失败。启动还调用 recoverCancelledRuns 排空已结算 interrupted 的遗留 scope，独立于是否能继续协议。
 
@@ -51,7 +51,7 @@ Effect 清理先关闭新准入、中止正在准备的 execution，取消已接
 
 ## 验证
 
-[harness server 核心测试](../../../tests/harness-server-core.test.mjs) 验证幂等、未知模型、同步交接拒绝、快照不匹配、依赖替换与关闭；[会话树测试](../../../tests/conversation-tree.test.mjs) 验证同父并发、启动窗口取消、等待者中止与分支隔离；[原生 Session 测试](../../../tests/native-session.test.mjs) 验证父引用二次检查和首次初始化竞争；[恢复等待测试](../../../tests/computer-run-wait.test.mjs) 验证跨 Run 等待隔离、观察中止不取消原操作，以及 Effect 仍等待全部恢复与遗留 scope 实际退出。统一执行 `npm run check`。
+[harness server 核心测试](../../../tests/harness-server-core.test.mjs) 验证幂等、未知模型、同步交接拒绝、快照不匹配、依赖替换与关闭，以及本机单元附着固定与失效附着的恢复结算；[会话树测试](../../../tests/conversation-tree.test.mjs) 验证同父并发、启动窗口取消、等待者中止与分支隔离；[原生 Session 测试](../../../tests/native-session.test.mjs) 验证父引用二次检查和首次初始化竞争；[恢复等待测试](../../../tests/computer-run-wait.test.mjs) 验证跨 Run 等待隔离、观察中止不取消原操作，以及 Effect 仍等待全部恢复与遗留 scope 实际退出。统一执行 `npm run check`。
 
 项目文件只接受已准备的 snapshotId，幂等比较包含 ID 及顺序。新 Run 经 session-runs.readFileSnapshots 获取并校验有界文本，取消使用准入 AbortController，读取后等待 done；协议绑定在模板处理之后附加用户文件资料。已接受幂等请求不重新查草稿期限或源路径，详见[文件引用设计](../../project-file-references-design.md)。
 
