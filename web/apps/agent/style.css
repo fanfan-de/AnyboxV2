@@ -449,6 +449,11 @@
 #agent--settings-dialog .settings-panel-heading h3 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
 #agent--settings-dialog .settings-panel-heading p { margin: 6px 0 0; font-size: 12px; }
 .settings-card { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.computer-management { min-width: 0; padding: 16px 0; }
+.computer-management p, .computer-management strong { overflow-wrap: anywhere; }
+.computer-management textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 5px; padding: 9px 10px; }
+#agent--settings-dialog .computer-grant-toggle { display: flex; align-items: center; gap: 8px; }
+#agent--settings-dialog .computer-grant-toggle input { width: auto; flex: 0 0 auto; margin: 0; }
 #agent--settings-dialog h4 { margin: 0; font-size: 13px; font-weight: 600; }
 .settings-field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 280px); align-items: center; gap: 24px; }
 .settings-field-row > button { justify-self: end; }

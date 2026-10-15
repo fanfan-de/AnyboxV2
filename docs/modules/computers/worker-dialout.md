@@ -39,3 +39,7 @@
 ## 验证
 
 [worker 附着测试](../../../tests/computer-worker-attachments.test.mjs)经真实认证监听器验证附着、领取执行、ceiling 拒绝、跨附着拒绝、两侧撤销、worker 重启后的续连以及附着的连接失败重试与模糊失败不重试。完整入口为 `npm run check`。
+
+## 独立设备管理
+
+`updatePermissions(id, ceiling)` 委托本机附着账本，等待工具排空后返回当前视图；既有拨出循环保留，实际接纳始终读取最新账本上限。设备管理不依赖 harness server 控制面，客户端与 CLI 直接经 worker 回环协议调用本服务。attach / list / revoke / updatePermissions 均登记在途管理操作；Effect 先停止新管理与拨出请求，再等待管理操作和循环退出，避免关闭期间写入已卸载的账本。参见 [独立管理](../../computer-worker-management.md)。

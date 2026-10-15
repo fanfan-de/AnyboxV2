@@ -1,17 +1,30 @@
 # harness server 独立部署与多设备连接
 
+[统一发行与独立运行角色](runtime-roles-and-distribution.md)已确定从各平台完整 Anybox 产品包按需部署客户端服务、harness server 与 Computer worker，各角色独立进程和生命周期。统一角色入口已接入当前 Node 发行；随包无头运行时及三平台服务管理仍待补齐，现有平台限制继续适用。
+
 harness server 是 Anybox Harness 的通用服务端核心，可部署在本地设备或远端服务器。执行端支持 macOS / Linux，要求 Node.js >=22.13.0。命名与客户端边界见 [命名规范](naming.md)。每台设备独立运行一个应用宿主，在同一个根上按 Anybox Harness 打开目标装配内部 Models、Prompt 和 Agent 能力，并独立保存配置、业务数据库与附件目录。本机客户端拥有独立 `client.sqlite` 与系统凭据命名空间，不需要本机 harness server 在线。
 
 ## 开发仓库启动
 
 ```sh
 npm run harness:server:init
-npm run web
+npm run web:local
 ```
 
 初始化命令在业务库中建立稳定实例身份，并只在本次终端输出完整设备令牌。通过 Anybox Harness 工作区侧栏的「管理连接」打开连接管理并填写令牌；本机默认服务地址 `http://127.0.0.1:3001`，客户端页面 `http://127.0.0.1:3000`。配对成功后完整令牌只保存在客户端系统凭据库。浏览器不保存令牌。
 
-分别启动 harness server 与 Anybox Harness 客户端时使用 `npm run harness:server` 与 `npm run client`。旧 `npm run harness` 和 `npm run harness:init` 保留为服务端启动及初始化的兼容别名。`npm run web` 启动两个独立子进程；harness server 初始化失败时客户端仍启动。停止组合命令会关闭其启动的两个应用。关闭浏览器或单独客户端服务不会取消任何远端 Run；重新连接通过原实例和幂等键补查。取消 Run 是单独的显式操作，关闭远端进程仅由其宿主负责；Anybox Harness 连接管理通过「启动 Agent」「停止 Agent」显式控制对应设备的执行组件。
+`npm run client` 与 `npm run web` 都只启动客户端，连接远端时无需运行本机 harness server。`npm run harness:server` 单独启动执行端；`npm run computer:worker -- <独立数据目录>` 单独启动 Computer worker。旧 `npm run harness` 和 `npm run harness:init` 保留为服务端兼容别名。显式 `npm run web:local` 才组合启动客户端与 harness server 两个独立子进程；harness server 初始化失败时客户端仍启动。停止组合命令会关闭其启动的两个应用。关闭浏览器或单独客户端服务不会取消任何远端 Run；重新连接通过原实例和幂等键补查。取消 Run 是单独的显式操作，关闭远端进程仅由其宿主负责；Anybox Harness 连接管理通过「启动 Agent」「停止 Agent」显式控制对应设备的执行组件。
+
+共享构建后，开发目录和 Node 发行物均可使用以下入口；分派器只动态加载选中的角色。`--help` 和未知角色不装配任何服务。原角色 main 保留独立调用能力，已有 systemd 与 worker 进程入口无需迁移。
+
+```sh
+node dist/entrypoints/anybox-main.js client
+node dist/entrypoints/anybox-main.js harness-server
+node dist/entrypoints/anybox-main.js harness-server init
+node dist/entrypoints/anybox-main.js computer-worker /absolute/worker-data
+```
+
+这些命令仍使用当前 Node 运行时；Windows Computer 的 Unix 限制尚未解除。Computer 独立附着管理 CLI 已补齐，见 [独立管理](computer-worker-management.md)；系统服务安装器仍待实现。
 
 新安装显示代码注册的应用目录，正式目录目前提供 Anybox Harness。点击打开后直接进入项目与会话工作区，在侧栏「管理连接」中配对本地或远程设备，并启动对应 Agent；侧栏「执行设备」选择新增项目的归属及模型、Prompt 设置的管理范围，已有会话保持所属设备。已有 run-state 的安装在首次迁移时保留 Agent 运行目标。模型与 Prompt 管理统一从工作区「设置」进入，按所选设备管理，不提供独立功能页面或应用。选择设备不启动其执行组件，选择远程设备不启动本机执行服务。
 
@@ -54,7 +67,7 @@ npm run harness:server
 
 harness server 的端口规范变量为 `ANYBOX_HARNESS_PORT`；配置解析保留旧 `ANYBOX_WEB_PORT` 入口作为兼容回退。客户端继续使用 `ANYBOX_WEB_PORT` 配置自己的页面端口。
 
-远端 Computer 形态的建立顺序：先以本机形态运行，在 `POST /units/attach-codes` 生成 `computer` 附着码；在用户设备本机 harness server 的连接管理（U1 第 5 步前为 `POST /units/local-computer/attachments`）填入该 harness server 的 HTTPS 地址与附着码并设定目录/工具上限；该设备的 worker 随即以 `Unit` 凭证拨出。然后以 `ANYBOX_COMPUTER_UNIT=remote ANYBOX_COMPUTER_ATTACHMENT=<附着 ID>` 重新启动 harness server。本机形态也可以把单个项目绑定到远端附着：`POST /projects` 传 `computerAttachmentId`，路径由该单元解析并限制在设备拥有者设定的目录上限内；一个 harness server 可同时服务本机项目与多个远端单元的项目。切换形态必须重启；远端单元离线时新 Run 的计算工具以 `tool-unavailable` 失败，已接受操作在单元上继续，重连后按原 ID 查回。
+远端 Computer 形态的建立顺序：先以本机形态运行，在 `POST /units/attach-codes` 生成 `computer` 附着码；在用户设备客户端“管理连接 → 管理本机 Computer worker”（或独立 CLI，无须本机 harness server）填入该 harness server 的 HTTPS 地址与附着码并设定目录/工具上限；该设备的 worker 随即以 `Unit` 凭证拨出。然后以 `ANYBOX_COMPUTER_UNIT=remote ANYBOX_COMPUTER_ATTACHMENT=<附着 ID>` 重新启动 harness server。本机形态也可以把单个项目绑定到远端附着：`POST /projects` 传 `computerAttachmentId`，路径由该单元解析并限制在设备拥有者设定的目录上限内；一个 harness server 可同时服务本机项目与多个远端单元的项目。切换形态必须重启；远端单元离线时新 Run 的计算工具以 `tool-unavailable` 失败，已接受操作在单元上继续，重连后按原 ID 查回。
 
 本机 harness server 使用服务器 Computer 的实测形态（2026-10-15）：服务器上的 Anybox Harness 执行目标与 worker unit 保持运行（它是该 worker 的附着控制面），本机 harness server 只监听回环，因此由本机建立 SSH 反向隧道 `ssh -N -R 127.0.0.1:3101:127.0.0.1:3001 <user>@<server>`，服务器 worker 以 `harnessUrl=http://127.0.0.1:3101` 拨出：拨出规则只对回环放行明文 HTTP，加密由 SSH 负责；隧道端口只在服务器回环可达，拥有者路由仍要设备令牌、单元路由仍要附着凭证。附着后在本机 `POST /projects` 传服务器目录路径与 `computerAttachmentId` 即可，本机形态可同时服务本机项目；隧道由本机终端或 launchd 保持，断开期间该单元离线。
 
@@ -98,7 +111,7 @@ worker 目录固定给一个 Authority，不与其他业务库或设备实例共
 
 开发启动按需 detached 创建 worker，保证只强杀 Runtime 进程时 worker 继续。detached 不脱离 systemd cgroup；生产部署需安装独立的 [computer-worker.service.example](../deploy/computer-worker.service.example)，先启动 worker unit 并确认该目录 endpoint 已就绪，再启动 harness server。两份 unit 的目录必须与同一业务库匹配，且不能通过 PartOf/BindsTo 或共同停止范围把 worker 绑到 Runtime。Authority 的代理会认证并复用该目录已有 endpoint，无须重新执行工具。缺少现有 endpoint 而由 harness server 自动启动的 worker 会留在其 cgroup，不能据此承诺整个 Runtime 服务的重启接续。
 
-独立 worker 自己的 unit 仍用 `KillMode=control-group` 管理其进程组；应用正常关闭会取消并排空所属 Run，停止 worker unit 或共同 cgroup 还会终止执行服务，这些都与 Runtime 进程异常退出不同。worker 永久丢失后 starting/running 操作只能 outcome-unknown，保留已知事实并拒绝重放，不能把这个场景宣传为接续成功。worker 异常退出后由下一次本地调用重新启动（例如打开附着列表或新的本机 Run），没有本地调用就不会重启：只作为远端 harness server 单元使用的设备（U1 的 Mac 等）必须由 systemd、launchd 等外部监督 worker，否则 worker 崩溃后该单元一直离线，远端 Run 保持 running 直到单元回来或被取消。升级或重启远端 harness server 时，远端单元的拨出循环在产品 `applying` 期间收到 `product-unavailable` 而 offline，并按最长 15 秒的退避自动重连，不需要重新附着；绑定该单元的项目在此期间不可用，新 Run 准入被拒绝。当前故障注入实测的是 Runtime PID 的 SIGKILL 与存活 worker 身份；systemd 服务和真实 macOS 部署需按实际运维环境另行验收。
+独立 worker 自己的 unit 仍用 `KillMode=control-group` 管理其进程组；应用正常关闭会取消并排空所属 Run，停止 worker unit 或共同 cgroup 还会终止执行服务，这些都与 Runtime 进程异常退出不同。worker 永久丢失后 starting/running 操作只能 outcome-unknown，保留已知事实并拒绝重放，不能把这个场景宣传为接续成功。worker 异常退出后由下一次本地调用重新启动（例如旧服务端附着 API 或新的本机 Run；新版独立管理需明确点击启动），没有本地调用就不会重启：只作为远端 harness server 单元使用的设备（U1 的 Mac 等）必须由 systemd、launchd 等外部监督 worker，否则 worker 崩溃后该单元一直离线，远端 Run 保持 running 直到单元回来或被取消。升级或重启远端 harness server 时，远端单元的拨出循环在产品 `applying` 期间收到 `product-unavailable` 而 offline，并按最长 15 秒的退避自动重连，不需要重新附着；绑定该单元的项目在此期间不可用，新 Run 准入被拒绝。当前故障注入实测的是 Runtime PID 的 SIGKILL 与存活 worker 身份；systemd 服务和真实 macOS 部署需按实际运维环境另行验收。
 
 独立 worker 继承现有 Bash/进程组件的 Unix guard，Linux/macOS 可装配，本次仅 Linux 实测。Windows 可运行纯模型和受控资源契约测试，真实 worker 激活尚未支持；全部文件计算工具也依赖这个根，不能单独绕过平台限制。
 
@@ -127,3 +140,7 @@ Session、Models 与附件原有格式不因部署拆分或产品停用改变。
 源码中 `src/host/` 是不依赖具体应用的 Anybox 宿主，`src/applications/harness/` 是完整 Anybox Harness 应用。`src/entrypoints/` 组合正式目录，服务端规范命令为 `harness:server` / `harness:server:init`，保留 `harness` / `harness:init` 兼容别名以及 `client` / `web` 命令；通用宿主工厂显式接收应用目录。目录调整不改变 API 路径、稳定应用 ID、数据库迁移或浏览器持久格式，当前结构见[目录边界](harness-module-boundary.md)。
 
 客户端与执行端分别通过受信目录注册应用，详见[接入说明](application-development.md)。应用默认关闭，按 ID 分别保存和恢复目标；移出目录不删除数据。Web 标签状态只保存在当前浏览器 sessionStorage。关闭标签不停止后台应用，显式“停止应用”成功后才卸载组件并清理标签。Anybox Harness 连接与目标控制在自身页面，修改连接不重载其他应用。服务端清理失败禁止本应用重装，需重启进程；其他应用保留自己的状态。
+
+## Computer worker 独立管理
+
+[操作说明](computer-worker-management.md)列出客户端入口与 `computer-worker serve/start/status/attach/permissions/revoke/stop` 命令。客户端可用 `ANYBOX_COMPUTER_WORKER_DIRECTORY` 指定管理目标，默认沿用本机业务库路径附加 `.computer-worker`；仅指定路径不会创建它。上述实测记录中的 harness server 管理依赖属于当时流程，现在可直接通过独立 CLI 管理服务器 worker。独立 worker 应由自己的 systemd/launchd unit 监督。

@@ -34,3 +34,9 @@
 ## 验证
 
 [worker 附着测试](../../../tests/computer-worker-attachments.test.mjs)覆盖纯规则、记录/撤销与凭据意图、执行器按附着授权与 ceiling 拒绝、worker 重启后的凭证读取；真实系统凭据用例由 `ANYBOX_KEYRING_TESTS=1` 门控。完整入口为 `npm run check`。
+
+## 权限修改
+
+`updatePermissions(attachmentId, ceiling)` 校验并更新既有 JSON 中的本地权限上限，保留 ID、epoch、scope、凭据和历史，不增加迁移。`record`、`updatePermissions`、`revoke` 按附着串行。权限更新期间 `requireApprovedIn` 返回 `worker-attachment-updating`，保存后以 `onChanged(attachment, change)` 的 `permissions` 通知执行器取消并排空该附着已有 Run，等待实际退出后才重新开放准入。`record` / `revoke` 分别发同名变更原因；撤销单调且禁止再修改。
+
+监听清理失败仍通知其他监听者；撤销仍尝试删除凭据，随后报告失败，不假报清理成功。组件卸载等待已接纳的队列与凭据操作。`tests/computer-worker-management.test.mjs` 验证新上限、并发修改与撤销、实际退出和重启持久化。

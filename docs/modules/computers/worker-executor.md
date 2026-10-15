@@ -35,3 +35,5 @@ worker 异常重启将可能开始的 starting/running 操作转为 outcome-unkn
 ## 验证
 
 [Worker 行为](../../../tests/computer-worker.test.mjs)与[故障注入](../../../tests/computer-worker-resume.test.mjs)验证真实独立进程、接纳去重、owner 栅栏、排队取消、固定 scope、stdin/output 重复领取、worker 故障未知事实及 Runtime SIGKILL 后接续；[worker 附着测试](../../../tests/computer-worker-attachments.test.mjs)验证按附着授权与上限拒绝。补丁逐文件事实及取消屏障继续由 [Apply Patch 测试](../../../tests/apply-patch-component.test.mjs)验证。完整入口为 `npm run check`。
+
+本机权限修改与撤销均按附着取消并排空当前 Run。权限修改期间附着账本暂停新准入；执行器等待实际工具退出后才确认管理变更完成，scope 清理失败标 uncertain 并返回 `worker-cleanup-failed`。其他附着的 Run 不受影响。行为验证见 `tests/computer-worker-management.test.mjs`。

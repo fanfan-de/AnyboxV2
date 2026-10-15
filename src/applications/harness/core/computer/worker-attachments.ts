@@ -4,11 +4,12 @@ import { createSystemKeyringStore } from '@anybox/api-key-manager'
 import type { SystemKeyringOptions, SystemKeyringStore } from '@anybox/api-key-manager'
 import { localStorageServiceKey } from '../../../../storage/port.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow } from '../../../../storage/port.js'
-import { localWorkerAttachment, localWorkerAttachmentId, revokeWorkerAttachment, validateWorkerAttachment } from './worker-attachments-domain.js'
+import { localWorkerAttachment, localWorkerAttachmentId, revokeWorkerAttachment, validateWorkerAttachment, validateComputerCeiling } from './worker-attachments-domain.js'
 import type { WorkerAttachment } from './worker-attachments-domain.js'
 import { workerError } from './worker-port.js'
 
 export const workerAttachmentsServiceKey = 'computer.worker-attachments'
+export type WorkerAttachmentChange = 'record' | 'permissions' | 'revoke'
 export interface WorkerAttachmentsOptions {
   /** System credential namespace; the unit credential of each attachment is one entry in it. */
   readonly namespace?: string
@@ -22,10 +23,11 @@ export interface WorkerAttachmentsPort {
   record(attachment: WorkerAttachment, credential: string): Promise<WorkerAttachment>
   /** Stops acceptance immediately, lets listeners finish, then deletes the credential. Idempotent. */
   revoke(attachmentId: string): Promise<WorkerAttachment>
+  updatePermissions(attachmentId: string, ceiling: unknown): Promise<WorkerAttachment>
   credential(attachmentId: string, signal?: AbortSignal): Promise<string>
   /** Synchronous participant of the executor's acceptance transaction; the loopback attachment is always approved. */
   requireApprovedIn(reader: StorageReader, attachmentId: string): WorkerAttachment
-  onChanged(listener: (attachment: WorkerAttachment) => void | Promise<void>): () => void
+  onChanged(listener: (attachment: WorkerAttachment, change: WorkerAttachmentChange) => void | Promise<void>): () => void
 }
 const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute('CREATE TABLE computer_worker_attachments (attachment_id TEXT PRIMARY KEY, state TEXT NOT NULL, record_json TEXT NOT NULL, created_at TEXT NOT NULL, revoked_at TEXT)')
@@ -43,7 +45,9 @@ export function createWorkerAttachmentsComponent(options: WorkerAttachmentsOptio
     const db = deps[localStorageServiceKey], now = options.now ?? (() => new Date().toISOString())
     await db.migrate('computer-worker-attachments', migrations)
     let vault: SystemKeyringStore | undefined, accepting = true
-    const pending = new Set<Promise<unknown>>(), listeners = new Set<(attachment: WorkerAttachment) => void | Promise<void>>()
+    const pending = new Set<Promise<unknown>>(), listeners = new Set<(attachment: WorkerAttachment, change: WorkerAttachmentChange) => void | Promise<void>>()
+    const queues = new Map<string, Promise<unknown>>()
+    const changingPermissions = new Set<string>()
     const secrets = () => vault ??= createSystemKeyringStore({ namespace: options.namespace ?? 'anybox.computer-worker', openEntry: options.openEntry ?? nativeEntry })
     const keyring = async <T>(work: (store: SystemKeyringStore) => Promise<T>): Promise<T> => {
       try { return await work(secrets()) } catch { throw workerError('worker-credential-unavailable') }
@@ -54,7 +58,16 @@ export function createWorkerAttachmentsComponent(options: WorkerAttachmentsOptio
       return result
     }
     const readOne = (reader: StorageReader, attachmentId: string) => { const row = reader.get('SELECT * FROM computer_worker_attachments WHERE attachment_id = ?', [attachmentId]); return row ? fromRow(row) : undefined }
-    const notify = async (attachment: WorkerAttachment) => { for (const listener of [...listeners]) await listener(attachment) }
+    const change = <T>(id: string, work: () => Promise<T>) => track(async () => {
+      const task = (queues.get(id) ?? Promise.resolve()).catch(() => {}).then(work)
+      queues.set(id, task)
+      try { return await task } finally { if (queues.get(id) === task) queues.delete(id) }
+    })
+    const notify = async (attachment: WorkerAttachment, reason: WorkerAttachmentChange) => {
+      let failure: unknown
+      for (const listener of [...listeners]) { try { await listener(attachment, reason) } catch (error) { failure ??= error } }
+      if (failure) throw failure
+    }
     // Orphaned credentials from an interrupted record() or revoke() are reconciled before anything is served.
     for (const row of await db.read(reader => reader.all('SELECT attachment_id, kind FROM computer_worker_credential_intents'))) {
       const attachmentId = String(row.attachment_id)
@@ -68,7 +81,7 @@ export function createWorkerAttachmentsComponent(options: WorkerAttachmentsOptio
     ctx.effect(() => async () => { accepting = false; await Promise.allSettled([...pending]); try { await vault?.close() } catch { /* nothing to recover */ } }, 'stop worker attachment changes and join credential operations')
     const service: WorkerAttachmentsPort = {
       list: () => track(() => db.read(reader => Object.freeze(reader.all('SELECT * FROM computer_worker_attachments ORDER BY created_at, attachment_id').map(fromRow)))),
-      record: (input, credential) => track(async () => {
+      record: (input, credential) => change(input?.attachmentId, async () => {
         const attachment = validateWorkerAttachment(input)
         if (attachment.state !== 'approved' || attachment.attachmentId === localWorkerAttachmentId || typeof credential !== 'string' || !credential) throw workerError('worker-attachment-invalid')
         await db.transaction(tx => {
@@ -80,10 +93,27 @@ export function createWorkerAttachmentsComponent(options: WorkerAttachmentsOptio
           tx.execute('INSERT INTO computer_worker_attachments (attachment_id, state, record_json, created_at, revoked_at) VALUES (?, ?, ?, ?, NULL)', [attachment.attachmentId, attachment.state, JSON.stringify(attachment), attachment.createdAt])
           tx.execute('DELETE FROM computer_worker_credential_intents WHERE attachment_id = ?', [attachment.attachmentId])
         })
-        await notify(attachment)
+        await notify(attachment, 'record')
         return attachment
       }),
-      revoke: attachmentId => track(async () => {
+      updatePermissions: (attachmentId, input) => change(attachmentId, async () => {
+        if (attachmentId === localWorkerAttachmentId) throw workerError('worker-attachment-local')
+        const ceiling = validateComputerCeiling(input)
+        changingPermissions.add(attachmentId)
+        try {
+          const updated = await db.transaction(tx => {
+            const prior = readOne(tx, attachmentId)
+            if (!prior) throw workerError('worker-attachment-missing')
+            if (prior.state !== 'approved') throw workerError('worker-attachment-rejected')
+            const next = Object.freeze({ ...prior, ceiling })
+            tx.execute('UPDATE computer_worker_attachments SET record_json = ? WHERE attachment_id = ?', [JSON.stringify(next), attachmentId])
+            return next
+          })
+          await notify(updated, 'permissions')
+          return updated
+        } finally { changingPermissions.delete(attachmentId) }
+      }),
+      revoke: attachmentId => change(attachmentId, async () => {
         if (attachmentId === localWorkerAttachmentId) throw workerError('worker-attachment-local')
         const revoked = await db.transaction(tx => {
           const prior = readOne(tx, attachmentId)
@@ -94,11 +124,13 @@ export function createWorkerAttachmentsComponent(options: WorkerAttachmentsOptio
           tx.execute('INSERT INTO computer_worker_credential_intents (attachment_id, kind, at) VALUES (?, ?, ?) ON CONFLICT(attachment_id) DO UPDATE SET kind = excluded.kind, at = excluded.at', [attachmentId, 'delete', now()])
           return next
         })
-        await notify(revoked)
+        let cleanupFailure: unknown
+        try { await notify(revoked, 'revoke') } catch (error) { cleanupFailure = error }
         try {
           await keyring(store => store.delete(credentialId(attachmentId)))
           await db.transaction(tx => { tx.execute('DELETE FROM computer_worker_credential_intents WHERE attachment_id = ?', [attachmentId]) })
         } catch { /* The delete intent stays durable and is retried at the next start. */ }
+        if (cleanupFailure) throw cleanupFailure
         return revoked
       }),
       credential: (attachmentId, signal) => track(async () => {
@@ -111,6 +143,7 @@ export function createWorkerAttachmentsComponent(options: WorkerAttachmentsOptio
       requireApprovedIn(reader, attachmentId) {
         if (typeof attachmentId !== 'string' || !attachmentId) throw workerError('worker-invalid')
         if (attachmentId === localWorkerAttachmentId) return localWorkerAttachment(now())
+        if (changingPermissions.has(attachmentId)) throw workerError('worker-attachment-updating')
         const stored = readOne(reader, attachmentId)
         if (!stored || stored.state !== 'approved') throw workerError('worker-attachment-rejected')
         return stored

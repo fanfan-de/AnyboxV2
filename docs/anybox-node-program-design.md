@@ -2,6 +2,8 @@
 
 [文档首页](README.md) · [可组合部署单元设计](composable-units-design.md) · [Computer 资源模块](modules/computers/README.md) · [架构评估（2026-10-15）](harness-architecture-review-2026-10-15.md) · [部署说明](harness-server-deployment.md) · [命名与边界](naming.md)
 
+后续决定：已采用[统一发行与独立运行角色](runtime-roles-and-distribution.md)，各平台统一交付 Anybox，桌面组合四种独立运行角色，同时支持无头部署。本文原先“不做桌面应用”“桌面不作为交付物”和单独决定节点程序分发的假设已被该决定替代。下文保留为未采纳的方案记录；额外节点应用、独立 Models、拨入传输、身份及凭据调整均未随本次决定采纳，不据此预建组件。
+
 状态：2026-10-15 目标设计稿，未采纳为计划。依据 HEAD `fd161c6` 加当日未提交的 U1 变更、[可组合部署单元设计](composable-units-design.md)与[架构评估](harness-architecture-review-2026-10-15.md)写成，不改变任何组件文档描述的当前行为。本文回答一个问题：用户在 Windows、macOS、Linux 的任意一台机器上安装一个软件，这台机器就能为一个或多个 harness server 提供 Computer 环境、Models 服务以及后续其他单元，这个软件应该是什么形态、怎样接入现有契约、分几步交付。“节点程序”是本文的工作名称，采纳时在 [naming.md](naming.md) 定名，见第 3 节。
 
 ## 1. 目标、范围与非目标
@@ -40,7 +42,7 @@
 | 真实跨机器验收 | [可组合单元设计第 9 节](composable-units-design.md#9-分阶段实施与验收) | 远端 harness server 操作本机 macOS worker；本机 harness server 经 SSH 反向隧道操作服务器 worker |
 | 独立服务示例 | [computer-worker.service.example](../deploy/computer-worker.service.example) | Linux 用户级 systemd unit，worker 独立于 harness server 的 cgroup |
 | Web 外壳 | [Web 客户端设计](web-client-design.md)、[Application HTTP 监听组件](modules/web/web-frontend.md)、[通用客户端宿主](../src/host/client.ts) | 通用监听器同时服务静态页面与 `/api/client/v1`、`/api/v1`，显式接收应用目录（空目录也是合法宿主）；执行端用设备令牌认证，回环客户端页面校验 Host/Origin；浏览器外壳按目录挂载应用界面 |
-| 各入口 | `src/entrypoints/` | harness server、computer worker、客户端三个独立 main，`serve.ts` 组合启动本地 harness server 与客户端（`npm run web`）；桌面入口不在本文范围 |
+| 各入口 | `src/entrypoints/` | harness server、computer worker、客户端三个独立 main；后续已接入 `anybox-main.ts` 统一分派，`npm run web` 仅启动客户端，`serve.ts` 的显式组合命令改为 `npm run web:local`；当前桌面行为见统一发行约定 |
 
 ### 2.2 差距
 

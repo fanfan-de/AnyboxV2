@@ -1,7 +1,7 @@
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { createClientHost as createApplicationClientHost } from '../host/client.js'
-import { harnessClientApplication } from '../applications/harness/registration.js'
+import { harnessClientApplication } from '../applications/harness/client/registration.js'
 import type { HarnessClientRuntimeOptions } from '../applications/harness/client/runtime.js'
 import type { ApplicationRegistration } from '../host/applications/registration.js'
 import { defaultModelsConfigPath } from '../applications/harness/server-config.js'
@@ -20,7 +20,8 @@ export async function createClientHost(options: DefaultClientHostOptions) {
     applications: options.applications ?? [harnessClientApplication(options)] })
 }
 
-async function main() {
+export async function main(args: readonly string[] = process.argv.slice(2)) {
+  if (args.length) throw new Error('The client role takes no arguments; configure it with ANYBOX_CLIENT_* and ANYBOX_WEB_PORT')
   const path = process.env.ANYBOX_CLIENT_DATABASE ?? './data/client.sqlite'
   const legacyModelsPath = process.env.ANYBOX_MODELS_DATABASE ?? './data/models.sqlite'
   const forbidden = [process.env.ANYBOX_HARNESS_DATABASE ?? './data/harness.sqlite', legacyModelsPath,
@@ -28,8 +29,10 @@ async function main() {
   if (forbidden.some(other => resolve(other) === resolve(path))) throw new Error('Client and execution databases must be different files')
   const port = Number(process.env.ANYBOX_WEB_PORT ?? 3000)
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid client port')
-  const host = await createClientHost({ path, port, namespace: process.env.ANYBOX_CLIENT_NAMESPACE, localInstanceId: process.env.ANYBOX_LOCAL_INSTANCE_ID })
+  const host = await createClientHost({ path, port, namespace: process.env.ANYBOX_CLIENT_NAMESPACE, localInstanceId: process.env.ANYBOX_LOCAL_INSTANCE_ID,
+    computer: { directory: process.env.ANYBOX_COMPUTER_WORKER_DIRECTORY ?? `${process.env.ANYBOX_HARNESS_DATABASE ?? './data/harness.sqlite'}.computer-worker` } })
   process.stdout.write(`Anybox Client: ${host.url}\n`)
+  process.send?.({ type: 'ready', role: 'client', url: host.url })
   const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch((error: unknown) => { process.exitCode = 1; process.stderr.write(`Client shutdown failed: ${describeError(error)}\n`) }) }
   process.once('SIGINT', stop); process.once('SIGTERM', stop)
 }

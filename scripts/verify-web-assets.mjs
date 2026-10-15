@@ -38,7 +38,7 @@ export async function verifyWebAssets(catalog) {
 export async function verifyDefaultWebAssets(directory, copiedDirectory) {
   const root = pathToFileURL(resolve(directory) + '/')
   const [{ harnessClientApplication }, { shellAssets }, { createApplicationCatalog }] = await Promise.all([
-    import(new URL('dist/applications/harness/registration.js', root)), import(new URL('dist/host/assets.js', root)), import(new URL('dist/host/applications/registration.js', root)),
+    import(new URL('dist/applications/harness/client/registration.js', root)), import(new URL('dist/host/assets.js', root)), import(new URL('dist/host/applications/registration.js', root)),
   ])
   const catalog = createApplicationCatalog([harnessClientApplication()], shellAssets)
   await verifyWebAssets(copiedDirectory ? { ...catalog, assets: new Map([...catalog.assets].map(([path, asset]) => [path, { ...asset, file: join(copiedDirectory, relative(resolve(directory), asset.file)) }])) } : catalog)

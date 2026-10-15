@@ -8,6 +8,8 @@ Anybox 是 NyaCore 应用的宿主应用。每个应用在 `src/applications/<id
 
 实现 `ApplicationRegistration`（`src/host/applications/registration.ts`），将入口加入 `src/entrypoints/` 的正式组合目录。通用客户端 `src/host/client.ts` 与执行端 `src/host/execution.ts` 显式接收 `applications`，空数组是合法空宿主；它们不选择具体应用。默认 CLI 入口保留 Anybox Harness 目录和配置兼容，harness server 包装器位于 `src/applications/harness/server.ts`。保留 Anybox Harness 时加入 `harnessClientApplication(options)` 或 `harnessServerApplication(config,options)`；各入口的宿主资源仍只安装一次。
 
+客户端工厂从 `src/applications/harness/client/registration.ts` 导入，服务端工厂从 `src/applications/harness/registration.ts` 导入。两侧只共享 `definition.ts` 的纯产品元数据；不要使用重新导出双方运行时的聚合入口，否则纯客户端也会加载执行端依赖。
+
 ```ts
 import { fileURLToPath } from 'node:url'
 import type { ApplicationRegistration } from '../../host/applications/registration.js'

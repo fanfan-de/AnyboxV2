@@ -2,6 +2,8 @@
 
 [文档首页](README.md) · [组件手册](modules/README.md) · [部署说明](harness-server-deployment.md)
 
+发行与进程目标以[统一发行与独立运行角色](runtime-roles-and-distribution.md)为准：每个平台统一交付完整 Anybox，桌面界面、客户端服务、harness server 与 Computer worker 独立进程并支持单独部署。下文描述现有代码与资源归属，目标中的平台打包和独立服务管理仍需补齐。
+
 Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是正式目录中的 Agent 产品，其通用服务端核心称为 harness server。服务端可部署在本地或远端，浏览器工作区、连接与网关归 Anybox Harness 客户端；完整规范见 [命名与边界](naming.md)。宿主与应用保持同仓库、同构建，通过独立目录、公开契约和资源所有权划分；不新增 Anybox Harness npm 包。Models 保持独立可复用包。
 
 ## 实际目录
@@ -18,13 +20,14 @@ src/
     web/                          应用列表、左侧应用入口、全局路由与 Web 契约
   applications/
     harness/
-      registration.ts, assets.ts   Anybox Harness 注册入口与资源清单
+      registration.ts             服务端注册入口
+      definition.ts, assets.ts     共享纯元数据与资源清单
       server.ts, server-runtime.ts harness server 组合入口与按需装配
       server-config.ts           harness server 配置校验
       server-models.ts           harness server Models 装配与旧配置迁入
       core/                      Agent、Prompt、Projects、Session、Run、工具与协议 Loop
       http/                      harness server 业务 HTTP/SSE 与 Models 管理路由
-      client/                    连接、凭据、网关、目录窗口与客户端装配
+      client/                    独立客户端 registration.ts、连接、凭据、网关、目录窗口与装配
       web/                       Anybox Harness 浏览器入口、控制器与视图
   entrypoints/                    正式应用目录、环境变量、进程信号与启动命令
   storage/port.ts, sqlite.ts       宿主公共业务存储端口与 SQLite 提供方
@@ -34,6 +37,8 @@ web/apps/agent/                   Anybox Harness 模板、图标与样式
 ```
 
 `src/host/` 不导入具体应用。通用宿主工厂显式接收注册目录，空目录仍可启动；`src/entrypoints/` 在宿主之外选择正式应用和默认配置。新增应用修改其自身目录与组合入口。Anybox Harness 可以依赖宿主公开的注册、运行时和 HTTP 契约，核心业务不依赖浏览器、客户端网关或进程入口。
+
+客户端只导入 `applications/harness/client/registration.ts`；服务端只导入 `applications/harness/registration.ts`，共享 `definition.ts` 不加载两侧运行时。`entrypoints/anybox-main.ts` 在解析角色后动态导入相应 main，桌面后台也使用独立的 `desktop-client.ts` 与 `desktop-execution.ts`。`npm run web` 默认纯客户端，`web:local` 才使用组合启动器。
 
 前端外壳管理左侧应用入口及其管理浮层、全局路由和界面生命周期；窄条右侧只提供无装饰的挂载容器，全部布局由当前应用内部组件从顶边开始呈现。宿主不在右侧显示标题栏、标签栏、操作栏、通知或加载失败页。关闭界面和停止应用控制位于窄条底部，应用列表、状态及重载入口位于管理浮层。应用拥有自己的导航、内容、操作、模板和样式。Anybox Harness 直接挂载项目与会话工作区，侧栏保留一处设备选择和连接管理；模型与 Prompt 是工作区设置分类，设备 Agent 启停放在连接管理，不另设功能页面顶栏。安全展示 DTO、校验和解码位于 `core/view/` 等无 DOM 入口，浏览器只导入允许的纯函数和 type-only 契约，不引入 execution。HTTP DTO 不包含凭据引用、原生恢复记录、execution、租约和 result/done 句柄。Models 驱动负责原生传输，协议 Loop 决定工具与续轮，RunRuntime 管理操作、取消与退出。
 

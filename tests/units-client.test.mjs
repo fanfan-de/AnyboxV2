@@ -7,6 +7,7 @@ class Element extends EventTarget {
   hidden = false; disabled = false; value = ''; textContent = ''; className = ''; children = []; dataset = {}
   append(...children) { this.children.push(...children) }
   replaceChildren(...children) { this.children = children }
+  setAttribute(name, value) { this[name] = value }
   find(predicate) { for (const child of this.children) { if (predicate(child)) return child; const nested = child.find?.(predicate); if (nested) return nested } return undefined }
 }
 const flush = async () => { for (let n = 0; n < 5; n++) await new Promise(resolve => setImmediate(resolve)) }
@@ -67,13 +68,14 @@ test('the device-owner attachment entry consumes codes with explicit ceilings an
   dom(t)
   let attachments = []
   const { source, calls } = api({
-    '/units/local-computer/attachments': body => {
-      if (!body) return attachments
+    '/computer/status': () => ({ state: 'running', supported: true, workerId: 'worker', attachments }),
+    '/computer/attachments': body => {
       if (body.code !== 'good') throw Object.assign(new Error('unit-code-invalid'), { status: 409, code: 'unit-code-invalid' })
       const attached = { attachmentId: 'remote-1', harnessUrl: body.harnessUrl, instanceId: 'remote-instance', state: 'approved', ceiling: body.ceiling, connection: 'connecting', lastError: null }
       attachments = [attached]; return attached
     },
-    '/units/local-computer/attachments/remote-1/revoke': () => { attachments = attachments.map(a => ({ ...a, state: 'revoked', connection: 'revoked' })); return attachments[0] },
+    '/computer/attachments/remote-1/permissions': body => { attachments = attachments.map(a => ({ ...a, ceiling: body.ceiling })); return attachments[0] },
+    '/computer/attachments/remote-1/revoke': () => { attachments = attachments.map(a => ({ ...a, state: 'revoked', connection: 'revoked' })); return attachments[0] },
   })
   const section = new Element()
   const view = setupLocalAttachments(source, messageFor, section, 'Laptop')
@@ -87,8 +89,30 @@ test('the device-owner attachment entry consumes codes with explicit ceilings an
   assert.deepEqual(calls.find(call => call.body?.code === 'good').body, { harnessUrl: 'https://h.example', code: 'good', ceiling: { kind: 'computer', projects: ['/work'], tools: ['anybox.bash'] } })
   assert.ok(!JSON.stringify(section.children.map(child => child.textContent)).includes('good'), 'the consumed code is not displayed')
   assert.equal(view.snapshot().attachments[0].connection, 'connecting')
+  await view.permissions('remote-1', { projects: ['/restricted'], tools: [] })
+  assert.deepEqual(view.snapshot().attachments[0].ceiling, { kind: 'computer', projects: ['/restricted'], tools: [] })
+  assert.ok(calls.every(call => call.path.startsWith('/computer/')), 'management uses the local client, never a connection gateway')
   await view.revoke('remote-1')
   assert.equal(view.snapshot().attachments[0].state, 'revoked')
+})
+
+test('opening and refreshing local worker management never starts it; explicit start enables attachment controls', async t => {
+  dom(t)
+  let running = false
+  const { source, calls } = api({
+    '/computer/status': () => ({ state: running ? 'running' : 'stopped', supported: true, attachments: [] }),
+    '/computer/start': () => { running = true; return {} },
+  })
+  const section = new Element(), view = setupLocalAttachments(source, messageFor, section, '本机')
+  t.after(() => view.dispose())
+  await flush(); await view.refresh()
+  assert.deepEqual(calls.map(call => call.path), ['/computer/status', '/computer/status'])
+  const start = section.find(node => node.textContent === '启动 Computer worker')
+  assert.equal(start.disabled, false)
+  start.dispatchEvent(new Event('click')); await flush()
+  assert.equal(calls.filter(call => call.path === '/computer/start').length, 1)
+  assert.equal(start.hidden, true)
+  await view.dispose(); assert.equal(running, true, 'closing the panel does not stop the worker')
 })
 
 test('the client gateway proxies only the owner-side unit routes', () => {

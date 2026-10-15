@@ -8,9 +8,10 @@ import { createHarnessServer } from '../applications/harness/server.js'
 import { describeError } from './error-report.js'
 export { createHarnessServer }
 
-async function main() {
+export async function main(args: readonly string[] = process.argv.slice(2)) {
   const config = parseHarnessServerConfig({ ...process.env, ANYBOX_HARNESS_PORT: process.env.ANYBOX_HARNESS_PORT ?? '3001' })
-  const command = process.argv[2] ?? 'serve'
+  const command = args[0] ?? 'serve'
+  if (args.length > (command === 'serve' ? 1 : 2)) throw new Error('Too many harness server arguments')
   if (['init', 'recover-access', 'new-identity'].includes(command)) {
     const root = new Context()
     try {
@@ -19,7 +20,7 @@ async function main() {
       const access = root.get<HostAccessPort>(hostAccessServiceKey)!
       if (command === 'init' && (await access.list()).length) throw new Error('Already initialized; use recover-access with the daemon stopped')
       if (command === 'new-identity') await access.resetIdentity()
-      const result = await access.issue(process.argv[3] ?? 'Owner device')
+      const result = await access.issue(args[1] ?? 'Owner device')
       process.stdout.write(`Instance: ${access.instance.instanceId}\nAccess token (shown once): ${result.token}\n`)
     } finally { await root.fiber.dispose() }
     return

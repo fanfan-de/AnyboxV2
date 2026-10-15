@@ -247,3 +247,57 @@ test('local gateway exposes only status and accepts empty retries; ordinary Web 
     assert.equal((await post({})).status, 403)
   } finally { await gateway?.close(); await f.close() }
 })
+
+test('desktop bootstrap and status remain client-only; explicit concurrent starts launch once and preserve pairing', async () => {
+  const f = await fixture(), entered = deferred(), release = deferred()
+  let running = false, starts = 0, reads = 0
+  try {
+    const client = await f.client({ localPairing: { ...f.pairing,
+      async getLocal(signal) { reads++; return running ? f.pairing.getLocal(signal) : undefined },
+      async start(signal) { starts++; entered.resolve(); await release.promise; signal.throwIfAborted(); running = true },
+    } })
+    await new Promise(resolve => setImmediate(resolve))
+    for (let i = 0; i < 3; i++) assert.deepEqual(client.connections.localStatus(), { enabled: true, state: 'disabled', instanceId: null, connectionId: null })
+    assert.equal(starts, 0); assert.equal(reads, 1); assert.equal(f.issued, 0); assert.equal(f.keys.size, 0)
+    const a = client.connections.retryLocal(), b = client.connections.retryLocal()
+    assert.equal(a, b); await entered.promise; assert.equal(starts, 1)
+    release.resolve(); assert.equal((await a).state, 'ready'); assert.equal((await b).state, 'ready')
+    assert.equal(f.issued, 1)
+  } finally { release.resolve(); await f.close() }
+})
+
+test('an explicit start during read-only bootstrap is not lost or duplicated', async () => {
+  const f = await fixture(), entered = deferred(), release = deferred()
+  let starts = 0
+  try {
+    const client = await f.client({ localPairing: { ...f.pairing,
+      async getLocal(signal) { if (!starts) { entered.resolve(); await release.promise; return undefined } return f.pairing.getLocal(signal) },
+      async start() { starts++ },
+    } })
+    await entered.promise
+    const a = client.connections.retryLocal(), b = client.connections.retryLocal()
+    assert.equal(a, b); assert.equal(starts, 0)
+    release.resolve()
+    assert.equal((await a).state, 'ready'); assert.equal((await b).state, 'ready'); assert.equal(starts, 1)
+  } finally { release.resolve(); await f.close() }
+})
+
+test('closing the client cancels and joins an explicit start; an already cancelled request cannot start a service', async () => {
+  const f = await fixture(), entered = deferred(), release = deferred()
+  let starts = 0, signal
+  try {
+    const client = await f.client({ localPairing: { ...f.pairing, async getLocal() { return undefined },
+      async start(value) { starts++; signal = value; entered.resolve(); await release.promise; value.throwIfAborted() },
+    } })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal((await client.connections.retryLocal(AbortSignal.abort())).error.code, 'cancelled')
+    assert.equal(starts, 0)
+    const starting = client.connections.retryLocal(); await entered.promise
+    let closed = false
+    const closing = client.root.fiber.dispose().then(() => { closed = true })
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(signal.aborted, true); assert.equal(closed, false)
+    release.resolve(); await closing
+    assert.equal((await starting).error.code, 'cancelled'); assert.equal(f.issued, 0)
+  } finally { release.resolve(); await f.close() }
+})

@@ -12,7 +12,9 @@
 
 组件拥有 `client-connections` v2 的连接表、凭据意图日志和单条本机归属记录，以及独立 system-keyring-store 句柄。公开 list/save/check/remove 不返回 token 或 credentialRef；只有受信网关 acquire 获得本次固定的配置版本与 token。连接包含本机 ID、名称、地址、固定 instanceId、revision；编辑使用 expectedRevision。相同 instanceId 不重复登记。
 
-桌面组合可注入 `DesktopLocalPairingOptions`：`getLocal(signal)` 返回受信本机地址及 instanceId，`issue(signal)` 通过私有宿主控制发行 managed token，`reconcile(retainedToken,signal)` 回收同一桌面所有者的孤立凭据。组件每代异步启动一次配对，不阻塞初始化；并发 `retryLocal(signal?)` 复用当前操作。`localStatus()` 仅返回 enabled、disabled/pending/ready/failed 状态、本机身份、连接 ID/版本及固定错误码。普通 Web 组合不注入此选项，不能调用重试。
+桌面组合可注入 `DesktopLocalPairingOptions`：只读 `getLocal(signal)` 返回受信本机地址及 instanceId，服务未启动时返回 undefined；可选 `start(signal)` 只在显式 `retryLocal` 中调用，用于启用本机服务；`issue(signal)` 通过私有宿主控制发行 managed token，`reconcile(retainedToken,signal)` 回收同一桌面所有者的孤立凭据。组件每代异步观察一次本机服务，不调用 start、不阻塞初始化；不存在服务时保存 `enabled: true, state: disabled` 且不访问执行端或发行凭据。enabled 表达桌面控制能力，state 表达配对状态。存在服务时按既有流程配对。并发显式启动复用同一操作；在自动观察期间收到显式启动时等待观察退出，再执行一次启动，不丢弃请求。关闭停止准入、取消并等待已经受理的私有调用，已取消请求不调用 start。`localStatus()` 仅返回白名单状态、本机身份、连接 ID/版本及固定错误码。普通 Web 组合不注入此选项，不能调用重试。
+
+共享连接管理在 disabled 状态显示“启动本机服务”，点击才 POST `/local/retry`；未保存表单阻止该操作。状态轮询、打开/恢复客户端应用和选择远端设备不会调用 start。桌面私有 `local.start` 由主进程负责实例去重与生命周期；配对请求取消只结束观察，已经显式启用的服务保持桌面托管，直至正常退出。详细进程边界见[桌面运行边界](../../desktop-runtime.md)。
 
 首次自动保存与本机 connectionId/instanceId 归属同事务提交。已有本机连接保留 ID、名称和凭据，仅端口变化时保存新地址；未变地址不增加 revision。执行库身份变化拒绝静默替换。Vault 读取失败保留已存凭据和宿主 token，不以无凭据状态撤销它；仅明确认证失败或非 managed token 才发行替代。失败新 token 由受信回收或下一次初始化恢复，远端连接继续可用；自动配对不启动 Agent。连接管理展示 pending/失败状态，提供显式重试，成功后只刷新本应用。桌面配对启用且界面活动时，pending 每 500 毫秒、其他状态每 5 秒读取非秘密状态，以观察明确重启后的连接版本；已有未保存表单或工作区不能离开时推迟重建。停用或释放界面停止计时器，状态读取不触发配对或重启。
 

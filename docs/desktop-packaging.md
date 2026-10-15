@@ -1,5 +1,7 @@
 # Anybox 桌面构建与安装
 
+发行目标见[统一发行与独立运行角色](runtime-roles-and-distribution.md)：Windows、macOS、Linux 各自一个完整 Anybox 产品包，包含可独立启动的各角色，支持无头部署。本文的 macOS arm64、DMG/ZIP 与 Node staging 描述均为当前实现，三平台统一成品包和随包无头入口尚待补齐。
+
 桌面版与 Web 使用同一份前端源码和 `npm run build` 产物：宿主浏览器外壳、应用 ESM 入口、样式、模板和 Markdown vendor 都继续由现有登记资源图提供。Electron 仅增加桌面窗口、固定 `anybox-app://app/` origin、原生能力适配和后台进程管理。修改前端后，两种交付方式都使用新的构建；已安装桌面版需要更换安装包获取修改。
 
 首版目标是 macOS Apple Silicon（arm64）。Electron 固定为 44.5.1，内置 Node 24.21.0；使用 Electron Forge 8.0.1 生成 `.app`、DMG 和 ZIP。安装用户不需要安装 Node、npm、相邻 NyaCore 或项目源码。此阶段不配置 Developer ID 签名、公证、自动更新、开机启动或 Windows/Linux 桌面发行。打包在重命名、ASAR 和 fuse 修改完成后，以本机 ad hoc 签名修复整个 app 及 helper，并自动运行 `codesign --verify --deep --strict`；保留 Electron 原有 entitlements。这保证本机运行与系统 Keychain 访问，不代表 Developer ID 签名或公证。
@@ -40,6 +42,8 @@ npm run desktop:make
 上述命令要求在 macOS arm64 上执行。`desktop:package` 输出 `artifacts/desktop/out/Anybox-darwin-arm64/Anybox.app`；`desktop:make` 同时在 `artifacts/desktop/out/make/` 输出 DMG 和 ZIP。打开 DMG，将 `Anybox.app` 拖入“应用程序”。这是本机安装与测试产物，未经过公开发行签名和公证。
 
 后台客户端与本机执行端由 Electron 的 utility processes 承载，分别持有自己的 Nya 根和持久资源。客户端端口与执行端端口由系统分配；桌面窗口使用稳定的 custom origin，以保留浏览器 localStorage。关闭窗口仅隐藏窗口并继续已开始任务；退出应用等待后台组件和在途操作清理。已有独立 Web 服务可以继续运行，桌面数据独立保存到 Electron 用户数据目录的 `data/`，不会自动迁移或共享仓库 `./data/`。
+
+默认启动只创建客户端 utility process；在连接管理或原生窗口菜单中点击“启动本机服务”后才创建执行端。`npm run desktop:dev -- --local` 或成品应用的 `--local` 参数显式选择本机组合；完整 desktop smoke 同样显式启用本机服务。两种角色分别使用 `desktop-client.js`、`desktop-execution.js`，普通客户端启动不加载执行端或原生图片 QA 模块。Node staging 已包含 `anybox-main.js` 统一分派器和各独立入口；桌面包内可脱离 Electron 的无头运行时仍待后续打包实现。
 
 退出会先确认当前页面的未保存修改，再检查并确认本机活动；拒绝任何一项都保留可用的页面与后台资源。全部检查通过后才关闭服务并等待实际退出，最后由已批准的退出许可处理 Electron 页面的 unload 阻止。普通红色关闭按钮仍只隐藏窗口。共享构建后可运行 `node tests/helpers/desktop-quit-electron.mjs`，通过不含真实业务服务或凭据的隔离 Electron 进程复验未保存修改拒绝、确认放弃与最终退出；该入口不替代系统 Vault 和成品包 smoke。
 

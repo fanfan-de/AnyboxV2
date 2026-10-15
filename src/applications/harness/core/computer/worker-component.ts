@@ -223,6 +223,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
       }
       // A revoked attachment stops accepting immediately; its open scopes are cancelled and drained like a shutdown of that harness server's work.
       const revokeRuns = async (attachmentId: string) => {
+        let cleanupFailed = false
         const runIds = await db.transaction(tx => {
           const open = tx.all('SELECT run_id FROM computer_worker_runs WHERE attachment_id = ? AND closed = 0', [attachmentId]).map(row => String(row.run_id))
           tx.execute('UPDATE computer_worker_runs SET cancelled = 1 WHERE attachment_id = ? AND closed = 0', [attachmentId])
@@ -240,11 +241,12 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
             const uncertain = await db.read(reader => reader.get('SELECT uncertain FROM computer_worker_runs WHERE run_id = ?', [runId])?.uncertain === 1)
             const cleanup = await joined(current.execution.close())
             if (!uncertain) await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET closed = 1, has_processes = 0, cleanup_json = ? WHERE run_id = ?', [JSON.stringify(cleanup), runId]))
-          } catch { await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET uncertain = 1 WHERE run_id = ?', [runId])) }
+          } catch { cleanupFailed = true; await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET uncertain = 1 WHERE run_id = ?', [runId])) }
           finally { scopes.delete(runId) }
         }
+        if (cleanupFailed) throw workerError('worker-cleanup-failed')
       }
-      const unsubscribe = attachments.onChanged(attachment => attachment.state === 'revoked' ? revokeRuns(attachment.attachmentId) : undefined)
+      const unsubscribe = attachments.onChanged((attachment, change) => attachment.state === 'revoked' || change === 'permissions' ? revokeRuns(attachment.attachmentId) : undefined)
       ctx.effect(() => () => unsubscribe(), 'stop observing attachment revocations')
       const service: ComputerWorkerPort = {
         info: async () => ({ ...identity, platform: process.platform, architecture: process.arch }),

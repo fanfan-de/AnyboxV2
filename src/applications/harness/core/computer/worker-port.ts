@@ -55,15 +55,26 @@ export interface ComputerWorkerPort {
 }
 /** Device-owner control of the worker's own attachments, reachable only over the loopback bootstrap. */
 export interface LocalComputerWorkerControl {
-  listAttachments(): Promise<readonly JsonValue[]>
-  consumeAttachCode(input: { readonly harnessUrl: string; readonly code: string; readonly ceiling: JsonValue }): Promise<JsonValue>
-  revokeAttachment(attachmentId: string): Promise<JsonValue>
+  listAttachments(signal?: AbortSignal): Promise<readonly JsonValue[]>
+  consumeAttachCode(input: { readonly harnessUrl: string; readonly code: string; readonly ceiling: JsonValue }, signal?: AbortSignal): Promise<JsonValue>
+  revokeAttachment(attachmentId: string, signal?: AbortSignal): Promise<JsonValue>
+  updatePermissions(attachmentId: string, ceiling: unknown, signal?: AbortSignal): Promise<JsonValue>
 }
 export interface ComputerWorkerOptions {
   readonly directory: string
   readonly executable?: string
   readonly startupTimeoutMs?: number
   readonly requestTimeoutMs?: number
+  /** Management observers never start a worker implicitly. Execution clients retain demand startup. */
+  readonly autoStart?: boolean
+}
+export interface LocalComputerWorkerStatus {
+  readonly state: 'stopped' | 'running' | 'unavailable'
+  readonly supported: boolean
+  readonly workerId?: string
+  readonly bootId?: string
+  readonly pid?: number
+  readonly attachments: readonly JsonValue[]
 }
 export function workerError(code: string): Error & { readonly code: string } {
   return Object.assign(new Error(code), { name: 'ComputerWorkerError', code })

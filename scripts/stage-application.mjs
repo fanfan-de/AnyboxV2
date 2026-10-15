@@ -31,8 +31,10 @@ export async function stageApplication(root, directory, { desktop = false, build
   await cp(join(root, 'web'), join(output, 'web'), { recursive: true })
   await cp(join(root, 'deploy'), join(output, 'deploy'), { recursive: true })
   await cp(join(root, 'docs/harness-server-deployment.md'), join(output, 'README.md'))
-  const scripts = { 'harness:server': 'node dist/entrypoints/harness-server-main.js', 'harness:server:init': 'node dist/entrypoints/harness-server-main.js init',
-    harness: 'npm run harness:server', 'harness:init': 'npm run harness:server:init', client: 'node dist/entrypoints/client-main.js', web: 'node dist/entrypoints/serve.js' }
+  const scripts = { anybox: 'node dist/entrypoints/anybox-main.js',
+    'harness:server': 'node dist/entrypoints/anybox-main.js harness-server', 'harness:server:init': 'node dist/entrypoints/anybox-main.js harness-server init',
+    harness: 'npm run harness:server', 'harness:init': 'npm run harness:server:init', client: 'node dist/entrypoints/anybox-main.js client',
+    'computer:worker': 'node dist/entrypoints/anybox-main.js computer-worker', web: 'npm run client', 'web:local': 'node dist/entrypoints/serve.js' }
   await writeFile(join(output, 'package.json'), JSON.stringify({ name: desktop ? 'anybox-desktop' : 'anybox-app', productName: desktop ? 'Anybox' : undefined,
     version: manifest.version, private: true, type: 'module', engines: manifest.engines, scripts, dependencies,
     ...(desktop ? { main: 'dist/entrypoints/desktop-main.js', devDependencies: { electron: manifest.devDependencies.electron } } : {}) }, null, 2) + '\n')

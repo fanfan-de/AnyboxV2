@@ -75,6 +75,7 @@
 | 宿主 | [访问管理](./web/host-access.md) | `host-access` | `host.access` |
 | 客户端 | [连接管理](./web/client-connections.md) | `client-connections` | `client.connections` |
 | 客户端外壳 | [应用 HTTP](./web/client-shell.md) | `app-client-http` | `app.client-http` |
+| Anybox Harness 客户端 | [Computer 管理](./web/client-computer.md) | `client-computer` | `client.computer` |
 | Anybox Harness 客户端 | [同源网关](./web/client-gateway.md) | `client-gateway` | `client.gateway` |
 | 验证 | [H0 资源探针](./diagnostics/resource-probe.md) | `h0-resource-probe` | `h0.runs`；仅验证使用 |
 

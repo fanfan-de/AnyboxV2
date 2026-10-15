@@ -5,7 +5,9 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 通用宿主、应用和默认组合入口分别位于 `src/host/`、`src/applications/` 与 `src/entrypoints/`；当前目录和依赖约定见 [Anybox 宿主与 Anybox Harness 应用边界](./harness-module-boundary.md)。应用打开和运行时装配见 [应用宿主](products-v1.md)。
 
 - [Anybox 产品设计草案](./anybox-product-design.md)：产品定位、跨领域应用、用户创作流程、首期范围与待决定事项；区分已明确方向、建议方案和当前实现。
+- [统一发行与独立运行角色](runtime-roles-and-distribution.md)：已确定各平台统一产品包、四种运行角色独立进程与部署、按需启用和生命周期归属；列明当前实现差距与完成条件。
 - [harness server 独立部署与多设备接入](harness-server-deployment.md)：启动、配对、发行物、HTTPS、服务与恢复。
+- [Computer worker 独立管理](computer-worker-management.md)：无本机 harness server 的客户端与 CLI 附着、权限、状态和撤销。
 - [Anybox 桌面构建与安装](desktop-packaging.md)：macOS Electron 开发、打包及安装验收；[桌面运行边界](desktop-runtime.md)说明共享页面、私有进程、配对和退出。
 
 ## 按模块阅读
@@ -45,7 +47,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
 | [Computer 资源设计](./computer-resource-design.md) | 本机按需资源、独立 worker 与工具等待重启接续；跨机器工作区及独立模型 exchange 按后续阶段实施 |
 | [可组合部署单元设计](./composable-units-design.md) | harness server、Models、Computer 三个单元各自独立部署与任意跨机器组合的通用规则、附着与绑定、契约形状及分阶段验收；U0 附着登记已实施，跨机器阶段待实施 |
-| [节点程序设计（2026-10-15）](./anybox-node-program-design.md) | 在任意机器安装一个程序提供 Computer、Models 及后续单元：单程序多角色、节点 Web 服务与无头 CLI 两种外壳、每单元一进程、按单元附着与节点分组、拨出加拨入、凭据与平台矩阵、分阶段验收；目标设计稿，未采纳 |
+| [节点程序设计（2026-10-15）](./anybox-node-program-design.md) | Computer、Models 与后续单元控制面的未采纳草案；发行及桌面关系以已确定的统一发行与独立运行角色约定为准，额外节点应用、拨入与 Models 拆分等提议仍未采纳 |
 | [工具库设计](./tools-library-design.md) | 来源工具混选、不可变会话快照、Run 进程清理和原生工具图片 |
 | [多模态图片输入设计](./multimodal-image-input-design.md) | 四种原生协议图片输入的端到端链路、历史升级兼容与验收 |
 | [项目目录选择](./project-directory-picker.md) | 多实例目录浏览、固定连接、分页清理和旧版兼容 |

@@ -88,7 +88,19 @@ export async function openComputerWorker(directory: string, options: OpenCompute
     await root.installComponent(createComputerWorkerExecutorComponent({ workerId, bootId }))
     await root.installComponent(createWorkerDialoutComponent(options.dialout))
     const token = randomUUID() + randomUUID()
-    server = createServer(async (request, response) => {
+    server = createComputerWorkerHttpServer(root, token, () => { void close().catch(() => { process.exitCode = 1 }) })
+    await new Promise<void>((yes, no) => { server!.once('error', no); server!.listen(0, '127.0.0.1', () => { server!.removeListener('error', no); yes() }) })
+    endpoint = { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, token, pid: process.pid, workerId, bootId }
+    const temp = join(path, `endpoint.${bootId}.tmp`)
+    await writeFile(temp, JSON.stringify(endpoint), { flag: 'wx', mode: 0o600 })
+    await rename(temp, join(path, 'endpoint.json'))
+    return { endpoint, close }
+  } catch (error) { await close(); throw error }
+}
+
+/** Loopback adapter: the owning process supplies the root and shutdown boundary. */
+export function createComputerWorkerHttpServer(root: Context, token: string, onShutdown: () => void) {
+  return createServer(async (request, response) => {
       if (!authentic(request.headers.authorization, token) || request.socket.remoteAddress !== '127.0.0.1') {
         response.writeHead(401).end(); return
       }
@@ -107,9 +119,14 @@ export async function openComputerWorker(directory: string, options: OpenCompute
           case '/submit': output = await worker.submit(input as WorkerSubmission); break
           case '/get': output = await worker.get(input as WorkerAuthorization & { operationId: string }); break
           case '/query': output = await worker.query(input as Parameters<ComputerWorkerPort['query']>[0]); break
-          // Device-owner control of this unit's attachments; only the loopback harness server reaches these.
+          // Device-owner control, shared by the local client, CLI and compatible harness server adapter.
           case '/attachments/list': output = await dialout().list(); break
           case '/attachments/consume': output = await dialout().attach(input as Parameters<WorkerDialoutPort['attach']>[0]); break
+          case '/attachments/permissions': {
+            const { attachmentId, ceiling } = input as { attachmentId?: unknown; ceiling?: unknown }
+            if (typeof attachmentId !== 'string' || !attachmentId) throw workerError('worker-invalid')
+            output = await dialout().updatePermissions(attachmentId, ceiling); break
+          }
           case '/attachments/revoke': {
             const { attachmentId } = input as { attachmentId?: unknown }
             if (typeof attachmentId !== 'string' || !attachmentId) throw workerError('worker-invalid')
@@ -118,7 +135,7 @@ export async function openComputerWorker(directory: string, options: OpenCompute
           case '/shutdown':
             await worker.shutdown(); output = null
             response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ value: null }))
-            setImmediate(() => { void close().catch(() => { process.exitCode = 1 }) }); return
+            setImmediate(onShutdown); return
           default: throw workerError('worker-invalid')
         }
         response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ value: output ?? null }))
@@ -127,11 +144,4 @@ export async function openComputerWorker(directory: string, options: OpenCompute
         response.writeHead(code === 'worker-owner-rejected' ? 409 : 400, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ error: code }))
       }
     })
-    await new Promise<void>((yes, no) => { server!.once('error', no); server!.listen(0, '127.0.0.1', () => { server!.removeListener('error', no); yes() }) })
-    endpoint = { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, token, pid: process.pid, workerId, bootId }
-    const temp = join(path, `endpoint.${bootId}.tmp`)
-    await writeFile(temp, JSON.stringify(endpoint), { flag: 'wx', mode: 0o600 })
-    await rename(temp, join(path, 'endpoint.json'))
-    return { endpoint, close }
-  } catch (error) { await close(); throw error }
 }

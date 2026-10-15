@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { createHarnessServer } from '../../dist/entrypoints/harness-server-main.js'
 import { createClientHost } from '../../dist/entrypoints/client-main.js'
-import { harnessClientApplication } from '../../dist/applications/harness/registration.js'
+import { harnessClientApplication } from '../../dist/applications/harness/client/registration.js'
 import { testApplication } from './test-application.mjs'
 import { parseHarnessServerConfig } from '../../dist/applications/harness/server-config.js'
 

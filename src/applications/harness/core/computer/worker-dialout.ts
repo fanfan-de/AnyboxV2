@@ -24,6 +24,7 @@ export interface WorkerDialoutPort {
   attach(input: WorkerAttachInput, signal?: AbortSignal): Promise<WorkerAttachmentView>
   list(): Promise<readonly WorkerAttachmentView[]>
   revoke(attachmentId: string): Promise<WorkerAttachmentView>
+  updatePermissions(attachmentId: string, ceiling: unknown): Promise<WorkerAttachmentView>
 }
 export interface WorkerDialoutOptions { readonly fetch?: typeof fetch; readonly pollWaitMs?: number; readonly getWaitMs?: number; readonly requestTimeoutMs?: number }
 interface Loop { readonly abort: AbortController; done: Promise<void>; state: WorkerDialoutState; lastError: string | null }
@@ -191,6 +192,10 @@ export function createWorkerDialoutComponent(options: WorkerDialoutOptions = {})
       return Object.freeze({ ...attachment, connection: attachment.state === 'revoked' ? 'revoked' : loop?.state ?? 'offline', lastError: loop?.lastError ?? null })
     }
     const service: WorkerDialoutPort = {
+      async updatePermissions(attachmentId, ceiling) {
+        if (closing) throw workerError('worker-closing')
+        return view(await attachments.updatePermissions(attachmentId, ceiling))
+      },
       async attach(input, signal) {
         if (closing) throw workerError('worker-closing')
         const harnessUrl = validateHarnessUrl(input?.harnessUrl), ceiling = validateComputerCeiling(input?.ceiling)
@@ -228,13 +233,24 @@ export function createWorkerDialoutComponent(options: WorkerDialoutOptions = {})
         return view(revoked)
       },
     }
-    ctx.provide(workerDialoutServiceKey, service)
+    const pending = new Set<Promise<unknown>>()
+    const track = <T>(work: () => Promise<T>): Promise<T> => {
+      if (closing) return Promise.reject(workerError('worker-closing'))
+      const task = Promise.resolve().then(work)
+      pending.add(task); void task.finally(() => pending.delete(task)).catch(() => {})
+      return task
+    }
+    ctx.provide(workerDialoutServiceKey, {
+      attach: (input, signal) => track(() => service.attach(input, signal)), list: () => track(() => service.list()),
+      revoke: id => track(() => service.revoke(id)), updatePermissions: (id, ceiling) => track(() => service.updatePermissions(id, ceiling)),
+    } satisfies WorkerDialoutPort)
     for (const attachment of await attachments.list()) {
       if (attachment.state !== 'approved') continue
       try { start(attachment, await attachments.credential(attachment.attachmentId)) } catch { /* Listed as offline until the credential becomes readable. */ }
     }
     ctx.effect(() => async () => {
       closing = true; unsubscribe(); lifetime.abort('worker-dialout-closing')
+      await Promise.allSettled([...pending])
       await Promise.allSettled([...loops.values()].map(loop => { loop.abort.abort('worker-dialout-closing'); return loop.done }))
       loops.clear()
     }, 'stop unit dial-out loops and join their requests')
