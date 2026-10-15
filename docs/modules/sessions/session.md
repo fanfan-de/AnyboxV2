@@ -76,7 +76,7 @@ Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude 
 
 `RunOperationStart` 包含 id、kind（model/operation/tool）、JSON intent、可选 records 与 tool，以及只用于通用 operation 的 cleanup:true 准入标记。Session 不解释 intent 来推断清理，模型或工具操作不能利用该标记在取消后启动。observation 的 kind 为 value/error/cleanup-failed，可携 records、checkpoint、工具事实、通用 JSON result 和失败分类；结果在现有 observation_json 中持久化，不增加事件种类。
 
-计算工具的 startOperation 在同一业务事务中复核固定工具声明，调用 Computer Operations.acceptIn，提交 Session 意图、started 事件、计算声明和逻辑实例/工作区需求。observeOperation 同事务提交真实工具观察、图片保留以及 Operations.observeIn 的 observed 标记。事务内不等待激活、目录检查或实际工具退出；计划和模型 operation 不创建 computer 声明。新增账本仍归各领域组件，Session 不直接读写其表。
+计算工具的 startOperation 在同一业务事务中复核固定工具声明，调用 Computer Operations.acceptIn 并传入 Run 固定的 Computer 附着引用，提交 Session 意图、started 事件、计算声明和逻辑实例/工作区需求。observeOperation 同事务提交真实工具观察、图片保留以及 Operations.observeIn 的 observed 标记。事务内不等待激活、目录检查或实际工具退出；计划和模型 operation 不创建 computer 声明。新增账本仍归各领域组件，Session 不直接读写其表。
 
 run-state v10 新增独立版本化 RunResumeState，不复活旧 Run phase 写入器。接受、模型意图、完整工具批次、工具观察/额度、清理及结算提案与恢复游标原子提交；runOwnerEpoch 是授权，写操作拒绝旧 owner。protocolCursor 由 Loop 解释，Session 只保存不透明 JSON。startOperation、observeOperation 与 settleRun 接受 ownerEpoch，缺省值只用于原 owner 兼容调用。
 

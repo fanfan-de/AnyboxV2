@@ -4,7 +4,9 @@
 
 ## 工厂、服务与依赖
 
-`createProjectFilesComponent({ now?, newId?, collectionIntervalMs?, treeBrowser? })` 创建根上的 `harness-project-files`，提供 `harness.project-files: ProjectFilesPort`。组件注入 `local-storage` 和 `harness.projects`，从本轮 deps 使用服务；harness server 在 Projects 之后安装，Session 依赖它。没有项目 Context、额外 SQLite 连接、文件目录或工具注册。
+`createProjectFilesComponent({ now?, newId?, collectionIntervalMs?, treeBrowser? })` 创建根上的 `harness-project-files`，提供 `harness.project-files: ProjectFilesPort`。组件注入 `local-storage`、`harness.projects` 和 `computer.worker`，从本轮 deps 使用服务；harness server 在 Projects 之后安装，Session 依赖它。没有项目 Context、额外 SQLite 连接、文件目录或工具注册。
+
+读取来源按项目绑定选择：绑定 `local:computer` 的项目用本机文件系统提供方；绑定远端附着的项目经 [Worker 路由](../computers/worker-router.md)的只读查询面（`search`、`read`、`list`）由单元读取，参数、限制与错误码相同。远端目录树的每个游标是一次有界列表快照，分页不再回到单元；读到的内容仍由本组件保存为不可变快照并保留，事实归属不变。
 
 源码：[组件](../../../src/applications/harness/core/project-files/component.ts)、[端口](../../../src/applications/harness/core/project-files/port.ts)、[文件系统提供方](../../../src/applications/harness/core/project-files/filesystem.ts)、[纯规则与浏览器共享类型](../../../src/applications/harness/core/project-files/domain.ts)。文件系统提供方、内部树浏览器和规则不是独立组件。树浏览器由该组件独占，`treeBrowser` 仅提供受控测试的目录访问及时间替身。
 

@@ -3,7 +3,8 @@ import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
+import sharp from 'sharp'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
@@ -14,7 +15,7 @@ import { createRunRuntimeComponent } from '../dist/applications/harness/core/run
 import { createLocalComputerProvider } from './helpers/fixed-computer-provider.mjs'
 import { computerDeclarationDigest } from '../dist/applications/harness/core/computer/operations-domain.js'
 import { getToolById } from '../dist/applications/harness/core/tool/catalog.js'
-import { installComputerServices, createControlledComputerWorker } from './helpers/computer-services.mjs'
+import { installComputerServices, createControlledComputerWorker, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { deferred, modelSnapshot } from './helpers/controlled-models.mjs'
 import { nativeRegistration, completedOutcome } from './helpers/native-records.mjs'
 
@@ -32,11 +33,12 @@ async function until(predicate) {
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-computer-operations-')), root = new Context()
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  const worker = createControlledComputerWorker(root)
+  await root.installComponent(worker.component)
   await root.installComponent(createProjectComponent(inputs))
   const projects = root.get('harness.projects'), project = await projects.openProject(directory)
   const provider = createLocalComputerProvider(), events = { activations: 0, executions: [], cleanupFailed: false }
   root.provide('computer.instance-provider', { ...provider, activate(input) { events.activations++; return provider.activate(input) } })
-  const worker = createControlledComputerWorker(root)
   await installComputerServices(root, inputs, { worker })
   const db = root.get('local-storage'), ops = root.get('harness.computer-operations'), computers = root.get('harness.computers')
   t.after(async () => {
@@ -53,6 +55,27 @@ async function fixture(t) {
   const openRun = ({ execution, ...input }) => { worker.setExecution(input.runId, execution); return ops.openRun(input) }
   return { root, directory, db, ops, computers, projects, project, events, accept, executor, openRun, worker }
 }
+
+test('pushed tool images are resolved from the Session scope instead of being imported again, and mismatched receipts are rejected', async t => {
+  const f = await fixture(t)
+  const png = await sharp({ create: { width: 2, height: 2, channels: 4, background: '#0f0f0f' } }).png().toBuffer()
+  const assets = f.root.get('harness.image-assets')
+  const imported = await joined(assets.importImage({ scopeId: 'session', bytes: (async function* () { yield png })() }))
+  const { expiresAt: _draft, ...ref } = imported
+  assert.equal(typeof _draft, 'string')
+  const pushed = { assetId: imported.assetId, sha256: imported.sha256, byteLength: imported.byteLength, mimeType: imported.mediaType }
+  const viewed = { name: 'bash', result: { exitCode: 0, signal: null, stdout: 'image', stderr: '', truncated: false }, images: [ref] }
+  await f.accept('pushed'); await f.accept('mismatch'); await f.accept('foreign')
+  const scope = f.openRun({ runId: 'run', imageInput: true, execution: f.executor(req => immediate({ ...viewed, workerImages: [
+    req.id === 'pushed' ? { ref, pushed } : req.id === 'mismatch' ? { ref, pushed: { ...pushed, sha256: createHash('sha256').update('other').digest('hex') } } : { ref, pushed: { ...pushed, assetId: 'missing' } }] })) })
+  const observed = await joined(scope.execute('pushed'))
+  assert.deepEqual(observed.images, [ref], 'the receipt resolves to the retained Session asset without a second import')
+  assert.equal((await assets.describe('session', [ref.assetId]))[0].expiresAt, undefined, 'the observation transaction retained the pushed draft')
+  await assert.rejects(joined(scope.execute('mismatch')), { code: 'computer-operation-conflict' })
+  await assert.rejects(joined(scope.execute('foreign')), { code: 'computer-operation-conflict' })
+  assert.equal((await f.ops.get('mismatch')).state, 'failed'); assert.equal((await f.ops.get('foreign')).state, 'failed')
+  await joined(scope.close())
+})
 
 test('operation declaration and resource demand roll back together; hashes exclude authorization and normalize parameter key order', async t => {
   const f = await fixture(t)
@@ -202,6 +225,7 @@ test('component reconstruction preserves uncertain execution facts and never rep
   const second = new Context()
   try {
     await second.installComponent(createLocalSqliteComponent(join(f.directory, 'state.sqlite')))
+    await installComputerWorkerStub(second)
     await second.installComponent(createProjectComponent(inputs))
     const provider = createLocalComputerProvider()
     second.provide('computer.instance-provider', { ...provider, activate(input) { f.events.activations++; return provider.activate(input) } })

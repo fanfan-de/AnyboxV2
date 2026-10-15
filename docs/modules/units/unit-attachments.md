@@ -14,7 +14,10 @@
 | `createAttachCode({ unitKind, scope, ttlMs? })` | 记录 `pending` 附着并返回一次性附着码；有效期默认 10 分钟，允许 1 分钟到 24 小时 |
 | `attach({ code, unitKind, unitId, contractVersion, capabilities?, ceiling })` | 消费附着码：校验未过期、种类一致、同种类同 `unitId` 没有其他 `approved` 附着，并要求请求作用域落在单元上限内；成功后返回一次性单元凭证 |
 | `revoke(id)` | 远端附着幂等撤销并递增 epoch；本机附着返回 `unit-attachment-local` |
-| `local(unitKind)` | 返回该种类的本机附着及其 Run 绑定引用；Models 引用带本次装配 bootId |
+| `authenticate(id, credential)` | 以常量时间比较凭证的 SHA-256 摘要；记录缺失或摘要不符返回 `unit-credential-invalid`，非 `approved` 返回 `unit-attachment-state`。[单元传输](unit-transport.md)用它认证拨出的单元 |
+| `local(unitKind)` | 返回该种类的本机附着及其 Run 绑定引用；Models 引用带本次装配 bootId；组合没有声明该种类的本机单元时返回 `unit-attachment-missing` |
+| `binding(id)` | 任意 approved 附着的 Run 绑定引用，供项目绑定到远端附着的 Run 准入使用；非 approved 返回 `unit-attachment-state` |
+| `getIn(reader, id)` | 调用方事务内的同步读取，不检查状态；Computer Operations 用它取远端附着声明的平台/架构作为放置事实 |
 | `requireApprovedIn(tx, binding)` | 同步参加业务事务：引用的附着必须仍为 `approved`、种类与 `unitId` 一致且 epoch 相同，否则 `unit-attachment-mismatch` |
 | `verify(bindings)` | 异步执行同样的校验，供 Run 恢复接管前使用 |
 
@@ -32,7 +35,7 @@
 
 ## 失败与兼容边界
 
-本机附着不能经 API 撤销或收紧作用域；直接改写账本使引用失效时，Run 在接受或恢复阶段按 `unit-attachment-mismatch` 拒绝，不自动改绑。附着码过期返回 `unit-code-expired` 并保留 `pending` 记录，可显式撤销。`attach` 校验失败不改变记录状态。组件不实现单元侧消费附着码的网络入口、远端代理或凭证认证，这些随远端 Computer（U1）与远端 Models（U3）加入。
+本机附着不能经 API 撤销或收紧作用域；直接改写账本使引用失效时，Run 在接受或恢复阶段按 `unit-attachment-mismatch` 拒绝，不自动改绑。附着码过期返回 `unit-code-expired` 并保留 `pending` 记录，可显式撤销。`attach` 校验失败不改变记录状态。组件不持有网络：单元侧消费附着码、长轮询与回执经 harness server HTTP 的单元路由到达 `attach`、`authenticate` 与[单元传输](unit-transport.md)；远端代理组件随 U1 第 2 步、远端 Models 随 U3 加入。
 
 ## 验证
 

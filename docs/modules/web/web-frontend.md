@@ -6,7 +6,7 @@
 
 内部 `startApplicationHttpServer` 是客户端和执行端共用的监听器实现。执行端使用 `/api/v1`；客户端 Shell 使用 `/api/client/v1`。组件持有监听 socket、请求集合、监听器生命周期信号及撤销订阅。注册目录拥有精确静态地址与业务前缀；静态文件只从映射读取，不遍历任意路径。
 
-生产执行端认证 Bearer 和 instanceId；无认证客户端校验 Host、Origin 和 Sec-Fetch-Site。设置 CSP/no-store。产品控制保持既有接口，已接受控制不因断连取消。业务归属由目录路由固定，身份头仅能与归属一致。授权、Activity 登记、根上当前适配器捕获均在首次异步业务工作前完成。
+生产执行端认证 Bearer 和 instanceId；应用可在注册目录的 `http.selfAuthenticated` 声明相对前缀（Anybox Harness 为 `/units/unit`），这些路径只在 `/api/v1/apps/:appId` 下可达、没有旧别名，监听器不要求设备令牌，以 `principal: 'unit'` 交给应用自行认证，设备令牌在其上不被接受，`X-Anybox-Instance-Id` 仍随响应返回。无认证客户端校验 Host、Origin 和 Sec-Fetch-Site。设置 CSP/no-store。产品控制保持既有接口，已接受控制不因断连取消。业务归属由目录路由固定，身份头仅能与归属一致。授权、Activity 登记、根上当前适配器捕获均在首次异步业务工作前完成。
 
 桌面客户端额外配置私有 `transportSecret` 时，监听器先以常量时间摘要比较校验 `X-Anybox-Desktop-Transport`，再执行原 Host/Origin 及目录规则。校验覆盖静态资源和全部 API，不能以回环地址替代桥接授权；凭证由桌面受信进程在转发时添加，页面脚本不持有它。执行端访问令牌与此传输凭证的职责和归属独立，普通 Web 监听行为不变。
 
@@ -16,7 +16,7 @@ close 同步停止 HTTP 准入、发送关闭信号并取消未完成请求体�
 
 通用客户端与执行宿主的 `prepareClose()` 同步开始监听器关闭，同时停止产品控制和应用运行时准入；它等待控制与装配退出，保留组件与存储直到宿主 `close()` 卸载整根。HTTP 排空还等待 `retainUntil()` 保留操作及租约实际退出，因此只在 `close()` 中与 Nya 根清理一起等待，避免 Run 需要根清理取消而 HTTP 先等待 Run 的死锁。执行端的 `closing` 从准备阶段开始即为 true，Run 准备同步关闭；已接纳运行的取消与实际退出仍由后续根清理负责。两个方法均幂等，准备失败不跳过后续资源清理。
 
-浏览器入口归各应用静态资源。Anybox Harness 只挂载项目与会话工作区，侧栏底部将一处紧凑设备选择器与设置图标放在同一行，连接、模型与 Prompt 在工作区设置的分类面板中管理；设备的“启动 Agent”“停止 Agent”位于“管理连接”分类。此布局不改变宿主监听器、HTTP 分派和应用启停契约，具体展示与恢复见[Web 客户端设计](../../web-client-design.md)和[宿主设计](../../products-v1.md)。
+浏览器入口归各应用静态资源。Anybox Harness 只挂载项目与会话工作区，侧栏底部将一处紧凑设备选择器与设置图标放在同一行，连接、模型、Prompt 与单元附着在工作区设置的分类面板中管理；设备的“启动 Agent”“停止 Agent”和“附着到远端 harness server”位于“管理连接”分类，“单元附着”分类展示所选设备 harness server 的附着列表并生成一次性附着码。此布局不改变宿主监听器、HTTP 分派和应用启停契约，具体展示与恢复见[Web 客户端设计](../../web-client-design.md)和[宿主设计](../../products-v1.md)。
 
 项目会话列表与已归档列表使用 Session 返回的 `title`，无需打开会话或加载对话历史。标题由 Session 从首次已接受输入派生；打开不同分支、关闭面板或刷新页面不改变名称。空会话继续显示短 ID；新会话首次发送后，面板读取 Session 时同步更新列表标题，不再从当前路径或临时 Run 列表缓存名称。
 

@@ -5,6 +5,7 @@ import { createHostAccessComponent, hostAccessServiceKey } from '../host/access.
 import type { HostAccessPort } from '../host/access.js'
 import { parseHarnessServerConfig } from '../applications/harness/server-config.js'
 import { createHarnessServer } from '../applications/harness/server.js'
+import { describeError } from './error-report.js'
 export { createHarnessServer }
 
 async function main() {
@@ -29,7 +30,7 @@ async function main() {
   const host = await createHarnessServer(config, { name: process.env.ANYBOX_HARNESS_NAME, host: process.env.ANYBOX_HARNESS_BIND ?? '127.0.0.1', projects })
   process.stdout.write(`harness server: ${host.url} (${host.instance.instanceId})\n`)
   process.send?.({ type: 'ready', instanceId: host.instance.instanceId, url: host.url })
-  const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch(() => { process.exitCode = 1; process.stderr.write('harness server shutdown failed\n') }) }
+  const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch((error: unknown) => { process.exitCode = 1; process.stderr.write(`harness server shutdown failed: ${describeError(error)}\n`) }) }
   process.once('SIGINT', stop); process.once('SIGTERM', stop)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main().catch(error => {

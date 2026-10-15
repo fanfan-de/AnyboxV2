@@ -11,16 +11,17 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 - `options.directoryHome` 由宿主通过 `HarnessServerCoreOptions.projectDirectoryHome` 传入，生产默认是执行端系统用户主目录；未配置只禁用浏览，不影响旧接口。
 - `options.initialProjects` 接收受信宿主预登记路径；每次依赖就绪后的激活先幂等登记，再提供服务，因此首次启用 Agent 或从 PENDING 恢复均会处理宿主配置。路径无效会使该次组件启动失败，先前成功登记的项目仍保留，显式重试继续幂等登记。
 - `inputs.now()` 和 `inputs.newId()` 由组合根注入，默认时间与 ID 生成不写死在领域动作里。
-- 注入 [本地存储](../infrastructure/local-sqlite.md) 的 `local-storage`；提供 `harness.projects: ProjectPort`。
-- `apply` 等待 `migrate('projects', migrations)` 后注册服务；当前迁移版本为 1。
+- 注入 [本地存储](../infrastructure/local-sqlite.md) 的 `local-storage` 与 [Worker 路由](../computers/worker-router.md)的 `computer.worker`；提供 `harness.projects: ProjectPort`。
+- `options.defaultComputerAttachmentId` 是未显式指定时新项目的 Computer 附着：本机形态为 `local:computer`，远端形态为 `ANYBOX_COMPUTER_ATTACHMENT`。
+- `apply` 等待 `migrate('projects', migrations)` 后注册服务；当前迁移版本为 2。
 
 ## 数据与接口
 
-`Project` 包含 `id`、规范化 `path`、`name`、`createdAt`、`available`。前四项是持久事实；available 在读取时使用 stat 计算，不持久缓存目录存活状态。名称初始为规范路径 basename，没有项目改名或删除接口。
+`Project` 包含 `id`、规范化 `path`、`name`、`createdAt`、`available` 与 `computerAttachmentId`。前四项和绑定是持久事实；available 在读取时计算，不持久缓存目录存活状态：绑定 `local:computer` 的项目在本机 stat，绑定远端附着的项目经组合根提供的 `computerQuery` 入口（当前 `computer.worker` 的 `stat` 查询）由单元回答；单元离线时项目不可用，Run 与会话准入随之拒绝，不等待单元回来。路径是所绑定单元上的绝对路径（pinned-local），只对该单元有意义。名称初始为规范路径 basename，没有项目改名、改绑或删除接口。
 
 | 方法 | 输入和结果 |
 | --- | --- |
-| `openProject(path)` | 只接受非空绝对目录路径；realpath 后按规范路径去重，返回 available=true 的项目 |
+| `openProject(path, { computerAttachmentId? })` | 只接受非空绝对目录路径。本机绑定 realpath 并确认目录；远端绑定由单元的 `stat` 查询在其附着上限内解析规范路径并确认目录，不可达、越界或非目录都返回 `project-unavailable`。按 (规范路径, 绑定) 去重，返回 available=true 的项目 |
 | `listProjects()` | 按 createdAt、id 排序返回所有项目，并并行检查每个目录当前可用性 |
 | `getProject(id)` | 不存在返回 undefined；存在则重新检查目录 |
 | `getIn(reader,id)` | 受信同步事务参与接口，仅返回稳定项目元数据，available=false；不检查目录、不激活计算资源 |
@@ -34,7 +35,7 @@ harness server API 提供登记、查询与浏览接口；`getIn` 只供受信�
 
 openProject 首先 realpath 解析目录别名，并确认目标是目录；文件、已删除路径或权限导致不可达的路径被拒绝。随后在事务内查询 `harness_projects.path`，已存在则复用同一 ID，否则插入新 ID、目录名和时间。数据库的 UNIQUE(path) 保证规范路径身份唯一，打开同一目录的不同路径表示不会创建多个项目。
 
-`harness_projects` 表由本组件的 projects 迁移域拥有；SQLite 连接归存储组件。本组件不打开额外连接，不建立每项目数据库或 Nya Context。目录失效只影响 available 和新操作准入，不删除项目记录及其 Session 历史。
+`harness_projects` 表由本组件的 projects 迁移域拥有，v2 增加 `computer_attachment_id` 并把唯一键改为 (path, computer_attachment_id)，旧项目迁入时绑定 `local:computer`。会话表以外键引用项目且存储强制外键，因此 v2 在事务内以 `PRAGMA defer_foreign_keys = ON` 重建同名表：先复制到临时表、删除原表、建新表并按原 ID 回填，提交时延迟检查通过；空表测试不覆盖这一点，[目录测试](../../../tests/project-directories.test.mjs)用带会话引用的 v1 账本验证。SQLite 连接归存储组件。本组件不打开额外连接，不建立每项目数据库或 Nya Context。目录失效只影响 available 和新操作准入，不删除项目记录及其 Session 历史。
 
 [Workspaces](../computers/workspaces.md) 按需读取 Projects.getIn，为旧项目建立独立 pinned-local 身份；只有计算工具执行前才通过 requireAvailable 准备 binding。Projects 不依赖 Workspaces、Computers 或 Operations，项目登记和会话创建不会因此激活 computer。本阶段仍保留本机绝对路径与共享目录语义，不承诺项目目录跨机器迁移。
 

@@ -50,8 +50,10 @@ export async function startApplicationHttpServer(options: {
       }
       const url = new URL(request.url ?? '/', origin)
       if (url.origin !== origin) throw failure(403, 'forbidden-host')
+      // A unit route carries no device token; the application authenticates the unit itself and never treats it as the owner.
+      const unitRoute = options.catalog.route(url.pathname, base)?.selfAuthenticated === true
       let actorId = 'local-web-user'
-      if (options.access) {
+      if (options.access && !unitRoute) {
         actorId = options.access.authenticate(request.headers.authorization)
         responses.set(response, actorId)
         response.setHeader('X-Anybox-Instance-Id', options.access.instance.instanceId)
@@ -68,6 +70,7 @@ export async function startApplicationHttpServer(options: {
         const revoke = new RegExp(`^${base}/access/tokens/([^/]+)/revoke$`).exec(url.pathname)
         if (method === 'POST' && revoke) { await requestObject(request, []); await options.access.revoke(decodeURIComponent(revoke[1])); json(response, 200, { ok: true }); return }
       }
+      if (options.access && unitRoute) response.setHeader('X-Anybox-Instance-Id', options.access.instance.instanceId)
       if (method === 'GET' && options.catalog.assets.has(url.pathname)) {
         const asset = options.catalog.assets.get(url.pathname)!
         response.setHeader('Content-Type', asset.type); response.end(await readFile(asset.file)); return
@@ -87,7 +90,7 @@ export async function startApplicationHttpServer(options: {
       const handler = options.service(route.application.http!.service)
       if (!handler) throw failure(503, 'product-unavailable')
       const relative = new URL(url); relative.pathname = route.path
-      await handler.handle(request, response, relative, { signal: lifetime.signal, actorId, appId: id, retainUntil(done) {
+      await handler.handle(request, response, relative, { signal: lifetime.signal, actorId: unitRoute ? 'unit' : actorId, appId: id, principal: unitRoute ? 'unit' : 'owner', retainUntil(done) {
         // Observe now; it may reject before the request finishes.
         const settled = done.then(() => {}, () => {}); retained.push(settled)
       } })

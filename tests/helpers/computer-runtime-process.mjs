@@ -56,7 +56,7 @@ try {
     }
   }
   await root.installComponent(createLocalComputerWorkerComponent({ directory: join(settings.directory, 'worker') }))
-  actualWorker = root.get('computer.worker')
+  actualWorker = root.get('computer.local-worker')
   const submit = actualWorker.submit
   if (missingReceipt || ['cancel-offline', 'close-confirmation'].includes(settings.fault)) actualWorker.submit = async input => {
     if (settings.fault === 'cancel-offline' && input.kind === 'cancel') {

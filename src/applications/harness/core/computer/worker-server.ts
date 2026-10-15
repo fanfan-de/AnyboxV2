@@ -13,10 +13,20 @@ import { createProcessToolsComponent } from '../tool/process-component.js'
 import { createFileToolsComponent } from '../tool/files-component.js'
 import { createImageAssetsComponent } from '../image/component.js'
 import { createComputerWorkerExecutorComponent } from './worker-component.js'
+import { createWorkerAttachmentsComponent } from './worker-attachments.js'
+import type { WorkerAttachmentsOptions } from './worker-attachments.js'
+import { createWorkerDialoutComponent, workerDialoutServiceKey } from './worker-dialout.js'
+import type { WorkerDialoutOptions, WorkerDialoutPort } from './worker-dialout.js'
 import { computerWorkerServiceKey, workerError } from './worker-port.js'
 import type { ComputerWorkerPort, WorkerAuthorization, WorkerSubmission } from './worker-port.js'
 
 export interface WorkerEndpoint { readonly url: string; readonly token: string; readonly pid: number; readonly workerId: string; readonly bootId: string }
+export interface OpenComputerWorkerOptions {
+  /** Unit credentials live in this system credential namespace; a host without one cannot attach to remote harness servers. */
+  readonly credentialNamespace?: string
+  readonly openEntry?: WorkerAttachmentsOptions['openEntry']
+  readonly dialout?: WorkerDialoutOptions
+}
 const missing = async (): Promise<never> => { throw workerError('worker-fixed-binding-required') }
 /** Tools get a root service for their compatibility dependency, but worker requests must carry a fixed path. */
 function trustedProjectBindings(): ProjectPort {
@@ -30,7 +40,7 @@ function authentic(given: string | undefined, token: string): boolean {
   const a = Buffer.from(given), b = Buffer.from(`Bearer ${token}`)
   return a.length === b.length && timingSafeEqual(a, b)
 }
-export async function openComputerWorker(directory: string): Promise<{ readonly endpoint: WorkerEndpoint; close(): Promise<void> }> {
+export async function openComputerWorker(directory: string, options: OpenComputerWorkerOptions = {}): Promise<{ readonly endpoint: WorkerEndpoint; close(): Promise<void> }> {
   const path = resolve(directory)
   await mkdir(path, { recursive: true, mode: 0o700 })
   // A failed process leaves no application-owned lock: the SQLite OS lock proves exclusive ownership.
@@ -74,7 +84,9 @@ export async function openComputerWorker(directory: string): Promise<{ readonly 
     await root.installComponent(createApplyPatchComponent())
     await root.installComponent(createProcessToolsComponent())
     await root.installComponent(createFileToolsComponent())
+    await root.installComponent(createWorkerAttachmentsComponent({ namespace: options.credentialNamespace, openEntry: options.openEntry }))
     await root.installComponent(createComputerWorkerExecutorComponent({ workerId, bootId }))
+    await root.installComponent(createWorkerDialoutComponent(options.dialout))
     const token = randomUUID() + randomUUID()
     server = createServer(async (request, response) => {
       if (!authentic(request.headers.authorization, token) || request.socket.remoteAddress !== '127.0.0.1') {
@@ -87,12 +99,22 @@ export async function openComputerWorker(directory: string): Promise<{ readonly 
         for await (const chunk of request) { const bytes = Buffer.from(chunk); size += bytes.length; if (size > 40 * 1024 * 1024) throw workerError('worker-invalid'); chunks.push(bytes) }
         const input: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
         const worker = root.get<ComputerWorkerPort>(computerWorkerServiceKey)!
+        const dialout = () => { const service = root.get<WorkerDialoutPort>(workerDialoutServiceKey); if (!service) throw workerError('worker-closing'); return service }
         let output: unknown
         switch (request.url) {
           case '/info': output = await worker.info(); break
           case '/claim': output = await worker.claimRun(input as WorkerAuthorization); break
           case '/submit': output = await worker.submit(input as WorkerSubmission); break
           case '/get': output = await worker.get(input as WorkerAuthorization & { operationId: string }); break
+          case '/query': output = await worker.query(input as Parameters<ComputerWorkerPort['query']>[0]); break
+          // Device-owner control of this unit's attachments; only the loopback harness server reaches these.
+          case '/attachments/list': output = await dialout().list(); break
+          case '/attachments/consume': output = await dialout().attach(input as Parameters<WorkerDialoutPort['attach']>[0]); break
+          case '/attachments/revoke': {
+            const { attachmentId } = input as { attachmentId?: unknown }
+            if (typeof attachmentId !== 'string' || !attachmentId) throw workerError('worker-invalid')
+            output = await dialout().revoke(attachmentId); break
+          }
           case '/shutdown':
             await worker.shutdown(); output = null
             response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify({ value: null }))

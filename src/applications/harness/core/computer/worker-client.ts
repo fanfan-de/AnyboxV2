@@ -3,8 +3,9 @@ import { mkdir, readFile, open } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Component } from '@nya/core'
-import { computerWorkerServiceKey, workerError } from './worker-port.js'
-import type { ComputerWorkerOptions, ComputerWorkerPort, WorkerOperation } from './worker-port.js'
+import type { JsonValue } from '@anybox/models'
+import { localComputerWorkerServiceKey, localComputerWorkerControlServiceKey, workerError } from './worker-port.js'
+import type { ComputerWorkerOptions, ComputerWorkerPort, LocalComputerWorkerControl, WorkerOperation } from './worker-port.js'
 import type { WorkerEndpoint } from './worker-server.js'
 
 const wait = (ms: number) => new Promise<void>(yes => setTimeout(yes, ms))
@@ -20,7 +21,7 @@ async function endpoint(path: string): Promise<WorkerEndpoint | undefined> {
   } catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined; throw error }
 }
 /** The proxy owns only local HTTP observations. Unloading it never stops the independent worker. */
-export function connectLocalComputerWorker(options: ComputerWorkerOptions): ComputerWorkerPort & { closeObserver(): Promise<void> } {
+export function connectLocalComputerWorker(options: ComputerWorkerOptions): ComputerWorkerPort & { readonly control: LocalComputerWorkerControl; closeObserver(): Promise<void> } {
   const directory = resolve(options.directory)
   let accepting = true
   let connecting: Promise<WorkerEndpoint> | undefined
@@ -38,7 +39,8 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
       return output.value as T
     } finally { clearTimeout(timeout); observing.delete(abort) }
   }
-  const ensure = () => connecting ??= (async () => {
+  let current: WorkerEndpoint | undefined
+  const connect = async (): Promise<WorkerEndpoint> => {
     if (!accepting) throw workerError('worker-observer-closed')
     await mkdir(directory, { recursive: true, mode: 0o700 })
     const previous = await endpoint(directory)
@@ -60,27 +62,40 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
       await wait(25)
     }
     throw workerError('worker-startup-timeout')
-  })().catch(error => { connecting = undefined; throw error })
+  }
+  // A worker that died since the last call is replaced on this call instead of failing it first; nothing here supervises an idle worker.
+  const ensure = () => {
+    if (current && !live(current.pid)) { connecting = undefined; current = undefined }
+    return connecting ??= connect().then(found => { current = found; return found }, error => { connecting = undefined; throw error })
+  }
   const request = <T>(path: string, input: unknown) => tracked((async () => {
     if (!accepting) throw workerError('worker-observer-closed')
     const target = await ensure()
     try { return await send<T>(target, path, input) }
     catch (error) { if (!live(target.pid)) connecting = undefined; throw error }
   })())
+  // Attachment control starts the worker when needed: a unit must be running to serve its remote harness servers.
+  const control: LocalComputerWorkerControl = {
+    listAttachments: () => request<readonly JsonValue[]>('/attachments/list', {}),
+    consumeAttachCode: input => request<JsonValue>('/attachments/consume', input),
+    revokeAttachment: attachmentId => request<JsonValue>('/attachments/revoke', { attachmentId }),
+  }
   return {
+    control,
     info: () => request('/info', {}), claimRun: input => request('/claim', input), submit: input => request<WorkerOperation>('/submit', input),
     get: async input => (await request<WorkerOperation | null>('/get', input)) ?? undefined,
+    query: input => request('/query', input),
     shutdown: async () => {
-      const current = await endpoint(directory)
-      if (!current || !live(current.pid)) return
+      const running = await endpoint(directory)
+      if (!running || !live(running.pid)) return
       await request('/shutdown', {})
       const until = Date.now() + 120_000
       while (Date.now() < until) {
         const remaining = await endpoint(directory)
-        if (!remaining || remaining.bootId !== current.bootId || !live(current.pid)) {
-          connecting = undefined
+        if (!remaining || remaining.bootId !== running.bootId || !live(running.pid)) {
+          connecting = undefined; current = undefined
           const receipt = JSON.parse(await readFile(join(directory, 'shutdown.json'), 'utf8')) as { bootId?: string; error?: string }
-          if (receipt.bootId !== current.bootId) throw workerError('worker-shutdown-unknown')
+          if (receipt.bootId !== running.bootId) throw workerError('worker-shutdown-unknown')
           if (receipt.error) throw workerError(receipt.error)
           return
         }
@@ -95,6 +110,7 @@ export function createLocalComputerWorkerComponent(options: ComputerWorkerOption
   return { name: 'computer-local-worker-client', apply(ctx) {
     const client = connectLocalComputerWorker(options)
     ctx.effect(() => () => client.closeObserver(), 'cancel and join local worker observers')
-    ctx.provide(computerWorkerServiceKey, client)
+    ctx.provide(localComputerWorkerServiceKey, client)
+    ctx.provide(localComputerWorkerControlServiceKey, client.control)
   } }
 }

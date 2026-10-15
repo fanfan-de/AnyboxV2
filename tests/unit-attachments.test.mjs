@@ -14,7 +14,7 @@ import { createImageAssetsComponent } from '../dist/applications/harness/core/im
 import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { nativeRegistration } from './helpers/native-records.mjs'
 import { ids, modelSnapshot } from './helpers/controlled-models.mjs'
 
@@ -138,6 +138,7 @@ test('the acceptance transaction fixes local unit references and rejects stale o
   t.after(async () => { try { await root.fiber.dispose() } finally { rmSync(directory, { recursive: true, force: true }) } })
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
+  await installComputerWorkerStub(root)
   await root.installComponent(createProjectComponent(inputs))
   await root.installComponent(createProjectFilesComponent(inputs))
   await installComputerServices(root, inputs)

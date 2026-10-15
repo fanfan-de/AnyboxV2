@@ -1,4 +1,4 @@
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -20,6 +20,7 @@ async function open(directory) {
   const root = new Context(), inputs = { newId: ids(), now: () => 'now' }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
+  await installComputerWorkerStub(root)
   await root.installComponent(createProjectComponent(inputs))
   await root.installComponent(createProjectFilesComponent(inputs))
   const { worker } = await installComputerServices(root, inputs)

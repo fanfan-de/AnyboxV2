@@ -119,3 +119,71 @@ Session run-state 写 v9，新 NativeInitialization v2 / tool-library-v1 复制�
 Session 注入该组件，run-state 升为 v11，在 `harness_runs` 增加 `unit_bindings_json`；`registerRun` 在接受事务内复核 Run 传入的引用仍为 approved 且 epoch 相同。Run 准入固定本机 Models/Computer 的绑定引用，恢复接管前校验引用，不匹配时交给只清理的 Runtime 并结算 `dependency-unavailable` 失败，不改绑当前单元。HTTP 增加 `/units/attachments`、`/units/attach-codes`、`/units/attachments/:id/revoke` 三条拥有者侧路由，不设旧别名；Run DTO 与 Web 不变。远端拨出、单元侧消费附着码、按附着区分的 worker 授权和远端代理组件属于 U1/U3，不预建。
 
 验收入口：`tests/unit-attachments.test.mjs`、`tests/harness-server-core.test.mjs` 的本机附着固定与恢复栅栏场景、`tests/harness-server-http.test.mjs` 的附着路由；直接装配 Session 的夹具经 `tests/helpers/unit-attachments.mjs` 登记同样的本机单元。macOS / Node.js 24.16.0 上 `npm run check` 类型检查与构建通过，1314 项测试中 1302 项通过、11 项按原门控跳过、1 项失败；该失败是 `tests/computer-worker.test.mjs` 的真实 worker 图片用例，在未改动的 HEAD 上同样失败，属于本机环境既有问题，不由本次引入。未调用真实模型、系统 Vault 或远端单元，未修改 NyaCore。
+
+## 可组合单元 U1 第 1 步：按附着授权、回环控制与单元拨出（2026-10-14）
+
+Computer 单元侧：worker 根新增 `computer-worker-attachments`（独占 `computer-worker-attachments` v1，记录服务的 harness server、设备拥有者设定的上限与凭据意图；单元凭证只在系统凭据命名空间，默认 `anybox.computer-worker`，由 `ANYBOX_COMPUTER_WORKER_NAMESPACE` 指定）与 `computer-worker-dialout`（消费附着码、每个 approved 附着一条长轮询循环、领取请求交本地执行器并 POST 回执）。worker 执行器 `computer-worker` 升 v2，Run 表记录所属附着；每个授权带 `attachmentId`，首次 claim 固定 Run 归属，其他附着的 claim/submit/get 一律拒绝，工具接纳同事务检查上限（目录与工具契约），撤销附着时取消并排空其 Run。worker 回环增加 `/attachments/list|consume|revoke`，本机 worker 客户端提供 `computer.local-worker-control`。
+
+harness server 侧：`harness.unit-attachments` 增加常量时间的凭证认证；新增 `harness-unit-transport`（内存邮箱：长轮询领取、回执、连接状态；关闭只拒绝等待中的请求）。通用宿主在应用注册增加 `http.selfAuthenticated` 前缀与 `ApplicationHttpContext.principal`，`/units/unit/*` 只在 `/api/v1/apps/agent` 下可达、不要求也不接受设备令牌。`computer-operations` 升 v3，scope 记录 Run 固定的 Computer 附着引用，新工具声明进入 starting 前复核附着仍有效，恢复与控制声明使用同一附着；RunRuntime 把 Run 的附着引用交给 `openRun`。拥有者侧新增 `/units/local-computer/attachments` 三条路由。
+
+验收入口：`tests/unit-transport.test.mjs`（纯规则、认证、领取/回执/超时/换代/关闭、宿主路由）、`tests/computer-worker-attachments.test.mjs`（经真实认证监听器的端到端拨出：附着、ceiling 与跨附着拒绝、两侧撤销、worker 重启续连；真实系统凭据用例由 `ANYBOX_KEYRING_TESTS=1` 门控）；既有 worker/操作/恢复测试改为显式 `local:computer` 授权。macOS / Node.js 24.16.0 上 `npm run check` 类型检查与构建通过，1321 项测试中 1308 项通过、12 项按原门控跳过、1 项失败；该失败仍是 `tests/computer-worker.test.mjs` 的真实 worker 图片用例，属本机环境既有问题。未调用真实模型、系统 Vault，未做真实跨机器 HTTPS 验收，未修改 NyaCore。远端代理组件、字节通道、只读查询面、Web 入口与故障注入矩阵分别属于 U1 第 2–6 步。
+
+## 可组合单元 U1 第 2 步：远端 Computer 代理组件（2026-10-14）
+
+新增 `computer-unit-worker-proxy`（第 4 步与本机实例提供方合并为 `computer-worker-router`），以与本机形态相同的服务名提供 `computer.worker` 与 `computer.instance-provider`（providerId `unit`）：按授权中的附着经 `harness.unit-transport` 投递 claim/submit/get，同一单元 boot 上的 claim 不重复，`get` 附带上次状态让单元在本地等待变化；`info` 与实例激活向单元请求身份、平台与架构；`shutdown` 固定拒绝。传输失败映射为可重试的 `worker-unavailable`，单元的拒绝保留原 code。`apply` 不等待远端；Effect 只中止本代在途请求，远端已接受操作继续。
+
+组合根按 `computerUnit` 选择形态：本机形态与此前相同；远端形态不安装本机 worker 客户端与本机实例提供方、不登记 `local:computer` 本机附着，Run 准入经新增的 `harness.unit-attachments.binding(id)` 固定配置的远端附着。`server-config` 解析 `ANYBOX_COMPUTER_UNIT=local|remote` 与 `ANYBOX_COMPUTER_ATTACHMENT`，变量写入部署说明。Computer Operations 的 `acceptIn` 接收 Run 固定的 Computer 附着（Session 从 Run 记录传入）：远端附着的声明放在逻辑计算机 `unit:<attachmentId>`，规格取附着记录中单元声明的平台/架构（新增 `getIn` 同步读取，不做批准栅栏；栅栏仍在声明进入 starting 前）。
+
+同一步还有两处配套变更：Computers 每次激活都向提供方重新确认（并发共享一次），不再从内存缓存回答，重启后的 worker 或远端单元得到新代次而不是过期引用；代理把"无人领取"与"已领取但回执丢失"区分为 `worker-unreachable` 与 `worker-unavailable`，Operations 对没有任何 receipt 的 Run 让工具声明以不可用失败、取消与 close-scope 不等待远端，已有 receipt 的 Run 按普通失联继续等待。Workspaces 接受 providerId 为 `unit` 的实例并保持 pinned-local。
+
+验收入口：`tests/computer-worker-router.test.mjs`（配置解析；无单元时安装即返回、准入 `computer-unavailable`；按附着路由、Effect 只放弃本地观察而单元继续执行；真实 worker 附着后以远端形态重新装配 harness server，经代理完成 Bash 与 Apply Patch Run，单元离线时 Run 以 `tool-unavailable` 结算，单元重启回来后以新代次继续）。macOS / Node.js 24.16.0 上 `npm run check` 类型检查与构建通过，1325 项测试中 1312 项通过、12 项按原门控跳过、1 项失败（仍是本机环境既有的 worker 图片用例）。字节通道、只读查询面、按项目绑定、Web 入口与故障注入矩阵属第 3–6 步。
+
+## 可组合单元 U1 第 3 步：字节通道（2026-10-14）
+
+拨出传输不再把工具图片以 base64 内嵌回传：worker 拨出循环在回报 `submit`/`get` 事实前，从 worker 自己的图片组件读取原字节并 `POST /units/unit/bytes?scope=<sessionId>`（头部带 MIME、`x-anybox-sha256`、`x-anybox-byte-length`），harness server 经 Session 导入为该会话的草稿资源并返回 `{ assetId, sha256, byteLength, mimeType }`；事实的 `images` 只带 `{ ref, pushed }`，`WorkerOperation` 新增工具操作的 `sessionId`。Operations 校验回执与 ref 的摘要/长度一致并经 `describe` 确认草稿存在，再随观察同事务保留，不再导入；回执缺失或不符结算 `computer-operation-conflict`。回环传输保留 base64。
+
+验收入口：`tests/computer-worker-router.test.mjs`（直接端口经代理读取图片：事实无 base64、回执摘要与长度一致、harness server 草稿字节与原图一致、重复事实复用回执、字节通道需单元凭证）、`tests/computer-operations.test.mjs`（受控 worker 返回 `pushed` 回执：保留而不再导入、摘要不符或资源缺失拒绝）。受控模型夹具不能把图片回传给模型，完整图片 Run 在远端形态下未经夹具验证。macOS / Node.js 24.16.0 上 `npm run check` 类型检查与构建通过，1326 项测试中 1313 项通过、12 项按原门控跳过、1 项失败（本机环境既有的 worker 图片用例）。
+
+## 可组合单元 U1 第 4 步：只读查询面与项目绑定（2026-10-14）
+
+Computer 契约新增不经操作账本的只读查询面 `query({ attachmentId, query })`：`stat`、`list`、`search`、`read` 复用 Project Files 的文件系统规则，worker 执行器要求附着 approved 且根路径落在其目录上限内，回环 `/query` 与拨出 `query` 请求种类都接入。第 2 步的远端代理与本机实例提供方合并为 `computer-worker-router`：同名 `computer.worker` 与 `computer.instance-provider`，按授权附着把调用路由到回环 worker（`computer.local-worker`，本机客户端改提供此名）或单元传输，实例提供方按资源 providerId（`local`/`unit`）确认；Computers 接受提供方声明的多个 ID。单元在失联窗口内没有轮询过时请求立即失败，离线不再等满领取窗口。
+
+项目绑定 Computer 附着：`projects` v2 增加 `computer_attachment_id` 并把唯一键改为 (path, 绑定)，旧项目迁入时绑定 `local:computer`；`openProject(path, { computerAttachmentId? })` 远端绑定由单元的 `stat` 在上限内解析规范路径，可用性由单元回答，离线即不可用并拒绝准入；Projects 不注入 worker（它是 worker 根工具的依赖），由组合根传入按调用解析当前 `computer.worker` 的 `computerQuery` 入口。Project Files 注入 `computer.worker`，按项目绑定选本机文件系统或单元查询面（搜索、预览、准备、目录树快照），快照仍保存在 harness server。Run 接受事务改为从项目绑定取 Computer 引用，Session 把它传给 Operations；组合的 `ANYBOX_COMPUTER_ATTACHMENT` 只作为远端形态新项目的默认绑定，本机形态也可把单个项目绑定到远端附着。HTTP `POST /projects` 增加可选 `computerAttachmentId`，Project DTO 带绑定。宿主目录选择器仍只浏览 harness server 本机，远端项目以绝对路径登记。
+
+验收入口：`tests/computer-worker-router.test.mjs`（无单元时的路由与查询失败；查询面 stat/list/search/read 与越界拒绝；远端形态下默认绑定、单元回答可用性、远端项目的搜索/预览/准备/快照/目录树、单元离线时准入立即拒绝且项目不可用、单元重启后继续；本机形态同时服务本机项目与远端绑定项目：上限外目录拒绝、同路径不同单元是两个项目、两个 Run 各自落在所绑定 worker、远端项目读取经单元）。受控 worker 夹具按需站在 `computer.local-worker` 或 `computer.worker` 之后。
+
+## 可组合单元 U1 第 5 步：Web 附着入口（2026-10-14）
+
+新增浏览器模块 `units-client.ts`：设置弹窗增加“单元附着”分类（`setupUnitsSettings`，使用所选设备的固定 Api）列出该 harness server 的附着并生成一次性 Computer 附着码、撤销远端附着；“管理连接”每台设备增加“附着到远端 harness server”入口（`setupLocalAttachments`，经该设备的 `/units/local-computer/attachments` 由其本机执行器消费附着码，设定目录/工具上限，列出连接状态并可撤销）。附着码只显示一次，关闭设置弹窗丢弃输入。客户端网关白名单只接纳拥有者侧 `/units/attachments`、`/units/attach-codes`、`/units/attachments/:id/revoke` 与 `/units/local-computer/attachments[/:id/revoke]`，单元侧路由不经网关。错误映射增加 `unit-*` 与 `worker-attach*` 提示。项目绑定到远端附着尚未进入 Web，仍经 `POST /projects` 的 `computerAttachmentId`。
+
+验收入口：`tests/units-client.test.mjs`（纯规则、设置面板列出/生成/撤销与错误提示、连接管理附着入口消费与撤销、网关白名单）。第 4、5 步合并一次 macOS / Node.js 24.16.0 `npm run check`：类型检查与构建通过，1331 项测试中 1318 项通过、12 项按原门控跳过、1 项失败（本机环境既有的 worker 图片用例）。
+
+## 可组合单元 U1 第 6 步：故障注入行为测试（2026-10-14）
+
+新增 `tests/computer-unit-faults.test.mjs` 与子进程夹具 `tests/helpers/unit-harness-process.mjs`，单元在测试进程内运行、经真实认证 HTTP 拨出：
+
+| 故障 | 退出事实与断言 |
+| --- | --- |
+| 网络中断（单元侧 fetch 失败 4 秒，命令期间完成） | Run 保持 running 不被判失败；恢复后拿到原结果，`effect.log` 一行、toolCalls 1、tool-observed 一次、receipt 保留、pins 释放 |
+| 单元重启（关闭并重开 worker，新 bootId） | 在途命令成为 cancelled 事实并只消费一次，Run 以 `tool-cancelled` 结算且不重放；旧 boot 保存的 scope 清理由新 boot 返回，pins 释放；后续 Run 在同一逻辑计算机的新代次上完成 |
+| 单元进程 SIGKILL（真实 worker 子进程，`tests/helpers/unit-worker-process.mjs`，新 bootId） | 没有任何 boot 记录 scope 清理：在途操作成为 outcome-unknown，Run 以 `tool-cleanup-failure` 结算且不重放，pin 不释放；同一 worker 以新 boot 应答即证明旧实例已退出，Computers 退役旧实例并换代，worker 侧 uncertain 的旧 Run 不再栅栏同一 workspace，后续 Run 完成；应用关闭报告清理失败 |
+| 撤销附着（命令运行中） | 单元下一次轮询 401 后本地撤销、删除凭证并取消命令；新 Run 准入被拒绝；harness server 把已置位操作记为 outcome-unknown，scope 清理报告失败、pins 不释放，应用关闭报告清理失败 |
+| harness server SIGKILL（真实子进程，固定端口与实例身份） | 单元保持运行；替代进程 `restarted` 后单元重连，恢复接管经 `authorizeRun` 等待单元回来，查回同一 receipt，Run 完成、输出为原结果、`effect.log` 一行、模型调用 2 次、唯一成功节点 |
+
+配套变更：Computer Operations 在传输失败后复核附着仍 approved（撤销即 outcome-unknown，不再无限等待）。真实跨机器 HTTPS 与系统凭据验收未进行，仍由 `ANYBOX_KEYRING_TESTS=1` 门控的单元凭证用例与后续部署验收记录覆盖。macOS / Node.js 24.16.0 上 `npm run check` 类型检查与构建通过，1335 项测试中 1322 项通过、12 项按原门控跳过、1 项失败（本机环境既有的 worker 图片用例）。
+
+真实部署发现的回归（2026-10-14）：`projects` v2 最初用"建新表、删旧表、改名"重建，而 `harness_sessions.project_id` 以外键引用项目且 node:sqlite 默认强制外键，带会话的账本在删表时报 `FOREIGN KEY constraint failed`，本机与腾讯云上的 Agent 目标都以 `product-startup-failed` 启动失败；空表测试没有覆盖。改为事务内 `PRAGMA defer_foreign_keys = ON`、复制到临时表、删表、同名建新表并按原 ID 回填，`tests/project-directories.test.mjs` 增加带外键引用行的 v1 账本迁移用例。客户端网关对 `/units/*` 改用 `/api/v1/apps/agent` 上游路径（这些路由没有兼容别名），`tests/products-api.test.mjs` 验证。
+
+## 可组合单元 U1 真实跨机器验收（2026-10-14）
+
+腾讯云上海 harness server 升级到 `fd161c6-u1b-20261014`（commit fd161c6 加未提交的 U1 工作树），本机 macOS 以同一构建运行 Anybox Harness 客户端、本机 harness server 与独立 worker。经网关走通：本机消费附着码（单元凭证进入 macOS Keychain）、远端登记绑定该附着的项目、真实 DeepSeek 模型驱动的 Bash/Apply Patch/Read Run、`codex_view_image` 经字节通道保留远端资产、项目文件搜索/预览/目录树；归档与会话查询不变。故障注入完成本机 worker SIGKILL（u1b 暴露回归，修正后以 u1c 复验，见下两段）与在途撤销附着（见 u1c 段之后）；远端 harness server 的进程 SIGKILL 被本机执行环境拒绝，未做真实验收，只有进程内子进程用例覆盖。详细 ID 与事实见[可组合单元设计](composable-units-design.md)第 9 节。
+
+真实跨机器故障注入发现的回归（2026-10-14，腾讯云 harness server 操作本机 Mac worker）：SIGKILL 本机 worker 后，旧 Run 的 pin 因无人观察 scope 退出而永不释放，Computers 对同一逻辑计算机的换代被 `computer-pinned` 拒绝，worker 侧 uncertain 的旧 Run 又以 `worker-binding-conflict` 栅栏同一 workspace，之后该单元上所有新 Run 都以 `tool-unavailable` 失败；进程内的单元重启用例因优雅关闭记录了清理而没有覆盖。修正为提供方在同一 worker 以新 bootId 应答时返回 `previousExited: true`，Computers 据此退役带未释放 pin 的旧实例，worker 的同 workspace 栅栏排除 uncertain Run；本机 worker 客户端在每次调用前检查已连接 PID，异常退出后首个调用即重连或重启。新增单元进程 SIGKILL 故障用例、提供方证明换代用例与客户端重连用例。
+
+`fd161c6-u1c-20261014` 重新验收（2026-10-14 19:29 升级，同一腾讯云 harness server 与本机 Mac）：升级后首个 Run `be297b50` 激活逻辑计算机 `unit:898a9abc…` 时，本机 worker 已以新 bootId 应答，带 `9f3edd0b` 未释放 pin 的第 1 代被退役并换到第 2 代；命令执行中 SIGKILL 本机 worker，本机随后的第一个本地调用观察到死亡 endpoint、第二个调用 3 秒内重启 worker，拨出 8 秒内重新连接，旧 Run 在 kill 后 14 秒以 `tool-cleanup-failure` 结算，其 pin 作为事实保留未释放，`worker-restart3.log` 只有一行；后续 Run `f7c490bd` 换到第 3 代完成并释放 pin（实例表 1 retired / 2 retired / 3 ready）。升级本身的观察：切换时旧 u1b 进程对 SIGTERM 记录 `harness server shutdown failed` 并以退出码 1 结束，入口没有打印原因（已改为打印错误链，未重新部署）；新进程在 3.6 GB 内存的 VM 上 `applying` 约 2 分钟才 `running`，期间本机拨出循环因 `product-unavailable` 进入 offline 并按退避自动重连，`running` 后 30 秒内恢复 connected，无须重新附着。本机 Mac 在附着期间空闲睡眠 23 分钟（18:44–19:07），唤醒后两侧仍显示 connected，没有在途 Run，不需要人工干预。
+
+在途撤销（u1c，2026-10-14 19:38）：Run `d1f0771d` 的命令在本机执行中，经网关 `POST /units/attachments/898a9abc…/revoke` 撤销附着，远端立即记为 revoked；本机拨出循环约 20 秒内观察到撤销并终止了命令进程组（`sleep 60` 消失，`revoke2.log` 只有一行），该 Run 以 `tool-cleanup-failure` 结算；同一会话的新 Run 准入被拒（`project-unavailable`，项目绑定的附着已撤销）。随后远端签发新附着码、本机消费（附着 `f7a1936c`，20 秒内 connected）、远端以新附着把同一目录登记为新项目 `23e60d67` 并新建会话，Run `f174ff25` 执行 `cat revoke2.log` 得到 `once`，从撤销到恢复约 35 秒。第一次尝试的撤销请求没有 JSON 体而被 `invalid-json` 拒绝，那次 Run `331d1df4` 正常完成，不构成验收。
+
+反向拓扑验收（2026-10-15，设计 1.1 节场景表第 5 行：本机 harness server + 远端 Computer）：本机 harness server（本机形态，Models 与客户端同在本机）经 SSH 反向隧道接受腾讯云 worker 的拨出附着（附着 `6ce26a47`，上限 `/home/anybox/projects`，服务器 worker 的单元凭证保存在服务器 gnome-keyring），把服务器目录 `/home/anybox/projects/demo` 登记为绑定该附着的项目，DeepSeek V4.1 Flash 驱动的 Run `97777b1f` 在服务器上执行 `hostname; pwd; cat README.md` 并返回 `VM-0-8-ubuntu`，从签发附着码到 Run 完成 34 秒。隧道做法见[部署说明](harness-server-deployment.md)。
+
+测试环境注意：18:42 的完整 `npm run check` 中撤销故障用例被判 180 秒超时（总时长 963 秒），原因是本机在运行期间进入空闲睡眠 15 分钟，Node 计时器按连续时钟在唤醒后立即触发超时，并非并发负载或代码回归；用 `caffeinate -i -s` 保持唤醒后，同一组 7 个并发测试文件 134 秒通过（83/84，仅已知的 macOS 图片用例失败），故障用例文件单独 5/5。长时间检查需保证宿主不睡眠。

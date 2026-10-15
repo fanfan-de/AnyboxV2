@@ -27,6 +27,10 @@ import { projectProtocolRecords } from '../core/protocol-agents/projection.js'
 import { listTools } from '../core/tool/catalog.js'
 import { unitAttachmentsServiceKey } from '../core/unit/port.js'
 import type { UnitAttachmentsPort } from '../core/unit/port.js'
+import { unitTransportServiceKey } from '../core/unit/transport-component.js'
+import type { UnitTransportPort } from '../core/unit/transport-component.js'
+import { localComputerWorkerControlServiceKey } from '../core/computer/worker-port.js'
+import type { LocalComputerWorkerControl } from '../core/computer/worker-port.js'
 
 export const harnessServerHttpServiceKey = 'harness.http'
 const localActorId = 'local-web-user'
@@ -42,15 +46,25 @@ type CommandDependencies = {
   [promptServiceKey]: PromptPort
   [agentPromptServiceKey]: AgentPromptPort
   [unitAttachmentsServiceKey]: UnitAttachmentsPort
+  [unitTransportServiceKey]: UnitTransportPort
+  [localComputerWorkerControlServiceKey]: LocalComputerWorkerControl
 }
 
-function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies): HarnessServerApiCommands {
+function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies, instanceId: () => string | null): HarnessServerApiCommands {
   return {
     listAgents: () => agentIds,
     listTools,
+    instanceId,
     listUnitAttachments: () => deps[unitAttachmentsServiceKey].list(),
     createUnitAttachCode: input => deps[unitAttachmentsServiceKey].createAttachCode(input),
     revokeUnitAttachment: id => deps[unitAttachmentsServiceKey].revoke(id),
+    attachUnit: input => deps[unitAttachmentsServiceKey].attach(input),
+    authenticateUnit: authorization => deps[unitTransportServiceKey].authenticate(authorization),
+    pollUnit: (attachmentId, registration, signal) => deps[unitTransportServiceKey].poll(attachmentId, registration, signal),
+    replyUnit: (attachmentId, replies) => deps[unitTransportServiceKey].reply(attachmentId, replies),
+    listLocalComputerAttachments: () => deps[localComputerWorkerControlServiceKey].listAttachments(),
+    attachLocalComputer: input => deps[localComputerWorkerControlServiceKey].consumeAttachCode(input),
+    revokeLocalComputerAttachment: id => deps[localComputerWorkerControlServiceKey].revokeAttachment(id),
     getAgentTools: agentId => deps[sessionServiceKey].getAgentTools(agentId),
     setAgentTools: (agentId, input) => deps[sessionServiceKey].setAgentTools(agentId, input),
     directoryPickerSupported: () => deps[directoryPickerServiceKey]?.supported ?? false,
@@ -66,7 +80,7 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
       if (!path || signal.aborted) return null
       return deps[projectServiceKey].openProject(path)
     },
-    openProject: path => deps[projectServiceKey].openProject(path),
+    openProject: (path, options) => deps[projectServiceKey].openProject(path, options),
     listProjects: () => deps[projectServiceKey].listProjects(),
     createSession(projectId, agentId, modelId) {
       if (modelId !== undefined && !deps[modelsServiceKey].get(modelId)) throw modelsError('not-found')
@@ -159,7 +173,7 @@ export function createHarnessServerHttpComponent(root: Context, agents: readonly
     const snapshots = new Map<string, unknown>()
     const services = {} as CommandDependencies
     for (const key of [sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
-      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, unitAttachmentsServiceKey] as const) {
+      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey] as const) {
       snapshots.set(key, root.get(key))
       Object.defineProperty(services, key, { get() {
         const service = snapshots.get(key)
@@ -167,7 +181,7 @@ export function createHarnessServerHttpComponent(root: Context, agents: readonly
         return service
       } })
     }
-    const commands = createCommands(agentIds, services)
+    const commands = createCommands(agentIds, services, () => root.get<HostAccessPort>(hostAccessServiceKey)?.instance.instanceId ?? null)
     commands.directoryBrowsingSupported = () => (snapshots.get(projectServiceKey) as ProjectPort | undefined)?.directoryBrowsingSupported ?? false
     commands.directoryCreationSupported = () => (snapshots.get(projectServiceKey) as ProjectPort | undefined)?.directoryCreationSupported ?? false
     commands.directoryPickerSupported = () => (snapshots.get(directoryPickerServiceKey) as DirectoryPickerPort | undefined)?.supported ?? false

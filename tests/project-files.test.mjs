@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { installComputerWorkerStub } from './helpers/computer-services.mjs'
 import fs from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -15,6 +16,7 @@ async function joinCall(call) { try { return await call.result } finally { await
 async function fixture(directory, options = {}) {
   const root = new Context()
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  await installComputerWorkerStub(root)
   await root.installComponent(createProjectComponent({ newId: () => 'project', now: () => new Date().toISOString() }))
   await root.installComponent(createProjectFilesComponent(options))
   const project = await root.get('harness.projects').openProject(directory)

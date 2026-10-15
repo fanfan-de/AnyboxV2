@@ -3,6 +3,8 @@ import { createPageRequests } from './page-lifecycle.js'
 import type { HarnessConnection, HarnessClient } from './harness-client.js'
 import type { ProductView } from '../../../host/applications/contracts.js'
 import type { LocalPairingStatus } from '../client/connections.js'
+import { setupLocalAttachments } from './units-client.js'
+import type { LocalAttachmentsView } from './units-client.js'
 export function setupConnections(root: HTMLElement, api: HarnessClient, selectedId: string | undefined, messageFor: (error: unknown) => string, canLeave: () => boolean, changed: (connection?: HarnessConnection) => void, apiBase: string, targetChanged: () => void) {
   const lifetime = new AbortController()
   const owned = createPageRequests((path, body, signal) => requestJSON(path, body, signal))
@@ -28,7 +30,7 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   panel.innerHTML = `<header class="settings-panel-heading"><h3 id="agent--connections-title">管理连接</h3>
     <p>连接自己的执行设备。项目、模型配置和会话保存在对应设备上。</p></header>
     <section data-local class="settings-card" hidden><p data-local-status role="status"></p><button type="button" data-local-retry>重试本机连接</button></section>
-    <div data-list></div><section data-tokens class="settings-card" hidden></section><p data-status class="notice" role="status" hidden></p>
+    <div data-list></div><section data-tokens class="settings-card" hidden></section><section data-attachments class="settings-card" hidden></section><p data-status class="notice" role="status" hidden></p>
     <form data-form class="settings-card"><h3 data-heading>添加连接</h3>
     <label>名称<input name="name" required maxlength="200" autocomplete="off"></label>
     <label>服务地址<input name="endpoint" required type="url" placeholder="https://harness.example.com" autocomplete="off"></label>
@@ -39,6 +41,7 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   const form = panel.querySelector<HTMLFormElement>('[data-form]')!
   const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement
   let editing: HarnessConnection | undefined, busy = false, suspended = false
+  let attachmentsView: LocalAttachmentsView | undefined
   const canLeaveConnection = () => !busy && !field('token').value && field('name').value === (editing?.name ?? '') && field('endpoint').value === (editing?.endpoint ?? '')
   const status = (message: string) => { notice.textContent = message; notice.hidden = !message }
   const action = async (work: () => Promise<void>) => {
@@ -151,6 +154,13 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
       }))
       section.append(tokenList, label, issue, once); await render()
     }))
+    // The device owner's consent: this device's own worker attaches to another harness server with explicit directory and tool ceilings.
+    button('附着到远端 harness server', () => void action(async () => {
+      const section = panel.querySelector<HTMLElement>('[data-attachments]')!
+      await attachmentsView?.dispose()
+      section.hidden = false
+      attachmentsView = setupLocalAttachments(api.forConnection(connection.id), messageFor, section, connection.name)
+    }))
     button('编辑', () => { editing = connection; field('name').value = connection.name; field('endpoint').value = connection.endpoint; field('token').value = ''; panel.querySelector('[data-heading]')!.textContent = `编辑 ${connection.name}` })
     button('移除连接', () => { if (canLeave() && canLeaveConnection()) void action(async () => { await control(`${apiBase}/connections/${connection.id}/delete`, { expectedRevision: connection.revision }); changed() }) })
     list.append(row)
@@ -165,12 +175,18 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
       selectConnection(saved)
     })
   })
-  settingsDialog.addEventListener('close', () => { if (suspended) return; field('token').value = ''; panel.querySelector('[data-tokens]')!.replaceChildren() }, { signal: lifetime.signal })
+  settingsDialog.addEventListener('close', () => {
+    if (suspended) return
+    field('token').value = ''; panel.querySelector('[data-tokens]')!.replaceChildren()
+    // Attach codes are secrets typed into this form; closing the dialog drops them with the panel.
+    const section = panel.querySelector<HTMLElement>('[data-attachments]')
+    if (section) { section.hidden = true; void attachmentsView?.dispose(); attachmentsView = undefined }
+  }, { signal: lifetime.signal })
   const open = () => {
     suspended = false
     root.querySelector<HTMLButtonElement>('[data-settings-section="connections"]')!.click()
     if (!settingsDialog.open) root.querySelector<HTMLButtonElement>('#agent--open-settings')!.click()
   }
   return { open, setActive(active: boolean) { suspended = !active; clearTimeout(localTimer); localTimer = undefined; if (active) void refreshLocal() },
-    canLeave: canLeaveConnection, async dispose() { lifetime.abort(); clearTimeout(localTimer); await Promise.all([owned.dispose(), ...targets.map(target => target.dispose())]); panel.replaceChildren() } }
+    canLeave: canLeaveConnection, async dispose() { lifetime.abort(); clearTimeout(localTimer); await Promise.all([owned.dispose(), attachmentsView?.dispose(), ...targets.map(target => target.dispose())]); panel.replaceChildren() } }
 }

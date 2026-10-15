@@ -4,7 +4,7 @@ import { openComputerWorker } from '../applications/harness/core/computer/worker
 export async function main(): Promise<void> {
   const directory = process.argv[2]
   if (!directory) throw new Error('computer worker directory is required')
-  const worker = await openComputerWorker(directory)
+  const worker = await openComputerWorker(directory, { credentialNamespace: process.env.ANYBOX_COMPUTER_WORKER_NAMESPACE })
   const stop = () => { void worker.close().catch(() => { process.exitCode = 1 }) }
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)

@@ -7,16 +7,23 @@ import type { DirectoryBrowserOptions } from './directory-browser.js'
 import type { DirectoryBrowseOpened, DirectoryBrowseOptions, DirectoryCreated, DirectoryPage } from './directories.js'
 import { localStorageServiceKey } from '../../../../storage/port.js'
 import type { LocalStoragePort, StorageMigration, StorageRow, StorageReader } from '../../../../storage/port.js'
+import type { ComputerQuery, ComputerQueryResult } from '../computer/query-domain.js'
+import { localAttachmentId, validateUnitId } from '../unit/domain.js'
 
 export const projectServiceKey = 'harness.projects'
+const localComputerAttachment = localAttachmentId('computer')
 
 export interface Project {
   readonly id: string
+  /** Absolute path on the bound Computer unit; pinned-local, meaningful only there. */
   readonly path: string
   readonly name: string
   readonly createdAt: string
   readonly available: boolean
+  /** The Computer attachment that serves this project's tools and reads; `local:computer` for this harness server's own worker. */
+  readonly computerAttachmentId: string
 }
+export interface OpenProjectOptions { readonly computerAttachmentId?: string }
 
 export interface ProjectUnavailableError extends Error {
   readonly code: 'project-unavailable'
@@ -42,7 +49,7 @@ export interface ProjectPort {
   createDirectory(owner: string, browseId: string, name: string, signal?: AbortSignal): OwnedCall<DirectoryCreated>
   closeDirectoryBrowse(owner: string, browseId: string): Promise<void>
   onDirectoryBrowseRetired(listener: (browseId: string) => void): () => void
-  openProject(path: string): Promise<Project>
+  openProject(path: string, options?: OpenProjectOptions): Promise<Project>
   listProjects(): Promise<readonly Project[]>
   getProject(id: string): Promise<Project | undefined>
   requireAvailable(id: string): Promise<Project>
@@ -53,8 +60,15 @@ export interface ProjectOptions {
   readonly directoryHome?: string
   /** Internal provider and clocks can be replaced for lifecycle verification. */
   readonly directoryBrowser?: Omit<DirectoryBrowserOptions, 'homePath'>
-  /** Trusted host declarations, idempotently registered on each activation. */
+  /** Trusted host declarations, idempotently registered on each activation; always bound to the default Computer attachment. */
   readonly initialProjects?: readonly string[]
+  /** Binding for projects opened without an explicit attachment: the local worker, or the remote form's configured attachment. */
+  readonly defaultComputerAttachmentId?: string
+  /**
+   * Trusted composition-root entry to the current Computer contract's read-only query surface, resolved per call. Projects is a
+   * dependency of the tools on a worker root, so it cannot inject `computer.worker` itself; without this entry remote bindings are unavailable.
+   */
+  readonly computerQuery?: (attachmentId: string, query: ComputerQuery) => Promise<ComputerQueryResult>
 }
 
 const migrations: readonly StorageMigration[] = [{
@@ -64,20 +78,43 @@ const migrations: readonly StorageMigration[] = [{
       id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created_at TEXT NOT NULL
     )`)
   },
+}, {
+  // v2: a project is bound to one Computer attachment; the same path may exist on different units.
+  // Sessions reference harness_projects(id) and foreign keys are enforced, so the table is rebuilt under its own name with
+  // deferred constraint checking: dropping it counts the referencing sessions as violations and re-inserting the same ids clears them.
+  version: 2,
+  up(tx) {
+    tx.execute('PRAGMA defer_foreign_keys = ON')
+    tx.execute('CREATE TABLE harness_projects_rebuild AS SELECT id, path, name, created_at FROM harness_projects')
+    tx.execute('DROP TABLE harness_projects')
+    tx.execute(`CREATE TABLE harness_projects (
+      id TEXT PRIMARY KEY, path TEXT NOT NULL, computer_attachment_id TEXT NOT NULL, name TEXT NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(path, computer_attachment_id)
+    )`)
+    tx.execute(`INSERT INTO harness_projects (id, path, computer_attachment_id, name, created_at)
+      SELECT id, path, '${localComputerAttachment}', name, created_at FROM harness_projects_rebuild`)
+    tx.execute('DROP TABLE harness_projects_rebuild')
+  },
 }]
 
 function stored(row: StorageRow): Project {
-  const { id, path, name, created_at: createdAt } = row
-  if (typeof id !== 'string' || typeof path !== 'string' || typeof name !== 'string' || typeof createdAt !== 'string') {
+  const { id, path, name, created_at: createdAt, computer_attachment_id: computerAttachmentId } = row
+  if (typeof id !== 'string' || typeof path !== 'string' || typeof name !== 'string' || typeof createdAt !== 'string' || typeof computerAttachmentId !== 'string') {
     throw new Error('invalid stored project')
   }
-  return Object.freeze({ id, path, name, createdAt, available: false })
+  return Object.freeze({ id, path, name, createdAt, available: false, computerAttachmentId })
 }
 
-async function availability(project: Project): Promise<Project> {
+type ComputerQueryEntry = NonNullable<ProjectOptions['computerQuery']>
+/** Local projects are checked on this host; remote ones through the bound unit's read-only query surface. */
+async function availability(project: Project, computerQuery: ComputerQueryEntry): Promise<Project> {
   try {
-    const info = await stat(project.path)
-    return Object.freeze({ ...project, available: info.isDirectory() })
+    if (project.computerAttachmentId === localComputerAttachment) {
+      const info = await stat(project.path)
+      return Object.freeze({ ...project, available: info.isDirectory() })
+    }
+    const result = await computerQuery(project.computerAttachmentId, { kind: 'stat', path: project.path })
+    return Object.freeze({ ...project, available: result.kind === 'stat' && result.directory })
   } catch { return project }
 }
 
@@ -85,6 +122,8 @@ async function availability(project: Project): Promise<Project> {
 export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOptions = {}): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
 }> {
+  const defaultBinding = validateUnitId(options.defaultComputerAttachmentId ?? localComputerAttachment)
+  const computerQuery: ComputerQueryEntry = options.computerQuery ?? (() => Promise.reject(projectUnavailableError()))
   return {
     name: 'harness-projects',
     inject: [localStorageServiceKey],
@@ -121,22 +160,31 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
         createDirectory: (owner, browseId, name, signal) => directories.create(owner, browseId, name, signal),
         closeDirectoryBrowse: (owner, browseId) => directories.release(owner, browseId),
         onDirectoryBrowseRetired: listener => directories.onRetired(listener),
-        openProject(path) {
+        openProject(path, openOptions = {}) {
           return track(async () => {
             if (typeof path !== 'string' || !isAbsolute(path) || !path.trim()) {
               throw new TypeError('an absolute project directory is required')
             }
+            const binding = openOptions.computerAttachmentId === undefined ? defaultBinding : validateUnitId(openOptions.computerAttachmentId)
             let canonical: string
-            try {
-              canonical = await realpath(path)
-              if (!(await stat(canonical)).isDirectory()) throw projectUnavailableError()
-            } catch { throw projectUnavailableError() }
+            if (binding === localComputerAttachment) {
+              try {
+                canonical = await realpath(path)
+                if (!(await stat(canonical)).isDirectory()) throw projectUnavailableError()
+              } catch { throw projectUnavailableError() }
+            } else {
+              // The directory lives on the bound unit; its own read-only query surface resolves and checks it under the attachment ceiling.
+              let result: ComputerQueryResult
+              try { result = await computerQuery(binding, { kind: 'stat', path }) } catch { throw projectUnavailableError() }
+              if (result.kind !== 'stat' || !result.directory || result.canonical === null) throw projectUnavailableError()
+              canonical = result.canonical
+            }
             const row = await db.transaction(tx => {
-              const prior = tx.get('SELECT * FROM harness_projects WHERE path = ?', [canonical])
+              const prior = tx.get('SELECT * FROM harness_projects WHERE path = ? AND computer_attachment_id = ?', [canonical, binding])
               if (prior) return prior
               const id = inputs.newId()
-              tx.execute('INSERT INTO harness_projects (id, path, name, created_at) VALUES (?, ?, ?, ?)',
-                [id, canonical, basename(canonical) || canonical, inputs.now()])
+              tx.execute('INSERT INTO harness_projects (id, path, computer_attachment_id, name, created_at) VALUES (?, ?, ?, ?, ?)',
+                [id, canonical, binding, basename(canonical) || canonical, inputs.now()])
               return tx.get('SELECT * FROM harness_projects WHERE id = ?', [id])!
             })
             return Object.freeze({ ...stored(row), available: true })
@@ -146,20 +194,20 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
           return track(async () => {
             const rows = await db.read(reader => reader.all(
               'SELECT * FROM harness_projects ORDER BY created_at, id'))
-            return Object.freeze(await Promise.all(rows.map(row => availability(stored(row)))))
+            return Object.freeze(await Promise.all(rows.map(row => availability(stored(row), computerQuery))))
           })
         },
         getProject(id) {
           return track(async () => {
             const row = await get(id)
-            return row ? availability(stored(row)) : undefined
+            return row ? availability(stored(row), computerQuery) : undefined
           })
         },
         requireAvailable(id) {
           return track(async () => {
             const row = await get(id)
             if (!row) throw new Error(`unknown project ${id}`)
-            const project = await availability(stored(row))
+            const project = await availability(stored(row), computerQuery)
             if (!project.available) throw projectUnavailableError()
             return project
           })

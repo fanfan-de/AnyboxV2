@@ -1,4 +1,4 @@
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { registerNativeRun, completeNativeRun, completedOutcome } from './helpers/native-records.mjs'
@@ -378,6 +378,7 @@ test('restart interrupts multiple active Runs independently while retaining thei
   try {
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
     await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
+    await installComputerWorkerStub(root)
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
     await installComputerServices(root, inputs)

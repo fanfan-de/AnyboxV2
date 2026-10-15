@@ -129,7 +129,7 @@ async function workerFixture(t) {
   const connection = connectLocalComputerWorker({ directory: join(f.directory, 'worker') })
   t.after(() => connection.closeObserver())
   const identity = await connection.info()
-  const owner = { runId: 'worker-run', runOwnerEpoch: 1 }
+  const owner = { runId: 'worker-run', runOwnerEpoch: 1, attachmentId: 'local:computer' }
   await connection.claimRun(owner)
   const binding = { bindingId: 'binding', reservationId: 'reservation', workspaceId: 'workspace', projectId: 'project', scopeId: owner.runId,
     computerId: 'local', computerInstanceId: `${identity.workerId}:${identity.bootId}`, instanceGeneration: 1, workspaceEpoch: 1,
@@ -447,7 +447,7 @@ test('an account epoch change rejects resume and fails only after the original w
   assert.equal((await f.calls()).length, 1)
   const worker = connectLocalComputerWorker({ directory: join(f.directory, 'worker') })
   try {
-    const operation = await worker.get({ runId: started.runId, runOwnerEpoch: report.resume.state.runOwnerEpoch, operationId: report.operations[0].operation_id })
+    const operation = await worker.get({ runId: started.runId, runOwnerEpoch: report.resume.state.runOwnerEpoch, attachmentId: 'local:computer', operationId: report.operations[0].operation_id })
     assert.equal(operation.state, 'cancelled')
     assert.equal(operation.executeCount, 1)
   } finally { await worker.closeObserver() }
@@ -477,7 +477,7 @@ test('SIGKILL while the next model response is pending interrupts the Run but dr
   assert.equal((await f.calls()).length, 2)
   const worker = connectLocalComputerWorker({ directory: join(f.directory, 'worker') })
   try {
-    const close = await worker.get({ runId: started.runId, runOwnerEpoch: report.resume.state.runOwnerEpoch, operationId: `${started.runId}:computer-close-scope` })
+    const close = await worker.get({ runId: started.runId, runOwnerEpoch: report.resume.state.runOwnerEpoch, attachmentId: 'local:computer', operationId: `${started.runId}:computer-close-scope` })
     assert.equal(close.state, 'succeeded')
     assert.equal(close.executeCount, 1)
     assert.equal(close.observation.processes.length, 1)

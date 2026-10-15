@@ -79,7 +79,6 @@ export function createComputersComponent(inputs: RuntimeInputs): Component.Objec
       await db.migrate('computers', migrations)
       let accepting = true
       const activations = new Map<string, Activation>()
-      const ready = new Map<string, ComputerInstance>()
       const pending = new Set<Promise<unknown>>()
       const cleanupFailures = new Set<unknown>()
       const assertOpen = () => { if (!accepting) throw computerError('computer-unavailable') }
@@ -104,7 +103,7 @@ export function createComputersComponent(inputs: RuntimeInputs): Component.Objec
           const row = tx.get('SELECT * FROM harness_computers WHERE computer_id = ?', [computerId])
           if (!row) throw computerError('computer-missing')
           const resource = resourceFrom(row)
-          if (resource.spec.providerId !== provider.providerId) throw computerError('computer-unavailable')
+          if (!(provider.providerIds ?? [provider.providerId]).includes(resource.spec.providerId)) throw computerError('computer-unavailable')
           const previousRow = row.current_instance_id === null ? undefined : tx.get(
             'SELECT * FROM harness_computer_instances WHERE instance_id = ?', [row.current_instance_id])
           const previousInstance = previousRow ? instanceFrom(previousRow) : undefined
@@ -128,7 +127,7 @@ export function createComputersComponent(inputs: RuntimeInputs): Component.Objec
         if (!await done) throw computerError('computer-cleanup-failed')
         if (activation.cancelled || !accepting) throw computerError('computer-cancelled')
         if (failed || !output) throw computerError('computer-unavailable')
-        const providerRef = computerIdentity(output.providerRef)
+        const providerRef = computerIdentity(output.providerRef), previousExited = output.previousExited === true
         if (output.platform !== initial.resource.spec.platform || output.architecture !== initial.resource.spec.architecture) {
           throw computerError('computer-unavailable')
         }
@@ -137,17 +136,18 @@ export function createComputersComponent(inputs: RuntimeInputs): Component.Objec
           const current = tx.get('SELECT * FROM harness_computers WHERE computer_id = ?', [computerId])
           if (!current || current.activation_revision !== initial.resource.activationRevision) throw computerError('computer-conflict')
           const previous = initial.previousInstance
-          if (previous && previous.providerId === provider.providerId && previous.providerRef === providerRef) {
+          if (previous && previous.providerId === initial.resource.spec.providerId && previous.providerRef === providerRef) {
             return currentInstance(tx, previous)
           }
-          if (previous && tx.get('SELECT 1 FROM harness_computer_pins WHERE instance_id = ? AND released_at IS NULL',
+          // Unreleased pins keep a possibly live instance in place; a provider that proves the previous boot exited retires it with its pins as facts.
+          if (previous && !previousExited && tx.get('SELECT 1 FROM harness_computer_pins WHERE instance_id = ? AND released_at IS NULL',
             [previous.computerInstanceId])) throw computerError('computer-pinned')
           const latest = tx.get('SELECT MAX(instance_generation) AS generation FROM harness_computer_instances WHERE computer_id = ?', [computerId])
           const lastGeneration = latest?.generation
           const instanceGeneration = typeof lastGeneration === 'number' ? lastGeneration + 1 : 1
           if (!Number.isSafeInteger(instanceGeneration)) throw computerError('computer-unavailable')
           const next: ComputerInstance = Object.freeze({ computerInstanceId: inputs.newId(), computerId, instanceGeneration,
-            providerId: provider.providerId, providerRef, platform: output!.platform, architecture: output!.architecture,
+            providerId: initial.resource.spec.providerId, providerRef, platform: output!.platform, architecture: output!.architecture,
             activatedAt: inputs.now(), status: 'ready' })
           if (previous) tx.execute('UPDATE harness_computer_instances SET status = ? WHERE instance_id = ?', ['retired', previous.computerInstanceId])
           tx.execute(`INSERT INTO harness_computer_instances
@@ -157,7 +157,6 @@ export function createComputersComponent(inputs: RuntimeInputs): Component.Objec
           tx.execute('UPDATE harness_computers SET current_instance_id = ? WHERE computer_id = ?', [next.computerInstanceId, computerId])
           return next
         })
-        ready.set(computerId, instance)
         return instance
       }
       const observe = (result: Promise<ComputerInstance>): OwnedCall<ComputerInstance> => {
@@ -198,10 +197,10 @@ export function createComputersComponent(inputs: RuntimeInputs): Component.Objec
           assertOpen()
           return track(db.read(reader => Object.freeze(reader.all('SELECT * FROM harness_computers ORDER BY created_at, computer_id').map(resourceFrom))))
         },
+        // Every activation confirms the current instance with the provider: a restarted worker or unit yields a new generation
+        // instead of a stale cached reference. Concurrent callers still share one confirmation.
         activate(computerId) {
           assertOpen(); computerIdentity(computerId)
-          const confirmed = ready.get(computerId)
-          if (confirmed) return observe(Promise.resolve(confirmed))
           const shared = activations.get(computerId)
           if (shared) return observe(shared.result)
           const activation: Activation = { result: undefined as unknown as Promise<ComputerInstance>, cancelled: false }

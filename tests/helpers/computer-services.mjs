@@ -29,7 +29,7 @@ function localExecution(root, input) {
 }
 
 /** Controlled worker facts exercise Authority polling without launching a detached test daemon. */
-export function createControlledComputerWorker(root, { inject = [] } = {}) {
+export function createControlledComputerWorker(root, { inject = [], serviceKey = computerWorkerServiceKey } = {}) {
   const owners = new Map(), records = new Map(), executors = new Map(), configured = new Map(), active = new Map(), pending = new Set()
   let stopped = false, shutting
   const authorize = input => { if (owners.get(input.runId) !== input.runOwnerEpoch) throw workerError('worker-owner') }
@@ -43,7 +43,9 @@ export function createControlledComputerWorker(root, { inject = [] } = {}) {
         if (!executor && input.kind === 'tool') { executor = configured.get(input.runId) ?? localExecution(root, input); executors.set(input.runId, executor) }
         call = input.kind === 'close-scope' ? executor?.close() ?? immediate({ processes: [] }) : executor.execute(input.declaration.request, input.binding)
         active.set(input.operationId, call)
-        const value = await Promise.race([call.result, call.done.then(() => new Promise(() => {}))])
+        let value = await Promise.race([call.result, call.done.then(() => new Promise(() => {}))])
+        // Worker-level image facts (base64 or pushed receipts) sit beside the observation, as the real worker reports them.
+        if (value && typeof value === 'object' && 'workerImages' in value) { const { workerImages, ...rest } = value; record.images = workerImages; value = rest }
         record.observation = value
         await call.done
         if (input.kind === 'tool' && value?.name === 'codex_exec_command' && Number.isSafeInteger(value.result?.session_id)) {
@@ -64,6 +66,7 @@ export function createControlledComputerWorker(root, { inject = [] } = {}) {
     async info() { return { workerId: 'controlled-local', bootId: 'controlled-boot', platform: process.platform, architecture: process.arch } },
     async claimRun(input) { if (stopped || (owners.get(input.runId) ?? 0) > input.runOwnerEpoch) throw workerError('worker-owner'); owners.set(input.runId, input.runOwnerEpoch) },
     async get(input) { authorize(input); return records.get(input.operationId) ? structuredClone(records.get(input.operationId)) : undefined },
+    async query() { throw workerError('worker-request-unsupported') },
     async submit(input) {
       authorize(input); if (stopped) throw workerError('worker-closed')
       const prior = records.get(input.operationId)
@@ -80,8 +83,18 @@ export function createControlledComputerWorker(root, { inject = [] } = {}) {
     })() },
   }
   return { service, records, setExecution(runId, execution) { configured.set(runId, execution) }, component: {
-    name: 'controlled-computer-worker', inject, apply(ctx) { ctx.provide(computerWorkerServiceKey, service); ctx.effect(() => () => service.shutdown(), 'join controlled worker execution') },
+    name: 'controlled-computer-worker', inject, apply(ctx) { ctx.provide(serviceKey, service); ctx.effect(() => () => service.shutdown(), 'join controlled worker execution') },
   } }
+}
+
+/** Project Files injects computer.worker; fixtures without a worker of their own install a controlled stand-in first. */
+const standIns = new WeakMap()
+export async function installComputerWorkerStub(root) {
+  if (root.get(computerWorkerServiceKey)) return standIns.get(root)
+  const worker = createControlledComputerWorker(root)
+  standIns.set(root, worker)
+  await root.installComponent(worker.component)
+  return worker
 }
 
 /** Direct component fixtures use the same resource closure as the trusted composition root. */
@@ -91,7 +104,7 @@ export async function installComputerServices(root, inputs, options = {}) {
     const file = await root.get('local-storage').read(reader => reader.get('PRAGMA database_list').file)
     await root.installComponent(createImageAssetsComponent({ directory: `${file}.images` }))
   }
-  let worker = options.worker, workerFiber
+  let worker = options.worker ?? standIns.get(root), workerFiber
   if (!root.get(computerWorkerServiceKey)) {
     worker ??= createControlledComputerWorker(root)
     workerFiber = root.installComponent(worker.component); await workerFiber

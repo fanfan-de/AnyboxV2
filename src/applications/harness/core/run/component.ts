@@ -24,6 +24,7 @@ import { createWaiters } from './waiters.js'
 import { computerOperationsServiceKey, type ComputerOperationsPort } from '../computer/operations-port.js'
 import { unitAttachmentsServiceKey } from '../unit/port.js'
 import type { UnitAttachmentsPort, RunUnitBindings } from '../unit/port.js'
+import { localAttachmentId } from '../unit/domain.js'
 import { isUnitError } from '../unit/domain.js'
 
 export const runServiceKey = 'harness.runs'
@@ -169,15 +170,16 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             if (!session) throw new Error(`unknown session ${input.sessionId}`)
             if (session.archivedAt !== null) throw treeError('session-archived')
             if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
-            await projects.requireAvailable(session.projectId)
+            const project = await projects.requireAvailable(session.projectId)
             const agent = agents.find(value => value.id === session.agentId)
             if (!agent) throw new Error('agent is unavailable')
             const modelId = input.modelId ?? session.modelId ?? agent.modelId
             if (!modelId) throw modelFailure('model-unavailable')
             const protocolId = protocols.protocolForModel(modelId)
             if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
-            // Every Run runs against this harness server's own units until Session or Agent selection exists.
-            const units: RunUnitBindings = Object.freeze({ schemaVersion: 1, models: (await attachments.local('models')).binding, computer: (await attachments.local('computer')).binding })
+            // Every Run runs against this harness server's own Models unit; the Computer unit comes from the project's binding.
+            const units: RunUnitBindings = Object.freeze({ schemaVersion: 1, models: (await attachments.local('models')).binding,
+              computer: project.computerAttachmentId === localAttachmentId('computer') ? (await attachments.local('computer')).binding : await attachments.binding(project.computerAttachmentId) })
             const history = await records.loadNativeHistory(session.id, input.parentNodeId)
             const fixedInitialization = history?.initialization ?? await records.loadNativeInitialization(session.id)
             const availableTools = listTools().map(tool => tool.definition)

@@ -3,7 +3,9 @@ import type { JsonValue } from '@anybox/models'
 import type { ValidatedToolRequest } from '../run/domain.js'
 import type { ToolDefinition } from '../tool/definition.js'
 import type { WorkspaceBinding } from '../workspace/port.js'
+import { unitComputerProviderId } from './port.js'
 import type { ComputerSpecification } from './port.js'
+export { unitComputerProviderId }
 
 export interface ComputerDeclaration {
   readonly schemaVersion: 1
@@ -39,6 +41,9 @@ export interface ComputerOperation {
   readonly observed: boolean
   readonly workerReceipt?: string
 }
+/** Computers served by a remote Computer unit are logical resources named after their attachment. */
+export function unitComputerId(attachmentId: string): string { return `unit:${attachmentId}` }
+export function unitAttachmentOfComputer(computerId: string): string | undefined { return computerId.startsWith('unit:') && computerId.length > 5 ? computerId.slice(5) : undefined }
 export function needsComputer(request: Pick<ValidatedToolRequest, 'name'>): boolean {
   return !['codex_update_plan', 'claude_code_TodoWrite', 'deepseek_harness_todo_write'].includes(request.name)
 }

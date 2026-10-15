@@ -22,23 +22,36 @@ import { createPromptComponent, promptServiceKey } from './prompt/component.js'
 import type { PromptPort } from './prompt/component.js'
 import { createProjectComponent, projectServiceKey } from './project/component.js'
 import type { ProjectPort } from './project/component.js'
-import { createWorkerInstanceProviderComponent } from './computer/worker-instance-provider.js'
 import { createLocalComputerWorkerComponent } from './computer/worker-client.js'
-import { computerWorkerServiceKey } from './computer/worker-port.js'
+import { createWorkerRouterComponent } from './computer/worker-router.js'
+import { computerWorkerServiceKey, localComputerWorkerServiceKey } from './computer/worker-port.js'
+import type { ComputerWorkerPort } from './computer/worker-port.js'
+import { projectUnavailableError } from './project/component.js'
 import { createComputersComponent } from './computer/component.js'
 import { createWorkspacesComponent } from './workspace/component.js'
 import { createComputerOperationsComponent } from './computer/operations-component.js'
 import { listTools } from './tool/catalog.js'
 import { createUnitAttachmentsComponent } from './unit/component.js'
+import { createUnitTransportComponent } from './unit/transport-component.js'
 import { unitAttachmentsServiceKey } from './unit/port.js'
 import type { AttachCodeInput, UnitAttachment, UnitAttachmentsPort } from './unit/port.js'
 import { localComputerUnitId, localModelsUnitId } from './unit/domain.js'
+
+/** Which Computer unit this composition serves: its own worker over loopback, or one remote attachment through unit dial-out. */
+export type ComputerUnitSelection = { readonly kind: 'local'; readonly claimTimeoutMs?: number; readonly replyTimeoutMs?: number } | {
+  /** No local worker; projects bind to remote attachments, this one by default. */
+  readonly kind: 'remote'; readonly attachmentId: string
+  /** How long admission waits for a unit to claim a request before reporting it unavailable; transport defaults apply when omitted. */
+  readonly claimTimeoutMs?: number; readonly replyTimeoutMs?: number
+}
 
 /** The root must provide Models, local storage and image assets before the harness server core starts. */
 export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly agents: readonly AgentDefinition[]
   /** Stable private directory shared with the independent worker, never a Session path. */
   readonly localWorkerDirectory?: string
+  /** Defaults to the local worker. Changing the form requires reassembling the harness server. */
+  readonly computerUnit?: ComputerUnitSelection
   /** Host-supplied default for its directory picker; omission disables browsing for embedded callers. */
   readonly projectDirectoryHome?: string
   readonly initialProjects?: readonly string[]
@@ -89,12 +102,26 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   const configuredProtocols = context.get<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
   const protocolComponents = context.get(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
-  const workerComponents = context.get(computerWorkerServiceKey) ? [] : [createLocalComputerWorkerComponent({directory: options.localWorkerDirectory ?? resolve('data/computer-worker')})]
-  // The in-process Models component and this Authority's own worker attach as local units at startup.
-  const attachmentComponents = [createUnitAttachmentsComponent(inputs, { localUnits: [{ unitKind: 'models', unitId: localModelsUnitId }, { unitKind: 'computer', unitId: localComputerUnitId }] })]
-  return [...protocolComponents, ...attachmentComponents, createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects }),
-    createProjectFilesComponent(inputs), ...workerComponents,
-    createWorkerInstanceProviderComponent(), createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
+  const computerUnit = options.computerUnit ?? { kind: 'local' }
+  if (computerUnit.kind === 'remote' && (!computerUnit.attachmentId || computerUnit.attachmentId.startsWith('local:'))) throw new TypeError('remote Computer unit requires a remote attachment id')
+  // The router serves `computer.worker` and `computer.instance-provider` in both forms; only the local form has a loopback worker behind it.
+  const localWorkerComponents = computerUnit.kind === 'local' && !context.get(localComputerWorkerServiceKey)
+    ? [createLocalComputerWorkerComponent({directory: options.localWorkerDirectory ?? resolve('data/computer-worker')})] : []
+  const workerComponents = [...localWorkerComponents, createWorkerRouterComponent({ local: computerUnit.kind === 'local', claimTimeoutMs: computerUnit.claimTimeoutMs, replyTimeoutMs: computerUnit.replyTimeoutMs })]
+  // The in-process Models component and, in the local form, this Authority's own worker attach as local units at startup.
+  const attachmentComponents = [createUnitAttachmentsComponent(inputs, { localUnits: [{ unitKind: 'models', unitId: localModelsUnitId },
+    ...(computerUnit.kind === 'local' ? [{ unitKind: 'computer' as const, unitId: localComputerUnitId }] : [])] }), createUnitTransportComponent(inputs)]
+  // Remote-bound projects are checked through the current Computer contract; Projects stays a dependency of worker-root tools, so it resolves it per call.
+  const computerQuery = (attachmentId: string, query: Parameters<ComputerWorkerPort['query']>[0]['query']) => {
+    const worker = context.get<ComputerWorkerPort>(computerWorkerServiceKey)
+    if (!worker) return Promise.reject(projectUnavailableError())
+    return worker.query({ attachmentId, query })
+  }
+  return [...protocolComponents, ...attachmentComponents, ...workerComponents,
+    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery,
+      ...(computerUnit.kind === 'remote' ? { defaultComputerAttachmentId: computerUnit.attachmentId } : {}) }),
+    createProjectFilesComponent(inputs),
+    createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
     createSessionComponent(inputs, agents), createRunRuntimeComponent(inputs),
     createRunComponent(inputs, agents, lifetime.isClosing, lifetime.signal)]
 }
@@ -162,7 +189,7 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     revokeUnitAttachment: attachmentId => currentUnits().revoke(attachmentId),
     getAgentTools: agentId => currentSessions().getAgentTools(agentId),
     setAgentTools: (agentId, input) => currentSessions().setAgentTools(agentId, input),
-    openProject: path => currentProjects().openProject(path),
+    openProject: (path, openOptions) => currentProjects().openProject(path, openOptions),
     get directoryBrowsingSupported() { return currentProjects().directoryBrowsingSupported },
     get directoryCreationSupported() { return currentProjects().directoryCreationSupported },
     openDirectoryBrowse: (...args) => currentProjects().openDirectoryBrowse(...args),

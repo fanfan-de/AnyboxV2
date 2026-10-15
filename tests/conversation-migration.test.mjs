@@ -1,4 +1,4 @@
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
@@ -25,6 +25,7 @@ async function legacyFixture(t, turns = sample.turns) {
   t.after(async () => { await root.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) })
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'state.sqlite')) + ".images" }))
+  await installComputerWorkerStub(root)
   await root.installComponent(createProjectComponent(inputs))
   await root.installComponent(createProjectFilesComponent(inputs))
   const project = await root.get(projectServiceKey).openProject(directory)

@@ -4,7 +4,7 @@ import type { JsonValue } from '@anybox/models'
 import type { RuntimeInputs } from '../contracts.js'
 import { localStorageServiceKey } from '../../../../storage/port.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow, StorageTransaction } from '../../../../storage/port.js'
-import { approveAttachment, attachCodeExpired, attachCodeExpiry, attachmentBinding, bindingMatches, localAttachment, revokeAttachment, secretDigest,
+import { approveAttachment, attachCodeExpired, attachCodeExpiry, attachmentBinding, bindingMatches, localAttachment, revokeAttachment, secretDigest, secretMatches,
   unitError, validateRunUnitBinding, validateRunUnitBindings, validateUnitId, validateUnitKind, validateUnitScope } from './domain.js'
 import type { UnitAttachment, UnitKind } from './domain.js'
 import { unitAttachmentsServiceKey } from './port.js'
@@ -105,9 +105,11 @@ export function createUnitAttachmentsComponent(inputs: RuntimeInputs, options: U
       locals.set(kind, unitId)
     }
     await db.transaction(tx => {
+      // One timestamp for the whole startup transaction keeps the ledger order deterministic across local units.
+      const at = inputs.now()
       for (const [kind, unitId] of locals) {
         if (tx.get('SELECT 1 FROM harness_unit_attachments WHERE unit_kind = ? AND unit_id = ? AND origin = ? AND state = ?', [kind, unitId, 'local', 'approved'])) continue
-        const at = inputs.now(), attachment = localAttachment(kind, unitId, at)
+        const attachment = localAttachment(kind, unitId, at)
         if (readAttachment(tx, attachment.attachmentId)) throw unitError('unit-attachment-state')
         insertAttachment(tx, attachment, { codeDigest: null, credentialDigest: null })
         recordEvent(tx, attachment.attachmentId, 'created', 1, { origin: 'local', unitKind: kind, requestedScope: attachment.requestedScope }, at)
@@ -177,6 +179,16 @@ export function createUnitAttachmentsComponent(inputs: RuntimeInputs, options: U
           return revoked
         })
       }),
+      authenticate: (attachmentId, credential) => track(() => {
+        validateUnitId(attachmentId)
+        return db.read(reader => {
+          const row = reader.get('SELECT * FROM harness_unit_attachments WHERE attachment_id = ?', [attachmentId])
+          if (!row || !secretMatches(credential, nullable(row, 'credential_digest'))) throw unitError('unit-credential-invalid')
+          const attachment = attachmentFrom(row)
+          if (attachment.state !== 'approved') throw unitError('unit-attachment-state')
+          return attachment
+        })
+      }),
       local: unitKind => track(() => {
         const kind = validateUnitKind(unitKind), unitId = locals.get(kind)
         if (unitId === undefined) throw unitError('unit-attachment-missing')
@@ -187,6 +199,15 @@ export function createUnitAttachmentsComponent(inputs: RuntimeInputs, options: U
           return Object.freeze({ attachment, binding: attachmentBinding(attachment, kind === 'models' ? bootId : undefined) })
         })
       }),
+      binding: attachmentId => track(() => {
+        validateUnitId(attachmentId)
+        return db.read(reader => {
+          const attachment = readAttachment(reader, attachmentId)
+          if (!attachment) throw unitError('unit-attachment-missing')
+          return attachmentBinding(attachment, attachment.unitKind === 'models' && attachment.origin === 'local' ? bootId : undefined)
+        })
+      }),
+      getIn(reader, attachmentId) { assertOpen(); validateUnitId(attachmentId); return readAttachment(reader, attachmentId) },
       requireApprovedIn(tx, binding) {
         assertOpen()
         const fixed = validateRunUnitBinding(binding), attachment = readAttachment(tx, fixed.attachmentId)

@@ -5,6 +5,7 @@ import { createModelsCatalog, setupModelsSettings } from './models-client.js'
 import { setupPromptSettings } from './prompt-client.js'
 import { setupSessionDefaults } from './session-defaults-client.js'
 import { setupToolsSettings } from './tools-client.js'
+import { setupUnitsSettings } from './units-client.js'
 import { messageFor } from './client-errors.js'
 import type { AgentView } from './client-types.js'
 import type { MountedPage } from './page-lifecycle.js'
@@ -37,7 +38,7 @@ sidebar.addEventListener('click', event => {
 
 const selected = options.selectedId === undefined ? api.connections[0] : api.connections.find(item => item.id === options.selectedId)
 required('agent--settings-target').textContent = `执行设备：${options.selectedName ?? selected?.name ?? '未选择'}`
-type SettingsSection = 'general' | 'connections' | 'archive' | 'models' | 'prompts' | 'tools'
+type SettingsSection = 'general' | 'connections' | 'archive' | 'models' | 'prompts' | 'tools' | 'units'
 const settingsNavigation = [...settingsDialog.querySelectorAll<HTMLButtonElement>('[data-settings-section]')]
 const settingsPanels = [...settingsDialog.querySelectorAll<HTMLElement>('[data-settings-panel]')]
 function selectSettingsSection(section: SettingsSection): void {
@@ -69,6 +70,7 @@ const hostApi = selected ? api.forConnection(selected.id) : undefined
 const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefined
 const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('agent--session-defaults'), agentSelect) : undefined
 const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('agent--tools-settings'), agentSelect) : undefined
+const unitsSettings = hostApi ? setupUnitsSettings(hostApi, messageFor, required('agent--units-settings')) : undefined
 const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, selected.instanceId, required('agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('agent--prompt-settings'), JSON.stringify(['agent', selected.instanceId, 'prompts'])) : undefined
 if (!selected) {
@@ -83,6 +85,7 @@ if (!selected) {
     panel.append(heading, hint)
   }
   required('agent--tools-settings').textContent = '请先在管理连接中启动所选设备上的 Agent，再配置工具。'
+  required('agent--units-settings').textContent = '请先在管理连接中启动所选设备上的 Agent，再管理单元附着。'
 }
 function revealSettings(section: SettingsSection): void {
   selectSettingsSection(section)

@@ -17,12 +17,15 @@ const paths: Record<string, readonly RegExp[]> = {
     new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/versions)?$`),
     new RegExp(`^/sessions/${id}(/runs(/by-key/${id})?|/nodes(/${id}(/path)?)?|/images/${id}/content|/project-files/(search|preview|snapshots/${id}))?$`),
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
-    new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|connections|configurations)(/${id}(/(history|models))?)?$`) ],
+    new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|connections|configurations)(/${id}(/(history|models))?)?$`),
+    /^\/units\/(attachments|local-computer\/attachments)$/ ],
   POST: [ /^\/(projects|sessions|prompts|access\/tokens)$/, /^\/products\/[^/]+\/(open|stop|retry)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
     /^\/projects\/directories\/(browse|close|create)$/,
     new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/publish)?$`),
     new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew|tree/(open|page|close)))$`), new RegExp(`^/runs/${id}/cancel$`),
-    /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|connections|configurations)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`) ],
+    /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|connections|configurations)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`),
+    // Owner-side unit attachment control; unit-side `/units/unit/*` is never proxied, units dial the harness server directly.
+    /^\/units\/(attach-codes|local-computer\/attachments)$/, new RegExp(`^/units/(attachments|local-computer/attachments)/${id}/revoke$`) ],
 }
 export function allowedProxyPath(method: string, path: string): boolean {
   return !!paths[method]?.some(pattern => pattern.test(path)) && !path.split('/').some(segment => {
@@ -60,7 +63,9 @@ async function forward(connections: ConnectionsPort, connectionId: string, path:
   signal.throwIfAborted()
   expectedConnection(binding, lease.connection)
   const suffix = search.toString()
-  const url = new URL(`${lease.connection.endpoint}/api/v1${path}${suffix ? `?${suffix}` : ''}`)
+  // Unit attachment routes exist only under the application path; everything else keeps the compatible execution entry.
+  const upstreamBase = path === '/units' || path.startsWith('/units/') ? '/api/v1/apps/agent' : '/api/v1'
+  const url = new URL(`${lease.connection.endpoint}${upstreamBase}${path}${suffix ? `?${suffix}` : ''}`)
   const headers: Record<string, string> = { Authorization: `Bearer ${lease.token}`, 'X-Anybox-Instance-Id': lease.connection.instanceId }
   if (binding.productId) headers['X-Anybox-Product-Id'] = binding.productId
   if (request.headers['content-type']) headers['Content-Type'] = request.headers['content-type']

@@ -1,4 +1,4 @@
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { imageAssetsServiceKey } from '../dist/applications/harness/core/image/port.js'
@@ -36,6 +36,7 @@ async function fixture(execution = false, imagePort) {
     await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
     await root.installComponent(imagePort ? { name: 'test-session-images', apply(ctx) { ctx.provide(imageAssetsServiceKey, imagePort) } }
       : createImageAssetsComponent({ directory: (join(directory, 'harness.sqlite')) + ".images" }))
+    await installComputerWorkerStub(root)
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
     await installComputerServices(root, inputs)

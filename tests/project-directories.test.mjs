@@ -4,6 +4,7 @@ import fs from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
@@ -20,10 +21,37 @@ async function fixture(t, options = {}) {
   const root = new Context()
   t.after(async () => { try { await root.fiber.dispose() } finally { await fs.rm(directory, { recursive: true, force: true }) } })
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  await installComputerWorkerStub(root)
   await root.installComponent(createProjectComponent({ newId: randomUUID, now: () => new Date().toISOString() },
     { directoryHome: directory, ...options }))
   return { root, directory, projects: root.get('harness.projects') }
 }
+
+test('the projects v2 migration rebuilds a populated table that sessions reference and keeps every project bound to the local worker', async t => {
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-projects-migration-'))
+  const root = new Context()
+  t.after(async () => { try { await root.fiber.dispose() } finally { await fs.rm(directory, { recursive: true, force: true }) } })
+  await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  const db = root.get('local-storage')
+  // A v1 ledger as deployed before composable units: projects plus a child table with an enforced foreign key and rows.
+  await db.migrate('projects', [{ version: 1, up(tx) { tx.execute('CREATE TABLE harness_projects (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created_at TEXT NOT NULL)') } }])
+  await db.transaction(tx => {
+    tx.execute("CREATE TABLE harness_sessions_fixture (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES harness_projects(id))")
+    tx.execute("INSERT INTO harness_projects (id, path, name, created_at) VALUES ('p1', '/one', 'one', 't'), ('p2', '/two', 'two', 't')")
+    tx.execute("INSERT INTO harness_sessions_fixture (id, project_id) VALUES ('s1', 'p1'), ('s2', 'p1'), ('s3', 'p2')")
+    assert.equal(tx.get('PRAGMA foreign_keys').foreign_keys, 1, 'the storage enforces foreign keys')
+  })
+  await installComputerWorkerStub(root)
+  await root.installComponent(createProjectComponent({ newId: randomUUID, now: () => new Date().toISOString() }, { directoryHome: directory }))
+  const projects = root.get('harness.projects')
+  assert.ok(projects, 'the migration succeeded with referencing rows present')
+  assert.deepEqual((await projects.listProjects()).map(p => [p.id, p.path, p.computerAttachmentId, p.available]), [['p1', '/one', 'local:computer', false], ['p2', '/two', 'local:computer', false]])
+  assert.equal(await db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'projects'").version), 2)
+  assert.deepEqual(await db.read(reader => reader.all('PRAGMA foreign_key_check')), [])
+  assert.equal(await db.read(reader => reader.get('SELECT count(*) AS n FROM harness_sessions_fixture s JOIN harness_projects p ON p.id = s.project_id').n), 3)
+  const opened = await projects.openProject(directory)
+  assert.equal(opened.computerAttachmentId, 'local:computer')
+})
 
 test('directory browsing reserves no handle, never registers a project, and canonical aliases retain project identity', async t => {
   const f = await fixture(t)

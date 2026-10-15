@@ -11,6 +11,7 @@ export const harnessAssets: readonly ApplicationAsset[] = [
   { path: '/applications/harness/web/prompt-client.js', file: fileURLToPath(new URL('./web/prompt-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/session-defaults-client.js', file: fileURLToPath(new URL('./web/session-defaults-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/tools-client.js', file: fileURLToPath(new URL('./web/tools-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
+  { path: '/applications/harness/web/units-client.js', file: fileURLToPath(new URL('./web/units-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/models-client.js', file: fileURLToPath(new URL('./web/models-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/models-directory-client.js', file: fileURLToPath(new URL('./web/models-directory-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/archive-client.js', file: fileURLToPath(new URL('./web/archive-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },

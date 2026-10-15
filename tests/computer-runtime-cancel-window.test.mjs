@@ -28,12 +28,13 @@ for (const batchId of [undefined, 'durable-batch']) {
       finally { await rm(directory, { recursive: true, force: true }) }
     })
     await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+    const worker = createControlledComputerWorker(root)
+    await root.installComponent(worker.component)
     await root.installComponent(createProjectComponent(inputs))
     const project = await root.get('harness.projects').openProject(directory)
     const provider = createLocalComputerProvider()
     let activations = 0, executions = 0
     root.provide('computer.instance-provider', { ...provider, activate(input) { activations++; return provider.activate(input) } })
-    const worker = createControlledComputerWorker(root)
     await installComputerServices(root, inputs, { worker })
     await root.installComponent(createProjectFilesComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, [{ id: 'assistant' }]))
@@ -114,6 +115,8 @@ test('Run cancellation while computer activation is pending never reopens or dis
     finally { await rm(directory, { recursive: true, force: true }) }
   })
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  const worker = createControlledComputerWorker(root)
+  await root.installComponent(worker.component)
   await root.installComponent(createProjectComponent(inputs))
   const project = await root.get('harness.projects').openProject(directory)
   const provider = createLocalComputerProvider()
@@ -123,7 +126,6 @@ test('Run cancellation while computer activation is pending never reopens or dis
     const result = releaseActivation.promise.then(() => call.result)
     return { result, done: result.then(() => call.done, () => call.done), cancel: call.cancel }
   } })
-  const worker = createControlledComputerWorker(root)
   await installComputerServices(root, inputs, { worker })
   let executions = 0
   worker.setExecution('activation-cancel', { execute() { executions++; throw new Error('cancelled operation was dispatched') }, hasProcesses: () => false,

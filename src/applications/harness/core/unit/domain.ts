@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import type { JsonValue } from '@anybox/models'
 
 /** Deployment units attach to one harness server. Identity, scope rules and state transitions stay pure here. */
@@ -51,7 +51,8 @@ export interface RunUnitBindings {
 }
 
 export type UnitErrorCode = 'unit-invalid' | 'unit-attachment-missing' | 'unit-attachment-state' | 'unit-code-invalid' | 'unit-code-expired' |
-  'unit-kind-mismatch' | 'unit-scope-exceeded' | 'unit-already-attached' | 'unit-attachment-local' | 'unit-attachment-mismatch' | 'unit-attachments-closed'
+  'unit-kind-mismatch' | 'unit-scope-exceeded' | 'unit-already-attached' | 'unit-attachment-local' | 'unit-attachment-mismatch' | 'unit-attachments-closed' |
+  'unit-credential-invalid'
 
 export function unitError(code: UnitErrorCode): Error & { readonly code: UnitErrorCode } {
   return Object.assign(new Error(code), { name: 'UnitAttachmentError', code })
@@ -103,6 +104,22 @@ export function scopeWithin(scope: UnitScope, ceiling: UnitScope): boolean {
 }
 
 export function secretDigest(secret: string): string { return createHash('sha256').update(secret, 'utf8').digest('hex') }
+/** Constant-time comparison of a presented secret against the stored digest. */
+export function secretMatches(secret: string, digest: string | null): boolean {
+  if (digest === null || typeof secret !== 'string' || !secret || secret.length > 4096) return false
+  const presented = Buffer.from(secretDigest(secret), 'hex'), stored = Buffer.from(digest, 'hex')
+  return presented.length === stored.length && timingSafeEqual(presented, stored)
+}
+/** Unit requests present `Unit <attachmentId>:<credential>`; credentials are base64url and never contain the separator. */
+export function parseUnitAuthorization(header: string | undefined): { readonly attachmentId: string; readonly credential: string } {
+  if (typeof header !== 'string' || !header.startsWith('Unit ')) throw unitError('unit-credential-invalid')
+  const value = header.slice(5).trim(), separator = value.lastIndexOf(':')
+  if (separator < 1 || separator === value.length - 1) throw unitError('unit-credential-invalid')
+  const attachmentId = value.slice(0, separator), credential = value.slice(separator + 1)
+  if (!/^[A-Za-z0-9_-]{16,512}$/.test(credential)) throw unitError('unit-credential-invalid')
+  try { return Object.freeze({ attachmentId: validateUnitId(attachmentId), credential }) } catch { throw unitError('unit-credential-invalid') }
+}
+export function unitAuthorization(attachmentId: string, credential: string): string { return `Unit ${attachmentId}:${credential}` }
 
 export const attachCodeLimits = Object.freeze({ defaultTtlMs: 10 * 60_000, minTtlMs: 60_000, maxTtlMs: 24 * 3_600_000 })
 export function attachCodeExpiry(now: string, ttlMs: number | undefined): string {

@@ -8,7 +8,7 @@
 
 源码：[组件](../../../src/applications/harness/core/workspace/component.ts)、[端口](../../../src/applications/harness/core/workspace/port.ts)、[领域值与校验](../../../src/applications/harness/core/workspace/domain.ts)。调用者为 [Computer Operations](computer-operations.md)；项目身份仍归 [Projects](../sessions/projects.md)。
 
-`options` 可提供 `now()`、`newId()` 和受信的 `localProviderId`。默认提供方为 `local`；替代提供方仍须在本机解析目录，不能通过改名获得远端准备能力。组件没有新增环境变量、浏览器设置、独立数据库连接或目录。
+`options` 可提供 `now()`、`newId()` 和受信的 `localProviderId`。默认提供方为 `local`；替代提供方仍须在本机解析目录，不能通过改名获得远端准备能力。远端 Computer 单元的实例（providerId `unit`，见[Worker 路由](worker-router.md)）同样按 pinned-local 准备：binding 路径仍是项目的绝对路径，只对所绑定单元有意义，harness server 不在本机检查该路径对单元是否存在；项目目录本身仍须在 harness server 可用，按项目绑定到单元属 U1 第 4 步。组件没有新增环境变量、浏览器设置、独立数据库连接或目录。
 
 ## 接口与本机映射
 

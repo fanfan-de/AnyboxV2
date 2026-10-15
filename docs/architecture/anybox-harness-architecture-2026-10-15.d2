@@ -1,0 +1,540 @@
+# Anybox Harness 架构 · 2026-10-15（含可组合单元 U0/U1）
+# 渲染：d2 --layout elk anybox-harness-architecture-2026-10-15.d2 anybox-harness-architecture-2026-10-15.svg
+# 容器表示进程或职责分组；每个服务进程只有一个 Nya 根，组件全部安装在根上。
+# 实线为主要调用或交接，虚线为数据、配置与资源归属；不枚举全部 inject 依赖。
+# 圆柱表示独占持久资源的组件，其标签注明实际文件、目录或迁移域。
+
+direction: down
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+
+classes: {
+  process: {
+    style: {
+      stroke: "#1f4e79"
+      fill: "#f4f8fc"
+      stroke-width: 2
+      border-radius: 10
+      font-size: 22
+      bold: true
+    }
+  }
+  group: {
+    style: {
+      stroke: "#7f93ad"
+      fill: "#ffffff"
+      stroke-dash: 4
+      border-radius: 8
+      font-size: 18
+      bold: true
+    }
+  }
+  component: {
+    style: {
+      fill: "#e6eef9"
+      stroke: "#3b6ea5"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  unit: {
+    style: {
+      fill: "#efe6f9"
+      stroke: "#7b4fa0"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  unit-store: {
+    shape: cylinder
+    style: {
+      fill: "#efe6f9"
+      stroke: "#7b4fa0"
+      font-size: 14
+    }
+  }
+  loop: {
+    style: {
+      fill: "#e9f5ea"
+      stroke: "#3c8a4a"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  tool: {
+    style: {
+      fill: "#fdeedd"
+      stroke: "#c8742a"
+      border-radius: 6
+      font-size: 15
+    }
+  }
+  store: {
+    shape: cylinder
+    style: {
+      fill: "#fff6d6"
+      stroke: "#b08a1a"
+      font-size: 14
+    }
+  }
+  external: {
+    shape: cloud
+    style: {
+      fill: "#f1f1f1"
+      stroke: "#6d6d6d"
+      font-size: 15
+    }
+  }
+  note: {
+    shape: page
+    style: {
+      fill: "#fffdf2"
+      stroke: "#c2b280"
+      font-size: 13
+    }
+  }
+  call: {
+    style: {
+      stroke: "#2b4c7e"
+      stroke-width: 2
+      font-size: 13
+    }
+  }
+  unit-call: {
+    style: {
+      stroke: "#7b4fa0"
+      stroke-width: 2
+      font-size: 13
+    }
+  }
+  data: {
+    style: {
+      stroke: "#8a7a3a"
+      stroke-dash: 5
+      font-size: 13
+    }
+  }
+}
+
+title: |md
+  # Anybox Harness 架构（2026-10-15）
+  浏览器外壳 → Anybox Harness 客户端根 → harness server 执行根 ⇄ 独立 Computer worker 根（回环或跨机器拨出）
+| {
+  near: top-center
+}
+
+user: 用户 {
+  shape: person
+  style.font-size: 15
+}
+
+desktop: "Electron 主进程（桌面版，可选）\nsrc/entrypoints/desktop-main.ts · src/desktop/\n窗口 · anybox-app:// 协议桥 · 原生目录对话框 · 退出协调\n以 UtilityProcess 托管客户端根与执行端根" {
+  class: component
+  style.fill: "#f6f0fb"
+  style.stroke: "#7b4fa0"
+}
+
+# ---------------------------------------------------------------- 展示端
+ui: "展示端 · 浏览器 / Electron Renderer\n外壳通过 mount(container, context) 挂载应用界面" {
+  class: process
+  shell: "Anybox 外壳\nsrc/host/web/\n应用入口条 · #/apps/:appId 路由 · sessionStorage 工作区" {
+    class: component
+  }
+  harness-web: "Anybox Harness 工作区\nsrc/applications/harness/web/\n设备选择 · 项目 · 会话树 · 四分屏 · Models/Prompt 设置\n“单元附着”设置分类（列出 · 一次性附着码 · 撤销）\n连接管理：每台设备“附着到远端 harness server”入口" {
+    class: component
+  }
+}
+
+# ---------------------------------------------------------------- 客户端进程
+client: "Anybox Harness 客户端进程 · 一个 Nya 根\nsrc/host/client.ts · npm run client" {
+  class: process
+  resident: "通用宿主常驻" {
+    class: group
+    client-http: "app.client-http\n回环监听 · 静态页面 · /api/client/v1/apps/:appId 分派" {
+      class: component
+    }
+    products: "app.products / app.activity\n应用目标 · 活动准入" {
+      class: component
+    }
+    storage: "local-storage\nclient.sqlite · 连接与应用目标" {
+      class: store
+    }
+  }
+  harness: "打开 Anybox Harness 后装配 · src/applications/harness/client/" {
+    class: group
+    gateway: "client.gateway\n同源白名单代理 · JSON / 上传 / SSE\n固定连接版本与 instanceId，不跨实例重试\n放行拥有者侧 /units 路由，不代理单元侧 /units/unit/*" {
+      class: component
+    }
+    connections: "client.connections\n连接地址 · 实例身份 · 凭据引用 · 本机配对\n持久化于 client.sqlite" {
+      class: component
+    }
+    picker: "host.directory-picker\n本机目录对话框（只浏览本机）" {
+      class: component
+    }
+    gateway -> connections: "读取当前连接" {
+      class: call
+    }
+  }
+  resident.client-http -> harness.gateway: "按应用目录分派" {
+    class: call
+  }
+}
+
+# ---------------------------------------------------------------- 执行端进程
+execution: "执行端进程 · harness server · 一个 Nya 根（本机或远端，每实例独立）\nsrc/host/execution.ts · src/applications/harness/server*.ts · npm run harness:server\n形态：ANYBOX_COMPUTER_UNIT=local（本机 worker，可把单个项目绑定远端附着）| remote（无本机 worker，新项目默认绑定 ANYBOX_COMPUTER_ATTACHMENT）；切换需重启" {
+  class: process
+
+  host: "通用宿主常驻 · src/host/" {
+    class: group
+    http: "host.http\n通用监听 · 经 host.access 校验设备 Bearer · /api/v1/apps/:appId 分派\n应用登记的 http.selfAuthenticated 前缀 /units/unit 跳过设备令牌，以 principal: unit 交应用认证" {
+      class: component
+    }
+    access: "host.access\n实例身份 · 设备令牌摘要" {
+      class: component
+    }
+    products: "app.products / app.activity\n打开目标 · 活动冻结 · Run 停止 guard" {
+      class: component
+    }
+  }
+
+  harness-http: "harness.http · src/applications/harness/http/\n业务 HTTP / SSE · Models 管理路由 · 白名单展示投影\n拥有者侧：/units/attachments · /units/attach-codes · /units/attachments/:id/revoke · /units/local-computer/attachments[/:id/revoke]\n单元侧（Unit 凭证 + x-anybox-instance-id）：/units/unit/attach | poll | replies | bytes | revoke" {
+    class: component
+  }
+
+  core: "harness server 核心 · src/applications/harness/core/" {
+    class: group
+
+    runs: "harness.runs / harness.run-admission\n幂等 · 准入 · 准备 program · 取消 / 等待\n接受事务从项目绑定取 Computer 附着引用" {
+      class: component
+    }
+    prompts: "harness.prompts / harness.agent-prompts\n草稿 · 发布版本 · Agent 绑定" {
+      class: component
+    }
+    sessions: "harness.sessions / harness.session-runs\n会话 · 节点树 · Run 记录 · 原生记录 · 事件 · 工具选择快照\n接受事务 · 结算事务 · 复核附着引用写入 unit_bindings_json" {
+      class: component
+    }
+    protocol-agents: "harness.protocol-agents + 四协议绑定 · core/protocol-agents/\nLoop 1.3.0 · 固定驱动代租约 · PreparedRunProgram" {
+      class: loop
+    }
+    run-runtime: "harness.run-runtime\n独占 program · RunHost.perform() · 操作账本 · 实际退出等待" {
+      class: component
+    }
+
+    units: "可组合单元 · core/unit/（U0 / U1）" {
+      class: group
+      attachments: "harness.unit-attachments\n迁移域 unit-attachments v1：附着记录 · 审计事件\n本机单元 local:models / local:computer 幂等 approved，不可经 API 撤销\n附着码与单元凭证只存 SHA-256 摘要、只返回一次；撤销递增 epoch" {
+        class: unit-store
+      }
+      transport: "harness.unit-transport\n内存邮箱（每附着一份）· 长轮询领取 · POST 回执\nauthenticate 经附着账本常量时间比较凭证摘要，只有 approved 通过\n领取窗口 10 s · 回执窗口 60 s · 45 s 无轮询视为失联；无持久事实" {
+        class: unit
+      }
+    }
+
+    computer: "Computer 协调 · core/computer/ · core/workspace/" {
+      class: group
+      operations: "harness.computer-operations / harness.computers / harness.workspaces\n声明 / receipt / 结果 · 实例 pin · pinned-local 工作区\ncomputer-operations v3：scope 记录 Run 固定的附着，新声明前复核\n远端声明放在逻辑计算机 unit:<attachmentId>，本机为 local" {
+        class: component
+      }
+      router: "computer-worker-router → computer.worker / computer.instance-provider\n核心代码看到的唯一 Computer 契约，按授权附着路由\nlocal:computer → 回环客户端；其他附着 → 单元传输\nactivate 按 providerId local | unit 确认实例，同 workerId 新 bootId 即 previousExited" {
+        class: unit
+      }
+      local-client: "computer.local-worker / computer.local-worker-control\n仅本机形态：按 endpoint 查回或 detached 启动独立 worker\n本代 HTTP 观察 · 经回环转发设备拥有者的附着控制" {
+        class: component
+      }
+      operations -> router: "claimRun / submit / get · activate" {
+        class: call
+      }
+      router -> local-client: "local:computer" {
+        class: call
+      }
+    }
+
+    projects: "harness.projects\nprojects v2：项目绑定一个 Computer 附着（旧项目 local:computer）\n远端绑定由单元 stat 解析，离线即不可用并拒绝准入" {
+      class: component
+    }
+    project-files: "harness.project-files\n文本搜索 · 文件快照 · 保留凭证\n按项目绑定选本机文件系统或单元查询面，快照仍在 harness server" {
+      class: component
+    }
+    image-assets: "harness.image-assets\n不可变原字节 · 导入 / 读取 / 回收\n目录：业务库路径 + .images（字节通道推送的图片先作为草稿导入）" {
+      class: store
+    }
+    storage: "local-storage · 业务 SQLite（harness.sqlite）\nrun-state v11 · unit-attachments v1 · projects v2\ncomputer-operations v3 · computers · workspaces · image-assets · project-files" {
+      class: store
+    }
+
+    runs -> sessions: "幂等查找 · 接受事务 · 结算" {
+      class: call
+    }
+    runs -> prompts: "解析 Prompt" {
+      class: call
+    }
+    runs -> protocol-agents: "准备 program" {
+      class: call
+    }
+    runs -> run-runtime: "start({ runId, program })" {
+      class: call
+    }
+    runs -> units.attachments: "准入解析本机附着 · 恢复接管前校验引用" {
+      class: unit-call
+    }
+    run-runtime -> protocol-agents: "execute(host) / close()" {
+      class: call
+    }
+    run-runtime -> computer.operations: "工具操作意图 · 观察" {
+      class: call
+    }
+    sessions -> computer.operations: "acceptIn 同事务接纳工具声明 · 传 Computer 附着引用" {
+      class: call
+    }
+    sessions -> units.attachments: "接受事务复核 approved 与 epoch" {
+      class: unit-call
+    }
+    computer.operations -> units.attachments: "新声明进入 starting 前复核；撤销即 outcome-unknown" {
+      class: unit-call
+    }
+    computer.router -> units.transport: "其他附着：request(info / claim / submit / get / query)" {
+      class: unit-call
+    }
+    projects -> computer.router: "远端绑定：query(stat)" {
+      class: data
+    }
+    project-files -> computer.router: "远端绑定：单元查询面 list / search / read" {
+      class: call
+    }
+    sessions -> image-assets: "同事务保留引用" {
+      class: call
+    }
+    sessions -> project-files: "同事务保留引用" {
+      class: call
+    }
+    sessions -> projects: "项目目录身份与绑定" {
+      class: data
+    }
+    sessions -> storage: "" {
+      class: data
+    }
+  }
+
+  models: "Models · packages/models（独立可复用包，不导入 src/）· 以 local:models 登记为本机单元" {
+    class: group
+    core: "models\n提供 models · models.settings · models.protocols · models.source-data\n连接配置队列 · 驱动注册代 · 私有 execution" {
+      class: component
+    }
+    store: "models.store\nJSON 配置：models.json（ANYBOX_MODELS_CONFIG）\n定义 / 连接 / 配置 / 不可变版本" {
+      class: store
+    }
+    vault: "models.vault\n系统凭据，配置只存引用与意图" {
+      class: component
+    }
+    drivers: "原生协议驱动 2.1.0 · 登记到 models.protocols" {
+      class: group
+      responses: "responses" {
+        class: component
+      }
+      chat: "chat-completions\n（DeepSeek 亦用此协议）" {
+        class: component
+      }
+      anthropic: "anthropic-messages" {
+        class: component
+      }
+      gemini: "gemini-interactions" {
+        class: component
+      }
+    }
+    catalog: "models.catalog-source → models.catalog-cache → models.catalog\n匿名目录 · ETag 刷新 · 经 source-data 原子接纳\n缓存：models-catalog.sqlite" {
+      class: store
+    }
+    store -> core: "注入 models.store" {
+      class: data
+    }
+    vault -> core: "注入 models.vault\nopenNative 读取一次凭据" {
+      class: data
+    }
+    drivers -> core: "register(driver)" {
+      class: call
+    }
+    catalog -> core: "source-data 接纳定义" {
+      class: call
+    }
+  }
+
+  host.http -> harness-http: "按应用目录分派；/units/unit 以 principal: unit 交应用认证" {
+    class: call
+  }
+  harness-http -> core.runs: "startRun / cancelRun / view" {
+    class: call
+  }
+  harness-http -> core.sessions: "会话 · 节点 · 事件查询" {
+    class: call
+  }
+  harness-http -> core.units: "拥有者侧：列出 / 附着码 / 撤销\n单元侧：authenticate · poll · reply · bytes" {
+    class: unit-call
+  }
+  harness-http -> models.core: "models.settings 管理" {
+    class: call
+  }
+  host.products -> core.runs: "stop guard: pauseIfIdle" {
+    class: call
+  }
+  core.protocol-agents -> models.core: "openNative → 独立 execution" {
+    class: call
+  }
+  host.access -> core.storage: "" {
+    class: data
+  }
+}
+
+# ---------------------------------------------------------------- Computer worker 进程
+worker: "独立 Computer worker 进程 · 一个 Nya 根（idle 时继续运行）\nsrc/entrypoints/computer-worker-main.ts · 目录：业务库路径 + .computer-worker\n可与 harness server 同机（回环）或在另一台机器（拨出）；同一 worker 可同时服务两者，每个 Run 只归一个附着" {
+  class: process
+  executor: "computer.worker 执行器\ncomputer-worker v2：按附着区分 Run 授权（首次 claim 固定归属，其他 worker-owner-rejected）\n耐久账本 · 固定初始化声明 · Run 进程 scope · 不经账本的只读查询面 query\nworkerId 稳定 · bootId 每次变化" {
+    class: component
+  }
+  attachments: "computer.worker-attachments\n迁移域 computer-worker-attachments v1：所服务的 harness server · 作用域上限 · 凭据意图\n单元凭证只在系统凭据命名空间（ANYBOX_COMPUTER_WORKER_NAMESPACE，默认 anybox.computer-worker）" {
+    class: unit-store
+  }
+  dialout: "computer.worker-dialout\n消费附着码 → 每个 approved 附着一条长轮询循环\n领取 info / claim / submit / get / query 交执行器并 POST 回执\n工具图片先 POST bytes 再以 { ref, pushed } 回报；要求 HTTPS，仅回环允许 HTTP" {
+    class: unit
+  }
+  bindings: "harness.projects\n固定 workspacePath 绑定，不反查 Authority" {
+    class: component
+  }
+  worker-images: "harness.image-assets\nworker 独占图片目录" {
+    class: store
+  }
+  worker-storage: "local-storage\nworker.sqlite · computer-worker v2 · computer-worker-attachments v1" {
+    class: store
+  }
+  tools: "工具组件 · 相对路径基准来自固定绑定" {
+    class: group
+    bash: "tools.bash" {
+      class: tool
+    }
+    apply-patch: "tools.apply-patch\n跨项目串行队列 · 逐文件提交" {
+      class: tool
+    }
+    processes: "tools.processes\n管道进程组 · write_stdin" {
+      class: tool
+    }
+    files: "tools.files\n读取 · 搜索 · 读图导入" {
+      class: tool
+    }
+  }
+  dialout -> executor: "领取到的请求（授权附着由投递附着决定）" {
+    class: unit-call
+  }
+  dialout -> attachments: "记录 / 读取凭证 / 本地撤销" {
+    class: unit-call
+  }
+  dialout -> worker-images: "读取工具图片原字节" {
+    class: data
+  }
+  executor -> attachments: "接纳事务内 requireApprovedIn · ceiling 检查" {
+    class: unit-call
+  }
+  executor -> tools: "固定声明的工具批次" {
+    class: call
+  }
+  executor -> worker-storage: "" {
+    class: data
+  }
+}
+
+# ---------------------------------------------------------------- 外部
+network: "进程之外 · 网络与系统" {
+  class: group
+  style.stroke-dash: 0
+  style.fill: "#fafafa"
+  model-api: "模型 API\nOpenAI Responses · Chat Completions\nAnthropic · Gemini · DeepSeek" {
+    class: external
+  }
+  models-dev: "models.dev 公开目录\napi.json?type=all" {
+    class: external
+  }
+  keychain: "系统凭据\nmacOS Keychain · Windows Credential Manager\nLinux Secret Service（@napi-rs/keyring）" {
+    class: external
+  }
+}
+
+project-fs: "项目目录（文件系统）\n路径基准，不是沙箱；远端绑定的路径只对所绑定单元有意义" {
+  class: external
+}
+
+footer: "图例" {
+  near: bottom-center
+  grid-rows: 1
+  grid-gap: 28
+  style.stroke: "#9aa5b1"
+  style.fill: "#ffffff"
+  style.font-size: 16
+  component: "Nya 组件\n安装在所在进程的根" {
+    class: component
+  }
+  unit: "可组合单元组件（U0 / U1）\n附着 · 传输 · 路由 · 拨出" {
+    class: unit
+  }
+  loop: "协议 Loop 绑定\nPreparedRunProgram" {
+    class: loop
+  }
+  tool: "工具组件\n仅在 worker 根" {
+    class: tool
+  }
+  store: "独占持久资源的组件\n标签注明文件、目录或迁移域" {
+    class: store
+  }
+  external: "进程之外的服务" {
+    class: external
+  }
+  lines: "实线：主要调用或交接（紫色为单元相关）\n虚线：数据、配置与资源归属\n不枚举全部 inject 依赖" {
+    class: note
+  }
+  nya: "NyaCore · @nya/core（../NyaCore）\n每进程一个根 Context · 组件 inject / provide\napply(ctx, config, deps) · Effect 登记清理 · 依赖就绪与撤销顺序" {
+    class: note
+  }
+}
+
+# ---------------------------------------------------------------- 跨进程边
+user -> ui.shell: "" {
+  class: call
+}
+desktop -> ui.shell: "anybox-app:// 窗口\n客户端根与执行端根各为一个 UtilityProcess" {
+  class: data
+}
+ui.harness-web -> client.resident.client-http: "同源 HTTP / SSE" {
+  class: call
+}
+client.harness.gateway -> execution.host.http: "HTTP + 设备 Bearer + instanceId\n本机或远端 harness server" {
+  class: call
+}
+client.harness.connections -> network.keychain: "客户端凭据命名空间" {
+  class: data
+}
+execution.models.vault -> network.keychain: "Key 写入 / 读取（anybox.models）" {
+  class: data
+}
+worker.attachments -> network.keychain: "单元凭证 unit-attachment/<attachmentId>" {
+  class: data
+}
+execution.models.drivers -> network.model-api: "JSON / SSE 流式" {
+  class: call
+}
+execution.models.catalog -> network.models-dev: "24h ETag 刷新" {
+  class: call
+}
+execution.core.computer.local-client -> worker.executor: "回环 HTTP · local:computer（仅本机形态）\n声明 / 结果 / 查询 · 附着控制 · 图片 base64 内嵌" {
+  class: call
+}
+worker.dialout -> execution.harness-http: "HTTPS 拨出（远端附着）· Unit <attachmentId>:<credential> + x-anybox-instance-id\nPOST attach（消费附着码）· GET poll 长轮询 · POST replies · POST bytes · POST revoke" {
+  class: unit-call
+}
+execution.core.project-files -> project-fs: "本机绑定：只读搜索与快照" {
+  class: data
+}
+worker.tools -> project-fs: "命令 · 补丁 · 读取（附着上限内）" {
+  class: data
+}

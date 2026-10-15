@@ -7,8 +7,11 @@ export interface LegacyModelImport {
   readonly parameters: NativeParameters
   readonly credentialId: string
 }
+export type ComputerUnitConfig = { readonly kind: 'local' } | { readonly kind: 'remote'; readonly attachmentId: string }
 export interface HarnessServerConfig {
   readonly port: number
+  /** `ANYBOX_COMPUTER_UNIT=local|remote`; remote names the approved attachment in `ANYBOX_COMPUTER_ATTACHMENT`. */
+  readonly computerUnit: ComputerUnitConfig
   readonly harnessDatabasePath: string
   readonly imageAssetsDirectory: string
   readonly modelsDatabasePath: string
@@ -70,8 +73,14 @@ export function parseHarnessServerConfig(env: Environment): HarnessServerConfig 
     throw new TypeError('ANYBOX_MODELS_CATALOG_DATABASE must be different from Models and harness server databases')
   }
   const credentialNamespace = optionalValue(env, 'ANYBOX_MODELS_NAMESPACE') ?? 'anybox.models'
+  const computerUnitKind = optionalValue(env, 'ANYBOX_COMPUTER_UNIT') ?? 'local'
+  if (computerUnitKind !== 'local' && computerUnitKind !== 'remote') throw new TypeError('ANYBOX_COMPUTER_UNIT must be local or remote')
+  const computerAttachment = optionalValue(env, 'ANYBOX_COMPUTER_ATTACHMENT')
+  if (computerUnitKind === 'remote' && !computerAttachment) throw new TypeError('ANYBOX_COMPUTER_ATTACHMENT must name the approved remote Computer attachment when ANYBOX_COMPUTER_UNIT is remote')
+  if (computerAttachment?.startsWith('local:')) throw new TypeError('ANYBOX_COMPUTER_ATTACHMENT must not name a local attachment')
+  const computerUnit: ComputerUnitConfig = computerUnitKind === 'remote' ? Object.freeze({ kind: 'remote', attachmentId: computerAttachment! }) : Object.freeze({ kind: 'local' })
   return Object.freeze({
-    port, harnessDatabasePath, imageAssetsDirectory, modelsDatabasePath, modelsConfigPath, modelsCatalogDatabasePath, credentialNamespace,
+    port, computerUnit, harnessDatabasePath, imageAssetsDirectory, modelsDatabasePath, modelsConfigPath, modelsCatalogDatabasePath, credentialNamespace,
     legacy: Object.freeze({
       provider: Object.freeze({ name: api === 'openai-responses' ? 'OpenAI（迁入）' : 'DeepSeek（迁入）', enabled: true,
         protocolId: api === 'openai-responses' ? 'responses' : 'chat-completions', baseUrl, auth: 'api-key' as const, timeoutMs }),

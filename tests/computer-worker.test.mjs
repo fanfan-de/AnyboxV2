@@ -8,6 +8,7 @@ import sharp from 'sharp'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createComputerWorkerExecutorComponent } from '../dist/applications/harness/core/computer/worker-component.js'
+import { createWorkerAttachmentsComponent } from '../dist/applications/harness/core/computer/worker-attachments.js'
 import { connectLocalComputerWorker, createLocalComputerWorkerComponent } from '../dist/applications/harness/core/computer/worker-client.js'
 import { computerDeclarationDigest } from '../dist/applications/harness/core/computer/operations-domain.js'
 import { getToolById } from '../dist/applications/harness/core/tool/catalog.js'
@@ -25,7 +26,7 @@ async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-worker-contract-'))
   const port = connectLocalComputerWorker({ directory: join(directory, 'worker') })
   t.after(async () => { try { await port.shutdown(); await port.closeObserver() } finally { await rm(directory, { recursive: true, force: true }) } })
-  let owner = { runId: 'run', runOwnerEpoch: 1 }
+  let owner = { runId: 'run', runOwnerEpoch: 1, attachmentId: 'local:computer' }
   const cold = await Promise.all([port.info(), port.info(), port.info()])
   assert.deepEqual(cold[1], cold[0]); assert.deepEqual(cold[2], cold[0])
   const info = cold[0]
@@ -46,8 +47,21 @@ async function fixture(t) {
     await port.submit(input); return finish(port, input)
   }
   return { directory, port, tool, close, info, get owner() { return owner }, get binding() { return binding },
-    async nextRun(runId, changes) { owner = { runId, runOwnerEpoch: 1 }; binding = { ...binding, scopeId: runId, bindingId: `binding-${runId}`, reservationId: `reservation-${runId}`, ...changes }; await port.claimRun(owner) } }
+    async nextRun(runId, changes) { owner = { runId, runOwnerEpoch: 1, attachmentId: 'local:computer' }; binding = { ...binding, scopeId: runId, bindingId: `binding-${runId}`, reservationId: `reservation-${runId}`, ...changes }; await port.claimRun(owner) } }
 }
+
+test('a worker that died since the last call is replaced by the next call instead of failing it', { skip: !unix, timeout: 60000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-worker-respawn-'))
+  const port = connectLocalComputerWorker({ directory: join(directory, 'worker') })
+  t.after(async () => { try { await port.shutdown(); await port.closeObserver() } finally { await rm(directory, { recursive: true, force: true }) } })
+  const first = await port.info()
+  const endpoint = JSON.parse(await readFile(join(directory, 'worker', 'endpoint.json'), 'utf8'))
+  process.kill(endpoint.pid, 'SIGKILL')
+  for (let n = 0; n < 400; n++) { try { process.kill(endpoint.pid, 0); await delay(25) } catch { break } }
+  const second = await port.info()
+  assert.equal(second.workerId, first.workerId, 'the directory keeps the worker identity')
+  assert.notEqual(second.bootId, first.bootId, 'the first call after the death already talks to a replacement boot')
+})
 
 test('installing and disposing the worker proxy does not allocate computer or create a ledger', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-worker-lazy-'))
@@ -143,8 +157,10 @@ test('failed actual exit cannot hang on a missing tool result or certify a scope
     ctx.provide('tools.processes', {})
     ctx.provide('harness.image-assets', {})
   } })
+  const memory = new Map()
+  await root.installComponent(createWorkerAttachmentsComponent({ openEntry: (service, id) => ({ getPassword: async () => memory.get(`${service}:${id}`), setPassword: async value => { memory.set(`${service}:${id}`, value) }, deleteCredential: async () => memory.delete(`${service}:${id}`) }) }))
   await root.installComponent(createComputerWorkerExecutorComponent({ workerId: 'worker', bootId: 'boot' }))
-  const port = root.get('computer.worker'), owner = { runId: 'run', runOwnerEpoch: 1 }
+  const port = root.get('computer.worker'), owner = { runId: 'run', runOwnerEpoch: 1, attachmentId: 'local:computer' }
   await port.claimRun(owner)
   const entry = getToolById('anybox.bash')
   const binding = { bindingId: 'binding', reservationId: 'reservation', workspaceId: 'workspace', projectId: 'project', scopeId: owner.runId,
@@ -160,7 +176,7 @@ test('failed actual exit cannot hang on a missing tool result or certify a scope
   const close = { ...owner, operationId: 'close-broken', kind: 'close-scope', declarationDigest: 'close-broken' }
   await port.submit(close)
   assert.equal((await finish(port, close)).state, 'outcome-unknown')
-  const patchOwner = { runId: 'patch-run', runOwnerEpoch: 1 }
+  const patchOwner = { runId: 'patch-run', runOwnerEpoch: 1, attachmentId: 'local:computer' }
   await port.claimRun(patchOwner)
   const patchEntry = getToolById('anybox.apply_patch')
   const patchDeclaration = { ...declaration, runId: patchOwner.runId, operationId: 'partial-patch',

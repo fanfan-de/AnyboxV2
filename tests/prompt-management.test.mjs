@@ -1,4 +1,4 @@
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
@@ -330,6 +330,7 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   const directory = mkdtempSync(join(tmpdir(), 'anybox-prompts-'))
   const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
+  await installComputerWorkerStub(root)
   const projectsFiber = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())

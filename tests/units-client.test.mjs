@@ -1,0 +1,99 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { setupUnitsSettings, setupLocalAttachments, parseGrantList, computerScope, describeAttachment, describeLocalAttachment } from '../dist/applications/harness/web/units-client.js'
+import { allowedProxyPath } from '../dist/applications/harness/client/gateway.js'
+
+class Element extends EventTarget {
+  hidden = false; disabled = false; value = ''; textContent = ''; className = ''; children = []; dataset = {}
+  append(...children) { this.children.push(...children) }
+  replaceChildren(...children) { this.children = children }
+  find(predicate) { for (const child of this.children) { if (predicate(child)) return child; const nested = child.find?.(predicate); if (nested) return nested } return undefined }
+}
+const flush = async () => { for (let n = 0; n < 5; n++) await new Promise(resolve => setImmediate(resolve)) }
+function dom(t) {
+  const previous = globalThis.document
+  globalThis.document = { createElement: () => new Element() }
+  t.after(() => { globalThis.document = previous })
+}
+function api(handlers) {
+  const calls = []
+  const source = async (path, body) => { calls.push({ path, body }); const handler = handlers[path]; if (!handler) throw Object.assign(new Error('not-found'), { status: 404, code: 'not-found' }); return handler(body) }
+  return { source, calls }
+}
+const messageFor = error => `message:${error?.code ?? 'unknown'}`
+
+test('grant lists and scopes are pure and attachment descriptions stay free of secrets', () => {
+  assert.deepEqual(parseGrantList(' /a\n/b,/a , '), ['/a', '/b'])
+  assert.deepEqual(computerScope([], []), { kind: 'computer', projects: 'all', tools: 'all' })
+  assert.deepEqual(computerScope(['/a'], ['anybox.bash']), { kind: 'computer', projects: ['/a'], tools: ['anybox.bash'] })
+  const text = describeAttachment({ attachmentId: 'a', unitKind: 'computer', origin: 'remote', state: 'approved', unitId: 'laptop', epoch: 2, scope: { kind: 'computer', projects: ['/work'], tools: 'all' }, requestedScope: { kind: 'computer', projects: ['/work'], tools: 'all' } })
+  assert.ok(text.includes('laptop') && text.includes('/work') && text.includes('epoch 2'))
+  assert.ok(describeLocalAttachment({ attachmentId: 'a', harnessUrl: 'https://h.example', instanceId: 'i', state: 'approved', connection: 'offline', lastError: 'unit-unreachable', ceiling: { kind: 'computer', projects: 'all', tools: 'all' } }).includes('离线'))
+})
+
+test('the owner-side units settings list, issue one-time codes and revoke through the fixed device API', async t => {
+  dom(t)
+  let attachments = [{ attachmentId: 'local:computer', unitKind: 'computer', origin: 'local', state: 'approved', unitId: 'computer-local', epoch: 1, scope: { kind: 'computer', projects: 'all', tools: 'all' }, requestedScope: { kind: 'computer', projects: 'all', tools: 'all' } }]
+  const { source, calls } = api({
+    '/units/attachments': () => attachments,
+    '/units/attach-codes': body => { const attachment = { attachmentId: 'remote-1', unitKind: body.unitKind, origin: 'remote', state: 'pending', unitId: null, epoch: 1, scope: null, requestedScope: body.scope }; attachments = [...attachments, attachment]; return { attachment, code: 'secret-code' } },
+    '/units/attachments/remote-1/revoke': () => { attachments = attachments.map(a => a.attachmentId === 'remote-1' ? { ...a, state: 'revoked', epoch: 2 } : a); return attachments[1] },
+  })
+  const panel = new Element()
+  const view = setupUnitsSettings(source, messageFor, panel)
+  t.after(() => view.dispose())
+  await flush()
+  assert.equal(view.snapshot().attachments.length, 1)
+  assert.ok(panel.find(node => node.textContent === '尚无附着记录。') === undefined)
+  const code = await view.issue({ projects: ['/work'], tools: [] })
+  assert.equal(code, 'secret-code')
+  assert.deepEqual(calls[1], { path: '/units/attach-codes', body: { unitKind: 'computer', scope: { kind: 'computer', projects: ['/work'], tools: 'all' } } })
+  assert.ok(panel.find(node => typeof node.textContent === 'string' && node.textContent.includes('secret-code')), 'the code is shown once after issuing')
+  assert.equal(view.snapshot().attachments.length, 2)
+  const row = panel.find(node => node.dataset?.attachmentId === 'remote-1')
+  assert.ok(row); assert.ok(row.find(node => node.textContent === '撤销附着'), 'remote attachments can be revoked')
+  assert.equal(panel.find(node => node.dataset?.attachmentId === 'local:computer').find(node => node.textContent === '撤销附着'), undefined, 'local attachments cannot be revoked')
+  await view.revoke('remote-1')
+  assert.equal(view.snapshot().attachments[1].state, 'revoked')
+  assert.equal(calls.at(-2).path, '/units/attachments/remote-1/revoke')
+  const failing = api({ '/units/attachments': () => { throw Object.assign(new Error('closed'), { status: 503, code: 'unit-attachments-closed' }) } })
+  const broken = setupUnitsSettings(failing.source, messageFor, new Element())
+  t.after(() => broken.dispose())
+  await flush()
+  assert.equal(broken.snapshot().notice, 'message:unit-attachments-closed')
+})
+
+test('the device-owner attachment entry consumes codes with explicit ceilings and revokes locally', async t => {
+  dom(t)
+  let attachments = []
+  const { source, calls } = api({
+    '/units/local-computer/attachments': body => {
+      if (!body) return attachments
+      if (body.code !== 'good') throw Object.assign(new Error('unit-code-invalid'), { status: 409, code: 'unit-code-invalid' })
+      const attached = { attachmentId: 'remote-1', harnessUrl: body.harnessUrl, instanceId: 'remote-instance', state: 'approved', ceiling: body.ceiling, connection: 'connecting', lastError: null }
+      attachments = [attached]; return attached
+    },
+    '/units/local-computer/attachments/remote-1/revoke': () => { attachments = attachments.map(a => ({ ...a, state: 'revoked', connection: 'revoked' })); return attachments[0] },
+  })
+  const section = new Element()
+  const view = setupLocalAttachments(source, messageFor, section, 'Laptop')
+  t.after(() => view.dispose())
+  await flush()
+  assert.ok(section.find(node => node.textContent === '这台设备尚未附着到其他 harness server。'))
+  await assert.rejects(view.attach({ harnessUrl: 'https://h.example', code: 'bad', projects: [], tools: [] }), { code: 'unit-code-invalid' })
+  assert.equal(view.snapshot().notice, 'message:unit-code-invalid')
+  const attached = await view.attach({ harnessUrl: 'https://h.example', code: 'good', projects: ['/work'], tools: ['anybox.bash'] })
+  assert.equal(attached.attachmentId, 'remote-1')
+  assert.deepEqual(calls.find(call => call.body?.code === 'good').body, { harnessUrl: 'https://h.example', code: 'good', ceiling: { kind: 'computer', projects: ['/work'], tools: ['anybox.bash'] } })
+  assert.ok(!JSON.stringify(section.children.map(child => child.textContent)).includes('good'), 'the consumed code is not displayed')
+  assert.equal(view.snapshot().attachments[0].connection, 'connecting')
+  await view.revoke('remote-1')
+  assert.equal(view.snapshot().attachments[0].state, 'revoked')
+})
+
+test('the client gateway proxies only the owner-side unit routes', () => {
+  for (const [method, path] of [['GET', '/units/attachments'], ['GET', '/units/local-computer/attachments'], ['POST', '/units/attach-codes'], ['POST', '/units/local-computer/attachments'],
+    ['POST', '/units/attachments/abc/revoke'], ['POST', '/units/local-computer/attachments/abc/revoke']]) assert.equal(allowedProxyPath(method, path), true, `${method} ${path}`)
+  for (const [method, path] of [['POST', '/units/unit/attach'], ['GET', '/units/unit/poll'], ['POST', '/units/unit/replies'], ['POST', '/units/unit/bytes'], ['POST', '/units/attachments'], ['GET', '/units/attach-codes'],
+    ['POST', '/units/attachments/../revoke']]) assert.equal(allowedProxyPath(method, path), false, `${method} ${path}`)
+})
