@@ -9,7 +9,7 @@
 | 入口 | 行为 |
 | --- | --- |
 | `status(signal?)` | 读取 endpoint、确认 PID 和 workerId/bootId，返回 stopped/running/unavailable、平台支持与非秘密附着状态；不创建目录、不启动 |
-| `start()` | 显式启动或复用已运行实例，Windows 返回固定不支持错误 |
+| `start()` | 显式启动或复用已运行实例；Windows 检查随包原生后端并使用受保护 DACL 的私有目录 |
 | `control.consumeAttachCode(input, signal?)` | 已运行 worker 附着到远端，码仅出现在请求中 |
 | `control.updatePermissions(id, ceiling, signal?)` | 保存权限并等待既有执行退出，空数组与 all 区分 |
 | `control.revokeAttachment(id, signal?)` | 本地撤销与清理，不要求远端在线 |

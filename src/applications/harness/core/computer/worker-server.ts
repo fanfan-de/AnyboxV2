@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
-import { mkdir, readFile, rename, writeFile, unlink, open } from 'node:fs/promises'
+import { readFile, rename, writeFile, unlink, open } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
@@ -19,6 +19,8 @@ import { createWorkerDialoutComponent, workerDialoutServiceKey } from './worker-
 import type { WorkerDialoutOptions, WorkerDialoutPort } from './worker-dialout.js'
 import { computerWorkerServiceKey, workerError } from './worker-port.js'
 import type { ComputerWorkerPort, WorkerAuthorization, WorkerSubmission } from './worker-port.js'
+import { ensurePrivateDirectory } from '../../../../platform/private-directory.js'
+import { processRuntimeAvailable } from '../../../../platform/process-runtime.js'
 
 export interface WorkerEndpoint { readonly url: string; readonly token: string; readonly pid: number; readonly workerId: string; readonly bootId: string }
 export interface OpenComputerWorkerOptions {
@@ -41,8 +43,9 @@ function authentic(given: string | undefined, token: string): boolean {
   return a.length === b.length && timingSafeEqual(a, b)
 }
 export async function openComputerWorker(directory: string, options: OpenComputerWorkerOptions = {}): Promise<{ readonly endpoint: WorkerEndpoint; close(): Promise<void> }> {
-  const path = resolve(directory)
-  await mkdir(path, { recursive: true, mode: 0o700 })
+  if (!processRuntimeAvailable()) throw workerError('worker-platform-unsupported')
+  let path: string
+  try { path = await ensurePrivateDirectory(resolve(directory)) } catch { throw workerError('worker-directory-unavailable') }
   // A failed process leaves no application-owned lock: the SQLite OS lock proves exclusive ownership.
   const root = new Context()
   let server: ReturnType<typeof createServer> | undefined

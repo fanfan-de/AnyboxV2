@@ -24,7 +24,8 @@ function nativeEntry(namespace: string, slotId: string): ModelsCredentialEntry {
   // Native cancellation can settle a JS promise before an OS operation finishes.
   // Await native completion, then report cancellation; never release ownership early.
   return {
-    getPassword: () => entry.getPassword(),
+    // The native stores return null for a missing credential; keep the public port's undefined contract.
+    getPassword: async () => (await entry.getPassword()) ?? undefined,
     setPassword: value => entry.setPassword(value),
     deleteCredential: () => entry.deleteCredential(),
   };

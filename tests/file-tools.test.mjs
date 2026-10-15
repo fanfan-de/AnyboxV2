@@ -52,7 +52,8 @@ test('file reads paginate from 1, preserve line numbers and reject unsafe text t
     await fs.writeFile(join(f.directory, 'file'), 'one\r\ntwo\r\nthree')
     const page = await f.execute('deepseek_harness_read', { file_path: 'file', offset: 2, limit: 1 })
     assert.equal(page.result.text, '2: two'); assert.equal(page.result.nextOffset, 3)
-    await fs.symlink('file', join(f.directory, 'link'))
+    await fs.mkdir(join(f.directory, 'linked-directory'))
+    await fs.symlink(process.platform === 'win32' ? join(f.directory, 'linked-directory') : 'file', join(f.directory, 'link'), process.platform === 'win32' ? 'junction' : 'file')
     assert.equal((await f.execute('claude_code_Read', { file_path: 'link' })).result.code, 'symbolic-link')
     await fs.link(join(f.directory, 'file'), join(f.directory, 'hard'))
     assert.equal((await f.execute('deepseek_harness_read', { file_path: 'file' })).result.code, 'hard-link')
@@ -102,12 +103,12 @@ test('search includes hidden and ignored files, excludes dependencies and does n
     await fs.writeFile(join(f.directory, 'nested/a.ts'), 'needle one\nnone\nneedle two\n')
     await fs.writeFile(join(f.directory, 'node_modules/a.ts'), 'needle excluded\n')
     await fs.writeFile(join(f.directory, '.git/config'), 'needle excluded\n')
-    await fs.symlink('nested/a.ts', join(f.directory, 'link.ts'))
-    await fs.symlink('nested', join(f.directory, 'directory-link'))
+    await fs.symlink(process.platform === 'win32' ? join(f.directory, 'nested') : 'nested/a.ts', join(f.directory, 'link.ts'), process.platform === 'win32' ? 'junction' : 'file')
+    await fs.symlink(join(f.directory, 'nested'), join(f.directory, 'directory-link'), process.platform === 'win32' ? 'junction' : 'dir')
     const glob = await f.execute('deepseek_harness_glob', { pattern: '*.ts' })
     assert.deepEqual(glob.result.paths, ['nested/a.ts'])
     const hidden = await f.execute('claude_code_Grep', { pattern: 'needle' })
-    assert.deepEqual(hidden.result.matches.map(value => value.slice(f.directory.length + 1)).sort(), ['.hidden', 'nested/a.ts'])
+    assert.deepEqual(hidden.result.matches.map(value => value.slice(f.directory.length + 1).replaceAll('\\', '/')).sort(), ['.hidden', 'nested/a.ts'])
     const deepseek = await f.execute('deepseek_harness_grep', { pattern: 'needle', include: '*.ts' })
     assert.equal(deepseek.result.matches.length, 2)
     assert.deepEqual(deepseek.result.matches.map(value => value.line), [1, 3])
@@ -155,7 +156,7 @@ test('file-tool cancellation joins accepted lookups and prevents mutations', asy
 
 test('file-tool done propagates underlying mutation cleanup failure after recording committed facts', async () => {
   const f = await fixture({ patchOptions: { filesystem: { async unlink(path) {
-    if (path.endsWith('/content')) throw Object.assign(new Error('private'), { code: 'EPERM' })
+    if (path.endsWith(`${process.platform === 'win32' ? '\\' : '/'}content`)) throw Object.assign(new Error('private'), { code: 'EPERM' })
     await fs.unlink(path)
   } } } })
   try {

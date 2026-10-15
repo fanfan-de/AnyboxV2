@@ -17,7 +17,7 @@
 | `requireApprovedIn(reader, attachmentId)` | 执行器接纳事务内的同步参与：`local:computer` 固定返回全量作用域的回环附着；其余必须存在且 `approved`，否则 `worker-attachment-rejected` |
 | `onChanged(listener)` | 记录或撤销后依次 await 每个监听器 |
 
-记录保存 `attachmentId`、规范化的 `harnessUrl`、目标 instanceId、状态、设备拥有者的 `ceiling`、harness server 批准的 `scope`、附着 epoch 与时间。纯函数 `validateHarnessUrl` 只接受 HTTPS，或回环主机上的 HTTP；`ceilingPermits(ceiling, { path, toolId })` 判定固定工作区路径落在允许目录内且工具契约被允许，执行器在每次工具接纳事务里调用它。
+记录保存 `attachmentId`、规范化的 `harnessUrl`、目标 instanceId、状态、设备拥有者的 `ceiling`、harness server 批准的 `scope`、附着 epoch 与时间。纯函数 `validateHarnessUrl` 只接受 HTTPS，或回环主机上的 HTTP；`ceilingPermits(ceiling, { path, toolId }, within?)` 判定固定工作区路径落在允许目录内且工具契约被允许，执行器在每次工具接纳事务里调用它。默认包含关系为规范路径边界比较；Windows 执行器注入由真实目录及祖先身份得出的包含关系，不在领域函数里访问文件系统，也不假定整块 Windows 文件系统都不区分大小写。
 
 ## 数据与资源归属
 

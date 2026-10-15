@@ -6,7 +6,7 @@
 
 执行器 inject worker 独占的 `local-storage`、`tools.bash`、`tools.apply-patch`、`tools.processes`、`tools.files`、`harness.image-assets` 和 [`computer.worker-attachments`](worker-attachments.md)。每个 Run scope 固定工具依赖代及精确 WorkspaceBinding；所有调用传入 binding.path，不读取 Authority 项目目录或 Session 表。worker 自己安装 Bash、补丁、管道进程、文件与图片组件，资源仍由各组件 Effect 持有。内部 `createWorkerExecution` 是闭包适配器，不另注册组件。
 
-此根继承 Bash/Processes 的 Unix 平台检查：当前 Linux/macOS 可装配，真实验收在 Linux 完成；Windows 的纯模型与受控契约测试不代表 Windows worker 已可用。文件工具同样需要完整 worker 根，因此也受此限制。
+此根要求与当前 Windows、macOS 或 Linux 平台和架构匹配的原生进程后端；缺少后端时在建立目录和组件之前拒绝启动。文件工具、图片、补丁和执行账本复用同一根。完整支持仍需各平台分别通过真实进程、取消排空、凭据与发行包验收，不能用受控替身测试代替。
 
 ## 账本与执行提交
 
@@ -19,6 +19,8 @@
 `query({ attachmentId, query })` 是只读查询面：`stat` 解析绝对路径并报告是否目录，`list` 返回项目目录一页有界条目与目录身份，`search` 与 `read` 复用 Project Files 的文件系统规则（符号链接、越界、文本限制与错误码相同）。查询要求附着 approved 且根路径落在其目录上限内（`worker-scope-rejected`），不写账本、不占用 Run scope，可自由重试；worker 关闭中止进行中的查询。
 
 每个授权还带 `attachmentId`：`claimRun` 在事务内经附着账本要求该附着为 approved（回环 `local:computer` 恒为 approved，不存在或已撤销返回 `worker-attachment-rejected`），Run 首次 claim 固定其附着，之后其他附着对同一 Run 的 claim、submit 与 get 一律 `worker-owner-rejected`。工具接纳在同一事务里用设备拥有者设定的上限检查固定的 `binding.path` 与工具契约 ID，越界返回 `worker-scope-rejected`，不产生副作用。附着被撤销时执行器取消并排空该附着尚未关闭的 Run：置位取消、终止活动调用、关闭 scope 并保存清理结果，无法证明退出的 Run 保留 uncertain；其他附着的 Run 不受影响。
+
+Windows 接纳与查询由文件系统边界同步解析真实目标目录及祖先的设备/文件身份，再将包含关系判断传给纯领域规则；一次判断内缓存目标祖先，不跨调用缓存。目录大小写别名仅在实际身份相同时相等，支持启用了大小写敏感属性的 NTFS 目录；junction 指向上限外目录不能仅靠字符串前缀获得准入。目标或上限无法读取时保守拒绝。这是固定工作区的准入检查，仍不把项目路径变为文件系统沙箱。
 
 Codex exec 的数字 session_id 映射到包含 worker boot、Run 与确切实例代次的 ProcessRef。长进程仍在原 worker scope 中；每次 write_stdin/poll 是独立稳定 operation，重复同 ID 返回原结果。此阶段保证 worker 存活时 Runtime 换代接续；worker 自身崩溃不能据账本恢复原 OS 管道。
 

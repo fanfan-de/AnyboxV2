@@ -6,6 +6,7 @@ import type { HarnessClientRuntimeOptions } from '../applications/harness/client
 import type { ApplicationRegistration } from '../host/applications/registration.js'
 import { defaultModelsConfigPath } from '../applications/harness/server-config.js'
 import { describeError } from './error-report.js'
+import { observeRoleStop } from './role-lifecycle.js'
 
 export interface DefaultClientHostOptions extends HarnessClientRuntimeOptions {
   readonly applications?: readonly ApplicationRegistration[]
@@ -20,8 +21,7 @@ export async function createClientHost(options: DefaultClientHostOptions) {
     applications: options.applications ?? [harnessClientApplication(options)] })
 }
 
-export async function main(args: readonly string[] = process.argv.slice(2)) {
-  if (args.length) throw new Error('The client role takes no arguments; configure it with ANYBOX_CLIENT_* and ANYBOX_WEB_PORT')
+export async function openClientFromEnvironment() {
   const path = process.env.ANYBOX_CLIENT_DATABASE ?? './data/client.sqlite'
   const legacyModelsPath = process.env.ANYBOX_MODELS_DATABASE ?? './data/models.sqlite'
   const forbidden = [process.env.ANYBOX_HARNESS_DATABASE ?? './data/harness.sqlite', legacyModelsPath,
@@ -29,12 +29,17 @@ export async function main(args: readonly string[] = process.argv.slice(2)) {
   if (forbidden.some(other => resolve(other) === resolve(path))) throw new Error('Client and execution databases must be different files')
   const port = Number(process.env.ANYBOX_WEB_PORT ?? 3000)
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid client port')
-  const host = await createClientHost({ path, port, namespace: process.env.ANYBOX_CLIENT_NAMESPACE, localInstanceId: process.env.ANYBOX_LOCAL_INSTANCE_ID,
+  return createClientHost({ path, port, namespace: process.env.ANYBOX_CLIENT_NAMESPACE, localInstanceId: process.env.ANYBOX_LOCAL_INSTANCE_ID,
     computer: { directory: process.env.ANYBOX_COMPUTER_WORKER_DIRECTORY ?? `${process.env.ANYBOX_HARNESS_DATABASE ?? './data/harness.sqlite'}.computer-worker` } })
+}
+export async function main(args: readonly string[] = process.argv.slice(2)) {
+  if (args.length) throw new Error('The client role takes no arguments; configure it with ANYBOX_CLIENT_* and ANYBOX_WEB_PORT')
+  const starting = openClientFromEnvironment()
+  const lifetime = observeRoleStop(starting, error => { process.exitCode = 1; process.stderr.write(`Client shutdown failed: ${describeError(error)}\n`) })
+  const host = await starting
+  if (lifetime.stopping) return
   process.stdout.write(`Anybox Client: ${host.url}\n`)
   process.send?.({ type: 'ready', role: 'client', url: host.url })
-  const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch((error: unknown) => { process.exitCode = 1; process.stderr.write(`Client shutdown failed: ${describeError(error)}\n`) }) }
-  process.once('SIGINT', stop); process.once('SIGTERM', stop)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main().catch(error => {
   if (process.connected) process.disconnect()

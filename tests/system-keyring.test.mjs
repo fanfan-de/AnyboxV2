@@ -33,7 +33,7 @@ async function readInChildProcess(namespace, id) {
   return JSON.parse(stdout)
 }
 
-test('the platform credential store writes, reads across processes, and deletes under a private namespace',
+test('the platform credential store normalizes missing values, writes, reads across processes, and deletes under a private namespace',
   { skip: skipUnless(enabled && !expectNoStore) }, async () => {
     const namespace = `anybox-test-${randomUUID()}`
     const id = 'llm/chat-completions/test'

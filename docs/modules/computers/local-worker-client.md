@@ -16,9 +16,17 @@ Effect 关闭本代准入、取消本地 HTTP 并等待请求实际退出，不�
 
 独占 worker 目录保存私有 endpoint 元数据、workerId、执行账本与输出/图片数据。endpoint 使用回环地址和每次启动生成的本机令牌，文件按私有权限写入；令牌不进入 Session、模型历史或浏览器 API。worker 不持有模型 Key，也不直连 Authority 业务库。该实现仅为本机受信连接，远端认证/TLS、托管工作区和弹性实例留待后续阶段。
 
-worker 根装配继承 Bash/进程工具的 Unix guard，适用于 Linux/macOS，本次真实 daemon 及 SIGKILL 验收仅在 Linux 完成。Windows 可验证纯模型、资源契约和受控 worker；真实 worker 激活尚未支持，此限制覆盖需要此根的文件工具，不能假称 Windows Files 可单独执行。
+worker 启动与 `status().supported` 按当前平台的原生进程后端可用性判断；Windows、macOS、Linux 使用相同 worker 根与执行账本，缺少匹配的后端时返回 `worker-platform-unsupported`。平台代码存在不代表该平台成品与真实故障验收已完成，验收记录需分别列出。
 
-验证：[真实 Runtime 强杀与故障注入](../../../tests/computer-worker-resume.test.mjs)、[Worker 行为](../../../tests/computer-worker.test.mjs)。完整入口为 `npm run check`。
+创建 worker 目录和日志前先执行私有目录边界：Unix 使用 `0700`；Windows 使用受保护 DACL，仅允许当前运行账户和 SYSTEM，并复核实际 ACL。不能创建或核验时返回 `worker-directory-unavailable`，不发布 endpoint。系统服务应与共享该目录的桌面使用同一账户；另一账户的服务使用自己的目录及 Vault。
+
+Windows 目录已由当前账户拥有时只修改 DACL，不重复请求 `WRITE_OWNER`；因此父目录仅授予 Modify 的普通工作区也可创建私有 worker 目录。现有 owner 不同时仍显式尝试转为当前账户并核验，缺少权限则拒绝，不保留可被其他 owner 改写的 endpoint 目录。
+
+后台进程通过 `src/platform/runtime-path.ts` 选择独立 Node：源码 Node 模式使用当前 Node；源码 Electron 的启动脚本显式传递 `ANYBOX_DEVELOPMENT_NODE_EXECUTABLE`，worker 使用启动脚本自身的 Node 与源码构建入口。Electron 成品忽略该开发变量，使用 `resources/runtime/node[.exe]` 和 `resources/runtime/app/dist/entrypoints/computer-worker-main.js`，部署可由 `ANYBOX_RUNTIME_DIRECTORY` 指定整套目录。不依赖 Electron RunAsNode；缺失运行时或入口时拒绝启动。`status()` 仅检查后端与既有 endpoint，不创建目录或修改 ACL。
+
+系统服务 runner 为 harness server 设置内部 `ANYBOX_SYSTEM_SERVICE_ROLE=harness-server`。这种宿主只能复用已独立启动的 worker；缺少 worker 时连显式 `start()` 也返回 `worker-service-start-required`，且不创建目录。这样不会把 idle worker 放入 harness server 的 Windows Job 或 systemd cgroup，避免停止 harness server 时误杀应独立存活的 worker。桌面与普通 CLI 仍按原有生命周期启动。
+
+验证：[真实 Runtime 强杀与故障注入](../../../tests/computer-worker-resume.test.mjs)、[Worker 行为](../../../tests/computer-worker.test.mjs)、[原生目录权限、路径身份与后台入口](../../../tests/platform-worker-files.test.mjs)、[原生 worker 启停、观察关闭与强杀恢复](../../../tests/native-worker-lifecycle.test.mjs)。完整入口为 `npm run check`。
 
 ## 独立管理形态
 

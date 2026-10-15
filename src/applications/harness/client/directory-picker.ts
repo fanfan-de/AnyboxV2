@@ -68,6 +68,8 @@ export function runMacOSDirectoryDialog(signal: AbortSignal): Promise<string | u
 }
 
 export interface DirectoryPickerOptions {
+  /** A supplied native host adapter explicitly declares its capability. */
+  readonly supported?: boolean
   /** Useful to exercise host lifecycle without showing a system dialog. */
   readonly platform?: NodeJS.Platform
   readonly runDialog?: (signal: AbortSignal) => Promise<string | undefined>
@@ -78,7 +80,7 @@ export function createDirectoryPickerComponent(options: DirectoryPickerOptions =
   return {
     name: 'host-directory-picker',
     apply(ctx) {
-      const supported = (options.platform ?? process.platform) === 'darwin'
+      const supported = options.supported ?? (options.platform ?? process.platform) === 'darwin'
       const runDialog = options.runDialog ?? runMacOSDirectoryDialog
       let accepting = true
       let active: { readonly controller: AbortController; readonly done: Promise<unknown> } | undefined

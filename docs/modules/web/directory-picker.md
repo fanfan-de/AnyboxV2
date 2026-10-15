@@ -19,12 +19,13 @@ Directory Picker 为已确认本机身份且平台支持的“添加项目”流
 
 | 选项 | 默认值 | 含义 |
 | --- | --- | --- |
-| `platform` | `process.platform` | 决定 `supported`；只有 `darwin` 为 true，主要供生命周期测试 |
+| `platform` | `process.platform` | 默认 osascript 提供方只有 `darwin` 可用，主要供生命周期测试 |
+| `supported` | 按默认平台提供方判断 | 替换宿主显式声明原生能力；Electron 桌面注入真实对话框并设为 true |
 | `runDialog` | `runMacOSDirectoryDialog` | 接收 `AbortSignal`，返回路径或 `undefined` 的 Promise；可以替换原生调用 |
 
 服务有只读 `supported: boolean` 与 `pick(signal?): Promise<string | undefined>`。`undefined` 表示用户在对话框点取消；显式 signal 取消则拒绝 `DirectoryPickerFailure('cancelled')`。两者含义不同。
 
-每次调用先检查组件准入、平台支持、是否已有活动对话框和上游取消状态。只允许一个活动调用，没有等待队列；占用期间的第二次调用立即以 `busy` 拒绝。组件安装在非 macOS 仍然成功并提供 `supported: false`，使路径输入与远程连接继续可用。
+每次调用先检查组件准入、平台支持、是否已有活动对话框和上游取消状态。只允许一个活动调用，没有等待队列；占用期间的第二次调用立即以 `busy` 拒绝。未注入原生宿主时，非 macOS 提供 `supported: false`，使路径输入与远程连接继续可用。Electron 桌面通过私有 RPC 注入系统对话框并显式声明能力，Windows 不再被默认 osascript 的平台条件误拒绝。
 
 ## 原生流程与所有权
 

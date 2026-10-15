@@ -1,6 +1,6 @@
 # Anybox 桌面运行边界
 
-[统一发行与独立运行角色](runtime-roles-and-distribution.md)已确定各平台统一产品包、各角色独立进程并可单独部署。本文记录当前桌面实现；客户端默认独立运行，本机服务显式启用，独立常驻服务管理仍待补齐。
+[统一发行与独立运行角色](runtime-roles-and-distribution.md)确定各平台统一产品包、各角色独立进程并可单独部署。客户端默认独立运行，本机服务显式启用；独立常驻实例通过[后台服务管理](platform-services.md)操作，桌面不接管其生命周期。
 
 桌面版完整复用 Web 宿主外壳、Anybox Harness ESM 入口、模板、样式和 HTTP/SSE API。`src/desktop/` 仅持有桌面适配；`src/entrypoints/desktop-main.ts`、`desktop-client.ts` 与 `desktop-execution.ts` 是受信组合入口。客户端和执行端分别静态加载自身实现，共用的 `src/desktop/worker-runtime.ts` 只管理私有启动、关闭和 RPC；原合并 worker 入口已删除。通用宿主不导入 Electron 或具体应用，桌面层不解释 Session、模型协议或工具执行。构建、安装和验收命令见 [桌面打包](desktop-packaging.md)。
 
@@ -34,7 +34,9 @@ Connections 组件每次 `apply` 拥有本代配对任务、取消控制与非�
 
 原生目录选择复用 picker 的 `runDialog` 注入，经私有 worker 端口调用 Electron 对话框。对话框由可销毁的透明、无边框 BaseWindow 持有，不创建额外 renderer。临时窗口采用主窗口的 bounds，作为原生子窗口先显示再挂接目录面板，确保原生层级在主窗口上方；不使用隐藏的 1×1 窗口或嵌套 modal sheet。Dock 激活和单实例恢复保持原生面板的 key window，不聚焦透明所有者或主窗口以免抢走响应链。
 
-macOS 取消由主进程私有 Node-API/Cocoa 适配器处理：只接收本次自有 BaseWindow 的 native handle，在主线程查找其附着的 NSOpenPanel 并发送真实 Cancel；不使用全局 first responder，也不操作其他窗口。关闭所有者的隐式 Stop 返回码会被 Electron 当作接受并读取书签，因此不能作为取消。面板尚未附着时短暂重试，结果完成后清除重试计时器，等待原生对话框实际结束，再销毁临时窗口、恢复主窗口焦点。构建适配器仅属于桌面命令，普通 Web 构建不依赖 Xcode；安装包解包并签名该 `.node` 文件，运行时无需编译器。浏览器只获得选中的路径，仍执行原有 instanceId/revision 检查。
+macOS 取消由主进程私有 Node-API/Cocoa 适配器处理：只接收本次自有 BaseWindow 的 native handle，在主线程查找其附着的 NSOpenPanel 并发送真实 Cancel；不使用全局 first responder，也不操作其他窗口。关闭所有者的隐式 Stop 返回码会被 Electron 当作接受并读取书签，因此不能作为取消。面板尚未附着时短暂重试，结果完成后清除重试计时器，等待原生对话框实际结束，再销毁临时窗口、恢复主窗口焦点。安装包解包并签名该 `.node` 文件，运行时无需编译器。浏览器只获得选中的路径，仍执行原有 instanceId/revision 检查。
+
+Windows 通过随包原生目录 helper 向当前进程、本次 BaseWindow 拥有的文件对话框发送真实 Cancel；关闭所有者本身不能完成取消。主进程等待异步 helper 与对话框实际返回后才销毁所有者。helper 只定位明确的进程及窗口归属，不向其他应用或任意前台窗口发送按键。
 
 ## 隐藏、退出与恢复
 

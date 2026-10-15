@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { link, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { Context, FiberState } from '@nya/core';
@@ -283,9 +283,15 @@ test('Nya source dependency replacement closes the old facade before a fresh cat
   await f.close();
 });
 
-async function directory(t) { const path = await mkdtemp(join(tmpdir(), 'models-catalog-')); t.after(() => rm(path, { recursive: true, force: true })); return path; }
+const fixtureRoots = new Map();
+async function directory(t) {
+  const path = await mkdtemp(join(tmpdir(), 'models-catalog-')), roots = new Set(); fixtureRoots.set(path, roots);
+  t.after(async () => { for (const root of roots) await root.fiber.dispose(); fixtureRoots.delete(path); await rm(path, { recursive: true, force: true }); });
+  return path;
+}
 async function openCache(path, options = {}) {
   const root = new Context(), component = root.installComponent(createModelsCatalogCacheComponent({ path, ...options }));
+  fixtureRoots.get(dirname(path))?.add(root);
   await component; assert.equal(component.state, FiberState.ACTIVE);
   return { root, component, cache: root.get('models.catalog-cache') };
 }
@@ -327,8 +333,11 @@ test('valid cached data takes precedence over bundled snapshot and malformed cac
 test('catalog cache refuses host database paths and symbolic/hard-link aliases before opening SQLite or falling back', async t => {
   const parent = await directory(t), path = join(parent, 'models.sqlite');
   await writeFile(path, 'host database content');
-  const symbolic = join(parent, 'symbolic.sqlite'), hard = join(parent, 'hard.sqlite');
-  await symlink(path, symbolic); await link(path, hard);
+  const aliasDirectory = join(parent, 'directory-alias'); await symlink(parent, aliasDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+  // Windows directory junctions alias the same real file without requiring Developer Mode.
+  const symbolic = process.platform === 'win32' ? join(aliasDirectory, 'models.sqlite') : join(parent, 'symbolic.sqlite'), hard = join(parent, 'hard.sqlite');
+  if (process.platform !== 'win32') await symlink(path, symbolic);
+  await link(path, hard);
   for (const candidate of [path, symbolic, hard]) {
     const root = new Context(), component = root.installComponent(createModelsCatalogCacheComponent({ path: candidate, reservedPaths: [path] }));
     try { await component; } catch {}
@@ -336,7 +345,6 @@ test('catalog cache refuses host database paths and symbolic/hard-link aliases b
     assert.equal(root.get('models.catalog-cache'), undefined);
     await root.fiber.dispose();
   }
-  const aliasDirectory = join(parent, 'directory-alias'); await symlink(parent, aliasDirectory, 'dir');
   const uncreated = join(parent, 'uncreated.sqlite'), alias = join(aliasDirectory, 'uncreated.sqlite');
   const root = new Context(), blocked = root.installComponent(createModelsCatalogCacheComponent({ path: uncreated, reservedPaths: [alias] }));
   try { await blocked; } catch {}

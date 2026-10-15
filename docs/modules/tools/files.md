@@ -20,4 +20,6 @@ Glob 使用随包 `@vscode/ripgrep` 发现文件，再通过 `picomatch` 匹配�
 
 Electron 下搜索进程使用 `searchBinaryPath` 将 `app.asar` 的模块解析路径转换为已解包的实际路径；普通 Node 路径保持原样。发行与桌面二进制验证见 [桌面打包](../../desktop-packaging.md) 和 `tests/search-release.test.mjs`。
 
+ripgrep 也通过共享 `spawnManagedProcess` 启动，Windows 归属独立 Job，Unix 归属独立进程组。取消、超时、输出越界和 worker 退出均排空实际进程及管道；不把搜索进程留在普通 `spawn` 的未管理路径。文件工具的 Nya 资源归属不变。
+
 行为测试：[file-tools.test.mjs](../../../tests/file-tools.test.mjs)、[apply-patch-component.test.mjs](../../../tests/apply-patch-component.test.mjs)。验证包括分页、隐藏/ignore 搜索、排除和链接、原字节图片及能力、共享队列、外部并发修改、取消等待和清理失败。完整验收运行 `npm run check`。

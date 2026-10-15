@@ -1,0 +1,19 @@
+{
+  "powershell": {
+    "version": "7.6.6",
+    "source": "https://github.com/PowerShell/PowerShell/releases/tag/v7.6.6",
+    "x64": { "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/PowerShell-7.6.6-win-x64.zip", "sha256": "02fe458be20493fbdf43f61ea20610b811ee6c738ab1676c61b9cfcd1a33c860" },
+    "arm64": { "url": "https://github.com/PowerShell/PowerShell/releases/download/v7.6.6/PowerShell-7.6.6-win-arm64.zip", "sha256": "bbde9dda31d148415eccb5fbe1638e6400a144187b006e5b3fd8ec2f39d781be" }
+  },
+  "windowsCRuntimeLicense": {
+    "source": "https://visualstudio.microsoft.com/license-terms/vs2022-cruntime/",
+    "url": "https://visualstudio.microsoft.com/wp-content/uploads/2021/09/Visual-C-Runtime-2015-2022-License-1.docx",
+    "sha256": "f1e3d56ceb2ad68aae0711b910375009e651ac5530fa0760f0dea6e81e54fae1"
+  },
+  "bash": {
+    "version": "2.56.0.windows.1",
+    "source": "https://github.com/git-for-windows/git/releases/tag/v2.56.0.windows.1",
+    "x64": { "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/PortableGit-2.56.0-64-bit.7z.exe", "sha256": "eceb5e061aa90df2f69ddd3e90f0030e1b8037a7829934bc40e4be1caa1accc1" },
+    "arm64": { "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.1/PortableGit-2.56.0-arm64.7z.exe", "sha256": "edd9bd32aefa5d2bd4b938c38c18ceca306a7f6b29a6951cd6a4bb16d9d28d8f" }
+  }
+}

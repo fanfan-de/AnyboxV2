@@ -21,14 +21,17 @@ const configuration = (overrides = {}) => ({ ...version('s'), modelDefinitionId:
   name: 'Local model', enabled: true, remoteModelId: 'remote', baseline: true, parameters: params('not-installed', {}), capabilities: model().capabilities, ...overrides });
 async function open(path) {
   const root = new Context();
+  fixtureRoots.get(path)?.add(root);
   const fiber = root.installComponent(createModelsStoreComponent({ path }));
   await fiber; assert.equal(fiber.state, FiberState.ACTIVE);
   return { root, store: root.get('models.store') };
 }
+const fixtureRoots = new Map();
 async function temporary(t) {
   const directory = await mkdtemp(join(tmpdir(), 'models-store-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  return join(directory, 'models.sqlite');
+  const path = join(directory, 'models.sqlite'), roots = new Set(); fixtureRoots.set(path, roots);
+  t.after(async () => { for (const root of roots) await root.fiber.dispose(); fixtureRoots.delete(path); await rm(directory, { recursive: true, force: true }); });
+  return path;
 }
 const initial = (overrides = {}) => ({ providers: [{ record: provider(), expectedRevision: null }], models: [{ record: model(), expectedRevision: null }],
   connection: { record: connection(), expectedRevision: null }, configurations: [{ record: configuration(), expectedRevision: null }], ...overrides });

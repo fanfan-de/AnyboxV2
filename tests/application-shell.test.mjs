@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 
 const product = state => ({ definition: { id: 'agent', name: 'Anybox Harness', description: 'Application',
-  web: { entry: fileURLToPath(new URL('./helpers/shell-application.mjs', import.meta.url)) } }, desiredEnabled: state !== 'disabled', state })
+  web: { entry: new URL('./helpers/shell-application.mjs', import.meta.url).pathname } }, desiredEnabled: state !== 'disabled', state })
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 let fixtureId = 0

@@ -1,12 +1,28 @@
 /** Portable application staging shared by Node releases and desktop packaging. */
 import { spawn } from 'node:child_process'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdir, cp, readFile, writeFile, readdir } from 'node:fs/promises'
-import { resolve, join } from 'node:path'
+import { resolve, join, dirname, relative, isAbsolute, delimiter } from 'node:path'
 import { createHash } from 'node:crypto'
 import { verifyStagedApplication } from './verify-staged-application.mjs'
 
 export const run = (command, args, cwd, options = {}) => new Promise((resolve, reject) => {
-  const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'inherit'], ...options }); let output = ''
+  // npm.cmd is not an executable. Invoke npm's JavaScript entry directly so
+  // paths and arguments never pass through cmd.exe or shell interpolation.
+  if (command === 'npm') {
+    let npm = process.env.npm_execpath
+    if (!npm) {
+      const adjacent = join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')
+      if (existsSync(adjacent)) npm = adjacent
+      else for (const folder of (process.env.PATH ?? process.env.Path ?? '').split(delimiter)) {
+        const candidate = process.platform === 'win32' ? join(folder, 'node_modules/npm/bin/npm-cli.js') : join(folder, 'npm')
+        if (existsSync(candidate)) { npm = realpathSync(candidate); break }
+      }
+    }
+    if (!npm || !existsSync(npm)) throw new Error('Build requires an installed npm CLI; run through npm or set npm_execpath')
+    args = [npm, ...args]; command = process.execPath
+  }
+  const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true, ...options }); let output = ''
   child.stdout.on('data', value => { output += value })
   child.once('error', reject)
   child.once('exit', (code, signal) => code === 0 ? resolve(output) : reject(new Error(`${command} exited ${code ?? signal}`)))
@@ -14,7 +30,8 @@ export const run = (command, args, cwd, options = {}) => new Promise((resolve, r
 
 export async function stageApplication(root, directory, { desktop = false, build = true } = {}) {
   const output = resolve(directory)
-  if (output === root || root.startsWith(output + '/')) throw new Error('Choose a separate empty output directory')
+  const inside = relative(output, resolve(root))
+  if (!inside || (!inside.startsWith('..') && !isAbsolute(inside))) throw new Error('Choose a separate empty output directory')
   await mkdir(output, { recursive: true })
   if ((await readdir(output)).length) throw new Error('Release output must be empty')
   if (build) await run('npm', ['run', 'build'], root)
@@ -42,7 +59,8 @@ export async function stageApplication(root, directory, { desktop = false, build
   const lock = await readFile(join(output, 'package-lock.json'))
   await writeFile(join(output, 'release.json'), JSON.stringify({ version: manifest.version, artifacts,
     lockSha256: createHash('sha256').update(lock).digest('hex'),
-    nativeDependencies: desktop ? 'Matching macOS arm64 native dependencies are included in the desktop package.' : 'Install with npm ci --omit=dev --include=optional on the target macOS/Linux platform.' }, null, 2) + '\n')
+    platform: process.platform, architecture: process.arch,
+    nativeDependencies: 'Target-platform dependencies and an independent Node runtime are included by the product packaging step.' }, null, 2) + '\n')
   await verifyStagedApplication(root, output)
   return { output, manifest, artifacts }
 }

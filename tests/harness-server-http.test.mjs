@@ -926,6 +926,19 @@ test('unsupported project picker leaves harness server HTTP available', async ()
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
+test('a Windows native host can explicitly provide its directory picker capability', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-web-windows-picker-'))
+  let calls = 0
+  const f = await fixture(directory, { platform: 'win32', supported: true, runDialog: async () => { calls++; return directory } })
+  try {
+    assert.deepEqual((await request(f.web, 'GET', '/projects/picker')).data, { supported: true })
+    const selected = await request(f.web, 'POST', '/projects/pick', {})
+    assert.equal(selected.response.status, 200)
+    assert.equal(selected.data.path, realpathSync(directory))
+    assert.equal(calls, 1)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
 test('harness server shutdown cancels an open picker and waits for it to exit', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-picker-'))
   let started

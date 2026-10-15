@@ -14,7 +14,7 @@ test('harness server startup separates persistent Models storage from the one-ti
   assert.equal(config.imageAssetsDirectory, './data/harness.sqlite.images')
   assert.equal(config.modelsDatabasePath, './data/models.sqlite')
   assert.equal(config.modelsConfigPath, './data/models.json')
-  assert.equal(config.modelsCatalogDatabasePath, 'data/models-catalog.sqlite')
+  assert.equal(config.modelsCatalogDatabasePath, join('data', 'models-catalog.sqlite'))
   assert.equal(config.credentialNamespace, 'anybox.models')
   assert.equal(config.legacy.provider.protocolId, 'chat-completions')
   assert.equal(config.legacy.remoteModelId, 'deepseek-flash')

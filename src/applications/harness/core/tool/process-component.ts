@@ -1,5 +1,3 @@
-import { spawn } from 'node:child_process'
-import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { isAbsolute, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { Component } from '@nya/core'
@@ -8,6 +6,8 @@ import type { OwnedCall } from '../contracts.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 import { validateLibraryArguments } from './catalog.js'
+import { spawnManagedProcess, type ManagedProcess } from '../../../../platform/process-runtime.js'
+import { prepareShellCommand } from '../../../../platform/shell.js'
 
 export const processToolsServiceKey = 'tools.processes'
 export interface ProcessRunScope {
@@ -32,7 +32,7 @@ export class ProcessFailure extends Error {
 }
 interface ProcessEntry {
   readonly id: number
-  readonly child: ChildProcessWithoutNullStreams
+  readonly child: ManagedProcess
   readonly done: Promise<void>
   readonly changed: Set<() => void>
   pending: string
@@ -52,19 +52,6 @@ function positive(value: number | undefined, fallback: number): number {
   const selected = value ?? fallback
   if (!Number.isSafeInteger(selected) || selected <= 0 || selected > 2_147_483_647) throw new TypeError('invalid process option')
   return selected
-}
-function environment(): NodeJS.ProcessEnv {
-  return { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: process.env.HOME ?? '', TMPDIR: process.env.TMPDIR ?? '/tmp', LANG: process.env.LANG ?? 'C' }
-}
-function signalGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): boolean {
-  if (child.pid === undefined) return true
-  try { process.kill(-child.pid, signal); return true }
-  catch (error) { return error instanceof Error && 'code' in error && error.code === 'ESRCH' }
-}
-function groupAlive(child: ChildProcessWithoutNullStreams): boolean {
-  if (child.pid === undefined) return false
-  try { process.kill(-child.pid, 0); return true }
-  catch (error) { return !(error instanceof Error && 'code' in error && error.code === 'ESRCH') }
 }
 /** Split a string on a valid UTF-8 boundary; byte limits never corrupt persisted text. */
 function prefix(text: string, byteLimit: number): { head: string; tail: string } {
@@ -98,7 +85,6 @@ function drain(entry: ProcessEntry, tokens: number, started: number): JsonValue 
 
 /** Owns pipe process groups per Run. Operation done and process done are separate barriers. */
 export function createProcessToolsComponent(options: ProcessOptions = {}): Component.Object<void, { [projectServiceKey]: ProjectPort }> {
-  if (process.platform === 'win32') throw new TypeError('process component requires a Unix host')
   const timeoutMs = positive(options.timeoutMs, 120_000)
   const maxBufferedOutputBytes = positive(options.maxBufferedOutputBytes, 131_072)
   const terminationGraceMs = positive(options.terminationGraceMs, 5_000)
@@ -142,21 +128,20 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
           try { projectPath = workspacePath ?? (await deps[projectServiceKey].requireAvailable(projectId)).path }
           catch { throw new ProcessFailure('unavailable') }
           if (signal.aborted || !open || !accepting) throw new ProcessFailure('cancelled')
+          // Other starts can complete while this call resolves the project.
+          if ([...processes.values()].filter(entry => !entry.exited).length >= maxProcessesPerRun) throw new ProcessFailure('unavailable')
           const cwd = input.workdir ? isAbsolute(input.workdir) ? input.workdir : resolve(projectPath, input.workdir) : projectPath
-          let child: ChildProcessWithoutNullStreams
-          try { child = spawn(input.shell ?? '/bin/bash', [input.login === false ? '-c' : '-lc', input.command], { cwd, env: environment(), detached: true, stdio: ['pipe', 'pipe', 'pipe'] }) }
+          let child: ManagedProcess
+          try { child = spawnManagedProcess({ ...prepareShellCommand({ ...input, bash: input.foreground }), cwd, terminationGraceMs }) }
           catch { throw new ProcessFailure('unavailable') }
-          let finish!: () => void, timer: NodeJS.Timeout | undefined, killTimer: NodeJS.Timeout | undefined
-          let forceAt = 0
+          let finish!: () => void, timer: NodeJS.Timeout | undefined
           const entry: ProcessEntry = {
             id: nextSessionId++, child, done: new Promise<void>(yes => { finish = yes }), changed: new Set(), pending: '', truncated: false, pendingTruncated: false,
             exited: false, spawnFailed: false, exitCode: null, signal: null, terminated: false, timedOut: false, cleanupFailed: false, writing: Promise.resolve(),
             terminate() {
               if (entry.exited || entry.terminated) return
               entry.terminated = true
-              signalGroup(child, 'SIGTERM')
-              forceAt = Date.now() + terminationGraceMs
-              killTimer = setTimeout(() => { signalGroup(child, 'SIGKILL') }, terminationGraceMs)
+              child.terminate()
             },
           }
           processes.set(entry.id, entry)
@@ -171,31 +156,17 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
           child.stdout.on('data', (chunk: Buffer) => collect(stdout.write(chunk)))
           child.stderr.on('data', (chunk: Buffer) => collect(stderr.write(chunk)))
           child.stdin.on('error', () => { /* Write callbacks report pipe closure; never emit an uncaught stream error. */ })
-          child.once('error', () => { entry.spawnFailed = true })
-          // The shell can exit while a child still owns its pipes or runs with redirected
-          // output. Independent background jobs are outside this contract: clean its group.
-          child.once('exit', (exitCode, signal) => {
+          const observedExit = child.exited.then(({ exitCode, signal }) => {
             entry.exitCode = exitCode; entry.signal = signal
-            if (groupAlive(child)) entry.terminate()
-          })
-          child.once('close', (exitCode, signal) => {
+          }, () => { entry.spawnFailed = true })
+          // The platform owner joins the whole process tree and both output pipes.
+          // A shell exit alone is never a completed process session.
+          void Promise.all([observedExit, child.done.catch(() => { entry.cleanupFailed = true })]).then(() => {
             collect(stdout.end()); collect(stderr.end())
-            entry.exitCode = exitCode; entry.signal = signal
+            if (child.outputTruncated) { entry.truncated = true; entry.pendingTruncated = true }
             if (timer) clearTimeout(timer)
-            const settle = () => {
-              entry.exited = true
-              if (killTimer) clearTimeout(killTimer)
-              changed(entry); finish()
-            }
-            const joinGroup = () => {
-              if (!groupAlive(child)) { settle(); return }
-              entry.terminate()
-              if (Date.now() >= forceAt + terminationGraceMs) {
-                entry.cleanupFailed = true; settle(); return
-              }
-              setTimeout(joinGroup, 10)
-            }
-            joinGroup()
+            entry.exited = true
+            changed(entry); finish()
           })
           timer = setTimeout(() => { entry.timedOut = true; entry.terminate() }, input.timeout ?? timeoutMs)
           if (input.foreground) child.stdin.end()

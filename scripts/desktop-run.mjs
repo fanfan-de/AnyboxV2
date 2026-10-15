@@ -9,7 +9,7 @@ if (smoke && process.env.ANYBOX_KEYRING_TESTS !== '1') {
   process.stderr.write('Desktop smoke uses the system Vault. Run: ANYBOX_KEYRING_TESTS=1 npm run desktop:smoke\n')
   process.exit(1)
 }
-const env = { ...process.env, ...(smoke ? { ANYBOX_DESKTOP_SMOKE: '1' } : {}) }
+const env = { ...process.env, ANYBOX_DEVELOPMENT_NODE_EXECUTABLE: process.execPath, ...(smoke ? { ANYBOX_DESKTOP_SMOKE: '1' } : {}) }
 delete env.ELECTRON_RUN_AS_NODE
 delete env.NODE_OPTIONS
 const child = spawn(require('electron'), [root, ...process.argv.slice(2).filter(argument => argument !== '--smoke')], { cwd: root, env, stdio: 'inherit' })

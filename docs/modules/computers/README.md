@@ -86,4 +86,4 @@ sequenceDiagram
 
 本模块不提供跨机器迁移、portable-managed、checkpoint 或独立模型 exchange。模型请求已发出而响应未保存时停止自动重发；任意 Runtime 阶段接续属于第四阶段。远端项目仍以绝对路径登记，宿主的目录选择器只浏览 harness server 本机。验收与后续边界见[设计文档](../../computer-resource-design.md)与[可组合单元设计](../../composable-units-design.md)。
 
-实际 worker 保留 Unix 工具装配限制，Linux/macOS 可装配，本次仅 Linux 完成真实进程故障验收。Windows 纯模型、资源契约与受控 worker 测试不代表真实 worker（包括文件工具）已支持。
+实际 worker 依据当前 Windows、macOS 或 Linux 的原生进程后端可用性装配，缺少匹配产物时关闭启动准入。三平台共享服务、账本、文件与图片组件；各平台原生进程故障、系统凭据及完整发行包仍须分别验收，不能以受控替身测试替代。

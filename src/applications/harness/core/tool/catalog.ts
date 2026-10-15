@@ -47,7 +47,7 @@ const sources = freeze({
 })
 function entry(toolId: string, name: LibraryToolName, category: ToolCatalogEntry['category'], source: ToolCatalogEntry['source'], description: string, parameters: Record<string, JsonValue>, dependencies: readonly string[] = []): ToolCatalogEntry {
   return freeze({ toolId, version: '1.0.0', name: toolId.slice(toolId.indexOf('.') + 1), category, source, definition: { name, description, parameters }, dependencies, selectable: true,
-    scope: category === 'command' ? 'Run-owned Unix pipe execution; no PTY or independent background jobs.' : category === 'image' ? 'Static JPEG, PNG and WebP images only.' : category === 'plan' ? 'Run-owned full replacement plan or todo state.' : 'Project-relative paths are a base, not a filesystem sandbox; UTF-8 text and declared static image reads only.',
+    scope: category === 'command' ? 'Run-owned native pipe execution on Windows, macOS and Linux; no PTY or independent background jobs. Codex defaults to PowerShell on Windows and Bash on Unix; Bash tools always use Bash.' : category === 'image' ? 'Static JPEG, PNG and WebP images only.' : category === 'plan' ? 'Run-owned full replacement plan or todo state.' : 'Project-relative paths are a base, not a filesystem sandbox; UTF-8 text and declared static image reads only.',
     adaptation: 'Source-specific arguments and names are preserved under a fixed model-call prefix; Anybox owns execution, cancellation and bounded results.' + (name === 'codex_apply_patch' ? ' Freeform patch input is represented by the patch JSON field.' : '') })
 }
 const fileRead = object({ file_path: str(), offset: integer(1), limit: integer(1, 10_000) }, ['file_path'])

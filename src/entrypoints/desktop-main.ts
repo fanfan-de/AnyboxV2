@@ -89,7 +89,7 @@ else {
   }
   const openDirectory = async (signal: AbortSignal) => {
     if (signal.aborted || !window || window.isDestroyed() || quitting) throw rpcFailure('cancelled')
-    const cancelNativePanel = process.platform === 'darwin' ? prepareDirectoryPanelCancellation() : undefined
+    const cancelNativePanel = process.platform === 'darwin' || process.platform === 'win32' ? prepareDirectoryPanelCancellation() : undefined
     reveal()
     // Showing a native child establishes macOS window ordering before attaching
     // the panel. Keep its bounds aligned with the main window, without another
@@ -103,14 +103,16 @@ else {
     const done = new Promise<void>(resolve => { finished = resolve }); nativeDialogs.add(done)
     let dialogEnded = false
     let cancelTimer: ReturnType<typeof setTimeout> | undefined
+    let cancelling: Promise<void> | undefined
     const abort = () => {
-      if (dialogEnded || parent.isDestroyed()) return
+      if (dialogEnded || parent.isDestroyed() || cancelling) return
       if (cancelNativePanel) {
-        // Cancel this owner's panel directly, independent of key-window focus.
-        // Closing the owner would return Stop and trigger bookmark reads.
-        if (!cancelNativePanel(parent.getNativeWindowHandle()) && !cancelTimer) {
-          cancelTimer = setTimeout(() => { cancelTimer = undefined; abort() }, 10)
-        }
+        // Cancel only this owner's panel and keep the owner alive until the
+        // native dialog has actually returned. Windows owner.close is insufficient.
+        const retry = () => { if (!dialogEnded && !cancelTimer) cancelTimer = setTimeout(() => { cancelTimer = undefined; abort() }, 25) }
+        cancelling = Promise.resolve().then(() => cancelNativePanel(parent.getNativeWindowHandle()))
+          .then(cancelled => { if (!cancelled) retry() }, retry)
+          .finally(() => { cancelling = undefined })
       } else parent.close()
     }
     signal.addEventListener('abort', abort, { once: true })
@@ -124,6 +126,7 @@ else {
     } finally {
       dialogEnded = true
       if (cancelTimer) clearTimeout(cancelTimer)
+      await cancelling
       signal.removeEventListener('abort', abort); if (!parent.isDestroyed()) parent.destroy()
       if (directoryParent === parent) directoryParent = undefined
       if (!quitting && window && !window.isDestroyed() && window.isVisible()) window.focus()
@@ -263,7 +266,9 @@ else {
         process.stdout.write('Anybox desktop smoke passed\n')
       } catch (error) {
         process.exitCode = 1
-        await writeFile(join(app.getPath('userData'), 'smoke-report.json'), JSON.stringify({ passed: false, error: error instanceof Error ? error.message : 'smoke failed' }) + '\n')
+        await writeFile(join(app.getPath('userData'), 'smoke-report.json'), JSON.stringify({ passed: false,
+          error: error instanceof Error ? error.message : 'smoke failed',
+          failures: error instanceof AggregateError ? error.errors.map(value => value instanceof Error ? value.message : 'cleanup failure') : undefined }) + '\n')
         process.stderr.write(`Anybox desktop smoke failed: ${error instanceof Error ? error.message : 'failure'}\n`)
       }
       await shutdown(false); quitAllowed = true; app.exit(process.exitCode === 1 ? 1 : 0)

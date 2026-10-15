@@ -1,12 +1,14 @@
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, open } from 'node:fs/promises'
+import { readFile, open } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { Component } from '@nya/core'
 import type { JsonValue } from '@anybox/models'
 import { localComputerWorkerServiceKey, localComputerWorkerControlServiceKey, workerError } from './worker-port.js'
 import type { ComputerWorkerOptions, ComputerWorkerPort, LocalComputerWorkerControl, LocalComputerWorkerStatus, WorkerOperation } from './worker-port.js'
 import type { WorkerEndpoint } from './worker-server.js'
+import { ensurePrivateDirectory } from '../../../../platform/private-directory.js'
+import { processRuntimeAvailable } from '../../../../platform/process-runtime.js'
+import { resolveBackgroundEntrypoint, resolveBackgroundRuntime } from '../../../../platform/runtime-path.js'
 
 const wait = (ms: number) => new Promise<void>(yes => setTimeout(yes, ms))
 function live(pid: number): boolean {
@@ -51,16 +53,20 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
     if (!accepting) throw workerError('worker-observer-closed')
     if (previous && live(previous.pid)) { await send(previous, '/info', {}); return previous }
     if (!start) throw workerError('worker-not-running')
-    if (process.platform === 'win32') throw workerError('worker-platform-unsupported')
-    await mkdir(directory, { recursive: true, mode: 0o700 })
+    // A system-managed harness must not put an independent worker inside its
+    // own service Job/cgroup: stopping that harness would kill the worker too.
+    if (process.env.ANYBOX_SYSTEM_SERVICE_ROLE === 'harness-server') throw workerError('worker-service-start-required')
+    if (!processRuntimeAvailable()) throw workerError('worker-platform-unsupported')
+    try { await ensurePrivateDirectory(directory) } catch { throw workerError('worker-directory-unavailable') }
     // The worker exclusively owns this directory; local managers only share its private endpoint.
     const errorLog = await open(join(directory, 'worker.log'), 'a', 0o600)
     let child: ReturnType<typeof spawn>
     let spawnFailure: unknown
     try {
       if (!accepting) throw workerError('worker-observer-closed')
-      child = spawn(options.executable ?? process.execPath, [fileURLToPath(new URL('../../../../entrypoints/computer-worker-main.js', import.meta.url)), directory],
-        { detached: true, stdio: ['ignore', 'ignore', errorLog.fd], windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } })
+      const runtime = options.executable ? { executable: options.executable, prefixArgs: [] } : resolveBackgroundRuntime()
+      child = spawn(runtime.executable, [...runtime.prefixArgs, resolveBackgroundEntrypoint('computer-worker-main.js'), directory],
+        { detached: true, stdio: ['ignore', 'ignore', errorLog.fd], windowsHide: true, env: { ...process.env } })
       child.once('error', error => { spawnFailure = error })
       child.unref()
     } finally { await errorLog.close() }
@@ -103,7 +109,7 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
     })()),
     status: signal => tracked((async () => {
       if (!accepting) throw workerError('worker-observer-closed')
-      const supported = process.platform !== 'win32', target = await endpoint(directory)
+      const supported = processRuntimeAvailable(), target = await endpoint(directory)
       if (!target || !live(target.pid)) return { state: 'stopped', supported, attachments: [] }
       try {
         const info = await send<Awaited<ReturnType<ComputerWorkerPort['info']>>>(target, '/info', {}, signal)

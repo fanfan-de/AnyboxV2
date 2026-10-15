@@ -1,7 +1,6 @@
 import { constants } from 'node:fs'
 import type { BigIntStats } from 'node:fs'
 import * as fs from 'node:fs/promises'
-import { spawn } from 'node:child_process'
 import { basename, extname, isAbsolute, parse, relative, resolve, sep } from 'node:path'
 import type { Component } from '@nya/core'
 import type { JsonValue } from '@anybox/models'
@@ -17,6 +16,8 @@ import { applyPatchServiceKey } from './apply-patch-component.js'
 import type { ApplyPatchPort } from './apply-patch-component.js'
 import { validatePatchText } from './apply-patch-domain.js'
 import { patchDiagnostic } from './apply-patch-types.js'
+import { spawnManagedProcess } from '../../../../platform/process-runtime.js'
+import { toolEnvironment } from '../../../../platform/shell.js'
 
 export const fileToolsServiceKey = 'tools.files'
 
@@ -139,33 +140,29 @@ async function searchTarget(projectPath: string, path: JsonValue | undefined): P
 /** The child is joined on every path, including timeout, output overflow and cancellation. */
 async function runRg(arguments_: readonly string[], cwd: string, signal: AbortSignal, timeoutMs: number): Promise<string> {
   signal.throwIfAborted()
-  const child = spawn(searchBinaryPath(), [...arguments_], { cwd, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
-  const chunks: Buffer[] = []; let kept = 0; let failure: Error | undefined; let killTimer: NodeJS.Timeout | undefined
-  const kill = (kind: NodeJS.Signals) => {
-    if (child.pid === undefined) return
-    try { if (process.platform === 'win32') child.kill(kind); else process.kill(-child.pid, kind) }
-    catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) failure = toolError('cleanup-failed', 'The search process could not be stopped.') }
-  }
+  const child = spawnManagedProcess({ executable: searchBinaryPath(), args: arguments_, cwd, env: toolEnvironment(), stdin: 'ignore', terminationGraceMs: 3000 })
+  const chunks: Buffer[] = []; let kept = 0; let failure: Error | undefined
   const stop = (error: Error) => {
     if (failure) return
-    failure = error; kill('SIGTERM'); killTimer = setTimeout(() => kill('SIGKILL'), 3000)
+    failure = error; child.terminate()
   }
   const abort = () => stop(toolError('cancelled', 'The file operation was cancelled.'))
   signal.addEventListener('abort', abort, { once: true })
   if (signal.aborted) abort()
   const timer = setTimeout(() => stop(toolError('search-timeout', 'The search timed out.')), timeoutMs)
-  const exit = await new Promise<number | null>(yes => {
-    child.stdout.on('data', (chunk: Buffer) => {
-      kept += chunk.length
-      if (kept > 20_000_000) stop(toolError('search-output-overflow', 'The search output exceeded 20 MB; narrow the search.'))
-      else chunks.push(chunk)
-    })
-    child.stderr.on('data', () => {})
-    child.once('error', () => { failure ??= toolError('search-unavailable', 'The bundled search process could not start.') })
-    child.once('close', yes)
+  child.stdout.on('data', (chunk: Buffer) => {
+    kept += chunk.length
+    if (kept > 20_000_000) stop(toolError('search-output-overflow', 'The search output exceeded 20 MB; narrow the search.'))
+    else chunks.push(chunk)
   })
-  clearTimeout(timer); if (killTimer) clearTimeout(killTimer)
-  signal.removeEventListener('abort', abort)
+  child.stderr.on('data', () => {})
+  let exit: number | null = null
+  try {
+    const observed = await child.exited.catch(() => { failure ??= toolError('search-unavailable', 'The bundled search process could not start.'); return undefined })
+    exit = observed?.exitCode ?? null
+    await child.done.catch(() => { failure = toolError('cleanup-failed', 'The search process could not be stopped.') })
+    if (child.outputTruncated) failure ??= toolError('search-output-overflow', 'The search output exceeded its buffer; narrow the search.')
+  } finally { clearTimeout(timer); signal.removeEventListener('abort', abort) }
   if (failure) throw failure
   if (exit !== 0 && exit !== 1) throw toolError('invalid-pattern', 'The search pattern or target could not be processed.')
   return Buffer.concat(chunks).toString('utf8')

@@ -23,7 +23,6 @@ import { workerBootOf } from '../dist/applications/harness/core/computer/worker-
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
 
-const unix = process.platform !== 'win32'
 const childFixture = fileURLToPath(new URL('./helpers/unit-harness-process.mjs', import.meta.url))
 const unitFixture = fileURLToPath(new URL('./helpers/unit-worker-process.mjs', import.meta.url))
 /** A real worker process on `directory`; `kill()` is the unclean exit no cleanup ever records. */
@@ -73,7 +72,9 @@ async function harnessWithUnit(t, { dialoutFetch, expectCleanupFailure = false, 
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
   await root.installComponent(models.component())
   await root.installComponent(createHostAccessComponent('fault harness'))
-  const core = await installHarnessServerCore(root, { agents, localWorkerDirectory: join(directory, 'never-started-local-worker'), computerUnit: { kind: 'local', claimTimeoutMs: 1_500 } })
+  // Exercise the same lost-reply timeout as production without spending its full
+  // 60-second window on each fault. Unit-side get waits remain shorter (200 ms).
+  const core = await installHarnessServerCore(root, { agents, localWorkerDirectory: join(directory, 'never-started-local-worker'), computerUnit: { kind: 'local', claimTimeoutMs: 1_500, replyTimeoutMs: 2_500 } })
   const httpFiber = root.installComponent(createFixtureApplicationApiComponent(root, core.api.listAgents(), 0, { authenticated: true })); await httpFiber
   const web = root.get(hostHttpServiceKey)
   const { memory, openEntry } = memoryEntries()
@@ -84,7 +85,7 @@ async function harnessWithUnit(t, { dialoutFetch, expectCleanupFailure = false, 
   const f = { root, core, api: core.api, web, directory, projectDirectory, script, memory, unitDirectory,
     unit: await openUnit(), control: connectLocalComputerWorker({ directory: unitDirectory }),
     async reopenUnit() { await f.control.closeObserver(); await f.unit.close(); f.unit = await openUnit(); f.control = connectLocalComputerWorker({ directory: unitDirectory }); return f.unit },
-    /** SIGKILL of the unit process: its command keeps running as an orphan and no boot ever records the scope cleanup. */
+    /** Unclean unit exit loses its durable cleanup receipt even when the native supervisor cleans the process tree. */
     async killUnit() { await f.control.closeObserver(); await f.unit.kill() },
     async respawnUnit() { f.unit = await openUnit(); f.control = connectLocalComputerWorker({ directory: unitDirectory }); return f.unit },
     instances: () => root.get('local-storage').read(reader => reader.all('SELECT instance_generation, status, provider_ref FROM harness_computer_instances ORDER BY instance_generation')),
@@ -115,7 +116,7 @@ async function harnessWithUnit(t, { dialoutFetch, expectCleanupFailure = false, 
 }
 const longCommand = (marker = 'once', sleep = 2, tail = "printf 'original-result'") => `printf '${marker}\\n' >> effect.log; printf started > started.flag; sleep ${sleep}; ${tail}`
 
-test('a network interruption between the unit and the harness server delays the fact without repeating the side effect', { skip: !unix, timeout: 180_000 }, async t => {
+test('a network interruption between the unit and the harness server delays the fact without repeating the side effect', { timeout: 180_000 }, async t => {
   let offline = false
   const f = await harnessWithUnit(t, { dialoutFetch: (url, init) => offline ? Promise.reject(new TypeError('network interrupted')) : fetch(url, init) })
   f.script.push({ id: 'call', name: 'bash', arguments: { command: longCommand('once', 2) } })
@@ -138,7 +139,7 @@ test('a network interruption between the unit and the harness server delays the 
   assert.ok((await f.pins(run.id)).every(pin => pin.released_at !== null), 'the scope released its pins after the real exit')
 })
 
-test('a unit restart turns its in-flight command into a cancelled fact that the harness server consumes once, and a new generation serves later Runs', { skip: !unix, timeout: 180_000 }, async t => {
+test('a unit restart turns its in-flight command into a cancelled fact that the harness server consumes once, and a new generation serves later Runs', { timeout: 180_000 }, async t => {
   const f = await harnessWithUnit(t)
   f.script.push({ id: 'call', name: 'bash', arguments: { command: longCommand('once', 30, "printf never > never.flag") } })
   const run = await f.api.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'go', idempotencyKey: 'restart' })
@@ -162,7 +163,7 @@ test('a unit restart turns its in-flight command into a cancelled fact that the 
   assert.equal(computers.length, 1)
 })
 
-test('revoking an attachment while a command runs rejects new declarations, cancels the unit side and settles the Run without replay', { skip: !unix, timeout: 180_000 }, async t => {
+test('revoking an attachment while a command runs rejects new declarations, cancels the unit side and settles the Run without replay', { timeout: 180_000 }, async t => {
   const f = await harnessWithUnit(t, { expectCleanupFailure: true })
   f.script.push({ id: 'call', name: 'bash', arguments: { command: longCommand('once', 30, "printf never > never.flag") } })
   const run = await f.api.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'go', idempotencyKey: 'revoked' })
@@ -170,7 +171,10 @@ test('revoking an attachment while a command runs rejects new declarations, canc
   const revoked = await f.api.revokeUnitAttachment(f.attached.attachmentId)
   assert.equal(revoked.state, 'revoked'); assert.equal(revoked.epoch, 2)
   const local = await until(async () => (await f.control.control.listAttachments()).find(item => item.attachmentId === f.attached.attachmentId && item.state === 'revoked'), 'the unit observes the revocation')
-  assert.equal(local.connection, 'revoked'); assert.equal(f.memory.size, 0, 'the unit dropped its credential')
+  assert.equal(local.connection, 'revoked')
+  // The ledger changes first; revocation then drains tools and deletes the key.
+  await until(() => f.memory.size === 0, 'the unit dropped its credential after draining the revoked attachment', 10_000)
+  assert.equal(f.memory.size, 0, 'the unit dropped its credential')
   await assert.rejects(f.api.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'more', idempotencyKey: 'after-revoke' }), error => ['project-unavailable', 'unit-attachment-state', 'unit-attachment-mismatch'].includes(error.code), 'new declarations for the revoked attachment are refused')
   const finished = await f.api.waitRun(run.id)
   assert.equal(finished.status, 'failed')
@@ -182,9 +186,9 @@ test('revoking an attachment while a command runs rejects new declarations, canc
   assert.ok((await f.pins(run.id)).some(pin => pin.released_at === null), 'pins stay until a unit proves the scope exited')
 })
 
-test('SIGKILL of the unit keeps the dead boot\'s pin as a fact, retires its instance and serves later Runs on a new generation', { skip: !unix, timeout: 180_000 }, async t => {
+test('SIGKILL of the unit keeps the dead boot\'s pin as a fact, retires its instance and serves later Runs on a new generation', { timeout: 180_000 }, async t => {
   const f = await harnessWithUnit(t, { unitProcess: true, expectCleanupFailure: true })
-  // The orphaned command outlives the killed worker; keep it harmless and shorter than the test budget.
+  // Native process cleanup cannot replace the durable scope receipt lost with the worker.
   f.script.push({ id: 'call', name: 'bash', arguments: { command: longCommand('once', 20) } })
   const run = await f.api.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'go', idempotencyKey: 'unclean' })
   await until(() => exists(join(f.projectDirectory, 'started.flag')), 'the unit started the command')
@@ -212,7 +216,7 @@ test('SIGKILL of the unit keeps the dead boot\'s pin as a fact, retires its inst
   assert.ok((await f.pins(run.id)).every(pin => pin.released_at === null), 'retiring the dead instance keeps its pin unreleased')
 })
 
-test('SIGKILL of the harness server leaves the unit running; the replacement process reclaims the Run and consumes the original result once', { skip: !unix, timeout: 180_000 }, async t => {
+test('SIGKILL of the harness server leaves the unit running; the replacement process reclaims the Run and consumes the original result once', { timeout: 180_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-unit-faults-restart-')))
   const projectDirectory = join(directory, 'project'); await mkdir(projectDirectory)
   const port = await new Promise((resolve, reject) => { const server = createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)) }) })

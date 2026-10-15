@@ -8,6 +8,7 @@ import { agentPromptServiceKey } from '../agent/prompt-binding-component.js'
 import type { AgentPromptPort } from '../agent/prompt-binding-component.js'
 import { modelFailure, normalizeModelFailure } from './model.js'
 import { listTools, validateToolSelection } from '../tool/catalog.js'
+import { toolEnvironmentPrompt } from '../tool/environment.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 import { validateRunInput, sameRunInput } from './domain.js'
@@ -185,8 +186,15 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             const availableTools = listTools().map(tool => tool.definition)
             if (fixedInitialization?.tools.some(tool => !availableTools.some(current => JSON.stringify(current) === JSON.stringify(tool)))) throw treeError('history-incompatible')
             try { validateToolSelection(session.toolSelection) } catch { throw treeError('history-incompatible') }
+            const computerAttachment = fixedInitialization ? undefined : await attachments.get(project.computerAttachmentId)
+            const computerCapabilities = computerAttachment?.capabilities
+            const toolPlatform = project.computerAttachmentId === localAttachmentId('computer') ? process.platform
+              : computerCapabilities && typeof computerCapabilities === 'object' && 'platform' in computerCapabilities && typeof computerCapabilities.platform === 'string' ? computerCapabilities.platform : 'unknown'
+            // Only the generic command tool has a platform-dependent default shell.
+            // Fixed Bash contracts and tool-free Sessions need no extra instructions.
+            const needsShellEnvironment = models.get(modelId)?.effectiveCapabilities?.tools === true && session.toolSelection.tools.some(tool => tool.toolId === 'codex.exec_command')
             const initialization: NativeInitialization = fixedInitialization ?? Object.freeze({ schemaVersion: 2,
-              prompts: prompts.resolveInitialPrompts(session.agentId),
+              prompts: Object.freeze([...prompts.resolveInitialPrompts(session.agentId), ...(needsShellEnvironment ? [toolEnvironmentPrompt(toolPlatform, project.path)] : [])]),
               tools: Object.freeze(models.get(modelId)?.effectiveCapabilities?.tools === true ? session.toolSelection.tools.map(tool => tool.definition) : []),
               toolContractVersion: 'tool-library-v1', toolSelection: session.toolSelection })
             const template = prompts.resolveTaskTemplate(session.agentId) ?? null

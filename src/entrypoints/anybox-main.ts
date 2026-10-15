@@ -6,6 +6,7 @@ const usage = `Usage: anybox <role> [arguments]
   harness-server init [name]     Initialize server access
   computer-worker <directory>    Start only the Computer worker
   computer-worker <command> ...  serve/start/status/attach/permissions/revoke/stop
+  service <command> ...          install/start/stop/status/uninstall system services
 Use --help after a role to show this help without starting services.
 `
 
@@ -13,12 +14,13 @@ Use --help after a role to show this help without starting services.
 export async function main(args: readonly string[] = process.argv.slice(2)): Promise<void> {
   const [role, ...rest] = args
   if (!role || role === '--help' || role === '-h') { process.stdout.write(usage); return }
-  if (!['client', 'harness-server', 'computer-worker'].includes(role)) throw new Error(`Unknown role: ${role}\n${usage}`)
-  if (role !== 'computer-worker' && rest.length === 1 && ['--help', '-h'].includes(rest[0]!)) { process.stdout.write(usage); return }
+  if (!['client', 'harness-server', 'computer-worker', 'service'].includes(role)) throw new Error(`Unknown role: ${role}\n${usage}`)
+  if (!['computer-worker', 'service'].includes(role) && rest.length === 1 && ['--help', '-h'].includes(rest[0]!)) { process.stdout.write(usage); return }
   switch (role) {
     case 'client': return (await import('./client-main.js')).main(rest)
     case 'harness-server': return (await import('./harness-server-main.js')).main(rest)
     case 'computer-worker': return (await import('./computer-worker-main.js')).main(rest)
+    case 'service': return (await import('./service-main.js')).main(rest)
   }
 }
 

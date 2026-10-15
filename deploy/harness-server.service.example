@@ -6,7 +6,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/anybox-app
-ExecStart=/usr/bin/node %h/anybox-app/dist/entrypoints/harness-server-main.js
+ExecStart=%h/anybox-app/runtime/anybox harness-server
+Environment=ANYBOX_SYSTEM_SERVICE_ROLE=harness-server
 Environment=ANYBOX_HARNESS_BIND=127.0.0.1
 Environment=ANYBOX_HARNESS_PORT=3001
 Environment=ANYBOX_HARNESS_DATABASE=%h/.local/share/anybox/harness.sqlite
@@ -17,7 +18,7 @@ Environment=ANYBOX_IMAGE_ASSETS_DIRECTORY=%h/.local/share/anybox/images
 Restart=on-failure
 RestartSec=5
 KillMode=control-group
-TimeoutStopSec=90
+TimeoutStopSec=infinity
 UMask=0077
 
 [Install]

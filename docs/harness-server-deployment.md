@@ -1,8 +1,8 @@
 # harness server 独立部署与多设备连接
 
-[统一发行与独立运行角色](runtime-roles-and-distribution.md)已确定从各平台完整 Anybox 产品包按需部署客户端服务、harness server 与 Computer worker，各角色独立进程和生命周期。统一角色入口已接入当前 Node 发行；随包无头运行时及三平台服务管理仍待补齐，现有平台限制继续适用。
+[统一发行与独立运行角色](runtime-roles-and-distribution.md)已确定从各平台完整 Anybox 产品包按需部署客户端服务、harness server 与 Computer worker，各角色独立进程和生命周期。发行物携带独立 Node 运行时，系统服务适配见[后台服务](platform-services.md)。本轮真实成品验收范围为 Windows，其他平台验证状态见[原生平台支持](native-platform-support.md)。
 
-harness server 是 Anybox Harness 的通用服务端核心，可部署在本地设备或远端服务器。执行端支持 macOS / Linux，要求 Node.js >=22.13.0。命名与客户端边界见 [命名规范](naming.md)。每台设备独立运行一个应用宿主，在同一个根上按 Anybox Harness 打开目标装配内部 Models、Prompt 和 Agent 能力，并独立保存配置、业务数据库与附件目录。本机客户端拥有独立 `client.sqlite` 与系统凭据命名空间，不需要本机 harness server 在线。
+harness server 是 Anybox Harness 的通用服务端核心，可部署在本地设备或远端服务器。执行端按 Windows / macOS / Linux 原生平台提供适配，源码开发要求 Node.js >=22.13.0，成品使用随包 runtime。命名与客户端边界见 [命名规范](naming.md)。每台设备独立运行一个应用宿主，在同一个根上按 Anybox Harness 打开目标装配内部 Models、Prompt 和 Agent 能力，并独立保存配置、业务数据库与附件目录。本机客户端拥有独立 `client.sqlite` 与系统凭据命名空间，不需要本机 harness server 在线。
 
 ## 开发仓库启动
 
@@ -24,7 +24,7 @@ node dist/entrypoints/anybox-main.js harness-server init
 node dist/entrypoints/anybox-main.js computer-worker /absolute/worker-data
 ```
 
-这些命令仍使用当前 Node 运行时；Windows Computer 的 Unix 限制尚未解除。Computer 独立附着管理 CLI 已补齐，见 [独立管理](computer-worker-management.md)；系统服务安装器仍待实现。
+源码命令使用开发机 Node；成品 `runtime/anybox.cmd`（Windows）或 `runtime/anybox`（Unix）使用随包独立 Node。Computer 独立附着管理见[独立管理](computer-worker-management.md)，系统服务安装/启停见[后台服务](platform-services.md)。Windows 原生执行与成品验证见[原生平台支持](native-platform-support.md)。
 
 新安装显示代码注册的应用目录，正式目录目前提供 Anybox Harness。点击打开后直接进入项目与会话工作区，在侧栏「管理连接」中配对本地或远程设备，并启动对应 Agent；侧栏「执行设备」选择新增项目的归属及模型、Prompt 设置的管理范围，已有会话保持所属设备。已有 run-state 的安装在首次迁移时保留 Agent 运行目标。模型与 Prompt 管理统一从工作区「设置」进入，按所选设备管理，不提供独立功能页面或应用。选择设备不启动其执行组件，选择远程设备不启动本机执行服务。
 
@@ -36,13 +36,12 @@ node dist/entrypoints/anybox-main.js computer-worker /absolute/worker-data
 
 ```sh
 npm run release -- /tmp/anybox-app-release
-# 复制整个发行目录到目标机器，再在目标机器执行：
-npm ci --omit=dev --include=optional
-npm run harness:server:init
-npm run harness:server
+# 复制整个发行目录到同平台、同架构的目标机器：
+./runtime/anybox harness-server init
+./runtime/anybox harness-server
 ```
 
-构建和发行都会验证登记的浏览器入口、相对依赖、MIME 与全部资源文件。输出目录必须为空。`package-lock.json` 固定全部直接、间接与平台可选依赖，`release.json` 记录内置包完整性和锁文件 SHA-256。目标机器运行 `npm ci --omit=dev --include=optional` 准备匹配平台和架构的 keyring、sharp、随包 ripgrep 等原生依赖；不要直接复制另一种平台的 node_modules。目录快照随 Models 包携带，普通构建与测试不更新快照。
+Windows 使用 `runtime\anybox.cmd` 执行相同角色命令。构建和发行都会验证登记的浏览器入口、相对依赖、MIME 与全部资源文件。输出目录必须为空。`package-lock.json` 固定全部直接、间接与平台可选依赖，`release.json` 记录内置包完整性和锁文件 SHA-256。构建机安装匹配平台和架构的 keyring、sharp、ripgrep 等原生依赖并随包提供；目标机器不需要 npm、外部 Node 或编译器，不要混用另一平台的运行时。目录快照随 Models 包携带，普通构建与测试不更新快照。
 
 ## 配置与持久目录
 
@@ -113,7 +112,7 @@ worker 目录固定给一个 Authority，不与其他业务库或设备实例共
 
 独立 worker 自己的 unit 仍用 `KillMode=control-group` 管理其进程组；应用正常关闭会取消并排空所属 Run，停止 worker unit 或共同 cgroup 还会终止执行服务，这些都与 Runtime 进程异常退出不同。worker 永久丢失后 starting/running 操作只能 outcome-unknown，保留已知事实并拒绝重放，不能把这个场景宣传为接续成功。worker 异常退出后由下一次本地调用重新启动（例如旧服务端附着 API 或新的本机 Run；新版独立管理需明确点击启动），没有本地调用就不会重启：只作为远端 harness server 单元使用的设备（U1 的 Mac 等）必须由 systemd、launchd 等外部监督 worker，否则 worker 崩溃后该单元一直离线，远端 Run 保持 running 直到单元回来或被取消。升级或重启远端 harness server 时，远端单元的拨出循环在产品 `applying` 期间收到 `product-unavailable` 而 offline，并按最长 15 秒的退避自动重连，不需要重新附着；绑定该单元的项目在此期间不可用，新 Run 准入被拒绝。当前故障注入实测的是 Runtime PID 的 SIGKILL 与存活 worker 身份；systemd 服务和真实 macOS 部署需按实际运维环境另行验收。
 
-独立 worker 继承现有 Bash/进程组件的 Unix guard，Linux/macOS 可装配，本次仅 Linux 实测。Windows 可运行纯模型和受控资源契约测试，真实 worker 激活尚未支持；全部文件计算工具也依赖这个根，不能单独绕过平台限制。
+独立 worker 的工具提供方按平台选择。Windows 通用命令使用 PowerShell，明确要求 Bash 的契约使用 Git Bash；两者均运行在原生 Windows 进程中，不调用 WSL。Windows 成品携带固定版本 shell，开发环境可显式指定路径。进程取消、scope 排空和 worker 故障遵守同一资源契约；平台实际验证与剩余限制见[原生平台支持](native-platform-support.md)。
 
 ## 令牌管理与恢复
 

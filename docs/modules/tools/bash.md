@@ -36,18 +36,18 @@ Bash 组件在选定项目目录中执行本机命令，独占每次调用的子
 
 1. 同步检查组件仍接受调用、项目 ID 非空、命令非空且不含 NUL；非法输入同步抛出 `BashFailure('invalid-request')`。
 2. 注册调用，使用受信 workspacePath；未指定时通过 `projects.requireAvailable(projectId)` 获取项目路径。查询期间取消的调用会等查询退出，再阻止进程启动。
-3. 用 `/bin/bash -c <command>` 启动独立进程组，`cwd` 为项目路径，stdin 忽略，stdout/stderr 使用管道。组件仅支持 Unix 宿主，Windows 在工厂入口被拒绝。
-4. 只继承 `PATH`、`HOME`、`TMPDIR`、`LANG`；缺省分别为 `/usr/bin:/bin`、空字符串、`/tmp`、`C`。其他宿主环境变量不传入子进程。
+3. 通过共享原生进程适配器启动 `bash -c <command>`，`cwd` 为项目路径，stdin 忽略，stdout/stderr 使用管道。Windows 使用随包 PortableGit/Git Bash，macOS/Linux 使用本机 Bash；不调用 WSL，不把 Bash 命令改译成 PowerShell。
+4. 环境继承使用 `src/platform/shell.ts` 的显式白名单，含路径、用户目录、临时目录、区域及 Windows 系统目录。Provider Key 与 Anybox 配置不传入工具。
 5. 按到达顺序共享输出字节预算；超出部分丢弃并置 `truncated: true`，但继续读取管道，避免因输出填满而阻塞退出。
-6. 等待子进程 `close` 事件后生成正常结果；`done` 在操作退出后清除两个计时器并移除活动调用。
+6. 等待初始进程与原生适配器的完整清理后生成正常结果；`done` 在操作退出后清除超时计时器并移除活动调用。
 
-项目路径不是文件系统沙箱。命令可以访问项目外路径和网络；最小环境继承也不构成权限隔离。截断以字节为单位，最终按 UTF-8 解码，不保证截断点恰好落在完整字符边界。
+项目路径不是文件系统沙箱。命令可以访问项目外路径和网络；最小环境继承也不构成权限隔离。两路输出独立增量解码为 UTF-8，共享字节预算且只在完整字符边界截断。
 
 ## 取消、超时与组件清理
 
-超时和显式 `cancel()` 都先拒绝中断 Promise，因此 `result` 可以在进程退出前以 `timeout` 或 `cancelled` 拒绝。组件向负 PID 对应的进程组发 SIGTERM，宽限期后发 SIGKILL。重复取消和已经退出后的取消不会再次启动终止流程。
+超时和显式 `cancel()` 都先拒绝中断 Promise，因此 `result` 可以在进程退出前以 `timeout` 或 `cancelled` 拒绝。平台适配器在 Windows 终止整个 Job Object，在 Unix 向独立进程组发 SIGTERM，宽限期后发 SIGKILL。重复取消和已经退出后的取消不会再次启动终止流程。
 
-调用者必须继续等待 `done`。它会等待项目查询或子进程实际结束，不因 `result` 已拒绝就提前完成。进程组信号发送失败（进程不存在的 `ESRCH` 除外）被记录为 `cleanup-failure`，在 `done` 暴露；普通业务错误本身不使 `done` 拒绝。
+调用者必须继续等待 `done`。它会等待项目查询、全部进程、管道与原生 helper 实际结束，不因 `result` 已拒绝就提前完成。无法确认树清理时记录 `cleanup-failure`，在 `done` 暴露；干净的启动失败及普通业务错误本身不使 `done` 拒绝。原生所有权与所有者强杀边界见[进程工具](processes.md)。
 
 组件通过 Effect 登记清理：先关闭准入，再取消所有活动调用，等待全部 `done`。已发生的清理错误会保留至组件关闭；多个错误用 `AggregateError` 聚合。不会因某一个调用失败而跳过其他调用的退出等待。
 

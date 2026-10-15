@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
+import { createDirectoryIdentityCheck } from '../../../../platform/path-identity.js'
 import { readProjectFile, searchProjectFiles } from '../project-files/filesystem.js'
 import { listProjectDirectory } from '../project-files/tree-access.js'
 import { fileTreeLimits } from '../project-files/domain.js'
@@ -284,7 +285,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
               validateToolBatch([declaration.request], [declaration.tool.definition])
               // The device owner's ceiling is checked at acceptance, in the same transaction as the authorization.
               const attachment = attachments.requireApprovedIn(tx, input.attachmentId)
-              if (!ceilingPermits(attachment.ceiling, { path: binding.path, toolId: declaration.tool.toolId })) throw workerError('worker-scope-rejected')
+              if (!ceilingPermits(attachment.ceiling, { path: binding.path, toolId: declaration.tool.toolId }, process.platform === 'win32' ? createDirectoryIdentityCheck() : undefined)) throw workerError('worker-scope-rejected')
               if (run.cancelled) throw workerError('worker-run-cancelled')
               if (run.closed || run.uncertain) throw workerError(run.uncertain ? 'worker-scope-unknown' : 'worker-scope-closed')
               if (typeof run.binding_json === 'string' && !sameWorkspaceBinding(JSON.parse(run.binding_json) as typeof binding, binding)) throw workerError('worker-binding-conflict')
@@ -329,7 +330,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
           assertOpen(); text(input?.attachmentId)
           const query = validateComputerQuery(input.query)
           const attachment = await db.read(reader => attachments.requireApprovedIn(reader, input.attachmentId))
-          if (!ceilingPermitsRoot(attachment.ceiling, queryRoot(query))) throw workerError('worker-scope-rejected')
+          if (!ceilingPermitsRoot(attachment.ceiling, queryRoot(query), process.platform === 'win32' ? createDirectoryIdentityCheck() : undefined)) throw workerError('worker-scope-rejected')
           const signal = queries.signal
           let result: ComputerQueryResult
           switch (query.kind) {

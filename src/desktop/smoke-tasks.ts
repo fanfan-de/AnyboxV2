@@ -10,6 +10,7 @@ import { createSmokeProvider } from './smoke-provider.js'
 import type { DesktopSmokeOptions } from './smoke.js'
 import type { FileContent, FileRef } from '../applications/harness/core/project-files/domain.js'
 import type { ProtocolViewSnapshot } from '../applications/harness/core/view/types.js'
+import { connectLocalComputerWorker } from '../applications/harness/core/computer/worker-client.js'
 
 export type SmokeApi = <T = unknown>(path: string, body?: object, headers?: Record<string, string>) => Promise<T>
 interface Entity { readonly id: string; readonly revision: number }
@@ -37,6 +38,8 @@ async function configureTarget(api: SmokeApi, projectPath: string, providerUrl: 
   check(model, 'Offline fixture did not receive a baseline model')
   const agents = await api<readonly Entity[]>('/agents')
   check(agents.length > 0, 'Smoke execution host has no Agent')
+  const tools = await api<{ revision: number }>(`/agents/${agents[0]!.id}/tools`)
+  await api(`/agents/${agents[0]!.id}/tools`, { toolIds: ['anybox.bash', 'anybox.apply_patch'], expectedRevision: tools.revision })
   await mkdir(projectPath, { recursive: true })
   const project = await api<Entity>('/projects', { path: projectPath })
   const session = await api<Entity>('/sessions', { projectId: project.id, agentId: agents[0]!.id, modelId: model!.id })
@@ -57,6 +60,7 @@ export async function runDesktopTaskSmoke(options: DesktopSmokeOptions, request:
   await mkdir(remotePaths.data, { recursive: true })
   const remote = createDesktopWorker('execution', remotePaths.data, () => {})
   let localTarget: Target | undefined, remoteTarget: Target | undefined
+  let failed = false, failure: unknown
   const api: SmokeApi = (path, body) => request(base + path, body, binding)
   try {
     stage('offline model, binary image, and SSE')
@@ -189,13 +193,25 @@ export async function runDesktopTaskSmoke(options: DesktopSmokeOptions, request:
       nativeQuitCancelled: options.confirmQuit ? true : null,
       localRunSurvivesHide: true, localQuitGuard: true, localCancelledOnExit: true, remoteSurvivesExit: true,
       remoteCompletedAfterExit: true, actualHostExit: true, databaseReleased: true, imageDirectoryReleased: true }
+  } catch (error) {
+    failed = true; failure = error; throw error
   } finally {
     if (localTarget && !options.execution?.ended) await clearFixtureKey(localTarget).catch(() => {})
     if (remoteTarget && !remote.ended && !options.client.ended) await clearFixtureKey(remoteTarget).catch(() => {})
     const errors: unknown[] = []
     try { await remote.close() } catch (error) { errors.push(error) }
     try { await provider.close() } catch (error) { errors.push(error) }
-    if (remote.ended) try { await rm(remoteHome, { recursive: true, force: true }) } catch (error) { errors.push(error) }
-    if (errors.length) throw new AggregateError(errors, 'Desktop smoke fixture cleanup failed')
+    // Product shutdown intentionally preserves idle workers. These two belong
+    // exclusively to the smoke fixture, so explicitly stop them before removal.
+    for (const directory of [`${paths.harness}.computer-worker`, `${remotePaths.harness}.computer-worker`]) {
+      const observer = connectLocalComputerWorker({ directory, autoStart: false })
+      try { await observer.shutdown() } catch (error) { errors.push(error) }
+      finally { await observer.closeObserver() }
+    }
+    // Windows may release the exited utility process's cwd handle shortly after
+    // Electron emits exit; wait through that bounded filesystem cleanup window.
+    if (remote.ended) try { await rm(remoteHome, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }) } catch (error) { errors.push(error) }
+    if (errors.length) throw new AggregateError(failed ? [failure, ...errors] : errors,
+      failed && failure instanceof Error ? failure.message : 'Desktop smoke fixture cleanup failed')
   }
 }

@@ -17,7 +17,7 @@ export async function startDesktopClient(options: DesktopWorkerStart, rpc: Deskt
       start: signal => rpc.call<void>('local.start', undefined, signal),
       issue: signal => rpc.call('local.issue', undefined, signal),
       reconcile: (token, signal) => rpc.call('local.reconcile', { token }, signal) },
-    picker: { runDialog: signal => rpc.call('directory.pick', undefined, signal) } })
+    picker: { supported: true, runDialog: signal => rpc.call('directory.pick', undefined, signal) } })
   rpc.handle('retryLocal', (_value, signal) => host.root.get<ConnectionsPort>(connectionsServiceKey)?.retryLocal(signal))
   return { ready: { url: host.url }, prepareClose: host.prepareClose, close: host.close }
 }

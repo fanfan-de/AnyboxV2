@@ -2,7 +2,7 @@
 
 [文档首页](README.md) · [桌面运行边界](desktop-runtime.md) · [桌面打包](desktop-packaging.md) · [部署说明](harness-server-deployment.md) · [组件手册](modules/README.md)
 
-状态：2026-10-15 已确定的产品与架构原则。本文固定发行与进程边界；当前实现及待补齐事项见第 6 节，不表示三平台发行、独立服务管理或 Windows Computer 已完成。
+状态：2026-10-15 产品与架构原则。Windows 原生 Computer、随包独立 runtime 与服务管理入口已进入实现和验证；本轮真实验收仅针对 Windows，macOS/Linux 保留平台适配与 CI，不能据此宣称三平台成品验收完成。验证账本见[原生平台支持](native-platform-support.md)。
 
 ## 1. 发行原则
 
@@ -68,16 +68,16 @@ Linux systemd、macOS launchd 与 Windows 服务的配置分别验收独立启�
 
 | 边界 | 当前证据 | 待补齐 |
 | --- | --- | --- |
-| 桌面与后台分进程 | [desktop-main.ts](../src/entrypoints/desktop-main.ts) 默认仅创建客户端；连接管理或原生菜单启动本机服务，`--local` 显式组合；Computer 另有进程 | 独立常驻服务管理与完整角色配置 |
-| 服务独立入口 | [anybox-main.ts](../src/entrypoints/anybox-main.ts) 按角色动态分派到 [client-main.ts](../src/entrypoints/client-main.ts)、[harness-server-main.ts](../src/entrypoints/harness-server-main.ts)、[computer-worker-main.ts](../src/entrypoints/computer-worker-main.ts)；Node 发行同步提供入口 | 桌面成品包内的独立无头运行时及平台服务管理 |
+| 桌面与后台分进程 | [desktop-main.ts](../src/entrypoints/desktop-main.ts) 默认仅创建客户端；连接管理或原生菜单启动本机服务，`--local` 显式组合；Computer 另有进程 | 各平台成品与角色配置验收 |
+| 服务独立入口 | [anybox-main.ts](../src/entrypoints/anybox-main.ts) 按角色动态分派；包内 `runtime/node` 与 `runtime/app` 提供脱离 Electron 的入口；[服务管理](platform-services.md)提供 install/start/stop/status/uninstall | Windows SCM 真实账户部署，以及 macOS/Linux 真实服务与无头账户验收 |
 | 角色按需加载 | 客户端注册与服务端注册分离，桌面分别使用 [desktop-client.ts](../src/entrypoints/desktop-client.ts)、[desktop-execution.ts](../src/entrypoints/desktop-execution.ts)；纯客户端子进程测试禁止执行端导入及子进程启动 | 真实 Electron 和三平台成品包验收 |
 | Computer 独立控制 | [独立管理](computer-worker-management.md)提供客户端本机入口与 CLI；附着、权限、状态与撤销直接访问 worker，读取状态不启动 | 真实平台、系统服务与成品包验收 |
-| 统一发行 | [桌面打包](desktop-packaging.md)当前限定 macOS arm64；[Node 发行](harness-server-deployment.md)仍依赖目标机器安装 Node/npm 依赖 | Windows/macOS/Linux 完整统一产品包、无桌面环境安装与按角色启动 |
-| 平台支持 | Linux/macOS worker 沿用 Unix 工具与进程管理；Windows 真实 worker 尚不支持 | Windows 工具契约与进程清理实现，以及三平台独立服务、系统凭据和成品包验收 |
+| 统一发行 | [桌面打包](desktop-packaging.md)支持目标平台本机构建；共用 staging、平台原生依赖、独立 Node runtime；Windows 随包固定版本 PowerShell 与 Git Bash；`.github/workflows/native-platforms.yml` 保留三平台 CI | 真实成品结果以平台验证账本为准；macOS/Linux 本轮不等待真机 |
+| 平台支持 | Windows 接入原生命令与进程清理；Unix 提供方保留；服务凭据仍使用各自用户的系统 Vault | 各平台故障、独立服务、系统凭据和成品包验收，跳过项不算通过 |
 
 2026-10-15 首轮已实现独立角色入口与按需启动，未改变持久数据格式或 Windows Computer 支持范围。`npm run client`/`web` 只运行客户端，`web:local` 显式组合。随后已补齐 Computer 独立控制面；服务管理和平台发行继续独立推进。
 
-本轮 Windows 验证：`npm run check` 的类型检查与构建通过；1352 项测试中 1058 通过、249 失败、45 跳过，失败名称与变更前完全一致，新增 11 项全部通过。纯客户端测试使用真实 Node 子进程，禁止执行端导入及子进程创建，并验证应用恢复和文件归属；桌面主入口测试使用真实角色子进程，替换 Electron 原生平台与系统 Vault。当前 Electron 二进制缺失且下载失败，未完成真实 Electron/成品包验收；这些结果不解除 Windows Computer 的限制。
+Windows 原生支持实现之前的基线：`npm run check` 类型检查与构建通过；1352 项测试中 1058 通过、249 失败、45 跳过。该历史结果不代表当前原生实现的验收；本轮结果统一记录在[原生平台支持](native-platform-support.md)。
 
 ## 7. 完成条件
 
@@ -87,4 +87,4 @@ Linux systemd、macOS launchd 与 Windows 服务的配置分别验收独立启�
 - 分别记录各角色空闲与实际工作负载的内存、CPU、启动时间，以及完整组合的总占用；采用一致测量口径，不以安装包大小或简单累加共享内存代替测量。
 - 验证单实例锁、独立数据目录、系统凭据、升级兼容和清理等待。发行前运行 `npm run check` 并记录真实平台与成品包验收；被跳过的真实凭据、平台或故障测试不能视为通过。
 
-2026-10-15 Computer 独立管理验证：`npm run check` 类型检查和构建通过，1358 项测试中 1064 通过、249 失败、45 跳过，失败名称与上一轮完全一致。新增 6 项全部通过；工具退出测试使用受控 OS 工具和内存凭据，未解除 Windows 真实 worker 限制。
+2026-10-15 Computer 独立管理的实现前基线：1358 项测试中 1064 通过、249 失败、45 跳过，新增 6 项通过，工具退出使用受控 OS 工具和内存凭据。后续 Windows 原生测试单独记录，不把这些替身测试计为平台通过。

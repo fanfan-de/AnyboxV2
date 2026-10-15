@@ -16,9 +16,12 @@ const provider = (id, extras = {}) => ({ id, revision: 1, versionId: `${id}-v1`,
   name: id, enabled: true, protocolId: 'absent', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 1000, credentialRef: `slot-${id}`, ...extras });
 const model = (id, providerId, extras = {}) => ({ id, revision: 1, versionId: `${id}-v1`, createdAt: '2026-01-01', updatedAt: '2026-01-01',
   providerId, name: id, enabled: true, remoteModelId: 'same-remote', capabilities, defaults: { temperature: 0.2 }, ...extras });
+const fixtureRoots = new Map();
 async function path(t) {
-  const directory = await mkdtemp(join(tmpdir(), 'models-v1-migration-')); t.after(() => rm(directory, { recursive: true, force: true }));
-  return join(directory, 'models.sqlite');
+  const directory = await mkdtemp(join(tmpdir(), 'models-v1-migration-')), path = join(directory, 'models.sqlite'), roots = new Set();
+  fixtureRoots.set(path, roots);
+  t.after(async () => { for (const root of roots) await root.fiber.dispose(); fixtureRoots.delete(path); await rm(directory, { recursive: true, force: true }); });
+  return path;
 }
 function createV1(path, providers, models, providerHistory = providers, modelHistory = models) {
   const db = new DatabaseSync(path);
@@ -35,7 +38,8 @@ function createV1(path, providers, models, providerHistory = providers, modelHis
   db.close();
 }
 async function open(path) {
-  const root = new Context(), fiber = root.installComponent(createModelsStoreComponent({ path })); await fiber;
+  const root = new Context(); fixtureRoots.get(path)?.add(root);
+  const fiber = root.installComponent(createModelsStoreComponent({ path })); await fiber;
   assert.equal(fiber.state, FiberState.ACTIVE); return { root, store: root.get('models.store') };
 }
 

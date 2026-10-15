@@ -67,18 +67,20 @@ async function assertNoTemporaryFiles(directory) {
   assert.deepEqual(paths.filter(path => basename(path).startsWith('.anybox-patch-')), [])
 }
 
-test('patch creates parent directories, updates, moves, deletes, and preserves executable permissions', async () => {
+test('patch creates parent directories, updates, moves, deletes, and preserves platform file permissions', async () => {
   const f = await fixture()
   try {
     assert.equal((await f.apply(patch('*** Add File: nested/start.txt\n+old'))).status, 'applied')
     await fs.chmod(join(f.project, 'nested/start.txt'), 0o751)
+    const mode = (await fs.stat(join(f.project, 'nested/start.txt'))).mode & 0o777
+    if (process.platform !== 'win32') assert.equal(mode, 0o751)
     assert.equal((await f.apply(patch(update('nested/start.txt')))).status, 'applied')
-    assert.equal((await fs.stat(join(f.project, 'nested/start.txt'))).mode & 0o777, 0o751)
+    assert.equal((await fs.stat(join(f.project, 'nested/start.txt'))).mode & 0o777, mode)
     const moved = await f.apply(patch('*** Update File: nested/start.txt\n*** Move to: moved/end.txt\n@@\n-new\n+final'))
     assert.equal(moved.status, 'applied')
     assert.deepEqual(moved.changes, [{ kind: 'added', path: 'moved/end.txt' }, { kind: 'deleted', path: 'nested/start.txt' }])
     assert.equal(await fs.readFile(join(f.project, 'moved/end.txt'), 'utf8'), 'final\n')
-    assert.equal((await fs.stat(join(f.project, 'moved/end.txt'))).mode & 0o777, 0o751)
+    assert.equal((await fs.stat(join(f.project, 'moved/end.txt'))).mode & 0o777, mode)
     await assert.rejects(fs.stat(join(f.project, 'nested/start.txt')), error => error.code === 'ENOENT')
     assert.equal((await f.apply(patch('*** Delete File: moved/end.txt'))).status, 'applied')
     await assertNoTemporaryFiles(f.project)
@@ -115,7 +117,7 @@ test('patch reports syntax and known filesystem failures as observations with fi
 test('patch permits absolute paths, parent paths and parent-directory links outside the project', async () => {
   const f = await fixture()
   try {
-    await fs.symlink(f.other, join(f.project, 'outside'), 'dir')
+    await fs.symlink(f.other, join(f.project, 'outside'), process.platform === 'win32' ? 'junction' : 'dir')
     const result = await f.apply(patch(
       `*** Add File: ${join(f.other, 'absolute.txt')}\n+absolute`,
       '*** Add File: ../other/relative.txt\n+relative',
@@ -132,7 +134,8 @@ test('patch rejects final symlinks, hard links and non-file targets without touc
   const f = await fixture()
   try {
     await fs.writeFile(join(f.project, 'original'), 'old\n')
-    await fs.symlink('original', join(f.project, 'symbolic'))
+    // Junctions are the native directory-link type available without Windows Developer Mode.
+    await fs.symlink(process.platform === 'win32' ? f.other : 'original', join(f.project, 'symbolic'), process.platform === 'win32' ? 'junction' : 'file')
     assert.equal((await f.apply(patch(update('symbolic')))).diagnostic.code, 'symbolic-link')
     await fs.link(join(f.project, 'original'), join(f.project, 'hard'))
     assert.equal((await f.apply(patch(update('hard')))).diagnostic.code, 'hard-link')
@@ -146,7 +149,7 @@ test('preflight rejects duplicate aliases and parent-child targets', async () =>
   const f = await fixture()
   try {
     await fs.mkdir(join(f.project, 'real'))
-    await fs.symlink('real', join(f.project, 'alias'), 'dir')
+    await fs.symlink(join(f.project, 'real'), join(f.project, 'alias'), process.platform === 'win32' ? 'junction' : 'dir')
     const duplicate = await f.apply(patch('*** Add File: real/file\n+one', '*** Add File: alias/file\n+two'))
     assert.equal(duplicate.diagnostic.code, 'overlapping-paths')
     const overlapping = await f.apply(patch('*** Add File: parent\n+one', '*** Add File: parent/child\n+two'))

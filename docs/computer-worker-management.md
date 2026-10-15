@@ -8,7 +8,7 @@ Computer worker 可以由本机客户端或命令行直接管理，无须安装�
 
 打开 Anybox Harness 的“管理连接”，点击“管理本机 Computer worker”。这个入口始终指向**客户端服务所在设备**，与选择的远端连接无关；浏览器部署在另一台机器时，也不会操作浏览器所在机器。
 
-1. 读取状态不会启动 worker；未运行时明确点击“启动 Computer worker”。Windows 真实 worker 尚未支持，入口显示平台限制并禁用启动。
+1. 读取状态不会启动 worker；未运行时明确点击“启动 Computer worker”。当前平台必须具备随包原生进程后端；Windows 使用原生 Job Object，无需 WSL，缺少或架构不匹配时才禁用启动。
 2. 在目标 harness server 的“单元附着”设置生成 Computer 附着码。
 3. 在本机管理入口填写目标 HTTPS 地址、附着码和目录／工具上限。仅回环地址允许 HTTP。附着码提交即从输入框清除；网络结果不明时先刷新状态，不自动再次消费。
 4. “刷新状态”显示 worker 身份、附着及 connected / connecting / offline / instance-mismatch / revoked 状态与最近错误。
@@ -60,6 +60,6 @@ node dist/entrypoints/anybox-main.js computer-worker stop ./data/worker
 
 `endpoint.json` 的回环令牌留在设备上，不返回浏览器或 CLI。既有 harness server `/units/local-computer/attachments` 路由保留兼容；新版本机管理界面不再调用它。远端拨出协议、attachment ID、epoch、数据库格式和持久凭据位置保持兼容。
 
-验证入口：`tests/computer-worker-management.test.mjs`（真实存储、执行器、拨出与 HTTP 适配器，替换 OS 工具和远端 HTTP）、`tests/units-client.test.mjs`、`tests/runtime-roles.test.mjs`，完整检查 `npm run check`。真实 macOS/Linux worker、Vault 与系统服务验收和 Windows worker 支持是独立验证项。
+验证入口：`tests/computer-worker-management.test.mjs`（真实存储、执行器、拨出与 HTTP 适配器，替换 OS 工具和远端 HTTP）、`tests/units-client.test.mjs`、`tests/runtime-roles.test.mjs`、`tests/native-worker-lifecycle.test.mjs`（真实原生 worker），完整检查 `npm run check`。原生平台验收记录见[平台支持](native-platform-support.md)，系统服务与交互用户进程的验证分别记录。
 
-本轮浏览器检查使用 Windows 上仅运行客户端的临时实例，确认没有远端连接时入口仍可用、启动因平台限制禁用，并检查普通及 700px 窄窗口布局。现有 Classic 页面固定浅色；本次复用其 token 与控件，不新增主题系统。
+初次管理界面接入时曾在 Windows 客户端验证平台受限提示及 700px 窄窗口布局；该历史记录不再代表 Windows worker 的当前可用性。当前状态依据原生后端探测。现有 Classic 页面固定浅色；沿用其 token 与控件。

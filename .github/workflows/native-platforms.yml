@@ -1,0 +1,46 @@
+name: Native platform acceptance
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: AnyboxV2
+      - uses: actions/checkout@v4
+        with:
+          repository: fanfan-de/NyaCore
+          ref: 13431c54a7ab06effba6d1b0a9dbb27682f86648
+          path: NyaCore
+          token: ${{ secrets.NYA_CORE_READ_TOKEN || github.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.16.0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+        working-directory: NyaCore
+      - run: npm run build
+        working-directory: NyaCore
+      - run: npm ci
+        working-directory: AnyboxV2
+      - run: npm run check
+        working-directory: AnyboxV2
+      - run: npm run desktop:make -- --no-build
+        working-directory: AnyboxV2
+      - run: node scripts/packaged-runtime-smoke.mjs
+        working-directory: AnyboxV2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anybox-${{ matrix.os }}
+          path: AnyboxV2/artifacts/desktop/out/make/
+          if-no-files-found: error

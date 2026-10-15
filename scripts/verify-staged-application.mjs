@@ -21,7 +21,8 @@ export function verifySearchDependencyLock(manifest, lock) {
   const wrapper = lock.packages['node_modules/@vscode/ripgrep']
   const binaries = Object.entries(wrapper.optionalDependencies ?? {})
   if (!binaries.length || !binaries.some(([name]) => name === '@vscode/ripgrep-darwin-arm64') ||
-    !binaries.some(([name]) => name === '@vscode/ripgrep-linux-x64')) throw new Error('Search release is missing target-platform optional dependencies')
+    !binaries.some(([name]) => name === '@vscode/ripgrep-linux-x64') ||
+    !binaries.some(([name]) => name === '@vscode/ripgrep-win32-x64')) throw new Error('Search release is missing target-platform optional dependencies')
   for (const [name, version] of binaries) {
     const entry = lock.packages[`node_modules/${name}`]
     if (version !== wrapper.version || entry?.version !== version || entry.optional !== true || !entry.integrity || !entry.os?.length || !entry.cpu?.length) {
@@ -66,49 +67,122 @@ export async function verifyStagedApplication(root, output) {
   return { assets: catalog.assets.size, vendoredPackages: Object.keys(release.artifacts).length, search }
 }
 
-export async function verifyDesktopSearchBinary(appPath) {
-  const modules = join(appPath, 'Contents/Resources/app.asar.unpacked/node_modules')
-  const binaryPath = join(modules, '@vscode/ripgrep-darwin-arm64/bin/rg')
+const resourcesPath = (app, platform) => join(app, platform === 'darwin' ? 'Contents/Resources' : 'resources')
+export function binaryMatchesTarget(binary, platform, architecture) {
+  if (binary.length < 64) return false
+  if (platform === 'darwin') return binary.readUInt32LE(0) === 0xfeedfacf && binary.readUInt32LE(4) === (architecture === 'arm64' ? 0x0100000c : 0x01000007)
+  if (platform === 'linux') return binary.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) && binary[4] === 2 && binary[5] === 1 && binary.readUInt16LE(18) === (architecture === 'arm64' ? 183 : 62)
+  if (platform === 'win32') {
+    if (binary.readUInt16LE(0) !== 0x5a4d) return false
+    const offset = binary.readUInt32LE(0x3c)
+    return offset + 6 <= binary.length && binary.readUInt32LE(offset) === 0x4550 && binary.readUInt16LE(offset + 4) === (architecture === 'arm64' ? 0xaa64 : 0x8664)
+  }
+  return false
+}
+async function verifyExecutable(path, platform, architecture, description) {
+  const info = await lstat(path), binary = await readFile(path)
+  if (!info.isFile()) throw new Error(`${description} must be a regular unpacked file`)
+  if ((platform !== 'win32' && !(info.mode & 0o111)) || !binaryMatchesTarget(binary, platform, architecture)) throw new Error(`${description} must be an executable ${architecture} ${platform === 'darwin' ? 'Mach-O' : platform === 'win32' ? 'PE' : 'ELF'} binary`)
+}
+/** Inspect actual PE imports instead of relying on the build machine's VC redistributable. */
+export function windowsImportedLibraries(binary) {
+  if (!binaryMatchesTarget(binary, 'win32', 'x64') && !binaryMatchesTarget(binary, 'win32', 'arm64')) throw new Error('Expected a Windows PE binary')
+  const pe = binary.readUInt32LE(0x3c), optional = pe + 24, optionalSize = binary.readUInt16LE(pe + 20)
+  const directories = optional + (binary.readUInt16LE(optional) === 0x20b ? 112 : 96), sections = []
+  for (let i = 0; i < binary.readUInt16LE(pe + 6); i++) {
+    const section = optional + optionalSize + i * 40
+    sections.push({ rva: binary.readUInt32LE(section + 12), size: Math.max(binary.readUInt32LE(section + 8), binary.readUInt32LE(section + 16)), file: binary.readUInt32LE(section + 20) })
+  }
+  const offset = rva => {
+    const section = sections.find(section => rva >= section.rva && rva < section.rva + section.size)
+    if (!section) throw new Error('Invalid PE import address')
+    return section.file + rva - section.rva
+  }
+  const name = rva => {
+    const start = offset(rva), end = binary.indexOf(0, start)
+    if (end < start) throw new Error('Invalid PE import name')
+    return binary.toString('ascii', start, end)
+  }
+  const libraries = []
+  const imports = binary.readUInt32LE(directories + 8)
+  if (imports) for (let entry = offset(imports); binary.readUInt32LE(entry + 12); entry += 20) libraries.push(name(binary.readUInt32LE(entry + 12)))
+  const delayed = binary.readUInt32LE(directories + 13 * 8)
+  if (delayed) for (let entry = offset(delayed); binary.readUInt32LE(entry + 4); entry += 32) {
+    if (!(binary.readUInt32LE(entry) & 1)) throw new Error('Unsupported absolute-address PE delay import')
+    libraries.push(name(binary.readUInt32LE(entry + 4)))
+  }
+  return [...new Set(libraries)]
+}
+export async function verifyWindowsHelperRuntime(path) {
+  const imports = windowsImportedLibraries(await readFile(path))
+  if (imports.some(name => /^(?:vcruntime|msvcp|msvcr|concrt)\d.*\.dll$/i.test(name))) {
+    throw new Error('Windows native helpers must statically link the VC runtime: ' + path)
+  }
+  return imports
+}
+async function verifyWindowsKeyringRuntime(directory, architecture) {
+  const addon = join(directory, `keyring.win32-${architecture}-msvc.node`)
+  await verifyExecutable(addon, 'win32', architecture, 'Windows Keyring addon')
+  const required = windowsImportedLibraries(await readFile(addon)).filter(name => /^(?:vcruntime|msvcp|msvcr|concrt)\d.*\.dll$/i.test(name))
+  if (!required.length) return
+  const metadata = JSON.parse(await readFile(join(directory, 'windows-runtime.json'), 'utf8'))
+  if (metadata.formatVersion !== 1 || metadata.architecture !== architecture) throw new Error('Windows Keyring runtime metadata is invalid')
+  if (hash(await readFile(join(directory, metadata.license.file))) !== metadata.license.sha256) throw new Error('VC runtime license integrity mismatch')
+  for (const name of required) {
+    const library = metadata.libraries.find(library => library.name.toLowerCase() === name.toLowerCase())
+    if (!library) throw new Error('Windows Keyring has an unbundled VC runtime dependency: ' + name)
+    const path = join(directory, library.name), binary = await readFile(path)
+    await verifyExecutable(path, 'win32', architecture, 'App-local VC runtime')
+    if (hash(binary) !== library.sha256) throw new Error('App-local VC runtime integrity mismatch')
+    if (windowsImportedLibraries(binary).some(dependency => /^(?:vcruntime|msvcp|msvcr|concrt)\d.*\.dll$/i.test(dependency))) throw new Error('VC runtime dependency closure is incomplete')
+  }
+}
+export async function verifyDesktopSearchBinary(appPath, { platform = process.platform, architecture = process.arch } = {}) {
+  const modules = join(resourcesPath(appPath, platform), 'app.asar.unpacked/node_modules')
+  const binaryPath = join(modules, `@vscode/ripgrep-${platform}-${architecture}/bin/${platform === 'win32' ? 'rg.exe' : 'rg'}`)
   for (const path of [join(modules, '@vscode/ripgrep/package.json'), join(modules, '@vscode/ripgrep/lib/index.js'), binaryPath]) {
     if (!(await lstat(path)).isFile()) throw new Error('Desktop search requires regular unpacked package entries and binary')
   }
-  const info = await lstat(binaryPath), binary = await readFile(binaryPath)
-  if (!(info.mode & 0o111) || binary.length < 32 || binary.readUInt32LE(0) !== 0xfeedfacf || binary.readUInt32LE(4) !== 0x0100000c) {
-    throw new Error('Desktop search requires an executable arm64 Mach-O ripgrep binary')
-  }
+  await verifyExecutable(binaryPath, platform, architecture, 'Desktop search ripgrep')
   const { stdout } = await execute(binaryPath, ['--version'], { timeout: 10_000, maxBuffer: 65_536 })
   if (!/^ripgrep \d+\./.test(stdout)) throw new Error('Desktop search binary did not report its ripgrep version')
   return { ripgrep: true }
 }
 
-export async function verifyDesktopNativeFiles(appPath) {
-  const modules = join(appPath, 'Contents/Resources/app.asar.unpacked/node_modules')
-  const files = async directory => {
-    const result = []
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (entry.isSymbolicLink()) throw new Error(`Native dependency has an unexpected symlink: ${entry.name}`)
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) result.push(...await files(path))
-      else if (entry.isFile()) result.push(path)
-    }
-    return result
+export async function verifyDesktopNativeFiles(appPath, { platform = process.platform, architecture = process.arch } = {}) {
+  const resources = resourcesPath(appPath, platform), runtime = join(resources, 'runtime')
+  const executable = join(runtime, platform === 'win32' ? 'node.exe' : 'node')
+  await verifyExecutable(executable, platform, architecture, 'Independent Node runtime')
+  const manifest = JSON.parse(await readFile(join(runtime, 'runtime.json'), 'utf8'))
+  if (manifest.platform !== platform || manifest.architecture !== architecture || hash(await readFile(executable)) !== manifest.artifacts.node.sha256) throw new Error('Bundled runtime integrity mismatch')
+  const application = join(runtime, 'app')
+  // Import the actual deployed native wrappers with the deployed Node. This
+  // checks DLL/shared-library closure without touching the user's Vault.
+  const probe = "const s=require('sharp');require('@napi-rs/keyring');require('@vscode/ripgrep');if(!s.versions.vips)process.exit(1);console.log('native-packages-ok')"
+  const { stdout } = await execute(executable, ['-e', probe], { cwd: application, windowsHide: true, timeout: 30_000 })
+  if (!stdout.includes('native-packages-ok')) throw new Error('Bundled native packages did not initialize')
+  await execute(executable, [join(application, 'dist/entrypoints/anybox-main.js'), '--help'], { cwd: application, windowsHide: true, timeout: 30_000 })
+  const helper = join(application, `dist/platform/native/anybox-process-host${platform === 'win32' ? '.exe' : ''}`)
+  await verifyExecutable(helper, platform, architecture, 'Process supervisor')
+  if (platform === 'win32') {
+    const service = join(application, 'dist/platform/native/anybox-service-host.exe')
+    const dialog = join(resources, 'app.asar.unpacked/dist/desktop/native/anybox-dialog-host.exe')
+    await verifyExecutable(dialog, platform, architecture, 'Desktop native dialog host')
+    const dialogVersion = await execute(dialog, ['--version'], { windowsHide: true, timeout: 10_000 })
+    if (dialogVersion.stdout.trim() !== 'anybox-dialog-host 1') throw new Error('Desktop native dialog host protocol mismatch')
+    await verifyExecutable(service, platform, architecture, 'SCM service host')
+    await Promise.all([helper, service, dialog].map(verifyWindowsHelperRuntime))
+    await Promise.all([
+      join(resources, `app.asar.unpacked/node_modules/@napi-rs/keyring-win32-${architecture}-msvc`),
+      join(application, `node_modules/@napi-rs/keyring-win32-${architecture}-msvc`),
+    ].map(directory => verifyWindowsKeyringRuntime(directory, architecture)))
+    await execute(service, ['--version'], { windowsHide: true, timeout: 10_000 })
+    await execute(join(runtime, 'powershell/pwsh.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'], { windowsHide: true, timeout: 30_000 })
+    await execute(join(runtime, 'bash/bin/bash.exe'), ['--version'], { windowsHide: true, timeout: 30_000 })
   }
-  const [keyring, sharp, vips] = await Promise.all([
-    files(join(modules, '@napi-rs/keyring-darwin-arm64')), files(join(modules, '@img/sharp-darwin-arm64')),
-    files(join(modules, '@img/sharp-libvips-darwin-arm64')),
-  ])
-  if (!keyring.some(path => path.endsWith('.node')) || !sharp.some(path => path.endsWith('.node')) || !vips.some(path => path.endsWith('.dylib'))) {
-    throw new Error('Desktop package is missing unpacked native binaries')
-  }
-  await Promise.all([stat(join(modules, '@napi-rs/keyring/index.js')), stat(join(modules, 'sharp/package.json'))])
-  const dialog = join(appPath, 'Contents/Resources/app.asar.unpacked/dist/desktop/native/mac-dialog.node')
-  if (!(await lstat(dialog)).isFile()) throw new Error('Desktop native dialog adapter is not a regular file')
-  const binary = await readFile(dialog)
-  if (binary.length < 32 || binary.readUInt32LE(0) !== 0xfeedfacf || binary.readUInt32LE(4) !== 0x0100000c) {
-    throw new Error('Desktop native dialog adapter must be an arm64 Mach-O binary')
-  }
-  await verifyDesktopSearchBinary(appPath)
-  return { keyring: true, sharp: true, libvips: true, macDialog: true, ripgrep: true }
+  if (platform === 'darwin') await verifyExecutable(join(resources, 'app.asar.unpacked/dist/desktop/native/mac-dialog.node'), platform, architecture, 'Desktop native dialog adapter')
+  await verifyDesktopSearchBinary(appPath, { platform, architecture })
+  return { keyring: true, sharp: true, libvips: true, macDialog: platform === 'darwin', windowsDialog: platform === 'win32', ripgrep: true, runtime: true, processHost: true, serviceHost: platform === 'win32' }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

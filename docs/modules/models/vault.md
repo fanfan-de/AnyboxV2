@@ -10,6 +10,8 @@
 
 默认后端为 `@napi-rs/keyring` 的 `AsyncEntry`，使用 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，Linux 显式选 `secret-service`。系统存储不可用就报告错误，不回退到内核 keyring、SQLite 或明文文件。
 
+原生后端的缺失条目 `null` 在适配器内归一化为公开端口的 `undefined`；不会把系统后端的空值形态传给 Models。真实 [system-keyring.test.mjs](../../../tests/system-keyring.test.mjs) 由 `ANYBOX_KEYRING_TESTS=1` 开启，使用独立随机命名空间验证缺失读取、写入、跨进程读取与删除，并在 finally 清理测试条目。
+
 ## 服务接口与流程
 
 | 接口 | 行为 |

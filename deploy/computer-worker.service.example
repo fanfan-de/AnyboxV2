@@ -7,11 +7,12 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/anybox-app
-ExecStart=/usr/bin/node %h/anybox-app/dist/entrypoints/computer-worker-main.js %h/.local/share/anybox/harness.sqlite.computer-worker
+ExecStart=%h/anybox-app/runtime/anybox computer-worker serve %h/.local/share/anybox/harness.sqlite.computer-worker
+Environment=ANYBOX_SYSTEM_SERVICE_ROLE=computer-worker
 Restart=on-failure
 RestartSec=5
 KillMode=control-group
-TimeoutStopSec=90
+TimeoutStopSec=infinity
 UMask=0077
 
 [Install]

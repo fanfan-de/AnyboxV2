@@ -28,12 +28,12 @@ async function fixture(directory, options = {}) {
 const source = (path, range) => ({ kind: 'project-file', path, ...(range ? { range } : {}) })
 
 test('project search includes hidden and ignored paths, excludes dependencies and symlinks', async t => {
-  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); let close = async () => {}; t.after(async () => { await close(); await fs.rm(directory, { recursive: true, force: true }) })
   for (const path of ['node_modules/pkg', '.git', '.yarn/cache', 'src']) await fs.mkdir(join(directory, path), { recursive: true })
   for (const path of ['.env', '.gitignore', 'ignored.txt', 'src/code.ts', 'code.ts', 'node_modules/pkg/code.ts', '.git/config', '.yarn/cache/data']) await fs.writeFile(join(directory, path), 'text')
   await fs.writeFile(join(directory, '.gitignore'), 'ignored.txt\n')
-  await fs.symlink(join(directory, 'src'), join(directory, 'linked'))
-  const f = await fixture(directory); t.after(f.close)
+  await fs.symlink(join(directory, 'src'), join(directory, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+  const f = await fixture(directory); close = () => f.close()
   const found = await joinCall(f.files.search(f.project.id, ''))
   assert.ok(found.paths.includes('.env')); assert.ok(found.paths.includes('ignored.txt'))
   assert.ok(!found.paths.some(path => /node_modules|\.git\/|\.yarn\/cache|linked/.test(path)))
@@ -44,10 +44,10 @@ test('project search includes hidden and ignored paths, excludes dependencies an
 })
 
 test('snapshots preserve UTF-8 BOM, CRLF, line ranges, empty content and batch ordering', async t => {
-  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); let close = async () => {}; t.after(async () => { await close(); await fs.rm(directory, { recursive: true, force: true }) })
   await fs.writeFile(join(directory, 'text'), '\ufeff你好\r\nsecond\r\nlast')
   await fs.writeFile(join(directory, 'empty'), '')
-  const f = await fixture(directory); t.after(f.close)
+  const f = await fixture(directory); close = () => f.close()
   const refs = await f.prepare('batch', [source('text'), source('text', { start: 2, end: 3 }), source('empty')])
   assert.equal((await f.read(refs[0].snapshotId))[0].text, '\ufeff你好\r\nsecond\r\nlast')
   assert.equal((await f.read(refs[1].snapshotId))[0].text, 'second\r\nlast')
@@ -57,9 +57,9 @@ test('snapshots preserve UTF-8 BOM, CRLF, line ranges, empty content and batch o
 })
 
 test('prepared batches replay after edits, deletion and restart and reject changed identity', async t => {
-  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); let close = async () => {}; t.after(async () => { await close(); await fs.rm(directory, { recursive: true, force: true }) })
   await fs.writeFile(join(directory, 'text'), 'selected')
-  let f = await fixture(directory); t.after(() => f.close())
+  let f = await fixture(directory); close = () => f.close()
   await fs.writeFile(join(directory, 'text'), 'sent')
   const [ref] = await f.prepare('key', [source('text')])
   await fs.unlink(join(directory, 'text'))
@@ -72,12 +72,12 @@ test('prepared batches replay after edits, deletion and restart and reject chang
 })
 
 test('validation failure creates no partial snapshots, rejects binary and enforces selected sizes', async t => {
-  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); let close = async () => {}; t.after(async () => { await close(); await fs.rm(directory, { recursive: true, force: true }) })
   await fs.writeFile(join(directory, 'ok'), 'ok')
   await fs.writeFile(join(directory, 'invalid'), Buffer.from([0xff, 0xfe]))
   await fs.writeFile(join(directory, 'binary'), 'a\0b')
   await fs.writeFile(join(directory, 'big'), 'small\n' + 'x'.repeat(fileLimits.maxBytes))
-  const f = await fixture(directory); t.after(f.close)
+  const f = await fixture(directory); close = () => f.close()
   for (const path of ['invalid', 'binary']) await assert.rejects(f.prepare(path, [source('ok'), source(path)]), { code: 'file-unsupported' })
   assert.equal(await f.db.read(db => db.get('SELECT COUNT(*) AS n FROM harness_file_snapshots').n), 0)
   const preview = await joinCall(f.files.preview(f.project.id, source('big')))
@@ -90,10 +90,10 @@ test('validation failure creates no partial snapshots, rejects binary and enforc
 })
 
 test('retention rolls back atomically and expiry tombstones never recapture sources', async t => {
-  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); let close = async () => {}; t.after(async () => { await close(); await fs.rm(directory, { recursive: true, force: true }) })
   let time = Date.parse('2026-09-29T00:00:00Z')
   await fs.writeFile(join(directory, 'text'), 'original')
-  let f = await fixture(directory, { now: () => new Date(time).toISOString() }); t.after(() => f.close())
+  let f = await fixture(directory, { now: () => new Date(time).toISOString() }); close = () => f.close()
   const [kept] = await f.prepare('kept', [source('text')]), [lost] = await f.prepare('lost', [source('text')])
   await f.db.transaction(tx => f.files.retainIn(tx, 'session', 'run:kept', [kept]))
   await assert.rejects(f.db.transaction(tx => { f.files.retainIn(tx, 'session', 'run:lost', [lost]); throw new Error('rollback') }))
@@ -108,9 +108,9 @@ test('retention rolls back atomically and expiry tombstones never recapture sour
 })
 
 test('cancellation and component shutdown wait for actual file close; queued reads stay bounded', async t => {
-  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); let close = async () => {}; t.after(async () => { await close(); await fs.rm(directory, { recursive: true, force: true }) })
   const target = join(directory, 'text'); await fs.writeFile(target, 'text')
-  const f = await fixture(directory), opened = deferred(), release = deferred(), original = fs.open
+  const f = await fixture(directory), opened = deferred(), release = deferred(), original = fs.open; close = () => f.close()
   let count = 0
   fs.open = async (...args) => {
     const handle = await original(...args)
@@ -134,9 +134,9 @@ test('cancellation and component shutdown wait for actual file close; queued rea
 })
 
 test('a file changed during a read is rejected before snapshot commit', async t => {
-  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); t.after(() => fs.rm(directory, { recursive: true, force: true }))
+  const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-files-')); let close = async () => {}; t.after(async () => { await close(); await fs.rm(directory, { recursive: true, force: true }) })
   const target = join(directory, 'text'); await fs.writeFile(target, 'text')
-  const f = await fixture(directory); t.after(f.close)
+  const f = await fixture(directory); close = () => f.close()
   const original = fs.open
   fs.open = async (...args) => {
     const handle = await original(...args)

@@ -51,7 +51,7 @@
 3. **形态是启动期决定。** `ANYBOX_COMPUTER_UNIT=local|remote`（[server-config.ts](../src/applications/harness/server-config.ts)）固定 harness server 有没有本机 worker，切换要重启。
 4. **只有拨出传输。** worker 只监听回环，远端 harness server 必须能被单元访问；harness server 在 NAT 后、单元在服务器上的场景要靠隧道。
 5. **代码边界。** worker 入口的导入闭包仍包含 `run/`、`prompt/`、`workspace/`、`unit/` 与 `core/index.ts` 的文件以及 `@anybox/api-key-manager`；单独构建会带上半个 harness server。
-6. **平台。** Windows 真实 worker 不支持（Bash 与进程组语义为 Unix）；无头 Linux 的系统凭据服务需要手工准备。
+6. **平台。** 本设计记录形成时 Windows 真实 worker 尚未支持；后续原生实现与验收见[原生平台支持](native-platform-support.md)。无头 Linux 的系统凭据服务需要手工准备。
 7. **Models 尚不是独立进程。** U2/U3 未实施，节点程序提供 Models 服务依赖它们。
 
 ## 3. 形态与命名

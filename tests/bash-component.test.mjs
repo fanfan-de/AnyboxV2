@@ -51,13 +51,13 @@ test('Bash runs in the selected project with only the chosen host environment', 
   try {
     const call = f.bash.execute({
       projectId: 'project-1',
-      command: 'printf "PWD=%s\\nHOME=%s\\nSECRET=%s\\n" "$PWD" "$HOME" "${ANYBOX_BASH_TEST_SECRET-unset}"',
+      command: process.platform === 'win32' ? 'printf "PWD=%s\\nHOME=%s\\nSECRET=%s\\n" "$(cygpath -w \"$PWD\")" "$(cygpath -w \"$HOME\")" "${ANYBOX_BASH_TEST_SECRET-unset}"' : 'printf "PWD=%s\\nHOME=%s\\nSECRET=%s\\n" "$PWD" "$HOME" "${ANYBOX_BASH_TEST_SECRET-unset}"',
     })
     const result = await call.result
     await call.done
     assert.equal(result.exitCode, 0)
     assert.equal(result.signal, null)
-    assert.equal(result.stdout, `PWD=${f.directory}\nHOME=${process.env.HOME ?? ''}\nSECRET=unset\n`)
+    assert.equal(result.stdout, `PWD=${f.directory}\nHOME=${process.env.HOME ?? (process.platform === 'win32' ? process.env.USERPROFILE : '')}\nSECRET=unset\n`)
     assert.equal(result.stderr, '')
     assert.equal(result.truncated, false)
   } finally {
@@ -90,6 +90,18 @@ test('Bash rejects invalid commands before execution and unavailable projects wi
     const call = f.bash.execute({ projectId: 'missing', command: 'pwd' })
     await assert.rejects(call.result, error => error.category === 'unavailable' && !error.message.includes('missing'))
     await call.done
+  } finally { await f.close() }
+})
+
+test('Bash truncates Unicode output on a complete UTF-8 boundary', async () => {
+  const f = await fixture({ maxOutputBytes: 5 })
+  try {
+    const call = f.bash.execute({ projectId: 'project-1', command: "printf '你你'" })
+    const result = await call.result
+    await call.done
+    assert.equal(result.stdout, '你')
+    assert.equal(result.stderr, '')
+    assert.equal(result.truncated, true)
   } finally { await f.close() }
 })
 
