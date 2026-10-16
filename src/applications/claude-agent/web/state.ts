@@ -18,12 +18,66 @@ export function formatRoute(route: ClaudeAgentRoute): string {
 }
 export interface DeviceSummary { readonly id: string; readonly name: string; readonly instanceId: string }
 export function deviceLabel(device: DeviceSummary, localInstanceId: string | null): string {
-  return device.instanceId === localInstanceId ? `本地 · ${device.name}` : device.name
+  return device.instanceId === localInstanceId ? `本机 · ${device.name}` : device.name
 }
-/** Picks the device from the route, then the remembered choice, then this machine, then the first registered device. */
+/** Picks the device from the route, then this machine, then the remembered choice, then the first qualified device. */
 export function selectDevice<Device extends DeviceSummary>(devices: readonly Device[], route: ClaudeAgentRoute, remembered: string | null, localInstanceId: string | null = null): Device | undefined {
-  return devices.find(device => device.instanceId === route.hostId) ?? devices.find(device => device.id === remembered)
-    ?? devices.find(device => localInstanceId !== null && device.instanceId === localInstanceId) ?? devices[0]
+  return devices.find(device => device.instanceId === route.hostId) ?? devices.find(device => localInstanceId !== null && device.instanceId === localInstanceId)
+    ?? devices.find(device => device.id === remembered) ?? devices[0]
+}
+export const claudeAgentCapability = 'claude-agent.v1'
+/** What a device's `/instance` answered; `undefined` means it could not be reached through the gateway. */
+export interface DeviceProbe { readonly capabilities: readonly string[] }
+export interface DevicePartition<Device extends DeviceSummary> { readonly qualified: Device[]; readonly unreachable: Device[]; readonly unsupported: Device[] }
+/** Only devices whose instance advertises the Claude Agent capability are offered; the rest are counted for a hint, never selected. */
+export function filterDevices<Device extends DeviceSummary>(devices: readonly Device[], probes: ReadonlyMap<string, DeviceProbe | undefined>): DevicePartition<Device> {
+  const partition: DevicePartition<Device> = { qualified: [], unreachable: [], unsupported: [] }
+  for (const device of devices) {
+    const probe = probes.get(device.id)
+    if (!probe) partition.unreachable.push(device)
+    else if (probe.capabilities.includes(claudeAgentCapability)) partition.qualified.push(device)
+    else partition.unsupported.push(device)
+  }
+  return partition
+}
+export type ComposerBlock = 'no-device' | 'not-running' | 'no-target' | 'running' | 'submitting' | null
+export interface ComposerInput { readonly hasDevice: boolean; readonly productRunning: boolean; readonly hasTarget: boolean; readonly runActive: boolean; readonly submitting: boolean }
+/** The single reason the composer cannot send right now, in the order a user would resolve them. */
+export function composerBlock(input: ComposerInput): ComposerBlock {
+  if (!input.hasDevice) return 'no-device'
+  if (!input.productRunning) return 'not-running'
+  if (!input.hasTarget) return 'no-target'
+  if (input.runActive) return 'running'
+  if (input.submitting) return 'submitting'
+  return null
+}
+export const composerBlockLabels: Readonly<Record<Exclude<ComposerBlock, null>, string>> = Object.freeze({
+  'no-device': '先添加并选择一台安装了 Claude 的执行设备', 'not-running': '所选设备上的 Claude Agent 尚未启动，请先启动',
+  'no-target': '先在左栏选择项目或线程', running: '正在执行，请等待完成或取消', submitting: '正在发送…' })
+export type TextSegment = { readonly kind: 'text'; readonly text: string } | { readonly kind: 'code'; readonly text: string; readonly language: string }
+const fenceOpen = /^ {0,3}(`{3,}|~{3,})[ \t]*([^`\s]*)[^\n]*$/
+/** Splits plain text at ``` / ~~~ fences (CommonMark-style: a closing fence uses the same character and is at least as long). An unclosed fence runs to the end. */
+export function splitCodeFences(text: string): TextSegment[] {
+  const segments: TextSegment[] = [], lines = text.split('\n')
+  let buffer: string[] = [], fence: { char: string; length: number; language: string } | undefined
+  const flush = () => {
+    if (fence) { segments.push({ kind: 'code', text: buffer.join('\n'), language: fence.language }); fence = undefined }
+    else if (buffer.length && buffer.some(line => line.trim())) segments.push({ kind: 'text', text: buffer.join('\n').replace(/^\n+|\n+$/g, '') })
+    buffer = []
+  }
+  for (const line of lines) {
+    if (fence) {
+      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)
+      if (close && close[1][0] === fence.char && close[1].length >= fence.length) flush()
+      else buffer.push(line)
+      continue
+    }
+    const open = fenceOpen.exec(line)
+    if (open && !(open[1][0] === '`' && open[2].includes('`'))) { flush(); fence = { char: open[1][0], length: open[1].length, language: open[2] } }
+    else buffer.push(line)
+  }
+  flush()
+  return segments
 }
 export interface ApiError extends Error { readonly status: number; readonly code: string }
 export function isApiError(error: unknown): error is ApiError {

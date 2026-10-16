@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, displayItems, formatUsage, groupThreads, threadIndicator, relativeTime } from '../dist/applications/claude-agent/web/state.js'
+import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, displayItems, formatUsage, groupThreads, threadIndicator, relativeTime, filterDevices, composerBlock, composerBlockLabels, splitCodeFences } from '../dist/applications/claude-agent/web/state.js'
 import { createApplicationCatalog } from '../dist/host/applications/registration.js'
 import { shellAssets } from '../dist/host/assets.js'
 import { claudeAgentClientApplication } from '../dist/applications/claude-agent/client/registration.js'
@@ -13,13 +13,36 @@ test('routes pin the device and thread, reject malformed segments and round-trip
   assert.equal(formatRoute({ hostId: 'h', threadId: 't:1' }), 'host/h/thread/t%3A1'); assert.equal(formatRoute({}), '')
   assert.deepEqual(parseRoute(formatRoute({ hostId: 'h', threadId: 't:1' })), { hostId: 'h', threadId: 't:1' })
 })
-test('device selection prefers the route, then the remembered device, then the first one, and labels the local device', () => {
+test('device selection prefers the route, then this machine, then the remembered device, then the first one, and labels the local device', () => {
   const devices = [{ id: 'a', name: 'Laptop', instanceId: 'ia' }, { id: 'b', name: 'Server', instanceId: 'ib' }]
   assert.equal(selectDevice(devices, { hostId: 'ib' }, 'a').id, 'b'); assert.equal(selectDevice(devices, {}, 'b').id, 'b'); assert.equal(selectDevice(devices, { hostId: 'missing' }, null).id, 'a')
-  assert.equal(selectDevice(devices, {}, null, 'ib').id, 'b', 'this machine wins over the first registered device'); assert.equal(selectDevice(devices, {}, 'a', 'ib').id, 'a', 'a remembered choice wins over this machine')
+  assert.equal(selectDevice(devices, {}, null, 'ib').id, 'b', 'this machine wins over the first registered device'); assert.equal(selectDevice(devices, {}, 'a', 'ib').id, 'b', 'this machine wins over a remembered choice')
+  assert.equal(selectDevice(devices, { hostId: 'ia' }, 'b', 'ib').id, 'a', 'the route still wins over this machine')
   assert.equal(selectDevice([], {}, 'a'), undefined)
   assert.match(messageFor(Object.assign(new Error('product-not-found'), { status: 404, code: 'product-not-found' })), /升级/)
-  assert.equal(deviceLabel(devices[0], 'ia'), '本地 · Laptop'); assert.equal(deviceLabel(devices[1], 'ia'), 'Server')
+  assert.equal(deviceLabel(devices[0], 'ia'), '本机 · Laptop'); assert.equal(deviceLabel(devices[1], 'ia'), 'Server')
+})
+test('only devices advertising the Claude Agent capability qualify; unreachable and unsupported ones are counted separately', () => {
+  const devices = [{ id: 'a', name: 'A', instanceId: 'ia' }, { id: 'b', name: 'B', instanceId: 'ib' }, { id: 'c', name: 'C', instanceId: 'ic' }, { id: 'd', name: 'D', instanceId: 'id' }]
+  const probes = new Map([['a', { capabilities: ['sse', 'claude-agent.v1'] }], ['b', { capabilities: ['projects.path'] }], ['c', undefined]])
+  const partition = filterDevices(devices, probes)
+  assert.deepEqual(partition.qualified.map(device => device.id), ['a']); assert.deepEqual(partition.unsupported.map(device => device.id), ['b']); assert.deepEqual(partition.unreachable.map(device => device.id), ['c', 'd'])
+})
+test('the composer names the single reason it cannot send, in resolution order', () => {
+  const base = { hasDevice: true, productRunning: true, hasTarget: true, runActive: false, submitting: false }
+  assert.equal(composerBlock(base), null)
+  assert.equal(composerBlock({ ...base, hasDevice: false, productRunning: false, hasTarget: false }), 'no-device')
+  assert.equal(composerBlock({ ...base, productRunning: false, hasTarget: false }), 'not-running'); assert.equal(composerBlock({ ...base, hasTarget: false, runActive: true }), 'no-target')
+  assert.equal(composerBlock({ ...base, runActive: true, submitting: true }), 'running'); assert.equal(composerBlock({ ...base, submitting: true }), 'submitting')
+  for (const key of Object.keys(composerBlockLabels)) assert.doesNotMatch(composerBlockLabels[key], /Claude Code/)
+})
+test('fenced code is split out of plain text with its language, closing fences must match, and an unclosed fence runs to the end', () => {
+  assert.deepEqual(splitCodeFences('Run this:\n```bash\nnpm test\n```\nthen done.'), [{ kind: 'text', text: 'Run this:' }, { kind: 'code', text: 'npm test', language: 'bash' }, { kind: 'text', text: 'then done.' }])
+  assert.deepEqual(splitCodeFences('~~~\na\n```\nb\n~~~\n'), [{ kind: 'code', text: 'a\n```\nb', language: '' }])
+  assert.deepEqual(splitCodeFences('````\n```\ninner\n```\n````'), [{ kind: 'code', text: '```\ninner\n```', language: '' }], 'a shorter fence does not close a longer one')
+  assert.deepEqual(splitCodeFences('```js\nconst x = 1'), [{ kind: 'code', text: 'const x = 1', language: 'js' }], 'an unclosed fence is still code while streaming')
+  assert.deepEqual(splitCodeFences('plain\n\ntext'), [{ kind: 'text', text: 'plain\n\ntext' }]); assert.deepEqual(splitCodeFences(''), [])
+  assert.deepEqual(splitCodeFences('inline ``` not a fence'), [{ kind: 'text', text: 'inline ``` not a fence' }])
 })
 test('error copy prefers the product\'s own message and never mentions Claude Code', () => {
   const error = Object.assign(new Error('未找到 `claude` 命令。'), { status: 503, code: 'claude-binary-missing' })

@@ -1,5 +1,5 @@
 import type { ApprovalView, TranscriptBlockView } from '../core/view.js'
-import { relativeTime, runStatusLabels, threadIndicator, threadIndicatorLabels } from './state.js'
+import { relativeTime, runStatusLabels, splitCodeFences, threadIndicator, threadIndicatorLabels } from './state.js'
 import type { DisplayItem, ThreadGroup, ThreadLike } from './state.js'
 
 type Child = Node | string | null | undefined | false
@@ -17,9 +17,21 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, attributes: Re
   return node
 }
 const pretty = (value: unknown) => { try { return JSON.stringify(value, null, 2) ?? 'null' } catch { return String(value) } }
+/** Plain text with fenced code shown in monospace blocks; no Markdown beyond the fences. The streaming caret sits on the last segment. */
+export function renderText(text: string, streaming: boolean): HTMLElement {
+  const segments = splitCodeFences(text)
+  const wrapper = el('div', { class: 'ca-text-block' })
+  if (!segments.length) wrapper.append(el('p', { class: `ca-text${streaming ? ' ca-streaming' : ''}`, text: '' }))
+  segments.forEach((segment, index) => {
+    const last = index === segments.length - 1
+    if (segment.kind === 'code') wrapper.append(el('pre', { class: `ca-code${streaming && last ? ' ca-streaming' : ''}`, 'data-language': segment.language || undefined }, el('code', { text: segment.text })))
+    else wrapper.append(el('p', { class: `ca-text${streaming && last ? ' ca-streaming' : ''}`, text: segment.text }))
+  })
+  return wrapper
+}
 export function renderBlock(block: TranscriptBlockView, streaming: boolean): HTMLElement {
   switch (block.kind) {
-    case 'text': return el('p', { class: `ca-text${streaming ? ' ca-streaming' : ''}`, text: block.text + (block.truncated ? '\n…（已截断）' : '') })
+    case 'text': return renderText(block.text + (block.truncated ? '\n…（已截断）' : ''), streaming)
     case 'thinking': {
       const details = el('details', { class: 'ca-thinking' }, el('summary', { text: streaming ? '思考中…' : '思考摘要' }), el('p', { text: block.text + (block.truncated ? '\n…（已截断）' : '') }))
       return details
