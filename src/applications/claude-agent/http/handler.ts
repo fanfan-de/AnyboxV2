@@ -17,7 +17,8 @@ export interface ClaudeAgentHttpHandler extends ApplicationHttpPort {
 }
 interface KnownFailure { readonly status: number; readonly code: string; readonly message?: string }
 const terminal: ReadonlySet<ClaudeAgentRunStatus> = new Set(['completed', 'failed', 'cancelled', 'interrupted'])
-const maxStreams = 64, waitLimitMs = 25_000, runBodyLimit = 512 * 1024
+// The client proxy answers a handshake within 15 s, so a long poll must return well before that.
+const maxStreams = 64, waitLimitMs = 10_000, runBodyLimit = 512 * 1024
 const validId = (value: string) => /^[A-Za-z0-9._:-]{1,128}$/.test(value)
 function knownFailure(error: unknown): KnownFailure {
   if (isClaudeAgentError(error)) return { status: error.status, code: error.code, ...(error.message && error.message !== error.code ? { message: error.message } : {}) }

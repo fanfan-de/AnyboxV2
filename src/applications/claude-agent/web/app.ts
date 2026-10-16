@@ -192,7 +192,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     const directory = await guard(() => readDevices(context.apiBase, lifetime.signal))
     if (!directory) return
     devices = directory.connections; localInstanceId = directory.localInstanceId
-    await selectClient(selectDevice(devices, route(), remembered()), activate)
+    await selectClient(selectDevice(devices, route(), remembered(), localInstanceId), activate)
   }
   const decide = async (approval: ApprovalView, decision: 'allow' | 'allow-session' | 'deny', answers?: Record<string, string>) => {
     if (!client) return

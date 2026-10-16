@@ -96,7 +96,7 @@ Run 状态：`running → completed | failed | cancelled`，重启后遗留为 `
 | `GET /threads/:id`、`/runs`、`/messages`、`/approvals` | 线程、Run 列表、转录（`getSessionMessages` 投影）、待处理审批 |
 | `POST /threads/:id/runs { prompt, idempotencyKey, model?, effort? }` | 202 `RunView`；接受后以 `retainUntil(waitRun)` 延续应用租约到进程退出 |
 | `GET /runs/:id`、`GET /runs/:id/view` | Run / 进程内的实时视图（重启后 404 `view-unavailable`） |
-| `GET /runs/:id/wait?timeoutMs` | `{ done, timedOut, run }`，超时只释放 waiter |
+| `GET /runs/:id/wait?timeoutMs` | `{ done, timedOut, run }`（0..10000，默认 10000；代理握手上限 15 秒），超时只释放 waiter |
 | `POST /runs/:id/cancel {}` | 请求取消，返回当前状态 |
 | `POST /approvals/:id { decision, answers? }` | `allow` / `allow-session` / `deny`，问题类必须给全部答案 |
 | `GET /events?threadId=…`（1..4） | SSE：`ready`、`run-changed`、`run-event`（带 seq），15 秒心跳，背压超限关闭该流；无重放游标，重连后用 `/runs/:id/view` 校准 |

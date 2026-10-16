@@ -16,7 +16,9 @@ test('routes pin the device and thread, reject malformed segments and round-trip
 test('device selection prefers the route, then the remembered device, then the first one, and labels the local device', () => {
   const devices = [{ id: 'a', name: 'Laptop', instanceId: 'ia' }, { id: 'b', name: 'Server', instanceId: 'ib' }]
   assert.equal(selectDevice(devices, { hostId: 'ib' }, 'a').id, 'b'); assert.equal(selectDevice(devices, {}, 'b').id, 'b'); assert.equal(selectDevice(devices, { hostId: 'missing' }, null).id, 'a')
+  assert.equal(selectDevice(devices, {}, null, 'ib').id, 'b', 'this machine wins over the first registered device'); assert.equal(selectDevice(devices, {}, 'a', 'ib').id, 'a', 'a remembered choice wins over this machine')
   assert.equal(selectDevice([], {}, 'a'), undefined)
+  assert.match(messageFor(Object.assign(new Error('product-not-found'), { status: 404, code: 'product-not-found' })), /升级/)
   assert.equal(deviceLabel(devices[0], 'ia'), '本地 · Laptop'); assert.equal(deviceLabel(devices[1], 'ia'), 'Server')
 })
 test('error copy prefers the product\'s own message and never mentions Claude Code', () => {

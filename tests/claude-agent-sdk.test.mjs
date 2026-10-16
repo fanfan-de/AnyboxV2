@@ -80,7 +80,7 @@ test('a browser-shaped client reaches the installed claude through the client ga
   const thread = await request(device + '/apps/claude-agent/threads', { projectPath: project }, 201)
   const run = await request(device + `/apps/claude-agent/threads/${thread.id}/runs`, { prompt: 'Reply with exactly the single word pong and nothing else. Do not use any tools.', idempotencyKey: 'e2e-1' }, 202)
   let waited
-  do { waited = await request(device + `/apps/claude-agent/runs/${run.id}/wait?timeoutMs=25000`) } while (!waited.done)
+  do { waited = await request(device + `/apps/claude-agent/runs/${run.id}/wait`) } while (!waited.done)
   assert.equal(waited.run.status, 'completed', JSON.stringify(waited.run))
   assert.match(waited.run.result.text, /pong/i)
   const messages = await request(device + `/apps/claude-agent/threads/${thread.id}/messages`)

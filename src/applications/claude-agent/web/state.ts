@@ -20,9 +20,10 @@ export interface DeviceSummary { readonly id: string; readonly name: string; rea
 export function deviceLabel(device: DeviceSummary, localInstanceId: string | null): string {
   return device.instanceId === localInstanceId ? `本地 · ${device.name}` : device.name
 }
-/** Picks the device from the route, then the remembered choice, then the first registered device. */
-export function selectDevice<Device extends DeviceSummary>(devices: readonly Device[], route: ClaudeAgentRoute, remembered: string | null): Device | undefined {
-  return devices.find(device => device.instanceId === route.hostId) ?? devices.find(device => device.id === remembered) ?? devices[0]
+/** Picks the device from the route, then the remembered choice, then this machine, then the first registered device. */
+export function selectDevice<Device extends DeviceSummary>(devices: readonly Device[], route: ClaudeAgentRoute, remembered: string | null, localInstanceId: string | null = null): Device | undefined {
+  return devices.find(device => device.instanceId === route.hostId) ?? devices.find(device => device.id === remembered)
+    ?? devices.find(device => localInstanceId !== null && device.instanceId === localInstanceId) ?? devices[0]
 }
 export interface ApiError extends Error { readonly status: number; readonly code: string }
 export function isApiError(error: unknown): error is ApiError {
@@ -47,6 +48,7 @@ const copy: Record<string, string> = {
   'product-unavailable': '所选设备上的 Claude Agent 尚未启动。',
   'product-busy': 'Claude Agent 仍有正在执行的任务。',
   'product-startup-failed': '所选设备上的 Claude Agent 未能启动，请在那台设备上检查状态。',
+  'product-not-found': '所选设备上没有 Claude Agent 应用，请先把那台设备升级到包含它的版本。',
   'authentication-failed': '访问令牌无效或已撤销，请在“管理连接”中更新凭据。',
   'credential-unavailable': '系统凭据库不可用；连接配置仍保留。',
   'instance-mismatch': '此地址对应的实例已改变，已阻止请求。请为新实例添加连接。',

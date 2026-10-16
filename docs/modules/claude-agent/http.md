@@ -16,7 +16,7 @@
 
 ## 接口
 
-路径相对 `/api/v1/apps/claude-agent`；完整表见[设计文档](../../claude-agent-design.md#http--sse-契约)。POST 体为 JSON 且字段白名单；提示词体上限 512 KiB，其余 64 KiB。错误 `{ error: { code, message? } }`：`ClaudeAgentError` 按自身状态码与安全文案输出，URI/类型错误 400，未知异常 500 `internal-error`。`POST /threads/:id/runs` 接受后调用 `context.retainUntil(waitRun)`，应用租约延续到进程退出。`GET /events` 订阅 1..4 个线程，最多 64 条流。
+路径相对 `/api/v1/apps/claude-agent`；完整表见[设计文档](../../claude-agent-design.md#http--sse-契约)。POST 体为 JSON 且字段白名单；提示词体上限 512 KiB，其余 64 KiB。错误 `{ error: { code, message? } }`：`ClaudeAgentError` 按自身状态码与安全文案输出，URI/类型错误 400，未知异常 500 `internal-error`。`POST /threads/:id/runs` 接受后调用 `context.retainUntil(waitRun)`，应用租约延续到进程退出。`GET /runs/:id/wait` 的 `timeoutMs` 为 0..10000（默认 10000），低于客户端代理 15 秒的握手上限。`GET /events` 订阅 1..4 个线程，最多 64 条流。
 
 ## SSE
 
