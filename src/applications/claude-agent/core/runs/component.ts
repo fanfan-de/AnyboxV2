@@ -3,7 +3,7 @@ import { realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import type { Component } from '@nya/core'
 import { listDirectory, parseDirectoryRequest } from '../directories.js'
-import { claudeAgentError, defaultThreadTitle, validateRunInput, validateThreadInput } from '../domain.js'
+import { claudeAgentError, defaultThreadTitle, promptTitle, validateRunInput, validateThreadInput } from '../domain.js'
 import type { ClaudeAgentClock } from '../domain.js'
 import { applyRunEvent, emptyRunView } from '../events.js'
 import { mergeRecentProjects, normalizeProjectPath } from '../projects.js'
@@ -13,7 +13,7 @@ import type { ClaudeAgentSdkPort, SdkRunHandle, SdkRunHooks } from '../sdk/port.
 import { claudeAgentStoreServiceKey } from '../store/component.js'
 import type { ClaudeAgentStorePort, RunRecord, ThreadRecord } from '../store/component.js'
 import { createApprovalRegistry } from './approvals.js'
-import type { ApprovalView, ClaudeAgentRunStatus, DirectoryListingView, RecentProjectsView, RunChangedView, RunEventFrameView, RunEventView, RunLiveView, RunView, ThreadMessagesView, ThreadView } from '../view.js'
+import type { ApprovalView, ClaudeAgentRunStatus, DirectoryListingView, RecentModelsView, RecentProjectsView, RunChangedView, RunEventFrameView, RunEventView, RunLiveView, RunView, ThreadMessagesView, ThreadView } from '../view.js'
 
 export const claudeAgentRunsServiceKey = 'claude-agent.runs'
 export const claudeAgentRunAdmissionServiceKey = 'claude-agent.run-admission'
@@ -50,6 +50,8 @@ export interface ClaudeAgentRunsPort {
   listRecentProjects(signal?: AbortSignal): Promise<RecentProjectsView>
   /** Subdirectories of one directory on this device; `~` is the device's home. Stateless, cancelled with the request. */
   browseDirectory(params: { readonly path: string | null; readonly showHidden: string | null }, signal?: AbortSignal): Promise<DirectoryListingView>
+  /** Model names recently requested or reported on this device, for input suggestions. */
+  listRecentModels(): Promise<RecentModelsView>
 }
 export interface ClaudeAgentRunsOptions {
   readonly clock?: Partial<ClaudeAgentClock>
@@ -75,10 +77,12 @@ const settlesWithin = (promise: Promise<unknown> | undefined, ms: number): Promi
   const finish = () => { clearTimeout(timer); resolve(true) }
   promise.then(finish, finish)
 })
-const threadView = (record: ThreadRecord): ThreadView => Object.freeze({ schemaVersion: 1, id: record.id, projectPath: record.projectPath, title: record.title, nativeSessionId: record.nativeSessionId,
-  createdAt: record.createdAt, updatedAt: record.updatedAt, lastRun: record.lastRunId && record.lastRunStatus ? { id: record.lastRunId, status: record.lastRunStatus } : null })
+const threadView = (record: ThreadRecord, pendingApprovals: number): ThreadView => Object.freeze({ schemaVersion: 1, id: record.id, projectPath: record.projectPath, title: record.title,
+  titleSource: record.titleSource, nativeSessionId: record.nativeSessionId, createdAt: record.createdAt, updatedAt: record.updatedAt,
+  lastRun: record.lastRunId && record.lastRunStatus ? { id: record.lastRunId, status: record.lastRunStatus } : null, pendingApprovals })
 const runView = (record: RunRecord): RunView => Object.freeze({ schemaVersion: 1, id: record.id, threadId: record.threadId, status: record.status, prompt: record.prompt, model: record.model,
-  effort: record.effort, nativeSessionId: record.nativeSessionId, createdAt: record.createdAt, finishedAt: record.finishedAt, result: record.result, error: record.error })
+  resolvedModel: record.resolvedModel, effort: record.effort, nativeSessionId: record.nativeSessionId, createdAt: record.createdAt, finishedAt: record.finishedAt, result: record.result, error: record.error })
+const recentModelLimit = 12
 
 /**
  * Admission (one active Run per thread), cancellation, approval bridging and the bounded live projection.
@@ -106,6 +110,15 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
     const track = (work: Promise<unknown>) => { writes.add(work); void work.catch(error => ctx.logger.warn('Claude Agent index write failed', { error })).finally(() => writes.delete(work)) }
     const ensureOpen = () => { if (!accepting || pauseCount > 0) throw claudeAgentError('service-unavailable', 503) }
     const requireThread = async (id: string) => { const thread = await store.getThread(id); if (!thread) throw claudeAgentError('thread-not-found', 404); return thread }
+    const viewThread = (record: ThreadRecord) => threadView(record, approvals.pending(record.id).length)
+    /** The Claude environment's own title for the thread's session; user titles are never replaced and read failures keep the current title. */
+    const claudeTitle = async (run: ActiveRun): Promise<string | undefined> => {
+      if (!run.record.nativeSessionId) return undefined
+      const thread = await store.getThread(run.record.threadId).catch(() => undefined)
+      if (!thread || thread.titleSource === 'user') return undefined
+      const info = await sdk.readSessionInfo(run.record.nativeSessionId, thread.projectPath).catch(() => undefined)
+      return info?.title && info.title !== thread.title ? info.title : undefined
+    }
     const retainView = (runId: string, view: RunLiveView) => {
       views.delete(runId); views.set(runId, view)
       for (const id of views.keys()) { if (views.size <= retainedViews) break; if (!active.has(id)) views.delete(id) }
@@ -123,6 +136,7 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
       const handle = run.handle!
       const outcome = await handle.result
       await handle.done
+      const title = await claudeTitle(run)
       const now = clock.now()
       for (const view of approvals.denyAll(run.record.id, now, 'The run has ended.')) finishApproval(run, view)
       const status: ClaudeAgentRunStatus = run.cancelRequested ? 'cancelled' : outcome.kind === 'result' && !outcome.result.isError ? 'completed' : 'failed'
@@ -134,7 +148,7 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
       if (activeByThread.get(run.record.threadId) === run.record.id) activeByThread.delete(run.record.threadId)
       try {
         await store.updateRun(run.record.id, { status, finishedAt: now, result, error, nativeSessionId: run.record.nativeSessionId })
-        await store.updateThread(run.record.threadId, { lastRunId: run.record.id, lastRunStatus: status }, now)
+        await store.updateThread(run.record.threadId, { lastRunId: run.record.id, lastRunStatus: status, ...(title ? { title, titleSource: 'claude' } : {}) }, now)
       } catch (cause) { ctx.logger.warn('Claude Agent run settlement was not saved', { error: cause }) }
       publishChange(run)
       for (const waiter of [...run.waiters]) waiter()
@@ -143,10 +157,14 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
       const run: ActiveRun = { record, handle: undefined, view: emptyRunView(record.id, record.threadId), cancelRequested: false, settled: Promise.resolve(), waiters: new Set() }
       const hooks: SdkRunHooks = {
         onEvent(event) {
-          if (event.type === 'init' && run.record.nativeSessionId !== event.init.nativeSessionId) {
-            run.record = { ...run.record, nativeSessionId: event.init.nativeSessionId }
-            track(store.updateRun(record.id, { nativeSessionId: event.init.nativeSessionId }))
-            track(store.updateThread(record.threadId, { nativeSessionId: event.init.nativeSessionId }, clock.now()))
+          if (event.type === 'init') {
+            const session = run.record.nativeSessionId !== event.init.nativeSessionId, model = event.init.model && run.record.resolvedModel !== event.init.model
+            if (session || model) {
+              const patch = { ...(session ? { nativeSessionId: event.init.nativeSessionId } : {}), ...(model ? { resolvedModel: event.init.model } : {}) }
+              run.record = { ...run.record, ...patch }
+              track(store.updateRun(record.id, patch))
+            }
+            if (session) track(store.updateThread(record.threadId, { nativeSessionId: event.init.nativeSessionId }, clock.now()))
           }
           applyEvent(run, event)
         },
@@ -180,11 +198,11 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
         const input = validateThreadInput(raw)
         if (!(await directoryExists(input.projectPath))) throw claudeAgentError('project-path-missing', 404, `目录不存在或不是文件夹：${input.projectPath}`)
         const now = clock.now()
-        return threadView(await store.createThread({ id: clock.newId(), projectPath: input.projectPath, title: input.title ?? defaultThreadTitle(input.projectPath),
-          nativeSessionId: null, createdAt: now, updatedAt: now, lastRunId: null, lastRunStatus: null }))
+        return viewThread(await store.createThread({ id: clock.newId(), projectPath: input.projectPath, title: input.title ?? defaultThreadTitle(input.projectPath),
+          titleSource: input.title ? 'user' : 'default', nativeSessionId: null, createdAt: now, updatedAt: now, lastRunId: null, lastRunStatus: null }))
       },
-      listThreads: async () => (await store.listThreads()).map(threadView),
-      getThread: async id => { const thread = await store.getThread(id); return thread && threadView(thread) },
+      listThreads: async () => (await store.listThreads()).map(viewThread),
+      getThread: async id => { const thread = await store.getThread(id); return thread && viewThread(thread) },
       async readThreadMessages(id, signal) {
         const thread = await requireThread(id)
         if (!thread.nativeSessionId) return { nativeSessionId: null, messages: [] }
@@ -208,8 +226,10 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
           ensureOpen()
           const now = clock.now()
           const record = await store.createRun({ id: clock.newId(), threadId, idempotencyKey: input.idempotencyKey, status: 'running', prompt: input.prompt, model: input.model ?? null,
-            effort: input.effort ?? null, nativeSessionId: thread.nativeSessionId, createdAt: now, finishedAt: null, result: null, error: null })
-          await store.updateThread(threadId, { lastRunId: record.id, lastRunStatus: 'running' }, now)
+            resolvedModel: null, effort: input.effort ?? null, nativeSessionId: thread.nativeSessionId, createdAt: now, finishedAt: null, result: null, error: null })
+          // A thread still named after its directory takes its first prompt as the title until the environment names the session.
+          const named = thread.titleSource === 'default' ? promptTitle(input.prompt) : ''
+          await store.updateThread(threadId, { lastRunId: record.id, lastRunStatus: 'running', ...(named ? { title: named, titleSource: 'prompt' } : {}) }, now)
           try { return runView(launch(record, thread).record) }
           catch (error) {
             const failedAt = clock.now(), message = error instanceof Error ? error.message : 'The agent could not be started.'
@@ -256,6 +276,7 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
         return Object.freeze({ schemaVersion: 1, projects: mergeRecentProjects(existing.flat(), recentProjectLimit), partial: !sessions.ok })
       },
       browseDirectory: (params, signal) => { ensureOpen(); return listDirectory(parseDirectoryRequest(params, homeDirectory), { signal }) },
+      listRecentModels: async () => { ensureOpen(); return Object.freeze({ schemaVersion: 1, models: await store.listRecentModels(recentModelLimit) }) },
       async resolveApproval(id, decision, answers) {
         const pending = approvals.get(id)
         const run = pending && active.get(pending.runId)

@@ -1,5 +1,6 @@
 import type { ApprovalView, TranscriptBlockView } from '../core/view.js'
-import type { DisplayItem } from './state.js'
+import { relativeTime, runStatusLabels, threadIndicator, threadIndicatorLabels } from './state.js'
+import type { DisplayItem, ThreadGroup, ThreadLike } from './state.js'
 
 type Child = Node | string | null | undefined | false
 /** Small element helper: fixed tags, text nodes and attributes only; no HTML strings. */
@@ -93,4 +94,30 @@ export function syncTranscript(container: HTMLElement, items: readonly DisplayIt
     return node
   })
   container.replaceChildren(...next)
+}
+export interface ThreadGroupHandlers { open(threadId: string): void; create(path: string): void; toggle(path: string): void }
+export interface ThreadGroupOptions { readonly currentThreadId?: string; readonly selectedPath?: string; readonly collapsed: ReadonlySet<string>; readonly now: number }
+/** One list item per project directory: a toggle naming the directory, a per-project "new thread" button and the threads newest first. */
+export function renderThreadGroups<Thread extends ThreadLike>(groups: readonly ThreadGroup<Thread>[], options: ThreadGroupOptions, handlers: ThreadGroupHandlers): HTMLElement[] {
+  return groups.map(group => {
+    const expanded = !options.collapsed.has(group.path)
+    const toggle = el('button', { type: 'button', class: 'ca-group-toggle', 'aria-expanded': String(expanded), title: group.path },
+      el('span', { class: 'ca-group-chevron', 'aria-hidden': 'true' }), el('span', { class: 'ca-group-name', text: group.name }), el('small', { class: 'ca-group-count', text: String(group.threads.length) }))
+    toggle.addEventListener('click', () => handlers.toggle(group.path))
+    const create = el('button', { type: 'button', class: 'ca-group-new', title: `在 ${group.name} 新建线程`, 'aria-label': `在 ${group.name} 新建线程`, text: '＋' })
+    create.addEventListener('click', () => handlers.create(group.path))
+    const selected = options.selectedPath === group.path && !options.currentThreadId
+    const list = el('ul', { class: 'ca-group-threads', hidden: !expanded }, ...group.threads.map(thread => {
+      const indicator = threadIndicator(thread)
+      const status = thread.lastRun ? runStatusLabels[thread.lastRun.status] ?? thread.lastRun.status : '尚未执行'
+      const button = el('button', { type: 'button', 'data-thread-id': thread.id, 'aria-current': thread.id === options.currentThreadId ? 'true' : 'false', title: thread.title },
+        el('span', { class: 'ca-thread-dot', 'data-indicator': indicator ?? '', title: indicator ? threadIndicatorLabels[indicator] : undefined, 'aria-hidden': indicator ? undefined : 'true' }),
+        el('span', { class: 'ca-thread-text' }, el('span', { class: 'ca-thread-name', text: thread.title }),
+          el('small', { text: `${relativeTime(thread.updatedAt, options.now)} · ${indicator === 'approval' ? threadIndicatorLabels.approval : status}` })))
+      if (indicator) button.setAttribute('aria-label', `${thread.title}，${threadIndicatorLabels[indicator]}`)
+      button.addEventListener('click', () => handlers.open(thread.id))
+      return el('li', {}, button)
+    }))
+    return el('li', { class: 'ca-thread-group', 'data-path': group.path, 'data-selected': selected ? 'true' : undefined }, el('div', { class: 'ca-group-head' }, toggle, create), list)
+  })
 }

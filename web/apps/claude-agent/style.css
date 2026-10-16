@@ -16,12 +16,32 @@ input, select, textarea { border: 1px solid var(--line-strong); border-radius: 6
 .ca-new-thread { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .ca-new-thread input, .ca-new-thread button { font-size: 12px; }
 .ca-threads { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
-.ca-thread-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
-.ca-thread-list button { display: flex; flex-direction: column; gap: 2px; width: 100%; padding: 8px 9px; border: 0; border-radius: 6px; background: transparent; color: #525252; text-align: left; font-size: 12px; line-height: 18px; }
-.ca-thread-list button:hover { background: var(--hover); }
-.ca-thread-list button[aria-current="true"] { background: var(--selected); color: #111; }
-.ca-thread-list small { font-size: 10px; color: var(--muted); }
+.ca-thread-list, .ca-group-threads { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ca-thread-group { margin-bottom: 6px; }
+.ca-group-head { display: flex; align-items: center; gap: 2px; }
+.ca-group-toggle { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; padding: 6px 6px; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); font-size: 11px; font-weight: 600; text-align: left; }
+.ca-group-toggle:hover, .ca-group-new:hover { background: var(--hover); }
+.ca-thread-group[data-selected="true"] .ca-group-toggle { background: var(--selected); color: #111; }
+.ca-group-chevron { flex-shrink: 0; width: 0; height: 0; border-left: 5px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .15s; }
+.ca-group-toggle[aria-expanded="true"] .ca-group-chevron { transform: rotate(90deg); }
+.ca-group-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-group-count { font-weight: 400; color: var(--muted); font-size: 10px; }
+.ca-group-new { flex-shrink: 0; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--secondary); font-size: 14px; line-height: 1; }
+.ca-group-threads { padding-left: 6px; }
+.ca-group-threads button { display: flex; align-items: flex-start; gap: 7px; width: 100%; padding: 7px 8px; border: 0; border-radius: 6px; background: transparent; color: #525252; text-align: left; font-size: 12px; line-height: 18px; }
+.ca-group-threads button:hover { background: var(--hover); }
+.ca-group-threads button[aria-current="true"] { background: var(--selected); color: #111; }
+.ca-thread-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.ca-thread-text small { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ca-thread-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ca-thread-dot { flex-shrink: 0; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: transparent; border: 1px solid transparent; }
+.ca-thread-dot[data-indicator="running"] { background: #c9a227; border-color: #c9a227; animation: ca-pulse 1.4s ease-in-out infinite; }
+.ca-thread-dot[data-indicator="approval"] { background: #3b6fd6; border-color: #3b6fd6; animation: ca-pulse 1.4s ease-in-out infinite; }
+.ca-thread-dot[data-indicator="failed"] { background: var(--danger); border-color: var(--danger); }
+@keyframes ca-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .ca-thread-dot, .ca-group-chevron { animation: none; transition: none; } }
+.ca-empty-state { padding: 24px var(--gutter); font-size: 13px; line-height: 1.7; color: var(--secondary); }
+.ca-empty-state p { margin: 0; max-width: var(--reading-width); margin: 0 auto; }
 .ca-empty { padding: 8px; font-size: 11px; color: var(--muted); line-height: 1.6; }
 .ca-powered { padding: 10px 16px; border-top: 1px solid var(--line); font-size: 10px; color: var(--muted); }
 .ca-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }

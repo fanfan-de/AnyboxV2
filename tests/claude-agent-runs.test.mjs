@@ -3,6 +3,9 @@ import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Context } from '@nya/core'
+import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
+import { localStorageServiceKey } from '../dist/storage/port.js'
 import { createRunsFixture, fakeSdk, sampleResult, tick, waitFor } from './helpers/claude-agent.mjs'
 
 async function fixture(t, options = {}) {
@@ -153,7 +156,7 @@ test('a cancelled run that neither answers the interrupt nor exits in time is te
   second.exit()
   assert.equal((await f.runs.waitRun(slow.id)).status, 'cancelled')
   // Simulate a process crash: a running row without a live owner is interrupted by the next store start.
-  await f.store.createRun({ id: 'orphan', threadId: thread.id, idempotencyKey: 'orphan', status: 'running', prompt: 'lost', model: null, effort: null, nativeSessionId: null, createdAt: 'now', finishedAt: null, result: null, error: null })
+  await f.store.createRun({ id: 'orphan', threadId: thread.id, idempotencyKey: 'orphan', status: 'running', prompt: 'lost', model: null, resolvedModel: null, effort: null, nativeSessionId: null, createdAt: 'now', finishedAt: null, result: null, error: null })
   await f.store.updateThread(thread.id, { lastRunId: 'orphan', lastRunStatus: 'running' }, 'now')
   await f.close()
   const reopened = await open()
@@ -208,4 +211,66 @@ test('recent projects merge thread directories with the Claude environment, keep
   const fallback = await f.runs.listRecentProjects()
   assert.equal(fallback.partial, true); assert.deepEqual(fallback.projects.map(project => project.path), ['/projects/b', '/projects/a'])
   assert.ok(a.id)
+})
+test('threads take the first prompt as title, then the Claude environment\'s session title; user titles, reported models and pending counts are kept', async t => {
+  const { open } = await fixture(t)
+  const titles = new Map([['sa', 'Claude named it']])
+  const sdk = fakeSdk({ sessionInfo: async sessionId => { const title = titles.get(sessionId); if (title === 'throw') throw new Error('unreadable'); return title === undefined ? undefined : { title } } })
+  const f = await open({ sdk })
+  const auto = await f.runs.createThread({ projectPath: '/projects/auto' }), named = await f.runs.createThread({ projectPath: '/projects/named', title: 'Mine' })
+  assert.equal(auto.titleSource, 'default'); assert.equal(named.titleSource, 'user'); assert.equal(auto.pendingApprovals, 0)
+  const run = await f.runs.startRun(auto.id, { prompt: '\n  Refactor the   parser\nsecond line', idempotencyKey: 'k1' })
+  assert.equal(run.resolvedModel, null)
+  let thread = await f.runs.getThread(auto.id)
+  assert.deepEqual([thread.title, thread.titleSource], ['Refactor the parser', 'prompt'])
+  const other = await f.runs.startRun(named.id, { prompt: 'hello', idempotencyKey: 'k1', model: 'requested-model' })
+  assert.equal((await f.runs.getThread(named.id)).title, 'Mine')
+  const [a, b] = f.sdk.runs
+  a.hooks.onEvent({ type: 'init', init: { nativeSessionId: 'sa', model: 'default-model', cwd: '/projects/auto', permissionMode: 'default', claudeCodeVersion: 'v', toolCount: 0 } })
+  b.hooks.onEvent({ type: 'init', init: { nativeSessionId: 'sb', model: 'requested-model', cwd: '/projects/named', permissionMode: 'default', claudeCodeVersion: 'v', toolCount: 0 } })
+  assert.equal((await f.runs.getRun(run.id)).resolvedModel, 'default-model', 'the init frame reports the model the agent actually used')
+  const decision = a.hooks.canUseTool(permission('t1'))
+  await waitFor(() => f.runs.listPendingApprovals(auto.id).length === 1)
+  assert.equal((await f.runs.getThread(auto.id)).pendingApprovals, 1); assert.equal((await f.runs.getThread(named.id)).pendingApprovals, 0)
+  for (const active of [a, b]) { active.finish({ kind: 'result', result: sampleResult() }); active.exit() }
+  await f.runs.waitRun(run.id); await f.runs.waitRun(other.id)
+  assert.equal((await decision).behavior, 'deny')
+  thread = await f.runs.getThread(auto.id)
+  assert.deepEqual([thread.title, thread.titleSource, thread.pendingApprovals], ['Claude named it', 'claude', 0], 'the environment\'s title replaces the prompt title after the run')
+  assert.deepEqual([(await f.runs.getThread(named.id)).title, (await f.runs.getThread(named.id)).titleSource], ['Mine', 'user'], 'user titles are never replaced')
+  assert.deepEqual((await f.runs.listRecentModels()).models, ['requested-model', 'default-model'])
+  titles.set('sa', 'throw')
+  const again = await f.runs.startRun(auto.id, { prompt: 'continue', idempotencyKey: 'k2' })
+  f.sdk.runs[2].finish({ kind: 'result', result: sampleResult() }); f.sdk.runs[2].exit()
+  await f.runs.waitRun(again.id)
+  assert.equal((await f.runs.getThread(auto.id)).title, 'Claude named it', 'an unreadable session keeps the current title')
+  assert.equal((await f.runs.listRuns(auto.id)).length, 2)
+})
+test('an index written before title sources marks user titles on upgrade and keeps the other rows readable', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-claude-agent-v1-')), path = join(directory, 'claude-agent.sqlite')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const root = new Context()
+  await root.installComponent(createLocalSqliteComponent(path))
+  await root.get(localStorageServiceKey).transaction(tx => {
+    tx.execute(`CREATE TABLE claude_agent_threads (id TEXT PRIMARY KEY, project_path TEXT NOT NULL, title TEXT NOT NULL, native_session_id TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_run_id TEXT, last_run_status TEXT)`)
+    tx.execute(`CREATE TABLE claude_agent_runs (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL REFERENCES claude_agent_threads(id), idempotency_key TEXT NOT NULL,
+      status TEXT NOT NULL, prompt TEXT NOT NULL, model TEXT, effort TEXT, native_session_id TEXT, created_at TEXT NOT NULL, finished_at TEXT,
+      result_json TEXT, error_json TEXT, UNIQUE(thread_id, idempotency_key))`)
+    tx.execute(`CREATE TABLE claude_agent_approvals (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, thread_id TEXT NOT NULL, tool_use_id TEXT NOT NULL,
+      tool_name TEXT NOT NULL, kind TEXT NOT NULL, request_json TEXT NOT NULL, decision TEXT, answers_json TEXT, requested_at TEXT NOT NULL, resolved_at TEXT)`)
+    tx.execute("INSERT INTO claude_agent_threads VALUES ('t-user', '/projects/demo', 'My title', 's1', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:01.000Z', 'r1', 'completed')")
+    tx.execute("INSERT INTO claude_agent_threads VALUES ('t-default', '/projects/demo', 'demo', NULL, '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z', NULL, NULL)")
+    tx.execute("INSERT INTO claude_agent_runs VALUES ('r1', 't-user', 'k', 'completed', 'p', 'old-model', NULL, 's1', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:01.000Z', NULL, NULL)")
+    tx.execute("INSERT INTO schema_migrations (domain, version) VALUES ('claude-agent', 1)")
+  })
+  await root.fiber.dispose()
+  const f = await createRunsFixture(path)
+  try {
+    const threads = await f.runs.listThreads()
+    assert.deepEqual(threads.map(thread => [thread.id, thread.title, thread.titleSource]), [['t-user', 'My title', 'user'], ['t-default', 'demo', 'default']])
+    const run = await f.runs.getRun('r1')
+    assert.equal(run.model, 'old-model'); assert.equal(run.resolvedModel, null); assert.equal(run.status, 'completed')
+    assert.deepEqual((await f.runs.listRecentModels()).models, ['old-model'])
+  } finally { await f.close() }
 })

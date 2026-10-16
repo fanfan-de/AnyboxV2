@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, displayItems, formatUsage } from '../dist/applications/claude-agent/web/state.js'
+import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, displayItems, formatUsage, groupThreads, threadIndicator, relativeTime } from '../dist/applications/claude-agent/web/state.js'
 import { createApplicationCatalog } from '../dist/host/applications/registration.js'
 import { shellAssets } from '../dist/host/assets.js'
 import { claudeAgentClientApplication } from '../dist/applications/claude-agent/client/registration.js'
@@ -46,4 +46,25 @@ test('the client registration publishes an exact asset map beside Anybox Harness
   assert.equal(claude.definition.web.entry, '/applications/claude-agent/web/app.js'); assert.deepEqual(claude.definition.web.styles, ['/apps/claude-agent/style.css'])
   assert.ok(catalog.assets.has('/applications/claude-agent/core/events.js')); assert.equal(catalog.assets.has('/applications/claude-agent/core/sdk/adapter.js'), false)
   assert.equal(claude.definition.description.includes('Claude Code'), false); assert.match(claude.definition.description, /Powered by Claude/)
+})
+test('threads group by project directory with the newest group and thread first, and indicators rank approvals over running', () => {
+  const thread = (id, projectPath, updatedAt, lastRun = null, pendingApprovals = 0) => ({ id, projectPath, title: id, updatedAt, lastRun, pendingApprovals })
+  const groups = groupThreads([
+    thread('a1', '/w/alpha', '2026-10-16T00:00:01.000Z'), thread('b1', '/w/beta', '2026-10-16T00:00:05.000Z', { id: 'r', status: 'running' }, 1),
+    thread('a2', '/w/alpha', '2026-10-16T00:00:03.000Z', { id: 'r', status: 'failed' }), thread('c1', '/', '2026-10-16T00:00:02.000Z'),
+  ])
+  assert.deepEqual(groups.map(group => [group.path, group.name, group.updatedAt, group.threads.map(item => item.id)]), [
+    ['/w/beta', 'beta', '2026-10-16T00:00:05.000Z', ['b1']], ['/w/alpha', 'alpha', '2026-10-16T00:00:03.000Z', ['a2', 'a1']], ['/', '/', '2026-10-16T00:00:02.000Z', ['c1']]])
+  assert.equal(threadIndicator(groups[0].threads[0]), 'approval'); assert.equal(threadIndicator(thread('x', '/', '', { id: 'r', status: 'running' })), 'running')
+  assert.equal(threadIndicator(thread('x', '/', '', { id: 'r', status: 'cancelling' }, 0)), 'running'); assert.equal(threadIndicator(groups[1].threads[0]), 'failed')
+  assert.equal(threadIndicator(thread('x', '/', '', { id: 'r', status: 'interrupted' })), 'failed'); assert.equal(threadIndicator(thread('x', '/', '', { id: 'r', status: 'completed' })), null)
+  assert.equal(threadIndicator(thread('x', '/', '', { id: 'r', status: 'completed' }, 3)), null, 'stale counts never show on finished runs'); assert.equal(threadIndicator(thread('x', '/', '')), null)
+  assert.deepEqual(groupThreads([]), [])
+})
+test('relative times are coarse, explicit about now and fall back to a date', () => {
+  const now = Date.parse('2026-10-16T12:00:00.000Z')
+  assert.equal(relativeTime('2026-10-16T11:59:40.000Z', now), '刚刚'); assert.equal(relativeTime('2026-10-16T11:45:00.000Z', now), '15 分钟前')
+  assert.equal(relativeTime('2026-10-16T09:00:00.000Z', now), '3 小时前'); assert.equal(relativeTime('2026-10-15T11:00:00.000Z', now), '昨天')
+  assert.equal(relativeTime('2026-10-10T12:00:00.000Z', now), '6 天前'); assert.match(relativeTime('2026-08-01T12:00:00.000Z', now), /^2026-08-0[12]$/)
+  assert.equal(relativeTime('garbage', now), ''); assert.equal(relativeTime('2026-10-16T13:00:00.000Z', now), '刚刚', 'clock skew never produces negative times')
 })

@@ -78,3 +78,39 @@ export function formatUsage(result: RunResultView): string {
   return `${result.numTurns} 轮 · ${(result.durationMs / 1000).toFixed(1)} 秒 · ${tokens} tokens · 约 ${money(result.totalCostUsd)}${result.isError ? ' · 出错' : ''}`
 }
 export const runStatusLabels: Readonly<Record<string, string>> = Object.freeze({ running: '正在执行', cancelling: '正在取消', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' })
+export interface ThreadLike { readonly id: string; readonly projectPath: string; readonly title: string; readonly updatedAt: string; readonly lastRun: { readonly status: string } | null; readonly pendingApprovals: number }
+export interface ThreadGroup<Thread extends ThreadLike> { readonly path: string; readonly name: string; readonly updatedAt: string; readonly threads: readonly Thread[] }
+const lastSegment = (path: string) => path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path
+/** Threads grouped by project directory: newest thread first inside a group, groups ordered by their newest thread. */
+export function groupThreads<Thread extends ThreadLike>(threads: readonly Thread[]): ThreadGroup<Thread>[] {
+  const groups = new Map<string, Thread[]>()
+  for (const thread of threads) { const list = groups.get(thread.projectPath); if (list) list.push(thread); else groups.set(thread.projectPath, [thread]) }
+  return [...groups].map(([path, list]) => {
+    const sorted = [...list].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id.localeCompare(b.id)))
+    return { path, name: lastSegment(path), updatedAt: sorted[0].updatedAt, threads: sorted }
+  }).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.path.localeCompare(b.path)))
+}
+export type ThreadIndicator = 'approval' | 'running' | 'failed' | null
+/** A waiting approval outranks the running state; failed and interrupted Runs share one indicator. */
+export function threadIndicator(thread: Pick<ThreadLike, 'lastRun' | 'pendingApprovals'>): ThreadIndicator {
+  const status = thread.lastRun?.status
+  if (status === 'running' || status === 'cancelling') return thread.pendingApprovals > 0 ? 'approval' : 'running'
+  return status === 'failed' || status === 'interrupted' ? 'failed' : null
+}
+export const threadIndicatorLabels: Readonly<Record<Exclude<ThreadIndicator, null>, string>> = Object.freeze({ approval: '等待审批', running: '正在执行', failed: '失败或中断' })
+/** Coarse relative time in Chinese; `now` is explicit so rendering stays pure. Invalid input returns an empty string. */
+export function relativeTime(iso: string, now: number): string {
+  const time = Date.parse(iso)
+  if (Number.isNaN(time)) return ''
+  const seconds = Math.max(0, Math.round((now - time) / 1000))
+  if (seconds < 60) return '刚刚'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.round(hours / 24)
+  if (days === 1) return '昨天'
+  if (days < 30) return `${days} 天前`
+  const date = new Date(time)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}

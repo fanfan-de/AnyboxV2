@@ -55,7 +55,8 @@ test('HTTP exposes the environment, threads, runs, live views, approvals and SSE
   assert.equal((await f.api('POST', '/threads', { projectPath: '/projects/other' })).status, 404)
   assert.equal((await f.api('POST', '/threads', { projectPath: '/projects/demo', extra: 1 })).status, 400)
   const created = await f.api('POST', '/threads', { projectPath: '/projects/demo', title: 'Demo' })
-  assert.equal(created.status, 201); assert.deepEqual(Object.keys(created.data).sort(), ['createdAt', 'id', 'lastRun', 'nativeSessionId', 'projectPath', 'schemaVersion', 'title', 'updatedAt'])
+  assert.equal(created.status, 201); assert.deepEqual(Object.keys(created.data).sort(), ['createdAt', 'id', 'lastRun', 'nativeSessionId', 'pendingApprovals', 'projectPath', 'schemaVersion', 'title', 'titleSource', 'updatedAt'])
+  assert.equal(created.data.titleSource, 'user')
   const thread = created.data
   assert.deepEqual((await f.api('GET', '/threads')).data.map(item => item.id), [thread.id])
   assert.equal((await f.api('GET', '/threads/missing')).status, 404); assert.equal((await f.api('GET', '/threads/missing/runs')).status, 404)
@@ -80,6 +81,7 @@ test('HTTP exposes the environment, threads, runs, live views, approvals and SSE
   await waitFor(() => f.runs.listPendingApprovals(thread.id).length === 1)
   const pending = (await f.api('GET', `/threads/${thread.id}/approvals`)).data
   assert.equal(pending.length, 1); assert.equal(pending[0].toolName, 'Bash'); assert.equal(pending[0].decision, null)
+  assert.equal((await f.api('GET', `/threads/${thread.id}`)).data.pendingApprovals, 1, 'the thread view counts approvals waiting in memory')
   assert.equal((await stream.read()).data.event.type, 'approval-requested')
   assert.equal((await f.api('POST', `/approvals/${pending[0].id}`, { decision: 'maybe' })).status, 400)
   const resolved = await f.api('POST', `/approvals/${pending[0].id}`, { decision: 'allow' })
@@ -103,6 +105,8 @@ test('HTTP exposes the environment, threads, runs, live views, approvals and SSE
   assert.equal((await f.api('POST', '/runs/missing/cancel', {})).status, 404)
   assert.deepEqual((await f.api('GET', `/threads/${thread.id}/runs`)).data.map(run => run.status), ['cancelled'])
   assert.equal((await f.api('GET', `/threads/${thread.id}`)).data.nativeSessionId, 'sess')
+  assert.deepEqual((await f.api('GET', '/models/recent')).data, { schemaVersion: 1, models: ['m'] }, 'the reported model of the run is suggested')
+  assert.equal((await f.api('GET', '/models/recent?x=1')).status, 400)
   assert.equal((await fetch(`${f.server.url}/api/v1/apps/claude-agent/events`)).status, 400)
   assert.equal((await fetch(`${f.server.url}/api/v1/apps/claude-agent/events?threadId=a&threadId=a`)).status, 400)
   await stream.close()

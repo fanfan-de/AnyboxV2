@@ -40,6 +40,12 @@ export function validateThreadInput(raw: unknown): ThreadInput {
 export function defaultThreadTitle(projectPath: string): string {
   return basename(projectPath) || projectPath
 }
+export const promptTitleLimit = 60
+/** First non-empty line of a prompt, whitespace collapsed, at most 60 characters; empty when the prompt has no text. */
+export function promptTitle(prompt: string): string {
+  const line = prompt.split(/\r?\n/).map(entry => entry.replace(/\s+/g, ' ').trim()).find(Boolean) ?? ''
+  return line.length > promptTitleLimit ? `${line.slice(0, promptTitleLimit - 1)}…` : line
+}
 export function validateRunInput(raw: unknown): RunInput {
   if (!isRecord(raw) || Object.keys(raw).some(key => !['prompt', 'idempotencyKey', 'model', 'effort'].includes(key))) throw claudeAgentError('invalid-input', 400)
   const { prompt, idempotencyKey, model, effort } = raw

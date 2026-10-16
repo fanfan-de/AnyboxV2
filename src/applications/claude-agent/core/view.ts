@@ -12,15 +12,20 @@ export interface EnvironmentView {
     readonly error?: { readonly code: string; readonly message: string }
   }
 }
+/** Who named the thread: the directory name, the first prompt, the Claude environment's own session title, or the user (never overwritten). */
+export type ThreadTitleSource = 'default' | 'prompt' | 'claude' | 'user'
 export interface ThreadView {
   readonly schemaVersion: 1
   readonly id: string
   readonly projectPath: string
   readonly title: string
+  readonly titleSource: ThreadTitleSource
   readonly nativeSessionId: string | null
   readonly createdAt: string
   readonly updatedAt: string
   readonly lastRun: { readonly id: string; readonly status: ClaudeAgentRunStatus } | null
+  /** Approvals waiting for an answer in this thread's active Run; in-memory, so 0 after a restart. */
+  readonly pendingApprovals: number
 }
 export interface RunUsageView {
   readonly inputTokens: number
@@ -48,6 +53,8 @@ export interface RunView {
   readonly status: ClaudeAgentRunStatus
   readonly prompt: string
   readonly model: string | null
+  /** Model the agent reported in its init frame; the CLI default when `model` was not given. */
+  readonly resolvedModel: string | null
   readonly effort: ClaudeAgentEffort | null
   readonly nativeSessionId: string | null
   readonly createdAt: string
@@ -55,6 +62,8 @@ export interface RunView {
   readonly result: RunResultView | null
   readonly error: RunErrorView | null
 }
+/** Distinct model names used by recent Runs on this device, requested or reported, newest first. */
+export interface RecentModelsView { readonly schemaVersion: 1; readonly models: readonly string[] }
 export type ApprovalDecision = 'allow' | 'allow-session' | 'deny'
 export type ApprovalOutcome = ApprovalDecision | 'cancelled'
 export interface ApprovalQuestionView {

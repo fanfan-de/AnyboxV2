@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { applyRunEvent, emptyRunView, liveViewLimits, boundedJson } from '../dist/applications/claude-agent/core/events.js'
 import { createMessageTranslator, historyMessages, permissionRequest, permissionResult, questionViews, blockView } from '../dist/applications/claude-agent/core/sdk/translate.js'
 import { approvalView, decisionFor } from '../dist/applications/claude-agent/core/runs/approvals.js'
-import { validateRunInput, validateThreadInput } from '../dist/applications/claude-agent/core/domain.js'
+import { promptTitle, validateRunInput, validateThreadInput } from '../dist/applications/claude-agent/core/domain.js'
 
 const fold = events => events.reduce(applyRunEvent, emptyRunView('run', 'thread'))
 
@@ -128,4 +128,9 @@ test('inputs are validated before any resource is touched', () => {
   assert.throws(() => validateRunInput({ prompt: 'hi', idempotencyKey: 'bad key!' }), { code: 'invalid-input' })
   assert.throws(() => validateRunInput({ prompt: 'hi', idempotencyKey: 'k', effort: 'ultra' }), { code: 'invalid-input' })
   assert.throws(() => validateRunInput({ prompt: 'x'.repeat(256 * 1024 + 1), idempotencyKey: 'k' }), { code: 'request-too-large' })
+})
+test('a prompt title is the first non-empty line, collapsed and bounded to 60 characters', () => {
+  assert.equal(promptTitle('\n\n  Fix   the   build \nmore detail'), 'Fix the build')
+  assert.equal(promptTitle('x'.repeat(80)), `${'x'.repeat(59)}…`); assert.equal(promptTitle('x'.repeat(60)), 'x'.repeat(60))
+  assert.equal(promptTitle('   \n  '), '')
 })

@@ -4,13 +4,18 @@ import type { ApprovalView, EnvironmentView, HistoryMessageView, RunChangedView,
 import { applyRunEvent, emptyRunView } from '../core/events.js'
 import { createDeviceClient, readDevices } from './client.js'
 import type { DeviceClient, DeviceConnection } from './client.js'
-import { deviceLabel, displayItems, formatRoute, formatUsage, messageFor, parseRoute, runStatusLabels, selectDevice } from './state.js'
-import { el, renderApproval, syncTranscript } from './view.js'
+import { deviceLabel, displayItems, formatRoute, formatUsage, groupThreads, messageFor, parseRoute, runStatusLabels, selectDevice } from './state.js'
+import { el, renderApproval, renderThreadGroups, syncTranscript } from './view.js'
 
-const selectedKey = 'anybox.claude-agent.selected'
+const selectedKey = 'anybox.claude-agent.selected', collapsedKey = 'anybox.claude-agent.collapsed'
 const efforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const app = '/apps/claude-agent'
+// Other threads' Runs are not subscribed; the list is re-read on this cadence only while one of them is active.
+const threadPollMs = 10_000
 const activeStatus = (run: RunView | undefined) => run?.status === 'running' || run?.status === 'cancelling'
+const activeThread = (thread: ThreadView) => thread.lastRun?.status === 'running' || thread.lastRun?.status === 'cancelling'
+const lastSegment = (path: string) => path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path
+const storedSet = (key: string): Set<string> => { try { const value = JSON.parse(sessionStorage.getItem(key) ?? '[]'); return new Set(Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []) } catch { return new Set() } }
 
 /** One device, one thread at a time. The browser is a view over the execution device; it never owns runs or transcripts. */
 export async function mount(container: HTMLElement, context: ApplicationWebContext): Promise<MountedApplication> {
@@ -26,6 +31,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   const title = el('strong', { class: 'ca-thread-title', text: '选择或新建一个线程' }), path = el('small', { class: 'ca-thread-path' }), status = el('span', { class: 'ca-run-status' })
   const notice = el('p', { class: 'ca-notice notice', role: 'alert', hidden: true })
   const transcript = el('div', { class: 'ca-transcript', 'aria-live': 'polite' })
+  const emptyState = el('div', { class: 'ca-empty-state', hidden: true })
   const approvalsPanel = el('section', { class: 'ca-approvals', hidden: true, 'aria-label': '待处理请求' })
   const prompt = el('textarea', { name: 'prompt', rows: '3', placeholder: '输入提示词。Enter 发送，Shift+Enter 换行', 'aria-label': '提示词', id: context.domId('prompt') })
   const model = el('input', { name: 'model', placeholder: '模型（可选）', 'aria-label': '模型', autocomplete: 'off' })
@@ -38,29 +44,34 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     el('aside', { class: 'ca-sidebar' },
       el('header', { class: 'ca-sidebar-head' }, el('h1', { text: 'Claude Agent' }), el('label', { class: 'ca-device', for: deviceSelect.id }, el('span', { text: '执行设备' }), deviceSelect), deviceStatus, startButton),
       newThread, el('nav', { class: 'ca-threads', 'aria-label': '线程' }, threadList), el('footer', { class: 'ca-powered', text: 'Powered by Claude' })),
-    el('main', { class: 'ca-main' }, el('header', { class: 'ca-thread-head' }, title, path, status), notice, transcript, approvalsPanel, composer, usage)))
+    el('main', { class: 'ca-main' }, el('header', { class: 'ca-thread-head' }, title, path, status), notice, transcript, emptyState, approvalsPanel, composer, usage)))
 
   let devices: readonly DeviceConnection[] = [], localInstanceId: string | null = null, client: DeviceClient | undefined
-  let threads: readonly ThreadView[] = [], thread: ThreadView | undefined
+  let threads: readonly ThreadView[] = [], thread: ThreadView | undefined, project: string | undefined
   let history: readonly HistoryMessageView[] = [], runs: readonly RunView[] = [], current: RunView | undefined, live: RunLiveView | undefined
-  let pending: readonly ApprovalView[] = [], subscription: { close(): void } | undefined
+  let pending: readonly ApprovalView[] = [], subscription: { close(): void } | undefined, threadTimer: ReturnType<typeof setTimeout> | undefined
   let submitting = false, disposed = false, viewRefresh: Promise<void> | undefined, draft: { prompt: string; key: string } | undefined
+  const collapsed = storedSet(collapsedKey)
   const show = (message = '') => { notice.textContent = message; notice.hidden = !message }
   const remember = (id: string) => { try { sessionStorage.setItem(selectedKey, id) } catch { /* optional */ } }
   const remembered = () => { try { return sessionStorage.getItem(selectedKey) } catch { return null } }
+  const saveCollapsed = () => { try { sessionStorage.setItem(collapsedKey, JSON.stringify([...collapsed])) } catch { /* optional */ } }
   const route = () => parseRoute(context.route.read())
   const navigate = (next: { hostId?: string; threadId?: string }, replace = false) => { const value = formatRoute(next); if (context.route.read() !== value) context.route.navigate(value, replace) }
   const guard = <T>(work: () => Promise<T>): Promise<T | undefined> => work().catch(error => { if (!disposed && !lifetime.signal.aborted) show(messageFor(error)); return undefined })
+  const target = () => thread?.projectPath ?? project
 
   const render = () => {
     if (disposed) return
-    title.textContent = thread ? thread.title : '选择或新建一个线程'
-    path.textContent = thread ? thread.projectPath : ''
+    title.textContent = thread ? thread.title : project ? `新线程 · ${lastSegment(project)}` : '选择或新建一个线程'
+    path.textContent = target() ?? ''
     status.textContent = current ? runStatusLabels[current.status] ?? current.status : ''
     status.dataset.status = current?.status ?? ''
     const active = activeStatus(current)
     syncTranscript(transcript, displayItems(history, active ? live : undefined, active ? current?.prompt : undefined))
     if (active || !thread) transcript.scrollTop = transcript.scrollHeight
+    emptyState.hidden = !!thread || !client
+    if (!emptyState.hidden) emptyState.replaceChildren(el('p', { text: project ? `在 ${project} 开始新线程：直接在下方输入提示词并发送。` : '在左栏选择一个线程，或输入项目目录新建线程。' }))
     approvalsPanel.hidden = pending.length === 0
     // Rebuild the forms only when the pending set changes, so streaming events never wipe a half-entered answer.
     const approvalKey = pending.map(approval => approval.id).join('\n')
@@ -71,27 +82,33 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
       if (focus && document.activeElement === document.body) focus.focus()
     }
     cancel.hidden = !active
-    send.disabled = !thread || !client || active || submitting
-    prompt.disabled = !thread || !client
+    send.disabled = !target() || !client || active || submitting
+    prompt.disabled = !target() || !client
     const finished = current && !active && current.result ? current : [...runs].reverse().find(run => run.result)
     usage.textContent = finished?.result ? formatUsage(finished.result) : ''
     if (current?.error && !active) show(current.error.message)
     for (const node of threadList.querySelectorAll<HTMLButtonElement>('button[data-thread-id]')) node.setAttribute('aria-current', node.dataset.threadId === thread?.id ? 'true' : 'false')
   }
   const renderThreads = () => {
-    threadList.replaceChildren(...threads.map(item => {
-      const button = el('button', { type: 'button', 'data-thread-id': item.id, 'aria-current': item.id === thread?.id ? 'true' : 'false' },
-        el('span', { class: 'ca-thread-name', text: item.title }), el('small', { text: item.lastRun ? runStatusLabels[item.lastRun.status] ?? item.lastRun.status : '尚未执行' }))
-      button.addEventListener('click', () => { void openThread(item.id) })
-      return el('li', {}, button)
+    threadList.replaceChildren(...renderThreadGroups(groupThreads(threads), { currentThreadId: thread?.id, selectedPath: project, collapsed, now: Date.now() }, {
+      open: id => { void openThread(id) },
+      create: directory => startProject(directory),
+      toggle: directory => { if (collapsed.has(directory)) collapsed.delete(directory); else collapsed.add(directory); saveCollapsed(); renderThreads() },
     }))
     if (!threads.length) threadList.append(el('li', { class: 'ca-empty', text: client ? '还没有线程。输入项目目录新建一个。' : '' }))
+    scheduleThreadPoll()
   }
   const renderDevices = () => {
     deviceSelect.replaceChildren(...devices.map(device => el('option', { value: device.id, text: deviceLabel(device, localInstanceId) })))
     deviceSelect.disabled = !devices.length
     if (client) deviceSelect.value = client.connection.id
     deviceSelect.title = `执行设备：${deviceSelect.selectedOptions[0]?.textContent ?? '未选择'}`
+  }
+  const stopThreadPoll = () => { if (threadTimer !== undefined) { clearTimeout(threadTimer); threadTimer = undefined } }
+  const scheduleThreadPoll = () => {
+    stopThreadPoll()
+    if (disposed || !client || !threads.some(activeThread)) return
+    threadTimer = setTimeout(() => { threadTimer = undefined; void loadThreads() }, threadPollMs)
   }
   const stopSubscription = () => { subscription?.close(); subscription = undefined }
   const subscribe = (threadId: string) => {
@@ -108,10 +125,14 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     const view = await client!.request<RunLiveView>(`${app}/runs/${encodeURIComponent(runId)}/view`)
     if (current?.id === runId) live = view
   }).then(() => { viewRefresh = undefined; render() })
+  const updateListEntry = (id: string, patch: Partial<ThreadView>) => { threads = threads.map(item => item.id === id ? { ...item, ...patch } : item); renderThreads() }
   const onEvent = (frame: RunEventFrameView) => {
     if (!current || frame.runId !== current.id) return
-    if (live && frame.seq === live.seq + 1) { live = applyRunEvent(live, frame.event); if (frame.event.type === 'approval-requested' || frame.event.type === 'approval-resolved') pending = live.approvals.filter(approval => approval.decision === null); render() }
-    else void refreshView(frame.runId)
+    if (live && frame.seq === live.seq + 1) {
+      live = applyRunEvent(live, frame.event)
+      if (frame.event.type === 'approval-requested' || frame.event.type === 'approval-resolved') { pending = live.approvals.filter(approval => approval.decision === null); if (thread) updateListEntry(thread.id, { pendingApprovals: pending.length }) }
+      render()
+    } else void refreshView(frame.runId)
   }
   const onChange = async (change: RunChangedView) => {
     if (!client || !thread || change.threadId !== thread.id) return
@@ -121,7 +142,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
       if (current) void refreshView(current.id)
     } else current = { ...current, status: change.status }
     if (!activeStatus(current)) await refreshThread()
-    else render()
+    else { if (thread) updateListEntry(thread.id, { lastRun: { id: change.runId, status: change.status } }); render() }
   }
   const refreshThread = async () => {
     if (!client || !thread) return
@@ -137,12 +158,13 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     pending = approvals ?? []
     if (activeStatus(current)) await refreshView(current!.id)
     const latest = await guard(() => client!.request<ThreadView>(`${app}/threads/${encodeURIComponent(id)}`))
-    if (latest && thread?.id === id) { thread = latest; threads = threads.map(item => item.id === id ? latest : item); renderThreads() }
+    if (latest && thread?.id === id) { thread = latest; updateListEntry(id, latest) }
     render()
   }
   const openThread = async (id: string | undefined, replace = false) => {
     if (!client) return
     thread = threads.find(item => item.id === id)
+    if (thread) project = undefined
     history = []; runs = []; current = undefined; live = undefined; pending = []; show()
     navigate({ hostId: client.connection.instanceId, threadId: thread?.id }, replace)
     renderThreads(); render()
@@ -150,10 +172,19 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     subscribe(thread.id)
     await refreshThread()
   }
+  /** A project without a thread yet: the first prompt sent creates the thread and starts its Run. */
+  const startProject = (directory: string) => {
+    if (!client) return
+    stopSubscription()
+    project = directory; thread = undefined; history = []; runs = []; current = undefined; live = undefined; pending = []; show()
+    navigate({ hostId: client.connection.instanceId })
+    renderThreads(); render()
+    prompt.focus()
+  }
   const loadThreads = async () => {
     if (!client) return
     const list = await guard(() => client!.request<readonly ThreadView[]>(`${app}/threads`))
-    if (list) threads = list
+    if (list) { threads = list; if (thread) thread = list.find(item => item.id === thread!.id) ?? thread }
     renderThreads()
   }
   const loadEnvironment = async () => {
@@ -173,8 +204,8 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     return running
   }
   const selectClient = async (device: DeviceConnection | undefined, activate: boolean) => {
-    stopSubscription()
-    thread = undefined; threads = []; history = []; runs = []; current = undefined; live = undefined; pending = []
+    stopSubscription(); stopThreadPoll()
+    thread = undefined; project = undefined; threads = []; history = []; runs = []; current = undefined; live = undefined; pending = []
     client = device ? createDeviceClient(context.apiBase, device, lifetime.signal) : undefined
     renderDevices(); renderThreads(); render(); show()
     if (!device) { deviceStatus.textContent = devices.length ? '' : '尚未配置执行设备。请先在 Anybox Harness 的“管理连接”中添加设备。'; startButton.hidden = true; return }
@@ -197,20 +228,28 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   const decide = async (approval: ApprovalView, decision: 'allow' | 'allow-session' | 'deny', answers?: Record<string, string>) => {
     if (!client) return
     const resolved = await guard(() => client!.request<ApprovalView>(`${app}/approvals/${encodeURIComponent(approval.id)}`, { decision, ...(answers ? { answers } : {}) }))
-    if (resolved) { pending = pending.filter(item => item.id !== approval.id); render() }
+    if (resolved) { pending = pending.filter(item => item.id !== approval.id); if (thread) updateListEntry(thread.id, { pendingApprovals: pending.length }); render() }
   }
   const submit = async () => {
-    if (!client || !thread || submitting) return
+    if (!client || !target() || submitting) return
     const text = prompt.value.trim()
     if (!text) return
     submitting = true; render()
     try {
       // The same unsent text keeps its key, so a retry after a lost response cannot start a second run.
       if (!draft || draft.prompt !== text) draft = { prompt: text, key: crypto.randomUUID() }
+      if (!thread) {
+        // First message in a project: create the thread, then its Run; a failure keeps the prompt as a draft.
+        const created = await client.request<ThreadView>(`${app}/threads`, { projectPath: project })
+        threads = [created, ...threads]; thread = created; project = undefined
+        navigate({ hostId: client.connection.instanceId, threadId: created.id })
+        subscribe(created.id); renderThreads()
+      }
       const body = { prompt: text, idempotencyKey: draft.key, ...(model.value.trim() ? { model: model.value.trim() } : {}), ...(effort.value ? { effort: effort.value } : {}) }
       const run = await client.request<RunView>(`${app}/threads/${encodeURIComponent(thread.id)}/runs`, body)
       draft = undefined; prompt.value = ''
       current = run; live = emptyRunView(run.id, run.threadId); runs = [...runs.filter(item => item.id !== run.id), run]; show()
+      updateListEntry(thread.id, { lastRun: { id: run.id, status: run.status } })
     } catch (error) { show(messageFor(error)) }
     finally { submitting = false; render() }
   }
@@ -239,10 +278,11 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   return {
     async setActive(active: boolean, reason: ApplicationActivation) {
       if (disposed) return
-      if (!active) { for (const dialog of container.querySelectorAll<HTMLDialogElement>('dialog[open]')) dialog.close(); return }
+      if (!active) { for (const dialog of container.querySelectorAll<HTMLDialogElement>('dialog[open]')) dialog.close(); stopThreadPoll(); return }
+      scheduleThreadPoll()
       if (reason === 'open' && client) { if (await ensureProduct(true)) { await loadEnvironment(); await loadThreads(); if (route().threadId && !thread) await openThread(route().threadId, true) } }
     },
     canClose: () => !submitting,
-    async dispose() { disposed = true; unsubscribeRoute(); stopSubscription(); lifetime.abort(); container.replaceChildren() },
+    async dispose() { disposed = true; unsubscribeRoute(); stopSubscription(); stopThreadPoll(); lifetime.abort(); container.replaceChildren() },
   }
 }
