@@ -5,6 +5,7 @@ import { applyRunEvent, emptyRunView } from '../core/events.js'
 import { createDeviceClient, readDevices } from './client.js'
 import type { DeviceClient, DeviceConnection } from './client.js'
 import { deviceLabel, displayItems, formatRoute, formatUsage, groupThreads, messageFor, parseRoute, runStatusLabels, selectDevice } from './state.js'
+import { createProjectPanel } from './projects.js'
 import { el, renderApproval, renderThreadGroups, syncTranscript } from './view.js'
 
 const selectedKey = 'anybox.claude-agent.selected', collapsedKey = 'anybox.claude-agent.collapsed'
@@ -24,9 +25,12 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   const deviceSelect = el('select', { id: context.domId('device'), 'aria-label': '执行设备' })
   const deviceStatus = el('p', { class: 'ca-device-status', role: 'status' })
   const startButton = el('button', { type: 'button', class: 'ca-start', text: '启动 Claude Agent', hidden: true })
-  const pathInput = el('input', { name: 'projectPath', required: true, placeholder: '项目目录绝对路径', 'aria-label': '项目目录绝对路径', autocomplete: 'off', id: context.domId('project-path') })
-  const titleInput = el('input', { name: 'title', placeholder: '标题（可选）', 'aria-label': '标题', autocomplete: 'off' })
-  const newThread = el('form', { class: 'ca-new-thread' }, pathInput, titleInput, el('button', { type: 'submit', class: 'primary-button', text: '新建线程' }))
+  const panel = createProjectPanel(context.domId, {
+    request: (path, signal) => { if (!client) return Promise.reject(Object.assign(new Error('product-unavailable'), { status: 503, code: 'product-unavailable' })); return client.request(path, undefined, signal) },
+    select: directory => startProject(directory),
+    create: (directory, threadTitle) => { void createThread(directory, threadTitle) },
+    report: error => { if (!disposed && !lifetime.signal.aborted) show(messageFor(error)) },
+  })
   const threadList = el('ul', { class: 'ca-thread-list' })
   const title = el('strong', { class: 'ca-thread-title', text: '选择或新建一个线程' }), path = el('small', { class: 'ca-thread-path' }), status = el('span', { class: 'ca-run-status' })
   const notice = el('p', { class: 'ca-notice notice', role: 'alert', hidden: true })
@@ -43,7 +47,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   container.replaceChildren(el('section', { class: 'claude-agent-app' },
     el('aside', { class: 'ca-sidebar' },
       el('header', { class: 'ca-sidebar-head' }, el('h1', { text: 'Claude Agent' }), el('label', { class: 'ca-device', for: deviceSelect.id }, el('span', { text: '执行设备' }), deviceSelect), deviceStatus, startButton),
-      newThread, el('nav', { class: 'ca-threads', 'aria-label': '线程' }, threadList), el('footer', { class: 'ca-powered', text: 'Powered by Claude' })),
+      panel.element, el('nav', { class: 'ca-threads', 'aria-label': '线程' }, threadList), el('footer', { class: 'ca-powered', text: 'Powered by Claude' })),
     el('main', { class: 'ca-main' }, el('header', { class: 'ca-thread-head' }, title, path, status), notice, transcript, emptyState, approvalsPanel, composer, usage)))
 
   let devices: readonly DeviceConnection[] = [], localInstanceId: string | null = null, client: DeviceClient | undefined
@@ -95,7 +99,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
       create: directory => startProject(directory),
       toggle: directory => { if (collapsed.has(directory)) collapsed.delete(directory); else collapsed.add(directory); saveCollapsed(); renderThreads() },
     }))
-    if (!threads.length) threadList.append(el('li', { class: 'ca-empty', text: client ? '还没有线程。输入项目目录新建一个。' : '' }))
+    if (!threads.length) threadList.append(el('li', { class: 'ca-empty', text: client ? '还没有线程。先在上方选择项目。' : '' }))
     scheduleThreadPoll()
   }
   const renderDevices = () => {
@@ -126,6 +130,13 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     if (current?.id === runId) live = view
   }).then(() => { viewRefresh = undefined; render() })
   const updateListEntry = (id: string, patch: Partial<ThreadView>) => { threads = threads.map(item => item.id === id ? { ...item, ...patch } : item); renderThreads() }
+  /** The device may retitle a thread when a Run starts (first prompt) or ends (session title); re-read it so the header and list follow. */
+  const reloadThread = async (id: string) => {
+    const latest = await guard(() => client!.request<ThreadView>(`${app}/threads/${encodeURIComponent(id)}`))
+    if (!latest || disposed) return
+    if (thread?.id === id) thread = latest
+    updateListEntry(id, latest); render()
+  }
   const onEvent = (frame: RunEventFrameView) => {
     if (!current || frame.runId !== current.id) return
     if (live && frame.seq === live.seq + 1) {
@@ -177,9 +188,18 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     if (!client) return
     stopSubscription()
     project = directory; thread = undefined; history = []; runs = []; current = undefined; live = undefined; pending = []; show()
+    panel.setPath(directory)
     navigate({ hostId: client.connection.instanceId })
     renderThreads(); render()
     prompt.focus()
+  }
+  const createThread = async (directory: string, threadTitle: string | undefined) => {
+    if (!client) return
+    const created = await guard(() => client!.request<ThreadView>(`${app}/threads`, { projectPath: directory, ...(threadTitle ? { title: threadTitle } : {}) }))
+    if (!created) return
+    threads = [created, ...threads]
+    await openThread(created.id)
+    void panel.refreshRecent()
   }
   const loadThreads = async () => {
     if (!client) return
@@ -187,6 +207,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     if (list) { threads = list; if (thread) thread = list.find(item => item.id === thread!.id) ?? thread }
     renderThreads()
   }
+  const enablePanel = async () => { panel.setEnabled(true); await panel.refreshRecent() }
   const loadEnvironment = async () => {
     if (!client) return
     const environment = await guard(() => client!.request<EnvironmentView>(`${app}/environment`))
@@ -201,10 +222,11 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     const running = state.state === 'running'
     deviceStatus.textContent = running ? '' : state.state === 'failed' ? '所选设备上的 Claude Agent 未能启动。' : '所选设备上的 Claude Agent 尚未启动。'
     startButton.hidden = running
+    if (!running) panel.setEnabled(false)
     return running
   }
   const selectClient = async (device: DeviceConnection | undefined, activate: boolean) => {
-    stopSubscription(); stopThreadPoll()
+    stopSubscription(); stopThreadPoll(); panel.setEnabled(false)
     thread = undefined; project = undefined; threads = []; history = []; runs = []; current = undefined; live = undefined; pending = []
     client = device ? createDeviceClient(context.apiBase, device, lifetime.signal) : undefined
     renderDevices(); renderThreads(); render(); show()
@@ -214,7 +236,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     navigate({ hostId: device.instanceId, threadId: requested.hostId === device.instanceId ? requested.threadId : undefined }, true)
     if (!(await ensureProduct(activate))) return
     await loadEnvironment()
-    await loadThreads()
+    await Promise.all([loadThreads(), enablePanel()])
     const threadId = route().threadId
     if (threadId && threads.some(item => item.id === threadId)) await openThread(threadId, true)
     else if (threadId) navigate({ hostId: device.instanceId }, true)
@@ -243,31 +265,21 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
         const created = await client.request<ThreadView>(`${app}/threads`, { projectPath: project })
         threads = [created, ...threads]; thread = created; project = undefined
         navigate({ hostId: client.connection.instanceId, threadId: created.id })
-        subscribe(created.id); renderThreads()
+        subscribe(created.id); renderThreads(); void panel.refreshRecent()
       }
       const body = { prompt: text, idempotencyKey: draft.key, ...(model.value.trim() ? { model: model.value.trim() } : {}), ...(effort.value ? { effort: effort.value } : {}) }
       const run = await client.request<RunView>(`${app}/threads/${encodeURIComponent(thread.id)}/runs`, body)
       draft = undefined; prompt.value = ''
       current = run; live = emptyRunView(run.id, run.threadId); runs = [...runs.filter(item => item.id !== run.id), run]; show()
       updateListEntry(thread.id, { lastRun: { id: run.id, status: run.status } })
+      void reloadThread(thread.id)
     } catch (error) { show(messageFor(error)) }
     finally { submitting = false; render() }
   }
   composer.addEventListener('submit', event => { event.preventDefault(); void submit() })
   prompt.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit() } })
   cancel.addEventListener('click', () => { if (client && current) void guard(() => client!.request<RunView>(`${app}/runs/${encodeURIComponent(current!.id)}/cancel`, {})).then(run => { if (run) { current = run; render() } }) })
-  newThread.addEventListener('submit', event => {
-    event.preventDefault()
-    if (!client) return
-    const projectPath = pathInput.value.trim(), threadTitle = titleInput.value.trim()
-    void guard(() => client!.request<ThreadView>(`${app}/threads`, { projectPath, ...(threadTitle ? { title: threadTitle } : {}) })).then(created => {
-      if (!created) return
-      pathInput.value = ''; titleInput.value = ''
-      threads = [created, ...threads]
-      void openThread(created.id)
-    })
-  })
-  startButton.addEventListener('click', () => { void (async () => { if (await ensureProduct(true)) { await loadEnvironment(); await loadThreads() } })() })
+  startButton.addEventListener('click', () => { void (async () => { if (await ensureProduct(true)) { await loadEnvironment(); await Promise.all([loadThreads(), enablePanel()]) } })() })
   deviceSelect.addEventListener('change', () => { const device = devices.find(item => item.id === deviceSelect.value); if (device && device.id !== client?.connection.id) void selectClient(device, false) })
   const unsubscribeRoute = context.route.subscribe(() => {
     const requested = route()
@@ -280,9 +292,9 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
       if (disposed) return
       if (!active) { for (const dialog of container.querySelectorAll<HTMLDialogElement>('dialog[open]')) dialog.close(); stopThreadPoll(); return }
       scheduleThreadPoll()
-      if (reason === 'open' && client) { if (await ensureProduct(true)) { await loadEnvironment(); await loadThreads(); if (route().threadId && !thread) await openThread(route().threadId, true) } }
+      if (reason === 'open' && client) { if (await ensureProduct(true)) { await loadEnvironment(); await Promise.all([loadThreads(), enablePanel()]); if (route().threadId && !thread) await openThread(route().threadId, true) } }
     },
     canClose: () => !submitting,
-    async dispose() { disposed = true; unsubscribeRoute(); stopSubscription(); stopThreadPoll(); lifetime.abort(); container.replaceChildren() },
+    async dispose() { disposed = true; unsubscribeRoute(); stopSubscription(); stopThreadPoll(); panel.dispose(); lifetime.abort(); container.replaceChildren() },
   }
 }
