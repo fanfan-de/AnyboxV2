@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { createClientHost as createApplicationClientHost } from '../host/client.js'
 import type { ClientConnectionsOptions } from '../host/connections.js'
 import { harnessClientApplication } from '../applications/harness/registration.js'
+import { claudeAgentClientApplication } from '../applications/claude-agent/client/registration.js'
 import type { HarnessClientRuntimeOptions } from '../applications/harness/client/runtime.js'
 import type { ApplicationRegistration } from '../host/applications/registration.js'
 import { defaultModelsConfigPath } from '../applications/harness/server-config.js'
@@ -18,7 +19,7 @@ export interface DefaultClientHostOptions extends HarnessClientRuntimeOptions, C
 export async function createClientHost(options: DefaultClientHostOptions) {
   return createApplicationClientHost({ path: options.path, port: options.port, transportSecret: options.transportSecret,
     connections: { namespace: options.namespace, openEntry: options.openEntry, fetch: options.fetch, localPairing: options.localPairing },
-    applications: options.applications ?? [harnessClientApplication({ localInstanceId: options.localInstanceId, picker: options.picker })] })
+    applications: options.applications ?? [harnessClientApplication({ localInstanceId: options.localInstanceId, picker: options.picker }), claudeAgentClientApplication({ localInstanceId: options.localInstanceId })] })
 }
 
 async function main() {
