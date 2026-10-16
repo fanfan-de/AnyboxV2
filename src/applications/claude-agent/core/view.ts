@@ -143,3 +143,21 @@ export interface RunLiveView {
 export interface RunChangedView { readonly threadId: string; readonly runId: string; readonly status: ClaudeAgentRunStatus; readonly seq: number }
 export interface RunEventFrameView { readonly threadId: string; readonly runId: string; readonly seq: number; readonly event: RunEventView }
 export interface ThreadMessagesView { readonly nativeSessionId: string | null; readonly messages: readonly HistoryMessageView[] }
+/** A project directory recently used on the execution device: by this application's threads, by the Claude environment, or both. */
+export interface RecentProjectView {
+  readonly path: string
+  readonly name: string
+  readonly lastUsedAt: string
+  readonly source: 'threads' | 'claude' | 'both'
+}
+/** `partial` is true when the Claude environment's session list could not be read and only thread directories are included. */
+export interface RecentProjectsView { readonly schemaVersion: 1; readonly projects: readonly RecentProjectView[]; readonly partial: boolean }
+export interface DirectoryEntryView { readonly name: string; readonly path: string }
+/** Subdirectories of one directory on the execution device; symbolic links are not followed and the list is bounded. */
+export interface DirectoryListingView {
+  readonly schemaVersion: 1
+  readonly path: string
+  readonly parent: string | null
+  readonly entries: readonly DirectoryEntryView[]
+  readonly truncated: boolean
+}

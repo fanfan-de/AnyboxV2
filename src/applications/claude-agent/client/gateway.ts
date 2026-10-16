@@ -16,7 +16,7 @@ export interface ClaudeAgentGateway {
 const id = '[^/]+', app = `/apps/${claudeAgentId}`
 /** Only the execution device's product control and this application's own routes may be reached through the proxy. */
 const paths: Record<string, readonly RegExp[]> = {
-  GET: [/^\/instance$/, new RegExp(`^/products/${claudeAgentId}$`), new RegExp(`^${app}/(environment|threads|events)$`),
+  GET: [/^\/instance$/, new RegExp(`^/products/${claudeAgentId}$`), new RegExp(`^${app}/(environment|threads|events|directories|projects/recent)$`),
     new RegExp(`^${app}/threads/${id}(/(runs|messages|approvals))?$`), new RegExp(`^${app}/runs/${id}(/(view|wait))?$`)],
   POST: [new RegExp(`^/products/${claudeAgentId}/(open|stop|retry)$`), new RegExp(`^${app}/threads(/${id}/runs)?$`), new RegExp(`^${app}/runs/${id}/cancel$`), new RegExp(`^${app}/approvals/${id}$`)],
 }

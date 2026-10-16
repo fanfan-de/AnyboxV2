@@ -1,7 +1,7 @@
 import type { CanUseTool, PermissionResult, PermissionUpdate, SDKMessage, SDKResultMessage, SessionMessage } from '@anthropic-ai/claude-agent-sdk'
 import { boundedJson, boundedText } from '../events.js'
 import type { ApprovalQuestionView, HistoryMessageView, RunResultView, TranscriptBlockView } from '../view.js'
-import type { SdkPermissionDecision, SdkPermissionRequest, SdkRunEvent } from './port.js'
+import type { SdkPermissionDecision, SdkPermissionRequest, SdkRunEvent, SdkSessionInfo, SdkSessionProject } from './port.js'
 
 /** Pure translations between SDK objects and the application's own views. SDK types do not leave this directory. */
 export const translationLimits = Object.freeze({ toolResult: 32 * 1024, toolInput: 16 * 1024, resultText: 64 * 1024, errorText: 4096 })
@@ -123,4 +123,23 @@ export function historyMessages(messages: readonly SessionMessage[]): HistoryMes
     const blocks = typeof content === 'string' ? [{ kind: 'text' as const, ...boundedText(content) }] : Array.isArray(content) ? content.map(blockView) : []
     return blocks.length ? [{ id: message.uuid, role: message.type, blocks }] : []
   })
+}
+/** Distinct `cwd` values of the worker's session list, newest first; entries without a directory are skipped. */
+export function sessionProjects(raw: unknown): SdkSessionProject[] {
+  if (!Array.isArray(raw)) return []
+  const newest = new Map<string, number>()
+  for (const entry of raw) {
+    const value = record(entry), cwd = text(value?.cwd), modified = typeof value?.lastModified === 'number' && Number.isFinite(value.lastModified) ? value.lastModified : 0
+    if (!cwd) continue
+    newest.set(cwd, Math.max(newest.get(cwd) ?? 0, modified))
+  }
+  return [...newest].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([path, modified]) => ({ path, lastUsedAt: new Date(modified).toISOString() }))
+}
+export const sessionTitleLimit = 200
+/** First line of the environment's title, bounded; `undefined` when the worker found no session. */
+export function sessionInfo(raw: unknown): SdkSessionInfo | undefined {
+  const value = record(raw)
+  if (!value) return undefined
+  const candidate = [value.customTitle, value.summary, value.firstPrompt].map(text).map(entry => entry.trim().split(/\r?\n/, 1)[0].replace(/\s+/g, ' ').trim()).find(Boolean) ?? ''
+  return { title: candidate ? candidate.slice(0, sessionTitleLimit) : null }
 }

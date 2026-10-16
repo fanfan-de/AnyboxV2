@@ -29,6 +29,7 @@ test('the proxy whitelist admits only product control and this application\'s ro
     ['POST', '/apps/claude-agent/threads/t/runs', true], ['GET', '/apps/claude-agent/runs/r/view', true], ['GET', '/apps/claude-agent/runs/r/wait', true], ['POST', '/apps/claude-agent/runs/r/cancel', true],
     ['POST', '/apps/claude-agent/approvals/a', true], ['GET', '/apps/claude-agent/events', true], ['GET', '/apps/agent/sessions', false], ['GET', '/models', false], ['POST', '/apps/claude-agent/threads/%2e%2e/runs', false],
     ['GET', '/apps/claude-agent/runs/r/events', false], ['POST', '/apps/claude-agent/threads/t', false],
+    ['GET', '/apps/claude-agent/projects/recent', true], ['GET', '/apps/claude-agent/directories', true], ['POST', '/apps/claude-agent/directories', false], ['GET', '/apps/claude-agent/projects', false],
   ]) assert.equal(allowedClaudeAgentProxyPath(method, path), expected, `${method} ${path}`)
 })
 test('the gateway lists host connections, forwards only whitelisted routes with the device credentials and streams SSE through', async () => {

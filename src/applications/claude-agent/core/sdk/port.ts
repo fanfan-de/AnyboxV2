@@ -44,9 +44,17 @@ export interface SdkRunHandle {
   /** Terminates the process; `done` still reports the actual exit. */
   close(): void
 }
+/** One project directory the Claude environment recorded a session in, with the newest session's modification time. */
+export interface SdkSessionProject { readonly path: string; readonly lastUsedAt: string }
+/** The Claude environment's own title for a session: custom title, then summary, then first prompt. */
+export interface SdkSessionInfo { readonly title: string | null }
 export interface ClaudeAgentSdkPort {
   environment(): EnvironmentView
   /** Throws a ClaudeAgentError synchronously when no executable is available or the adapter is closing. */
   openRun(request: SdkRunRequest, hooks: SdkRunHooks): SdkRunHandle
   readSessionMessages(sessionId: string, dir: string, signal?: AbortSignal): Promise<readonly HistoryMessageView[]>
+  /** Distinct project directories of the environment's interactive sessions, newest first. */
+  listSessionProjects(signal?: AbortSignal): Promise<readonly SdkSessionProject[]>
+  /** Undefined when the session file is missing or has no title yet. */
+  readSessionInfo(sessionId: string, dir: string, signal?: AbortSignal): Promise<SdkSessionInfo | undefined>
 }

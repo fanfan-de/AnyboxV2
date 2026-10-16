@@ -5,13 +5,13 @@ import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import type { Component } from '@nya/core'
 import { query } from '@anthropic-ai/claude-agent-sdk'
-import type { Options, Query, SDKUserMessage, SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk'
+import type { Options, Query, SDKUserMessage, SessionMessage, SpawnOptions, SpawnedProcess } from '@anthropic-ai/claude-agent-sdk'
 import { claudeAgentError } from '../domain.js'
 import type { EnvironmentView, HistoryMessageView } from '../view.js'
 import { resolveClaudeExecutable } from './executable.js'
 import { claudeAgentSdkServiceKey } from './port.js'
-import type { ClaudeAgentSdkPort, SdkRunHandle, SdkRunHooks, SdkRunOutcome, SdkRunRequest } from './port.js'
-import { createMessageTranslator, historyMessages, permissionRequest, permissionResult, resultView } from './translate.js'
+import type { ClaudeAgentSdkPort, SdkRunHandle, SdkRunHooks, SdkRunOutcome, SdkRunRequest, SdkSessionInfo, SdkSessionProject } from './port.js'
+import { createMessageTranslator, historyMessages, permissionRequest, permissionResult, resultView, sessionInfo, sessionProjects } from './translate.js'
 
 export interface ClaudeAgentSdkOptions {
   readonly executableOverride?: string
@@ -23,12 +23,16 @@ export interface ClaudeAgentSdkOptions {
   readonly historyWorker?: string
   readonly historyTimeoutMs?: number
   readonly historyLimitBytes?: number
+  /** Newest interactive sessions scanned for recent project directories. */
+  readonly sessionScanLimit?: number
   /** One sentence appended to the Claude Code system prompt preset. */
   readonly hostInstructions?: string
 }
 const defaultInstructions = 'You are running inside Anybox, a desktop host application; the user works with you through its Claude Agent interface.'
 const stderrTailLimit = 8 * 1024
 const forcedExitDelayMs = 10_000
+// Session lists and single-session metadata are small; their workers get tighter bounds than a transcript read.
+const sessionListTimeoutMs = 15_000, sessionListLimitBytes = 1024 * 1024, sessionInfoTimeoutMs = 10_000, sessionInfoLimitBytes = 64 * 1024
 
 interface Deferred { readonly promise: Promise<void>; resolve(): void }
 const deferred = (): Deferred => { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done }); return { promise, resolve } }
@@ -48,7 +52,7 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
   const platform = options.platform ?? process.platform
   const isFile = options.isFile ?? ((path: string) => { try { return statSync(path).isFile() } catch { return false } })
   const workerPath = options.historyWorker ?? fileURLToPath(new URL('./history-worker.js', import.meta.url))
-  const historyTimeout = options.historyTimeoutMs ?? 30_000, historyLimit = options.historyLimitBytes ?? 8 * 1024 * 1024
+  const historyTimeout = options.historyTimeoutMs ?? 30_000, historyLimit = options.historyLimitBytes ?? 8 * 1024 * 1024, sessionScanLimit = options.sessionScanLimit ?? 200
   const instructions = options.hostInstructions ?? defaultInstructions
   return { name: 'claude-agent-sdk', apply(ctx) {
     const executable = resolveClaudeExecutable({ override: options.executableOverride, env: options.env ?? process.env, platform, homeDirectory: options.homeDirectory ?? homedir(), isFile })
@@ -117,10 +121,10 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
       handles.add(handle); void done.finally(() => handles.delete(handle))
       return handle
     }
-    const readSessionMessages = async (sessionId: string, dir: string, signal?: AbortSignal): Promise<readonly HistoryMessageView[]> => {
+    /** One worker per read: spawned, bounded by time and output size, killed on cancellation, joined before cleanup completes. */
+    const runWorker = async (args: readonly string[], bounds: { readonly timeoutMs: number; readonly limitBytes: number }, signal?: AbortSignal): Promise<unknown> => {
       if (!accepting) throw claudeAgentError('service-unavailable', 503)
-      if (!/^[0-9a-fA-F-]{36}$/.test(sessionId)) throw claudeAgentError('invalid-input', 400)
-      const child = spawn(process.execPath, [workerPath, sessionId, dir], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true })
+      const child = spawn(process.execPath, [workerPath, ...args], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true })
       const chunks: Buffer[] = []; let size = 0, overflow = false, failure: unknown
       const errors = createTail(stderrTailLimit)
       const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
@@ -130,20 +134,31 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
       const entry = { child, exited: exited.then(() => {}) }
       workers.add(entry)
       const stop = () => { if (!exitedAlready(child)) child.kill('SIGKILL') }
-      const timer = setTimeout(stop, historyTimeout)
+      const timer = setTimeout(stop, bounds.timeoutMs)
       signal?.addEventListener('abort', stop, { once: true }); if (signal?.aborted) stop()
       child.stderr?.setEncoding('utf8'); child.stderr?.on('data', (chunk: string) => errors.push(chunk))
-      child.stdout?.on('data', (chunk: Buffer) => { size += chunk.length; if (size > historyLimit) { overflow = true; stop(); return } chunks.push(chunk) })
+      child.stdout?.on('data', (chunk: Buffer) => { size += chunk.length; if (size > bounds.limitBytes) { overflow = true; stop(); return } chunks.push(chunk) })
       try {
         const { code } = await exited
         if (signal?.aborted) throw claudeAgentError('cancelled', 499)
         if (overflow) throw claudeAgentError('history-too-large', 413)
-        if (failure || code !== 0) throw claudeAgentError('history-unavailable', 503, describe('The session transcript could not be read.', errors.read()))
-        return historyMessages(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        if (failure || code !== 0) throw claudeAgentError('history-unavailable', 503, describe('The Claude environment\'s session files could not be read.', errors.read()))
+        return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown
       } catch (error) {
         if (error instanceof Error && error.name === 'ClaudeAgentError') throw error
-        throw claudeAgentError('history-unavailable', 503, 'The session transcript could not be parsed.')
+        throw claudeAgentError('history-unavailable', 503, 'The Claude environment\'s session data could not be parsed.')
       } finally { clearTimeout(timer); signal?.removeEventListener('abort', stop); workers.delete(entry) }
+    }
+    const requireSessionId = (sessionId: string) => { if (!/^[0-9a-fA-F-]{36}$/.test(sessionId)) throw claudeAgentError('invalid-input', 400) }
+    const readSessionMessages = async (sessionId: string, dir: string, signal?: AbortSignal): Promise<readonly HistoryMessageView[]> => {
+      requireSessionId(sessionId)
+      return historyMessages(await runWorker(['messages', sessionId, dir], { timeoutMs: historyTimeout, limitBytes: historyLimit }, signal) as SessionMessage[])
+    }
+    const listSessionProjects = async (signal?: AbortSignal): Promise<readonly SdkSessionProject[]> =>
+      sessionProjects(await runWorker(['sessions', String(sessionScanLimit)], { timeoutMs: sessionListTimeoutMs, limitBytes: sessionListLimitBytes }, signal))
+    const readSessionInfo = async (sessionId: string, dir: string, signal?: AbortSignal): Promise<SdkSessionInfo | undefined> => {
+      requireSessionId(sessionId)
+      return sessionInfo(await runWorker(['info', sessionId, dir], { timeoutMs: sessionInfoTimeoutMs, limitBytes: sessionInfoLimitBytes }, signal))
     }
     ctx.effect(() => async () => {
       accepting = false
@@ -151,7 +166,7 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
       for (const worker of workers) if (!exitedAlready(worker.child)) worker.child.kill('SIGKILL')
       await Promise.allSettled([...[...handles].map(handle => handle.done), ...[...workers].map(worker => worker.exited)])
     }, 'terminate and join Claude Agent processes')
-    const service: ClaudeAgentSdkPort = { environment: () => environment, openRun, readSessionMessages }
+    const service: ClaudeAgentSdkPort = { environment: () => environment, openRun, readSessionMessages, listSessionProjects, readSessionInfo }
     ctx.provide(claudeAgentSdkServiceKey, service)
   } }
 }

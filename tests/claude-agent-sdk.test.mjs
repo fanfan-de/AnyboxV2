@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
@@ -46,6 +46,12 @@ test('the installed claude executable completes a turn, pins a resumable session
   const history = await sdk.readSessionMessages(init.init.nativeSessionId, directory)
   assert.ok(history.some(message => message.role === 'user'), 'the prompt is in the transcript')
   assert.ok(history.some(message => message.role === 'assistant' && message.blocks.some(block => block.kind === 'text' && /pong/i.test(block.text))), 'the reply is in the transcript')
+  const info = await sdk.readSessionInfo(init.init.nativeSessionId, directory)
+  assert.ok(info && typeof info.title === 'string' && info.title.length > 0, `the environment names the session: ${JSON.stringify(info)}`)
+  const projects = await sdk.listSessionProjects()
+  assert.ok(Array.isArray(projects) && projects.every(project => typeof project.path === 'string' && /^\d{4}-/.test(project.lastUsedAt)), 'session projects are directories with ISO times')
+  const real = await realpath(directory)
+  assert.ok(projects.some(project => project.path === real), `the project directory of the completed run is listed: ${real}`)
 
   const streamed = []
   const second = sdk.openRun({ cwd: directory, prompt: 'Without using any tools, write the numbers from 1 to 400 one per line, slowly and completely.', resume: init.init.nativeSessionId },

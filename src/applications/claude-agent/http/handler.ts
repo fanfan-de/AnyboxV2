@@ -48,6 +48,11 @@ export function createClaudeAgentHttpHandler(services: () => ClaudeAgentHttpServ
       return
     }
     if (method === 'GET' && path === '/environment') { noQuery(); json(response, 200, sdk.environment()); return }
+    if (method === 'GET' && path === '/projects/recent') { noQuery(); json(response, 200, await runs.listRecentProjects(controller.signal)); return }
+    if (method === 'GET' && path === '/directories') {
+      if ([...url.searchParams.keys()].some(key => key !== 'path' && key !== 'showHidden')) throw failure(400, 'invalid-input')
+      json(response, 200, await runs.browseDirectory({ path: url.searchParams.get('path'), showHidden: url.searchParams.get('showHidden') }, controller.signal)); return
+    }
     if (path === '/threads') {
       noQuery()
       if (method === 'GET') { json(response, 200, await runs.listThreads()); return }

@@ -1,15 +1,19 @@
 import { randomUUID } from 'node:crypto'
-import { stat } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import type { Component } from '@nya/core'
+import { listDirectory, parseDirectoryRequest } from '../directories.js'
 import { claudeAgentError, defaultThreadTitle, validateRunInput, validateThreadInput } from '../domain.js'
 import type { ClaudeAgentClock } from '../domain.js'
 import { applyRunEvent, emptyRunView } from '../events.js'
+import { mergeRecentProjects, normalizeProjectPath } from '../projects.js'
+import type { RecentProjectSource } from '../projects.js'
 import { claudeAgentSdkServiceKey } from '../sdk/port.js'
 import type { ClaudeAgentSdkPort, SdkRunHandle, SdkRunHooks } from '../sdk/port.js'
 import { claudeAgentStoreServiceKey } from '../store/component.js'
 import type { ClaudeAgentStorePort, RunRecord, ThreadRecord } from '../store/component.js'
 import { createApprovalRegistry } from './approvals.js'
-import type { ApprovalView, ClaudeAgentRunStatus, RunChangedView, RunEventFrameView, RunEventView, RunLiveView, RunView, ThreadMessagesView, ThreadView } from '../view.js'
+import type { ApprovalView, ClaudeAgentRunStatus, DirectoryListingView, RecentProjectsView, RunChangedView, RunEventFrameView, RunEventView, RunLiveView, RunView, ThreadMessagesView, ThreadView } from '../view.js'
 
 export const claudeAgentRunsServiceKey = 'claude-agent.runs'
 export const claudeAgentRunAdmissionServiceKey = 'claude-agent.run-admission'
@@ -42,6 +46,10 @@ export interface ClaudeAgentRunsPort {
   cancelRun(id: string): Promise<RunView | undefined>
   listPendingApprovals(threadId?: string): readonly ApprovalView[]
   resolveApproval(id: string, decision: unknown, answers: unknown): Promise<ApprovalView>
+  /** Directories recently used by this application's threads or by the Claude environment, existing on this device, newest first. */
+  listRecentProjects(signal?: AbortSignal): Promise<RecentProjectsView>
+  /** Subdirectories of one directory on this device; `~` is the device's home. Stateless, cancelled with the request. */
+  browseDirectory(params: { readonly path: string | null; readonly showHidden: string | null }, signal?: AbortSignal): Promise<DirectoryListingView>
 }
 export interface ClaudeAgentRunsOptions {
   readonly clock?: Partial<ClaudeAgentClock>
@@ -49,6 +57,9 @@ export interface ClaudeAgentRunsOptions {
   /** Replaceable for tests; production checks the execution device's own file system. */
   readonly directoryExists?: (path: string) => Promise<boolean>
   readonly retainedViews?: number
+  /** Home directory `~` expands to when browsing; defaults to the execution device's. */
+  readonly homeDirectory?: string
+  readonly recentProjectLimit?: number
 }
 interface ActiveRun {
   record: RunRecord
@@ -78,8 +89,13 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
 }> {
   const clock: ClaudeAgentClock = { now: options.clock?.now ?? (() => new Date().toISOString()), newId: options.clock?.newId ?? (() => randomUUID()) }
   const timeouts = { interrupt: options.cancel?.interruptTimeoutMs ?? 3_000, result: options.cancel?.resultTimeoutMs ?? 10_000, exit: options.cancel?.exitTimeoutMs ?? 5_000 }
-  const directoryExists = options.directoryExists ?? (async (path: string) => { try { return (await stat(path)).isDirectory() } catch { return false } })
-  const retainedViews = options.retainedViews ?? 64
+  // Recent projects are deduplicated by the directory's real path (macOS /tmp and /var are links); threads keep the path the user gave.
+  const resolveDirectory = options.directoryExists
+    ? async (path: string) => (await options.directoryExists!(path)) ? path : undefined
+    : async (path: string) => { try { const real = await realpath(path); return (await stat(real)).isDirectory() ? real : undefined } catch { return undefined } }
+  const directoryExists = async (path: string) => (await resolveDirectory(path)) !== undefined
+  const retainedViews = options.retainedViews ?? 64, recentProjectLimit = options.recentProjectLimit ?? 20
+  const homeDirectory = options.homeDirectory ?? homedir()
   return { name: 'claude-agent-runs', inject: [claudeAgentStoreServiceKey, claudeAgentSdkServiceKey], apply(ctx, _config, deps) {
     const store = deps[claudeAgentStoreServiceKey], sdk = deps[claudeAgentSdkServiceKey]
     const active = new Map<string, ActiveRun>(), activeByThread = new Map<string, string>(), starting = new Set<string>()
@@ -229,6 +245,17 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
         return runView(run.record)
       },
       listPendingApprovals: threadId => approvals.pending(threadId),
+      async listRecentProjects(signal) {
+        ensureOpen()
+        // The environment's session list is best effort: when it cannot be read, thread directories alone are returned and flagged.
+        const [threads, sessions] = await Promise.all([store.listThreads(), sdk.listSessionProjects(signal).then(list => ({ ok: true as const, list }), () => ({ ok: false as const, list: [] }))])
+        if (signal?.aborted) throw claudeAgentError('cancelled', 499)
+        const sources: RecentProjectSource[] = [...threads.map(thread => ({ path: thread.projectPath, lastUsedAt: thread.updatedAt, source: 'threads' as const })),
+          ...sessions.list.map(session => ({ path: session.path, lastUsedAt: session.lastUsedAt, source: 'claude' as const }))]
+        const existing = await Promise.all(sources.map(async source => { const path = await resolveDirectory(normalizeProjectPath(source.path)); return path ? [{ ...source, path }] : [] }))
+        return Object.freeze({ schemaVersion: 1, projects: mergeRecentProjects(existing.flat(), recentProjectLimit), partial: !sessions.ok })
+      },
+      browseDirectory: (params, signal) => { ensureOpen(); return listDirectory(parseDirectoryRequest(params, homeDirectory), { signal }) },
       async resolveApproval(id, decision, answers) {
         const pending = approvals.get(id)
         const run = pending && active.get(pending.runId)

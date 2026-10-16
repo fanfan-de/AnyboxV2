@@ -35,6 +35,8 @@ export function fakeSdk(options = {}) {
       return run.handle
     },
     async readSessionMessages(sessionId, dir, signal) { return options.history ? options.history(sessionId, dir, signal) : [] },
+    async listSessionProjects(signal) { return options.sessionProjects ? options.sessionProjects(signal) : [] },
+    async readSessionInfo(sessionId, dir, signal) { return options.sessionInfo ? options.sessionInfo(sessionId, dir, signal) : undefined },
   }
   return { port, runs }
 }
@@ -45,7 +47,8 @@ export async function createRunsFixture(path, options = {}) {
     await root.installComponent(createClaudeAgentStoreComponent(options.store))
     const sdk = options.sdk ?? fakeSdk(options.sdkOptions)
     root.provide(claudeAgentSdkServiceKey, sdk.port)
-    await root.installComponent(createClaudeAgentRunsComponent({ clock: options.clock ?? clock(), directoryExists: options.directoryExists ?? (async () => true), cancel: options.cancel, retainedViews: options.retainedViews }))
+    await root.installComponent(createClaudeAgentRunsComponent({ clock: options.clock ?? clock(), directoryExists: options.directoryExists ?? (async () => true), cancel: options.cancel, retainedViews: options.retainedViews,
+      homeDirectory: options.homeDirectory, recentProjectLimit: options.recentProjectLimit }))
     const runs = root.get(claudeAgentRunsServiceKey)
     if (!runs) throw new Error('claude-agent.runs did not become active')
     return { root, sdk, runs, admission: root.get(claudeAgentRunAdmissionServiceKey), store: root.get(claudeAgentStoreServiceKey), close: () => root.fiber.dispose() }

@@ -190,3 +190,22 @@ test('thread history is read through the adapter with the pinned session and pro
   assert.deepEqual(calls, [['sess-9', '/p']])
   await assert.rejects(f.runs.readThreadMessages('missing'), { code: 'thread-not-found', status: 404 })
 })
+test('recent projects merge thread directories with the Claude environment, keep only existing directories and flag a failed environment read', async t => {
+  const existing = new Set(['/projects/a', '/projects/b', '/projects/claude-only'])
+  const { open } = await fixture(t, { directoryExists: async path => existing.has(path) })
+  let fail = false
+  const sdk = fakeSdk({ sessionProjects: async () => {
+    if (fail) throw new Error('no projects directory')
+    return [{ path: '/projects/claude-only', lastUsedAt: '2026-10-16T00:00:00.500Z' }, { path: '/projects/a/', lastUsedAt: '2030-01-01T00:00:00.000Z' }, { path: '/projects/gone', lastUsedAt: '2031-01-01T00:00:00.000Z' }]
+  } })
+  const f = await open({ sdk, recentProjectLimit: 2 })
+  const a = await f.runs.createThread({ projectPath: '/projects/a' }); await f.runs.createThread({ projectPath: '/projects/b' })
+  const recent = await f.runs.listRecentProjects()
+  assert.equal(recent.partial, false)
+  assert.deepEqual(recent.projects.map(project => [project.path, project.source]), [['/projects/a', 'both'], ['/projects/b', 'threads']], 'the newest two existing directories; the missing one is dropped')
+  assert.equal(recent.projects[0].lastUsedAt, '2030-01-01T00:00:00.000Z'); assert.equal(recent.projects[0].name, 'a')
+  fail = true
+  const fallback = await f.runs.listRecentProjects()
+  assert.equal(fallback.partial, true); assert.deepEqual(fallback.projects.map(project => project.path), ['/projects/b', '/projects/a'])
+  assert.ok(a.id)
+})

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startApplicationHttpServer } from '../dist/host/http-server.js'
@@ -155,4 +155,26 @@ test('the registered execution application guards stops while a run is active, a
   await host.ready
   await waitFor(() => host.products.get('claude-agent').state === 'running')
   assert.equal((await host.root.get('claude-agent.runs').getRun(second.id)).status, 'cancelled')
+})
+test('recent projects and directory browsing are served with bounded query parameters', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'anybox-claude-agent-home-'))
+  t.after(() => rm(home, { recursive: true, force: true }))
+  await mkdir(join(home, 'work')); await mkdir(join(home, 'work', 'app')); await mkdir(join(home, '.config'))
+  const sdk = fakeSdk({ sessionProjects: async () => [{ path: join(home, 'work'), lastUsedAt: '2026-10-15T00:00:00.000Z' }] })
+  const f = await httpFixture(t, { sdk, directoryExists: async path => path === join(home, 'work') || path === join(home, 'work', 'app'), homeDirectory: home })
+  await f.api('POST', '/threads', { projectPath: join(home, 'work', 'app') })
+  const recent = await f.api('GET', '/projects/recent')
+  assert.equal(recent.status, 200); assert.equal(recent.data.schemaVersion, 1); assert.equal(recent.data.partial, false)
+  assert.deepEqual(recent.data.projects.map(project => [project.name, project.source]), [['app', 'threads'], ['work', 'claude']])
+  assert.equal((await f.api('GET', '/projects/recent?x=1')).status, 400)
+  const listing = await f.api('GET', '/directories?path=~')
+  assert.equal(listing.status, 200)
+  assert.deepEqual(listing.data, { schemaVersion: 1, path: home, parent: join(home, '..'), entries: [{ name: 'work', path: join(home, 'work') }], truncated: false })
+  assert.deepEqual((await f.api('GET', `/directories?path=${encodeURIComponent('~/')}&showHidden=1`)).data.entries.map(entry => entry.name), ['.config', 'work'])
+  assert.deepEqual((await f.api('GET', `/directories?path=${encodeURIComponent(join(home, 'work'))}`)).data.entries, [{ name: 'app', path: join(home, 'work', 'app') }])
+  assert.equal((await f.api('GET', '/directories')).data.error.code, 'project-path-invalid')
+  assert.equal((await f.api('GET', '/directories?path=relative')).status, 400)
+  assert.equal((await f.api('GET', `/directories?path=${encodeURIComponent(join(home, 'missing'))}`)).data.error.code, 'project-path-missing')
+  assert.equal((await f.api('GET', '/directories?path=~&other=1')).status, 400)
+  assert.equal((await f.api('GET', '/directories?path=~&showHidden=maybe')).status, 400)
 })
