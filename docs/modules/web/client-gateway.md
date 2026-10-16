@@ -2,7 +2,7 @@
 
 [宿主与客户端模块](README.md)
 
-`src/applications/harness/client/gateway.ts` 的 `createClientGatewayComponent({localInstanceId?})` 创建 Anybox Harness 内部 `client-gateway`，提供 `client.gateway: HarnessGateway`（handle、幂等 close）。inject `client.connections`、`host.directory-picker` 与 `app.activity`。组件仅在 Anybox Harness 客户端打开时安装，拥有在途连接、上传、SSE 和下载流；常驻监听器及静态页面属于 [Client Shell](client-shell.md)。`client.connections` 是宿主常驻的[连接库](client-connections.md)；转发的通用部分（请求绑定校验、租约获取、认证与实例头、重定向与实例不匹配拒绝、双向流管道与超时）是宿主 `src/host/connection-proxy.ts` 的 `forwardConnectionRequest`，网关只保留 Anybox Harness 的白名单、连接管理路由、本机状态与目录窗口。
+`src/applications/harness/client/gateway.ts` 的 `createClientGatewayComponent({localInstanceId?})` 创建 Anybox Harness 内部 `client-gateway`，提供 `client.gateway: HarnessGateway`（handle、幂等 close）。inject `client.connections`、`host.directory-picker` 与 `app.activity`。组件仅在 Anybox Harness 客户端打开时安装，拥有在途连接、上传、SSE 和下载流；常驻监听器及静态页面属于 [Client Shell](client-shell.md)。`client.connections` 是宿主常驻的[连接库](client-connections.md)，`host.directory-picker` 是宿主常驻的[目录窗口](directory-picker.md)；转发的通用部分（请求绑定校验、租约获取、认证与实例头、重定向与实例不匹配拒绝、双向流管道与超时）是宿主 `src/host/connection-proxy.ts` 的 `forwardConnectionRequest`，网关只保留 Anybox Harness 的白名单、连接管理路由、本机状态与目录窗口。
 
 每个委托请求在首次异步读取之前登记 Anybox Harness Activity 租约。写入阻止关闭客户端应用，读操作可取消但等待实际退出。`createHarnessGateway` 为内部闭包工厂；`createHarnessGateway` 仅组合相同 Gateway 与 Shell 的嵌入/测试入口，没有第二套产品生命周期。
 

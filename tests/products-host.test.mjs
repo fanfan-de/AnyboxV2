@@ -25,7 +25,7 @@ test('the host owns local/remote connections and opening a remote Agent leaves l
     await Promise.all([local.ready, remote.ready])
     client = await createClientHost({ path: join(directory, 'client.sqlite'), localInstanceId: local.instance.instanceId, openEntry })
     assert.ok(client.root.get('client.connections'), 'the connection library is a resident host provider'); assert.equal(client.root.get('client.gateway'), undefined)
-    assert.equal(client.root.get('host.directory-picker'), undefined)
+    assert.ok(client.root.get('host.directory-picker'), 'the directory window is a resident host provider')
     assert.equal((await request(client.url, '/api/client/v1/products'))[0].definition.name, 'Anybox Harness')
     await request(client.url, '/api/client/v1/connections', undefined, 503)
     await request(client.url, '/api/client/v1/products', { name: 'Models', pages: [] }, 404)

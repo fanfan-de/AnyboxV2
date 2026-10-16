@@ -4,6 +4,8 @@ import { createClientShellComponent, clientShellServiceKey } from './client-http
 import type { ClientShell } from './client-http.js'
 import { createConnectionsComponent } from './connections.js'
 import type { ClientConnectionsOptions } from './connections.js'
+import { createDirectoryPickerComponent } from './directory-picker.js'
+import type { DirectoryPickerOptions } from './directory-picker.js'
 import { createApplicationCatalog, createApplicationRuntimes } from './applications/registration.js'
 import type { ApplicationRegistration } from './applications/registration.js'
 import { shellAssets } from './assets.js'
@@ -19,6 +21,8 @@ export interface ClientHostOptions {
   readonly transportSecret?: string
   /** Execution device connections are a resident host provider shared by every client application. */
   readonly connections?: ClientConnectionsOptions
+  /** The native directory window for this machine, shared by every client application; unsupported platforms still install it. */
+  readonly picker?: DirectoryPickerOptions
 }
 
 /** Owns the client root and shell without choosing an application. */
@@ -54,6 +58,7 @@ export async function createClientHost(options: ClientHostOptions) {
   try {
     await root.installComponent(createLocalSqliteComponent(options.path))
     await root.installComponent(createConnectionsComponent(options.connections))
+    await root.installComponent(createDirectoryPickerComponent(options.picker))
     await root.installComponent(createProductActivityComponent())
     await root.installComponent(createProductsComponent({ directory: catalog.applications.map(app => app.definition), runtime: id => runtime.get(id), restoreLegacyAgent: false }))
     products = root.get<ProductsPort>(productsServiceKey)!
