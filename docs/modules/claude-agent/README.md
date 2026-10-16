@@ -24,4 +24,4 @@ Claude Agent（稳定 ID `claude-agent`）原生消费 `@anthropic-ai/claude-age
 
 ## 测试
 
-`tests/claude-agent-executable.test.mjs`、`claude-agent-projection.test.mjs`、`claude-agent-projects.test.mjs`、`claude-agent-runs.test.mjs`、`claude-agent-http.test.mjs`、`claude-agent-client.test.mjs`、`claude-agent-web.test.mjs` 使用内存 SDK 替身与临时目录；`claude-agent-sdk.test.mjs` 由 `ANYBOX_CLAUDE_AGENT_TESTS=1` 门控，使用本机真实 `claude`。边界由 `application-boundaries.test.mjs` 固定。统一入口 `npm run check`。
+`tests/claude-agent-executable.test.mjs`、`claude-agent-projection.test.mjs`、`claude-agent-projects.test.mjs`、`claude-agent-runs.test.mjs`、`claude-agent-http.test.mjs`、`claude-agent-client.test.mjs`、`claude-agent-web.test.mjs` 使用内存 SDK 替身与临时目录；`claude-agent-reconnect.test.mjs` 与 `claude-agent-project-panel.test.mjs` 挂载实际浏览器模块验证断流补读、线程隔离及目录窗口取消。`claude-agent-sdk.test.mjs` 由 `ANYBOX_CLAUDE_AGENT_TESTS=1` 门控，使用本机真实 `claude`。边界由 `application-boundaries.test.mjs` 固定。统一入口 `npm run check`。

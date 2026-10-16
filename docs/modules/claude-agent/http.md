@@ -20,7 +20,7 @@
 
 ## SSE
 
-每条流先发 `ready`，之后按发生顺序发 `run-changed` 与 `run-event`（含 seq），15 秒空闲心跳。队列上限 1024 帧或 1 MiB，背压 15 秒未 drain 即关闭该流；慢浏览器只失去订阅，不影响 Run。没有重放游标，浏览器重连后用 `/runs/:id/view` 校准。
+每条流先发 `ready`，之后按发生顺序发 `run-changed` 与 `run-event`（含 seq），15 秒空闲心跳。队列上限 1024 帧或 1 MiB，背压 15 秒未 drain 即关闭该流；慢浏览器只失去订阅，不影响 Run。没有重放游标，浏览器每次收到 `ready` 都重新查询当前线程、转录、Run 列表与待审批请求；Run 仍活动时再用 `/runs/:id/view` 校准实时投影。切换线程或设备会取消旧线程的补读，迟到的响应和较旧的投影不能覆盖当前界面。
 
 ## 执行、取消与清理
 
@@ -33,3 +33,5 @@
 ## 测试
 
 [claude-agent-http.test.mjs](../../../tests/claude-agent-http.test.mjs)：路由与 DTO、SSE 顺序、审批 API、wait 超时、二进制缺失文案、最近项目与目录浏览的查询参数边界、最近模型、注册应用的停止保护、能力宣告与整根关闭排空。
+
+[claude-agent-reconnect.test.mjs](../../../tests/claude-agent-reconnect.test.mjs)：挂载实际浏览器入口，断流后通过 `ready` 恢复终态、转录与审批，并验证切换线程后旧查询不能覆盖新界面。

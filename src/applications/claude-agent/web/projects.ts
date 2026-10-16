@@ -14,8 +14,8 @@ export interface ProjectPanelHandlers {
   select(path: string): void
   /** Explicit "new thread" with an optional user title. */
   create(path: string, title: string | undefined): void
-  /** The host's native directory window; resolves null when the user cancels. Offered only for this machine. */
-  pickNative(): Promise<string | null>
+  /** The host's native directory window; cancelled when this panel leaves its device. Resolves null when the user cancels. */
+  pickNative(signal?: AbortSignal): Promise<string | null>
   report(error: unknown): void
 }
 export interface ProjectPanel {
@@ -138,13 +138,16 @@ export function createProjectPanel(domId: (local: string) => string, handlers: P
   hiddenToggle.addEventListener('change', () => { if (listing) void browse(listing.path) })
   chooseButton.addEventListener('click', () => { if (listing) { setPath(listing.path); handlers.select(listing.path) } })
   const setPath = (path: string) => { cancelValidation(); pathInput.value = path; markValid(path) }
-  let picking = false
+  let picking: AbortController | undefined
+  const cancelPicking = () => { picking?.abort(); picking = undefined }
   nativeButton.addEventListener('click', () => { void (async () => {
-    if (picking || !enabled) return
-    picking = true; nativeButton.disabled = true
-    try { const path = await handlers.pickNative(); if (path && !disposed) { setPath(path); handlers.select(path) } }
-    catch (error) { if (!disposed) handlers.report(error) }
-    finally { picking = false; nativeButton.disabled = !enabled }
+    if (picking || !enabled || disposed) return
+    const controller = new AbortController(); picking = controller; nativeButton.disabled = true
+    try {
+      const path = await handlers.pickNative(controller.signal)
+      if (path && !controller.signal.aborted && !disposed && enabled && picking === controller) { setPath(path); handlers.select(path) }
+    } catch (error) { if (!controller.signal.aborted && !disposed && picking === controller) handlers.report(error) }
+    finally { if (picking === controller) { picking = undefined; nativeButton.disabled = !enabled } }
   })() })
   const renderRecent = (recent: RecentProjectsView | undefined, now: number) => {
     recentList.replaceChildren(...(recent?.projects ?? []).map(project => {
@@ -172,8 +175,9 @@ export function createProjectPanel(domId: (local: string) => string, handlers: P
   }
   const setEnabled = (next: boolean) => {
     enabled = next
+    if (!next) cancelPicking()
     for (const control of [pathInput, titleInput, browseButton, upButton, hiddenToggle, chooseButton]) control.disabled = !next
-    nativeButton.disabled = !next || picking
+    nativeButton.disabled = !next || !!picking
     createButton.disabled = !next || !valid
     if (!next) { cancelValidation(); browsing?.abort(); recentLoad?.abort(); valid = undefined; pathInput.value = ''; setStatus('', ''); listing = undefined; browser.hidden = true; browseButton.setAttribute('aria-expanded', 'false'); renderBrowser(); recentList.replaceChildren(); recentHint.hidden = true }
   }

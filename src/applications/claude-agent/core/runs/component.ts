@@ -144,12 +144,12 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
       const error = outcome.kind === 'failed' ? outcome.error
         : outcome.result.isError ? { code: 'agent-error', message: outcome.result.text || outcome.result.errors?.join('\n') || 'The agent reported an error.' } : null
       run.record = { ...run.record, status, finishedAt: now, result, error }
-      active.delete(run.record.id)
-      if (activeByThread.get(run.record.threadId) === run.record.id) activeByThread.delete(run.record.threadId)
       try {
         await store.updateRun(run.record.id, { status, finishedAt: now, result, error, nativeSessionId: run.record.nativeSessionId })
         await store.updateThread(run.record.threadId, { lastRunId: run.record.id, lastRunStatus: status, ...(title ? { title, titleSource: 'claude' } : {}) }, now)
       } catch (cause) { ctx.logger.warn('Claude Agent run settlement was not saved', { error: cause }) }
+      active.delete(run.record.id)
+      if (activeByThread.get(run.record.threadId) === run.record.id) activeByThread.delete(run.record.threadId)
       publishChange(run)
       for (const waiter of [...run.waiters]) waiter()
     }
@@ -254,6 +254,7 @@ export function createClaudeAgentRunsComponent(options: ClaudeAgentRunsOptions =
       async cancelRun(id) {
         const run = active.get(id)
         if (!run) { const record = await store.getRun(id); return record && runView(record) }
+        if (run.record.finishedAt !== null) return runView(run.record)
         if (!run.cancelRequested) {
           run.cancelRequested = true
           run.record = { ...run.record, status: 'cancelling' }

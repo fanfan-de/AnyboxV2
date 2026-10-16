@@ -35,7 +35,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     request: (path, signal) => { if (!client) return Promise.reject(Object.assign(new Error('product-unavailable'), { status: 503, code: 'product-unavailable' })); return client.request(path, undefined, signal) },
     select: directory => startProject(directory),
     create: (directory, threadTitle) => { void createThread(directory, threadTitle) },
-    pickNative: () => client ? client.pickDirectory() : Promise.reject(Object.assign(new Error('picker-unavailable'), { status: 503, code: 'picker-unavailable' })),
+    pickNative: signal => client ? client.pickDirectory(signal) : Promise.reject(Object.assign(new Error('picker-unavailable'), { status: 503, code: 'picker-unavailable' })),
     report: error => { if (!disposed && !lifetime.signal.aborted) show(messageFor(error)) },
   })
   const threadList = el('ul', { class: 'ca-thread-list' })
@@ -73,7 +73,8 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   let threads: readonly ThreadView[] = [], thread: ThreadView | undefined, project: string | undefined, loadingThread: string | undefined
   let history: readonly HistoryMessageView[] = [], runs: readonly RunView[] = [], current: RunView | undefined, live: RunLiveView | undefined
   let pending: readonly ApprovalView[] = [], subscription: { close(): void } | undefined, threadTimer: ReturnType<typeof setTimeout> | undefined
-  let submitting = false, disposed = false, viewRefresh: Promise<void> | undefined, draft: { prompt: string; key: string } | undefined
+  let submitting = false, disposed = false, viewRefresh: { runId: string; version: number; work: Promise<void> } | undefined, draft: { prompt: string; key: string } | undefined
+  let threadReads = new AbortController(), threadReadVersion = 0
   let models: string[] = []
   const collapsed = storedSet(collapsedKey)
   const show = (message: string) => { noticeText.textContent = message; notice.hidden = false }
@@ -84,7 +85,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   const route = () => parseRoute(context.route.read())
   const navigate = (next: { hostId?: string; threadId?: string }, replace = false) => { const value = formatRoute(next); if (context.route.read() !== value) context.route.navigate(value, replace) }
   /** A failed request shows a transient error; the next successful one clears it. Environment and Run errors have their own places. */
-  const guard = <T>(work: () => Promise<T>): Promise<T | undefined> => work().then(value => { if (!disposed) clearNotice(); return value }, error => { if (!disposed && !lifetime.signal.aborted) show(messageFor(error)); return undefined })
+  const guard = <T>(work: () => Promise<T>, relevant = () => !disposed): Promise<T | undefined> => work().then(value => { if (relevant()) clearNotice(); return value }, error => { if (relevant() && !lifetime.signal.aborted) show(messageFor(error)); return undefined })
   const target = () => thread?.projectPath ?? project
   const setDrawer = (open: boolean) => { root.dataset.drawer = open ? 'open' : ''; backdrop.hidden = !open; menuButton.setAttribute('aria-expanded', String(open)) }
   const closeDrawer = () => { if (root.dataset.drawer === 'open') setDrawer(false) }
@@ -164,21 +165,35 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     if (disposed || !client || !threads.some(activeThread)) return
     threadTimer = setTimeout(() => { threadTimer = undefined; void loadThreads() }, threadPollMs)
   }
-  const stopSubscription = () => { subscription?.close(); subscription = undefined }
+  const stopSubscription = () => {
+    subscription?.close(); subscription = undefined
+    threadReads.abort(); threadReads = new AbortController(); viewRefresh = undefined
+  }
   const subscribe = (threadId: string) => {
     stopSubscription()
     if (!client) return
-    subscription = client.events(threadId, {
-      ready() {},
-      change: change => void onChange(change),
-      event: frame => onEvent(frame),
+    const device = client, signal = threadReads.signal
+    const relevant = () => !disposed && !signal.aborted && client === device && thread?.id === threadId
+    subscription = device.events(threadId, {
+      ready() { if (relevant()) void refreshThread() },
+      change: change => { if (relevant()) void onChange(change) },
+      event: frame => { if (relevant()) onEvent(frame) },
       error() { /* reconnecting; the next ready triggers a reconcile through queries */ },
     })
   }
-  const refreshView = (runId: string) => viewRefresh ??= guard(async () => {
-    const view = await client!.request<RunLiveView>(`${app}/runs/${encodeURIComponent(runId)}/view`)
-    if (current?.id === runId) { live = view; addModel(view.init?.model) }
-  }).then(() => { viewRefresh = undefined; render() })
+  const refreshView = (runId: string): Promise<void> => {
+    if (viewRefresh?.runId === runId && viewRefresh.version === threadReadVersion) return viewRefresh.work
+    const device = client, signal = threadReads.signal, version = threadReadVersion
+    const relevant = () => !disposed && !signal.aborted && client === device && current?.id === runId && version === threadReadVersion
+    const work: Promise<void> = guard(async () => {
+      const view = await device!.request<RunLiveView>(`${app}/runs/${encodeURIComponent(runId)}/view`, undefined, signal)
+      if (relevant() && (!live || live.runId !== runId || view.seq >= live.seq)) {
+        live = view; pending = view.approvals.filter(approval => approval.decision === null); addModel(view.init?.model)
+      }
+    }, relevant).then(() => { if (viewRefresh?.work === work) viewRefresh = undefined; if (relevant()) render() })
+    viewRefresh = { runId, version, work }
+    return work
+  }
   const updateListEntry = (id: string, patch: Partial<ThreadView>) => { threads = threads.map(item => item.id === id ? { ...item, ...patch } : item); renderThreads() }
   /** The device may retitle a thread when a Run starts (first prompt) or ends (session title); re-read it so the header and list follow. */
   const reloadThread = async (id: string) => {
@@ -198,29 +213,35 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   }
   const onChange = async (change: RunChangedView) => {
     if (!client || !thread || change.threadId !== thread.id) return
+    const device = client, signal = threadReads.signal, version = ++threadReadVersion
+    const relevant = () => !disposed && !signal.aborted && client === device && thread?.id === change.threadId && version === threadReadVersion
     if (!current || current.id !== change.runId) {
-      current = await guard(() => client!.request<RunView>(`${app}/runs/${encodeURIComponent(change.runId)}`))
+      const latest = await guard(() => device.request<RunView>(`${app}/runs/${encodeURIComponent(change.runId)}`, undefined, signal), relevant)
+      if (!relevant()) return
+      current = latest
       live = current ? emptyRunView(current.id, current.threadId) : undefined
-      if (current) void refreshView(current.id)
     } else current = { ...current, status: change.status }
     if (!activeStatus(current)) { await refreshThread(); void loadModels() }
-    else { if (thread) updateListEntry(thread.id, { lastRun: { id: change.runId, status: change.status } }); render() }
+    else { if (thread) updateListEntry(thread.id, { lastRun: { id: change.runId, status: change.status } }); if (current) void refreshView(current.id); render() }
   }
   const refreshThread = async () => {
     if (!client || !thread) return
-    const id = thread.id
+    const id = thread.id, device = client, signal = threadReads.signal, version = ++threadReadVersion
+    const relevant = () => !disposed && !signal.aborted && client === device && thread?.id === id && version === threadReadVersion
     const [messages, list, approvals] = await Promise.all([
-      guard(() => client!.request<ThreadMessagesView>(`${app}/threads/${encodeURIComponent(id)}/messages`)),
-      guard(() => client!.request<readonly RunView[]>(`${app}/threads/${encodeURIComponent(id)}/runs`)),
-      guard(() => client!.request<readonly ApprovalView[]>(`${app}/threads/${encodeURIComponent(id)}/approvals`)),
+      guard(() => device.request<ThreadMessagesView>(`${app}/threads/${encodeURIComponent(id)}/messages`, undefined, signal), relevant),
+      guard(() => device.request<readonly RunView[]>(`${app}/threads/${encodeURIComponent(id)}/runs`, undefined, signal), relevant),
+      guard(() => device.request<readonly ApprovalView[]>(`${app}/threads/${encodeURIComponent(id)}/approvals`, undefined, signal), relevant),
     ])
-    if (disposed || thread?.id !== id) return
+    if (!relevant()) return
     if (messages) history = messages.messages
-    if (list) { runs = list; current = list.find(activeStatus) ?? list.at(-1); if (!activeStatus(current)) live = undefined; for (const run of list) { addModel(run.model); addModel(run.resolvedModel) } }
-    pending = approvals ?? []
+    if (list) { runs = list; current = list.find(activeStatus) ?? list.at(-1); if (!activeStatus(current) || live?.runId !== current?.id) live = undefined; for (const run of list) { addModel(run.model); addModel(run.resolvedModel) } }
+    if (approvals) pending = approvals
     if (activeStatus(current)) await refreshView(current!.id)
-    const latest = await guard(() => client!.request<ThreadView>(`${app}/threads/${encodeURIComponent(id)}`))
-    if (latest && thread?.id === id) { thread = latest; updateListEntry(id, latest) }
+    if (!relevant()) return
+    const latest = await guard(() => device.request<ThreadView>(`${app}/threads/${encodeURIComponent(id)}`, undefined, signal), relevant)
+    if (!relevant()) return
+    if (latest) { thread = latest; updateListEntry(id, latest) }
     render()
   }
   const openThread = async (id: string | undefined, replace = false) => {

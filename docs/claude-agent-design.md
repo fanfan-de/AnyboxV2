@@ -103,7 +103,7 @@ Run 状态：`running → completed | failed | cancelled`，重启后遗留为 `
 | `GET /runs/:id/wait?timeoutMs` | `{ done, timedOut, run }`（0..10000，默认 10000；代理握手上限 15 秒），超时只释放 waiter |
 | `POST /runs/:id/cancel {}` | 请求取消，返回当前状态 |
 | `POST /approvals/:id { decision, answers? }` | `allow` / `allow-session` / `deny`，问题类必须给全部答案 |
-| `GET /events?threadId=…`（1..4） | SSE：`ready`、`run-changed`、`run-event`（带 seq），15 秒心跳，背压超限关闭该流；无重放游标，重连后用 `/runs/:id/view` 校准 |
+| `GET /events?threadId=…`（1..4） | SSE：`ready`、`run-changed`、`run-event`（带 seq），15 秒心跳，背压超限关闭该流；无重放游标，每次 `ready` 补读线程、转录、Run 与审批，活动 Run 再用 `/runs/:id/view` 校准 |
 
 DTO 定义在 `core/view.ts`：`ThreadView`（含 `titleSource`：default/prompt/claude/user，以及内存中的 `pendingApprovals` 计数）、`RunView`（含 `resolvedModel`、`RunResultView` 用量与 `RunErrorView`）、`ApprovalView`、`RunEventView`、`RunLiveView`（有界：单块 64 KiB、400 条、50 条通知、200 条审批）、`HistoryMessageView`、`RecentProjectsView`、`DirectoryListingView`、`RecentModelsView`。全部 `schemaVersion: 1`，只做追加。
 
@@ -113,7 +113,7 @@ DTO 定义在 `core/view.ts`：`ThreadView`（含 `titleSource`：default/prompt
 - 最近项目合并两个来源：本应用已有线程的 `projectPath`，以及执行设备 Claude 环境自己记录的项目目录（`listSessions({ includeProgrammatic: false, limit: 200 })` 的 `cwd`，即用户在终端和 VS Code 用过的目录）。`listSessions` 与 `getSessionInfo` 和 `getSessionMessages` 一样在 `history-worker` 子进程中执行，分别有 15 秒 / 1 MiB 与 10 秒 / 64 KiB 上限。Runs 按真实路径（`realpath`）合并去重、只保留仍存在的目录、按最近使用倒序最多 20 条；环境列表读取失败时只返回线程目录并标记 `partial`。
 - 目录浏览 `GET /directories` 是 Claude Agent 自己的纯函数 + fs 实现（`core/directories.ts`），不复用 Anybox Harness 的目录浏览或 Projects，不持有长期资源，不新建 Nya 组件，随请求取消。
 - 浏览器的路径输入以 350 ms 防抖复用该接口校验：存在即成为所选项目，目录名作为标题占位（不作为用户标题提交）；不存在时禁用“新建线程”。
-- 系统目录窗口：所选连接是受信本机且平台支持时，项目面板显示“系统目录窗口…”，经客户端网关 `POST /connections/:id/pick` 调用宿主常驻的 `host.directory-picker`；远端设备用应用内浏览。
+- 系统目录窗口：所选连接是受信本机且平台支持时，项目面板显示“系统目录窗口…”，经客户端网关 `POST /connections/:id/pick` 调用宿主常驻的 `host.directory-picker`；远端设备用应用内浏览。切换设备或销毁项目面板会取消窗口请求，旧请求的迟到结果与错误不会应用到新设备。
 - 首条消息即创建线程：选定项目（最近项目、浏览、输入或线程组的“在此项目新建线程”）后直接发送，浏览器先 `POST /threads` 再 `POST /threads/:id/runs`，中途失败保留提示词草稿。
 - 线程标题：显式标题来源为 user，永不覆盖；仍以目录名命名的线程在首个 Run 接受时取提示词首个非空行（最多 60 字）为 prompt 标题；Run 结算、进程退出后经 `getSessionInfo(sessionId, { dir })` 读取 `customTitle ?? summary ?? firstPrompt` 更新为 claude 标题，读取失败保留当前标题。本期不做改名。
 

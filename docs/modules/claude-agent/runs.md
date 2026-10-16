@@ -37,7 +37,7 @@
 
 审批：`canUseTool` 回调创建 `ApprovalView`（`permission` 或 `question`），持久化并发事件，等待 `resolveApproval`；`allow-session` 只在适配器报告可用时接受，问题类必须覆盖全部问题。SDK 放弃等待（signal 中止）记为 `cancelled`；Run 取消或已关闭时直接 deny。
 
-结算：等待 `result` 再等待 `done`；线程有 session 且标题来源不是 user 时经适配器 `readSessionInfo` 读取 Claude 环境的会话标题（失败或相同则忽略）；结清遗留审批；`cancelRequested` → `cancelled`，否则成功结果 → `completed`、错误结果或失败 → `failed`（`is_error` 的结果文本成为错误消息）；写回 Run 与线程（含新的 claude 标题），发出终态变化，唤醒 `waitRun`。状态只在进程实际退出后变为终态，终态变化在标题写入之后发出，浏览器重读线程即可看到新标题。
+结算：等待 `result` 再等待 `done`；线程有 session 且标题来源不是 user 时经适配器 `readSessionInfo` 读取 Claude 环境的会话标题（失败或相同则忽略）；结清遗留审批；`cancelRequested` → `cancelled`，否则成功结果 → `completed`、错误结果或失败 → `failed`（`is_error` 的结果文本成为错误消息）；写回 Run 与线程（含新的 claude 标题），再释放线程占用与活动登记，发出终态变化，唤醒 `waitRun`。状态只在进程实际退出后变为终态，结算写入期间仍视为忙碌，关闭必须等待完整结算；已经确定终态的 Run 收到取消请求时直接返回该终态。终态变化在标题写入之后发出，浏览器重读线程即可看到新标题。
 
 ## 执行、取消与清理
 
@@ -49,4 +49,4 @@
 
 ## 测试
 
-[claude-agent-runs.test.mjs](../../../tests/claude-agent-runs.test.mjs)：准入与并行、幂等、投影与 session 固定、审批阻塞/回答/取消、`result` 早于 `done`、超时终止、重启标记、卸载排空、最近项目合并与 partial、提示词/Claude/用户标题、实际模型、待审批计数、v1 样本升级。[claude-agent-projects.test.mjs](../../../tests/claude-agent-projects.test.mjs)：`mergeRecentProjects`、`parseDirectoryRequest`、`listDirectory` 的纯函数与临时目录行为。
+[claude-agent-runs.test.mjs](../../../tests/claude-agent-runs.test.mjs)：准入与并行、幂等、投影与 session 固定、审批阻塞/回答/取消、`result` 早于 `done`、超时终止、重启标记、卸载排空、真实 SQLite 排队结算时保持忙碌并等待 Run/线程索引写入、最近项目合并与 partial、提示词/Claude/用户标题、实际模型、待审批计数、v1 样本升级。[claude-agent-projects.test.mjs](../../../tests/claude-agent-projects.test.mjs)：`mergeRecentProjects`、`parseDirectoryRequest`、`listDirectory` 的纯函数与临时目录行为。

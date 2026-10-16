@@ -180,6 +180,39 @@ test('disposing the component cancels active runs and joins their exits', async 
   assert.equal((await reopened.runs.getRun(run.id)).status, 'cancelled')
   await assert.rejects(f.runs.startRun(thread.id, { prompt: 'late', idempotencyKey: 'k9' }), { code: 'service-unavailable' })
 })
+test('an exited run stays busy until SQLite settlement finishes and shutdown keeps its terminal thread state', async t => {
+  const { open } = await fixture(t)
+  const f = await open()
+  const thread = await f.runs.createThread({ projectPath: '/p' })
+  const run = await f.runs.startRun(thread.id, { prompt: 'finish before shutdown', idempotencyKey: 'k' })
+  const db = f.root.get(localStorageServiceKey), updateRun = f.store.updateRun
+  let release, entered
+  const blocked = new Promise(resolve => { release = resolve }), queued = new Promise(resolve => { entered = resolve })
+  // Hold a real transaction ahead of the terminal write, as another application sharing SQLite can do.
+  f.store.updateRun = (id, patch) => {
+    if (patch.status === 'completed') void db.transaction(async () => { entered(); await blocked })
+    return updateRun(id, patch)
+  }
+  let waited = false, closed = false, closing
+  const waiting = f.runs.waitRun(run.id).then(value => { waited = true; return value })
+  f.sdk.runs[0].finish({ kind: 'result', result: sampleResult() }); f.sdk.runs[0].exit()
+  try {
+    await queued
+    assert.equal(f.admission.busy(), true, 'settlement still owns the thread and the shutdown lease')
+    assert.equal(f.admission.pauseIfIdle(), undefined)
+    assert.equal(waited, false)
+    closing = f.close().then(() => { closed = true })
+    await tick(); await tick()
+    assert.equal(closed, false, 'shutdown waits for the Run and thread index writes')
+    assert.equal((await f.runs.getRun(run.id)).status, 'completed', 'shutdown does not cancel an already exited result')
+    assert.equal(f.sdk.runs[0].interrupts, 0)
+  } finally { release(); await closing }
+  const finished = await waiting
+  assert.equal(finished.status, 'completed')
+  const reopened = await open()
+  assert.equal((await reopened.runs.getRun(run.id)).status, 'completed')
+  assert.deepEqual((await reopened.runs.getThread(thread.id)).lastRun, { id: run.id, status: 'completed' })
+})
 test('thread history is read through the adapter with the pinned session and project directory', async t => {
   const { open } = await fixture(t)
   const calls = []
