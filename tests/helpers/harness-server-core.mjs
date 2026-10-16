@@ -37,12 +37,18 @@ export async function createTestHarnessServerCore(root, options, { legacyTools =
     if (closing) return closing
     const api = root.get('host.http')
     root.get(runAdmissionServiceKey)?.closeAdmission()
-    // Accepted ordinary HTTP writes retain their providers until the listener has drained.
-    const stopped = api ? api.close().then(() => installation.close(), async error => {
-      await installation.close(); throw error
-    }) : installation.close()
     closing = (async () => {
-      const results = await Promise.allSettled([stopped])
+      const invoke = work => Promise.resolve().then(work)
+      const listener = invoke(() => api?.close())
+      const core = (async () => {
+        const results = await Promise.allSettled([invoke(() => root.get('harness.http')?.close())])
+        // Ordinary handlers finish before their providers close. Retained Run
+        // leases belong to the listener and must drain alongside core cleanup.
+        results.push(...await Promise.allSettled([invoke(() => installation.close())]))
+        const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+        if (errors.length) throw new AggregateError(errors, 'Test application request and core cleanup failed')
+      })()
+      const results = await Promise.allSettled([listener, core])
       try { await root.fiber.dispose() } catch (error) { results.push({ status: 'rejected', reason: error }) }
       const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
       if (errors.length) throw new AggregateError(errors, 'Test application cleanup failed')

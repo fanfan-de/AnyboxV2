@@ -30,6 +30,8 @@ import type { RunChange } from '../core/run/notifications.js'
 import type { ProtocolViewFrame, ProtocolViewSnapshot } from '../core/view/types.js'
 import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
   PromptSnapshot, PromptVersion } from '../core/prompt/domain.js'
+import type { AttachCodeInput, UnitAttachment, UnitKind, UnitScope } from '../core/unit/port.js'
+import { isUnitError, validateUnitKind, validateUnitScope } from '../core/unit/domain.js'
 
 export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> {
@@ -83,6 +85,9 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   getPromptVersions(id: string): readonly PromptVersion[]
   getAgentPrompts(id: string): readonly PromptSnapshot[]
   bindPrompt(id: string, versionId: string): Promise<PromptBinding>
+  listUnitAttachments(): Promise<readonly UnitAttachment[]>
+  createUnitAttachCode(input: AttachCodeInput): Promise<{ readonly attachment: UnitAttachment; readonly code: string }>
+  revokeUnitAttachment(attachmentId: string): Promise<UnitAttachment>
 }
 
 export interface HarnessServerHttpHandler extends ApplicationHttpPort {
@@ -138,6 +143,11 @@ function knownFailure(error: unknown): HttpFailure {
       const code = String(error.code)
       return failure(code === 'asset-too-large' ? 413 : code === 'asset-missing' ? 404 : code === 'asset-expired' ? 409
         : ['asset-invalid', 'asset-unsupported', 'asset-corrupt'].includes(code) ? 400 : 503, code)
+    }
+    if (isUnitError(error)) {
+      const code = error.code
+      return failure(code === 'unit-attachment-missing' ? 404 : ['unit-invalid', 'unit-scope-exceeded', 'unit-kind-mismatch'].includes(code) ? 400
+        : code === 'unit-attachments-closed' ? 503 : 409, code)
     }
     if (/^unknown (agent|session|project|prompt) /.test(error.message)) return failure(404, 'not-found')
     if (error.message === 'prompt draft revision conflict') return failure(409, 'prompt-conflict')
@@ -473,6 +483,24 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         changeStreams.add(stream)
         const unsubscribe = cancelledByHost(response, () => stream.close())
         try { await stream.done } finally { unsubscribe(); changeStreams.delete(stream) }
+        return
+      }
+      if (method === 'GET' && path === '/api/v1/units/attachments') {
+        json(response, 200, await commands.listUnitAttachments())
+        return
+      }
+      if (method === 'POST' && path === '/api/v1/units/attach-codes') {
+        const body = await requestObject(request, ['unitKind', 'scope', 'ttlMs'])
+        let unitKind: UnitKind, scope: UnitScope
+        try { unitKind = validateUnitKind(body.unitKind); scope = validateUnitScope(body.scope) } catch { throw failure(400, 'invalid-input') }
+        if (body.ttlMs !== undefined && (typeof body.ttlMs !== 'number' || !Number.isSafeInteger(body.ttlMs))) throw failure(400, 'invalid-input')
+        json(response, 201, await commands.createUnitAttachCode({ unitKind, scope, ...(body.ttlMs === undefined ? {} : { ttlMs: body.ttlMs as number }) }))
+        return
+      }
+      const unitRevokeMatch = /^\/api\/v1\/units\/attachments\/([^/]+)\/revoke$/.exec(path)
+      if (method === 'POST' && unitRevokeMatch) {
+        await requestObject(request, [])
+        json(response, 200, await commands.revokeUnitAttachment(decodeURIComponent(unitRevokeMatch[1])))
         return
       }
       if (method === 'GET' && path === '/api/v1/agents') {

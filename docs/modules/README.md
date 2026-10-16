@@ -14,6 +14,7 @@
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 7 |
 | [computers/](./computers/README.md) | 按需本机资源、独立 worker、固定工作区与耐久工具操作协调 | 7 |
 | [sessions/](./sessions/README.md) | 项目身份与目录浏览、文件快照、会话树、归档、Run 持久事实及恢复 | 3 |
+| [units/](./units/README.md) | 可部署单元的附着账本、本机自动附着与 Run 固定的附着引用 | 1 |
 | [images/](./images/README.md) | 图片导入、不可变字节、草稿续期与事务保留 | 1 |
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
 | [tools/](./tools/README.md) | 来源工具契约、进程会话、文件变更与搜索 | 4 |
@@ -57,6 +58,7 @@
 | 项目与会话 | [Projects](./sessions/projects.md) | `harness-projects` | `harness.projects` |
 | 项目与会话 | [Project Files](./sessions/project-files.md) | `harness-project-files` | `harness.project-files` |
 | 项目与会话 | [Session](./sessions/session.md) | `harness-sessions` | `harness.sessions`、`harness.session-runs` |
+| 可组合单元 | [单元附着](./units/unit-attachments.md) | `harness-unit-attachments` | `harness.unit-attachments` |
 | 图片资源 | [Image Assets](./images/image-assets.md) | `harness-image-assets` | `harness.image-assets` |
 | Prompt | [Prompt](./prompts/prompts.md) | `harness-prompts` | `harness.prompts` |
 | Prompt | [Agent Prompt](./prompts/agent-prompts.md) | `harness-agent-prompts` | `harness.agent-prompts` |
@@ -83,7 +85,7 @@
 
 1. [Web](./web/web-frontend.md) 或 [harness server API](../../src/applications/harness/core/index.ts) 接收请求，通过当前服务进行调用。
 2. [Run](./execution/run.md) 先检查已接受幂等键，再检查 [Session](./sessions/session.md) 的归档状态、项目、Prompt 与模型选择；新请求经 Session 受管读取已准备的[文件快照](./sessions/project-files.md)。
-3. [协议应用注册](./execution/protocol-agent-registry.md) 在模板后附加文件资料并编码图片引用，固定驱动代与对应 Loop，通过 [Models](./models/models.md) 准备独立 execution/program；Session 在接受事务复核归档状态、协议及父恢复引用，同时永久保留图片与文件引用。
+3. [协议应用注册](./execution/protocol-agent-registry.md) 在模板后附加文件资料并编码图片引用，固定驱动代与对应 Loop，通过 [Models](./models/models.md) 准备独立 execution/program；Run 解析本机 Models 与 Computer 的[单元附着](./units/unit-attachments.md)引用，Session 在接受事务复核归档状态、协议、父恢复引用及附着引用，同时永久保留图片与文件引用。
 4. [RunRuntime](./execution/run-runtime.md) 同步接管 program，管理操作意图、实际启动、取消、退出和观察提交。计算工具声明和 resume cursor 由 Session 同事务接纳到 [Computer Operations](./computers/computer-operations.md)，后者按需准备确切实例和工作区，再交独立 [worker](./computers/worker-executor.md) 的工具执行器；纯模型和计划调用不激活 computer。进程异常退出后，新 Runtime 提升 owner，查回原操作与游标。
 5. 工具图片观察与原字节引用同事务保留，随后按用户图片块进入下一次原生请求；进程 scope 退出事实经通用清理操作提交，program 与全部工具退出后，Session 才原子提交成功节点、记录、结果引用和终态。Web 通过安全投影及持久查询呈现结果。
 
@@ -97,7 +99,8 @@ Models 配置库、目录缓存库和业务 SQLite 是三套独立连接，不�
 | --- | --- | --- |
 | Models 配置库 / 原生参数 | 配置库 v3；参数 `{ protocolId, formatVersion: 1, value }` | 未知扩展保留待迁移状态；历史 JSON 不改写 |
 | 应用目标迁移账本 | `app-products` v2；按注册 ID 保存打开目标 | 执行库首次按 run-state 保留 Agent；旧组合只迁入内置目标；客户端默认关闭 |
-| Session 迁移账本 | `run-state` v10 | v10 独立 Run 恢复游标与 owner；保留 v5 原生记录、v6 图片引用、v7 归档、v8 默认模型、v9 工具选择；旧 `dialogue-v1` 只读 |
+| Session 迁移账本 | `run-state` v11 | v11 在 `harness_runs` 增加固定的单元附着引用；v10 独立 Run 恢复游标与 owner；保留 v5 原生记录、v6 图片引用、v7 归档、v8 默认模型、v9 工具选择；旧 `dialogue-v1` 只读，没有引用的旧 Run 按本机形态解释 |
+| 单元附着迁移域 | `unit-attachments` v1 | 附着记录与审计事件；附着码和单元凭证只存 SHA-256 摘要；本机附着 ID 固定为 `local:<kind>` |
 | Run 根初始化 | `NativeInitialization` v2 / `tool-library-v1` | 复制 Session 工具快照；旧 v1 / `known-tools-v1` 定义与 JSON 保持原样 |
 | Run 原始输入 | `NativeRunInput` v3，保存 raw/text/template/images/files | v1 无附件，v2 只有图片；文件正文另存快照并进入本轮原生请求 |
 | 四协议驱动 / 应用绑定 | 驱动 2.1.0、Loop 1.3.0、原生记录 v2 | 读取 Loop 1.0/1.1/1.2/1.3；双读旧文本 v1，仍检查账户、模型和执行语义兼容 |

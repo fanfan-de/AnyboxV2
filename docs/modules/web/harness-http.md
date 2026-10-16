@@ -2,7 +2,7 @@
 
 [宿主模块](README.md) · [通用监听器](web-frontend.md)
 
-`src/applications/harness/http/harness-http.ts` 的 `createHarnessServerHttpComponent(root,agents,{authenticated?})` 创建 `harness-http`，提供 `harness.http: HarnessServerHttpHandler`。它是 harness server 安装的一部分，不持有监听端口。注入 app.activity 及认证模式下的 host.access；受信请求入口同步从根捕获当前 Session、Run、Projects、Models 和 Prompt 服务快照，缺失服务只影响对应业务。Agent 列表为只读配置。
+`src/applications/harness/http/harness-http.ts` 的 `createHarnessServerHttpComponent(root,agents,{authenticated?})` 创建 `harness-http`，提供 `harness.http: HarnessServerHttpHandler`。它是 harness server 安装的一部分，不持有监听端口。注入 app.activity 及认证模式下的 host.access；受信请求入口同步从根捕获当前 Session、Run、Projects、Models、Prompt 和单元附着服务快照，缺失服务只影响对应业务。Agent 列表为只读配置。
 
 内部 `createHarnessServerHttpHandler`、`models-api.ts` 负责业务路由、DTO、图片/文件、Models 管理和通知 SSE，`validation.ts` 保留 Prompt revision 等业务输入转换；不创建额外组件。每次调用固定该代服务；重启不重放旧请求。Run 通知订阅由此组件持有，通用监听器不导入任何 Anybox Harness 服务。
 
@@ -60,6 +60,16 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 等待超时只取消本次 waiter，不取消 Run；HTTP 断开也是如此。兄弟 Run 可以并发，浏览器必须选择明确父节点，服务端不推断 head。幂等恢复、成功节点创建条件及旧 Session 只读规则见 [Session](../sessions/session.md) 与 [Run](../execution/run.md)。
 
 新会话默认值由现有 Session 组件持久保存，不属于 Models 目录或浏览器偏好。保存非空值时 HTTP 捕获的 Models 服务检查配置存在且当前可用；已保存默认后来停用或删除时，查询与新会话创建保留其 ID，不静默换模型。未知 Agent 或新保存的模型返回 404；不可用模型返回 `409 model-unavailable`，过期 revision 返回 `409 session-defaults-conflict`，非法字段或缺失 modelId/revision 返回 400。revision 初始为 0，保存及清除均递增。默认变更只影响之后新建的会话，首次 Run 仍负责固定协议；已有会话的显式选模与 Run 优先级不变。
+
+## API：单元附着
+
+以下路径只使用 `/api/v1/apps/agent` 前缀，没有旧 `/api/v1` 别名；Web 尚未接入，远端单元消费附着码的入口随 U1 加入。
+
+| 方法 / 路径 | 输入或行为 |
+| --- | --- |
+| `GET /units/attachments` | 附着记录列表，含本机自动附着；不含附着码或凭证 |
+| `POST /units/attach-codes` | `{ unitKind, scope, ttlMs? }`；记录 pending 附着并返回 201 与一次性 `code`；种类与作用域不一致或 ttl 非整数返回 400 |
+| `POST /units/attachments/:id/revoke` | `{}`；远端附着幂等撤销并递增 epoch；本机附着返回 `409 unit-attachment-local`，未知 ID 返回 404 |
 
 ## API：项目文件快照
 

@@ -13,6 +13,7 @@ import { imageLimits } from '../image/limits.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { JsonValue } from '@anybox/models'
 import type { ToolDefinition } from '../tool/definition.js'
+import type { RunUnitBindings } from '../unit/domain.js'
 import { validateLibraryArguments, type LibraryToolName } from '../tool/catalog.js'
 
 export type RunHistory =
@@ -112,6 +113,8 @@ export interface Run {
   readonly protocolBinding?: ProtocolBindingSnapshot
   readonly nativeInput?: NativeRunInput
   readonly initialization?: NativeInitialization
+  /** Unit attachments fixed by the acceptance transaction; absent only for Runs accepted before the ledger existed. */
+  readonly units?: RunUnitBindings
   /** Historical metadata only; no retired profile can be executed. */
   readonly legacyModelSnapshot?: Readonly<{ profileId: string; configVersion: string }>
   readonly errorCategory?: RunFailureCategory

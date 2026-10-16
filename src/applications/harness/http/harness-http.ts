@@ -25,6 +25,8 @@ import { runChangedEvent, runViewEvent } from '../core/run/notifications.js'
 import { decodeProtocolView } from '../core/view/decode.js'
 import { projectProtocolRecords } from '../core/protocol-agents/projection.js'
 import { listTools } from '../core/tool/catalog.js'
+import { unitAttachmentsServiceKey } from '../core/unit/port.js'
+import type { UnitAttachmentsPort } from '../core/unit/port.js'
 
 export const harnessServerHttpServiceKey = 'harness.http'
 const localActorId = 'local-web-user'
@@ -39,12 +41,16 @@ type CommandDependencies = {
   [directoryPickerServiceKey]: DirectoryPickerPort
   [promptServiceKey]: PromptPort
   [agentPromptServiceKey]: AgentPromptPort
+  [unitAttachmentsServiceKey]: UnitAttachmentsPort
 }
 
 function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies): HarnessServerApiCommands {
   return {
     listAgents: () => agentIds,
     listTools,
+    listUnitAttachments: () => deps[unitAttachmentsServiceKey].list(),
+    createUnitAttachCode: input => deps[unitAttachmentsServiceKey].createAttachCode(input),
+    revokeUnitAttachment: id => deps[unitAttachmentsServiceKey].revoke(id),
     getAgentTools: agentId => deps[sessionServiceKey].getAgentTools(agentId),
     setAgentTools: (agentId, input) => deps[sessionServiceKey].setAgentTools(agentId, input),
     directoryPickerSupported: () => deps[directoryPickerServiceKey]?.supported ?? false,
@@ -153,7 +159,7 @@ export function createHarnessServerHttpComponent(root: Context, agents: readonly
     const snapshots = new Map<string, unknown>()
     const services = {} as CommandDependencies
     for (const key of [sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
-      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey] as const) {
+      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, unitAttachmentsServiceKey] as const) {
       snapshots.set(key, root.get(key))
       Object.defineProperty(services, key, { get() {
         const service = snapshots.get(key)

@@ -739,9 +739,10 @@ test('a fresh harness server restores persistent sessions over HTTP', async () =
   }
 })
 
-test('harness server shutdown cancels and joins an accepted Run before releasing its core', async () => {
+test('harness server shutdown cancels and joins an accepted Run before releasing its core', { timeout: 5_000 }, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-'))
   const f = await fixture(directory)
+  let shutdown, cancellationTimeout
   try {
     const created = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     const accepted = await request(f.web, 'POST', `/sessions/${created.data.id}/runs`, {
@@ -749,8 +750,11 @@ test('harness server shutdown cancels and joins an accepted Run before releasing
     })
     assert.equal(accepted.data.status, 'running')
     let closed = false
-    const shutdown = f.close().then(() => { closed = true })
-    await f.llm.calls[0].cancelled.promise
+    shutdown = f.close().then(() => { closed = true })
+    await Promise.race([f.llm.calls[0].cancelled.promise, new Promise((_, reject) => {
+      cancellationTimeout = setTimeout(() => reject(new Error('Shutdown did not cancel the accepted Run')), 2_000)
+    })])
+    clearTimeout(cancellationTimeout)
     assert.ok(f.llm.calls[0].cancellations.length > 0)
     assert.equal(closed, false)
     f.llm.calls[0].result.reject(modelsError('provider-failure'))
@@ -758,9 +762,12 @@ test('harness server shutdown cancels and joins an accepted Run before releasing
     await shutdown
     assert.equal(closed, true)
   } finally {
-    for (const call of f.llm.calls) call.done.resolve()
-    await f.close()
+    clearTimeout(cancellationTimeout)
+    for (const call of f.llm.calls) { call.result.reject(modelsError('cancelled')); call.done.resolve() }
+    const results = await Promise.allSettled([shutdown, f.close()])
     rmSync(directory, { recursive: true, force: true })
+    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (errors.length) throw new AggregateError(errors, 'Shutdown fixture cleanup failed')
   }
 })
 
@@ -1462,4 +1469,33 @@ test('harness server HTTP archive routes enforce read-only state, active conflic
     for (const call of f.llm.calls) { call.result.resolve('cleanup'); call.done.resolve() }
     await f.close(); rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test('unit attachments are listed, attach codes are issued once, and local attachments cannot be revoked over HTTP', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-http-units-')), f = await fixture(directory)
+  const call = (method, path, body) => fetch(`${f.web.url}/api/v1/apps/agent${path}`, { method,
+    headers: method === 'POST' ? { Origin: f.web.url, 'Content-Type': 'application/json' } : undefined, body: method === 'POST' ? JSON.stringify(body) : undefined })
+  try {
+    const listed = await call('GET', '/units/attachments')
+    assert.equal(listed.status, 200)
+    assert.deepEqual((await listed.json()).map(a => [a.attachmentId, a.state, a.origin, a.credential]),
+      [['local:computer', 'approved', 'local', 'none'], ['local:models', 'approved', 'local', 'none']])
+    const created = await call('POST', '/units/attach-codes', { unitKind: 'computer', scope: { kind: 'computer', projects: ['/work'], tools: 'all' } })
+    assert.equal(created.status, 201)
+    const { attachment, code } = await created.json()
+    assert.equal(attachment.state, 'pending'); assert.equal(attachment.unitId, null); assert.equal(typeof code, 'string')
+    assert.ok(!JSON.stringify(await (await call('GET', '/units/attachments')).json()).includes(code), 'listing never returns the code')
+    assert.equal((await call('POST', '/units/attach-codes', { unitKind: 'models', scope: { kind: 'computer', projects: 'all', tools: 'all' } })).status, 400)
+    assert.equal((await call('POST', '/units/attach-codes', { unitKind: 'computer', scope: { kind: 'computer', projects: 'all', tools: 'all' }, ttlMs: 'soon' })).status, 400)
+    assert.equal((await call('POST', '/units/attach-codes', { unitKind: 'computer', scope: { kind: 'computer', projects: 'all', tools: 'all' }, extra: 1 })).status, 400)
+    const local = await call('POST', '/units/attachments/local%3Amodels/revoke', {})
+    assert.equal(local.status, 409); assert.equal((await local.json()).error.code, 'unit-attachment-local')
+    const revoked = await call('POST', `/units/attachments/${encodeURIComponent(attachment.attachmentId)}/revoke`, {})
+    assert.equal(revoked.status, 200)
+    const revokedBody = await revoked.json()
+    assert.equal(revokedBody.state, 'revoked'); assert.equal(revokedBody.epoch, 2)
+    const missing = await call('POST', '/units/attachments/missing/revoke', {})
+    assert.equal(missing.status, 404); assert.equal((await missing.json()).error.code, 'unit-attachment-missing')
+    assert.equal((await fetch(`${f.web.url}/api/v1/units/attachments`)).status, 404, 'new routes have no legacy alias')
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })

@@ -2,6 +2,8 @@ import type { ProjectFilesPort } from '../project-files/port.js'
 import { validateFileBatch } from '../project-files/domain.js'
 import type { FileRef } from '../project-files/domain.js'
 import type { ComputerOperationsPort } from '../computer/operations-port.js'
+import type { UnitAttachmentsPort } from '../unit/port.js'
+import { validateRunUnitBindings } from '../unit/domain.js'
 import { needsComputer } from '../computer/operations-domain.js'
 import { validateToolBatch, toolOutputBytes } from '../run/domain.js'
 /** SQLite implementation owned by the Session component; no runtime model plans or Nya services. */
@@ -229,6 +231,9 @@ const migrations: readonly StorageMigration[] = [{
       run_id TEXT PRIMARY KEY REFERENCES harness_runs(id), state_json TEXT NOT NULL
     )`)
   },
+}, {
+  version: 11,
+  up(tx) { tx.execute('ALTER TABLE harness_runs ADD COLUMN unit_bindings_json TEXT') },
 }]
 
 const initialResumeState: RunResumeState = Object.freeze({ schemaVersion: 1, runOwnerEpoch: 1, revision: 0,
@@ -556,6 +561,7 @@ function runFromRow(row: StorageRow): Run {
     modelSnapshot,
     ...(optional(row, 'binding_json') ? { protocolBinding: JSON.parse(required(row, 'binding_json')) as ProtocolBindingSnapshot } : {}),
     ...(optional(row, 'native_input_json') ? { nativeInput: JSON.parse(required(row, 'native_input_json')) as NativeRunInput } : {}),
+    ...(optional(row, 'unit_bindings_json') ? { units: validateRunUnitBindings(JSON.parse(required(row, 'unit_bindings_json'))) } : {}),
     ...(legacyModelSnapshot ? { legacyModelSnapshot } : {}),
     ...(optional(row, 'output') === undefined ? {} : { output: optional(row, 'output') }),
     ...(optional(row, 'error') === undefined ? {} : { error: optional(row, 'error') }),
@@ -591,6 +597,7 @@ export async function openSqliteSessionRecords(
   images: ImageAssetsPort,
   files: ProjectFilesPort,
   computers: ComputerOperationsPort,
+  attachments: UnitAttachmentsPort,
 ): Promise<SessionRecords> {
   await db.migrate('run-state', migrations)
   // Only a committed protocol response authorizes tool-stage takeover. A pending model request cannot be replayed.
@@ -768,16 +775,18 @@ export async function openSqliteSessionRecords(
         if (inputImages(native.input).length) images.retainIn(tx, input.sessionId, `run-input:${id}`, inputImages(native.input))
         if (inputFiles(native.input).some(file => file.projectId !== session.projectId)) throw treeError('invalid-history')
         if (inputFiles(native.input).length) files.retainIn(tx, input.sessionId, `run-input:${id}`, inputFiles(native.input))
+        const units = native.units === undefined ? undefined : validateRunUnitBindings(native.units)
+        if (units) { attachments.requireApprovedIn(tx, units.models); attachments.requireApprovedIn(tx, units.computer) }
         const execution = { ...initialRunExecution, phase: 'active' }
         tx.execute('UPDATE harness_sessions SET protocol_id = ? WHERE id = ? AND protocol_id IS NULL', [binding.protocolId, input.sessionId])
         tx.execute(`INSERT INTO harness_runs (
           id, session_id, idempotency_key, input, status, created_at, updated_at,
           prompts_json, model_snapshot_json, history_kind, parent_node_id, context_version, model_id, requested_model_id,
-          binding_json, native_input_json, initialization_id, parent_context_ref, execution_json
-        ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 'tree', ?, 'native-local-v1', ?, ?, ?, ?, ?, ?, ?)`, [
+          binding_json, native_input_json, initialization_id, parent_context_ref, execution_json, unit_bindings_json
+        ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 'tree', ?, 'native-local-v1', ?, ?, ?, ?, ?, ?, ?, ?)`, [
           id, input.sessionId, input.idempotencyKey, input.input, now, now,
           serialize(prompts), serialize(model), input.parentNodeId, model.modelId, input.modelId ?? null,
-          serialize(binding), serialize(native.input), initializationId, native.parentContextRef, serialize(execution),
+          serialize(binding), serialize(native.input), initializationId, native.parentContextRef, serialize(execution), units ? serialize(units) : null,
         ])
         tx.execute('INSERT INTO harness_run_resumes (run_id, state_json) VALUES (?, ?)', [id, serialize(initialResumeState)])
         return { run: getRun(tx, id)!, created: true }
