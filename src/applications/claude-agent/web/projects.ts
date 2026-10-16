@@ -14,6 +14,8 @@ export interface ProjectPanelHandlers {
   select(path: string): void
   /** Explicit "new thread" with an optional user title. */
   create(path: string, title: string | undefined): void
+  /** The host's native directory window; resolves null when the user cancels. Offered only for this machine. */
+  pickNative(): Promise<string | null>
   report(error: unknown): void
 }
 export interface ProjectPanel {
@@ -22,6 +24,8 @@ export interface ProjectPanel {
   setEnabled(enabled: boolean): void
   /** Shows a directory the controller chose (a thread group's "new thread" button) without re-validating it. */
   setPath(path: string): void
+  /** Offers the native window button; false hides it (remote device or unsupported platform). */
+  setNativePicker(available: boolean): void
   refreshRecent(): Promise<void>
   dispose(): void
 }
@@ -39,7 +43,8 @@ export function createProjectPanel(domId: (local: string) => string, handlers: P
   const titleInput = el('input', { name: 'title', placeholder: '标题（可选）', 'aria-label': '标题', autocomplete: 'off' })
   const createButton = el('button', { type: 'submit', class: 'primary-button', text: '新建线程', disabled: true })
   const browseButton = el('button', { type: 'button', class: 'ca-browse', text: '浏览…', 'aria-expanded': 'false' })
-  const form = el('form', { class: 'ca-project-form' }, pathInput, pathStatus, el('div', { class: 'ca-project-actions' }, titleInput, createButton, browseButton))
+  const nativeButton = el('button', { type: 'button', class: 'ca-pick-native', text: '系统目录窗口…', hidden: true })
+  const form = el('form', { class: 'ca-project-form' }, pathInput, pathStatus, el('div', { class: 'ca-project-actions' }, titleInput, createButton, browseButton, nativeButton))
   const browserPath = el('code', { class: 'ca-browser-path' })
   const upButton = el('button', { type: 'button', class: 'ca-browser-up', text: '上级', title: '上级目录' })
   const hiddenToggle = el('input', { type: 'checkbox', id: domId('show-hidden') })
@@ -133,6 +138,14 @@ export function createProjectPanel(domId: (local: string) => string, handlers: P
   hiddenToggle.addEventListener('change', () => { if (listing) void browse(listing.path) })
   chooseButton.addEventListener('click', () => { if (listing) { setPath(listing.path); handlers.select(listing.path) } })
   const setPath = (path: string) => { cancelValidation(); pathInput.value = path; markValid(path) }
+  let picking = false
+  nativeButton.addEventListener('click', () => { void (async () => {
+    if (picking || !enabled) return
+    picking = true; nativeButton.disabled = true
+    try { const path = await handlers.pickNative(); if (path && !disposed) { setPath(path); handlers.select(path) } }
+    catch (error) { if (!disposed) handlers.report(error) }
+    finally { picking = false; nativeButton.disabled = !enabled }
+  })() })
   const renderRecent = (recent: RecentProjectsView | undefined, now: number) => {
     recentList.replaceChildren(...(recent?.projects ?? []).map(project => {
       const button = el('button', { type: 'button', 'data-path': project.path, title: project.path },
@@ -160,9 +173,10 @@ export function createProjectPanel(domId: (local: string) => string, handlers: P
   const setEnabled = (next: boolean) => {
     enabled = next
     for (const control of [pathInput, titleInput, browseButton, upButton, hiddenToggle, chooseButton]) control.disabled = !next
+    nativeButton.disabled = !next || picking
     createButton.disabled = !next || !valid
     if (!next) { cancelValidation(); browsing?.abort(); recentLoad?.abort(); valid = undefined; pathInput.value = ''; setStatus('', ''); listing = undefined; browser.hidden = true; browseButton.setAttribute('aria-expanded', 'false'); renderBrowser(); recentList.replaceChildren(); recentHint.hidden = true }
   }
   renderBrowser()
-  return { element, setEnabled, setPath, refreshRecent, dispose() { disposed = true; setEnabled(false) } }
+  return { element, setEnabled, setPath, setNativePicker: available => { nativeButton.hidden = !available }, refreshRecent, dispose() { disposed = true; setEnabled(false) } }
 }

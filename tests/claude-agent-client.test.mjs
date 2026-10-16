@@ -13,6 +13,7 @@ import { allowedClaudeAgentProxyPath, createClaudeAgentGateway } from '../dist/a
 import { claudeAgentClientApplication } from '../dist/applications/claude-agent/client/registration.js'
 import { claudeAgentServerApplication } from '../dist/applications/claude-agent/registration.js'
 import { claudeAgentSdkServiceKey } from '../dist/applications/claude-agent/core/sdk/port.js'
+import { DirectoryPickerFailure } from '../dist/host/directory-picker.js'
 import { fakeSdk, sampleResult, waitFor } from './helpers/claude-agent.mjs'
 
 const base = '/api/client/v1/apps/claude-agent'
@@ -52,7 +53,7 @@ test('the gateway lists host connections, forwards only whitelisted routes with 
   try {
     const listed = await (await fetch(gateway.url + base + '/connections')).json()
     assert.deepEqual(listed, { connections: [connection], localInstanceId: instanceId })
-    assert.equal((await (await fetch(gateway.url + base + '/local')).json()).instanceId, instanceId)
+    assert.deepEqual(await (await fetch(gateway.url + base + '/local')).json(), { instanceId, picker: false, status: { enabled: true, state: 'ready', instanceId, connectionId: 'c', connectionRevision: 2 } }, 'no picker was given to this gateway')
     const headers = { 'X-Anybox-Product-Id': 'claude-agent', 'X-Anybox-Expected-Instance-Id': instanceId, 'X-Anybox-Connection-Revision': '2', Authorization: 'browser-forgery', 'X-Anybox-Instance-Id': 'browser-forgery' }
     assert.equal((await fetch(`${gateway.url}${base}/connections/c/v1/apps/claude-agent/threads`, { headers })).status, 200)
     assert.equal(received[0].url, '/api/v1/apps/claude-agent/threads')
@@ -112,4 +113,28 @@ test('both client applications share the host connection library and the Claude 
   await request('/api/client/v1/products/claude-agent/stop', {})
   assert.equal(client.root.get('claude-agent.gateway'), undefined); assert.ok(client.root.get('client.connections'), 'connections remain a resident host provider')
   assert.equal(execution.products.get('claude-agent').state, 'running', 'closing the client application does not stop the execution device')
+})
+test('the native directory window is offered only for the confirmed local connection, with the connection binding and picker failures mapped', async () => {
+  const instanceId = '22222222-2222-2222-2222-222222222222', remoteId = '33333333-3333-3333-3333-333333333333'
+  const connections = [{ id: 'local', name: 'This Mac', endpoint: 'http://127.0.0.1:1', instanceId, revision: 3, credentialConfigured: true }, { id: 'remote', name: 'Server', endpoint: 'https://example.invalid', instanceId: remoteId, revision: 1, credentialConfigured: true }]
+  let selection = '/Users/me/project', picks = 0
+  const picker = { supported: true, async pick(signal) { picks++; if (selection === 'busy') throw new DirectoryPickerFailure('busy'); if (selection === 'unavailable') throw new DirectoryPickerFailure('unavailable'); if (signal?.aborted) return undefined; return selection } }
+  const library = { list: async () => connections, acquire: async () => { throw new Error('not used') }, localStatus: () => ({ enabled: false, state: 'disabled', instanceId: null, connectionId: null }) }
+  const gateway = await startGateway(library, { localInstanceId: instanceId, picker })
+  const post = (id, headers = {}) => fetch(`${gateway.url}${base}/connections/${id}/pick`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: gateway.url, 'X-Anybox-Product-Id': 'claude-agent', ...headers }, body: '{}' })
+  try {
+    assert.deepEqual(await (await fetch(gateway.url + base + '/local')).json(), { instanceId, picker: true })
+    const picked = await post('local', { 'X-Anybox-Expected-Instance-Id': instanceId, 'X-Anybox-Connection-Revision': '3' })
+    assert.equal(picked.status, 200); assert.deepEqual(await picked.json(), { path: '/Users/me/project' })
+    selection = undefined
+    assert.deepEqual(await (await post('local', { 'X-Anybox-Expected-Instance-Id': instanceId, 'X-Anybox-Connection-Revision': '3' })).json(), { path: null }, 'cancelling the window is not an error')
+    assert.equal((await post('remote', { 'X-Anybox-Expected-Instance-Id': remoteId, 'X-Anybox-Connection-Revision': '1' })).status, 403, 'remote devices never open a window on this machine')
+    assert.equal((await post('missing')).status, 403)
+    assert.equal((await post('local', { 'X-Anybox-Expected-Instance-Id': instanceId, 'X-Anybox-Connection-Revision': '2' })).status, 409, 'a stale connection revision is refused before the window opens')
+    assert.equal(picks, 2)
+    const bound = { 'X-Anybox-Expected-Instance-Id': instanceId, 'X-Anybox-Connection-Revision': '3' }
+    selection = 'busy'; assert.deepEqual(await (await post('local', bound)).json(), { error: { code: 'picker-busy' } })
+    selection = 'unavailable'; assert.deepEqual(await (await post('local', bound)).json(), { error: { code: 'picker-unavailable' } })
+    assert.equal((await fetch(`${gateway.url}${base}/connections/local/pick?x=1`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: gateway.url }, body: '{}' })).status, 400)
+  } finally { await gateway.close() }
 })

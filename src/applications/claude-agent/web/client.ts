@@ -2,12 +2,16 @@ import type { RunChangedView, RunEventFrameView } from '../core/view.js'
 
 export interface DeviceConnection { readonly id: string; readonly name: string; readonly endpoint: string; readonly instanceId: string; readonly revision: number; readonly credentialConfigured: boolean }
 export interface DeviceDirectory { readonly connections: readonly DeviceConnection[]; readonly localInstanceId: string | null }
+/** This machine as the launcher confirmed it, and whether the host offers a native directory window for it. */
+export interface LocalIdentity { readonly instanceId: string | null; readonly picker?: boolean }
 export interface EventHandlers { ready(): void; change(change: RunChangedView): void; event(frame: RunEventFrameView): void; error(): void }
 export interface EventSubscription { close(): void }
 export interface DeviceClient {
   readonly connection: DeviceConnection
   request<T>(path: string, body?: object, signal?: AbortSignal): Promise<T>
   events(threadId: string, handlers: EventHandlers): EventSubscription
+  /** Opens the host's native directory window for this connection; null when the user cancelled. Only offered for this machine. */
+  pickDirectory(signal?: AbortSignal): Promise<string | null>
 }
 const apiFailure = (status: number, code: string, message?: string) => Object.assign(new Error(message || code), { status, code })
 /** JSON request keeping the product's own error message; the gateway strips every browser credential. */
@@ -21,18 +25,23 @@ export async function requestJSON<T>(url: string, body?: object, signal?: AbortS
 export function readDevices(apiBase: string, signal: AbortSignal): Promise<DeviceDirectory> {
   return requestJSON<DeviceDirectory>(`${apiBase}/connections`, undefined, signal)
 }
+export function readLocal(apiBase: string, signal: AbortSignal): Promise<LocalIdentity> {
+  return requestJSON<LocalIdentity>(`${apiBase}/local`, undefined, signal)
+}
 /** Every request pins the connection revision and expected instance; a changed device never receives an old request. */
 export function createDeviceClient(apiBase: string, connection: DeviceConnection, lifetime: AbortSignal): DeviceClient {
   const headers = { 'X-Anybox-Product-Id': 'claude-agent', 'X-Anybox-Expected-Instance-Id': connection.instanceId, 'X-Anybox-Connection-Revision': String(connection.revision) }
   const url = (path: string) => `${apiBase}/connections/${encodeURIComponent(connection.id)}/v1${path}`
+  const bound = <T>(target: string, body: object | undefined, signal: AbortSignal | undefined): Promise<T> => {
+    const controller = new AbortController(), abort = () => controller.abort()
+    lifetime.addEventListener('abort', abort, { once: true }); signal?.addEventListener('abort', abort, { once: true })
+    if (lifetime.aborted || signal?.aborted) abort()
+    return requestJSON<T>(target, body, controller.signal, headers).finally(() => { lifetime.removeEventListener('abort', abort); signal?.removeEventListener('abort', abort) })
+  }
   return {
     connection,
-    request<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
-      const controller = new AbortController(), abort = () => controller.abort()
-      lifetime.addEventListener('abort', abort, { once: true }); signal?.addEventListener('abort', abort, { once: true })
-      if (lifetime.aborted || signal?.aborted) abort()
-      return requestJSON<T>(url(path), body, controller.signal, headers).finally(() => { lifetime.removeEventListener('abort', abort); signal?.removeEventListener('abort', abort) })
-    },
+    request: <T>(path: string, body?: object, signal?: AbortSignal) => bound<T>(url(path), body, signal),
+    pickDirectory: async signal => (await bound<{ path: string | null }>(`${apiBase}/connections/${encodeURIComponent(connection.id)}/pick`, {}, signal)).path,
     events(threadId, handlers) {
       const controller = new AbortController()
       const stop = () => controller.abort()

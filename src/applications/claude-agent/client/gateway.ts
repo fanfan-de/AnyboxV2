@@ -2,8 +2,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Component } from '@nya/core'
 import { connectionsServiceKey } from '../../../host/connections.js'
 import type { ConnectionsPort } from '../../../host/connections.js'
-import { forwardConnectionRequest } from '../../../host/connection-proxy.js'
-import { failure, json } from '../../../host/http-utils.js'
+import { expectedConnection, forwardConnectionRequest, requestBinding } from '../../../host/connection-proxy.js'
+import { DirectoryPickerFailure, directoryPickerServiceKey } from '../../../host/directory-picker.js'
+import type { DirectoryPickerPort } from '../../../host/directory-picker.js'
+import { failure, json, requestObject } from '../../../host/http-utils.js'
 import type { ApplicationHttpContext } from '../../../host/applications/registration.js'
 import { productActivityServiceKey } from '../../../host/applications/contracts.js'
 import type { ProductActivityPort } from '../../../host/applications/contracts.js'
@@ -25,11 +27,17 @@ export function allowedClaudeAgentProxyPath(method: string, path: string): boole
     try { const value = decodeURIComponent(segment); return value === '.' || value === '..' || /[\\/\0]/.test(value) } catch { return true }
   })
 }
+const pickerFailure = (error: unknown) => {
+  if (error instanceof DirectoryPickerFailure && error.code === 'busy') return failure(409, 'picker-busy')
+  if (error instanceof DirectoryPickerFailure && error.code === 'unsupported') return failure(503, 'picker-unsupported')
+  return failure(503, 'picker-unavailable')
+}
 /** Reads the host connection library and forwards whitelisted requests to the chosen execution device; Anybox owns the listener. */
-export function createClaudeAgentGateway(connections: ConnectionsPort, options: { localInstanceId?: string; activity?: ProductActivityPort } = {}): ClaudeAgentGateway {
+export function createClaudeAgentGateway(connections: ConnectionsPort, options: { localInstanceId?: string; picker?: DirectoryPickerPort; activity?: ProductActivityPort } = {}): ClaudeAgentGateway {
   let closing = false
   const tasks = new Map<AbortController, Promise<void>>()
   const localInstanceId = () => connections.localStatus?.().instanceId ?? options.localInstanceId ?? null
+  const pickerAvailable = (connection: { readonly instanceId: string } | undefined) => { const local = localInstanceId(); return !!connection && !!local && connection.instanceId === local && !!options.picker?.supported }
   return {
     handle(request, response, url, context) {
       if (closing) return Promise.reject(failure(503, 'product-unavailable'))
@@ -49,7 +57,22 @@ export function createClaudeAgentGateway(connections: ConnectionsPort, options: 
         if (method === 'GET' && url.pathname === '/local') {
           if (url.search) throw failure(400, 'invalid-input')
           const status = connections.localStatus?.()
-          json(response, 200, { instanceId: localInstanceId(), ...(status?.enabled ? { status } : {}) }); return
+          json(response, 200, { instanceId: localInstanceId(), picker: !!localInstanceId() && !!options.picker?.supported, ...(status?.enabled ? { status } : {}) }); return
+        }
+        // The native directory window only ever runs on this machine, for the connection confirmed to be this machine.
+        const pick = /^\/connections\/([^/]+)\/pick$/.exec(url.pathname)
+        if (pick && method === 'POST') {
+          if (url.search) throw failure(400, 'invalid-input')
+          await requestObject(request, [])
+          const connectionId = decodeURIComponent(pick[1])
+          const connection = (await connections.list()).find(item => item.id === connectionId)
+          if (!connection || !pickerAvailable(connection)) throw failure(403, 'picker-unavailable')
+          expectedConnection(requestBinding(request), connection)
+          let path: string | null
+          try { path = await options.picker!.pick(controller.signal) ?? null } catch (error) { throw pickerFailure(error) }
+          const current = (await connections.list()).find(item => item.id === connectionId)
+          if (!current || current.instanceId !== connection.instanceId || current.revision !== connection.revision) throw failure(409, 'connection-changed')
+          json(response, 200, { path }); return
         }
         const proxy = /^\/connections\/([^/]+)\/v1(\/.*)$/.exec(url.pathname)
         if (proxy && allowedClaudeAgentProxyPath(method, proxy[2])) {
@@ -70,10 +93,10 @@ export function createClaudeAgentGateway(connections: ConnectionsPort, options: 
   }
 }
 export function createClaudeAgentGatewayComponent(options: { localInstanceId?: string } = {}): Component.Object<void, {
-  [connectionsServiceKey]: ConnectionsPort; [productActivityServiceKey]: ProductActivityPort
+  [connectionsServiceKey]: ConnectionsPort; [directoryPickerServiceKey]: DirectoryPickerPort; [productActivityServiceKey]: ProductActivityPort
 }> {
-  return { name: 'claude-agent-client-gateway', inject: [connectionsServiceKey, productActivityServiceKey], apply(ctx, _config, deps) {
-    const gateway = createClaudeAgentGateway(deps[connectionsServiceKey], { ...options, activity: deps[productActivityServiceKey] })
+  return { name: 'claude-agent-client-gateway', inject: [connectionsServiceKey, directoryPickerServiceKey, productActivityServiceKey], apply(ctx, _config, deps) {
+    const gateway = createClaudeAgentGateway(deps[connectionsServiceKey], { ...options, picker: deps[directoryPickerServiceKey], activity: deps[productActivityServiceKey] })
     ctx.effect(() => () => gateway.close(), 'cancel and join Claude Agent client proxy requests')
     ctx.provide(claudeAgentGatewayServiceKey, gateway)
   } }

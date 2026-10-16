@@ -2,7 +2,7 @@ import type { ApplicationActivation, ApplicationWebContext, MountedApplication }
 import type { ProductView } from '../../../host/applications/contracts.js'
 import type { ApprovalView, EnvironmentView, HistoryMessageView, RecentModelsView, RunChangedView, RunEventFrameView, RunLiveView, RunView, ThreadMessagesView, ThreadView } from '../core/view.js'
 import { applyRunEvent, emptyRunView } from '../core/events.js'
-import { createDeviceClient, readDevices } from './client.js'
+import { createDeviceClient, readDevices, readLocal } from './client.js'
 import type { DeviceClient, DeviceConnection } from './client.js'
 import { createProjectPanel } from './projects.js'
 import { composerBlock, composerBlockLabels, deviceLabel, displayItems, filterDevices, formatRoute, formatUsage, groupThreads, messageFor, parseRoute, runStatusLabels, selectDevice } from './state.js'
@@ -35,6 +35,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     request: (path, signal) => { if (!client) return Promise.reject(Object.assign(new Error('product-unavailable'), { status: 503, code: 'product-unavailable' })); return client.request(path, undefined, signal) },
     select: directory => startProject(directory),
     create: (directory, threadTitle) => { void createThread(directory, threadTitle) },
+    pickNative: () => client ? client.pickDirectory() : Promise.reject(Object.assign(new Error('picker-unavailable'), { status: 503, code: 'picker-unavailable' })),
     report: error => { if (!disposed && !lifetime.signal.aborted) show(messageFor(error)) },
   })
   const threadList = el('ul', { class: 'ca-thread-list' })
@@ -67,7 +68,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     el('main', { class: 'ca-main' }, el('header', { class: 'ca-thread-head' }, menuButton, title, path, status), environment, notice, transcript, transcriptHint, runError, emptyState, approvalsPanel, composer, usage))
   container.replaceChildren(root)
 
-  let devices: readonly DeviceConnection[] = [], hidden = { unreachable: 0, unsupported: 0 }, localInstanceId: string | null = null, client: DeviceClient | undefined
+  let devices: readonly DeviceConnection[] = [], hidden = { unreachable: 0, unsupported: 0 }, localInstanceId: string | null = null, localPicker = false, client: DeviceClient | undefined
   let productRunning = false, productState: ProductView['state'] | undefined
   let threads: readonly ThreadView[] = [], thread: ThreadView | undefined, project: string | undefined, loadingThread: string | undefined
   let history: readonly HistoryMessageView[] = [], runs: readonly RunView[] = [], current: RunView | undefined, live: RunLiveView | undefined
@@ -295,6 +296,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     thread = undefined; project = undefined; loadingThread = undefined; transcriptHint.hidden = true; threads = []; history = []; runs = []; current = undefined; live = undefined; pending = []; models = []
     productRunning = false; productState = undefined; environment.hidden = true
     client = device ? createDeviceClient(context.apiBase, device, lifetime.signal) : undefined
+    panel.setNativePicker(!!device && localPicker && device.instanceId === localInstanceId)
     renderDevices(); renderThreads(); renderModels(); render(); clearNotice()
     if (!device) return
     remember(device.id)
@@ -314,9 +316,9 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     } catch { return [device.id, undefined] as const }
   })))
   const loadDevices = async (activate: boolean) => {
-    const directory = await guard(() => readDevices(context.apiBase, lifetime.signal))
+    const [directory, local] = await Promise.all([guard(() => readDevices(context.apiBase, lifetime.signal)), readLocal(context.apiBase, lifetime.signal).catch(() => undefined)])
     if (!directory || disposed) return
-    localInstanceId = directory.localInstanceId
+    localInstanceId = directory.localInstanceId; localPicker = local?.picker === true && local.instanceId === directory.localInstanceId
     deviceStatus.textContent = directory.connections.length ? '正在检查执行设备…' : ''
     const partition = filterDevices(directory.connections, await probeDevices(directory.connections))
     if (disposed) return

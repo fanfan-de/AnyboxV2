@@ -110,6 +110,9 @@ const copy: Record<string, string> = {
   'connection-unavailable': '无法连接执行设备。已有任务可能仍在继续。',
   'not-found': '未找到请求的资源。',
   'too-many-streams': '订阅数量已达上限，请关闭其他页面后重试。',
+  'picker-busy': '系统目录窗口已打开，请先完成当前选择。',
+  'picker-unsupported': '当前系统不支持系统目录窗口，请用应用内浏览。',
+  'picker-unavailable': '无法打开系统目录窗口；它只对本机设备可用。',
 }
 /** Server messages are the product's own safe strings; they take precedence over generic copy. */
 export function messageFor(error: unknown): string {

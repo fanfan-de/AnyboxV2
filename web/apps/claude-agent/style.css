@@ -28,6 +28,7 @@ input, select, textarea { border: 1px solid var(--line-strong); border-radius: 6
 .ca-path-status[data-state="invalid"] { color: var(--danger); }
 .ca-project-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .ca-project-actions input { grid-column: 1 / -1; }
+.ca-pick-native { grid-column: 1 / -1; }
 .ca-browser { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .ca-browser-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .ca-browser-up { flex-shrink: 0; padding: 4px 8px; }
