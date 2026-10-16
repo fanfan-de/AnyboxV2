@@ -30,6 +30,8 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | 文档 | 内容 |
 | --- | --- |
 | [命名与边界](naming.md) | 产品、服务端与客户端命名，源码标识及持久兼容约定 |
+| [Anybox Harness 架构（2026-10-15，D2）](./architecture/anybox-harness-architecture-2026-10-15.md) | 当前工作区总览，含可组合单元 U0/U1：单元附着账本与拨出传输、Worker 路由、worker 附着账本与拨出、项目绑定 Computer 附着、Web 单元附着入口；可编辑 D2 源文件、SVG 和 PNG |
+| [架构评估与调整建议（2026-10-15）](./harness-architecture-review-2026-10-15.md) | 对当前 harness server 结构的静态评估：应保持的设计、七项结构性代价、按优先级排列并附验收条件的调整建议、实施顺序与待决定事项；评估稿，未采纳为计划 |
 | [架构总览（2026-10-13，D2）](./architecture/anybox-architecture-2026-10-13.md) | 单页总览：展示端、客户端根、harness server 执行根、独立 Computer worker 根与进程外服务；可编辑 D2 源文件、SVG 和 PNG |
 | [Claude Agent 设计](claude-agent-design.md) | 第二个正式应用：共享一个 Claude 环境、流式输入模式与取消、HTTP/SSE 契约、宿主连接库方案与打包要求 |
 | [D2 项目架构图（2026-10-13）](./architecture/d2/README.md) | 当前源码的进程总览、harness server、Models 和 Run 时序；四份可编辑 D2、SVG、PNG 与重绘脚本 |
@@ -46,7 +48,8 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | [harness server 组件协作总览](./harness-server-components.md) | 单根装配、资源所有权与关键调用路径 |
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
 | [Computer 资源设计](./computer-resource-design.md) | 本机按需资源、独立 worker 与工具等待重启接续；跨机器工作区及独立模型 exchange 按后续阶段实施 |
-| [可组合部署单元设计](./composable-units-design.md) | harness server、Models、Computer 三个单元各自独立部署与任意跨机器组合的通用规则、附着与绑定、契约形状及分阶段验收；U0 附着登记已实施，跨机器阶段待实施 |
+| [可组合部署单元设计](./composable-units-design.md) | harness server、Models、Computer 三个单元各自独立部署与任意跨机器组合的通用规则、附着与绑定、契约形状及分阶段验收；U0 附着登记与 U1 远端 Computer 已实施，远端 Models 等后续阶段待实施 |
+| [节点程序设计（2026-10-15）](./anybox-node-program-design.md) | 在任意机器安装一个程序提供 Computer、Models 及后续单元：单程序多角色、节点 Web 服务与无头 CLI 两种外壳、每单元一进程、按单元附着与节点分组、拨出加拨入、凭据与平台矩阵、分阶段验收；目标设计稿，未采纳 |
 | [工具库设计](./tools-library-design.md) | 来源工具混选、不可变会话快照、Run 进程清理和原生工具图片 |
 | [多模态图片输入设计](./multimodal-image-input-design.md) | 四种原生协议图片输入的端到端链路、历史升级兼容与验收 |
 | [项目目录选择](./project-directory-picker.md) | 多实例目录浏览、固定连接、分页清理和旧版兼容 |

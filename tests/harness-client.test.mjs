@@ -148,6 +148,23 @@ test('healthy list updates are observable before a stalled device responds; late
   off(); api.dispose()
 })
 
+test('a local Authority with a remote-default Computer never opens the native directory shortcut', async t => {
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async url => {
+    calls.push(url)
+    if (url === '/api/client/v1/local') return Response.json({ instanceId: a, picker: true })
+    if (url.endsWith('/instance')) return Response.json({ instanceId: a, apiVersion: 1, capabilities: [] })
+    throw new Error(`unexpected request ${url}`)
+  })
+  const api = createHarnessClient(connections, 'a')
+  try {
+    const target = api.directoryTarget('a')
+    assert.equal(await target.nativeAvailable(new AbortController().signal), false)
+    await assert.rejects(target.pickNative(new AbortController().signal), { code: 'picker-unavailable' })
+    assert.ok(!calls.some(url => url.endsWith('/pick')))
+  } finally { await api.dispose() }
+})
+
 test('project selection captures connection identity and revision for browse, native pick and registration', async t => {
   const calls = [], targets = connections.map((connection, index) => ({ ...connection, revision: index + 4 }))
   t.mock.method(globalThis, 'fetch', async (url, options) => {
@@ -155,7 +172,7 @@ test('project selection captures connection identity and revision for browse, na
     if (url === '/api/client/v1/local') return Response.json({ instanceId: a, picker: true })
     if (url.endsWith('/pick')) return Response.json({ path: '/same/path' })
     if (url.endsWith('/projects')) return Response.json({ id: 'same', name: 'project', path: '/same/path', available: true })
-    return Response.json({ instanceId: b, apiVersion: 1, capabilities: ['projects.browse'] })
+    return Response.json({ instanceId: url.includes('/connections/a/') ? a : b, apiVersion: 1, capabilities: ['projects.browse', 'projects.local-directories'] })
   })
   const api = createHarnessClient(targets, 'b'), bound = api.directoryTarget()
   assert.equal(bound.connection.instanceId, b)

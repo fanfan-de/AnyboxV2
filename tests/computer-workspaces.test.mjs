@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -59,6 +60,7 @@ test('an existing project maps to a workspace without changing its canonical pat
   const directory = await mkdtemp(join(tmpdir(), 'anybox-existing-project-'))
   const root = new Context()
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  await installComputerWorkerStub(root)
   await root.installComponent(createProjectComponent({ now: () => 'now', newId: () => 'existing-project' }))
   const project = await root.get('harness.projects').openProject(directory)
   await root.installComponent(createWorkspacesComponent({ now: () => 'now', newId: () => 'workspace' }))

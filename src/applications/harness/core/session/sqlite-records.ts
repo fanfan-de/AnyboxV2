@@ -881,7 +881,8 @@ export async function openSqliteSessionRecords(
           if (!tool) throw treeError('invalid-history')
           const session = tx.get('SELECT project_id FROM harness_sessions WHERE id = ?', [run.sessionId])!
           computers.acceptIn(tx, { operationId: operation.id, runId, sessionId: run.sessionId,
-            projectId: required(session, 'project_id'), request: operation.tool, tool, runOwnerEpoch: resume?.runOwnerEpoch ?? 1 })
+            projectId: required(session, 'project_id'), request: operation.tool, tool, runOwnerEpoch: resume?.runOwnerEpoch ?? 1,
+            ...(run.units ? { unit: run.units.computer } : {}) })
         }
         tx.execute('INSERT INTO harness_run_operations (run_id, id, kind, intent_json, tool_json, status) VALUES (?, ?, ?, ?, ?, ?)',
           [runId, operation.id, operation.kind, serialize(operation.intent), operation.tool ? serialize(operation.tool) : null, 'started'])

@@ -5,6 +5,7 @@ import type { ToolObservation, ValidatedToolRequest } from '../run/domain.js'
 import type { ComputerOperation } from './operations-domain.js'
 import type { ComputerSpecification } from './port.js'
 import type { ToolDefinition } from '../tool/definition.js'
+import type { RunUnitBinding } from '../unit/domain.js'
 
 export const computerOperationsServiceKey = 'harness.computer-operations'
 export interface ComputerRunScope {
@@ -19,6 +20,8 @@ export interface ComputerOperationsPort {
     readonly request: ValidatedToolRequest
     readonly tool: { readonly toolId: string; readonly version: string; readonly definition: ToolDefinition }
     readonly runOwnerEpoch?: number
+    /** The Run's fixed Computer attachment; a remote attachment places the declaration on that unit's logical computer. */
+    readonly unit?: RunUnitBinding
   }): ComputerOperation
   observeIn(tx: StorageTransaction, operationId: string, observation: JsonValue): void
   claimRunIn(tx: StorageTransaction, runId: string, runOwnerEpoch: number): void
@@ -29,8 +32,8 @@ export interface ComputerOperationsPort {
   authorizeRun(runId: string, runOwnerEpoch: number, signal: AbortSignal): Promise<void>
   /** Reconcile durable cancellation for terminal Runs; does not reopen Session history. */
   recoverCancelledRuns(excludeRunIds: readonly string[]): Promise<void>
-  /** Synchronous ownership only: opening a scope does not activate or prepare resources. */
-  openRun(input: { readonly runId: string; readonly runOwnerEpoch?: number; readonly imageInput?: boolean }): ComputerRunScope
+  /** Synchronous ownership only: opening a scope does not activate or prepare resources. Runs without a fixed unit reference use the local attachment. */
+  openRun(input: { readonly runId: string; readonly runOwnerEpoch?: number; readonly imageInput?: boolean; readonly unit?: RunUnitBinding }): ComputerRunScope
 }
 export interface ComputerOperationsOptions {
   readonly computerId?: string

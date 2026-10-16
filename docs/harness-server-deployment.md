@@ -45,11 +45,18 @@ npm run harness:server
 | `ANYBOX_IMAGE_ASSETS_DIRECTORY` | `${harnessDatabasePath}.images`，原字节 |
 | `ANYBOX_PROJECTS` | `[]`，JSON 绝对路径数组 |
 | `ANYBOX_MODELS_NAMESPACE` | `anybox.models`，模型凭据 |
+| `ANYBOX_COMPUTER_WORKER_NAMESPACE` | `anybox.computer-worker`，本机 worker 附着到远端 harness server 时保存单元凭证的系统凭据命名空间；由本机 harness server 拉起的 worker 继承环境 |
+| `ANYBOX_COMPUTER_UNIT` | `local`，Computer 单元形态；`remote` 时不启动本机 worker，项目只能绑定远端 Computer 附着 |
+| `ANYBOX_COMPUTER_ATTACHMENT` | 远端形态必填：`GET /units/attachments` 列表中该远端 Computer 附着的 ID，作为未显式绑定的新项目的默认附着；不能是 `local:*` |
 | `ANYBOX_CLIENT_DATABASE` | `./data/client.sqlite`，客户端连接记录 |
 | `ANYBOX_CLIENT_NAMESPACE` | `anybox.client`，客户端访问凭据 |
 | `ANYBOX_WEB_PORT` | `3000`，回环客户端页面端口 |
 
 harness server 的端口规范变量为 `ANYBOX_HARNESS_PORT`；配置解析保留旧 `ANYBOX_WEB_PORT` 入口作为兼容回退。客户端继续使用 `ANYBOX_WEB_PORT` 配置自己的页面端口。
+
+远端 Computer 形态的建立顺序：先以本机形态运行，在 `POST /units/attach-codes` 生成 `computer` 附着码；在用户设备本机 harness server 的连接管理（U1 第 5 步前为 `POST /units/local-computer/attachments`）填入该 harness server 的 HTTPS 地址与附着码并设定目录/工具上限；该设备的 worker 随即以 `Unit` 凭证拨出。然后以 `ANYBOX_COMPUTER_UNIT=remote ANYBOX_COMPUTER_ATTACHMENT=<附着 ID>` 重新启动 harness server。本机形态也可以把单个项目绑定到远端附着：`POST /projects` 传 `computerAttachmentId`，路径由该单元解析并限制在设备拥有者设定的目录上限内；一个 harness server 可同时服务本机项目与多个远端单元的项目。切换形态必须重启；远端单元离线时新 Run 的计算工具以 `tool-unavailable` 失败，已接受操作在单元上继续，重连后按原 ID 查回。
+
+本机 harness server 使用服务器 Computer 的实测形态（2026-10-15）：服务器上的 Anybox Harness 执行目标与 worker unit 保持运行（它是该 worker 的附着控制面），本机 harness server 只监听回环，因此由本机建立 SSH 反向隧道 `ssh -N -R 127.0.0.1:3101:127.0.0.1:3001 <user>@<server>`，服务器 worker 以 `harnessUrl=http://127.0.0.1:3101` 拨出：拨出规则只对回环放行明文 HTTP，加密由 SSH 负责；隧道端口只在服务器回环可达，拥有者路由仍要设备令牌、单元路由仍要附着凭证。附着后在本机 `POST /projects` 传服务器目录路径与 `computerAttachmentId` 即可，本机形态可同时服务本机项目；隧道由本机终端或 launchd 保持，断开期间该单元离线。
 
 执行端 Models JSON、旧 SQLite 导入源、目录缓存、业务数据库与客户端数据库必须分开，不能共用文件或文件别名。客户端配置中只有令牌引用，没有完整令牌。业务库只存设备令牌 SHA-256 摘要；这些令牌均代表实例拥有者，Prompt 仍映射 `local-web-user`。不使用 dotenv。
 
@@ -87,11 +94,11 @@ Models 的非秘密配置直接保存在 JSON，默认路径为 `data/models.jso
 
 Computer worker 默认独占 `${harnessDatabasePath}.computer-worker`，内含 worker.sqlite、身份、私有回环 endpoint 和图片/结果资料。它与 Authority 业务库分别使用排他连接，不能共用数据库或目录。运行进程被 SIGKILL 后，业务库 OS 锁释放，新进程从同一目录查回原 worker、声明和结果；模型响应尚未保存或没有新恢复信封的旧 Run 仍 interrupted，不自动重发。
 
-worker 目录固定给一个 Authority，不与其他业务库或设备实例共享。升级/完整备份先正常关闭应用并等所属 Run 实际退出，再明确停止独立 worker 服务及等待它的根清理；分别备份 Authority 业务库/图片目录和 worker 目录。应用关闭本身不会停止 idle worker，不能将此误认为 worker.sqlite 已可按停机文件复制。
+worker 目录固定给一个 Authority，不与其他业务库或设备实例共享。升级/完整备份先正常关闭应用并等所属 Run 实际退出，再明确停止独立 worker 服务及等待它的根清理；分别备份 Authority 业务库/图片目录和 worker 目录。应用关闭失败时入口以退出码 1 结束，并把错误链（AggregateError 成员与 cause）逐行打印到 stderr，systemd 下可在 journal 中查看。应用关闭本身不会停止 idle worker，不能将此误认为 worker.sqlite 已可按停机文件复制。
 
 开发启动按需 detached 创建 worker，保证只强杀 Runtime 进程时 worker 继续。detached 不脱离 systemd cgroup；生产部署需安装独立的 [computer-worker.service.example](../deploy/computer-worker.service.example)，先启动 worker unit 并确认该目录 endpoint 已就绪，再启动 harness server。两份 unit 的目录必须与同一业务库匹配，且不能通过 PartOf/BindsTo 或共同停止范围把 worker 绑到 Runtime。Authority 的代理会认证并复用该目录已有 endpoint，无须重新执行工具。缺少现有 endpoint 而由 harness server 自动启动的 worker 会留在其 cgroup，不能据此承诺整个 Runtime 服务的重启接续。
 
-独立 worker 自己的 unit 仍用 `KillMode=control-group` 管理其进程组；应用正常关闭会取消并排空所属 Run，停止 worker unit 或共同 cgroup 还会终止执行服务，这些都与 Runtime 进程异常退出不同。worker 永久丢失后 starting/running 操作只能 outcome-unknown，保留已知事实并拒绝重放，不能把这个场景宣传为接续成功。当前故障注入实测的是 Runtime PID 的 SIGKILL 与存活 worker 身份；systemd 服务和真实 macOS 部署需按实际运维环境另行验收。
+独立 worker 自己的 unit 仍用 `KillMode=control-group` 管理其进程组；应用正常关闭会取消并排空所属 Run，停止 worker unit 或共同 cgroup 还会终止执行服务，这些都与 Runtime 进程异常退出不同。worker 永久丢失后 starting/running 操作只能 outcome-unknown，保留已知事实并拒绝重放，不能把这个场景宣传为接续成功。worker 异常退出后由下一次本地调用重新启动（例如打开附着列表或新的本机 Run），没有本地调用就不会重启：只作为远端 harness server 单元使用的设备（U1 的 Mac 等）必须由 systemd、launchd 等外部监督 worker，否则 worker 崩溃后该单元一直离线，远端 Run 保持 running 直到单元回来或被取消。升级或重启远端 harness server 时，远端单元的拨出循环在产品 `applying` 期间收到 `product-unavailable` 而 offline，并按最长 15 秒的退避自动重连，不需要重新附着；绑定该单元的项目在此期间不可用，新 Run 准入被拒绝。当前故障注入实测的是 Runtime PID 的 SIGKILL 与存活 worker 身份；systemd 服务和真实 macOS 部署需按实际运维环境另行验收。
 
 独立 worker 继承现有 Bash/进程组件的 Unix guard，Linux/macOS 可装配，本次仅 Linux 实测。Windows 可运行纯模型和受控资源契约测试，真实 worker 激活尚未支持；全部文件计算工具也依赖这个根，不能单独绕过平台限制。
 

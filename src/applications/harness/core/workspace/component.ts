@@ -3,7 +3,7 @@ import type { Component } from '@nya/core'
 import { localStorageServiceKey } from '../../../../storage/port.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow } from '../../../../storage/port.js'
 import type { OwnedCall } from '../contracts.js'
-import { localComputerProviderId } from '../computer/port.js'
+import { localComputerProviderId, unitComputerProviderId } from '../computer/port.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 import { workspacesServiceKey } from './port.js'
@@ -149,7 +149,8 @@ export function createWorkspacesComponent(options: WorkspacesOptions = {}): Comp
       prepare(input, signal) { return owned(async cancel => {
         const id = workspaceText(input.reservationId), instance = input.instance
         workspaceText(instance.computerId); workspaceText(instance.computerInstanceId); workspacePositive(instance.instanceGeneration)
-        if (instance.status !== 'ready' || instance.providerId !== providerId) throw workspaceError('workspace-unavailable')
+        // Remote Computer units keep the pinned-local mode: the path is meaningful only on the bound unit.
+        if (instance.status !== 'ready' || (instance.providerId !== providerId && instance.providerId !== unitComputerProviderId)) throw workspaceError('workspace-unavailable')
         const row = await db.read(reader => reservationRow(reader, id), cancel)
         if (!row) throw workspaceError('workspace-missing')
         if (row.released_at !== null) throw workspaceError('workspace-released')

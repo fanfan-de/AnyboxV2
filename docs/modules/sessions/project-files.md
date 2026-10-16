@@ -4,7 +4,9 @@
 
 ## 工厂、服务与依赖
 
-`createProjectFilesComponent({ now?, newId?, collectionIntervalMs?, treeBrowser? })` 创建根上的 `harness-project-files`，提供 `harness.project-files: ProjectFilesPort`。组件注入 `local-storage` 和 `harness.projects`，从本轮 deps 使用服务；harness server 在 Projects 之后安装，Session 依赖它。没有项目 Context、额外 SQLite 连接、文件目录或工具注册。
+`createProjectFilesComponent({ now?, newId?, collectionIntervalMs?, treeBrowser? })` 创建根上的 `harness-project-files`，提供 `harness.project-files: ProjectFilesPort`。组件注入 `local-storage`、`harness.projects` 和 `computer.worker`，从本轮 deps 使用服务；harness server 在 Projects 之后安装，Session 依赖它。没有项目 Context、额外 SQLite 连接、文件目录或工具注册。
+
+读取来源按项目绑定选择：绑定 `local:computer` 的项目用本机文件系统提供方；绑定远端附着的项目经 [Worker 路由](../computers/worker-router.md)的只读查询面（`search`、`read`、`list`）由单元读取。远端目录树的每个游标是一次最多扫描 1,000 个目录项（含忽略项）的列表快照，分页不再回到单元；达到上限且还有条目时明确报 `file-tree-truncated`，不返回伪装完整的前缀，也不承诺后续远端续页。搜索与手工路径预览/引用仍可访问该目录中未列出的文件。读到的内容仍由本组件保存为不可变快照并保留，事实归属不变。
 
 源码：[组件](../../../src/applications/harness/core/project-files/component.ts)、[端口](../../../src/applications/harness/core/project-files/port.ts)、[文件系统提供方](../../../src/applications/harness/core/project-files/filesystem.ts)、[纯规则与浏览器共享类型](../../../src/applications/harness/core/project-files/domain.ts)。文件系统提供方、内部树浏览器和规则不是独立组件。树浏览器由该组件独占，`treeBrowser` 仅提供受控测试的目录访问及时间替身。
 
@@ -51,11 +53,11 @@ Session 允许旧 `dialogue-v1` 和归档会话浏览目录、搜索及预览当
 
 目录树打开/翻页和文件搜索/预览/准备/读取返回 OwnedCall。目录树采用按层分页：每页 100 项、扫描 1,000 项或 200ms，最多 16 个存活游标、空闲 60 秒回收。树只公开相对路径，包括隐藏和 ignore 文件，沿用排除及无符号链接规则；不借用 Projects 的全盘目录选择器。游标由内部树提供方拥有，结束、取消、关闭或过期均等待句柄关闭；关闭失败停止树浏览准入并使组件清理失败。
 
-树扫描与文件搜索、预览、准备读取共享并发 2 队列；排队取消不能提前占用或释放在途槽位。文件读取的 result 等待文件句柄关闭后才结算，done 表示实际退出。目录页 result/done 等待本页操作退出；有 nextPage 时保留游标句柄，结束、取消或 closeTree 才等待其退休。闲置游标关闭不占扫描槽位。关闭失败拒绝相应 done 或 closeTree，并使组件清理失败。
+树扫描与文件搜索、预览、准备读取共享并发 2 队列；排队取消不能提前占用或释放在途槽位。本机文件读取的 result 等待文件句柄关闭后才结算，done 表示实际退出；远端读取遵循下述观察边界。目录页 result/done 等待本页操作退出；有 nextPage 时本机提供方保留游标句柄，结束、取消或 closeTree 才等待其退休。闲置游标关闭不占扫描槽位。关闭失败拒绝相应 done 或 closeTree，并使组件清理失败。
 
-Effect 停止新调用和计时器，取消全部受管调用，等待树游标退休、文件读取、已开始提交及回收实际退出。组件 apply 在迁移和首次回收后返回，长期计时器不阻塞启动。Session/Run 消费者由 Nya 先退出，最后才释放 Projects 与业务存储。
+Effect 停止新调用和计时器，取消全部受管调用，等待树游标退休、本机文件读取、已开始提交及回收实际退出。远端查询传递同一次调用的观察取消信号；HTTP/transport 取消只表示 Authority 放弃观察，远端 `done` 不是 worker 文件句柄已退出的证明。当前没有跨机器单次查询取消与退出确认协议，worker 独立拥有已接纳查询，并在附着撤销、shutdown 和 Effect 中取消、等待文件系统操作及句柄真实退出。组件 apply 在迁移和首次回收后返回，长期计时器不阻塞启动。Session/Run 消费者由 Nya 先退出，最后才释放 Projects 与业务存储。
 
-失败使用 `ProjectFileError` 固定 code：invalid、missing、unavailable、unsupported、too-large、range-invalid、changed、expired、corrupt、cancelled、cleanup-failed、preparation-conflict、tree-busy、tree-expired、tree-conflict，均加 `file-` 前缀。准备失败可携带安全的 fileIndex 标识附件位置；系统路径及底层错误不向 HTTP 暴露。
+失败使用 `ProjectFileError` 固定 code：invalid、missing、unavailable、unsupported、too-large、range-invalid、changed、expired、corrupt、cancelled、cleanup-failed、preparation-conflict、tree-busy、tree-expired、tree-conflict、tree-truncated，均加 `file-` 前缀。准备失败可携带安全的 fileIndex 标识附件位置；系统路径及底层错误不向 HTTP 暴露。
 
 ## 验证
 

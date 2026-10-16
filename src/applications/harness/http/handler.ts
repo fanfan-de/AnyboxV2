@@ -30,14 +30,18 @@ import type { RunChange } from '../core/run/notifications.js'
 import type { ProtocolViewFrame, ProtocolViewSnapshot } from '../core/view/types.js'
 import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
   PromptSnapshot, PromptVersion } from '../core/prompt/domain.js'
-import type { AttachCodeInput, UnitAttachment, UnitKind, UnitScope } from '../core/unit/port.js'
+import type { AttachCodeInput, AttachRequest, UnitAttachment, UnitKind, UnitScope } from '../core/unit/port.js'
 import { isUnitError, validateUnitKind, validateUnitScope } from '../core/unit/domain.js'
+import { isTransportError, validateUnitRegistration } from '../core/unit/transport-domain.js'
+import type { UnitRegistration, UnitReply, UnitRequest } from '../core/unit/transport-domain.js'
+import type { JsonValue } from '@anybox/models'
 
 export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> {
   listAgents(): readonly { readonly id: string }[]
   listTools(): ReturnType<typeof listTools>
   directoryPickerSupported(): boolean
+  localDirectorySelectionSupported?(): boolean
   directoryBrowsingSupported(): boolean
   directoryCreationSupported(): boolean
   openDirectoryBrowse(owner: string, input: DirectoryBrowseOptions, signal?: AbortSignal): OwnedCall<DirectoryBrowseOpened>
@@ -46,7 +50,7 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   closeDirectoryBrowse(owner: string, browseId: string): Promise<void>
   onDirectoryBrowseRetired(listener: (browseId: string) => void): () => void
   pickProject(signal: AbortSignal): Promise<Project | null>
-  openProject?(path: string): Promise<Project>
+  openProject?(path: string, options?: { readonly computerAttachmentId?: string }): Promise<Project>
   listProjects(): Promise<readonly Project[]>
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
   getSessionDefaults(agentId: string): Promise<SessionDefaults>
@@ -88,6 +92,15 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   listUnitAttachments(): Promise<readonly UnitAttachment[]>
   createUnitAttachCode(input: AttachCodeInput): Promise<{ readonly attachment: UnitAttachment; readonly code: string }>
   revokeUnitAttachment(attachmentId: string): Promise<UnitAttachment>
+  /** This harness server's instance identity, or null when the host runs unauthenticated. */
+  instanceId(): string | null
+  attachUnit(input: AttachRequest): Promise<{ readonly attachment: UnitAttachment; readonly credential: string }>
+  authenticateUnit(authorization: string | undefined): Promise<UnitAttachment>
+  pollUnit(attachmentId: string, registration: UnitRegistration, signal: AbortSignal): Promise<readonly UnitRequest[]>
+  replyUnit(attachmentId: string, replies: readonly UnitReply[]): void
+  listLocalComputerAttachments(): Promise<readonly JsonValue[]>
+  attachLocalComputer(input: { readonly harnessUrl: string; readonly code: string; readonly ceiling: JsonValue }): Promise<JsonValue>
+  revokeLocalComputerAttachment(attachmentId: string): Promise<JsonValue>
 }
 
 export interface HarnessServerHttpHandler extends ApplicationHttpPort {
@@ -135,7 +148,7 @@ function knownFailure(error: unknown): HttpFailure {
     }
     if (error.name === 'ProjectFileError' && 'code' in error) {
       const code = String(error.code)
-      return failure(code === 'file-too-large' ? 413 : code === 'file-missing' ? 404
+      return failure(code === 'file-too-large' || code === 'file-tree-truncated' ? 413 : code === 'file-missing' ? 404
         : ['file-expired', 'file-changed', 'file-preparation-conflict', 'file-tree-expired', 'file-tree-conflict', 'file-tree-busy'].includes(code) ? 409
         : ['file-invalid', 'file-range-invalid', 'file-unsupported', 'file-corrupt'].includes(code) ? 400 : 503, code)
     }
@@ -144,10 +157,16 @@ function knownFailure(error: unknown): HttpFailure {
       return failure(code === 'asset-too-large' ? 413 : code === 'asset-missing' ? 404 : code === 'asset-expired' ? 409
         : ['asset-invalid', 'asset-unsupported', 'asset-corrupt'].includes(code) ? 400 : 503, code)
     }
-    if (isUnitError(error)) {
-      const code = error.code
+    if (isUnitError(error) || (error.name === 'ComputerWorkerError' && 'code' in error && String(error.code).startsWith('unit-'))) {
+      const code = String((error as { code: string }).code)
       return failure(code === 'unit-attachment-missing' ? 404 : ['unit-invalid', 'unit-scope-exceeded', 'unit-kind-mismatch'].includes(code) ? 400
-        : code === 'unit-attachments-closed' ? 503 : 409, code)
+        : code === 'unit-credential-invalid' ? 401 : code === 'unit-attachments-closed' ? 503 : 409, code)
+    }
+    if (isTransportError(error)) return failure(error.code === 'unit-transport-invalid' ? 400 : 503, error.code)
+    if (error.name === 'ComputerWorkerError' && 'code' in error) {
+      const code = String(error.code)
+      return failure(['worker-attachment-invalid', 'worker-invalid'].includes(code) ? 400 : code === 'worker-attachment-missing' ? 404
+        : ['worker-attachment-local', 'worker-attachment-conflict'].includes(code) ? 409 : /^worker-attach-/.test(code) ? 502 : 503, code)
     }
     if (/^unknown (agent|session|project|prompt) /.test(error.message)) return failure(404, 'not-found')
     if (error.message === 'prompt draft revision conflict') return failure(409, 'prompt-conflict')
@@ -275,6 +294,9 @@ function processExitProjection(value: import('@anybox/models').JsonValue | undef
 
 
 
+/** Unit replies carry tool observations; bytes of images travel separately. */
+const unitReplyBytes = 32 * 1024 * 1024
+
 function integerQuery(url: URL, key: string, fallback: number, min: number, max: number): number {
   const raw = url.searchParams.get(key)
   const value = raw === null ? fallback : /^\d+$/.test(raw) ? Number(raw) : NaN
@@ -301,6 +323,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
   const pickerRequests = new Set<AbortController>()
   const modelRequests = new Map<AbortController, Promise<unknown>>()
   const imageRequests = new Map<AbortController, Promise<unknown>>()
+  const unitRequests = new Map<AbortController, Promise<unknown>>()
   const directoryRequests = new Map<AbortController, Promise<unknown>>()
   const treeRequests = new Map<AbortController, Promise<unknown>>()
   const resourceRequestOwners = new Map<AbortController, string>()
@@ -406,6 +429,67 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
       const path = url.pathname
       const commands = options.currentCommands?.() ?? initialCommands
       const directoryOwner = context.actorId, productId = context.appId
+      // Unit routes are reached only through the host's self-authenticated dispatch; the unit credential replaces the device token.
+      const unitRoute = path === '/api/v1/units/unit' || path.startsWith('/api/v1/units/unit/')
+      if (context.principal === 'unit' || unitRoute) {
+        if (context.principal !== 'unit' || !unitRoute) throw failure(404, 'not-found')
+        if (method === 'POST' && path === '/api/v1/units/unit/attach') {
+          const body = await requestObject(request, ['code', 'unitKind', 'unitId', 'contractVersion', 'capabilities', 'ceiling'])
+          let unitKind: UnitKind, ceiling: UnitScope
+          try { unitKind = validateUnitKind(body.unitKind); ceiling = validateUnitScope(body.ceiling) } catch { throw failure(400, 'invalid-input') }
+          if (typeof body.code !== 'string' || typeof body.unitId !== 'string' || typeof body.contractVersion !== 'string') throw failure(400, 'invalid-input')
+          const result = await commands.attachUnit({ code: body.code, unitKind, unitId: body.unitId, contractVersion: body.contractVersion, ceiling,
+            ...(body.capabilities === undefined ? {} : { capabilities: body.capabilities as JsonValue }) })
+          json(response, 201, { attachment: result.attachment, credential: result.credential, instanceId: commands.instanceId() })
+          return
+        }
+        const attachment = await commands.authenticateUnit(request.headers.authorization)
+        const instanceId = commands.instanceId()
+        if (instanceId !== null && request.headers['x-anybox-instance-id'] !== instanceId) throw failure(409, 'instance-mismatch')
+        if (method === 'GET' && path === '/api/v1/units/unit/poll') {
+          const params = Object.fromEntries(url.searchParams)
+          let registration: UnitRegistration
+          try { registration = validateUnitRegistration({ ...params, ...(params.waitMs === undefined ? {} : { waitMs: Number(params.waitMs) }) }) } catch { throw failure(400, 'invalid-input') }
+          const requests = await imageRequest(request, response, signal => commands.pollUnit(attachment.attachmentId, registration, signal), unitRequests)
+          json(response, 200, { requests }); return
+        }
+        if (method === 'POST' && path === '/api/v1/units/unit/bytes') {
+          // Byte channel: the unit pushes an image's raw bytes into the Session's draft assets and gets the receipt it must quote.
+          const scope = url.searchParams.get('scope')
+          if (!scope || scope.length > 1024 || /[\0-\x1f\x7f]/.test(scope) || [...url.searchParams.keys()].some(key => key !== 'scope')) throw failure(400, 'invalid-input')
+          const contentType = request.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase()
+          if (!imageLimits.acceptedMediaTypes.includes(contentType as ImageRef['mediaType'])) throw failure(415, 'image-required')
+          const sha256 = request.headers['x-anybox-sha256'], byteLength = Number(request.headers['x-anybox-byte-length'])
+          if (typeof sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(sha256) || !Number.isSafeInteger(byteLength) || byteLength < 1 || byteLength > imageLimits.maxBytes) throw failure(400, 'invalid-input')
+          if (Number(request.headers['content-length']) > imageLimits.maxBytes) throw failure(413, 'asset-too-large')
+          const image = await imageRequest(request, response, async signal => {
+            async function* bytes() {
+              let length = 0
+              for await (const chunk of request) {
+                if (signal.aborted) throw failure(503, 'asset-cancelled')
+                const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+                length += data.byteLength
+                if (length > imageLimits.maxBytes) throw failure(413, 'asset-too-large')
+                yield data
+              }
+            }
+            return joinImageCall(commands.importImage(scope, bytes(), signal), signal)
+          }, unitRequests)
+          if (image.sha256 !== sha256 || image.byteLength !== byteLength) throw failure(409, 'bytes-mismatch')
+          json(response, 201, { assetId: image.assetId, sha256: image.sha256, byteLength: image.byteLength, mimeType: image.mediaType }); return
+        }
+        if (method === 'POST' && path === '/api/v1/units/unit/replies') {
+          const body = await requestObject(request, ['bootId', 'replies'], unitReplyBytes)
+          if (!Array.isArray(body.replies)) throw failure(400, 'invalid-input')
+          commands.replyUnit(attachment.attachmentId, body.replies as UnitReply[])
+          json(response, 200, { ok: true }); return
+        }
+        if (method === 'POST' && path === '/api/v1/units/unit/revoke') {
+          await requestObject(request, [])
+          json(response, 200, await commands.revokeUnitAttachment(attachment.attachmentId)); return
+        }
+        throw failure(404, 'not-found')
+      }
       if (method === 'POST' && path === '/api/v1/projects/directories/browse') {
         if (!commands.directoryBrowsingSupported?.()) throw failure(503, 'directory-browse-unsupported')
         if (url.search) throw failure(400, 'invalid-input')
@@ -465,9 +549,10 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         json(response, 201, result); return
       }
       if (method === 'POST' && path === '/api/v1/projects') {
-        const body = await requestObject(request, ['path'])
+        const body = await requestObject(request, ['path', 'computerAttachmentId'])
         if (!commands.openProject) throw failure(503, 'service-unavailable')
-        json(response, 200, await commands.openProject(body.path as string)); return
+        if (body.computerAttachmentId !== undefined && (typeof body.computerAttachmentId !== 'string' || !body.computerAttachmentId.trim())) throw failure(400, 'invalid-input')
+        json(response, 200, await commands.openProject(body.path as string, body.computerAttachmentId === undefined ? undefined : { computerAttachmentId: body.computerAttachmentId as string })); return
       }
       if (method === 'GET' && path === '/api/v1/changes') {
         const ids = url.searchParams.getAll('sessionId')
@@ -502,6 +587,20 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         await requestObject(request, [])
         json(response, 200, await commands.revokeUnitAttachment(decodeURIComponent(unitRevokeMatch[1])))
         return
+      }
+      // The device owner's control of this harness server's own worker: consume codes from other harness servers, list, revoke.
+      if (method === 'GET' && path === '/api/v1/units/local-computer/attachments') {
+        json(response, 200, await commands.listLocalComputerAttachments()); return
+      }
+      if (method === 'POST' && path === '/api/v1/units/local-computer/attachments') {
+        const body = await requestObject(request, ['harnessUrl', 'code', 'ceiling'])
+        if (typeof body.harnessUrl !== 'string' || typeof body.code !== 'string' || body.ceiling === undefined) throw failure(400, 'invalid-input')
+        json(response, 201, await commands.attachLocalComputer({ harnessUrl: body.harnessUrl, code: body.code, ceiling: body.ceiling as JsonValue })); return
+      }
+      const localRevokeMatch = /^\/api\/v1\/units\/local-computer\/attachments\/([^/]+)\/revoke$/.exec(path)
+      if (method === 'POST' && localRevokeMatch) {
+        await requestObject(request, [])
+        json(response, 200, await commands.revokeLocalComputerAttachment(decodeURIComponent(localRevokeMatch[1]))); return
       }
       if (method === 'GET' && path === '/api/v1/agents') {
         json(response, 200, commands.listAgents())
@@ -589,11 +688,12 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         return
       }
       if (method === 'GET' && path === '/api/v1/projects/picker') {
-        json(response, 200, { supported: commands.directoryPickerSupported() })
+        json(response, 200, { supported: commands.localDirectorySelectionSupported?.() !== false && commands.directoryPickerSupported() })
         return
       }
       if (method === 'POST' && path === '/api/v1/projects/pick') {
         await requestObject(request, [])
+        if (commands.localDirectorySelectionSupported?.() === false) throw failure(503, 'picker-unsupported')
         const controller = new AbortController()
         const disconnected = () => { if (!response.writableEnded) controller.abort() }
         response.once('close', disconnected)
@@ -878,7 +978,8 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
     capabilities: () => {
       const current = options.currentCommands?.() ?? commands
       return [...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
-        ...(current.directoryCreationSupported?.() ? ['projects.create-directory'] : [])]
+        ...(current.directoryCreationSupported?.() ? ['projects.create-directory'] : []),
+        ...(current.localDirectorySelectionSupported?.() === true ? ['projects.local-directories'] : [])]
     },
     notifyRunChange(change) {
       if (!closing) for (const stream of changeStreams) stream.publish(change)
@@ -894,6 +995,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
       for (const controller of pickerRequests) controller.abort()
       for (const controller of modelRequests.keys()) controller.abort()
       for (const controller of imageRequests.keys()) controller.abort()
+      for (const controller of unitRequests.keys()) controller.abort()
       for (const controller of directoryRequests.keys()) controller.abort()
       for (const controller of treeRequests.keys()) controller.abort()
       for (const finish of waitRequests) finish()
@@ -904,6 +1006,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         ...streams.map(stream => stream.done),
         ...[...modelRequests.values()].map(task => task.then(() => {}, () => {})),
         ...[...imageRequests.values()].map(task => task.then(() => {}, () => {})),
+        ...[...unitRequests.values()].map(task => task.then(() => {}, () => {})),
         ...[...directoryRequests.values()].map(task => task.then(() => {}, () => {})),
         ...[...treeRequests.values()].map(task => task.then(() => {}, () => {})),
       ]).then(async () => {

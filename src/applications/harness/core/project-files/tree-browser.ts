@@ -25,10 +25,18 @@ export interface FileTreeBrowser {
   close(): Promise<void>
 }
 
-/** Project Files owns cursors; scans use the same slot as preview/search/prepare. */
-export function createFileTreeBrowser(rootFor: (project: string) => Promise<string>,
+export interface FileTreeLocation { readonly root: string; readonly access: FileTreeAccessProvider }
+/**
+ * Project Files owns cursors; scans use the same slot as preview/search/prepare. Each project resolves its root and the access
+ * provider that lists it (this host's filesystem or a remote unit); a bare root string uses the default local provider.
+ */
+export function createFileTreeBrowser(locate: (project: string) => Promise<FileTreeLocation | string>,
   slot: <T>(signal: AbortSignal, work: () => Promise<T>) => Promise<T>, options: FileTreeBrowserOptions = {}): FileTreeBrowser {
-  const access = options.access ?? createFileTreeAccessProvider(), now = options.now ?? Date.now
+  const defaultAccess = options.access ?? createFileTreeAccessProvider(), now = options.now ?? Date.now
+  const resolve = async (project: string): Promise<FileTreeLocation> => {
+    const located = await locate(project)
+    return typeof located === 'string' ? { root: located, access: defaultAccess } : located
+  }
   const scanTime = options.scanTime ?? (() => performance.now()), newId = options.newId ?? randomUUID
   const idleMs = options.idleMs ?? fileTreeLimits.idleMs
   const cursors = new Map<string, TreeCursor>(), resources = new Set<TreeCursor>(), calls = new Set<OwnedCall<unknown>>()
@@ -88,7 +96,7 @@ export function createFileTreeBrowser(rootFor: (project: string) => Promise<stri
         if (cursor.cached?.page === page) { cursor.expiresAt = now() + idleMs; return cursor.cached }
         return await slot(readSignal, async () => {
           if (cursor.closed) throw fileError('file-tree-expired')
-          if (!cursor.cursor) cursor.cursor = await access.open(await rootFor(cursor.project), cursor.path, readSignal)
+          if (!cursor.cursor) { const location = await resolve(cursor.project); cursor.cursor = await location.access.open(location.root, cursor.path, readSignal) }
           readSignal.throwIfAborted()
           await cursor.cursor.verify(readSignal)
           const entries: FileTreeEntry[] = [], started = scanTime()

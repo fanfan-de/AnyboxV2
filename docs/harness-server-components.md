@@ -23,16 +23,19 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | 目录调度 | `models.catalog`；注入 source/cache/source-data | 定时器、刷新及接纳；停止调度、取消并等待提交 |
 | 业务 SQLite | `local-storage` | 排他连接、串行事务和领域迁移；等所有下游退出 |
 | 图片资源 | `harness.image-assets`；注入 local-storage | 排他图片目录、校验队列、临时文件、读取与 GC；取消并等待实际退出 |
-| Projects | `harness.projects`；注入 local-storage | 项目目录身份、目录检查与记录、有界浏览会话/目录句柄及取消清理 |
-| Project Files | `harness.project-files`；注入 local-storage/projects | 文件搜索、读取、SQLite 快照、准备批次与保留凭证；取消并等待文件和数据库操作 |
-| 单元附着 | `harness.unit-attachments`；注入 local-storage | `unit-attachments` 账本、本机单元的自动附着与本次装配 bootId；停止准入并等待账本操作退出 |
-| 本机 worker 客户端 | `computer.worker`；无 inject | 惰性连接或启动独立 worker；Effect 只取消并等待本地 HTTP 观察 |
-| 本机实例提供方 | `computer.instance-provider`；注入 computer.worker | 按需确认 workerId/bootId、平台及架构；不销毁用户设备 |
+| Projects | `harness.projects`；注入 local-storage/computer.worker | 项目目录身份与 Computer 附着绑定、本机或经单元查询面的目录检查、有界浏览会话/目录句柄及取消清理 |
+| Project Files | `harness.project-files`；注入 local-storage/projects/computer.worker | 文件搜索、读取、SQLite 快照、准备批次与保留凭证，按项目绑定选本机文件系统或单元查询面；取消并等待文件和数据库操作 |
+| 单元附着 | `harness.unit-attachments`；注入 local-storage | `unit-attachments` 账本、本机单元的自动附着与本次装配 bootId、单元凭证认证；停止准入并等待账本操作退出 |
+| 单元传输 | `harness.unit-transport`；注入 unit-attachments | 远端单元拨出的内存邮箱：长轮询领取、回执、连接状态；关闭拒绝等待中的请求并释放轮询，不取消单元已接受的工作 |
+| 本机 worker 客户端 | `computer.local-worker`、`computer.local-worker-control`；无 inject | 惰性连接或启动独立 worker，经回环转发附着控制；Effect 只取消并等待本地 HTTP 观察 |
+| Worker 路由 | `computer.worker`、`computer.instance-provider`；注入 unit-transport，本机形态另注入 computer.local-worker | 按授权附着路由到回环 worker 或单元传输，claim 缓存与 `get` 提示，按需确认实例；Effect 只中止本地远端观察 |
 | Computers | `harness.computers`；注入 local-storage/instance-provider | 逻辑资源、按需共享激活、实例代次和 pin；取消并等待提供方实际退出 |
 | Workspaces | `harness.workspaces`；注入 projects/local-storage | pinned-local 映射、scope reservation 与固定 binding；取消并等待准备和查询 |
-| Computer Operations | `harness.computer-operations`；注入 computers/workspaces/local-storage/worker/image-assets | 声明、receipt、结果、scope 与固定引用；Effect 取消并等待本代观察 |
+| Computer Operations | `harness.computer-operations`；注入 computers/workspaces/local-storage/worker/image-assets/unit-attachments | 声明、receipt、结果、scope 与固定的 Computer 附着引用；远端附着的声明放在 `unit:<attachmentId>` 逻辑计算机上；新声明前复核附着；Effect 取消并等待本代观察 |
 | worker 固定项目绑定 | worker 根的 `harness.projects`；无 inject | 仅接受 fixed workspacePath 的工具兼容端口，不反查 Authority |
-| worker 执行器 | worker 根的 `computer.worker`；注入 worker 存储/四工具/图片 | 独立账本、工具调用及 Run 进程 scope；关闭 worker 服务才取消并等待此根 |
+| worker 执行器 | worker 根的 `computer.worker`；注入 worker 存储/四工具/图片/worker-attachments | 独立账本、按附着区分的 Run 授权与上限检查、工具调用及 Run 进程 scope；关闭 worker 服务才取消并等待此根 |
+| worker 附着账本 | worker 根的 `computer.worker-attachments`；注入 worker 存储 | 服务的 harness server 记录、作用域上限、系统凭据命名空间中的单元凭证与意图日志；停止变更并等待凭据操作 |
+| worker 拨出 | worker 根的 `computer.worker-dialout`；注入 computer.worker/worker-attachments | 消费附着码、每个 approved 附着一条长轮询循环与回执；取消并等待循环及在途 HTTP |
 | Bash / Apply Patch | `tools.bash` / `tools.apply-patch`；注入 projects | 既有前台命令 / 跨项目文件队列与临时资源；取消后等实际退出 |
 | 进程工具 | `tools.processes`；注入 projects | 每 Run 的管道进程组、stdin 与增量输出；正常结束也关闭 scope 并等实际退出 |
 | 文件工具 | `tools.files`；注入 projects/image-assets/apply-patch | 读取 handle、搜索进程、图片导入和共享文本提交；取消并等待 |
@@ -42,7 +45,7 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | 协议应用注册 | `harness.protocol-agents`；注入 models/models.protocols/image-assets | 固定驱动与 Loop 组合、准备中的资源、Run 租约；撤销后等 program 释放 |
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
 | RunRuntime | `harness.run-runtime`；注入 session-runs/computer-operations | program、工具观察、owner、取消/等待者和临时视图；worker scope 与 program 退出后结算 |
-| Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime/computer-operations/unit-attachments | 准入、幂等、本机单元附着引用和交接前资源；恢复接管前校验附着引用；停止准入并等交接与在途 Run |
+| Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime/computer-operations/unit-attachments | 准入、幂等、单元附着引用（本机或组合固定的远端 Computer 附着）和交接前资源；恢复接管前校验附着引用；停止准入并等交接与在途 Run |
 | 执行访问管理 | `host.access` | 既有业务库中的实例身份与令牌摘要；撤销观察连接 |
 | 客户端连接 | `client.connections` | 独立 client.sqlite 与系统凭据意图日志 |
 | 客户端外壳 | `app.client-http` | 常驻回环监听器、静态页面与应用控制 |

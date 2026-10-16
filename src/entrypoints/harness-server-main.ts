@@ -7,6 +7,7 @@ import { parseHarnessServerConfig } from '../applications/harness/server-config.
 import { createHarnessServer } from '../applications/harness/server.js'
 import { parseClaudeAgentConfig } from '../applications/claude-agent/config.js'
 import { claudeAgentServerApplication } from '../applications/claude-agent/registration.js'
+import { describeError } from './error-report.js'
 export { createHarnessServer }
 
 async function main() {
@@ -32,7 +33,7 @@ async function main() {
     additionalApplications: [claudeAgentServerApplication(parseClaudeAgentConfig(process.env))] })
   process.stdout.write(`harness server: ${host.url} (${host.instance.instanceId})\n`)
   process.send?.({ type: 'ready', instanceId: host.instance.instanceId, url: host.url })
-  const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch(() => { process.exitCode = 1; process.stderr.write('harness server shutdown failed\n') }) }
+  const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch((error: unknown) => { process.exitCode = 1; process.stderr.write(`harness server shutdown failed: ${describeError(error)}\n`) }) }
   process.once('SIGINT', stop); process.once('SIGTERM', stop)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main().catch(error => {

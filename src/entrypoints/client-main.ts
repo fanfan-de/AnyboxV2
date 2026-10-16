@@ -8,6 +8,7 @@ import { claudeAgentClientApplication } from '../applications/claude-agent/clien
 import type { HarnessClientRuntimeOptions } from '../applications/harness/client/runtime.js'
 import type { ApplicationRegistration } from '../host/applications/registration.js'
 import { defaultModelsConfigPath } from '../applications/harness/server-config.js'
+import { describeError } from './error-report.js'
 
 export interface DefaultClientHostOptions extends HarnessClientRuntimeOptions, ClientConnectionsOptions {
   readonly applications?: readonly ApplicationRegistration[]
@@ -34,7 +35,7 @@ async function main() {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid client port')
   const host = await createClientHost({ path, port, namespace: process.env.ANYBOX_CLIENT_NAMESPACE, localInstanceId: process.env.ANYBOX_LOCAL_INSTANCE_ID })
   process.stdout.write(`Anybox Client: ${host.url}\n`)
-  const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch(() => { process.exitCode = 1; process.stderr.write('Client shutdown failed\n') }) }
+  const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch((error: unknown) => { process.exitCode = 1; process.stderr.write(`Client shutdown failed: ${describeError(error)}\n`) }) }
   process.once('SIGINT', stop); process.once('SIGTERM', stop)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main().catch(error => {

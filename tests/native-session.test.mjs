@@ -1,4 +1,4 @@
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import assert from 'node:assert/strict'
@@ -26,6 +26,7 @@ async function host(t, executing = false) {
     await root.installComponent(llm.component())
     harness = await createTestHarnessServerCore(root, { agents })
   } else {
+    await installComputerWorkerStub(root)
     await root.installComponent(createProjectComponent(inputs))
     await root.installComponent(createProjectFilesComponent(inputs))
     await installComputerServices(root, inputs)

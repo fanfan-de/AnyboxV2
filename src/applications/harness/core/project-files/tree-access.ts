@@ -31,6 +31,24 @@ async function checkedDirectory(root: string, path: string, signal: AbortSignal)
   return { target, identity: await lstat(target) }
 }
 
+/** One bounded listing of a project directory, for units answering tree queries without holding a handle across requests. */
+export async function listProjectDirectory(root: string, path: string, limit: number, signal: AbortSignal): Promise<{ readonly entries: readonly FileTreeEntry[]; readonly identity: string; readonly truncated: boolean }> {
+  const { identity } = await checkedDirectory(root, path, signal)
+  const cursor = await createFileTreeAccessProvider().open(root, path, signal)
+  const entries: FileTreeEntry[] = []
+  let scanned = 0, truncated = false
+  try {
+    while (true) {
+      const entry = await cursor.read(signal)
+      if (entry === null) break
+      // One lookahead distinguishes an exactly full directory from a truncated one. Ignored entries count too.
+      if (scanned++ >= limit) { truncated = true; break }
+      if (entry !== 'other') entries.push(entry)
+    }
+  } finally { await cursor.close() }
+  return { entries, identity: `${identity.dev}:${identity.ino}`, truncated }
+}
+
 export function createFileTreeAccessProvider(): FileTreeAccessProvider {
   return { async open(root, path, signal) {
     const { target, identity } = await checkedDirectory(root, path, signal)

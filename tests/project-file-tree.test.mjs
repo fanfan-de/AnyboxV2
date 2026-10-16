@@ -1,4 +1,4 @@
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -30,6 +30,7 @@ async function fixture(t, options = {}) {
   const inputs = { now: () => new Date().toISOString(), newId: randomUUID }
   t.after(async () => { try { await root.fiber.dispose() } finally { await fs.rm(directory, { recursive: true, force: true }) } })
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  await installComputerWorkerStub(root)
   await root.installComponent(createProjectComponent(inputs))
   const filesFiber = root.installComponent(createProjectFilesComponent(options)); await filesFiber
   const project = await root.get('harness.projects').openProject(directory)

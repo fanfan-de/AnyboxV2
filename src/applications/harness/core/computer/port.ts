@@ -6,6 +6,8 @@ export type { ComputerInstance, ComputerInstanceRef, ComputerPin, ComputerResour
 export const computerServiceKey = 'harness.computers'
 export const computerInstanceProviderServiceKey = 'computer.instance-provider'
 export const localComputerProviderId = 'local'
+/** Computers served by a remote Computer unit through the unit proxy. */
+export const unitComputerProviderId = 'unit'
 
 export interface ComputerActivationInput {
   readonly resource: ComputerResource
@@ -16,10 +18,17 @@ export interface ComputerActivationInput {
 /** Provider handles and SDK-specific failures never enter the durable resource domain. */
 export interface ComputerInstanceProvider {
   readonly providerId: string
+  /** Every provider id this provider serves; a router serves both local and unit computers. Defaults to `[providerId]`. */
+  readonly providerIds?: readonly string[]
   activate(input: ComputerActivationInput): OwnedCall<{
     readonly providerRef: string
     readonly platform: string
     readonly architecture: string
+    /**
+     * The provider proves that `previousInstance` can never execute again (the same worker answered with a new boot), so Computers
+     * may retire it although pins on it were never released; those pins stay on the retired instance as facts of an unknown exit.
+     */
+    readonly previousExited?: boolean
   }>
 }
 

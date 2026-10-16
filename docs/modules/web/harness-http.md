@@ -63,13 +63,27 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 
 ## API：单元附着
 
-以下路径只使用 `/api/v1/apps/agent` 前缀，没有旧 `/api/v1` 别名；Web 尚未接入，远端单元消费附着码的入口随 U1 加入。
+以下路径只使用 `/api/v1/apps/agent` 前缀，没有旧 `/api/v1` 别名；Web 尚未接入（U1 第 5 步）。拥有者侧路径使用设备令牌：
 
 | 方法 / 路径 | 输入或行为 |
 | --- | --- |
 | `GET /units/attachments` | 附着记录列表，含本机自动附着；不含附着码或凭证 |
 | `POST /units/attach-codes` | `{ unitKind, scope, ttlMs? }`；记录 pending 附着并返回 201 与一次性 `code`；种类与作用域不一致或 ttl 非整数返回 400 |
 | `POST /units/attachments/:id/revoke` | `{}`；远端附着幂等撤销并递增 epoch；本机附着返回 `409 unit-attachment-local`，未知 ID 返回 404 |
+| `POST /projects`（既有路由） | 新增可选 `computerAttachmentId`：把项目绑定到该 Computer 附着，路径由单元解析；缺省为组合的默认绑定。Project DTO 带 `computerAttachmentId` |
+| `GET /units/local-computer/attachments` | 本机 worker 的附着记录及连接状态，经 `computer.local-worker-control` 回环转发；远端 Computer 形态没有该服务时返回 503 |
+| `POST /units/local-computer/attachments` | `{ harnessUrl, code, ceiling }`；本机 worker 消费另一台 harness server 的附着码并设定目录与工具上限，返回 201；远端返回的 `unit-*` 错误码按附着错误映射，地址非法返回 400，不可达返回 502 |
+| `POST /units/local-computer/attachments/:id/revoke` | `{}`；本机 worker 撤销自己的远端附着并删除凭证；`local:computer` 返回 409，未知返回 404 |
+
+单元侧路径 `/units/unit/*` 在应用注册中声明为自认证前缀：通用监听器不要求设备令牌，也不接受设备令牌，以 `principal: 'unit'` 交给本组件。除 `attach` 外都以 `Authorization: Unit <attachmentId>:<credential>` 认证，并要求 `X-Anybox-Instance-Id` 等于本实例；凭证错误返回 `401 unit-credential-invalid`，附着已撤销返回 `409 unit-attachment-state`。
+
+| 方法 / 路径 | 输入或行为 |
+| --- | --- |
+| `POST /units/unit/attach` | `{ code, unitKind, unitId, contractVersion, capabilities?, ceiling }`；消费附着码，返回 201 `{ attachment, credential, instanceId }`，凭证只返回这一次 |
+| `GET /units/unit/poll?unitId&bootId&platform&architecture&waitMs` | 长轮询领取请求，最长 30 秒；返回 `{ requests: [{ requestId, kind, payload }] }`，无请求时为空数组；断开不领取 |
+| `POST /units/unit/replies` | `{ bootId, replies: [{ requestId, value } \| { requestId, error: { code, name?, message?, category? } }] }`，上限 32 MiB；未知 requestId 忽略 |
+| `POST /units/unit/bytes?scope=<sessionId>` | 字节通道：请求体为图片原字节，`Content-Type` 为允许的图片类型，`X-Anybox-Sha256`、`X-Anybox-Byte-Length` 声明摘要与长度；经 Session 导入为该会话的草稿资源，摘要或长度不符返回 `409 bytes-mismatch`，成功返回 201 `{ assetId, sha256, byteLength, mimeType }`，单元在回执中引用它 |
+| `POST /units/unit/revoke` | `{}`；单元侧撤销自己的附着 |
 
 ## API：项目文件快照
 

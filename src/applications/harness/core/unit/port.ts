@@ -1,5 +1,5 @@
 import type { JsonValue } from '@anybox/models'
-import type { StorageTransaction } from '../../../../storage/port.js'
+import type { StorageReader, StorageTransaction } from '../../../../storage/port.js'
 import type { RunUnitBinding, RunUnitBindings, UnitAttachment, UnitKind, UnitScope } from './domain.js'
 export type { RunUnitBinding, RunUnitBindings, UnitAttachment, UnitKind, UnitScope } from './domain.js'
 
@@ -36,8 +36,14 @@ export interface UnitAttachmentsPort {
   attach(input: AttachRequest): Promise<{ readonly attachment: UnitAttachment; readonly credential: string }>
   /** Idempotent for remote attachments; local attachments cannot be revoked. */
   revoke(attachmentId: string): Promise<UnitAttachment>
+  /** Presented unit credentials are compared in constant time against the stored digest; only approved attachments authenticate. */
+  authenticate(attachmentId: string, credential: string): Promise<UnitAttachment>
   /** This harness server's own unit of a kind, approved automatically at startup. */
   local(unitKind: UnitKind): Promise<LocalUnit>
+  /** Binding reference of any approved attachment, for compositions that fix a remote unit instead of the local one. */
+  binding(attachmentId: string): Promise<RunUnitBinding>
+  /** Synchronous read inside a caller's transaction, regardless of state; placement facts of revoked attachments stay readable. */
+  getIn(reader: StorageReader, attachmentId: string): UnitAttachment | undefined
   /** Synchronous participant of a business transaction: the fixed reference must still be approved at the same epoch. */
   requireApprovedIn(tx: StorageTransaction, binding: RunUnitBinding): UnitAttachment
   verify(bindings: RunUnitBindings): Promise<void>

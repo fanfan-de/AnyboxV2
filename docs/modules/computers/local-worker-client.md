@@ -2,11 +2,15 @@
 
 [返回 Computer 模块](README.md) · [Worker 执行器](worker-executor.md)
 
-`createLocalComputerWorkerComponent(options)` 在 Authority 根安装 `computer-local-worker-client`，提供 `computer.worker: ComputerWorkerPort`。它只拥有本代 HTTP 请求、超时和观察连接；不拥有 worker 的工具进程。源码：[客户端](../../../src/applications/harness/core/computer/worker-client.ts)、[受信端口](../../../src/applications/harness/core/computer/worker-port.ts)、[独立入口](../../../src/entrypoints/computer-worker-main.ts)。
+`createLocalComputerWorkerComponent(options)` 在 Authority 根安装 `computer-local-worker-client`，提供 `computer.local-worker: ComputerWorkerPort` 与 `computer.local-worker-control: LocalComputerWorkerControl`；核心组件消费的 `computer.worker` 由 [Worker 路由](worker-router.md)提供，`local:computer` 的调用经路由到达这里。它只拥有本代 HTTP 请求、超时和观察连接；不拥有 worker 的工具进程。源码：[客户端](../../../src/applications/harness/core/computer/worker-client.ts)、[受信端口](../../../src/applications/harness/core/computer/worker-port.ts)、[独立入口](../../../src/entrypoints/computer-worker-main.ts)。
 
-组件没有 inject。受信装配固定 `directory`，生产默认目录为业务库路径附加 `.computer-worker`，一个目录只归一个 Authority；可选 executable、startupTimeoutMs、requestTimeoutMs 用于指定启动设备的 Node 和连接期限。创建组件或查询 Session 不启动 worker。第一次实例激活/计算调用才检查独占目录的 endpoint，查回存活 worker，或 detached 启动独立进程。worker 的 stdio 和进程组不依附 Runtime，Runtime 进程 PID 的 SIGKILL 不终止它。detached 不脱离 systemd cgroup，生产接续需预先启动独立 worker unit，见[部署说明](../../harness-server-deployment.md)。
+组件没有 inject。受信装配固定 `directory`，生产默认目录为业务库路径附加 `.computer-worker`，一个目录只归一个 Authority；可选 executable、startupTimeoutMs、requestTimeoutMs 用于指定启动设备的 Node 和连接期限。创建组件或查询 Session 不启动 worker。第一次实例激活/计算调用才检查独占目录的 endpoint，查回存活 worker，或 detached 启动独立进程；之后每次调用先检查已连接 worker 的 PID 仍存活，worker 异常退出后下一次本地调用即重新查回或启动，而不是先失败一次。客户端只在有本地调用时才会这样做，不监督空闲 worker：仅为远端 harness server 服务的设备上，异常退出的 worker 直到下一次本地调用（例如打开附着列表）才会重启，生产部署应由 systemd 等外部监督。worker 的 stdio 和进程组不依附 Runtime，Runtime 进程 PID 的 SIGKILL 不终止它。detached 不脱离 systemd cgroup，生产接续需预先启动独立 worker unit，见[部署说明](../../harness-server-deployment.md)。
 
-`connectLocalComputerWorker(options)` 是内部客户端工厂，返回同一端口及 `closeObserver()`。`info` 返回稳定 workerId、本次 bootId、平台和架构；`claimRun` 设置单调 owner epoch；`submit` 持久接纳工具、取消或 scope 关闭声明；`get` 查询同一次执行事实。请求固定原 endpoint，不跨机器重试。声明 ID、摘要和 placement 由 Authority 固定，授权 owner 不进入不可变摘要。
+`connectLocalComputerWorker(options)` 是内部客户端工厂，返回同一端口、`control` 及 `closeObserver()`。`info` 返回稳定 workerId、本次 bootId、平台和架构；`claimRun` 设置单调 owner epoch；`submit` 持久接纳工具、取消或 scope 关闭声明；`get` 查询同一次执行事实；`query` 是不经账本的只读查询（stat、列目录、搜索、读取文本）。每个授权都带 `attachmentId`，本机 harness server 固定使用 `local:computer`；请求固定原 endpoint，不跨机器重试。声明 ID、摘要和 placement 由 Authority 固定，授权 owner 与附着都不进入不可变摘要。
+
+回环返回的工具图片仍以 base64 内嵌在 `WorkerOperation.images` 中，Operations 校验摘要后导入本机资源组件；这是回环传输的既有形态，拨出传输改用字节通道（见[worker 拨出](worker-dialout.md)）。
+
+`control` 是设备拥有者对本机 worker 附着的控制面，经回环转发到 worker 的 `/attachments/list`、`/attachments/consume`、`/attachments/revoke`：列出附着及连接状态、消费其他 harness server 的附着码并设定目录与工具上限、撤销。这些调用会按需启动 worker，因为单元必须运行才能服务远端；HTTP 层在 `/units/local-computer/attachments` 路由暴露它们。远端形态（U1 第 2 步）没有本机 worker，该服务不存在时路由返回 503。
 
 Effect 关闭本代准入、取消本地 HTTP 并等待请求实际退出，不调用 worker shutdown，也不把已接受操作标 cancelled。明确 `shutdown()` 请求 worker 停止准入、取消和排空实际工具，等待服务退出；这与 Runtime 换代及客户端观察关闭是不同控制意图。请求断开、超时或确认丢失只表示当前观察失败，不能证明工具未执行。
 

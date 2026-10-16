@@ -6,7 +6,7 @@
 
 `createComputersComponent(inputs)` 安装根上的 `harness-computers`，提供 `harness.computers: ComputersPort`。组件 inject 本轮 `local-storage` 和 `computer.instance-provider`，登记稳定逻辑资源、按需共享实例激活及持久固定引用。实例提供方实现留在独立端口内，不把 SDK、认证或进程句柄写入业务库。
 
-源码：[component.ts](../../../src/applications/harness/core/computer/component.ts)、[port.ts](../../../src/applications/harness/core/computer/port.ts)、[domain.ts](../../../src/applications/harness/core/computer/domain.ts)。本机提供方见[本机实例提供方](local-instance-provider.md)。
+源码：[component.ts](../../../src/applications/harness/core/computer/component.ts)、[port.ts](../../../src/applications/harness/core/computer/port.ts)、[domain.ts](../../../src/applications/harness/core/computer/domain.ts)。实例提供方见[Worker 路由](worker-router.md)，它按资源的 providerId（`local`/`unit`）确认本机 worker 或远端单元。
 
 实例激活按需确认独立本机 worker 的固定 workerId/bootId；命令执行与重启接续由 Operations、Session 和 worker 协作，Computers 本身不执行命令。Computers 不消费 Session、RunRuntime 或 Computer Operations，不反查操作队列。当前不提供跨机器迁移。
 
@@ -24,7 +24,7 @@
 
 `ComputerResource` 保存 computerId、固定规格（providerId/platform/architecture）、activationRevision 和 createdAt；登记不要求当前存在实例。`ComputerInstance` 保存独立 computerInstanceId、computerId、instanceGeneration、providerId/providerRef、平台、架构、activatedAt 和 ready/retired 状态。它与 harness server 的 instanceId 分开。
 
-本机在组件重启后重新按需确认：提供方引用仍相同则复用原实例 ID 和代次；提供方引用变化，且旧实例没有活动 pin，才保存新实例并增加 instanceGeneration。旧代无法被 requireInstance 或新 pin 接纳。确认本身不恢复进程，进程仍归既有工具 scope。
+每次激活都向提供方重新确认，不从内存缓存回答（并发调用共享一次确认）：提供方引用仍相同则复用原实例 ID 和代次；提供方引用变化（worker 或远端单元重启）时保存新实例并增加 instanceGeneration，旧实例置为 retired。旧实例仍有未释放 pin 时默认拒绝换代（`computer-pinned`），只有提供方在激活结果里以 `previousExited: true` 证明旧实例已不可能再执行（同一 worker 以新 bootId 应答）才照常换代；这些 pin 保留在 retired 实例上作为未知退出的事实，不被释放，迟到的真实退出仍可由 owner 释放。旧代无法被 requireInstance 或新 pin 接纳。确认本身不恢复进程，进程仍归既有工具 scope。
 
 ## 存储与事务归属
 
@@ -32,7 +32,7 @@
 
 资源规格、当前实例和代次是持久事实。activationRevision 表示本次按需确认修订；提供方调用始终在事务外。激活结果只有在 `result` 成功且 `done` 实际退出后才固定，提交时复核修订。首次实例为 generation=1，后续替代实例递增；失败不创建 ready 实例。
 
-调用方必须在同一业务事务中提交操作/workspace binding 与 `pinIn`，同样在确切 scope 退出后同事务释放相关归属。Computers 只写自己拥有的表，固定引用不由异步 acquire/release 模拟。释放记录保留，不能以同一 pinId 再次建立引用，防止迟到释放影响新归属。活动 pin 阻止替换当前实例；释放固定设备引用不关闭用户机器。
+调用方必须在同一业务事务中提交操作/workspace binding 与 `pinIn`，同样在确切 scope 退出后同事务释放相关归属。Computers 只写自己拥有的表，固定引用不由异步 acquire/release 模拟。释放记录保留，不能以同一 pinId 再次建立引用，防止迟到释放影响新归属。活动 pin 阻止替换可能仍存活的当前实例，提供方证明旧实例已退出时除外；释放固定设备引用不关闭用户机器。
 
 ## 取消、关闭与失败
 
@@ -44,4 +44,4 @@ Effect 先关闭新准入，再取消本代未退出的提供方调用，等待�
 
 ## 验证
 
-[computer-resources.test.mjs](../../../tests/computer-resources.test.mjs) 使用真实临时 SQLite 和受控提供方验证无激活登记、事务回滚、并发共享、单观察取消、实际退出屏障、持久实例身份、换代栅栏、pin 归属与关闭等待。测试不依赖 Unix Shell，Windows 可运行。根验证入口为 `npm run check`。
+[computer-resources.test.mjs](../../../tests/computer-resources.test.mjs) 使用真实临时 SQLite 和受控提供方验证无激活登记、事务回滚、并发共享、单观察取消、实际退出屏障、持久实例身份、换代栅栏与提供方证明旧实例退出后的换代、pin 归属与关闭等待。测试不依赖 Unix Shell，Windows 可运行。根验证入口为 `npm run check`。

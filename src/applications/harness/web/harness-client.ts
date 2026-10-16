@@ -76,6 +76,12 @@ export function createHarnessClient(inputConnections: readonly HarnessConnection
   const listListeners = new Map<string, Set<(values: readonly unknown[]) => void>>(), revisions = new Map<string, number>()
   let disposed = false
   const selected = () => selectedId === undefined ? connections[0] : connections.find(item => item.id === selectedId)
+  const localDirectorySelection = async (connection: HarnessConnection, signal: AbortSignal) => {
+    const local = await call<{ instanceId: string | null; picker: boolean }>(connection, '/local', undefined, signal, false, true)
+    if (!local.picker || local.instanceId !== connection.instanceId) return false
+    const info = await call<{ instanceId: string; capabilities: readonly string[] }>(connection, '/instance', undefined, signal)
+    return info.instanceId === connection.instanceId && info.capabilities.includes('projects.local-directories')
+  }
   const call = async <T>(connection: HarnessConnection, path: string, body?: object, signal?: AbortSignal, pinned = false, local = false): Promise<T> => {
     if (disposed) throw new Error('client-disposed')
     const controller = new AbortController(); requests.add(controller)
@@ -145,10 +151,10 @@ export function createHarnessClient(inputConnections: readonly HarnessConnection
       return {
         connection, api: fixed,
         async nativeAvailable(signal) {
-          const local = await call<{ instanceId: string | null; picker: boolean }>(connection, '/local', undefined, signal, false, true)
-          return local.picker && local.instanceId === connection.instanceId
+          return localDirectorySelection(connection, signal)
         },
         async pickNative(signal) {
+          if (!await localDirectorySelection(connection, signal)) throw Object.assign(new Error('picker-unavailable'), { status: 403, code: 'picker-unavailable' })
           return (await call<{ path: string | null }>(connection, `/connections/${encodeURIComponent(connection.id)}/pick`, {}, signal, true, true)).path
         },
         async register(path, signal) {

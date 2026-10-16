@@ -3,7 +3,8 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { ApplicationRuntime, ProductDefinition } from './contracts.js'
 
 export interface ApplicationAsset { readonly path: string; readonly file: string; readonly type: string }
-export interface ApplicationHttpContext { readonly signal: AbortSignal; readonly actorId: string; readonly appId: string; retainUntil(done: Promise<unknown>): void }
+/** `owner` requests carry a device token; `unit` requests reached a self-authenticated prefix and must authenticate inside the application. */
+export interface ApplicationHttpContext { readonly signal: AbortSignal; readonly actorId: string; readonly appId: string; readonly principal: 'owner' | 'unit'; retainUntil(done: Promise<unknown>): void }
 /** handle resolves after owned requests/streams exit, not merely after writing response headers. */
 export interface ApplicationHttpPort {
   capabilities?(): readonly string[]
@@ -16,13 +17,15 @@ export interface ApplicationRegistration {
     readonly service: string
     readonly capabilities?: readonly string[]
     readonly legacyRoutes?: readonly { readonly prefix: string; readonly stripPrefix: string }[]
+    /** Application-relative prefixes the host dispatches without device-token authentication; the application authenticates them itself. */
+    readonly selfAuthenticated?: readonly string[]
   }
   readonly assets?: readonly ApplicationAsset[]
 }
 export interface ApplicationCatalog {
   readonly applications: readonly ApplicationRegistration[]
   readonly assets: ReadonlyMap<string, ApplicationAsset>
-  route(path: string, base: string): { application: ApplicationRegistration; path: string } | undefined
+  route(path: string, base: string): { application: ApplicationRegistration; path: string; selfAuthenticated: boolean } | undefined
 }
 const validPath = (path: string) => path.startsWith('/') && !path.startsWith('//') && !/[?#\\\0]/.test(path) && !path.split('/').some(part => {
   try { const decoded = decodeURIComponent(part); return decoded === '.' || decoded === '..' || /[\\/\0]/.test(decoded) } catch { return true }
@@ -48,8 +51,12 @@ export function createApplicationCatalog(input: readonly ApplicationRegistration
     const application = Object.freeze({ ...value, definition, assets: Object.freeze([...(value.assets ?? [])]),
       ...(value.http ? { http: Object.freeze({ ...value.http,
         ...(value.http.capabilities ? { capabilities: Object.freeze([...value.http.capabilities]) } : {}),
-        legacyRoutes: Object.freeze([...(value.http.legacyRoutes ?? [])].map(route => Object.freeze({ ...route }))) }) } : {}) })
+        legacyRoutes: Object.freeze([...(value.http.legacyRoutes ?? [])].map(route => Object.freeze({ ...route }))),
+        selfAuthenticated: Object.freeze([...(value.http.selfAuthenticated ?? [])]) }) } : {}) })
     application.assets.forEach(addAsset)
+    for (const prefix of application.http?.selfAuthenticated ?? []) {
+      if (!validPath(prefix) || prefix === '/' || (application.http?.legacyRoutes ?? []).some(route => contains(route.prefix, route.stripPrefix + prefix) || contains(route.stripPrefix + prefix, route.prefix))) throw new TypeError(`invalid self-authenticated prefix: ${prefix}`)
+    }
     for (const route of application.http?.legacyRoutes ?? []) {
       if (!validPath(route.prefix) || route.prefix === '/' || !validPath(route.stripPrefix) || !contains(route.stripPrefix, route.prefix) ||
           aliases.some(other => contains(other.prefix, route.prefix) || contains(route.prefix, other.prefix)) || /\/products(?:\/|$)|\/apps(?:\/|$)|\/access(?:\/|$)|\/instance$/.test(route.prefix)) throw new TypeError(`invalid or duplicate application route: ${route.prefix}`)
@@ -69,10 +76,13 @@ export function createApplicationCatalog(input: readonly ApplicationRegistration
         const rest = path.slice((base + '/apps/').length), slash = rest.indexOf('/')
         const id = decodeURIComponent(slash < 0 ? rest : rest.slice(0, slash))
         const application = applications.find(app => app.definition.id === id)
-        return application?.http ? { application, path: slash < 0 ? '/' : rest.slice(slash) } : undefined
+        if (!application?.http) return undefined
+        const relative = slash < 0 ? '/' : rest.slice(slash)
+        return { application, path: relative, selfAuthenticated: (application.http.selfAuthenticated ?? []).some(prefix => contains(prefix, relative)) }
       }
+      // Legacy aliases never reach self-authenticated prefixes: those are only served under the application's own path.
       const route = aliases.find(route => contains(route.prefix, path))
-      return route ? { application: route.application, path: path.slice(route.stripPrefix.length) || '/' } : undefined
+      return route ? { application: route.application, path: path.slice(route.stripPrefix.length) || '/', selfAuthenticated: false } : undefined
     },
   })
 }

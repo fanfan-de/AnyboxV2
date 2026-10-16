@@ -89,8 +89,12 @@ test('concurrent activation shares provider work and a cancelled observer leaves
   provider.calls[0].done.resolve()
   const instance = await joined(b)
   assert.equal(instance.instanceGeneration, 1)
-  assert.deepEqual(await joined(f.computers.activate('computer')), instance)
-  assert.equal(provider.calls.length, 1)
+  // Later activations confirm with the provider again: a restarted executor must never be served from a cached reference.
+  const again = f.computers.activate('computer')
+  await tick()
+  assert.equal(provider.calls.length, 2)
+  provider.calls[1].result.resolve({ providerRef: 'host', platform: process.platform, architecture: process.arch }); provider.calls[1].done.resolve()
+  assert.deepEqual(await joined(again), instance)
 })
 
 test('instance pins participate atomically and reject foreign owners or stale generation', async t => {
@@ -129,12 +133,24 @@ test('component replacement preserves a confirmed host identity and only advance
   await resumed.close()
   const replacement = await owner.open(createLocalComputerProvider({ providerRef: 'host-b' }))
   await assert.rejects(joined(replacement.computers.activate('computer')), { code: 'computer-pinned' })
-  await replacement.db.transaction(tx => replacement.computers.releasePinIn(tx, 'run-pin', 'run'))
-  const b = await joined(replacement.computers.activate('computer'))
+  await replacement.close()
+  // The provider proves host-a exited (same worker, new boot): the pinned instance is retired and its pin stays unreleased as a fact.
+  const exited = await owner.open(createLocalComputerProvider({ providerRef: 'host-b', previousExited: true }))
+  const b = await joined(exited.computers.activate('computer'))
   assert.equal(b.instanceGeneration, 2)
   assert.notEqual(b.computerInstanceId, a.computerInstanceId)
-  await assert.rejects(replacement.computers.requireInstance(a), { code: 'computer-generation-mismatch' })
-  assert.deepEqual(await replacement.computers.requireInstance(b), b)
+  assert.equal((await exited.computers.getPin('run-pin')).releasedAt, null, 'retiring a dead instance never releases its pins')
+  await assert.rejects(exited.computers.requireInstance(a), { code: 'computer-generation-mismatch' })
+  assert.deepEqual(await exited.computers.requireInstance(b), b)
+  assert.deepEqual((await exited.db.read(reader => reader.all('SELECT instance_generation, status FROM harness_computer_instances ORDER BY instance_generation'))).map(row => [row.instance_generation, row.status]),
+    [[1, 'retired'], [2, 'ready']])
+  await exited.db.transaction(tx => exited.computers.releasePinIn(tx, 'run-pin', 'run'))
+  assert.equal(typeof (await exited.computers.getPin('run-pin')).releasedAt, 'string', 'a later observed exit still releases the pin on the retired instance')
+  await exited.close()
+  // Without that proof, a different reference with unreleased pins still cannot replace the instance.
+  const another = await owner.open(createLocalComputerProvider({ providerRef: 'host-c' }))
+  const c = await joined(another.computers.activate('computer'))
+  assert.equal(c.instanceGeneration, 3)
 })
 
 test('component close stops admission, cancels activation and waits for provider actual exit', async t => {

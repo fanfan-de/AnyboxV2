@@ -1,4 +1,4 @@
-import { installComputerServices } from './helpers/computer-services.mjs'
+import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
 import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun, nativeRegistration } from './helpers/native-records.mjs'
@@ -350,6 +350,7 @@ test('removing the Models component waits for the run consumer and its call', as
   const directory = mkdtempSync(join(tmpdir(), 'anybox-harness-'))
   const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
+  await installComputerWorkerStub(root)
   const projects = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())
@@ -447,6 +448,7 @@ test('RunRuntime owns in-flight calls while Session and Run state survive its re
   const directory = mkdtempSync(join(tmpdir(), 'anybox-harness-'))
   const llm = controlledModels()
   const inputs = { newId: ids(), now: () => 'now' }
+  await installComputerWorkerStub(root)
   const projects = root.installComponent(createProjectComponent(inputs))
   root.installComponent(createProjectFilesComponent(inputs))
   root.installComponent(createBashComponent())

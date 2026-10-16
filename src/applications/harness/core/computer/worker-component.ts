@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
+import { realpath, stat } from 'node:fs/promises'
+import { readProjectFile, searchProjectFiles } from '../project-files/filesystem.js'
+import { listProjectDirectory } from '../project-files/tree-access.js'
+import { fileTreeLimits } from '../project-files/domain.js'
+import { ceilingPermitsRoot, queryRoot, validateComputerQuery } from './query-domain.js'
+import type { ComputerQueryResult } from './query-domain.js'
+import type { UnitScope } from '../unit/domain.js'
 import type { Component } from '@nya/core'
 import type { JsonValue } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
@@ -15,6 +22,9 @@ import { fileToolsServiceKey, type FileToolsPort } from '../tool/files-component
 import { imageAssetsServiceKey, type ImageAssetsPort } from '../image/port.js'
 import { sameWorkspaceBinding } from '../workspace/domain.js'
 import { createWorkerExecution, type WorkerExecution } from './worker-execution.js'
+import { ceilingPermits, localWorkerAttachmentId } from './worker-attachments-domain.js'
+import { workerAttachmentsServiceKey } from './worker-attachments.js'
+import type { WorkerAttachmentsPort } from './worker-attachments.js'
 import { computerWorkerServiceKey, workerError } from './worker-port.js'
 import type { ComputerWorkerPort, WorkerAuthorization, WorkerSubmission, WorkerOperation, WorkerImage } from './worker-port.js'
 
@@ -24,6 +34,10 @@ const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute('CREATE INDEX computer_worker_operations_run ON computer_worker_operations(run_id, operation_id)')
   tx.execute('CREATE TABLE computer_worker_workspace_fences (workspace_id TEXT PRIMARY KEY, workspace_epoch INTEGER NOT NULL, instance_id TEXT NOT NULL, instance_generation INTEGER NOT NULL, path TEXT NOT NULL)')
   tx.execute('CREATE TABLE computer_worker_instance_fences (computer_id TEXT PRIMARY KEY, instance_id TEXT NOT NULL, instance_generation INTEGER NOT NULL)')
+} }, { version: 2, up(tx) {
+  // Runs accepted before attachments existed belong to the loopback harness server.
+  tx.execute(`ALTER TABLE computer_worker_runs ADD COLUMN attachment_id TEXT NOT NULL DEFAULT '${localWorkerAttachmentId}'`)
+  tx.execute('CREATE INDEX computer_worker_runs_attachment ON computer_worker_runs(attachment_id, closed)')
 } }]
 const terminal = (state: string) => ['succeeded', 'failed', 'cancelled', 'outcome-unknown'].includes(state)
 const json = (value: unknown): JsonValue => JSON.parse(JSON.stringify(value)) as JsonValue
@@ -32,22 +46,25 @@ function text(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !value || value.length > 4096 || value.includes('\0')) throw workerError('worker-invalid')
 }
 function auth(input: WorkerAuthorization): void {
-  text(input.runId)
+  text(input.runId); text(input.attachmentId)
   if (!Number.isSafeInteger(input.runOwnerEpoch) || input.runOwnerEpoch < 1) throw workerError('worker-invalid')
 }
+/** A Run is owned by exactly one attachment; another attachment can neither read nor continue it. */
 function authorize(reader: StorageReader, input: WorkerAuthorization): void {
   auth(input)
-  const row = reader.get('SELECT owner_epoch FROM computer_worker_runs WHERE run_id = ?', [input.runId])
-  if (!row || row.owner_epoch !== input.runOwnerEpoch) throw workerError('worker-owner-rejected')
+  const row = reader.get('SELECT owner_epoch, attachment_id FROM computer_worker_runs WHERE run_id = ?', [input.runId])
+  if (!row || row.owner_epoch !== input.runOwnerEpoch || row.attachment_id !== input.attachmentId) throw workerError('worker-owner-rejected')
 }
 function read(reader: StorageReader, id: string): WorkerOperation | undefined {
   const row = reader.get('SELECT * FROM computer_worker_operations WHERE operation_id = ?', [id])
   if (!row) return undefined
+  const submission = JSON.parse(String(row.submission_json)) as WorkerSubmission
   return Object.freeze({ operationId: String(row.operation_id), runId: String(row.run_id), declarationDigest: String(row.digest),
+    ...(submission.declaration?.sessionId ? { sessionId: submission.declaration.sessionId } : {}),
     receipt: String(row.receipt), state: row.state as WorkerOperation['state'], executeCount: Number(row.execute_count),
     ...(typeof row.observation_json === 'string' ? { observation: JSON.parse(row.observation_json) as JsonValue } : {}),
     ...(typeof row.error_json === 'string' ? { error: JSON.parse(row.error_json) as WorkerOperation['error'] }
-      : row.state === 'cancelled' && (JSON.parse(String(row.submission_json)) as WorkerSubmission).kind === 'tool' ? { error: cancelledError } : {}),
+      : row.state === 'cancelled' && submission.kind === 'tool' ? { error: cancelledError } : {}),
     ...(typeof row.process_ref_json === 'string' ? { processRef: JSON.parse(row.process_ref_json) as ProcessRef } : {}),
     ...(typeof row.images_json === 'string' ? { images: JSON.parse(row.images_json) as readonly WorkerImage[] } : {}) })
 }
@@ -65,10 +82,11 @@ async function joined<T>(call: OwnedCall<T>): Promise<T> {
 export function createComputerWorkerExecutorComponent(identity: { readonly workerId: string; readonly bootId: string }): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort; [bashServiceKey]: BashPort; [applyPatchServiceKey]: ApplyPatchPort
   [processToolsServiceKey]: ProcessToolsPort; [fileToolsServiceKey]: FileToolsPort; [imageAssetsServiceKey]: ImageAssetsPort
+  [workerAttachmentsServiceKey]: WorkerAttachmentsPort
 }> {
-  return { name: 'computer-worker-executor', inject: [localStorageServiceKey, bashServiceKey, applyPatchServiceKey, processToolsServiceKey, fileToolsServiceKey, imageAssetsServiceKey],
+  return { name: 'computer-worker-executor', inject: [localStorageServiceKey, bashServiceKey, applyPatchServiceKey, processToolsServiceKey, fileToolsServiceKey, imageAssetsServiceKey, workerAttachmentsServiceKey],
     async apply(ctx, _config, deps) {
-      const db = deps[localStorageServiceKey]
+      const db = deps[localStorageServiceKey], attachments = deps[workerAttachmentsServiceKey]
       await db.migrate('computer-worker', migrations)
       await db.transaction(tx => {
         tx.execute("UPDATE computer_worker_runs SET uncertain = 1 WHERE run_id IN (SELECT run_id FROM computer_worker_operations WHERE state IN ('starting','running'))")
@@ -76,11 +94,28 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
         tx.execute('UPDATE computer_worker_runs SET uncertain = 1 WHERE closed = 0 AND has_processes = 1')
       })
       let accepting = true
+      const queries = new AbortController()
+      const pendingQueries = new Set<{ readonly attachmentId: string; readonly abort: AbortController; readonly done: Promise<ComputerQueryResult> }>()
+      const queryCleanupFailures: unknown[] = []
       const scopes = new Map<string, { execution: WorkerExecution; abort: AbortController }>()
       const active = new Map<string, OwnedCall<unknown>>()
       const running = new Map<string, Promise<void>>()
       const tails = new Map<string, Promise<void>>()
       const assertOpen = () => { if (!accepting) throw workerError('worker-closing') }
+      // Compare the directory's identity on this worker, including aliases in an explicitly granted directory.
+      const canonicalPermitted = async (scope: UnitScope, canonical: string, signal: AbortSignal) => {
+        if (scope.kind !== 'computer') return false
+        if (scope.projects === 'all') return true
+        for (const directory of scope.projects) {
+          if (!isAbsolute(directory)) continue
+          signal.throwIfAborted()
+          let granted: string
+          try { granted = await realpath(directory) } catch { signal.throwIfAborted(); continue }
+          signal.throwIfAborted()
+          if (ceilingPermitsRoot({ ...scope, projects: [granted] }, canonical)) return true
+        }
+        return false
+      }
       const scope = async (submission: WorkerSubmission) => {
         let current = scopes.get(submission.runId)
         if (current) return current
@@ -203,21 +238,51 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
         if (submission.kind !== 'cancel') tails.set(submission.runId, work)
         void work.finally(() => running.delete(submission.operationId)).catch(() => { accepting = false })
       }
+      // A revoked attachment stops accepting immediately; its open scopes are cancelled and drained like a shutdown of that harness server's work.
+      const revokeRuns = async (attachmentId: string) => {
+        const reading = [...pendingQueries].filter(query => query.attachmentId === attachmentId)
+        for (const query of reading) query.abort.abort(workerError('worker-attachment-rejected'))
+        try {
+          const runIds = await db.transaction(tx => {
+            const open = tx.all('SELECT run_id FROM computer_worker_runs WHERE attachment_id = ? AND closed = 0', [attachmentId]).map(row => String(row.run_id))
+            tx.execute('UPDATE computer_worker_runs SET cancelled = 1 WHERE attachment_id = ? AND closed = 0', [attachmentId])
+            for (const runId of open) tx.execute("UPDATE computer_worker_operations SET cancel_requested = 1, state = CASE WHEN state IN ('accepted','queued') THEN 'cancelled' ELSE state END WHERE run_id = ? AND state IN ('accepted','queued','starting','running') AND json_extract(submission_json,'$.kind') = 'tool'", [runId])
+            return open
+          })
+          const operationIds = await db.read(reader => runIds.flatMap(runId => reader.all('SELECT operation_id FROM computer_worker_operations WHERE run_id = ?', [runId]).map(row => String(row.operation_id))))
+          for (const runId of runIds) scopes.get(runId)?.abort.abort('attachment-revoked')
+          for (const id of operationIds) active.get(id)?.cancel('attachment-revoked')
+          await Promise.allSettled([...operationIds.map(id => running.get(id)).filter((work): work is Promise<void> => !!work), ...reading.map(query => query.done)])
+          for (const runId of runIds) {
+            const current = scopes.get(runId)
+            if (!current) continue
+            try {
+              const uncertain = await db.read(reader => reader.get('SELECT uncertain FROM computer_worker_runs WHERE run_id = ?', [runId])?.uncertain === 1)
+              const cleanup = await joined(current.execution.close())
+              if (!uncertain) await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET closed = 1, has_processes = 0, cleanup_json = ? WHERE run_id = ?', [JSON.stringify(cleanup), runId]))
+            } catch { await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET uncertain = 1 WHERE run_id = ?', [runId])) }
+            finally { scopes.delete(runId) }
+          }
+        } finally { await Promise.allSettled(reading.map(query => query.done)) }
+      }
+      const unsubscribe = attachments.onChanged(attachment => attachment.state === 'revoked' ? revokeRuns(attachment.attachmentId) : undefined)
+      ctx.effect(() => () => unsubscribe(), 'stop observing attachment revocations')
       const service: ComputerWorkerPort = {
         info: async () => ({ ...identity, platform: process.platform, architecture: process.arch }),
         claimRun(input) {
           assertOpen(); auth(input)
           return db.transaction(tx => {
             assertOpen()
-            const previous = tx.get('SELECT owner_epoch FROM computer_worker_runs WHERE run_id = ?', [input.runId])
-            if (previous && Number(previous.owner_epoch) > input.runOwnerEpoch) throw workerError('worker-owner-rejected')
-            tx.execute('INSERT INTO computer_worker_runs (run_id, owner_epoch) VALUES (?, ?) ON CONFLICT(run_id) DO UPDATE SET owner_epoch = excluded.owner_epoch', [input.runId, input.runOwnerEpoch])
+            attachments.requireApprovedIn(tx, input.attachmentId)
+            const previous = tx.get('SELECT owner_epoch, attachment_id FROM computer_worker_runs WHERE run_id = ?', [input.runId])
+            if (previous && (Number(previous.owner_epoch) > input.runOwnerEpoch || previous.attachment_id !== input.attachmentId)) throw workerError('worker-owner-rejected')
+            tx.execute('INSERT INTO computer_worker_runs (run_id, owner_epoch, attachment_id) VALUES (?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET owner_epoch = excluded.owner_epoch', [input.runId, input.runOwnerEpoch, input.attachmentId])
           })
         },
         async submit(input) {
           assertOpen(); auth(input); text(input.operationId); text(input.declarationDigest)
           if (!['tool','close-scope','cancel'].includes(input.kind)) throw workerError('worker-invalid')
-          const accepted = await db.transaction(tx => {
+          const accepted = await db.transaction(async tx => {
             assertOpen()
             authorize(tx, input)
             const prior = read(tx, input.operationId)
@@ -236,6 +301,14 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
                 !Number.isSafeInteger(binding.instanceGeneration) || binding.instanceGeneration < 1 || !Number.isSafeInteger(binding.workspaceEpoch) || binding.workspaceEpoch < 1 ||
                 declaration.spec.platform !== process.platform || declaration.spec.architecture !== process.arch || computerDeclarationDigest(declaration) !== input.declarationDigest) throw workerError('worker-invalid')
               validateToolBatch([declaration.request], [declaration.tool.definition])
+              // New work checks both grants against this worker's actual directory identity. Existing receipts return above.
+              const attachment = attachments.requireApprovedIn(tx, input.attachmentId)
+              const granted = [attachment.ceiling, attachment.scope]
+              if (granted.some(scope => scope.kind !== 'computer' || !ceilingPermits({ ...scope, projects: 'all' }, { path: binding.path, toolId: declaration.tool.toolId }))) throw workerError('worker-scope-rejected')
+              let canonical: string
+              try { canonical = await realpath(binding.path) } catch { throw workerError('worker-scope-rejected') }
+              for (const scope of granted) if (!await canonicalPermitted(scope, canonical, queries.signal)) throw workerError('worker-scope-rejected')
+              assertOpen()
               if (run.cancelled) throw workerError('worker-run-cancelled')
               if (run.closed || run.uncertain) throw workerError(run.uncertain ? 'worker-scope-unknown' : 'worker-scope-closed')
               if (typeof run.binding_json === 'string' && !sameWorkspaceBinding(JSON.parse(run.binding_json) as typeof binding, binding)) throw workerError('worker-binding-conflict')
@@ -245,8 +318,9 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
               if (workspaceFence && (binding.workspaceEpoch < Number(workspaceFence.workspace_epoch) || binding.instanceGeneration < Number(workspaceFence.instance_generation) ||
                 binding.workspaceEpoch === workspaceFence.workspace_epoch && binding.path !== workspaceFence.path) ||
                 instanceFence && (binding.instanceGeneration < Number(instanceFence.instance_generation) || binding.instanceGeneration === instanceFence.instance_generation && binding.computerInstanceId !== instanceFence.instance_id)) throw workerError('worker-binding-conflict')
-              // Another active Run cannot silently replace the same workspace generation.
-              for (const other of tx.all('SELECT binding_json FROM computer_worker_runs WHERE binding_json IS NOT NULL AND closed = 0 AND run_id != ?', [input.runId])) {
+              // Another active Run cannot silently replace the same workspace generation. A Run of a dead boot (uncertain) can never
+              // execute again here: its unknown exit is a fact, not a live generation, so it does not fence later Runs out.
+              for (const other of tx.all('SELECT binding_json FROM computer_worker_runs WHERE binding_json IS NOT NULL AND closed = 0 AND uncertain = 0 AND run_id != ?', [input.runId])) {
                 const bound = JSON.parse(String(other.binding_json)) as typeof binding
                 if (bound.workspaceId === binding.workspaceId && (bound.workspaceEpoch !== binding.workspaceEpoch || bound.computerInstanceId !== binding.computerInstanceId || bound.instanceGeneration !== binding.instanceGeneration)) throw workerError('worker-binding-conflict')
               }
@@ -274,21 +348,72 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
           return accepted.operation
         },
         get(input) { text(input.operationId); return db.read(reader => { authorize(reader, input); const op = read(reader, input.operationId); if (op && op.runId !== input.runId) throw workerError('worker-operation-conflict'); return op }) },
-        async shutdown() { accepting = false },
+        // Queries read the filesystem under the attachment's ceiling and never enter the operation ledger.
+        async query(input, callerSignal) {
+          assertOpen(); text(input?.attachmentId)
+          const query = validateComputerQuery(input.query)
+          const abort = new AbortController(), signal = AbortSignal.any([queries.signal, abort.signal, ...(callerSignal ? [callerSignal] : [])])
+          // Register before the first asynchronous read; cancellation never detaches the real filesystem work.
+          const done = Promise.resolve().then(async (): Promise<ComputerQueryResult> => {
+            signal.throwIfAborted()
+            const attachment = await db.read(reader => attachments.requireApprovedIn(reader, input.attachmentId))
+            signal.throwIfAborted()
+            const root = queryRoot(query), scopes = [attachment.ceiling, attachment.scope]
+            if (scopes.some(scope => scope.kind !== 'computer')) throw workerError('worker-scope-rejected')
+            let canonical: string
+            try { canonical = await realpath(root) }
+            catch (error) {
+              signal.throwIfAborted()
+              if (scopes.some(scope => scope.kind !== 'computer' || !ceilingPermitsRoot(scope, root))) throw workerError('worker-scope-rejected')
+              if (query.kind === 'stat') return { kind: 'stat', directory: false, canonical: null }
+              throw error
+            }
+            signal.throwIfAborted()
+            for (const scope of scopes) if (!await canonicalPermitted(scope, canonical, signal)) throw workerError('worker-scope-rejected')
+            let result: ComputerQueryResult
+            switch (query.kind) {
+              case 'stat': {
+                try { result = { kind: 'stat', directory: (await stat(canonical)).isDirectory(), canonical } }
+                catch { signal.throwIfAborted(); result = { kind: 'stat', directory: false, canonical: null } }
+                break
+              }
+              case 'list': result = { kind: 'list', ...await listProjectDirectory(canonical, query.path, fileTreeLimits.scanEntries, signal) }; break
+              case 'search': result = { kind: 'search', search: await searchProjectFiles(canonical, query.query, signal) }; break
+              case 'read': result = { kind: 'read', preview: await readProjectFile(canonical, query.path, query.range, signal) }; break
+            }
+            signal.throwIfAborted()
+            return result
+          }).catch(error => {
+            if (error instanceof Error && 'code' in error && error.code === 'file-cleanup-failed') { queryCleanupFailures.push(error); accepting = false }
+            throw error
+          })
+          const pending = { attachmentId: input.attachmentId, abort, done }
+          pendingQueries.add(pending)
+          void done.finally(() => pendingQueries.delete(pending)).catch(() => {})
+          return done
+        },
+        async shutdown() {
+          accepting = false; queries.abort(workerError('worker-closing'))
+          await Promise.allSettled([...pendingQueries].map(query => query.done))
+          if (queryCleanupFailures.length) throw workerError('worker-cleanup-failed')
+        },
       }
       ctx.provide(computerWorkerServiceKey, service)
       // Only never-started queued declarations can safely start after a worker restart.
       for (const row of await db.read(reader => reader.all("SELECT submission_json FROM computer_worker_operations WHERE state IN ('accepted','queued') ORDER BY rowid"))) schedule(JSON.parse(String(row.submission_json)) as WorkerSubmission)
       ctx.effect(() => async () => {
-        accepting = false
-        await db.transaction(tx => {
-          tx.execute('UPDATE computer_worker_runs SET cancelled = 1 WHERE closed = 0')
-          tx.execute("UPDATE computer_worker_operations SET cancel_requested = 1, state = CASE WHEN state IN ('accepted','queued') THEN 'cancelled' ELSE state END WHERE state IN ('accepted','queued','starting','running') AND json_extract(submission_json,'$.kind') = 'tool'")
-        })
+        accepting = false; queries.abort(workerError('worker-closing'))
+        const failures: unknown[] = []
+        try {
+          await db.transaction(tx => {
+            tx.execute('UPDATE computer_worker_runs SET cancelled = 1 WHERE closed = 0')
+            tx.execute("UPDATE computer_worker_operations SET cancel_requested = 1, state = CASE WHEN state IN ('accepted','queued') THEN 'cancelled' ELSE state END WHERE state IN ('accepted','queued','starting','running') AND json_extract(submission_json,'$.kind') = 'tool'")
+          })
+        } catch (error) { failures.push(error) }
         for (const current of scopes.values()) current.abort.abort('worker-shutdown')
         for (const call of active.values()) call.cancel('worker-shutdown')
-        await Promise.allSettled([...running.values()])
-        const failures: unknown[] = []
+        await Promise.allSettled([...running.values(), ...[...pendingQueries].map(query => query.done)])
+        failures.push(...queryCleanupFailures)
         for (const [runId, current] of scopes) {
           try {
             const uncertain = await db.read(reader => reader.get('SELECT uncertain FROM computer_worker_runs WHERE run_id = ?', [runId])?.uncertain === 1)

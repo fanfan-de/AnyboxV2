@@ -18,12 +18,15 @@ const paths: Record<string, readonly RegExp[]> = {
     new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/versions)?$`),
     new RegExp(`^/sessions/${id}(/runs(/by-key/${id})?|/nodes(/${id}(/path)?)?|/images/${id}/content|/project-files/(search|preview|snapshots/${id}))?$`),
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
-    new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|connections|configurations)(/${id}(/(history|models))?)?$`) ],
+    new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|connections|configurations)(/${id}(/(history|models))?)?$`),
+    /^\/units\/(attachments|local-computer\/attachments)$/ ],
   POST: [ /^\/(projects|sessions|prompts|access\/tokens)$/, /^\/products\/[^/]+\/(open|stop|retry)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
     /^\/projects\/directories\/(browse|close|create)$/,
     new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/publish)?$`),
     new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew|tree/(open|page|close)))$`), new RegExp(`^/runs/${id}/cancel$`),
-    /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|connections|configurations)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`) ],
+    /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|connections|configurations)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`),
+    // Owner-side unit attachment control; unit-side `/units/unit/*` is never proxied, units dial the harness server directly.
+    /^\/units\/(attach-codes|local-computer\/attachments)$/, new RegExp(`^/units/(attachments|local-computer/attachments)/${id}/revoke$`) ],
 }
 export function allowedProxyPath(method: string, path: string): boolean {
   return !!paths[method]?.some(pattern => pattern.test(path)) && !path.split('/').some(segment => {
@@ -77,6 +80,10 @@ export function createHarnessGateway(connections: ConnectionsPort, options: { lo
         const localInstanceId = connections.localStatus?.().instanceId ?? options.localInstanceId
         if (!connection || !localInstanceId || connection.instanceId !== localInstanceId || !options.picker?.supported) throw failure(403, 'picker-unavailable')
         expectedConnection(requestBinding(request), connection)
+        const instance = await connections.check(connectionId, controller.signal)
+        if (!instance.capabilities.includes('projects.local-directories')) throw failure(403, 'picker-unavailable')
+        const checked = (await connections.list()).find(item => item.id === connectionId)
+        if (!checked || checked.instanceId !== connection.instanceId || checked.revision !== connection.revision) throw failure(409, 'connection-changed')
         const path = await options.picker.pick(controller.signal) ?? null
         const current = (await connections.list()).find(item => item.id === connectionId)
         if (!current || current.instanceId !== connection.instanceId || current.revision !== connection.revision) throw failure(409, 'connection-changed')
@@ -88,7 +95,9 @@ export function createHarnessGateway(connections: ConnectionsPort, options: { lo
     const proxy = /^\/api\/connections\/([^/]+)\/v1(\/.*)$/.exec(url.pathname)
     if (proxy && allowedProxyPath(method, proxy[2])) {
       try {
-        await forwardConnectionRequest(connections, decodeURIComponent(proxy[1]), proxy[2], url.search, request, response, controller.signal,
+        // Unit control has no legacy route; the application owns its upstream path.
+        const upstreamPath = proxy[2].startsWith('/units/') ? `/apps/agent${proxy[2]}` : proxy[2]
+        await forwardConnectionRequest(connections, decodeURIComponent(proxy[1]), upstreamPath, url.search, request, response, controller.signal,
           { allowQueryBinding: method === 'GET' && imageContentPath.test(proxy[2]) })
       } catch (error) { if (error && typeof error === 'object' && 'status' in error) throw error; throw failure(502, 'connection-unavailable') }
       return

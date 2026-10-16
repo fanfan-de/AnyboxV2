@@ -172,6 +172,39 @@ test('authenticated gateway preserves accepted Runs across client disconnect and
   } finally { await reader?.cancel().catch(() => {}); await gateway?.close(); await c?.root.fiber.dispose(); for (const h of hosts) await h.close(); await rm(dir, { recursive: true, force: true }) }
 })
 
+test('owner unit controls retain their application route through the authenticated gateway', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'anybox-unit-gateway-'))
+  let host, c, gateway
+  try {
+    host = await execution(join(dir, 'host'))
+    c = await client(join(dir, 'client.sqlite'), memoryKeys())
+    const connection = await c.connections.save({ name: 'unit owner', endpoint: host.server.url, token: host.token.token })
+    gateway = await startClientGateway(c.connections)
+    const base = `/api/connections/${connection.id}/v1/units`
+    const local = await call(gateway.url, `${base}/attachments`)
+    assert.equal(local.status, 200)
+    assert.deepEqual(local.data.map(attachment => attachment.attachmentId), ['local:computer', 'local:models'])
+    const scope = { kind: 'computer', projects: 'all', tools: [] }
+    const issued = await call(gateway.url, `${base}/attach-codes`, { unitKind: 'computer', scope })
+    assert.equal(issued.status, 201)
+    assert.deepEqual(issued.data.attachment.requestedScope, scope)
+    const listed = await call(gateway.url, `${base}/attachments`)
+    assert.equal(listed.data.find(attachment => attachment.attachmentId === issued.data.attachment.attachmentId).state, 'pending')
+    const revoked = await call(gateway.url, `${base}/attachments/${issued.data.attachment.attachmentId}/revoke`, {})
+    assert.equal(revoked.status, 200)
+    assert.equal(revoked.data.state, 'revoked')
+    assert.equal((await call(gateway.url, `${base}/unit/poll`)).status, 404)
+    assert.equal((await call(gateway.url, `${base}/unit/attach`, {})).status, 404)
+    assert.equal((await call(host.server.url, '/api/v1/units/attachments', undefined,
+      { Authorization: `Bearer ${host.token.token}`, 'X-Anybox-Instance-Id': host.auth.instance.instanceId })).status, 404, 'unit controls have no legacy host alias')
+  } finally {
+    await gateway?.close()
+    await c?.root.fiber.dispose()
+    await host?.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('gateway whitelist omits control-plane internals and encoded traversal', () => {
   for (const path of ['/shutdown', '/sessions/a/records', '/sessions/a/images/%2e%2e/content', '/runs/a%2fb', '/runs/%00']) assert.equal(allowedProxyPath('GET', path), false)
   for (const [method, path] of [['POST', '/projects'], ['POST', '/sessions/a/project-files/preview'], ['GET', '/sessions/archived'], ['GET', '/models/configurations/a/history'], ['POST', '/access/tokens/a/revoke']]) assert.equal(allowedProxyPath(method, path), true)
@@ -343,7 +376,8 @@ test('native directory shortcut requires launcher identity and rejects changed c
   let revision = 1, picks = 0, release, entered
   const selected = new Promise(resolve => { release = resolve }), started = new Promise(resolve => { entered = resolve })
   const connection = id => ({ id, name: id, endpoint: 'https://same.example', instanceId: id === 'local' ? instance : other, revision, credentialConfigured: true })
-  const connections = { list: async () => [connection('local'), connection('remote')] }
+  const connections = { list: async () => [connection('local'), connection('remote')],
+    check: async () => ({ instanceId: instance, capabilities: ['projects.local-directories'] }) }
   const picker = { supported: true, async pick() { picks++; entered(); return selected } }
   const gateway = await startClientGateway(connections, { localInstanceId: instance, picker })
   const pinned = { 'X-Anybox-Expected-Instance-Id': instance, 'X-Anybox-Connection-Revision': '1' }

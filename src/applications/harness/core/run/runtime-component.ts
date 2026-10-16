@@ -127,7 +127,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs): Component.Obje
           let computerScope: ComputerRunScope | undefined
           let processClosing: Promise<void> | undefined
           const scope = () => computerScope ??= deps[computerOperationsServiceKey].openRun({ runId, runOwnerEpoch: ownerEpoch,
-            imageInput: program.modelSnapshot.capabilities.imageInput === true })
+            imageInput: program.modelSnapshot.capabilities.imageInput === true, ...(run?.units ? { unit: run.units.computer } : {}) })
           const executeTool = (request: ValidatedToolRequest, operationId: string): OwnedCall<ToolObservation> => {
             if (needsComputer(request)) return scope().execute(operationId)
             const result = updateToolPlan(request.name, request.arguments)

@@ -39,11 +39,11 @@ test('worker authorization and orphan draining do not block another Run wait; ab
   const inputs = { now: () => 'now', newId: ids() }, agents = [{ id: 'assistant', modelId: 'default', instructions: 'Fixed' }]
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
+  const worker = createControlledComputerWorker(root)
+  await root.installComponent(worker.component)
   await root.installComponent(createProjectComponent(inputs))
   await root.installComponent(createProjectFilesComponent(inputs))
   await installUnitAttachments(root, inputs)
-  const worker = createControlledComputerWorker(root)
-  await root.installComponent(worker.component)
   await root.installComponent(createLocalComputerProviderComponent())
   await root.installComponent(createComputersComponent(inputs))
   await root.installComponent(createWorkspacesComponent(inputs))

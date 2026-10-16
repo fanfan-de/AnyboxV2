@@ -30,7 +30,7 @@ export interface FileRenewal { readonly valid: readonly FileRef[]; readonly inva
 export type ProjectFileErrorCode = 'file-invalid' | 'file-missing' | 'file-unavailable' | 'file-unsupported' |
   'file-too-large' | 'file-range-invalid' | 'file-changed' | 'file-expired' | 'file-corrupt' |
   'file-cancelled' | 'file-cleanup-failed' | 'file-preparation-conflict' | 'file-tree-expired' |
-  'file-tree-conflict' | 'file-tree-busy'
+  'file-tree-conflict' | 'file-tree-busy' | 'file-tree-truncated'
 export function fileError(code: ProjectFileErrorCode): Error & { readonly code: ProjectFileErrorCode } {
   return Object.assign(new Error(code), { name: 'ProjectFileError', code })
 }

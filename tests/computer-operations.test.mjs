@@ -3,7 +3,8 @@ import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
+import sharp from 'sharp'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
@@ -12,9 +13,10 @@ import { createProjectFilesComponent } from '../dist/applications/harness/core/p
 import { createSessionComponent } from '../dist/applications/harness/core/session/component.js'
 import { createRunRuntimeComponent } from '../dist/applications/harness/core/run/runtime-component.js'
 import { createLocalComputerProvider } from './helpers/fixed-computer-provider.mjs'
+import { workerError } from '../dist/applications/harness/core/computer/worker-port.js'
 import { computerDeclarationDigest } from '../dist/applications/harness/core/computer/operations-domain.js'
 import { getToolById } from '../dist/applications/harness/core/tool/catalog.js'
-import { installComputerServices, createControlledComputerWorker } from './helpers/computer-services.mjs'
+import { installComputerServices, createControlledComputerWorker, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { deferred, modelSnapshot } from './helpers/controlled-models.mjs'
 import { nativeRegistration, completedOutcome } from './helpers/native-records.mjs'
 
@@ -32,11 +34,12 @@ async function until(predicate) {
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-computer-operations-')), root = new Context()
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
+  const worker = createControlledComputerWorker(root)
+  await root.installComponent(worker.component)
   await root.installComponent(createProjectComponent(inputs))
   const projects = root.get('harness.projects'), project = await projects.openProject(directory)
   const provider = createLocalComputerProvider(), events = { activations: 0, executions: [], cleanupFailed: false }
   root.provide('computer.instance-provider', { ...provider, activate(input) { events.activations++; return provider.activate(input) } })
-  const worker = createControlledComputerWorker(root)
   await installComputerServices(root, inputs, { worker })
   const db = root.get('local-storage'), ops = root.get('harness.computer-operations'), computers = root.get('harness.computers')
   t.after(async () => {
@@ -53,6 +56,27 @@ async function fixture(t) {
   const openRun = ({ execution, ...input }) => { worker.setExecution(input.runId, execution); return ops.openRun(input) }
   return { root, directory, db, ops, computers, projects, project, events, accept, executor, openRun, worker }
 }
+
+test('pushed tool images are resolved from the Session scope instead of being imported again, and mismatched receipts are rejected', async t => {
+  const f = await fixture(t)
+  const png = await sharp({ create: { width: 2, height: 2, channels: 4, background: '#0f0f0f' } }).png().toBuffer()
+  const assets = f.root.get('harness.image-assets')
+  const imported = await joined(assets.importImage({ scopeId: 'session', bytes: (async function* () { yield png })() }))
+  const { expiresAt: _draft, ...ref } = imported
+  assert.equal(typeof _draft, 'string')
+  const pushed = { assetId: imported.assetId, sha256: imported.sha256, byteLength: imported.byteLength, mimeType: imported.mediaType }
+  const viewed = { name: 'bash', result: { exitCode: 0, signal: null, stdout: 'image', stderr: '', truncated: false }, images: [ref] }
+  await f.accept('pushed'); await f.accept('mismatch'); await f.accept('foreign')
+  const scope = f.openRun({ runId: 'run', imageInput: true, execution: f.executor(req => immediate({ ...viewed, workerImages: [
+    req.id === 'pushed' ? { ref, pushed } : req.id === 'mismatch' ? { ref, pushed: { ...pushed, sha256: createHash('sha256').update('other').digest('hex') } } : { ref, pushed: { ...pushed, assetId: 'missing' } }] })) })
+  const observed = await joined(scope.execute('pushed'))
+  assert.deepEqual(observed.images, [ref], 'the receipt resolves to the retained Session asset without a second import')
+  assert.equal((await assets.describe('session', [ref.assetId]))[0].expiresAt, undefined, 'the observation transaction retained the pushed draft')
+  await assert.rejects(joined(scope.execute('mismatch')), { code: 'computer-operation-conflict' })
+  await assert.rejects(joined(scope.execute('foreign')), { code: 'computer-operation-conflict' })
+  assert.equal((await f.ops.get('mismatch')).state, 'failed'); assert.equal((await f.ops.get('foreign')).state, 'failed')
+  await joined(scope.close())
+})
 
 test('operation declaration and resource demand roll back together; hashes exclude authorization and normalize parameter key order', async t => {
   const f = await fixture(t)
@@ -202,6 +226,7 @@ test('component reconstruction preserves uncertain execution facts and never rep
   const second = new Context()
   try {
     await second.installComponent(createLocalSqliteComponent(join(f.directory, 'state.sqlite')))
+    await installComputerWorkerStub(second)
     await second.installComponent(createProjectComponent(inputs))
     const provider = createLocalComputerProvider()
     second.provide('computer.instance-provider', { ...provider, activate(input) { f.events.activations++; return provider.activate(input) } })
@@ -279,4 +304,58 @@ test('Run intent and ComputerOperation admission share the Session transaction; 
   assert.equal(f.events.executions[0].workspacePath, f.project.path)
   assert.equal(f.events.activations, 1)
   assert.equal((await f.ops.get(operations[0].operation_id)).declaration.tool.toolId, 'anybox.bash')
+})
+
+
+test('an unconfirmed restored placement keeps owner recovery pending until the worker can answer', async t => {
+  const f = await fixture(t)
+  await f.accept('placed')
+  const scope = f.openRun({ runId: 'run', execution: f.executor() })
+  await joined(scope.execute('placed'))
+  const placement = (await f.ops.get('placed')).binding
+  await f.accept('unconfirmed')
+  await f.db.transaction(tx => {
+    tx.execute("UPDATE harness_computer_operations SET state='starting',binding_json=? WHERE operation_id='unconfirmed'", [JSON.stringify(placement)])
+    // Model the durable boundary after dispatch, before the Authority persisted any first receipt.
+    tx.execute("UPDATE harness_computer_operations SET worker_receipt=NULL WHERE run_id='run'")
+  })
+  const claim = f.worker.service.claimRun, controller = new AbortController()
+  f.worker.service.claimRun = async () => { throw workerError('worker-unreachable') }
+  let authorized = false
+  const authorizing = f.ops.authorizeRun('run', 1, controller.signal).then(() => { authorized = true })
+  void authorizing.catch(() => {})
+  try {
+    for (let n = 0; n < 5; n++) await tick()
+    assert.equal(authorized, false, 'no receipt after restart does not prove the placed call was never dispatched')
+  } finally {
+    f.worker.service.claimRun = claim
+    controller.abort(); await Promise.allSettled([authorizing])
+    await joined(scope.execute('unconfirmed')); await joined(scope.close())
+  }
+})
+
+test('cancelling a fresh placement before its first submit remains bounded while the unit is offline', { timeout: 5_000 }, async t => {
+  const f = await fixture(t), entered = deferred(), releaseClaim = deferred()
+  await f.accept('unsent')
+  const scope = f.openRun({ runId: 'run', execution: f.executor() }), claim = f.worker.service.claimRun
+  let first = true
+  f.worker.service.claimRun = async () => {
+    if (first) { first = false; entered.resolve(); await releaseClaim.promise }
+    throw workerError('worker-unreachable')
+  }
+  const call = scope.execute('unsent'); void call.result.catch(() => {})
+  let timer
+  try {
+    await entered.promise
+    assert.equal((await f.ops.get('unsent')).state, 'starting')
+    const cancelled = scope.cancel().then(() => true)
+    assert.equal(await Promise.race([cancelled, new Promise(resolve => { timer = setTimeout(() => resolve(false), 250) })]), true,
+      'this generation knows it has not called submit, so cancellation does not wait for a nonexistent remote scope')
+  } finally {
+    clearTimeout(timer)
+    f.worker.service.claimRun = claim; releaseClaim.resolve()
+    await Promise.allSettled([call.result, call.done]); await joined(scope.close())
+  }
+  assert.equal(f.events.executions.length, 0)
+  assert.notEqual((await f.computers.getPin('computer-run:run')).releasedAt, null)
 })

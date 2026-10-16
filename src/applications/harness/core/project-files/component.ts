@@ -12,6 +12,14 @@ import { fileError, fileLimits, validId, isFileRef, validateFileSelections, vali
 import type { FileContent, FileRef } from './domain.js'
 import { readProjectFile, searchProjectFiles } from './filesystem.js'
 import { createFileTreeBrowser } from './tree-browser.js'
+import { createFileTreeAccessProvider } from './tree-access.js'
+import type { FileTreeAccessProvider } from './tree-access.js'
+import { computerWorkerServiceKey } from '../computer/worker-port.js'
+import type { ComputerWorkerPort } from '../computer/worker-port.js'
+import { localAttachmentId } from '../unit/domain.js'
+import type { Project } from '../project/component.js'
+import type { FilePreview, FileRange, FileSearch } from './domain.js'
+import type { ComputerQuery, ComputerQueryResult } from '../computer/query-domain.js'
 
 const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute(`CREATE TABLE harness_file_snapshots (id TEXT PRIMARY KEY, scope_id TEXT NOT NULL,
@@ -28,12 +36,38 @@ function normalize(error: unknown): Error {
   return fileError(code === 'ENOENT' ? 'file-missing' : code === 'ELOOP' ? 'file-invalid' : 'file-unavailable')
 }
 
+/** Where a project's files are read: this host's filesystem, or the bound Computer unit's read-only query surface. */
+interface FileSource {
+  search(query: string, signal: AbortSignal): Promise<FileSearch>
+  read(path: string, range: FileRange | undefined, signal: AbortSignal): Promise<FilePreview>
+  readonly access: FileTreeAccessProvider
+}
 export function createProjectFilesComponent(options: ProjectFilesOptions = {}): Component.Object<void, {
-  [localStorageServiceKey]: LocalStoragePort; [projectServiceKey]: ProjectPort
+  [localStorageServiceKey]: LocalStoragePort; [projectServiceKey]: ProjectPort; [computerWorkerServiceKey]: ComputerWorkerPort
 }> {
   const now = options.now ?? (() => new Date().toISOString()), newId = options.newId ?? randomUUID
-  return { name: 'harness-project-files', inject: [localStorageServiceKey, projectServiceKey], async apply(ctx, _config, deps) {
-    const db = deps[localStorageServiceKey], projects = deps[projectServiceKey]
+  return { name: 'harness-project-files', inject: [localStorageServiceKey, projectServiceKey, computerWorkerServiceKey], async apply(ctx, _config, deps) {
+    const db = deps[localStorageServiceKey], projects = deps[projectServiceKey], worker = deps[computerWorkerServiceKey]
+    const localAccess = options.treeBrowser?.access ?? createFileTreeAccessProvider()
+    const remote = (project: Project): FileSource => {
+      const attachmentId = project.computerAttachmentId
+      const ask = async (query: ComputerQuery, signal: AbortSignal): Promise<ComputerQueryResult> => { signal.throwIfAborted(); return worker.query({ attachmentId, query }, signal) }
+      return {
+        search: async (query, signal) => { const result = await ask({ kind: 'search', root: project.path, query }, signal); if (result.kind !== 'search') throw fileError('file-unavailable'); return result.search },
+        read: async (path, range, signal) => { const result = await ask({ kind: 'read', root: project.path, path, ...(range ? { range } : {}) }, signal); if (result.kind !== 'read') throw fileError('file-unavailable'); return result.preview },
+        // A remote listing is one bounded snapshot per cursor; pages come from it without holding a handle on the unit.
+        access: { async open(root, path, signal) {
+          const listing = await ask({ kind: 'list', root, path }, signal)
+          if (listing.kind !== 'list') throw fileError('file-unavailable')
+          if (listing.truncated) throw fileError('file-tree-truncated')
+          let index = 0
+          return { async verify() {}, async read(readSignal) { readSignal.throwIfAborted(); return index < listing.entries.length ? listing.entries[index++]! : null }, async close() {} }
+        } },
+      }
+    }
+    const source = (project: Project): FileSource => project.computerAttachmentId === localAttachmentId('computer')
+      ? { search: (query, signal) => searchProjectFiles(project.path, query, signal), read: (path, range, signal) => readProjectFile(project.path, path, range, signal), access: localAccess }
+      : remote(project)
     await db.migrate('project-files', migrations)
     let accepting = true, active = 0
     const calls = new Set<OwnedCall<unknown>>(), pending = new Set<Promise<unknown>>(), failures: unknown[] = []
@@ -102,7 +136,7 @@ export function createProjectFilesComponent(options: ProjectFilesOptions = {}): 
         (SELECT 1 FROM harness_file_retentions r WHERE r.snapshot_id=harness_file_snapshots.id)`, [now()])
     }))
     await collect()
-    const trees = createFileTreeBrowser(async projectId => (await projects.requireAvailable(projectId)).path, slot, options.treeBrowser)
+    const trees = createFileTreeBrowser(async projectId => { const project = await projects.requireAvailable(projectId); return { root: project.path, access: source(project).access } }, slot, options.treeBrowser)
     const timer = setInterval(() => { void collect().catch(() => ctx.logger.warn('Project file snapshot collection failed')) }, options.collectionIntervalMs ?? 60 * 60 * 1000)
     timer.unref()
     ctx.effect(() => async () => {
@@ -127,13 +161,13 @@ export function createProjectFilesComponent(options: ProjectFilesOptions = {}): 
       search(projectId, query, signal) { return owned(signal, async signal => {
         if (typeof query !== 'string' || query.length > 4096 || query.includes('\0')) throw fileError('file-invalid')
         const project = await projects.requireAvailable(projectId)
-        return slot(signal, () => searchProjectFiles(project.path, query, signal))
+        return slot(signal, () => source(project).search(query, signal))
       }) },
       preview(projectId, raw, signal) { return owned(signal, async signal => {
         const [selection] = validateFileSelections([raw])
         if (selection.kind !== 'project-file') throw fileError('file-invalid')
         const project = await projects.requireAvailable(projectId)
-        return slot(signal, () => readProjectFile(project.path, selection.path, selection.range, signal))
+        return slot(signal, () => source(project).read(selection.path, selection.range, signal))
       }) },
       prepare(scope, projectId, key, raw, signal) {
         const queueKey = JSON.stringify([scope, key]), previous = preparations.get(queueKey)
@@ -163,7 +197,7 @@ export function createProjectFilesComponent(options: ProjectFilesOptions = {}): 
                 values.push(value)
               } else {
                 const project = await projects.requireAvailable(projectId)
-                const preview = await slot(signal, () => readProjectFile(project.path, selection.path, selection.range, signal))
+                const preview = await slot(signal, () => source(project).read(selection.path, selection.range, signal))
                 if (!preview.canReference) throw fileError('file-too-large')
                 const id = newId(), file: FileRef = { snapshotId: id, projectId, path: selection.path,
                   ...(selection.range ? { range: selection.range } : {}), actualRange: preview.actualRange,

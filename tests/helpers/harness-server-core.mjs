@@ -12,11 +12,12 @@ export async function createTestHarnessServerCore(root, options, { legacyTools =
   try {
     // These providers belong to the fixture worker. Install without waiting for
     // Projects, which the application composition supplies on this same root.
-    if (!root.get('computer.worker')) {
+    // The composition's router serves `computer.worker`; the fixture only stands in for the loopback worker behind it.
+    if (!root.get('computer.local-worker')) {
       const fibers = [createBashComponent(), createApplyPatchComponent(), createProcessToolsComponent(), createFileToolsComponent()]
         .map(component => root.installComponent(component))
       for (const fiber of fibers) void Promise.resolve(fiber).catch(() => {})
-      const worker = createControlledComputerWorker(root)
+      const worker = createControlledComputerWorker(root, { serviceKey: 'computer.local-worker' })
       await root.installComponent(worker.component)
     }
     installation = await installHarnessServerCore(root, options)

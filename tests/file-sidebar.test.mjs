@@ -4,6 +4,7 @@ import { clampFileTreeWidth, createFileSidebar, restoreFileSidebarSessionState }
 import { createFileView } from '../dist/applications/harness/web/file-view.js'
 import { sameFileReference } from '../dist/applications/harness/web/session-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
+import { messageFor as apiMessageFor } from '../dist/applications/harness/web/client-errors.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const ref = sessionId => ({ sessionId, projectId: `p-${sessionId}` })
@@ -46,7 +47,7 @@ function documentFixture() {
   document.createElement = createElement
   return { document, container: createElement('div') }
 }
-function fixture({ read, treeApi, session = {}, projectLabel } = {}) {
+function fixture({ read, treeApi, session = {}, projectLabel, messageFor = error => error.message } = {}) {
   const dom = documentFixture(), changed = [], requests = [], applied = [], treeRequests = []
   const state = { session: { id: 'a', projectId: 'p-a', historyMode: 'native-local-v1', ...session }, position: { viewNodeId: null }, draft: '', files: [], loading: false, busy: false }
   const controller = {
@@ -65,7 +66,7 @@ function fixture({ read, treeApi, session = {}, projectLabel } = {}) {
     treeRequests.push({ url, body, signal })
     if (treeApi) return treeApi(url, body, signal)
     if (url.endsWith('/open')) return { cursorId: 'tree', page: 0, path: body.path, entries: [], nextPage: null }
-  }, projectLabel, messageFor: error => error.message, changed: (sessionId, value) => changed.push({ sessionId, value: JSON.parse(JSON.stringify(value)) }) })
+  }, projectLabel, messageFor, changed: (sessionId, value) => changed.push({ sessionId, value: JSON.parse(JSON.stringify(value)) }) })
   sidebar.setSession(ref('a'), controller)
   return { ...dom, sidebar, controller, state, changed, requests, applied, treeRequests,
     open: (kind, item, extra = {}) => sidebar.open({ ref: ref('a'), parentNodeId: state.position.viewNodeId, kind, item, ...extra }) }
@@ -306,6 +307,22 @@ test('explicit expansion can read while filtering and an empty reread replaces c
     filter.value = 'a.ts'; filter.dispatch('input')
     assert.equal(entry('src/a.ts'), undefined, 'a successful empty refresh cannot resurrect older rows')
     assert.match(f.container.querySelector('.file-tree-status').textContent, /没有匹配项/)
+  } finally { await f.sidebar.dispose() }
+})
+
+test('a bounded remote tree reports incomplete browsing and directs the user to search or a file path', async () => {
+  const f = fixture({ messageFor: apiMessageFor, treeApi(url) {
+    if (url.endsWith('/open')) throw Object.assign(new Error('file-tree-truncated'), { status: 413, code: 'file-tree-truncated' })
+    return {}
+  } })
+  try {
+    await tick()
+    const text = f.container.querySelector('.file-tree-status').textContent
+    assert.match(text, /未完整列出/)
+    assert.match(text, /文件搜索.*文件路径/)
+    assert.equal(f.container.querySelector('.file-tree-more'), undefined)
+    assert.equal(f.container.querySelector('.file-tree-retry').textContent, '重试')
+    assert.equal(text.includes('此目录为空'), false)
   } finally { await f.sidebar.dispose() }
 })
 

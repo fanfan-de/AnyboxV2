@@ -8,16 +8,20 @@ import { localStorageServiceKey } from '../../../../storage/port.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageTransaction } from '../../../../storage/port.js'
 import { workspacesServiceKey } from '../workspace/port.js'
 import type { WorkspacesPort, WorkspaceBinding } from '../workspace/port.js'
-import { imageAssetsServiceKey } from '../image/port.js'
+import { imageAssetsServiceKey, isImageAssetError } from '../image/port.js'
 import type { ImageAssetsPort } from '../image/port.js'
 import { computerServiceKey } from './port.js'
 import type { ComputersPort } from './port.js'
-import { computerDeclarationDigest, needsComputer, operationError } from './operations-domain.js'
+import { computerDeclarationDigest, needsComputer, operationError, unitComputerId, unitComputerProviderId } from './operations-domain.js'
 import type { ComputerDeclaration, ComputerOperation, ComputerOperationState } from './operations-domain.js'
 import { computerOperationsServiceKey } from './operations-port.js'
 import type { ComputerOperationsPort, ComputerOperationsOptions, ComputerRunScope } from './operations-port.js'
-import { computerWorkerServiceKey } from './worker-port.js'
+import { computerWorkerServiceKey, workerBootOf, workerError } from './worker-port.js'
 import type { ComputerWorkerPort, WorkerOperation, WorkerSubmission } from './worker-port.js'
+import { bindingMatches, computerScopeAllowsTool, isUnitError, localAttachmentId, unitError, validateRunUnitBinding } from '../unit/domain.js'
+import type { RunUnitBinding } from '../unit/domain.js'
+import { unitAttachmentsServiceKey } from '../unit/port.js'
+import type { UnitAttachmentsPort } from '../unit/port.js'
 
 const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute(`CREATE TABLE harness_computer_operations (
@@ -31,6 +35,9 @@ const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   tx.execute('ALTER TABLE harness_computer_operations ADD COLUMN error_json TEXT')
   tx.execute(`CREATE TABLE harness_computer_scopes (run_id TEXT PRIMARY KEY, owner_epoch INTEGER NOT NULL,
     cancel_requested INTEGER NOT NULL DEFAULT 0, closed INTEGER NOT NULL DEFAULT 0, close_receipt TEXT, result_json TEXT)`)
+} }, { version: 3, up(tx) {
+  // Scopes opened before unit attachments existed talk to the local worker attachment.
+  tx.execute('ALTER TABLE harness_computer_scopes ADD COLUMN unit_binding_json TEXT')
 } }]
 const reservationId = (runId: string) => `computer-run:${runId}`
 const json = (value: unknown): JsonValue => JSON.parse(JSON.stringify(value)) as JsonValue
@@ -63,21 +70,42 @@ function retryable(error: unknown): boolean {
 
 export function createComputerOperationsComponent(inputs: RuntimeInputs, options: ComputerOperationsOptions = {}): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort; [computerServiceKey]: ComputersPort; [workspacesServiceKey]: WorkspacesPort
-  [computerWorkerServiceKey]: ComputerWorkerPort; [imageAssetsServiceKey]: ImageAssetsPort
+  [computerWorkerServiceKey]: ComputerWorkerPort; [imageAssetsServiceKey]: ImageAssetsPort; [unitAttachmentsServiceKey]: UnitAttachmentsPort
 }> {
   const computerId = options.computerId ?? 'local', spec = options.spec ?? { providerId: 'local', platform: process.platform, architecture: process.arch }
-  return { name: 'harness-computer-operations', inject: [localStorageServiceKey, computerServiceKey, workspacesServiceKey, computerWorkerServiceKey, imageAssetsServiceKey],
+  return { name: 'harness-computer-operations', inject: [localStorageServiceKey, computerServiceKey, workspacesServiceKey, computerWorkerServiceKey, imageAssetsServiceKey, unitAttachmentsServiceKey],
     async apply(ctx, _config, deps) {
-      const db = deps[localStorageServiceKey], computers = deps[computerServiceKey], workspaces = deps[workspacesServiceKey], worker = deps[computerWorkerServiceKey]
+      const db = deps[localStorageServiceKey], computers = deps[computerServiceKey], workspaces = deps[workspacesServiceKey], worker = deps[computerWorkerServiceKey], attachments = deps[unitAttachmentsServiceKey]
+      const scopeUnit = (reader: StorageReader, runId: string): RunUnitBinding | undefined => {
+        const row = reader.get('SELECT unit_binding_json FROM harness_computer_scopes WHERE run_id=?', [runId])
+        return typeof row?.unit_binding_json === 'string' ? validateRunUnitBinding(JSON.parse(row.unit_binding_json)) : undefined
+      }
+      const attachmentOf = (unit: RunUnitBinding | undefined) => unit?.attachmentId ?? localAttachmentId('computer')
+      // A Run bound to a remote Computer unit declares against that unit's logical computer; its platform comes from the attachment record.
+      // Only placement facts are read here; the approval fence runs when the declaration is about to start.
+      const placementFor = (tx: StorageTransaction, binding: RunUnitBinding | undefined): { computerId: string; spec: typeof spec } => {
+        const unit = binding === undefined ? undefined : validateRunUnitBinding(binding)
+        if (!unit || unit.attachmentId === localAttachmentId('computer')) return { computerId, spec }
+        if (unit.unitKind !== 'computer') throw operationError('computer-operation-conflict')
+        const attachment = attachments.getIn(tx, unit.attachmentId)
+        if (!attachment || attachment.unitKind !== 'computer' || attachment.unitId !== unit.unitId) throw operationError('computer-operation-unavailable')
+        const raw = attachment.capabilities
+        const capabilities = raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? raw as Readonly<Record<string, JsonValue>> : {}
+        const platform = capabilities.platform, architecture = capabilities.architecture
+        if (typeof platform !== 'string' || !platform || typeof architecture !== 'string' || !architecture) throw operationError('computer-operation-unavailable')
+        return { computerId: unitComputerId(unit.attachmentId), spec: { providerId: unitComputerProviderId, platform, architecture } }
+      }
       await db.migrate('computer-operations', migrations)
       await db.transaction(tx => tx.execute("UPDATE harness_computer_operations SET state='outcome-unknown' WHERE state IN ('starting','running') AND NOT EXISTS (SELECT 1 FROM harness_computer_scopes s WHERE s.run_id=harness_computer_operations.run_id)"))
       let accepting = true
+      const knownUnsent = new Set<string>()
       const scopes = new Map<string, ComputerRunScope>(), pending = new Set<Promise<unknown>>(), observers = new Set<AbortController>(), cleanupFailures = new Set<unknown>()
       const assertOpen = () => { if (!accepting) throw operationError('computer-operation-unavailable') }
       const track = <T>(promise: Promise<T>): Promise<T> => { pending.add(promise); void promise.finally(() => pending.delete(promise)).catch(() => {}); return promise }
       const write = async <T>(work: (tx: StorageTransaction) => T): Promise<T> => {
         try { return await db.transaction(work) } catch (error) {
           if (error instanceof RunFailure || error instanceof Error && ['ComputerError','WorkspaceError','ComputerOperationError'].includes(error.name)) throw error
+          if (isUnitError(error)) throw new RunFailure('tool-unavailable')
           accepting = false; throw new RunFailure('state-write-failure')
         }
       }
@@ -87,12 +115,36 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
         const abort = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); reject(operationError('computer-operation-unavailable')) }
         const timer = setTimeout(end, 30); signal.addEventListener('abort', abort, { once: true })
       })
-      const reconcile = async (submission: WorkerSubmission, signal: AbortSignal): Promise<WorkerOperation> => {
+      // The unit holds something of this Run only once a submission was durably received there.
+      const delivered = (reader: StorageReader, runId: string) =>
+        !!reader.get('SELECT 1 FROM harness_computer_operations WHERE run_id=? AND worker_receipt IS NOT NULL LIMIT 1', [runId]) ||
+        !!reader.get('SELECT 1 FROM harness_computer_scopes WHERE run_id=? AND close_receipt IS NOT NULL', [runId])
+      // A restarted observer cannot prove that a previously placed call with no receipt was never dispatched.
+      const unconfirmed = (reader: StorageReader, runId: string) => reader.all("SELECT operation_id FROM harness_computer_operations WHERE run_id=? AND binding_json IS NOT NULL AND worker_receipt IS NULL AND state IN ('starting','running','outcome-unknown')", [runId]).some(row => !knownUnsent.has(String(row.operation_id)))
+      const unreachable = (error: unknown) => error instanceof Error && 'code' in error && error.code === 'worker-unreachable'
+      const transportFailure = (error: unknown) => error instanceof Error && 'code' in error && (error.code === 'worker-unreachable' || error.code === 'worker-unavailable')
+      // A revoked or narrowed attachment will never answer again for this Run: its placed operations become outcome-unknown instead of waiting forever.
+      const stillAttached = async (unit: RunUnitBinding | undefined) => {
+        if (!unit || unit.attachmentId === localAttachmentId('computer')) return
+        if (!bindingMatches(unit, await attachments.get(unit.attachmentId))) throw Object.assign(workerError('worker-attachment-revoked'), { category: 'cleanup-failure' })
+      }
+      const reconcile = async (submission: WorkerSubmission, signal: AbortSignal, unit?: RunUnitBinding, mayHaveDispatched = false): Promise<WorkerOperation> => {
         while (!signal.aborted) {
           await db.read(reader => owner(reader, submission.runId, submission.runOwnerEpoch))
           try {
             await worker.claimRun(submission)
-            const known = await worker.get(submission), current = known ?? await worker.submit(submission)
+            const known = await worker.get(submission)
+            let current: WorkerOperation
+            if (known) { knownUnsent.delete(submission.operationId); current = known }
+            else {
+              knownUnsent.delete(submission.operationId)
+              try { current = await worker.submit(submission) }
+              catch (error) {
+                if (!unreachable(error)) mayHaveDispatched = true
+                else if (!mayHaveDispatched) knownUnsent.add(submission.operationId)
+                throw error
+              }
+            }
             if (current.declarationDigest !== submission.declarationDigest) throw operationError('computer-operation-conflict')
             if (terminal(current.state)) return current
             if (submission.kind === 'tool') await write(tx => {
@@ -100,7 +152,12 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
               const prior = read(tx,submission.operationId)
               if (prior && !terminal(prior.state) && (prior.state !== current.state || prior.workerReceipt !== current.receipt)) tx.execute('UPDATE harness_computer_operations SET state=?,worker_receipt=? WHERE operation_id=?',[current.state,current.receipt,submission.operationId])
             })
-          } catch (error) { if (!retryable(error)) throw error }
+          } catch (error) {
+            if (transportFailure(error)) await stillAttached(unit)
+            // A unit that never received anything of this Run makes admission fail; once it holds a receipt, an outage only delays.
+            if (unreachable(error)) { if (!mayHaveDispatched && !await db.read(reader => delivered(reader, submission.runId))) throw error }
+            else if (!retryable(error)) throw error
+          }
           await wait(signal)
         }
         throw operationError('computer-operation-unavailable')
@@ -117,11 +174,12 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
           if (!Number.isSafeInteger(epoch) || epoch < 1) throw operationError('computer-operation-owner')
           const prior = read(tx, input.operationId)
           owner(tx, input.runId, epoch)
-          computers.reserveIn(tx, { computerId, spec })
+          const placement = placementFor(tx, input.unit)
+          computers.reserveIn(tx, placement)
           const reservation = prior ? undefined : workspaces.reserveIn(tx, { reservationId: reservationId(input.runId), scopeId: input.runId, projectId: input.projectId })
           const declaration = json({ schemaVersion: 1, operationId: input.operationId, runId: input.runId, sessionId: input.sessionId,
             projectId: input.projectId, tool: input.tool, request: input.request, workspaceId: prior?.declaration.workspaceId ?? reservation!.workspaceId,
-            workspaceRevision: prior?.declaration.workspaceRevision ?? 0, computerId, spec }) as unknown as ComputerDeclaration
+            workspaceRevision: prior?.declaration.workspaceRevision ?? 0, computerId: placement.computerId, spec: placement.spec }) as unknown as ComputerDeclaration
           const digest = computerDeclarationDigest(declaration)
           if (prior) { if (prior.declarationDigest !== digest) throw operationError('computer-operation-conflict'); return prior }
           tx.execute('INSERT OR IGNORE INTO harness_computer_scopes (run_id,owner_epoch) VALUES (?,?)', [input.runId, epoch]); owner(tx, input.runId, epoch)
@@ -148,11 +206,14 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
         authorizeRun(runId,runOwnerEpoch,signal) {
           assertOpen()
           return track((async () => {
-            const placed = await db.read(reader => { owner(reader,runId,runOwnerEpoch); return !!reader.get('SELECT 1 FROM harness_computer_operations WHERE run_id=? AND binding_json IS NOT NULL',[runId]) })
-            if (!placed) return
+            const placed = await db.read(reader => { owner(reader,runId,runOwnerEpoch); return { placed: !!reader.get('SELECT 1 FROM harness_computer_operations WHERE run_id=? AND binding_json IS NOT NULL',[runId]), attachmentId: attachmentOf(scopeUnit(reader,runId)) } })
+            if (!placed.placed) return
             while (!signal.aborted) {
-              try { await worker.claimRun({runId,runOwnerEpoch}); return }
-              catch (error) { if (!retryable(error)) throw error }
+              try { await worker.claimRun({runId,runOwnerEpoch,attachmentId:placed.attachmentId}); return }
+              catch (error) {
+                if (unreachable(error)) { if (!await db.read(reader => delivered(reader, runId) || unconfirmed(reader, runId))) return }
+                else if (!retryable(error)) throw error
+              }
               await wait(signal)
             }
             throw operationError('computer-operation-unavailable')
@@ -162,9 +223,10 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
           assertOpen()
           return track((async () => {
             const excluded = new Set(excludeRunIds)
-            const runs = await db.read(reader => reader.all('SELECT run_id,owner_epoch FROM harness_computer_scopes WHERE cancel_requested=1 AND closed=0'))
+            const runs = await db.read(reader => reader.all('SELECT run_id,owner_epoch,unit_binding_json FROM harness_computer_scopes WHERE cancel_requested=1 AND closed=0'))
             await Promise.all(runs.filter(row => !excluded.has(String(row.run_id))).map(async row => {
-              const scope = service.openRun({runId:String(row.run_id),runOwnerEpoch:Number(row.owner_epoch)})
+              const scope = service.openRun({runId:String(row.run_id),runOwnerEpoch:Number(row.owner_epoch),
+                ...(typeof row.unit_binding_json === 'string' ? { unit: validateRunUnitBinding(JSON.parse(row.unit_binding_json)) } : {})})
               await scope.cancel()
               const ids = await db.read(reader => reader.all('SELECT operation_id FROM harness_computer_operations WHERE run_id=? AND binding_json IS NOT NULL',[String(row.run_id)]))
               for (const operation of ids) {
@@ -179,6 +241,20 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
           assertOpen(); if (scopes.has(input.runId)) throw operationError('computer-operation-conflict')
           const epoch = input.runOwnerEpoch ?? 1
           if (!Number.isSafeInteger(epoch) || epoch < 1) throw operationError('computer-operation-owner')
+          const unit = input.unit === undefined ? undefined : validateRunUnitBinding(input.unit)
+          if (unit && unit.unitKind !== 'computer') throw operationError('computer-operation-conflict')
+          const attachmentId = attachmentOf(unit)
+          let unitFixed = false
+          // The scope's unit reference is persisted with the first placement so recovery and cancellation use the same attachment.
+          const fixUnit = (tx: StorageTransaction) => {
+            if (unitFixed) return
+            const stored = scopeUnit(tx, input.runId)
+            if (stored ? stored.attachmentId !== attachmentId : unit !== undefined) {
+              if (stored) throw operationError('computer-operation-conflict')
+              tx.execute('UPDATE harness_computer_scopes SET unit_binding_json=? WHERE run_id=?', [JSON.stringify(unit), input.runId])
+            }
+            unitFixed = true
+          }
           const controller = new AbortController(); observers.add(controller)
           const calls = new Map<string,OwnedCall<ToolObservation>>()
           let binding: WorkspaceBinding | undefined, preparing: Promise<WorkspaceBinding> | undefined, stopped = false
@@ -186,13 +262,16 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
           const check = () => { assertOpen(); controller.signal.throwIfAborted(); if (stopped) throw operationError('computer-operation-unavailable') }
           const control = (kind: 'cancel'|'close-scope'): WorkerSubmission => {
             const operationId = `${input.runId}:computer-${kind}`
-            return { operationId, runId: input.runId,runOwnerEpoch:epoch,kind,declarationDigest:createHash('sha256').update(JSON.stringify({operationId,runId:input.runId,kind})).digest('hex') }
+            return { operationId, runId: input.runId,runOwnerEpoch:epoch,attachmentId,kind,declarationDigest:createHash('sha256').update(JSON.stringify({operationId,runId:input.runId,kind})).digest('hex') }
           }
           const cancel = () => cancellation ??= track((async () => {
             await write(tx => { owner(tx,input.runId,epoch); service.requestCancelIn(tx,input.runId)
               tx.execute("UPDATE harness_computer_operations SET state='cancelled',error_json=? WHERE run_id=? AND binding_json IS NULL AND state IN ('accepted','queued')",[JSON.stringify({category:'cancelled'}),input.runId])
             })
-            if (await db.read(reader => !!reader.get('SELECT 1 FROM harness_computer_operations WHERE run_id=? AND binding_json IS NOT NULL',[input.runId]))) await reconcile(control('cancel'),controller.signal)
+            if (await db.read(reader => !!reader.get('SELECT 1 FROM harness_computer_operations WHERE run_id=? AND binding_json IS NOT NULL',[input.runId]))) {
+              // Nothing to cancel on a unit that never received this Run.
+              try { await reconcile(control('cancel'),controller.signal,unit,await db.read(reader => unconfirmed(reader, input.runId))) } catch (error) { if (!unreachable(error)) throw error }
+            }
           })())
           const prepare = (operation: ComputerOperation): Promise<WorkspaceBinding> => preparing ??= (async () => {
             const existing = operation.binding ?? await workspaces.getBinding(reservationId(input.runId))
@@ -228,17 +307,33 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
                 const selected = binding ?? await prepare(operation), instance = await computers.requireInstance(selected)
                 await write(tx => { owner(tx,input.runId,epoch)
                   if (!operation.binding && (cancelled || tx.get('SELECT cancel_requested FROM harness_computer_scopes WHERE run_id=?',[input.runId])?.cancel_requested === 1 || read(tx,id)?.state === 'cancelled')) throw new RunFailure('tool-cancelled')
+                  // A revoked or narrowed attachment rejects new declarations; operations already placed continue to their exit.
+                  if (unit && !operation.binding) {
+                    const attachment = attachments.requireApprovedIn(tx, unit)
+                    if (!computerScopeAllowsTool(attachment.scope, operation.declaration.tool.toolId)) throw unitError('unit-scope-exceeded')
+                  }
+                  fixUnit(tx)
                   workspaces.requireBindingIn(tx,{...selected,reservationId:reservationId(input.runId),scopeId:input.runId})
+                  if (!operation.binding) knownUnsent.add(id)
                   tx.execute("UPDATE harness_computer_operations SET state='starting',binding_json=? WHERE operation_id=?",[JSON.stringify(selected),id])
                 })
                 const wanted = await db.read(reader => reader.get('SELECT cancel_requested FROM harness_computer_scopes WHERE run_id=?',[input.runId])?.cancel_requested === 1)
                 if (wanted || cancelled) await cancel()
-                const outcome = await reconcile({ operationId:id,runId:input.runId,runOwnerEpoch:epoch,declarationDigest:operation.declarationDigest,kind:'tool',
-                  declaration:operation.declaration,binding:selected,workerBootId:instance.providerRef.slice(instance.providerRef.lastIndexOf(':')+1),imageInput:input.imageInput === true },controller.signal)
+                const outcome = await reconcile({ operationId:id,runId:input.runId,runOwnerEpoch:epoch,attachmentId,declarationDigest:operation.declarationDigest,kind:'tool',
+                  declaration:operation.declaration,binding:selected,workerBootId:workerBootOf(instance.providerRef),imageInput:input.imageInput === true },controller.signal,unit,operation.binding !== undefined)
                 let observed = outcome.observation
                 if (outcome.images?.length && observed && typeof observed === 'object' && !Array.isArray(observed)) {
                   const imported = []
                   for (const image of outcome.images) {
+                    if (image.pushed) {
+                      // The unit already pushed the bytes through the byte channel; the receipt must name the same immutable bytes.
+                      if (image.pushed.sha256 !== image.ref.sha256 || image.pushed.byteLength !== image.ref.byteLength) throw operationError('computer-operation-conflict')
+                      const described = await deps[imageAssetsServiceKey].describe(operation.declaration.sessionId, [image.pushed.assetId])
+                        .then(refs => refs[0], error => { if (isImageAssetError(error)) return undefined; throw error })
+                      if (!described || described.sha256 !== image.ref.sha256 || described.byteLength !== image.ref.byteLength) throw operationError('computer-operation-conflict')
+                      const { expiresAt: _draft, ...ref } = described; imported.push(ref); continue
+                    }
+                    if (typeof image.base64 !== 'string') throw operationError('computer-operation-conflict')
                     const bytes = Buffer.from(image.base64,'base64')
                     if (bytes.byteLength !== image.ref.byteLength || createHash('sha256').update(bytes).digest('hex') !== image.ref.sha256) throw operationError('computer-operation-conflict')
                     const call = deps[imageAssetsServiceKey].importImage({scopeId:operation.declaration.sessionId,bytes:(async function* () { yield bytes })()})
@@ -265,7 +360,7 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
                   owner(tx,input.runId,epoch)
                   const current = read(tx,id)
                   if (!current || terminal(current.state)) return
-                  const unknown = /unknown|instance-replaced|worker-request-failed|worker-cleanup-failed/.test(code)
+                  const unknown = /unknown|instance-replaced|worker-request-failed|worker-cleanup-failed|attachment-revoked/.test(code)
                   if (unknown) cleanupFailed = true
                   const state = unknown ? 'outcome-unknown' : /cancelled/.test(code) || cancelled || error instanceof RunFailure && error.category === 'tool-cancelled' ? 'cancelled' : 'failed'
                   tx.execute('UPDATE harness_computer_operations SET state=?,error_json=? WHERE operation_id=?', [state,JSON.stringify({name:'ComputerOperationError',message:code || 'tool unavailable',category:state === 'cancelled' ? 'cancelled' : unknown ? 'cleanup-failure' : 'unavailable'}),id])
@@ -287,7 +382,8 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
                 if (persisted.closed === 1) return JSON.parse(String(persisted.result_json)) as JsonValue
                 const placed = await db.read(reader => !!reader.get('SELECT 1 FROM harness_computer_operations WHERE run_id=? AND binding_json IS NOT NULL',[input.runId]))
                 if (persisted.cancel_requested === 1 && placed) await cancel()
-                const closed = placed ? await reconcile(control('close-scope'),controller.signal) : undefined
+                // A placed Run whose unit never received a submission has no remote scope to close.
+                const closed = placed ? await reconcile(control('close-scope'),controller.signal,unit,await db.read(reader => unconfirmed(reader, input.runId))).catch(error => { if (unreachable(error)) return undefined; throw error }) : undefined
                 if (closed?.error || closed?.state === 'outcome-unknown' || cleanupFailed) {
                   cleanupFailed = true
                   if (closed?.observation !== undefined) {

@@ -59,7 +59,7 @@ test('instance metadata advertises product management and registered Harness cap
   try {
     const response = await fetch(web.url + '/api/v1/instance')
     assert.equal(response.status, 200)
-    assert.deepEqual((await response.json()).capabilities, ['products.v2', 'projects.path', 'images', 'project-files', 'sse'])
+    assert.deepEqual((await response.json()).capabilities, ['products.v2', 'projects.path', 'images', 'project-files', 'sse', 'units'])
   } finally { await web.close() }
 })
 
@@ -154,6 +154,13 @@ test('gateway forwards only product identity and validates image URL connection 
     assert.equal((await fetch(base + '/sessions/s/images/a/content?' + query)).status, 409)
     assert.equal((await fetch(base + '/products?' + query)).status, 400)
     assert.equal(received.length, 2)
+    // Unit attachment routes have no legacy alias upstream: the gateway addresses the application path for them.
+    assert.equal((await fetch(base + '/units/attachments', { headers })).status, 200)
+    assert.equal(received[2].url, '/api/v1/apps/agent/units/attachments')
+    assert.equal(received[2].headers.authorization, 'Bearer host-secret')
+    assert.equal((await fetch(base + '/units/local-computer/attachments', { headers })).status, 200)
+    assert.equal(received[3].url, '/api/v1/apps/agent/units/local-computer/attachments')
+    assert.equal(received.length, 4)
     assert.equal(allowedProxyPath('POST', '/products/x/open'), true)
     assert.equal(allowedProxyPath('POST', '/products/x/apply'), false)
     assert.equal(allowedProxyPath('POST', '/products/x/restore'), false)
