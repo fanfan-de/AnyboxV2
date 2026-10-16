@@ -8,6 +8,8 @@ import type { ConnectionsPort } from '../host/connections.js'
 import { createExecutionHost } from '../host/execution.js'
 import { parseHarnessServerConfig } from '../applications/harness/server-config.js'
 import { harnessServerApplication } from '../applications/harness/registration.js'
+import { parseClaudeAgentConfig } from '../applications/claude-agent/config.js'
+import { claudeAgentServerApplication } from '../applications/claude-agent/registration.js'
 import { hostAccessServiceKey } from '../host/access.js'
 import type { HostAccessPort } from '../host/access.js'
 import { runAdmissionServiceKey } from '../applications/harness/core/run/component.js'
@@ -32,7 +34,7 @@ const start = async (value: unknown): Promise<DesktopWorkerReady> => {
       ANYBOX_MODELS_CONFIG: paths.models, ANYBOX_MODELS_DATABASE: paths.legacyModels, ANYBOX_MODELS_CATALOG_DATABASE: paths.catalog,
       ANYBOX_IMAGE_ASSETS_DIRECTORY: paths.images, ANYBOX_MODELS_NAMESPACE: `${options.namespace}.models` })
     const executionHost = await createExecutionHost({ databasePath: paths.harness, port: 0, name: '本机 Anybox Harness', host: '127.0.0.1',
-      applications: [harnessServerApplication(config, { models: { readLegacyCredential: async () => undefined } })] })
+      applications: [harnessServerApplication(config, { models: { readLegacyCredential: async () => undefined } }), claudeAgentServerApplication(parseClaudeAgentConfig(process.env))] })
     host = executionHost
     return { url: executionHost.url, instanceId: executionHost.instance.instanceId } satisfies DesktopWorkerReady
   }

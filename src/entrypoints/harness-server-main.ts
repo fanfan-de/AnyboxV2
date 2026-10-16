@@ -5,6 +5,8 @@ import { createHostAccessComponent, hostAccessServiceKey } from '../host/access.
 import type { HostAccessPort } from '../host/access.js'
 import { parseHarnessServerConfig } from '../applications/harness/server-config.js'
 import { createHarnessServer } from '../applications/harness/server.js'
+import { parseClaudeAgentConfig } from '../applications/claude-agent/config.js'
+import { claudeAgentServerApplication } from '../applications/claude-agent/registration.js'
 export { createHarnessServer }
 
 async function main() {
@@ -26,7 +28,8 @@ async function main() {
   if (command !== 'serve') throw new Error('Use serve, init, recover-access or new-identity')
   const projects: unknown = JSON.parse(process.env.ANYBOX_PROJECTS ?? '[]')
   if (!Array.isArray(projects) || projects.some(path => typeof path !== 'string')) throw new Error('ANYBOX_PROJECTS must be a JSON array of absolute paths')
-  const host = await createHarnessServer(config, { name: process.env.ANYBOX_HARNESS_NAME, host: process.env.ANYBOX_HARNESS_BIND ?? '127.0.0.1', projects })
+  const host = await createHarnessServer(config, { name: process.env.ANYBOX_HARNESS_NAME, host: process.env.ANYBOX_HARNESS_BIND ?? '127.0.0.1', projects,
+    additionalApplications: [claudeAgentServerApplication(parseClaudeAgentConfig(process.env))] })
   process.stdout.write(`harness server: ${host.url} (${host.instance.instanceId})\n`)
   process.send?.({ type: 'ready', instanceId: host.instance.instanceId, url: host.url })
   const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch(() => { process.exitCode = 1; process.stderr.write('harness server shutdown failed\n') }) }
