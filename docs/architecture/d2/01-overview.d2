@@ -1,0 +1,63 @@
+# Anybox architecture snapshot · 2026-10-13 · source baseline 2e161e2
+# Arrows express calls / data flow, not a complete Nya injection graph.
+vars: {d2-config: {layout-engine: elk; theme-id: 0; pad: 48}}
+direction: right
+style.fill: "#F8FAFC"
+classes: {
+  boundary: {style: {fill: "#FFFFFF"; stroke: "#94A3B8"; stroke-dash: 5; border-radius: 16; font-size: 22}}
+  ui: {style: {fill: "#DBEAFE"; stroke: "#2563EB"; border-radius: 10; font-size: 20}}
+  service: {style: {fill: "#E0F2FE"; stroke: "#0284C7"; border-radius: 10; font-size: 20}}
+  runtime: {style: {fill: "#CCFBF1"; stroke: "#0F766E"; border-radius: 10; font-size: 20}}
+  data: {shape: cylinder; style: {fill: "#FEF3C7"; stroke: "#B45309"; font-size: 18}}
+}
+title: "ANYBOX / 项目架构总览\n2026-10-13 · 当前实现 · 01 / 04" {
+  shape: text
+  near: top-center
+  style: {font-size: 32; bold: true; font-color: "#0F172A"}
+}
+browser: "界面 / 浏览器或 Electron 渲染器" {
+  grid-columns: 1
+  grid-gap: 24
+  class: boundary
+  shell: "Anybox 前端外壳\n应用入口 · 路由 · 界面生命周期" {class: ui}
+  harness: "Anybox Harness 工作区\n项目 · 会话树 · 分屏 · 设置" {class: ui}
+}
+client: "客户端进程 / 独立 Nya 根" {
+  grid-columns: 1
+  grid-gap: 24
+  class: boundary
+  host: "Anybox 通用宿主\napp.products / app.activity\napp.client-http" {class: service}
+  gateway: "Anybox Harness 客户端\nclient.gateway / client.connections\n目录选择" {class: service}
+  state: "客户端 SQLite + 系统凭据\n连接元数据 / 令牌分别保存" {class: data}
+}
+execution: "执行设备 / 独立 Nya 根（本地或远端）" {
+  grid-columns: 1
+  grid-gap: 24
+  class: boundary
+  host: "Anybox 通用宿主\nhost.http / host.access\napp.products / app.activity" {class: service}
+  core: "harness server\nSession · Run · RunRuntime\n协议 Loop · Prompt · Projects" {class: runtime}
+  models: "Models / 独立通用包\n原生 execution · 四种协议\n配置 · Vault · 目录" {class: runtime}
+  computer: "Computer 协调\nComputers · Workspaces\nComputer Operations · worker 客户端" {class: runtime}
+  state: "执行端独占资源\n业务 SQLite / 图片原字节\nModels JSON / 目录缓存 / 系统 Vault" {class: data}
+}
+worker: "Computer worker / 独立进程与 Nya 根" {
+  grid-columns: 1
+  grid-gap: 24
+  class: boundary
+  executor: "Worker 执行器\n耐久接纳 · 操作去重 · Run scope" {class: runtime}
+  tools: "静态内置工具\nBash / Apply Patch\nProcesses / Files" {class: runtime}
+  state: "worker 独占资源\nworker.sqlite / 图片目录\n进程组 / 固定工作区绑定" {class: data}
+}
+providers: "外部模型 API\nResponses · Chat Completions\nAnthropic Messages · Gemini Interactions" {
+  shape: cloud
+  style: {fill: "#EDE9FE"; stroke: "#7C3AED"; font-size: 20}
+}
+browser -> client: "同源应用 API"
+client -> execution: "HTTP / SSE\n固定连接版本与 instanceId"
+execution -> worker: "受信回环 HTTP\n同一执行设备"
+execution -> providers: "Models 原生请求"
+note: "读图：虚线框 = 进程或界面边界；框内按职责聚合，非完整组件清单。\nAuthority 与 Runtime 当前同进程；每个执行设备可独立部署。项目与任务是数据边界，不创建 Context。\nworker 实际工具运行限 Unix；Windows 尚未支持真实 worker。客户端关闭不会取消服务端 Run。" {
+  shape: text
+  near: bottom-center
+  style: {font-size: 18; font-color: "#475569"}
+}
