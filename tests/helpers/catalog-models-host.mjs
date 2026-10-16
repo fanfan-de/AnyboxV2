@@ -8,7 +8,7 @@ import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
 import { createImageAssetsComponent } from '../../dist/applications/harness/core/image/component.js'
 import { installHarnessServerModels } from '../../dist/applications/harness/server-models.js'
 import { parseHarnessServerConfig } from '../../dist/applications/harness/server-config.js'
-import { createDirectoryPickerComponent } from '../../dist/applications/harness/client/directory-picker.js'
+import { createDirectoryPickerComponent } from '../../dist/host/directory-picker.js'
 import { hostHttpServiceKey } from '../../dist/host/component.js'
 import { createFixtureApplicationApiComponent } from './application-api.mjs'
 

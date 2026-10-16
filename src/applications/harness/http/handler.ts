@@ -23,7 +23,7 @@ import type { ModelsSettingsService, ModelsCatalogService, RunnableModelSummary,
 import { isProjectUnavailableError } from '../core/project/component.js'
 import type { Project } from '../core/project/component.js'
 import type { DirectoryBrowseOptions, DirectoryBrowseOpened, DirectoryCreated, DirectoryPage } from '../core/project/directories.js'
-import { DirectoryPickerFailure } from '../client/directory-picker.js'
+import { DirectoryPickerFailure } from '../../../host/directory-picker.js'
 import { openRunChangeStream } from './run-change-stream.js'
 import type { RunChangeStream } from './run-change-stream.js'
 import type { RunChange } from '../core/run/notifications.js'

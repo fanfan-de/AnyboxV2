@@ -3,10 +3,10 @@ import { AsyncEntry } from '@napi-rs/keyring'
 import type { Component } from '@nya/core'
 import { createSystemKeyringStore } from '@anybox/api-key-manager'
 import type { SystemKeyringStore, SystemKeyringOptions } from '@anybox/api-key-manager'
-import { localStorageServiceKey } from '../../../storage/port.js'
-import type { LocalStoragePort, StorageMigration } from '../../../storage/port.js'
-import { hostFailure } from '../../../host/access.js'
-import type { InstanceInfo } from '../../../host/access.js'
+import { localStorageServiceKey } from '../storage/port.js'
+import type { LocalStoragePort, StorageMigration } from '../storage/port.js'
+import { hostFailure } from './access.js'
+import type { InstanceInfo } from './access.js'
 
 export const connectionsServiceKey = 'client.connections'
 export interface Connection { readonly id: string; readonly name: string; readonly endpoint: string; readonly instanceId: string; readonly revision: number; readonly credentialConfigured: boolean }
@@ -64,7 +64,14 @@ export async function inspectInstance(endpoint: string, token: string, signal: A
     return value
   } finally { if (!response.bodyUsed) await response.body?.cancel().catch(() => {}) }
 }
-export function createConnectionsComponent(options: { namespace?: string; openEntry?: SystemKeyringOptions['openEntry']; fetch?: typeof fetch; localPairing?: DesktopLocalPairingOptions } = {}): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
+/** Resident client host options; applications consume the installed service instead of configuring their own copy. */
+export interface ClientConnectionsOptions {
+  readonly namespace?: string
+  readonly openEntry?: SystemKeyringOptions['openEntry']
+  readonly fetch?: typeof fetch
+  readonly localPairing?: DesktopLocalPairingOptions
+}
+export function createConnectionsComponent(options: ClientConnectionsOptions = {}): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
   return { name: 'client-connections', inject: [localStorageServiceKey], async apply(ctx, _config, deps) {
     const db = deps[localStorageServiceKey]; await db.migrate('client-connections', migrations)
     let vault: SystemKeyringStore | undefined, accepting = true, tail: Promise<unknown> = Promise.resolve()

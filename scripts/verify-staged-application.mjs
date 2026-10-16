@@ -34,11 +34,11 @@ export async function verifyStagedApplication(root, output) {
   root = resolve(root); output = resolve(output)
   await verifyDefaultWebAssets(root, output)
   const base = pathToFileURL(root + sep)
-  const [{ harnessClientApplication }, { shellAssets }, { createApplicationCatalog }] = await Promise.all([
-    import(new URL('dist/applications/harness/registration.js', base)), import(new URL('dist/host/assets.js', base)),
-    import(new URL('dist/host/applications/registration.js', base)),
+  const [{ harnessClientApplication }, { claudeAgentClientApplication }, { shellAssets }, { createApplicationCatalog }] = await Promise.all([
+    import(new URL('dist/applications/harness/registration.js', base)), import(new URL('dist/applications/claude-agent/client/registration.js', base)),
+    import(new URL('dist/host/assets.js', base)), import(new URL('dist/host/applications/registration.js', base)),
   ])
-  const catalog = createApplicationCatalog([harnessClientApplication()], shellAssets)
+  const catalog = createApplicationCatalog([harnessClientApplication(), claudeAgentClientApplication()], shellAssets)
   for (const [url, asset] of catalog.assets) {
     const path = relative(root, asset.file)
     if (path.startsWith('..' + sep) || path === '..') throw new Error(`Shared Web asset is outside the application: ${url}`)

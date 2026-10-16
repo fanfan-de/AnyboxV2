@@ -2,9 +2,9 @@
 
 [宿主与客户端模块](README.md)
 
-`src/applications/harness/client/connections.ts` 的 `createConnectionsComponent({namespace?,openEntry?,fetch?,localPairing?})` 创建 `client-connections`，提供 `client.connections: ConnectionsPort`。inject 客户端根的 `local-storage`，此根只打开独立 `client.sqlite`，不共用执行库。`namespace` 默认 `anybox.client`；`openEntry` 是测试/平台替身边界。
+`src/host/connections.ts` 的 `createConnectionsComponent(options: ClientConnectionsOptions)` 创建 `client-connections`，提供 `client.connections: ConnectionsPort`。它是客户端宿主的常驻公共提供方：`src/host/client.ts` 的 `createClientHost({ connections })` 在业务 SQLite 之后安装一次，Anybox Harness 与其他客户端应用的网关通过 inject 消费同一服务，不各自保存设备配置。inject 客户端根的 `local-storage`，此根只打开独立 `client.sqlite`，不共用执行库。`namespace` 默认 `anybox.client`；`openEntry` 是测试/平台替身边界；`localPairing` 由桌面组合经入口选项注入。通用转发（请求绑定校验、租约、认证与实例头、重定向与实例不匹配拒绝、双向流管道与超时）位于同目录的 `connection-proxy.ts`，供各应用网关按自己的白名单调用。
 
-连接是 Anybox Harness 内部功能。组件随 Anybox Harness 客户端打开安装、关闭卸载；通用外壳不管理本地/远程目标。工作区侧栏底部将一处紧凑的“执行设备”选择器与只显示图标的“设置”按钮放在同一行；选择器保留屏幕阅读器标签，完整设备名称通过 title 提示。“管理连接”是 Anybox Harness 设置中的第五个分类，与“会话设置”“模型管理”“Prompt 管理”“已归档会话”共用同一弹窗。连接和归档分类跨设备展示，弹窗在这两个分类隐藏当前执行设备提示。所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备，归档列表不受所选设备筛选限制。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。用户关闭设置或按 Esc 时清空未保存的访问令牌与已发行令牌的临时展示；临时停用应用保留已有草稿。关闭仅释放句柄，已保存连接和凭据保留。
+连接库归宿主，连接的管理界面目前仍由 Anybox Harness 提供；组件随客户端宿主启动安装、整根关闭卸载，应用启停不影响已保存连接与凭据。通用外壳不管理本地/远程目标。工作区侧栏底部将一处紧凑的“执行设备”选择器与只显示图标的“设置”按钮放在同一行；选择器保留屏幕阅读器标签，完整设备名称通过 title 提示。“管理连接”是 Anybox Harness 设置中的第五个分类，与“会话设置”“模型管理”“Prompt 管理”“已归档会话”共用同一弹窗。连接和归档分类跨设备展示，弹窗在这两个分类隐藏当前执行设备提示。所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备，归档列表不受所选设备筛选限制。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。用户关闭设置或按 Esc 时清空未保存的访问令牌与已发行令牌的临时展示；临时停用应用保留已有草稿。关闭仅释放句柄，已保存连接和凭据保留。
 
 设备切换先在应用路由中固定新选择，再重建本应用界面；旧工作区同步更新项目或会话查看位置时保留路由当前的设备选择，不能用重建前的连接覆盖它。查看项目与会话不自动改变设备选择，已有会话请求继续按自身 instanceId 路由。
 

@@ -75,4 +75,22 @@ test('browser dependency closures contain only browser modules and portable Harn
     !inside(file, shell), 'Browser shell depends on an application or native implementation')
   assertBoundary(modules, [...modules.keys()].filter(file => inside(file, harness)), file =>
     !inside(file, shell) && !inside(file, harness) && !inside(file, core), 'Harness browser reaches a native implementation')
+  const claudeWeb = 'dist/applications/claude-agent/web', claudeCore = 'dist/applications/claude-agent/core'
+  const portable = new Set([`${claudeCore}/events.js`, `${claudeCore}/view.js`])
+  assertBoundary(modules, [...modules.keys()].filter(file => inside(file, claudeWeb)), file =>
+    !inside(file, shell) && !inside(file, claudeWeb) && !portable.has(file), 'Claude Agent browser reaches a native implementation')
+})
+
+test('Claude Agent core stays independent of transports and hosts, only its SDK directory imports the SDK, and the client never loads execution code', async () => {
+  const modules = await graph('src', '.ts'), core = 'src/applications/claude-agent/core', client = 'src/applications/claude-agent/client'
+  const publicHostContracts = new Set(['src/host/applications/contracts.ts'])
+  assertBoundary(modules, [...modules.keys()].filter(file => inside(file, core)), file =>
+    inside(file, 'src/entrypoints') || inside(file, 'src/applications') && !inside(file, core) ||
+    inside(file, 'src/host') && !publicHostContracts.has(file), 'Claude Agent core depends on an application adapter')
+  const sdkImporters = [...modules].filter(([, dependencies]) => dependencies.some(dependency => dependency === '@anthropic-ai/claude-agent-sdk' || dependency.startsWith('@anthropic-ai/claude-agent-sdk/'))).map(([file]) => file)
+  assert.ok(sdkImporters.length, 'the adapter imports the SDK')
+  for (const file of sdkImporters) assert.ok(inside(file, `${core}/sdk`), `SDK import outside the adapter directory: ${file}`)
+  assertBoundary(modules, [...modules.keys()].filter(file => inside(file, client)), file =>
+    inside(file, core) && file !== `${core}/view.ts` || inside(file, 'src/applications/claude-agent/http') || inside(file, 'src/applications/harness') || inside(file, 'src/entrypoints'),
+    'Claude Agent client loads execution code')
 })

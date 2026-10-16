@@ -6,7 +6,7 @@ Anybox 是 NyaCore 应用的宿主应用。每个应用在 `src/applications/<id
 
 ## 声明目录
 
-实现 `ApplicationRegistration`（`src/host/applications/registration.ts`），将入口加入 `src/entrypoints/` 的正式组合目录。通用客户端 `src/host/client.ts` 与执行端 `src/host/execution.ts` 显式接收 `applications`，空数组是合法空宿主；它们不选择具体应用。默认 CLI 入口保留 Anybox Harness 目录和配置兼容，harness server 包装器位于 `src/applications/harness/server.ts`。保留 Anybox Harness 时加入 `harnessClientApplication(options)` 或 `harnessServerApplication(config,options)`；各入口的宿主资源仍只安装一次。
+实现 `ApplicationRegistration`（`src/host/applications/registration.ts`），将入口加入 `src/entrypoints/` 的正式组合目录。通用客户端 `src/host/client.ts` 与执行端 `src/host/execution.ts` 显式接收 `applications`，空数组是合法空宿主；它们不选择具体应用。默认 CLI 入口保留 Anybox Harness 目录和配置兼容，harness server 包装器位于 `src/applications/harness/server.ts`。保留 Anybox Harness 时加入 `harnessClientApplication(options)` 或 `harnessServerApplication(config,options)`；各入口的宿主资源仍只安装一次。Claude Agent（`claudeAgentClientApplication` / `claudeAgentServerApplication`，见 [设计](claude-agent-design.md)）是正式目录里第二个完整示例：两侧分别注册，客户端经宿主连接库到达执行设备。
 
 ```ts
 import { fileURLToPath } from 'node:url'
@@ -28,7 +28,7 @@ const notes: ApplicationRegistration = {
 }
 ```
 
-组件通过 inject 声明本轮依赖并使用 deps。业务持久化注入 `local-storage`，用唯一迁移域，不自行再开同一路径连接。共同提供方归宿主；不注入另一个可停止应用的专属服务。
+组件通过 inject 声明本轮依赖并使用 deps。业务持久化注入 `local-storage`，用唯一迁移域，不自行再开同一路径连接。共同提供方归宿主；不注入另一个可停止应用的专属服务。客户端的执行设备连接库 `client.connections`（`src/host/connections.ts`）就是这样的宿主提供方：任何客户端应用的网关都可以注入它读取设备列表、获取租约，并用 `src/host/connection-proxy.ts` 的 `forwardConnectionRequest` 按自己的白名单转发。
 
 ## 运行时和退出
 

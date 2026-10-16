@@ -1,6 +1,6 @@
 # Anybox 文档
 
-Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产品；harness server 是 Anybox Harness 可部署到本地或远端服务器的通用服务端核心。完整命名及兼容标识见 [命名与边界](naming.md)。项目文档分为组件手册、跨组件设计和验收记录。开发时从 [模块与组件手册](./modules/README.md) 进入：每个实际 Nya 组件有独立 Markdown 文档，协作完成同一职责的组件归入同一模块目录。
+Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产品；harness server 是 Anybox Harness 可部署到本地或远端服务器的通用服务端核心。Claude Agent 是第二个正式应用，直接驱动执行设备上用户自己的 Claude 环境，见 [Claude Agent 设计](claude-agent-design.md)。完整命名及兼容标识见 [命名与边界](naming.md)。项目文档分为组件手册、跨组件设计和验收记录。开发时从 [模块与组件手册](./modules/README.md) 进入：每个实际 Nya 组件有独立 Markdown 文档，协作完成同一职责的组件归入同一模块目录。
 
 通用宿主、应用和默认组合入口分别位于 `src/host/`、`src/applications/` 与 `src/entrypoints/`；当前目录和依赖约定见 [Anybox 宿主与 Anybox Harness 应用边界](./harness-module-boundary.md)。应用打开和运行时装配见 [应用宿主](products-v1.md)。
 
@@ -13,6 +13,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | 模块 | 文档入口 | 主要问题 |
 | --- | --- | --- |
 | 应用生命周期 | [products](./modules/products/README.md) | 受信注册目录、按需打开和停止如何对应实际资源 |
+| Claude Agent | [claude-agent](./modules/claude-agent/README.md) | 如何用用户自己的 Claude 环境执行、审批、取消并等待进程退出 |
 | Models | [models](./modules/models/README.md) | 定义、连接、配置、凭据、目录与原生协议如何协作 |
 | 执行 | [execution](./modules/execution/README.md) | Run 如何准入、选择协议 Loop、执行操作并等待资源退出 |
 | Computer 资源 | [computers](./modules/computers/README.md) | 本机按需实例、固定工作区、工具声明接纳和实际 scope 退出 |
@@ -30,6 +31,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | --- | --- |
 | [命名与边界](naming.md) | 产品、服务端与客户端命名，源码标识及持久兼容约定 |
 | [架构总览（2026-10-13，D2）](./architecture/anybox-architecture-2026-10-13.md) | 单页总览：展示端、客户端根、harness server 执行根、独立 Computer worker 根与进程外服务；可编辑 D2 源文件、SVG 和 PNG |
+| [Claude Agent 设计](claude-agent-design.md) | 第二个正式应用：共享一个 Claude 环境、流式输入模式与取消、HTTP/SSE 契约、宿主连接库方案与打包要求 |
 | [D2 项目架构图（2026-10-13）](./architecture/d2/README.md) | 当前源码的进程总览、harness server、Models 和 Run 时序；四份可编辑 D2、SVG、PNG 与重绘脚本 |
 | [Unity 架构实验室与 3D 空间（2026-10-13）](./architecture/unity-prototype/README.md) | 二维与三维交互原型；旋转、聚焦与分层理解进程边界，六种 Run 实验演示资源归属、取消、恢复与分支，附 Unity 源码 |
 | [live-panel 框架图（2026-10-04）](./architecture/live-panel/README.md) | 使用 live-panel Skill 的动态总览；独立客户端/执行根、harness server、原生 Loop、Models 与资源归属，含 HTML、MP4 和可编辑 JSON |

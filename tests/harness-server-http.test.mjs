@@ -14,7 +14,7 @@ import { createImageAssetsComponent } from '../dist/applications/harness/core/im
 import { hostHttpServiceKey } from '../dist/host/component.js'
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
-import { createDirectoryPickerComponent } from '../dist/applications/harness/client/directory-picker.js'
+import { createDirectoryPickerComponent } from '../dist/host/directory-picker.js'
 import { controlledModels, deferred } from './helpers/controlled-models.mjs'
 import { promptServiceKey } from '../dist/applications/harness/core/prompt/component.js'
 import { installManagedModels } from './helpers/managed-models.mjs'

@@ -4,7 +4,7 @@
 
 ## 目录与进程边界
 
-Anybox 按受信代码目录承载 NyaCore 应用，提供应用注册、装配、启停、公共资源和前端工作区。正式目录目前提供 Anybox Harness（稳定 ID `agent`）；应用随项目构建，不从网络安装执行代码。客户端和执行端各有一个 Nya 根，分别注入 `ApplicationRegistration[]`。同一个 ID 可以在两个进程使用不同装配：Anybox Harness 客户端安装连接、目录窗口与网关，harness server 安装 Models、Prompt、Session、Run、工具和业务 HTTP 适配器。普通应用可以只注册在客户端。
+Anybox 按受信代码目录承载 NyaCore 应用，提供应用注册、装配、启停、公共资源和前端工作区。正式目录目前提供 Anybox Harness（稳定 ID `agent`）与 Claude Agent（稳定 ID `claude-agent`，见 [Claude Agent 设计](claude-agent-design.md)）；应用随项目构建，不从网络安装执行代码。客户端和执行端各有一个 Nya 根，分别注入 `ApplicationRegistration[]`。同一个 ID 可以在两个进程使用不同装配：Anybox Harness 客户端安装目录窗口与网关，harness server 安装 Models、Prompt、Session、Run、工具和业务 HTTP 适配器；执行设备连接库 `client.connections` 由客户端宿主常驻提供，供全部客户端应用消费。普通应用可以只注册在客户端。
 
 目录注册校验 ID、静态地址、MIME、Web 入口和兼容路由归属。列表顺序等于目录顺序。`ApplicationRegistration` 保存受信工厂、HTTP 服务键和本地资源清单；`ProductDefinition/ProductView` 只含名称、图标、说明、同源浏览器入口及状态，不含 Node 路径、凭据或运行句柄。新增应用无需改 Products、监听器、工作区管理或 Anybox Harness。
 

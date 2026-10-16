@@ -4,16 +4,16 @@
 
 ## 职责与入口
 
-Directory Picker 为已确认本机身份且平台支持的“添加项目”流程提供系统目录窗口。远程设备、本机身份未确认或原生能力检查未确认可用时使用应用内目录选择器，其浏览由 Projects 负责；应用内视图及协议见[项目目录选择](../../project-directory-picker.md)，不新增 Nya 组件。它独占对话框进程，返回绝对路径；浏览器启动器在用户确认后调用固定目标登记路径，项目身份及可用性校验归 [Projects](../sessions/projects.md)，不是选择器职责。
+Directory Picker 是客户端宿主的常驻公共提供方：`src/host/client.ts` 的 `createClientHost({ picker })` 在连接库之后安装一次，Anybox Harness 与 Claude Agent 的客户端网关通过 inject 消费同一服务，各自决定何时允许打开窗口。它为已确认本机身份且平台支持的“添加项目”/“选择项目”流程提供系统目录窗口。远程设备、本机身份未确认或原生能力检查未确认可用时使用各应用自己的应用内目录选择：Anybox Harness 的浏览由 Projects 负责（见[项目目录选择](../../project-directory-picker.md)），Claude Agent 使用自己的目录浏览接口。它独占对话框进程，返回绝对路径；浏览器在用户确认后调用固定目标登记或选择路径，项目身份及可用性校验归消费方，不是选择器职责。
 
 | 项目 | 定义 |
 | --- | --- |
-| 源码 | [directory-picker.ts](../../../src/applications/harness/client/directory-picker.ts) |
+| 源码 | [directory-picker.ts](../../../src/host/directory-picker.ts) |
 | 工厂 / Nya 名称 | `createDirectoryPickerComponent(options?)` / `host-directory-picker` |
 | 服务 | `host.directory-picker: DirectoryPickerPort` |
 | `inject` | 无 |
 | 原生适配函数 | `runMacOSDirectoryDialog(signal)` |
-| 消费方 | [Client Gateway](client-gateway.md) |
+| 消费方 | [Client Gateway](client-gateway.md)、[Claude Agent Client Gateway](../claude-agent/client-gateway.md) |
 
 ## 配置与接口
 
@@ -36,7 +36,7 @@ Directory Picker 为已确认本机身份且平台支持的“添加项目”流
 
 ## 与客户端网关、Projects 的协作
 
-仅安装在客户端根。组合启动器通过子进程就绪消息确认 localInstanceId，桌面则由私有配对回调确认本机身份并注入 Electron 目录对话框；网关 `/api/client/v1/local` 返回身份和支持状态，`POST /api/client/v1/connections/:id/pick {}` 必须匹配此身份。点击“添加项目”时，浏览器固定连接身份和版本；确认本机且平台支持时直接调用目录窗口。窗口只返回路径，用户确认后浏览器立即通过该固定目标的 `POST /api/v1/projects {path}` 登记，不再打开应用内对话框二次确认；网关同时核对预期连接版本。用户取消则结束流程。窗口启动或登记失败显示工作区通知，不自动回退或换设备登记。
+随客户端宿主启动安装、整根关闭卸载，应用启停不影响它。组合启动器通过子进程就绪消息确认 localInstanceId，桌面则由私有配对回调确认本机身份并经入口选项 `picker.runDialog` 注入 Electron 目录对话框；Anybox Harness 网关 `/api/client/v1/local` 返回身份和支持状态，`POST /api/client/v1/connections/:id/pick {}` 必须匹配此身份。点击“添加项目”时，浏览器固定连接身份和版本；确认本机且平台支持时直接调用目录窗口。窗口只返回路径，用户确认后浏览器立即通过该固定目标的 `POST /api/v1/projects {path}` 登记，不再打开应用内对话框二次确认；网关同时核对预期连接版本。用户取消则结束流程。窗口启动或登记失败显示工作区通知，不自动回退或换设备登记。
 
 远程实例、本机身份未确认或原生能力检查未确认可用时使用应用内浏览，不按 hostname 推断本机。缺少 projects.browse 的旧 harness server 使用应用内手动绝对路径入口，不再使用 window.prompt。应用内目录对话框不再提供原生窗口快捷按钮。
 
@@ -59,4 +59,4 @@ Directory Picker 为已确认本机身份且平台支持的“添加项目”流
 
 [harness-server-http.test.mjs](../../../tests/harness-server-http.test.mjs) 覆盖项目登记、并发对话框拒绝、失败映射、不支持平台仍可使用 Web、关闭等待、HTTP 断开取消且不创建项目。这些生命周期测试通过替换 `runDialog` 控制退出时机，不等同于每个平台的真实 GUI 验收。完整验收运行 `npm run check`。
 
-浏览器启动器在界面停用或关闭时取消并等待本轮原生选择或登记操作退出，不发布迟到结果。原生窗口属于 Anybox Harness 的本机连接功能，组件仅在 Anybox Harness 客户端打开时安装，关闭等待窗口操作退出。通用应用外壳不管理执行目标或目录窗口。
+浏览器启动器在界面停用或关闭时取消并等待本轮原生选择或登记操作退出，不发布迟到结果。组件归宿主常驻，整根关闭时等待窗口操作退出；通用应用外壳不管理执行目标或目录窗口，是否可用由各应用网关按本机身份判断。

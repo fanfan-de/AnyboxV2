@@ -2,13 +2,14 @@
 
 [返回文档首页](../README.md)
 
-本手册按实际组件与资源边界组织，文档模块不必镜像源码目录。每个执行宿主与本机客户端分别拥有一个 Nya 根，应用不创建子 Context。通用宿主与外壳位于 `src/host/`，Anybox Harness 的核心、HTTP、客户端和浏览器实现位于 `src/applications/harness/`，默认组合入口位于 `src/entrypoints/`；Models 保持独立包。完整产品名和服务端称呼见[命名规范](../naming.md)。详见[模块边界](../harness-module-boundary.md)与[部署说明](../harness-server-deployment.md)。
+本手册按实际组件与资源边界组织，文档模块不必镜像源码目录。每个执行宿主与本机客户端分别拥有一个 Nya 根，应用不创建子 Context。通用宿主与外壳位于 `src/host/`，Anybox Harness 的核心、HTTP、客户端和浏览器实现位于 `src/applications/harness/`，Claude Agent 位于 `src/applications/claude-agent/`，默认组合入口位于 `src/entrypoints/`；Models 保持独立包。完整产品名和服务端称呼见[命名规范](../naming.md)。详见[模块边界](../harness-module-boundary.md)与[部署说明](../harness-server-deployment.md)。
 
 ## 模块目录
 
 | 目录 | 内聚职责 | 独立组件文档数 |
 | --- | --- | --- |
 | [products/](./products/README.md) | 固定应用目录、按需装配与活动准入 | 2 |
+| [claude-agent/](./claude-agent/README.md) | Claude Agent：线程索引、SDK 适配器、Run 准入与审批、HTTP/SSE、客户端网关 | 5 |
 | [models/](./models/README.md) | 可复用模型配置、凭据、原生驱动及可选公开目录 | 11 |
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 7 |
 | [computers/](./computers/README.md) | 按需本机资源、独立 worker、固定工作区与耐久工具操作协调 | 7 |
@@ -17,7 +18,7 @@
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
 | [tools/](./tools/README.md) | 来源工具契约、进程会话、文件变更与搜索 | 4 |
 | [infrastructure/](./infrastructure/README.md) | 业务数据库与可替换存储端口 | 1 |
-| [web/](./web/README.md) | 执行 API、访问管理、客户端外壳、Anybox Harness 连接与网关、目录选择 | 7 |
+| [web/](./web/README.md) | 执行 API、访问管理、客户端外壳与连接库、Anybox Harness 网关、目录选择 | 7 |
 | [diagnostics/](./diagnostics/README.md) | 资源归属探针 | 1 |
 
 ## 完整组件索引
@@ -68,10 +69,15 @@
 | harness server 接入 | [harness server HTTP](./web/harness-http.md) | `harness-http` | `harness.http` |
 | Web | [本机目录选择器](./web/directory-picker.md) | `host-directory-picker` | `host.directory-picker` |
 | 宿主 | [访问管理](./web/host-access.md) | `host-access` | `host.access` |
-| 客户端 | [连接管理](./web/client-connections.md) | `client-connections` | `client.connections` |
+| 宿主 | [连接库](./web/client-connections.md) | `client-connections` | `client.connections` |
 | 客户端外壳 | [应用 HTTP](./web/client-shell.md) | `app-client-http` | `app.client-http` |
 | Anybox Harness 客户端 | [同源网关](./web/client-gateway.md) | `client-gateway` | `client.gateway` |
 | 验证 | [H0 资源探针](./diagnostics/resource-probe.md) | `h0-resource-probe` | `h0.runs`；仅验证使用 |
+| Claude Agent | [Store](./claude-agent/store.md) | `claude-agent-store` | `claude-agent.store` |
+| Claude Agent | [SDK 适配器](./claude-agent/sdk.md) | `claude-agent-sdk` | `claude-agent.sdk` |
+| Claude Agent | [Runs](./claude-agent/runs.md) | `claude-agent-runs` | `claude-agent.runs`、`claude-agent.run-admission` |
+| Claude Agent | [HTTP](./claude-agent/http.md) | `claude-agent-http` | `claude-agent.http` |
+| Claude Agent | [Client Gateway](./claude-agent/client-gateway.md) | `claude-agent-client-gateway` | `claude-agent.gateway` |
 
 ## 从一次请求理解模块协作
 

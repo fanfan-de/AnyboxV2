@@ -2,7 +2,7 @@ import { requestJSON } from './harness-client.js'
 import { createPageRequests } from './page-lifecycle.js'
 import type { HarnessConnection, HarnessClient } from './harness-client.js'
 import type { ProductView } from '../../../host/applications/contracts.js'
-import type { LocalPairingStatus } from '../client/connections.js'
+import type { LocalPairingStatus } from '../../../host/connections.js'
 export function setupConnections(root: HTMLElement, api: HarnessClient, selectedId: string | undefined, messageFor: (error: unknown) => string, canLeave: () => boolean, changed: (connection?: HarnessConnection) => void, apiBase: string, targetChanged: () => void) {
   const lifetime = new AbortController()
   const owned = createPageRequests((path, body, signal) => requestJSON(path, body, signal))
