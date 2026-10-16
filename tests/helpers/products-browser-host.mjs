@@ -6,6 +6,8 @@ import { createInterface } from 'node:readline'
 import { createHarnessServer } from '../../dist/entrypoints/harness-server-main.js'
 import { createClientHost } from '../../dist/entrypoints/client-main.js'
 import { harnessClientApplication } from '../../dist/applications/harness/registration.js'
+import { claudeAgentClientApplication } from '../../dist/applications/claude-agent/client/registration.js'
+import { claudeAgentServerApplication } from '../../dist/applications/claude-agent/registration.js'
 import { testApplication } from './test-application.mjs'
 import { parseHarnessServerConfig } from '../../dist/applications/harness/server-config.js'
 
@@ -28,7 +30,7 @@ const stop = () => closing ??= (async () => {
 try {
   const project = join(directory, 'Example'); await mkdir(project)
   const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'business.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
-  host = await createHarnessServer(config, { name: '本地测试 Agent', projects: [project], models: {
+  host = await createHarnessServer(config, { name: '本地测试 Agent', projects: [project], additionalApplications: [claudeAgentServerApplication({})], models: {
     openEntry, catalogAutoRefresh: false, readLegacyCredential: async () => 'disposable-controlled-model-key',
     catalogFetch: async () => { throw new Error('Network is disabled in product acceptance') },
     fetch: async (_input, init) => {
@@ -44,7 +46,7 @@ try {
     },
   } })
   await host.ready
-  client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [harnessClientApplication({ localInstanceId: host.instance.instanceId }), notesRegistration] })
+  client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [harnessClientApplication({ localInstanceId: host.instance.instanceId }), claudeAgentClientApplication({ localInstanceId: host.instance.instanceId }), notesRegistration] })
   await client.products.open('agent')
   const issued = await host.root.get('host.access').issue('Disposable browser acceptance')
   await client.root.get('client.connections').save({ name: '本地测试 Agent', endpoint: host.url, token: issued.token })
