@@ -2,7 +2,7 @@
 
 [文档首页](README.md) · [组件手册](modules/README.md) · [部署说明](harness-server-deployment.md)
 
-Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是正式目录中的 Agent 产品，其通用服务端核心称为 harness server。服务端可部署在本地或远端，浏览器工作区与网关归 Anybox Harness 客户端，执行设备连接库归宿主；完整规范见 [命名与边界](naming.md)。宿主与应用保持同仓库、同构建，通过独立目录、公开契约和资源所有权划分；不新增 Anybox Harness npm 包。Models 保持独立可复用包。
+Anybox 是 NyaCore 应用的宿主产品，正式目录提供 Anybox Harness 与 Claude Agent 两个应用；Anybox Harness 是其中的 Agent 产品，其通用服务端核心称为 harness server，Claude Agent 的边界见[其设计文档](claude-agent-design.md)。服务端可部署在本地或远端，浏览器工作区与网关归 Anybox Harness 客户端，执行设备连接库归宿主；完整规范见 [命名与边界](naming.md)。宿主与应用保持同仓库、同构建，通过独立目录、公开契约和资源所有权划分；不新增 Anybox Harness npm 包。Models 保持独立可复用包。
 
 ## 实际目录
 
@@ -27,11 +27,17 @@ src/
       http/                      harness server 业务 HTTP/SSE 与 Models 管理路由
       client/                    网关、目录窗口与客户端装配
       web/                       Anybox Harness 浏览器入口、控制器与视图
+    claude-agent/
+      definition.ts, config.ts   Claude Agent 元数据与配置
+      registration.ts            执行端注册：索引、SDK 适配器、Run 与 HTTP
+      client/                    客户端注册、资源清单与到执行设备的网关
+      core/, http/, web/         索引存储、SDK 适配器、Run 准入、HTTP/SSE 与浏览器界面
   entrypoints/                    正式应用目录、环境变量、进程信号与启动命令
   storage/port.ts, sqlite.ts       宿主公共业务存储端口与 SQLite 提供方
 packages/models/                  通用 Models 模块及离线快照
 web/index.html, style.css         Anybox 外壳模板与样式
 web/apps/agent/                   Anybox Harness 模板、图标与样式
+web/apps/claude-agent/            Claude Agent 样式
 ```
 
 `src/host/` 不导入具体应用。通用宿主工厂显式接收注册目录，空目录仍可启动；`src/entrypoints/` 在宿主之外选择正式应用和默认配置。新增应用修改其自身目录与组合入口。Anybox Harness 可以依赖宿主公开的注册、运行时和 HTTP 契约，核心业务不依赖浏览器、客户端网关或进程入口。

@@ -6,7 +6,7 @@ Anybox 是 NyaCore 应用的宿主应用。每个应用在 `src/applications/<id
 
 ## 声明目录
 
-实现 `ApplicationRegistration`（`src/host/applications/registration.ts`），将入口加入 `src/entrypoints/` 的正式组合目录。通用客户端 `src/host/client.ts` 与执行端 `src/host/execution.ts` 显式接收 `applications`，空数组是合法空宿主；它们不选择具体应用。默认 CLI 入口保留 Anybox Harness 目录和配置兼容，harness server 包装器位于 `src/applications/harness/server.ts`。保留 Anybox Harness 时加入 `harnessClientApplication(options)` 或 `harnessServerApplication(config,options)`；各入口的宿主资源仍只安装一次。
+实现 `ApplicationRegistration`（`src/host/applications/registration.ts`），将入口加入 `src/entrypoints/` 的正式组合目录。通用客户端 `src/host/client.ts` 与执行端 `src/host/execution.ts` 显式接收 `applications`，空数组是合法空宿主；它们不选择具体应用。默认 CLI 入口保留 Anybox Harness 目录和配置兼容，harness server 包装器位于 `src/applications/harness/server.ts`。保留 Anybox Harness 时加入 `harnessClientApplication(options)` 或 `harnessServerApplication(config,options)`；各入口的宿主资源仍只安装一次。Claude Agent（`claudeAgentClientApplication` / `claudeAgentServerApplication`，见 [设计](claude-agent-design.md)）是正式目录里第二个完整示例：两侧分别注册，客户端经宿主连接库到达执行设备。
 
 ```ts
 import { fileURLToPath } from 'node:url'

@@ -62,9 +62,14 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     syncTranscript(transcript, displayItems(history, active ? live : undefined, active ? current?.prompt : undefined))
     if (active || !thread) transcript.scrollTop = transcript.scrollHeight
     approvalsPanel.hidden = pending.length === 0
-    approvalsPanel.replaceChildren(...pending.map(approval => renderApproval(approval, { decide: (view, decision, answers) => void decide(view, decision, answers) }, context.domId)))
-    const focus = approvalsPanel.querySelector<HTMLElement>('[data-default-to-no="true"] button:last-of-type')
-    if (focus && document.activeElement === document.body) focus.focus()
+    // Rebuild the forms only when the pending set changes, so streaming events never wipe a half-entered answer.
+    const approvalKey = pending.map(approval => approval.id).join('\n')
+    if (approvalsPanel.dataset.approvals !== approvalKey) {
+      approvalsPanel.dataset.approvals = approvalKey
+      approvalsPanel.replaceChildren(...pending.map(approval => renderApproval(approval, { decide: (view, decision, answers) => void decide(view, decision, answers) }, context.domId)))
+      const focus = approvalsPanel.querySelector<HTMLElement>('[data-default-to-no="true"] button:last-of-type')
+      if (focus && document.activeElement === document.body) focus.focus()
+    }
     cancel.hidden = !active
     send.disabled = !thread || !client || active || submitting
     prompt.disabled = !thread || !client
