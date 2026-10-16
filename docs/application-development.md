@@ -28,7 +28,7 @@ const notes: ApplicationRegistration = {
 }
 ```
 
-组件通过 inject 声明本轮依赖并使用 deps。业务持久化注入 `local-storage`，用唯一迁移域，不自行再开同一路径连接。共同提供方归宿主；不注入另一个可停止应用的专属服务。
+组件通过 inject 声明本轮依赖并使用 deps。业务持久化注入 `local-storage`，用唯一迁移域，不自行再开同一路径连接。共同提供方归宿主；不注入另一个可停止应用的专属服务。客户端的执行设备连接库 `client.connections`（`src/host/connections.ts`）就是这样的宿主提供方：任何客户端应用的网关都可以注入它读取设备列表、获取租约，并用 `src/host/connection-proxy.ts` 的 `forwardConnectionRequest` 按自己的白名单转发。
 
 ## 运行时和退出
 

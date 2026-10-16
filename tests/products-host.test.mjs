@@ -12,7 +12,7 @@ const request = async (url, path, body, expected = 200) => {
   const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : { Origin: url, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
   const data = await response.json(); assert.equal(response.status, expected, `${path}: ${JSON.stringify(data)}`); return data
 }
-test('Harness owns local/remote connections and opening a remote Agent leaves local execution stopped', { timeout: 60000 }, async () => {
+test('the host owns local/remote connections and opening a remote Agent leaves local execution stopped', { timeout: 60000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-application-host-')), secrets = new Map()
   const openEntry = (namespace, id) => { const key = `${namespace}:${id}`; return {
     getPassword: async () => secrets.get(key), setPassword: async value => { secrets.set(key, value) }, deleteCredential: async () => secrets.delete(key),
@@ -24,7 +24,7 @@ test('Harness owns local/remote connections and opening a remote Agent leaves lo
     local = await createHarnessServer(config('local'), { models }); remote = await createHarnessServer(config('remote'), { models })
     await Promise.all([local.ready, remote.ready])
     client = await createClientHost({ path: join(directory, 'client.sqlite'), localInstanceId: local.instance.instanceId, openEntry })
-    assert.equal(client.root.get('client.connections'), undefined); assert.equal(client.root.get('client.gateway'), undefined)
+    assert.ok(client.root.get('client.connections'), 'the connection library is a resident host provider'); assert.equal(client.root.get('client.gateway'), undefined)
     assert.equal(client.root.get('host.directory-picker'), undefined)
     assert.equal((await request(client.url, '/api/client/v1/products'))[0].definition.name, 'Anybox Harness')
     await request(client.url, '/api/client/v1/connections', undefined, 503)
@@ -51,7 +51,7 @@ test('Harness owns local/remote connections and opening a remote Agent leaves lo
     const activeWrite = client.root.get('app.activity').enter('agent')
     await request(client.url, '/api/client/v1/products/agent/stop', {}, 409); activeWrite.release()
     await request(client.url, '/api/client/v1/products/agent/stop', {})
-    assert.equal(client.root.get('client.connections'), undefined); assert.equal(client.root.get('client.gateway'), undefined)
+    assert.ok(client.root.get('client.connections')); assert.equal(client.root.get('client.gateway'), undefined)
     assert.equal(remote.products.get('agent').state, 'running', 'closing the client does not stop a remote Agent')
     assert.equal((await fetch(client.url)).status, 200)
     await request(client.url, '/api/client/v1/connections', undefined, 503)

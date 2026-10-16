@@ -44,7 +44,7 @@ try {
     },
   } })
   await host.ready
-  client = await createClientHost({ path: join(directory, 'client.sqlite'), applications: [harnessClientApplication({ localInstanceId: host.instance.instanceId, openEntry }), notesRegistration] })
+  client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [harnessClientApplication({ localInstanceId: host.instance.instanceId }), notesRegistration] })
   await client.products.open('agent')
   const issued = await host.root.get('host.access').issue('Disposable browser acceptance')
   await client.root.get('client.connections').save({ name: '本地测试 Agent', endpoint: host.url, token: issued.token })

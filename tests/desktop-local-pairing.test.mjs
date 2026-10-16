@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
 import { createHostAccessComponent, hostAccessServiceKey } from '../dist/host/access.js'
-import { createConnectionsComponent, connectionsServiceKey } from '../dist/applications/harness/client/connections.js'
+import { createConnectionsComponent, connectionsServiceKey } from '../dist/host/connections.js'
 import { startClientGateway } from './helpers/client-gateway.mjs'
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }

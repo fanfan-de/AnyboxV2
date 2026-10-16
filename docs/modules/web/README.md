@@ -2,7 +2,7 @@
 
 [模块导航](../README.md) · [部署说明](../../harness-server-deployment.md)
 
-每个进程独立一个 Nya 根。`src/host/` 的通用层拥有访问管理、监听器、HTTP 分派和浏览器外壳；`src/applications/harness/` 的应用层拥有业务 HTTP、连接、网关、目录窗口和 Anybox Harness 界面。客户端常驻应用外壳，Anybox Harness 打开后才安装其客户端组件。浏览器代码、静态映射和路由函数没有单独组件身份。
+每个进程独立一个 Nya 根。`src/host/` 的通用层拥有访问管理、监听器、HTTP 分派、执行设备连接库和浏览器外壳；`src/applications/harness/` 的应用层拥有业务 HTTP、网关、目录窗口和 Anybox Harness 界面。客户端常驻应用外壳与连接库，Anybox Harness 打开后才安装其网关和目录窗口。浏览器代码、静态映射和路由函数没有单独组件身份。
 
 Anybox Harness 的三栏工作区、目录树与文件标签由这些组件的浏览器入口实现，资源归属和恢复规则见[三栏工作区](../../harness-three-column-workspace.md)。
 
@@ -15,7 +15,7 @@ Anybox Harness 的模型设置由 `web/models-client.ts` 管理。模型能力�
 | [Application HTTP](web-frontend.md) | 常驻认证、应用控制与按目录分派 |
 | [harness server HTTP](harness-http.md) | Anybox Harness 业务路由、安全 DTO、Models 管理、通知 SSE |
 | [Host Access](host-access.md) | 业务库实例身份、设备令牌摘要、撤销 |
-| [Client Connections](client-connections.md) | 客户端连接库、系统凭据、身份校验 |
+| [Client Connections](client-connections.md) | 宿主常驻的执行设备连接库、系统凭据、身份校验与通用转发 |
 | [Client Shell](client-shell.md) | 常驻静态页面、应用目录与控制 HTTP |
 | [Client Gateway](client-gateway.md) | Anybox Harness 内部连接与白名单转发、网络生命周期 |
 | [Directory Picker](directory-picker.md) | 已确认本机设备添加项目时直接使用的系统目录窗口 |

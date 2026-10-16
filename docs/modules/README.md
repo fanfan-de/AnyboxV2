@@ -17,7 +17,7 @@
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
 | [tools/](./tools/README.md) | 来源工具契约、进程会话、文件变更与搜索 | 4 |
 | [infrastructure/](./infrastructure/README.md) | 业务数据库与可替换存储端口 | 1 |
-| [web/](./web/README.md) | 执行 API、访问管理、客户端外壳、Anybox Harness 连接与网关、目录选择 | 7 |
+| [web/](./web/README.md) | 执行 API、访问管理、客户端外壳与连接库、Anybox Harness 网关、目录选择 | 7 |
 | [diagnostics/](./diagnostics/README.md) | 资源归属探针 | 1 |
 
 ## 完整组件索引
@@ -68,7 +68,7 @@
 | harness server 接入 | [harness server HTTP](./web/harness-http.md) | `harness-http` | `harness.http` |
 | Web | [本机目录选择器](./web/directory-picker.md) | `host-directory-picker` | `host.directory-picker` |
 | 宿主 | [访问管理](./web/host-access.md) | `host-access` | `host.access` |
-| 客户端 | [连接管理](./web/client-connections.md) | `client-connections` | `client.connections` |
+| 宿主 | [连接库](./web/client-connections.md) | `client-connections` | `client.connections` |
 | 客户端外壳 | [应用 HTTP](./web/client-shell.md) | `app-client-http` | `app.client-http` |
 | Anybox Harness 客户端 | [同源网关](./web/client-gateway.md) | `client-gateway` | `client.gateway` |
 | 验证 | [H0 资源探针](./diagnostics/resource-probe.md) | `h0-resource-probe` | `h0.runs`；仅验证使用 |

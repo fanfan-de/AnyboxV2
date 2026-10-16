@@ -137,8 +137,8 @@ try {
   await root.installComponent(createFixtureApplicationApiComponent(root, harness.listAgents(), 0, { authenticated: true }))
   const values = new Map(), access = root.get('host.access')
   const openEntry = (_ns,id) => ({ async getPassword(){ return values.get(id) }, async setPassword(value){ values.set(id,value) }, async deleteCredential(){ return values.delete(id) } })
-  client = await createClientHost({ path: join(directory, 'client.sqlite'), applications: [
-    harnessClientApplication({ localInstanceId: access.instance.instanceId, openEntry }),
+  client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [
+    harnessClientApplication({ localInstanceId: access.instance.instanceId }),
     testApplication(),
   ] })
   await client.products.open('agent')
