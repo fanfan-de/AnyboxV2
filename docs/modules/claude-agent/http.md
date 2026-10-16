@@ -16,7 +16,7 @@
 
 ## 接口
 
-路径相对 `/api/v1/apps/claude-agent`；完整表见[设计文档](../../claude-agent-design.md#http--sse-契约)。POST 体为 JSON 且字段白名单；提示词体上限 512 KiB，其余 64 KiB。错误 `{ error: { code, message? } }`：`ClaudeAgentError` 按自身状态码与安全文案输出，URI/类型错误 400，未知异常 500 `internal-error`。`POST /threads/:id/runs` 接受后调用 `context.retainUntil(waitRun)`，应用租约延续到进程退出。`GET /runs/:id/wait` 的 `timeoutMs` 为 0..10000（默认 10000），低于客户端代理 15 秒的握手上限。`GET /events` 订阅 1..4 个线程，最多 64 条流。
+路径相对 `/api/v1/apps/claude-agent`；完整表见[设计文档](../../claude-agent-design.md#http--sse-契约)。除 `GET /directories`（只接受 `path` 与 `showHidden`，`path` 必填）、`GET /runs/:id/wait`（`timeoutMs`）和 `GET /events`（`threadId`）外，其余路由拒绝任何查询参数；`GET /projects/recent` 与 `GET /models/recent` 直接转交 Runs。POST 体为 JSON 且字段白名单；提示词体上限 512 KiB，其余 64 KiB。错误 `{ error: { code, message? } }`：`ClaudeAgentError` 按自身状态码与安全文案输出，URI/类型错误 400，未知异常 500 `internal-error`。`POST /threads/:id/runs` 接受后调用 `context.retainUntil(waitRun)`，应用租约延续到进程退出。`GET /runs/:id/wait` 的 `timeoutMs` 为 0..10000（默认 10000），低于客户端代理 15 秒的握手上限。`GET /events` 订阅 1..4 个线程，最多 64 条流。
 
 ## SSE
 
@@ -24,7 +24,7 @@
 
 ## 执行、取消与清理
 
-请求绑定监听器关闭信号与响应关闭：转录读取与 `wait` 随之取消，SSE 随之关闭；断开不取消 Run。`close()` 停止准入、中止在途请求、关闭全部流并等待处理退出；Effect 调用它。
+请求绑定监听器关闭信号与响应关闭：转录读取、最近项目、目录浏览与 `wait` 随之取消，SSE 随之关闭；断开不取消 Run。`close()` 停止准入、中止在途请求、关闭全部流并等待处理退出；Effect 调用它。
 
 ## 失败与兼容
 
@@ -32,4 +32,4 @@
 
 ## 测试
 
-[claude-agent-http.test.mjs](../../../tests/claude-agent-http.test.mjs)：路由与 DTO、SSE 顺序、审批 API、wait 超时、二进制缺失文案、注册应用的停止保护、能力宣告与整根关闭排空。
+[claude-agent-http.test.mjs](../../../tests/claude-agent-http.test.mjs)：路由与 DTO、SSE 顺序、审批 API、wait 超时、二进制缺失文案、最近项目与目录浏览的查询参数边界、最近模型、注册应用的停止保护、能力宣告与整根关闭排空。
