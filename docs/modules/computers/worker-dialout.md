@@ -39,3 +39,9 @@
 ## 验证
 
 [worker 附着测试](../../../tests/computer-worker-attachments.test.mjs)经真实认证监听器验证附着、领取执行、ceiling 拒绝、跨附着拒绝、两侧撤销、worker 重启后的续连以及附着的连接失败重试与模糊失败不重试。[拨出生命周期](../../../tests/computer-worker-dialout-lifecycle.test.mjs)验证已接纳管理请求取消后的清理等待、query 取消传递及工具提交独立性。完整入口为 `npm run check`。
+
+## 独立设备管理
+
+`updatePermissions(id, ceiling)` 委托本机附着账本，等待工具排空后返回当前视图；既有拨出循环保留，实际接纳始终读取最新账本上限。权限清理失败返回 `worker-cleanup-failed`，该附着在本 boot 内持续拒绝新工作，需要重启 worker；循环仍可处理已接受操作的 get、取消和关闭，不因新准入关闭而丢失事实或清理入口。再次修改权限与撤销可重试执行器保留的清理句柄。
+
+设备管理不依赖 harness server 控制面，客户端与 CLI 直接经 worker 回环协议调用本服务。attach / list / revoke / updatePermissions 均登记在途管理操作；Effect 先停止新管理与拨出请求，再等待管理操作和循环退出，避免关闭期间写入已卸载的账本。参见 [独立管理](../../computer-worker-management.md)。

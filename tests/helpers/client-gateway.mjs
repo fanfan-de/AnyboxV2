@@ -1,7 +1,7 @@
 import { createHarnessGateway } from '../../dist/applications/harness/client/gateway.js'
 import { startApplicationHttpServer } from '../../dist/host/http-server.js'
 import { createApplicationCatalog } from '../../dist/host/applications/registration.js'
-import { harnessClientApplication } from '../../dist/applications/harness/registration.js'
+import { harnessClientApplication } from '../../dist/applications/harness/client/registration.js'
 import { shellAssets } from '../../dist/host/assets.js'
 
 export async function startClientGateway(connections, options = {}) {

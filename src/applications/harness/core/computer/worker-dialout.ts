@@ -24,6 +24,7 @@ export interface WorkerDialoutPort {
   attach(input: WorkerAttachInput, signal?: AbortSignal): Promise<WorkerAttachmentView>
   list(): Promise<readonly WorkerAttachmentView[]>
   revoke(attachmentId: string): Promise<WorkerAttachmentView>
+  updatePermissions(attachmentId: string, ceiling: unknown): Promise<WorkerAttachmentView>
 }
 export interface WorkerDialoutOptions { readonly fetch?: typeof fetch; readonly pollWaitMs?: number; readonly getWaitMs?: number; readonly requestTimeoutMs?: number }
 interface Loop { readonly abort: AbortController; done: Promise<void>; state: WorkerDialoutState; lastError: string | null }
@@ -191,6 +192,10 @@ export function createWorkerDialoutComponent(options: WorkerDialoutOptions = {})
       return Object.freeze({ ...attachment, connection: attachment.state === 'revoked' ? 'revoked' : loop?.state ?? 'offline', lastError: loop?.lastError ?? null })
     }
     const service: WorkerDialoutPort = {
+      async updatePermissions(attachmentId, ceiling) {
+        if (closing) throw workerError('worker-closing')
+        return view(await attachments.updatePermissions(attachmentId, ceiling))
+      },
       async attach(input, signal) {
         if (closing) throw workerError('worker-closing')
         const harnessUrl = validateHarnessUrl(input?.harnessUrl), ceiling = validateComputerCeiling(input?.ceiling)
@@ -239,6 +244,7 @@ export function createWorkerDialoutComponent(options: WorkerDialoutOptions = {})
       attach: (input, signal) => track(() => service.attach(input, signal)),
       list: () => track(() => service.list()),
       revoke: id => track(() => service.revoke(id)),
+      updatePermissions: (id, ceiling) => track(() => service.updatePermissions(id, ceiling)),
     } satisfies WorkerDialoutPort)
     for (const attachment of await attachments.list()) {
       if (attachment.state !== 'approved') continue

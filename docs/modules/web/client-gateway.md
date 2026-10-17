@@ -2,7 +2,7 @@
 
 [宿主与客户端模块](README.md)
 
-`src/applications/harness/client/gateway.ts` 的 `createClientGatewayComponent({localInstanceId?})` 创建 Anybox Harness 内部 `client-gateway`，提供 `client.gateway: HarnessGateway`（handle、幂等 close）。inject `client.connections`、`host.directory-picker` 与 `app.activity`。组件仅在 Anybox Harness 客户端打开时安装，拥有在途连接、上传、SSE 和下载流；常驻监听器及静态页面属于 [Client Shell](client-shell.md)。`client.connections` 是宿主常驻的[连接库](client-connections.md)，`host.directory-picker` 是宿主常驻的[目录窗口](directory-picker.md)；转发的通用部分（请求绑定校验、租约获取、认证与实例头、重定向与实例不匹配拒绝、双向流管道与超时）是宿主 `src/host/connection-proxy.ts` 的 `forwardConnectionRequest`，网关只保留 Anybox Harness 的白名单、连接管理路由、本机状态与目录窗口。
+`src/applications/harness/client/gateway.ts` 的 `createClientGatewayComponent({localInstanceId?})` 创建 Anybox Harness 内部 `client-gateway`，提供 `client.gateway: HarnessGateway`（handle、幂等 close）。inject `client.connections`、`host.directory-picker` 、`app.activity` 与 `client.computer`。组件仅在 Anybox Harness 客户端打开时安装，拥有在途连接、上传、SSE 和下载流；常驻监听器及静态页面属于 [Client Shell](client-shell.md)。`client.connections` 是宿主常驻的[连接库](client-connections.md)，`host.directory-picker` 是宿主常驻的[目录窗口](directory-picker.md)；转发的通用部分（请求绑定校验、租约获取、认证与实例头、重定向与实例不匹配拒绝、双向流管道与超时）是宿主 `src/host/connection-proxy.ts` 的 `forwardConnectionRequest`，网关只保留 Anybox Harness 的白名单、连接管理路由、本机状态与目录窗口。
 
 每个委托请求在首次异步读取之前登记 Anybox Harness Activity 租约。写入阻止关闭客户端应用，读操作可取消但等待实际退出。`createHarnessGateway` 为内部闭包工厂；`createHarnessGateway` 仅组合相同 Gateway 与 Shell 的嵌入/测试入口，没有第二套产品生命周期。
 
@@ -33,3 +33,7 @@ Effect 停止接收请求，取消网络、上传和流读取并等待实际关�
 ## 项目目录树代理
 
 白名单显式接纳会话文件树的 `tree/open`、`tree/page` 和 `tree/close` POST 路径，复用固定连接版本与 instanceId 的请求绑定。游标 ID 不决定设备，不跨连接或应用重试；取消网络观察仍等待实际退出。浏览器按活动 thread 读取所属项目，不受左侧设备选择影响。详情见[三栏工作区](../../harness-three-column-workspace.md)。
+
+## 独立 Computer 管理
+
+客户端 `/api/client/v1/apps/agent/computer` 路由直接消费 [Client Computer](client-computer.md)，提供状态、显式启动、附着、权限修改与撤销。它不获取远端连接租约，不转发到任何 harness server；新路由不属于远端代理白名单。写入同样登记 Activity，断开只取消本地观察，worker 已接纳的操作继续完成。旧 `/units/local-computer/attachments` 白名单保留给已有 API 调用方，新界面不再使用。

@@ -9,6 +9,8 @@ import type { DirectoryPickerPort } from '../../../host/directory-picker.js'
 import type { ApplicationHttpContext } from '../../../host/applications/registration.js'
 import { productActivityServiceKey } from '../../../host/applications/contracts.js'
 import type { ProductActivityPort } from '../../../host/applications/contracts.js'
+import { clientComputerServiceKey } from './computer-worker.js'
+import type { ClientComputerPort } from './computer-worker.js'
 
 export const clientGatewayServiceKey = 'client.gateway'
 export interface HarnessGateway { handle(request: IncomingMessage, response: ServerResponse, url: URL, context: ApplicationHttpContext): Promise<void>; close(): Promise<void> }
@@ -37,7 +39,7 @@ export function allowedProxyPath(method: string, path: string): boolean {
 const imageContentPath = /^\/sessions\/[^/]+\/images\/[^/]+\/content$/
 
 /** The Anybox Harness client owns connection requests and proxy operations; Anybox owns the listener and the connection library. */
-export function createHarnessGateway(connections: ConnectionsPort, options: { localInstanceId?: string; picker?: DirectoryPickerPort; activity?: ProductActivityPort } = {}): HarnessGateway {
+export function createHarnessGateway(connections: ConnectionsPort, options: { localInstanceId?: string; picker?: DirectoryPickerPort; activity?: ProductActivityPort; computer?: ClientComputerPort } = {}): HarnessGateway {
   let closing = false
   const tasks = new Map<AbortController, Promise<void>>()
   return {
@@ -56,6 +58,33 @@ export function createHarnessGateway(connections: ConnectionsPort, options: { lo
       const lease = options.activity?.enter('agent', { blocking: request.method === 'POST', cancel: () => { controller.abort(); response.destroy() } })
       const task = Promise.resolve().then(async () => {
         const method = request.method ?? 'GET'
+    if (url.pathname.startsWith('/api/client/v1/computer/')) {
+      const computer = options.computer
+      if (!computer) throw failure(503, 'worker-management-unavailable')
+      try {
+        const path = url.pathname.slice('/api/client/v1/computer'.length)
+        if (method === 'GET' && path === '/status') { json(response, 200, await computer.status(controller.signal)); return }
+        if (method === 'POST' && path === '/start') {
+          await requestObject(request, []); controller.signal.throwIfAborted()
+          await computer.start(); json(response, 200, await computer.status(controller.signal)); return
+        }
+        if (method === 'POST' && path === '/attachments') {
+          const body = await requestObject(request, ['harnessUrl', 'code', 'ceiling']); controller.signal.throwIfAborted()
+          json(response, 200, await computer.control.consumeAttachCode(body as Parameters<ClientComputerPort['control']['consumeAttachCode']>[0], controller.signal)); return
+        }
+        const edit = /^\/attachments\/([^/]+)\/(permissions|revoke)$/.exec(path)
+        if (method === 'POST' && edit) {
+          const body = await requestObject(request, edit[2] === 'permissions' ? ['ceiling'] : []); controller.signal.throwIfAborted()
+          const id = decodeURIComponent(edit[1]!)
+          json(response, 200, edit[2] === 'permissions' ? await computer.control.updatePermissions(id, body.ceiling, controller.signal) : await computer.control.revokeAttachment(id, controller.signal)); return
+        }
+        throw failure(404, 'not-found')
+      } catch (error) {
+        if (error && typeof error === 'object' && 'status' in error) throw error
+        const code = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'worker-request-failed'
+        throw failure(code === 'worker-not-running' ? 409 : 400, code)
+      }
+    }
     if (url.pathname === '/api/client/v1/connections') {
       if (method === 'GET') { json(response, 200, await connections.list()); return }
       if (method === 'POST') { const body = await requestObject(request, ['id', 'name', 'endpoint', 'token', 'expectedRevision']); json(response, 200, await connections.save(body as unknown as ConnectionInput, controller.signal)); return }
@@ -115,10 +144,10 @@ export function createHarnessGateway(connections: ConnectionsPort, options: { lo
   }
 }
 export function createClientGatewayComponent(options: { localInstanceId?: string } = {}): Component.Object<void, {
-  [connectionsServiceKey]: ConnectionsPort; [directoryPickerServiceKey]: DirectoryPickerPort; [productActivityServiceKey]: ProductActivityPort
+  [connectionsServiceKey]: ConnectionsPort; [directoryPickerServiceKey]: DirectoryPickerPort; [productActivityServiceKey]: ProductActivityPort; [clientComputerServiceKey]: ClientComputerPort
 }> {
-  return { name: 'client-gateway', inject: [connectionsServiceKey, directoryPickerServiceKey, productActivityServiceKey], apply(ctx, _config, deps) {
-    const gateway = createHarnessGateway(deps[connectionsServiceKey], { ...options, picker: deps[directoryPickerServiceKey], activity: deps[productActivityServiceKey] })
+  return { name: 'client-gateway', inject: [connectionsServiceKey, directoryPickerServiceKey, productActivityServiceKey, clientComputerServiceKey], apply(ctx, _config, deps) {
+    const gateway = createHarnessGateway(deps[connectionsServiceKey], { ...options, picker: deps[directoryPickerServiceKey], activity: deps[productActivityServiceKey], computer: deps[clientComputerServiceKey] })
     ctx.effect(() => () => gateway.close(), 'cancel and join Anybox Harness client connection and proxy requests')
     ctx.provide(clientGatewayServiceKey, gateway)
   } }

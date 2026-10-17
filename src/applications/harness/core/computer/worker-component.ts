@@ -168,7 +168,12 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
             let cleanup: JsonValue | undefined
             if (!submission.targetOperationId) {
               const row = await db.read(reader => reader.get('SELECT * FROM computer_worker_runs WHERE run_id = ?', [submission.runId]))
-              if (row?.uncertain) throw workerError('worker-scope-unknown')
+              if (row?.uncertain) {
+                // Retain this boot's failed scope so control retries can still release its resources.
+                const current = scopes.get(submission.runId)
+                if (current) await joined(current.execution.close())
+                throw workerError('worker-scope-unknown')
+              }
               cleanup = row?.cleanup_json ? JSON.parse(String(row.cleanup_json)) as JsonValue : json(await joined(scopes.get(submission.runId)?.execution.close() ?? { result: Promise.resolve({ processes: [] }), done: Promise.resolve(), cancel() {} }))
               await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET closed = 1, has_processes = 0, cleanup_json = ? WHERE run_id = ?', [JSON.stringify(cleanup), submission.runId]))
             }
@@ -176,8 +181,11 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
           }
           if (submission.kind === 'close-scope') {
             const row = await db.read(reader => reader.get('SELECT * FROM computer_worker_runs WHERE run_id = ?', [submission.runId]))
-            if (row?.uncertain) throw workerError('worker-scope-unknown')
             const current = scopes.get(submission.runId)
+            if (row?.uncertain) {
+              if (current) await joined(current.execution.close())
+              throw workerError('worker-scope-unknown')
+            }
             call = row?.cleanup_json ? { result: Promise.resolve(JSON.parse(String(row.cleanup_json)) as JsonValue), done: Promise.resolve(), cancel() {} } : current?.execution.close() ?? { result: Promise.resolve({ processes: [] }), done: Promise.resolve(), cancel() {} }
             active.set(submission.operationId, call)
             const observation = json(await joined(call))
@@ -240,6 +248,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
       }
       // A revoked attachment stops accepting immediately; its open scopes are cancelled and drained like a shutdown of that harness server's work.
       const revokeRuns = async (attachmentId: string) => {
+        let cleanupFailed = false
         const reading = [...pendingQueries].filter(query => query.attachmentId === attachmentId)
         for (const query of reading) query.abort.abort(workerError('worker-attachment-rejected'))
         try {
@@ -259,13 +268,16 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
             try {
               const uncertain = await db.read(reader => reader.get('SELECT uncertain FROM computer_worker_runs WHERE run_id = ?', [runId])?.uncertain === 1)
               const cleanup = await joined(current.execution.close())
-              if (!uncertain) await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET closed = 1, has_processes = 0, cleanup_json = ? WHERE run_id = ?', [JSON.stringify(cleanup), runId]))
-            } catch { await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET uncertain = 1 WHERE run_id = ?', [runId])) }
-            finally { scopes.delete(runId) }
+              if (!uncertain) {
+                await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET closed = 1, has_processes = 0, cleanup_json = ? WHERE run_id = ?', [JSON.stringify(cleanup), runId]))
+                scopes.delete(runId)
+              }
+            } catch { cleanupFailed = true; await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET uncertain = 1 WHERE run_id = ?', [runId])) }
           }
         } finally { await Promise.allSettled(reading.map(query => query.done)) }
+        if (cleanupFailed) throw workerError('worker-cleanup-failed')
       }
-      const unsubscribe = attachments.onChanged(attachment => attachment.state === 'revoked' ? revokeRuns(attachment.attachmentId) : undefined)
+      const unsubscribe = attachments.onChanged((attachment, change) => attachment.state === 'revoked' || change === 'permissions' ? revokeRuns(attachment.attachmentId) : undefined)
       ctx.effect(() => () => unsubscribe(), 'stop observing attachment revocations')
       const service: ComputerWorkerPort = {
         info: async () => ({ ...identity, platform: process.platform, architecture: process.arch }),

@@ -33,7 +33,7 @@ GIF 从同一 MP4 转换，保留 2160 × 1760 分辨率和完整 28 秒，15 fp
 | --- | --- |
 | 界面与应用入口 | [宿主外壳](../../../src/host/web/client.ts)、[Anybox Harness 工作区](../../../src/applications/harness/web/harness-app.ts) |
 | 客户端根与网关 | [客户端宿主](../../../src/host/client.ts)、[应用客户端装配](../../../src/applications/harness/client/runtime.ts)、[白名单代理](../../../src/applications/harness/client/gateway.ts) |
-| 桌面进程边界 | [桌面入口](../../../src/entrypoints/desktop-main.ts)、[worker 入口](../../../src/entrypoints/desktop-worker.ts)、[运行边界](../../desktop-runtime.md) |
+| 桌面进程边界 | [桌面入口](../../../src/entrypoints/desktop-main.ts)、[客户端入口](../../../src/entrypoints/desktop-client.ts)、[执行端入口](../../../src/entrypoints/desktop-execution.ts)、[运行边界](../../desktop-runtime.md) |
 | 执行根与按需安装 | [执行宿主](../../../src/host/execution.ts)、[应用运行时](../../../src/applications/harness/server-runtime.ts)、[核心组合](../../../src/applications/harness/core/index.ts) |
 | Run / Runtime / RunHost | [Run](../../../src/applications/harness/core/run/component.ts)、[RunRuntime](../../../src/applications/harness/core/run/runtime-component.ts)、[program 契约](../../../src/applications/harness/core/run/program.ts) |
 | Session 接受与结算 | [Session](../../../src/applications/harness/core/session/component.ts)、[事务与恢复记录](../../../src/applications/harness/core/session/sqlite-records.ts) |

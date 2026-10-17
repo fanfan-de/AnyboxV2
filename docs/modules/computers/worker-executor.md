@@ -39,3 +39,7 @@ worker 异常重启将可能开始的 starting/running 操作转为 outcome-unkn
 ## 验证
 
 [Worker 行为](../../../tests/computer-worker.test.mjs)与[故障注入](../../../tests/computer-worker-resume.test.mjs)验证真实独立进程、接纳去重、owner 栅栏、排队取消、固定 scope、stdin/output 重复领取、worker 故障未知事实及 Runtime SIGKILL 后接续；[worker 附着测试](../../../tests/computer-worker-attachments.test.mjs)验证按附着授权与上限拒绝。[只读查询测试](../../../tests/computer-worker-query.test.mjs)以真实 SQLite 和文件句柄验证关闭/取消/撤销等待、canonical 范围交集及远端目录上限。补丁逐文件事实及取消屏障继续由 [Apply Patch 测试](../../../tests/apply-patch-component.test.mjs)验证。完整入口为 `npm run check`。
+
+本机权限修改与撤销均按附着取消并排空当前 Run。权限修改期间附着账本暂停新准入；执行器等待实际工具退出后才确认管理变更完成，scope 清理失败标 uncertain 并返回 `worker-cleanup-failed`。失败 scope 的本代句柄继续由执行器持有，后续权限通知、撤销、Run 的 cancel / close-scope 和根关闭均可再次等待它的实际退出，失败路径不得删除句柄。uncertain Run 的控制重试即使成功释放资源也仍报告 `outcome-unknown`，不能把先前的未知事实改写为成功清理证明。
+
+权限清理失败的附着在同一 boot 内保持关闭新准入；重复修改权限不会解除失败栅栏，必须重启 worker。get 与已接纳声明的幂等读取、取消和关闭仍可进行。新 boot 沿用既有未知操作不重放规则，旧 uncertain Run 不栅栏新代 workspace。其他附着的 Run 不受影响。行为验证见 `tests/computer-worker-management.test.mjs` 与 `tests/computer-worker-permissions-failure.test.mjs`，后者以真实子进程验证失败后拒绝新工作、控制重试等待实际退出及重启后的新 Run。

@@ -9,7 +9,6 @@ import { createDesktopWorker } from '../desktop/worker.js'
 import type { DesktopWorker } from '../desktop/worker.js'
 import { createDesktopProtocolBridge, desktopOrigin, isDesktopUrl } from '../desktop/protocol.js'
 import { rpcFailure } from '../desktop/rpc.js'
-import { runDesktopSmoke } from '../desktop/smoke.js'
 import { installDesktopSessionProtocol } from '../desktop/session-protocol.js'
 import { prepareDirectoryPanelCancellation } from '../desktop/native-dialog.js'
 import { prepareDesktopQuit, desktopBeforeUnloadProbe } from '../desktop/quit.js'
@@ -38,6 +37,7 @@ else {
   const run = async () => {
   let window: BrowserWindow | undefined, client: DesktopWorker | undefined, execution: DesktopWorker | undefined
   let local: DesktopWorkerReady | undefined, bridge: ReturnType<typeof createDesktopProtocolBridge> | undefined
+  let executionStarting: Promise<void> | undefined
   let sessionProtocol: ReturnType<typeof installDesktopSessionProtocol> | undefined
   let quitting: Promise<void> | undefined, quitAllowed = false, booting = true, shutdownCommitted = false
   const data = desktopPaths(app.getPath('userData'))
@@ -75,12 +75,17 @@ else {
       } else app.quit()
     })
   }
-  const startExecution = async () => {
-    if (shutdownCommitted) throw rpcFailure('service-unavailable')
-    if (execution && !execution.ended) throw rpcFailure('busy')
-    execution = createDesktopWorker('execution', data.data, code => workerExit('execution', code))
-    try { local = await execution.rpc.call<DesktopWorkerReady>('start', { kind: 'execution', userData: app.getPath('userData'), namespace }) }
-    catch (error) { await execution.close(); throw error }
+  const startExecution = async (): Promise<void> => {
+    if (shutdownCommitted || quitting) return Promise.reject(rpcFailure('service-unavailable'))
+    if (executionStarting) return executionStarting
+    if (execution && !execution.ended) return Promise.resolve()
+    const worker = createDesktopWorker('execution', data.data, code => workerExit('execution', code))
+    execution = worker
+    const starting = worker.rpc.call<DesktopWorkerReady>('start', { kind: 'execution', userData: app.getPath('userData'), namespace })
+      .then(ready => { local = ready })
+      .catch(async error => { await worker.close(); throw error })
+      .finally(() => { if (executionStarting === starting) executionStarting = undefined })
+    return executionStarting = starting
   }
   const openDirectory = async (signal: AbortSignal) => {
     if (signal.aborted || !window || window.isDestroyed() || quitting) throw rpcFailure('cancelled')
@@ -183,14 +188,15 @@ else {
     await app.whenReady()
     if (shutdownCommitted) return
     await mkdir(data.data, { recursive: true })
-    try { await startExecution() } catch {
+    try { if (smoke || process.argv.includes('--local')) await startExecution() } catch {
       local = undefined
       // An execution startup failure must leave remote connections usable.
     }
     if (shutdownCommitted) return
     client = createDesktopWorker('client', data.data, code => workerExit('client', code))
+    client.rpc.handle('local.start', (_value, signal) => { signal.throwIfAborted(); return startExecution() })
     client.rpc.handle('local.get', () => {
-      if (!local || !execution || execution.ended) throw rpcFailure('local-unavailable')
+      if (!local || !execution || execution.ended) return undefined
       return { endpoint: local.url, instanceId: local.instanceId }
     })
     client.rpc.handle('local.issue', (_value, signal) => {
@@ -235,7 +241,7 @@ else {
       { label: 'Anybox', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' }, { role: 'quit' }] },
       { label: '编辑', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
       { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { label: '显示 Anybox', click: reveal },
-        { label: '重启本机服务', click: () => {
+        { label: '启动本机服务', click: () => {
           if (execution && !execution.ended || quitting) return
           void startExecution().then(() => client?.rpc.call('retryLocal')).catch(() => dialog.showErrorBox('本机服务无法启动', '请检查桌面数据目录与系统凭据服务后重试。'))
         } }] },
@@ -245,6 +251,7 @@ else {
     booting = false; reveal()
     if (smoke) {
       try {
+        const { runDesktopSmoke } = await import('../desktop/smoke.js')
         const report = await runDesktopSmoke({ window, client, execution, clientReady, local, transportSecret,
           keyring: smokeKeyring, userData: app.getPath('userData'), reveal,
           shutdown: () => shutdown(nativeQuitSmoke), confirmQuit: nativeQuitSmoke ? () => shutdown(true) : undefined,

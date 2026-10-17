@@ -1,6 +1,6 @@
 import { createHostAccessComponent } from '../../dist/host/access.js'
 import { createClientHost } from '../../dist/entrypoints/client-main.js'
-import { harnessClientApplication } from '../../dist/applications/harness/registration.js'
+import { harnessClientApplication } from '../../dist/applications/harness/client/registration.js'
 /** Local browser acceptance host. Uses disposable SQLite and a controlled model; never reads real keys/data. */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

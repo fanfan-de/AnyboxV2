@@ -4,7 +4,7 @@
 
 `src/host/connections.ts` 的 `createConnectionsComponent(options: ClientConnectionsOptions)` 创建 `client-connections`，提供 `client.connections: ConnectionsPort`。它是客户端宿主的常驻公共提供方：`src/host/client.ts` 的 `createClientHost({ connections })` 在业务 SQLite 之后安装一次，Anybox Harness 与其他客户端应用的网关通过 inject 消费同一服务，不各自保存设备配置。inject 客户端根的 `local-storage`，此根只打开独立 `client.sqlite`，不共用执行库。`namespace` 默认 `anybox.client`；`openEntry` 是测试/平台替身边界；`localPairing` 由桌面组合经入口选项注入。通用转发（请求绑定校验、租约、认证与实例头、重定向与实例不匹配拒绝、双向流管道与超时）位于同目录的 `connection-proxy.ts`，供各应用网关按自己的白名单调用。
 
-连接库归宿主，连接的管理界面目前仍由 Anybox Harness 提供；组件随客户端宿主启动安装、整根关闭卸载，应用启停不影响已保存连接与凭据。通用外壳不管理本地/远程目标。工作区侧栏底部将一处紧凑的“执行设备”选择器与只显示图标的“设置”按钮放在同一行；选择器保留屏幕阅读器标签，完整设备名称通过 title 提示。“管理连接”是 Anybox Harness 设置中的第五个分类，与“会话设置”“模型管理”“Prompt 管理”“已归档会话”共用同一弹窗。连接和归档分类跨设备展示，弹窗在这两个分类隐藏当前执行设备提示。所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备，归档列表不受所选设备筛选限制。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。每台设备另有“附着到远端 harness server”入口（`units-client.ts` 的 `setupLocalAttachments`）：填入对方的 HTTPS 地址与附着码，设定允许对方使用的项目目录与工具契约上限，经该设备的 `/units/local-computer/attachments` 让其本机执行器消费附着码并拨出；列表显示每条附着的连接状态（连接中、已连接、离线、对方实例已改变、已撤销）并可撤销。附着码是秘密，关闭设置弹窗即丢弃输入与该面板。用户关闭设置或按 Esc 时清空未保存的访问令牌与已发行令牌的临时展示；临时停用应用保留已有草稿。关闭仅释放句柄，已保存连接和凭据保留。
+连接库归宿主，连接的管理界面目前仍由 Anybox Harness 提供；组件随客户端宿主启动安装、整根关闭卸载，应用启停不影响已保存连接与凭据。通用外壳不管理本地/远程目标。工作区侧栏底部将一处紧凑的“执行设备”选择器与只显示图标的“设置”按钮放在同一行；选择器保留屏幕阅读器标签，完整设备名称通过 title 提示。“管理连接”是 Anybox Harness 设置中的第五个分类，与“会话设置”“模型管理”“Prompt 管理”“已归档会话”共用同一弹窗。连接和归档分类跨设备展示，弹窗在这两个分类隐藏当前执行设备提示。所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备，归档列表不受所选设备筛选限制。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。独立的“管理本机 Computer worker”入口（`units-client.ts` 的 `setupLocalAttachments`）固定管理客户端服务所在设备：填入对方的 HTTPS 地址与附着码，设定允许对方使用的项目目录与工具契约上限，经本机 `/computer/*` 接口直接让 worker 消费附着码并拨出，不要求先启用本机 harness server，也不跟随所选远端连接；列表显示每条附着的连接状态（连接中、已连接、离线、对方实例已改变、已撤销），可修改上限及撤销。此前经所选设备 `/units/local-computer/attachments` 管理该设备 worker 的服务端路由仍保留兼容，新界面不再使用。附着码是秘密，关闭设置弹窗即丢弃输入与该面板。用户关闭设置或按 Esc 时清空未保存的访问令牌与已发行令牌的临时展示；临时停用应用保留已有草稿。关闭仅释放句柄，已保存连接和凭据保留。
 
 设备切换先在应用路由中固定新选择，再重建本应用界面；旧工作区同步更新项目或会话查看位置时保留路由当前的设备选择，不能用重建前的连接覆盖它。查看项目与会话不自动改变设备选择，已有会话请求继续按自身 instanceId 路由。
 
@@ -16,7 +16,9 @@ Anybox Harness 的系统目录窗口同时要求连接确认为本机且执行�
 
 组件拥有 `client-connections` v2 的连接表、凭据意图日志和单条本机归属记录，以及独立 system-keyring-store 句柄。公开 list/save/check/remove 不返回 token 或 credentialRef；只有受信网关 acquire 获得本次固定的配置版本与 token。连接包含本机 ID、名称、地址、固定 instanceId、revision；编辑使用 expectedRevision。相同 instanceId 不重复登记。
 
-桌面组合可注入 `DesktopLocalPairingOptions`：`getLocal(signal)` 返回受信本机地址及 instanceId，`issue(signal)` 通过私有宿主控制发行 managed token，`reconcile(retainedToken,signal)` 回收同一桌面所有者的孤立凭据。组件每代异步启动一次配对，不阻塞初始化；并发 `retryLocal(signal?)` 复用当前操作。`localStatus()` 仅返回 enabled、disabled/pending/ready/failed 状态、本机身份、连接 ID/版本及固定错误码。普通 Web 组合不注入此选项，不能调用重试。
+桌面组合可注入 `DesktopLocalPairingOptions`：只读 `getLocal(signal)` 返回受信本机地址及 instanceId，服务未启动时返回 undefined；可选 `start(signal)` 只在显式 `retryLocal` 中调用，用于启用本机服务；`issue(signal)` 通过私有宿主控制发行 managed token，`reconcile(retainedToken,signal)` 回收同一桌面所有者的孤立凭据。组件每代异步观察一次本机服务，不调用 start、不阻塞初始化；不存在服务时保存 `enabled: true, state: disabled` 且不访问执行端或发行凭据。enabled 表达桌面控制能力，state 表达配对状态。存在服务时按既有流程配对。并发显式启动复用同一操作；在自动观察期间收到显式启动时等待观察退出，再执行一次启动，不丢弃请求。关闭停止准入、取消并等待已经受理的私有调用，已取消请求不调用 start。`localStatus()` 仅返回白名单状态、本机身份、连接 ID/版本及固定错误码。普通 Web 组合不注入此选项，不能调用重试。
+
+共享连接管理在 disabled 状态显示“启动本机服务”，点击才 POST `/local/retry`；未保存表单阻止该操作。状态轮询、打开/恢复客户端应用和选择远端设备不会调用 start。桌面私有 `local.start` 由主进程负责实例去重与生命周期；配对请求取消只结束观察，已经显式启用的服务保持桌面托管，直至正常退出。详细进程边界见[桌面运行边界](../../desktop-runtime.md)。
 
 首次自动保存与本机 connectionId/instanceId 归属同事务提交。已有本机连接保留 ID、名称和凭据，仅端口变化时保存新地址；未变地址不增加 revision。执行库身份变化拒绝静默替换。Vault 读取失败保留已存凭据和宿主 token，不以无凭据状态撤销它；仅明确认证失败或非 managed token 才发行替代。失败新 token 由受信回收或下一次初始化恢复，远端连接继续可用；自动配对不启动 Agent。连接管理展示 pending/失败状态，提供显式重试，成功后只刷新本应用。桌面配对启用且界面活动时，pending 每 500 毫秒、其他状态每 5 秒读取非秘密状态，以观察明确重启后的连接版本；已有未保存表单或工作区不能离开时推迟重建。停用或释放界面停止计时器，状态读取不触发配对或重启。
 

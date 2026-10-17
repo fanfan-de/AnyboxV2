@@ -35,7 +35,7 @@ export async function verifyStagedApplication(root, output) {
   await verifyDefaultWebAssets(root, output)
   const base = pathToFileURL(root + sep)
   const [{ harnessClientApplication }, { claudeAgentClientApplication }, { shellAssets }, { createApplicationCatalog }] = await Promise.all([
-    import(new URL('dist/applications/harness/registration.js', base)), import(new URL('dist/applications/claude-agent/client/registration.js', base)),
+    import(new URL('dist/applications/harness/client/registration.js', base)), import(new URL('dist/applications/claude-agent/client/registration.js', base)),
     import(new URL('dist/host/assets.js', base)), import(new URL('dist/host/applications/registration.js', base)),
   ])
   const catalog = createApplicationCatalog([harnessClientApplication(), claudeAgentClientApplication()], shellAssets)

@@ -17,6 +17,7 @@ Anybox Harness 的模型设置由 `web/models-client.ts` 管理。模型能力�
 | [Host Access](host-access.md) | 业务库实例身份、设备令牌摘要、撤销 |
 | [Client Connections](client-connections.md) | 宿主常驻的执行设备连接库、系统凭据、身份校验与通用转发 |
 | [Client Shell](client-shell.md) | 常驻静态页面、应用目录与控制 HTTP |
+| [Client Computer](client-computer.md) | 独立 worker 本机管理、只读状态与显式启动 |
 | [Client Gateway](client-gateway.md) | Anybox Harness 内部连接与白名单转发、网络生命周期 |
 | [Directory Picker](directory-picker.md) | 宿主常驻的本机系统目录窗口，各客户端应用在已确认本机设备上添加或选择项目时使用 |
 

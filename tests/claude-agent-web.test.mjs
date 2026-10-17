@@ -4,7 +4,7 @@ import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, display
 import { createApplicationCatalog } from '../dist/host/applications/registration.js'
 import { shellAssets } from '../dist/host/assets.js'
 import { claudeAgentClientApplication } from '../dist/applications/claude-agent/client/registration.js'
-import { harnessClientApplication } from '../dist/applications/harness/registration.js'
+import { harnessClientApplication } from '../dist/applications/harness/client/registration.js'
 
 test('routes pin the device and thread, reject malformed segments and round-trip encoding', () => {
   assert.deepEqual(parseRoute(''), {}); assert.deepEqual(parseRoute('host/abc'), { hostId: 'abc' })

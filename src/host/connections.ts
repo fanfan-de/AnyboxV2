@@ -15,7 +15,10 @@ export interface ConnectionInput { readonly id?: string; readonly name: string; 
 export interface ConnectionLease { readonly connection: Connection; readonly token: string }
 /** Trusted desktop callbacks. Tokens never appear in the public pairing projection. */
 export interface DesktopLocalPairingOptions {
-  getLocal(signal: AbortSignal): Promise<{ readonly endpoint: string; readonly instanceId: string }>
+  /** Read-only: undefined means the desktop has not started a local server. */
+  getLocal(signal: AbortSignal): Promise<{ readonly endpoint: string; readonly instanceId: string } | undefined>
+  /** Called only by an explicit retry/start action, never by bootstrap or status reads. */
+  start?(signal: AbortSignal): Promise<void>
   issue(signal: AbortSignal): Promise<string>
   reconcile(retainedToken: string | undefined, signal: AbortSignal): Promise<void>
 }
@@ -77,6 +80,8 @@ export function createConnectionsComponent(options: ClientConnectionsOptions = {
     let vault: SystemKeyringStore | undefined, accepting = true, tail: Promise<unknown> = Promise.resolve()
     let local: LocalPairingStatus = Object.freeze({ enabled: !!options.localPairing, state: options.localPairing ? 'pending' : 'disabled', instanceId: null, connectionId: null })
     let pairing: Promise<LocalPairingStatus> | undefined
+    let pairingStartsService = false
+    let requestedStart: Promise<LocalPairingStatus> | undefined
     const controllers = new Set<AbortController>(), pending = new Set<Promise<unknown>>()
     const track = <T>(work: () => Promise<T>): Promise<T> => {
       if (!accepting) return Promise.reject(hostFailure('service-unavailable', 503))
@@ -166,11 +171,17 @@ export function createConnectionsComponent(options: ClientConnectionsOptions = {
       })
       await options.localPairing!.reconcile(token, signal)
     })
-    const ensureLocal = async (signal: AbortSignal): Promise<LocalPairingStatus> => {
+    const ensureLocal = async (signal: AbortSignal, start: boolean): Promise<LocalPairingStatus> => {
       const pair = options.localPairing!
       let issued: string | undefined, committed = false, previouslyRetained: string | undefined
       try {
+        signal.throwIfAborted()
+        if (start) { await pair.start?.(signal); signal.throwIfAborted() }
         const target = await pair.getLocal(signal); signal.throwIfAborted()
+        if (!target) {
+          local = Object.freeze({ enabled: true, state: 'disabled', instanceId: null, connectionId: null })
+          return local
+        }
         const endpoint = connectionEndpoint(target.endpoint)
         if (!/^[0-9a-f-]{36}$/.test(target.instanceId)) throw hostFailure('invalid-instance', 502)
         const owner = await queue(() => db.read(r => r.get('SELECT connection_id,instance_id FROM client_local_connection WHERE slot=1')))
@@ -216,6 +227,25 @@ export function createConnectionsComponent(options: ClientConnectionsOptions = {
       }
       return local
     }
+    const pairLocal = (signal: AbortSignal | undefined, start: boolean): Promise<LocalPairingStatus> => {
+      if (!options.localPairing) return Promise.reject(hostFailure('local-pairing-unavailable', 403))
+      if (!accepting) return Promise.reject(hostFailure('service-unavailable', 503))
+      if (pairing) {
+        if (start && !pairingStartsService && options.localPairing.start) {
+          return requestedStart ??= pairing.then(() => pairLocal(signal, true)).finally(() => { requestedStart = undefined })
+        }
+        return pairing
+      }
+      const controller = new AbortController(); controllers.add(controller)
+      const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
+      local = Object.freeze({ enabled: true, state: 'pending', instanceId: local.instanceId, connectionId: local.connectionId })
+      pairingStartsService = start
+      const result = track(() => ensureLocal(controller.signal, start)).finally(() => {
+        controllers.delete(controller); signal?.removeEventListener('abort', abort); pairing = undefined
+      })
+      pairing = result
+      return result
+    }
     const service: ConnectionsPort = {
       list: () => queue(async () => (await db.read(r => r.all('SELECT record FROM client_connections ORDER BY id'))).map(row => view(JSON.parse(String(row.record))))),
       acquire: id => queue(async () => { const record = await get(id); return { connection: view(record), token: await tokenFor(record) } }),
@@ -228,19 +258,7 @@ export function createConnectionsComponent(options: ClientConnectionsOptions = {
       }),
       save,
       localStatus: () => local,
-      retryLocal: signal => {
-        if (!options.localPairing) return Promise.reject(hostFailure('local-pairing-unavailable', 403))
-        if (!accepting) return Promise.reject(hostFailure('service-unavailable', 503))
-        if (pairing) return pairing
-        const controller = new AbortController(); controllers.add(controller)
-        const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
-        local = Object.freeze({ enabled: true, state: 'pending', instanceId: local.instanceId, connectionId: local.connectionId })
-        const result = track(() => ensureLocal(controller.signal)).finally(() => {
-          controllers.delete(controller); signal?.removeEventListener('abort', abort); pairing = undefined
-        })
-        pairing = result
-        return result
-      },
+      retryLocal: signal => pairLocal(signal, true),
       remove: (id, revision) => queue(async () => {
         const record = await get(id); if (record.revision !== revision) throw hostFailure('conflict', 409)
         await db.transaction(tx => { tx.execute('DELETE FROM client_connections WHERE id=?', [id]); tx.execute('INSERT INTO client_credential_intents VALUES(?)', [record.credentialRef]) })
@@ -252,6 +270,6 @@ export function createConnectionsComponent(options: ClientConnectionsOptions = {
     ctx.effect(() => async () => { accepting = false; for (const controller of controllers) controller.abort(); await Promise.allSettled([...pending]); await tail; await vault?.close() }, 'cancel and join client connection operations')
     ctx.provide(connectionsServiceKey, service)
     // Bootstrap is owned by this component generation and never holds up application readiness.
-    if (options.localPairing) void Promise.resolve().then(() => service.retryLocal()).catch(() => {})
+    if (options.localPairing) void Promise.resolve().then(() => pairLocal(undefined, false)).catch(() => {})
   } }
 }

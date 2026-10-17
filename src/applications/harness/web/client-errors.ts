@@ -43,6 +43,13 @@ export function messageFor(error: unknown): string {
     'worker-closing': '本机执行器正在关闭，请稍后重试。',
     'worker-startup-failed': '本机执行器未能启动。',
     'worker-startup-timeout': '本机执行器启动超时。',
+    'worker-not-running': 'Computer worker 尚未启动，请先点击“启动 Computer worker”。',
+    'worker-attachment-updating': '正在更新此附着的权限并等待工具退出，请稍后重试。',
+    'worker-cleanup-failed': '部分工具退出未能确认，此附着已停止接收新工作。请重启 Computer worker 后再试。',
+    'worker-platform-unsupported': '当前平台尚不支持 Computer worker。',
+    'worker-attachment-rejected': '这条附着已撤销，不能继续使用或修改权限。',
+    'worker-invalid-endpoint': '本机 worker 连接信息无效，请检查服务状态。',
+    'worker-request-failed': '本机 worker 请求未完成，请刷新状态；附着请求不要自动重试。',
   }
   if (connectionErrors[error.code]) return connectionErrors[error.code]
   return {

@@ -24,8 +24,10 @@ Anybox Harness 是完整产品名。描述一次部署、执行设备上的 API�
 | --- | --- |
 | 启动服务端 | `npm run harness:server` |
 | 初始化服务端实例与访问令牌 | `npm run harness:server:init` |
-| 启动客户端 | `npm run client` |
-| 组合启动本地服务端与客户端 | `npm run web` |
+| 只启动客户端 | `npm run client` 或 `npm run web` |
+| 只启动 Computer worker | `npm run computer:worker -- <数据目录>` |
+| 按角色启动 | `npm run anybox -- client\|harness-server\|computer-worker [参数]` |
+| 显式组合启动本地服务端与客户端 | `npm run web:local` |
 | Linux systemd 示例 | `deploy/harness-server.service.example`，安装为 `harness-server.service` |
 | 服务端 HTTPS/SSE 代理示例 | `deploy/harness-server.nginx.conf.example` |
 

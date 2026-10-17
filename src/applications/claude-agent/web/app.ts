@@ -32,10 +32,10 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   const deviceStatus = el('p', { class: 'ca-device-status', role: 'status' })
   const startButton = el('button', { type: 'button', class: 'ca-start', text: '启动 Claude Agent', hidden: true })
   const panel = createProjectPanel(context.domId, {
-    request: (path, signal) => { if (!client) return Promise.reject(Object.assign(new Error('product-unavailable'), { status: 503, code: 'product-unavailable' })); return client.request(path, undefined, signal) },
+    request: (path, signal) => { if (!client) return Promise.reject(Object.assign(new Error('product-unavailable'), { status: 503, code: 'product-unavailable' })); return track(client.request(path, undefined, signal)) },
     select: directory => startProject(directory),
     create: (directory, threadTitle) => { void createThread(directory, threadTitle) },
-    pickNative: signal => client ? client.pickDirectory(signal) : Promise.reject(Object.assign(new Error('picker-unavailable'), { status: 503, code: 'picker-unavailable' })),
+    pickNative: signal => client ? track(client.pickDirectory(signal)) : Promise.reject(Object.assign(new Error('picker-unavailable'), { status: 503, code: 'picker-unavailable' })),
     report: error => { if (!disposed && !lifetime.signal.aborted) show(messageFor(error)) },
   })
   const threadList = el('ul', { class: 'ca-thread-list' })
@@ -75,6 +75,14 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   let pending: readonly ApprovalView[] = [], subscription: { close(): void } | undefined, threadTimer: ReturnType<typeof setTimeout> | undefined
   let submitting = false, disposed = false, viewRefresh: { runId: string; version: number; work: Promise<void> } | undefined, draft: { prompt: string; key: string } | undefined
   let threadReads = new AbortController(), threadReadVersion = 0
+  let deviceLifetime = new AbortController(), deviceDiscovery = new AbortController(), discoveryVersion = 0, visible = true, disposal: Promise<void> | undefined
+  const tasks = new Set<Promise<unknown>>()
+  const track = <T>(work: Promise<T>): Promise<T> => {
+    const task = work.finally(() => tasks.delete(task))
+    tasks.add(task); return task
+  }
+  const currentDevice = (device: DeviceClient | undefined) => !!device && !disposed && !lifetime.signal.aborted && client === device
+  const sameConnection = (left: DeviceConnection, right: DeviceConnection) => left.id === right.id && left.instanceId === right.instanceId && left.revision === right.revision && left.endpoint === right.endpoint
   let models: string[] = []
   const collapsed = storedSet(collapsedKey)
   const show = (message: string) => { noticeText.textContent = message; notice.hidden = false }
@@ -85,7 +93,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   const route = () => parseRoute(context.route.read())
   const navigate = (next: { hostId?: string; threadId?: string }, replace = false) => { const value = formatRoute(next); if (context.route.read() !== value) context.route.navigate(value, replace) }
   /** A failed request shows a transient error; the next successful one clears it. Environment and Run errors have their own places. */
-  const guard = <T>(work: () => Promise<T>, relevant = () => !disposed): Promise<T | undefined> => work().then(value => { if (relevant()) clearNotice(); return value }, error => { if (relevant() && !lifetime.signal.aborted) show(messageFor(error)); return undefined })
+  const guard = <T>(work: () => Promise<T>, relevant = () => !disposed): Promise<T | undefined> => track(work().then(value => { if (relevant()) clearNotice(); return value }, error => { if (relevant() && !lifetime.signal.aborted) show(messageFor(error)); return undefined }))
   const target = () => thread?.projectPath ?? project
   const setDrawer = (open: boolean) => { root.dataset.drawer = open ? 'open' : ''; backdrop.hidden = !open; menuButton.setAttribute('aria-expanded', String(open)) }
   const closeDrawer = () => { if (root.dataset.drawer === 'open') setDrawer(false) }
@@ -140,7 +148,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     scheduleThreadPoll()
   }
   const renderDevices = () => {
-    const single = devices.length <= 1, device = client?.connection ?? devices[0]
+    const single = devices.length <= 1, device = devices.find(entry => entry.id === client?.connection.id) ?? devices[0]
     deviceField.hidden = single; deviceLine.hidden = !single
     deviceSelect.replaceChildren(...devices.map(entry => el('option', { value: entry.id, text: deviceLabel(entry, localInstanceId) })))
     deviceSelect.disabled = !devices.length
@@ -162,7 +170,7 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   const stopThreadPoll = () => { if (threadTimer !== undefined) { clearTimeout(threadTimer); threadTimer = undefined } }
   const scheduleThreadPoll = () => {
     stopThreadPoll()
-    if (disposed || !client || !threads.some(activeThread)) return
+    if (disposed || !visible || !client || !threads.some(activeThread)) return
     threadTimer = setTimeout(() => { threadTimer = undefined; void loadThreads() }, threadPollMs)
   }
   const stopSubscription = () => {
@@ -197,8 +205,10 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
   const updateListEntry = (id: string, patch: Partial<ThreadView>) => { threads = threads.map(item => item.id === id ? { ...item, ...patch } : item); renderThreads() }
   /** The device may retitle a thread when a Run starts (first prompt) or ends (session title); re-read it so the header and list follow. */
   const reloadThread = async (id: string) => {
-    const latest = await guard(() => client!.request<ThreadView>(`${app}/threads/${encodeURIComponent(id)}`))
-    if (!latest || disposed) return
+    const device = client
+    if (!device) return
+    const latest = await guard(() => device.request<ThreadView>(`${app}/threads/${encodeURIComponent(id)}`), () => currentDevice(device))
+    if (!latest || !currentDevice(device)) return
     if (thread?.id === id) thread = latest
     updateListEntry(id, latest); render()
   }
@@ -244,21 +254,23 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     if (latest) { thread = latest; updateListEntry(id, latest) }
     render()
   }
-  const openThread = async (id: string | undefined, replace = false) => {
-    if (!client) return
+  const openThread = (id: string | undefined, replace = false): Promise<void> => track((async () => {
+    const device = client
+    if (!device || !currentDevice(device)) return
     thread = threads.find(item => item.id === id)
     if (thread) { project = undefined; closeDrawer() }
     history = []; runs = []; current = undefined; live = undefined; pending = []; clearNotice()
-    navigate({ hostId: client.connection.instanceId, threadId: thread?.id }, replace)
+    navigate({ hostId: device.connection.instanceId, threadId: thread?.id }, replace)
     if (!thread) { loadingThread = undefined; transcriptHint.hidden = true; stopSubscription(); renderThreads(); render(); return }
     loadingThread = thread.id
-    const cancelHint = delayed(() => { if (loadingThread === id) { transcriptHint.textContent = '正在读取转录…'; transcriptHint.hidden = false } })
+    const cancelHint = delayed(() => { if (currentDevice(device) && loadingThread === id) { transcriptHint.textContent = '正在读取转录…'; transcriptHint.hidden = false } })
     renderThreads(); render()
     subscribe(thread.id)
+    const signal = threadReads.signal
     await refreshThread()
     cancelHint()
-    if (loadingThread === id) { loadingThread = undefined; transcriptHint.hidden = true; render() }
-  }
+    if (currentDevice(device) && !signal.aborted && loadingThread === id) { loadingThread = undefined; transcriptHint.hidden = true; render() }
+  })())
   /** A project without a thread yet: the first prompt sent creates the thread and starts its Run. */
   const startProject = (directory: string) => {
     if (!client) return
@@ -272,87 +284,122 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
     prompt.focus()
   }
   const createThread = async (directory: string, threadTitle: string | undefined) => {
-    if (!client) return
-    const created = await guard(() => client!.request<ThreadView>(`${app}/threads`, { projectPath: directory, ...(threadTitle ? { title: threadTitle } : {}) }))
-    if (!created) return
+    const device = client
+    if (!device) return
+    const created = await guard(() => device.request<ThreadView>(`${app}/threads`, { projectPath: directory, ...(threadTitle ? { title: threadTitle } : {}) }), () => currentDevice(device))
+    if (!created || !currentDevice(device)) return
     threads = [created, ...threads]
     await openThread(created.id)
-    void panel.refreshRecent()
+    if (currentDevice(device)) void panel.refreshRecent()
   }
-  const loadThreads = async () => {
-    if (!client) return
-    const cancelPlaceholder = threads.length ? () => {} : delayed(() => { threadList.replaceChildren(el('li', { class: 'ca-empty', text: '正在读取线程…' })) })
-    const list = await guard(() => client!.request<readonly ThreadView[]>(`${app}/threads`))
+  const loadThreads = async (device = client, signal?: AbortSignal) => {
+    if (!device) return
+    const relevant = () => currentDevice(device) && !signal?.aborted
+    const cancelPlaceholder = threads.length ? () => {} : delayed(() => { if (relevant()) threadList.replaceChildren(el('li', { class: 'ca-empty', text: '正在读取线程…' })) })
+    const list = await guard(() => device.request<readonly ThreadView[]>(`${app}/threads`, undefined, signal), relevant)
     cancelPlaceholder()
-    if (disposed) return
+    if (!relevant()) return
     if (list) { threads = list; if (thread) thread = list.find(item => item.id === thread!.id) ?? thread }
     renderThreads()
   }
-  const loadModels = async () => {
-    if (!client) return
-    const recent = await guard(() => client!.request<RecentModelsView>(`${app}/models/recent`))
-    if (recent) { models = [...new Set([...recent.models, ...models])]; renderModels() }
+  const loadModels = async (device = client, signal?: AbortSignal) => {
+    if (!device) return
+    const relevant = () => currentDevice(device) && !signal?.aborted
+    const recent = await guard(() => device.request<RecentModelsView>(`${app}/models/recent`, undefined, signal), relevant)
+    if (recent && relevant()) { models = [...new Set([...recent.models, ...models])]; renderModels() }
   }
   const enablePanel = async () => { panel.setEnabled(true); await panel.refreshRecent() }
-  const loadEnvironment = async () => {
-    if (!client) return
-    const view = await guard(() => client!.request<EnvironmentView>(`${app}/environment`))
+  const loadEnvironment = async (device: DeviceClient, signal?: AbortSignal) => {
+    const relevant = () => currentDevice(device) && !signal?.aborted
+    const view = await guard(() => device.request<EnvironmentView>(`${app}/environment`, undefined, signal), relevant)
+    if (!relevant()) return
     environment.textContent = view?.executable.error?.message ?? ''
     environment.hidden = !environment.textContent
   }
   /** Only an explicit activation may start the execution device's application; selecting a device never does. */
-  const ensureProduct = async (activate: boolean): Promise<boolean> => {
-    if (!client) return false
-    let state = await guard(() => client!.request<ProductView>('/products/claude-agent'))
-    if (!state) { productRunning = false; productState = undefined; renderDevices(); deviceStatus.textContent = '无法读取所选设备的状态。'; return false }
-    if (activate && state.state !== 'running') state = await guard(() => client!.request<ProductView>(state!.state === 'failed' || state!.state === 'blocked' ? '/products/claude-agent/retry' : '/products/claude-agent/open', {})) ?? state
+  const ensureProduct = async (activate: boolean, device = client, signal?: AbortSignal): Promise<boolean> => {
+    if (!device || !currentDevice(device) || signal?.aborted) return false
+    const relevant = () => currentDevice(device) && !signal?.aborted
+    let state = await guard(() => device.request<ProductView>('/products/claude-agent', undefined, signal), relevant)
+    if (!relevant()) return false
+    if (!state) { renderDevices(); deviceStatus.textContent = '无法读取所选设备的状态。'; return false }
+    if (activate && state.state !== 'running') state = await guard(() => device.request<ProductView>(state!.state === 'failed' || state!.state === 'blocked' ? '/products/claude-agent/retry' : '/products/claude-agent/open', {}, signal), relevant) ?? state
+    if (!relevant()) return false
     productRunning = state.state === 'running'; productState = state.state
     if (!productRunning) panel.setEnabled(false)
     renderDevices(); render()
     return productRunning
   }
-  const afterProduct = async () => { await loadEnvironment(); await Promise.all([loadThreads(), enablePanel(), loadModels()]) }
-  const selectClient = async (device: DeviceConnection | undefined, activate: boolean) => {
+  const afterProduct = async (device: DeviceClient, signal?: AbortSignal) => {
+    if (!currentDevice(device) || signal?.aborted) return
+    await loadEnvironment(device, signal)
+    if (!currentDevice(device) || signal?.aborted) return
+    await Promise.all([loadThreads(device, signal), enablePanel(), loadModels(device, signal)])
+  }
+  const selectClient = (device: DeviceConnection | undefined, activate: boolean, signal?: AbortSignal): Promise<void> => track((async () => {
+    if (disposed || signal?.aborted) return
+    deviceLifetime.abort(); deviceLifetime = new AbortController()
     stopSubscription(); stopThreadPoll(); panel.setEnabled(false)
     thread = undefined; project = undefined; loadingThread = undefined; transcriptHint.hidden = true; threads = []; history = []; runs = []; current = undefined; live = undefined; pending = []; models = []
     productRunning = false; productState = undefined; environment.hidden = true
-    client = device ? createDeviceClient(context.apiBase, device, lifetime.signal) : undefined
+    client = device ? createDeviceClient(context.apiBase, device, AbortSignal.any([lifetime.signal, deviceLifetime.signal])) : undefined
     panel.setNativePicker(!!device && localPicker && device.instanceId === localInstanceId)
     renderDevices(); renderThreads(); renderModels(); render(); clearNotice()
-    if (!device) return
+    const selected = client
+    if (!device || !selected) return
     remember(device.id)
     const requested = route()
     navigate({ hostId: device.instanceId, threadId: requested.hostId === device.instanceId ? requested.threadId : undefined }, true)
-    if (!(await ensureProduct(activate))) return
-    await afterProduct()
+    if (!(await ensureProduct(activate, selected, signal))) return
+    await afterProduct(selected, signal)
+    if (!currentDevice(selected) || signal?.aborted) return
     const threadId = route().threadId
     if (threadId && threads.some(item => item.id === threadId)) await openThread(threadId, true)
     else if (threadId) navigate({ hostId: device.instanceId }, true)
-  }
+  })())
   /** Each saved connection is asked for its instance capabilities through the gateway; only Claude Agent devices are offered. */
-  const probeDevices = async (list: readonly DeviceConnection[]): Promise<Map<string, DeviceProbe | undefined>> => new Map(await Promise.all(list.map(async device => {
+  const probeDevices = async (list: readonly DeviceConnection[], signal: AbortSignal): Promise<Map<string, DeviceProbe | undefined>> => new Map(await Promise.all(list.map(async device => {
     try {
-      const info = await createDeviceClient(context.apiBase, device, lifetime.signal).request<{ capabilities?: unknown }>('/instance', undefined, AbortSignal.timeout(probeTimeoutMs))
+      const info = await createDeviceClient(context.apiBase, device, signal).request<{ capabilities?: unknown }>('/instance', undefined, AbortSignal.timeout(probeTimeoutMs))
       return [device.id, { capabilities: Array.isArray(info?.capabilities) ? info.capabilities.filter((entry): entry is string => typeof entry === 'string') : [] }] as const
     } catch { return [device.id, undefined] as const }
   })))
-  const loadDevices = async (activate: boolean) => {
-    const [directory, local] = await Promise.all([guard(() => readDevices(context.apiBase, lifetime.signal)), readLocal(context.apiBase, lifetime.signal).catch(() => undefined)])
-    if (!directory || disposed) return
+  /** Refresh the saved directory on activation without resetting a still-valid device's view or observation. */
+  const loadDevices = (activate: boolean): Promise<void> => track((async () => {
+    deviceDiscovery.abort(); deviceDiscovery = new AbortController()
+    const signal = AbortSignal.any([lifetime.signal, deviceDiscovery.signal]), version = ++discoveryVersion
+    const relevant = () => !disposed && !signal.aborted && version === discoveryVersion
+    const [directory, local] = await Promise.all([guard(() => readDevices(context.apiBase, signal), relevant), readLocal(context.apiBase, signal).catch(() => undefined)])
+    if (!directory || !relevant()) return
+    if (!client) deviceStatus.textContent = directory.connections.length ? '正在检查执行设备…' : ''
+    const partition = filterDevices(directory.connections, await probeDevices(directory.connections, signal))
+    if (!relevant()) return
     localInstanceId = directory.localInstanceId; localPicker = local?.picker === true && local.instanceId === directory.localInstanceId
-    deviceStatus.textContent = directory.connections.length ? '正在检查执行设备…' : ''
-    const partition = filterDevices(directory.connections, await probeDevices(directory.connections))
-    if (disposed) return
-    devices = partition.qualified; hidden = { unreachable: partition.unreachable.length, unsupported: partition.unsupported.length }
-    await selectClient(selectDevice(devices, route(), remembered(), localInstanceId), activate)
-  }
+    // A failed probe is not a removed connection. Keep observing the current instance until its saved identity changes.
+    const unchanged = client && directory.connections.find(entry => sameConnection(entry, client!.connection))
+    const retained = unchanged && !partition.unsupported.some(entry => entry.id === unchanged.id) ? unchanged : undefined
+    devices = retained && !partition.qualified.some(entry => entry.id === retained.id) ? [...partition.qualified, retained] : partition.qualified
+    hidden = { unreachable: partition.unreachable.filter(entry => entry.id !== retained?.id).length, unsupported: partition.unsupported.filter(entry => entry.id !== retained?.id).length }
+    const requested = route(), selected = devices.find(entry => entry.instanceId === requested.hostId) ?? retained ?? selectDevice(devices, requested, remembered(), localInstanceId)
+    if (!client || !selected || !sameConnection(client.connection, selected)) { await selectClient(selected, activate, signal); return }
+    const device = client
+    panel.setNativePicker(localPicker && device.connection.instanceId === localInstanceId)
+    renderDevices()
+    if (await ensureProduct(activate, device, signal)) {
+      await afterProduct(device, signal)
+      if (relevant() && currentDevice(device) && route().threadId && !thread) await openThread(route().threadId, true)
+    }
+    if (relevant()) scheduleThreadPoll()
+  })())
   const decide = async (approval: ApprovalView, decision: 'allow' | 'allow-session' | 'deny', answers?: Record<string, string>) => {
-    if (!client) return
-    const resolved = await guard(() => client!.request<ApprovalView>(`${app}/approvals/${encodeURIComponent(approval.id)}`, { decision, ...(answers ? { answers } : {}) }))
-    if (resolved) { pending = pending.filter(item => item.id !== approval.id); if (thread) updateListEntry(thread.id, { pendingApprovals: pending.length }); render() }
+    const device = client
+    if (!device) return
+    const resolved = await guard(() => device.request<ApprovalView>(`${app}/approvals/${encodeURIComponent(approval.id)}`, { decision, ...(answers ? { answers } : {}) }), () => currentDevice(device))
+    if (resolved && currentDevice(device)) { pending = pending.filter(item => item.id !== approval.id); if (thread) updateListEntry(thread.id, { pendingApprovals: pending.length }); render() }
   }
-  const submit = async () => {
-    if (!client || !target() || submitting) return
+  const submit = (): Promise<void> => track((async () => {
+    const device = client
+    if (!device || !currentDevice(device) || !target() || submitting) return
     const text = prompt.value.trim()
     if (!text) return
     submitting = true; render()
@@ -361,44 +408,58 @@ export async function mount(container: HTMLElement, context: ApplicationWebConte
       if (!draft || draft.prompt !== text) draft = { prompt: text, key: crypto.randomUUID() }
       if (!thread) {
         // First message in a project: create the thread, then its Run; a failure keeps the prompt as a draft.
-        const created = await client.request<ThreadView>(`${app}/threads`, { projectPath: project })
+        const created = await device.request<ThreadView>(`${app}/threads`, { projectPath: project })
+        if (!currentDevice(device)) return
         threads = [created, ...threads]; thread = created; project = undefined
-        navigate({ hostId: client.connection.instanceId, threadId: created.id })
+        navigate({ hostId: device.connection.instanceId, threadId: created.id })
         subscribe(created.id); renderThreads(); void panel.refreshRecent()
       }
       const body = { prompt: text, idempotencyKey: draft.key, ...(model.value.trim() ? { model: model.value.trim() } : {}), ...(effort.value ? { effort: effort.value } : {}) }
-      const run = await client.request<RunView>(`${app}/threads/${encodeURIComponent(thread.id)}/runs`, body)
+      const run = await device.request<RunView>(`${app}/threads/${encodeURIComponent(thread.id)}/runs`, body)
+      if (!currentDevice(device)) return
       draft = undefined; prompt.value = ''
       current = run; live = emptyRunView(run.id, run.threadId); runs = [...runs.filter(item => item.id !== run.id), run]; clearNotice()
       addModel(run.model)
       updateListEntry(thread.id, { lastRun: { id: run.id, status: run.status } })
       void reloadThread(thread.id)
-    } catch (error) { show(messageFor(error)) }
+    } catch (error) { if (currentDevice(device)) show(messageFor(error)) }
     finally { submitting = false; render() }
-  }
+  })())
   composer.addEventListener('submit', event => { event.preventDefault(); void submit() })
   prompt.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); void submit() } })
-  cancel.addEventListener('click', () => { if (client && current) void guard(() => client!.request<RunView>(`${app}/runs/${encodeURIComponent(current!.id)}/cancel`, {})).then(run => { if (run) { current = run; render() } }) })
+  cancel.addEventListener('click', () => {
+    const device = client, runId = current?.id
+    if (device && runId) void guard(() => device.request<RunView>(`${app}/runs/${encodeURIComponent(runId)}/cancel`, {}), () => currentDevice(device) && current?.id === runId).then(run => { if (run && currentDevice(device) && current?.id === runId) { current = run; render() } })
+  })
   noticeClose.addEventListener('click', clearNotice)
   menuButton.addEventListener('click', () => setDrawer(root.dataset.drawer !== 'open'))
   backdrop.addEventListener('click', closeDrawer)
   root.addEventListener('keydown', event => { if (event.key === 'Escape' && root.dataset.drawer === 'open') { closeDrawer(); menuButton.focus() } })
-  startButton.addEventListener('click', () => { void (async () => { if (await ensureProduct(true)) await afterProduct() })() })
-  deviceSelect.addEventListener('change', () => { const device = devices.find(item => item.id === deviceSelect.value); if (device && device.id !== client?.connection.id) void selectClient(device, false) })
+  startButton.addEventListener('click', () => { void track((async () => { const device = client; if (device && await ensureProduct(true, device)) await afterProduct(device) })()) })
+  deviceSelect.addEventListener('change', () => {
+    const device = devices.find(item => item.id === deviceSelect.value)
+    if (device && device.id !== client?.connection.id) { deviceDiscovery.abort(); void selectClient(device, false) }
+  })
   const unsubscribeRoute = context.route.subscribe(() => {
     const requested = route()
-    if (requested.hostId && requested.hostId !== client?.connection.instanceId) { const device = devices.find(item => item.instanceId === requested.hostId); if (device) void selectClient(device, false); return }
+    if (requested.hostId && requested.hostId !== client?.connection.instanceId) { const device = devices.find(item => item.instanceId === requested.hostId); if (device) { deviceDiscovery.abort(); void selectClient(device, false) }; return }
     if (client && requested.threadId !== thread?.id && threads.length) void openThread(requested.threadId, true)
   })
   await loadDevices(false)
   return {
     async setActive(active: boolean, reason: ApplicationActivation) {
       if (disposed) return
-      if (!active) { for (const dialog of container.querySelectorAll<HTMLDialogElement>('dialog[open]')) dialog.close(); closeDrawer(); stopThreadPoll(); return }
-      scheduleThreadPoll()
-      if (reason === 'open' && client) { if (await ensureProduct(true)) { await afterProduct(); if (route().threadId && !thread) await openThread(route().threadId, true) } }
+      visible = active
+      // Deactivation cancels only discovery/open intent; an already selected thread keeps observing its Run.
+      if (!active) { deviceDiscovery.abort(); for (const dialog of container.querySelectorAll<HTMLDialogElement>('dialog[open]')) dialog.close(); closeDrawer(); stopThreadPoll(); return }
+      await loadDevices(reason === 'open')
     },
     canClose: () => !submitting,
-    async dispose() { disposed = true; unsubscribeRoute(); stopSubscription(); stopThreadPoll(); panel.dispose(); lifetime.abort(); container.replaceChildren() },
+    dispose() {
+      if (disposal) return disposal
+      disposed = true; unsubscribeRoute(); stopSubscription(); stopThreadPoll(); panel.dispose(); deviceDiscovery.abort(); deviceLifetime.abort(); lifetime.abort(); context.signal.removeEventListener('abort', abort); container.replaceChildren()
+      disposal = Promise.allSettled([...tasks]).then(() => {})
+      return disposal
+    },
   }
 }

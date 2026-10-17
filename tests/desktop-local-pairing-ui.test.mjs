@@ -19,20 +19,21 @@ function viewFixture(t, connections = []) {
   const root = new Element(), panel = new Element(), form = new Element(), dialog = new Element(), select = new Element()
   const fields = new Map(['name', 'endpoint', 'token'].map(name => [name, new Element()]))
   form.elements = { namedItem: name => fields.get(name) }
-  for (const name of ['list', 'status', 'local', 'local-status', 'local-retry', 'new', 'heading', 'tokens']) panel.nodes.set(`[data-${name}]`, new Element())
+  for (const name of ['list', 'status', 'local', 'local-status', 'local-retry', 'new', 'heading', 'tokens', 'computer', 'attachments']) panel.nodes.set(`[data-${name}]`, new Element())
   panel.nodes.set('[data-form]', form)
   root.nodes.set('#agent--harness-select', select); root.nodes.set('#agent--settings-dialog', dialog); root.nodes.set('#agent--connections-settings', panel)
-  let state = { enabled: true, state: 'pending', instanceId: 'local', connectionId: null }, reads = 0, changes = 0
+  let state = { enabled: true, state: 'pending', instanceId: 'local', connectionId: null }, reads = 0, changes = 0, retries = 0
   const previousDocument = globalThis.document, previousFetch = globalThis.fetch
   globalThis.document = { createElement: () => new Element() }
-  globalThis.fetch = async url => {
+  globalThis.fetch = async (url, options) => {
+    if (url === '/api/client/v1/local/retry') { assert.equal(options.method, 'POST'); retries++; return Response.json(state) }
     assert.equal(url, '/api/client/v1/local'); reads++
     return Response.json({ status: state })
   }
   const api = { connections, forConnection: () => async path => path === '/instance' ? { capabilities: [] } : {} }
   const view = setupConnections(root, api, undefined, () => 'error', () => true, () => { changes++ }, '/api/client/v1', () => {})
   t.after(async () => { await view.dispose(); globalThis.document = previousDocument; globalThis.fetch = previousFetch })
-  return { view, fields, setState(value) { state = value }, get reads() { return reads }, get changes() { return changes } }
+  return { view, fields, panel, setState(value) { state = value }, get reads() { return reads }, get changes() { return changes }, get retries() { return retries } }
 }
 
 test('pending-to-ready bootstrap keeps observing while unsaved input prevents rebuilding, then refreshes safely', async t => {
@@ -70,4 +71,21 @@ test('ordinary Web mode does not start desktop status timers', async t => {
   const reads = f.reads
   t.mock.timers.tick(20000); await flush()
   assert.equal(f.reads, reads); assert.equal(f.changes, 0)
+})
+
+test('a stopped local service offers an explicit start; observation and unsaved forms never start it', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const f = viewFixture(t)
+  f.setState({ enabled: true, state: 'disabled', instanceId: null, connectionId: null })
+  await flush(); f.view.setActive(true); await flush()
+  const button = f.panel.nodes.get('[data-local-retry]')
+  assert.equal(button.hidden, false); assert.equal(button.textContent, '启动本机服务')
+  assert.equal(f.panel.nodes.get('[data-local]').hidden, false)
+  t.mock.timers.tick(5000); await flush(); assert.equal(f.retries, 0)
+  f.fields.get('name').value = 'unsaved'
+  button.dispatchEvent(new Event('click')); await flush(); assert.equal(f.retries, 0)
+  f.fields.get('name').value = ''
+  f.setState({ enabled: true, state: 'ready', instanceId: 'local', connectionId: 'saved', connectionRevision: 1 })
+  button.dispatchEvent(new Event('click')); await flush()
+  assert.equal(f.retries, 1); assert.equal(f.panel.nodes.get('[data-local]').hidden, true)
 })

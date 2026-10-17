@@ -30,7 +30,8 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   panel.innerHTML = `<header class="settings-panel-heading"><h3 id="agent--connections-title">管理连接</h3>
     <p>连接自己的执行设备。项目、模型配置和会话保存在对应设备上。</p></header>
     <section data-local class="settings-card" hidden><p data-local-status role="status"></p><button type="button" data-local-retry>重试本机连接</button></section>
-    <div data-list></div><section data-tokens class="settings-card" hidden></section><section data-attachments class="settings-card" hidden></section><p data-status class="notice" role="status" hidden></p>
+    <section class="settings-card"><button type="button" data-computer>管理本机 Computer worker</button></section>
+    <div data-list></div><section data-tokens class="settings-card" hidden></section><section data-attachments class="computer-management" hidden></section><p data-status class="notice" role="status" hidden></p>
     <form data-form class="settings-card"><h3 data-heading>添加连接</h3>
     <label>名称<input name="name" required maxlength="200" autocomplete="off"></label>
     <label>服务地址<input name="endpoint" required type="url" placeholder="https://harness.example.com" autocomplete="off"></label>
@@ -69,8 +70,9 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
     if (lifetime.signal.aborted) return
     localEnabled = !!value?.enabled
     localCard.hidden = !value?.enabled || value.state === 'ready'
-    localRetry.hidden = value?.state !== 'failed'
-    localNotice.textContent = value?.state === 'pending' ? '正在连接本机执行设备…' : value?.state === 'failed' ? `本机连接未能完成：${messageFor(Object.assign(new Error(), { status: 503, code: value.error?.code ?? 'connection-unavailable' }))}` : ''
+    localRetry.hidden = value?.state !== 'failed' && value?.state !== 'disabled'
+    localRetry.textContent = value?.state === 'disabled' ? '启动本机服务' : '重试本机连接'
+    localNotice.textContent = value?.state === 'disabled' ? '本机服务尚未启动，远端连接可正常使用。' : value?.state === 'pending' ? '正在连接本机执行设备…' : value?.state === 'failed' ? `本机连接未能完成：${messageFor(Object.assign(new Error(), { status: 503, code: value.error?.code ?? 'connection-unavailable' }))}` : ''
     if (value?.state === 'ready' && value.connectionId && !api.connections.some(connection => connection.id === value.connectionId && connection.revision === value.connectionRevision) && !busy && canLeave() && canLeaveConnection()) changed()
     // Reading status never restarts or pairs a worker. A ready revision can change after
     // an explicit native restart; keep observing until unsaved UI work permits rebuilding.
@@ -95,6 +97,12 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
     })
   }, { signal: lifetime.signal })
   void refreshLocal()
+  panel.querySelector('[data-computer]')!.addEventListener('click', () => void action(async () => {
+    const section = panel.querySelector<HTMLElement>('[data-attachments]')!
+    await closeAttachments()
+    section.hidden = false
+    attachmentsView = setupLocalAttachments((path, body, signal) => control(`${apiBase}${path}`, body, signal), messageFor, section, '本机')
+  }))
   for (const connection of api.connections) {
     const row = document.createElement('section'); row.className = 'settings-card connection-row'
     const title = document.createElement('strong'), address = document.createElement('p'), result = document.createElement('p')
@@ -161,13 +169,6 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
         once.textContent = `仅本次显示，请复制到新设备：${result.token}`; await render()
       }))
       section.append(tokenList, label, issue, once); await render()
-    }))
-    // The device owner's consent: this device's own worker attaches to another harness server with explicit directory and tool ceilings.
-    button('附着到远端 harness server', () => void action(async () => {
-      const section = panel.querySelector<HTMLElement>('[data-attachments]')!
-      await closeAttachments()
-      section.hidden = false
-      attachmentsView = setupLocalAttachments(api.forConnection(connection.id), messageFor, section, connection.name)
     }))
     button('编辑', () => { editing = connection; field('name').value = connection.name; field('endpoint').value = connection.endpoint; field('token').value = ''; panel.querySelector('[data-heading]')!.textContent = `编辑 ${connection.name}` })
     button('移除连接', () => { if (canLeave() && canLeaveConnection()) void action(async () => { await control(`${apiBase}/connections/${connection.id}/delete`, { expectedRevision: connection.revision }); changed() }) })

@@ -4,7 +4,8 @@ import { createPrivateRpc } from './rpc.js'
 
 /** Each worker owns its root; main owns only the private process handle. */
 export function createDesktopWorker(kind: 'client' | 'execution', cwd: string, onExit: (code: number) => void) {
-  const child = utilityProcess.fork(fileURLToPath(new URL('../entrypoints/desktop-worker.js', import.meta.url)), [], {
+  const entry = kind === 'client' ? '../entrypoints/desktop-client.js' : '../entrypoints/desktop-execution.js'
+  const child = utilityProcess.fork(fileURLToPath(new URL(entry, import.meta.url)), [], {
     cwd, serviceName: `Anybox ${kind}`, stdio: 'pipe',
   })
   const rpc = createPrivateRpc(message => child.postMessage(message))

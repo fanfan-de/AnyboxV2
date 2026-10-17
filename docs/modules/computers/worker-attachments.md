@@ -34,3 +34,11 @@
 ## 验证
 
 [worker 附着测试](../../../tests/computer-worker-attachments.test.mjs)覆盖纯规则、记录/撤销与凭据意图、执行器按附着授权与 ceiling 拒绝、worker 重启后的凭证读取；真实系统凭据用例由 `ANYBOX_KEYRING_TESTS=1` 门控。完整入口为 `npm run check`。
+
+## 权限修改
+
+`updatePermissions(attachmentId, ceiling)` 校验并更新既有 JSON 中的本地权限上限，保留 ID、epoch、scope、凭据和历史，不增加迁移。`record`、`updatePermissions`、`revoke` 按附着串行。权限更新期间 `requireApprovedIn` 返回 `worker-attachment-updating`，保存后以 `onChanged(attachment, change)` 的 `permissions` 通知执行器取消并排空该附着已有 Run，等待实际退出后才重新开放准入。`record` / `revoke` 分别发同名变更原因；撤销单调且禁止再修改。
+
+权限通知清理失败后，已保存的上限保留，该附着在本次 worker 启动内关闭新 Run、工具和只读查询准入，返回 `worker-cleanup-failed`。管理队列退出不会解除该栅栏；再次修改权限仍会重试通知与清理，但即使后续资源退出也不能重新开放准入，需要重启 worker。旧操作的幂等回执、查询与取消/关闭不受新准入栅栏影响，仍可查回事实并重试保留的清理句柄。撤销仍可执行，并使后续准入返回 `worker-attachment-rejected`。此栅栏只属于当前 worker 启动代，不把旧 uncertain Run 变成新 boot 的永久 workspace 栅栏。
+
+监听清理失败仍通知其他监听者；撤销仍尝试删除凭据，随后报告失败，不假报清理成功。组件卸载等待已接纳的队列与凭据操作。`tests/computer-worker-management.test.mjs` 验证新上限、并发修改与撤销、实际退出和重启持久化；`tests/computer-worker-permissions-failure.test.mjs` 以真实子进程和受控 close 失败验证失败栅栏、控制重试退出及新 boot 不重放旧工具。
