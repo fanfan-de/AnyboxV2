@@ -6,11 +6,13 @@
 
 状态：2026-10-10，已接入本机按需资源、pinned-local 工作区、独立耐久 worker 和模型响应已保存后的工具等待重启接续；跨机器迁移及独立模型 exchange 尚未实现。组件契约见本文、[Computer 模块](./modules/computers/README.md)、[会话树](./session-conversation-tree.md)与[Models 模块](../packages/models/README.md)，具体行为以当前源码及行为测试为依据。后续演进见[资源设计](./computer-resource-design.md)。
 
-Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录边界](./harness-module-boundary.md)。通用宿主位于 `src/host/`，Anybox Harness 的注册、核心、HTTP、客户端和界面集中在 `src/applications/harness/`，默认组合在 `src/entrypoints/`。目录拆分不增加 Nya Context 或组件，本文记录现有单根装配和实际生命周期。
+Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录边界](./harness-module-boundary.md)。通用宿主位于 `packages/host/src/`，Anybox Harness 的注册、核心、HTTP、客户端和界面集中在 `packages/app-harness/src/`，默认组合在 `packages/distribution/src/entrypoints/`。目录拆分不增加 Nya Context 或组件，本文记录现有单根装配和实际生命周期。
+
+[D0a.1 独立业务服务](application-standalone-services.md)在 D0a 后先解除业务对宿主管理的启动依赖。`createHarnessServerRuntime()` 安装同一业务实现，Anybox 注册适配提供活动保护与宿主认证端口；`createStandaloneHarnessServer()` 自建唯一根，安装应用自己的访问与监听组件，不使用 `createExecutionHost()`。独立 CLI `anybox-harness-server` 与原 `anybox harness-server` 默认组合分别保留；原业务数据、实例、令牌与迁移账本不变，同一数据文件只允许一个持有者。
 
 ## 根、服务与资源归属
 
-每个进程只使用一个 Nya 根 Context。Authority 与 Runtime 当前同进程：Models、业务 SQLite、图片资源、单元附着、Projects、Project Files、Computer 协调及 worker 客户端、Prompt、Session、协议绑定、RunRuntime、Run 和 Web 直接安装在其根上；独立 worker 在自己的根安装执行器、固定项目绑定、独占存储、图片与四工具。Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`src/applications/harness/core/index.ts` 提供 Prompt/Agent 组件分组和受信门面，`src/applications/harness/server-runtime.ts` 根据该设备的 Anybox Harness 打开目标保留根级 Fiber 句柄；Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
+每个进程只使用一个 Nya 根 Context。Authority 与 Runtime 当前同进程：Models、业务 SQLite、图片资源、单元附着、Projects、Project Files、Computer 协调及 worker 客户端、Prompt、Session、协议绑定、RunRuntime、Run 和 Web 直接安装在其根上；独立 worker 在自己的根安装执行器、固定项目绑定、独占存储、图片与四工具。Provider、Model、项目与 Session 都是数据身份，不建立子 Context。`packages/app-harness/src/core/index.ts` 提供 Prompt/Agent 组件分组和受信门面，`packages/app-harness/src/server-runtime.ts` 根据该设备的 Anybox Harness 打开目标保留根级 Fiber 句柄；Agent 定义是启动时校验的只读配置，不是独立服务。组件用 `inject` 声明依赖并使用 `apply` 的 `deps` 快照；外部请求通过根的 `get()` 取得当前服务。Nya 负责撤销与清理顺序，组合根不复制依赖图。
 
 | 组件 | 服务 / 主要依赖 | 独占资源与关闭行为 |
 | --- | --- | --- |
@@ -46,14 +48,18 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
 | RunRuntime | `harness.run-runtime`；注入 session-runs/computer-operations | program、工具观察、owner、取消/等待者和临时视图；worker scope 与 program 退出后结算 |
 | Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime/computer-operations/unit-attachments | 准入、幂等、单元附着引用（本机或组合固定的远端 Computer 附着）和交接前资源；恢复接管前校验附着引用；停止准入并等交接与在途 Run |
-| 执行访问管理 | `host.access` | 既有业务库中的实例身份与令牌摘要；撤销观察连接 |
+| Anybox 托管访问管理 | `host.access` | 既有业务库中的实例身份与令牌摘要；撤销观察连接 |
+| Harness 独立访问管理 | `harness.access`；注入 local-storage | 应用自己的认证实现，兼容 host-access v2 迁移、原身份/令牌表；等待写入与撤销观察退出 |
+| Harness 独立监听 | `harness.listener`；注入 harness.access | 应用自己的 socket、认证分派、请求/SSE 与保留操作；业务在其后安装，关闭先取消业务再等待保留请求 |
 | 客户端连接 | `client.connections` | 独立 client.sqlite 与系统凭据意图日志 |
 | 客户端外壳 | `app.client-http` | 常驻回环监听器、静态页面与应用控制 |
 | Anybox Harness 客户端网关 | `client.gateway` | 随 Anybox Harness 安装的连接、JSON/上传/SSE 转发与退出等待 |
 | 本机目录选择器 | `host.directory-picker` | 客户端根中的原生对话框；仅匹配启动确认的本机实例 |
 | Web | `host.http`；应用入口注入访问、产品与活动管理服务 | 通用监听与应用分派；停止监听并等待请求真实退出 |
 
-源码入口分别位于 `packages/models/src/`、`src/applications/harness/core/`、应用的 `http/` 与 `client/`，通用监听器和外壳位于 `src/host/`。Session 的 `sqlite-records.ts` 是内部提供方，不额外注册组件。H0 的 `src/resource-probe.ts` 仅用于资源归属验证，不是正式执行路径。
+独立服务 HTTP 与认证归应用；`harness-http` 通过可选集成来源声明真实依赖，独立模式消费 `harness.access`，Anybox 注册适配消费 `app.activity` / `host.access`。业务 HTTP 本身无必需宿主依赖，单元凭据仍由单元组件认证。组件详见 [Harness Access](modules/web/harness-access.md)、[Harness Listener](modules/web/harness-listener.md) 和 [业务 HTTP](modules/web/harness-http.md)，没有公共 HTTP 或认证模块。
+
+源码入口分别位于 `packages/models/src/`、`packages/app-harness/src/core/`、应用的 `http/` 与 `client/`，通用监听器和外壳位于 `packages/host/src/`。Session 的 `sqlite-records.ts` 是内部提供方，不额外注册组件。H0 的 `packages/distribution/src/resource-probe.ts` 仅用于资源归属验证，不是正式执行路径。
 
 Models JSON 配置文件、旧配置导入源、目录缓存与业务数据库路径不能相同。配置文件持有定义、连接、版本化原生参数、`historyScopeEpoch` 和 Vault 意图；目录缓存只存公开来源；业务库持有 Session/Run/Prompt/Projects、图片元数据/保留凭证及文件快照正文/准备批次/保留凭证。图片原字节另存图片组件独占目录，文本快照不新增目录。系统凭据始终由 macOS Keychain、Windows Credential Manager 或 Linux Secret Service 保存。各业务领域组件在 `apply` 中调用 `migrate(domain, migrations)`，通用 SQLite 不接收业务迁移列表。
 
@@ -71,7 +77,7 @@ Models JSON 配置文件、旧配置导入源、目录缓存与业务数据库�
 
 ## 协议应用绑定与独立 Loop
 
-`src/applications/harness/core/protocol-agents/registry.ts` 将具体驱动代、Loop、输入编码、历史策略和展示投影闭包绑定为 `PreparedRunProgram`。公共 Run 只准备并交接 program；Runtime 只调用 `execute(host)` 和 `close()`，不解释停止原因。初始化声明来自 Session 的受信静态工具选择，不存在运行期插件注册。新 NativeInitialization v2 / tool-library-v1 复制创建会话时的快照；旧 v1 / known-tools-v1 保持原样。每次 Run 固定当前 executor 依赖代与协议代，不把运行句柄写入历史。
+`packages/app-harness/src/core/protocol-agents/registry.ts` 将具体驱动代、Loop、输入编码、历史策略和展示投影闭包绑定为 `PreparedRunProgram`。公共 Run 只准备并交接 program；Runtime 只调用 `execute(host)` 和 `close()`，不解释停止原因。初始化声明来自 Session 的受信静态工具选择，不存在运行期插件注册。新 NativeInitialization v2 / tool-library-v1 复制创建会话时的快照；旧 v1 / known-tools-v1 保持原样。每次 Run 固定当前 executor 依赖代与协议代，不把运行句柄写入历史。
 
 | 协议 | 原生历史与 Loop 决策 | 参数与专属能力 |
 | --- | --- | --- |

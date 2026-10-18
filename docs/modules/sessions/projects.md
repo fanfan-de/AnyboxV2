@@ -6,7 +6,7 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 
 ## 实现与装配
 
-- 源码：[Projects 组件](../../../src/applications/harness/core/project/component.ts)、[RuntimeInputs](../../../src/applications/harness/core/contracts.ts)。
+- 源码：[Projects 组件](../../../packages/app-harness/src/core/project/component.ts)、[RuntimeInputs](../../../packages/app-harness/src/core/contracts.ts)。
 - 工厂：`createProjectComponent(inputs, options?)`；组件名：`harness-projects`；配置类型：`void`。
 - `options.directoryHome` 由宿主通过 `HarnessServerCoreOptions.projectDirectoryHome` 传入，生产默认是执行端系统用户主目录；未配置只禁用浏览，不影响旧接口。
 - `options.initialProjects` 接收受信宿主预登记路径；每次依赖就绪后的激活先幂等登记，再提供服务，因此首次启用 Agent 或从 PENDING 恢复均会处理宿主配置。路径无效会使该次组件启动失败，先前成功登记的项目仍保留，显式重试继续幂等登记。
@@ -56,4 +56,4 @@ openProject 首先 realpath 解析目录别名，并确认目标是目录；文�
 
 `tests/remote-project-directory-selection.test.mjs` 验证真实 HTTP 能力列表不向远端默认绑定声明本机浏览、创建或目录窗口能力，直接请求执行端与客户端 picker 均被拒绝，手工路径仍由远端 Computer 校验。
 
-[目录浏览测试](../../../tests/project-directories.test.mjs) 验证分页、单层创建、名称与重名校验、认证归属、取消和实际退出等待及句柄清理；[多项目测试](../../../tests/multi-project.test.mjs) 验证规范目录身份、项目间 Session 隔离、并发 Run、重启后的历史以及目录不可用时历史可读；[Session 测试](../../../tests/session.test.mjs) 验证创建期间的项目检查会被关闭等待；[本地 SQLite 测试](../../../tests/local-sqlite.test.mjs) 验证底层独占存储与迁移。统一执行 `npm run check`。
+[目录浏览测试](../../../tests/project-directories.test.mjs) 验证分页、单层创建、名称与重名校验、认证归属、取消和实际退出等待及句柄清理；[多项目测试](../../../tests/multi-project.test.mjs) 验证规范目录身份、项目间 Session 隔离、并发 Run、重启后的历史以及目录不可用时历史可读；[Session 测试](../../../tests/session.test.mjs) 验证创建期间的项目检查会被关闭等待；[本地 SQLite 测试](../../../packages/storage-sqlite/tests/storage.test.mjs) 验证底层独占存储与迁移。统一执行 `npm run check`。

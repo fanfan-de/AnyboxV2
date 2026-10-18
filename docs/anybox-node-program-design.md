@@ -36,19 +36,19 @@
 
 | 能力 | 位置 | 说明 |
 | --- | --- | --- |
-| 自洽的 Computer 单元进程 | [worker 根装配](../src/applications/harness/core/computer/worker-server.ts)、[入口](../src/entrypoints/computer-worker-main.ts) | 独占 worker.sqlite 与图片目录、四个工具组件、附着账本（凭证在系统凭据库）、拨出循环。入口的传递导入闭包 41 个文件，外部依赖只有 NyaCore、ripgrep、picomatch、sharp、keyring 与 Models 包（多为类型导入） |
+| 自洽的 Computer 单元进程 | [worker 根装配](../packages/app-harness/src/core/computer/worker-server.ts)、[入口](../packages/distribution/src/entrypoints/computer-worker-main.ts) | 独占 worker.sqlite 与图片目录、四个工具组件、附着账本（凭证在系统凭据库）、拨出循环。入口的传递导入闭包 41 个文件，外部依赖只有 NyaCore、ripgrep、picomatch、sharp、keyring 与 Models 包（多为类型导入） |
 | 附着账本与凭证认证 | [单元附着](modules/units/unit-attachments.md)、[单元传输](modules/units/unit-transport.md) | 一次性附着码、按单元的凭证、作用域上限、epoch、两侧撤销 |
 | 位置透明的 Computer 契约 | [Worker 路由](modules/computers/worker-router.md) | `computer.worker` 按附着路由到回环 worker 或拨出单元，核心代码不感知差别 |
 | 真实跨机器验收 | [可组合单元设计第 9 节](composable-units-design.md#9-分阶段实施与验收) | 远端 harness server 操作本机 macOS worker；本机 harness server 经 SSH 反向隧道操作服务器 worker |
 | 独立服务示例 | [computer-worker.service.example](../deploy/computer-worker.service.example) | Linux 用户级 systemd unit，worker 独立于 harness server 的 cgroup |
-| Web 外壳 | [Web 客户端设计](web-client-design.md)、[Application HTTP 监听组件](modules/web/web-frontend.md)、[通用客户端宿主](../src/host/client.ts) | 通用监听器同时服务静态页面与 `/api/client/v1`、`/api/v1`，显式接收应用目录（空目录也是合法宿主）；执行端用设备令牌认证，回环客户端页面校验 Host/Origin；浏览器外壳按目录挂载应用界面 |
-| 各入口 | `src/entrypoints/` | harness server、computer worker、客户端三个独立 main；后续已接入 `anybox-main.ts` 统一分派，`npm run web` 仅启动客户端，`serve.ts` 的显式组合命令改为 `npm run web:local`；当前桌面行为见统一发行约定 |
+| Web 外壳 | [Web 客户端设计](web-client-design.md)、[Application HTTP 监听组件](modules/web/web-frontend.md)、[通用客户端宿主](../packages/host/src/client.ts) | 通用监听器同时服务静态页面与 `/api/client/v1`、`/api/v1`，显式接收应用目录（空目录也是合法宿主）；执行端用设备令牌认证，回环客户端页面校验 Host/Origin；浏览器外壳按目录挂载应用界面 |
+| 各入口 | `packages/distribution/src/entrypoints/` | harness server、computer worker、客户端三个独立 main；后续已接入 `anybox-main.ts` 统一分派，`npm run web` 仅启动客户端，`serve.ts` 的显式组合命令改为 `npm run web:local`；当前桌面行为见统一发行约定 |
 
 ### 2.2 差距
 
 1. **Computer 单元没有自己的控制面。** 消费附着码只能经该机器上的 harness server 连接管理页面，由它转发到 worker 的回环控制接口（[本机 worker 客户端](modules/computers/local-worker-client.md)）。没有 harness server 的机器无法附着；现有页面与网关都属于 Anybox Harness 客户端，没有面向节点本身的页面与路由。
-2. **单元身份挂在 harness server 上。** worker 数据目录默认是业务库路径加 `.computer-worker` 后缀，由 harness server 在第一次本地调用时懒启动（[worker-client.ts](../src/applications/harness/core/computer/worker-client.ts)）；`local:computer` 是写死的附着 ID，路由、Projects、Operations 各有专门分支。
-3. **形态是启动期决定。** `ANYBOX_COMPUTER_UNIT=local|remote`（[server-config.ts](../src/applications/harness/server-config.ts)）固定 harness server 有没有本机 worker，切换要重启。
+2. **单元身份挂在 harness server 上。** worker 数据目录默认是业务库路径加 `.computer-worker` 后缀，由 harness server 在第一次本地调用时懒启动（[worker-client.ts](../packages/app-harness/src/core/computer/worker-client.ts)）；`local:computer` 是写死的附着 ID，路由、Projects、Operations 各有专门分支。
+3. **形态是启动期决定。** `ANYBOX_COMPUTER_UNIT=local|remote`（[server-config.ts](../packages/app-harness/src/server-config.ts)）固定 harness server 有没有本机 worker，切换要重启。
 4. **只有拨出传输。** worker 只监听回环，远端 harness server 必须能被单元访问；harness server 在 NAT 后、单元在服务器上的场景要靠隧道。
 5. **代码边界。** worker 入口的导入闭包仍包含 `run/`、`prompt/`、`workspace/`、`unit/` 与 `core/index.ts` 的文件以及 `@anybox/api-key-manager`；单独构建会带上半个 harness server。
 6. **平台。** Windows 真实 worker 不支持（Bash 与进程组语义为 Unix）；无头 Linux 的系统凭据服务需要手工准备。
@@ -108,7 +108,7 @@ flowchart TB
 - **核心**是各单元进程与它们的控制接口；节点 Web 服务与 CLI 只是两种外壳，调用同一组回环控制接口，共用同一份节点配置。设置页里“提供 Computer”的开关与 CLI 的 `anybox computer enable` 做完全相同的事。
 - **单元进程**由系统服务管理器启动与监督，程序不内置 supervisor。节点 Web 服务在没有登记系统服务时可以自己拉起单元进程；一旦用户选择“开机提供”，就把单元进程和节点 Web 服务本身都登记为系统服务并交出监督权。
 - **控制接口**沿用 worker 现有的回环 HTTP 加私有令牌（endpoint 文件按私有权限写入节点数据目录）；节点 Web 服务与 CLI 读取同一个 endpoint。不引入新的认证模型。
-- **节点 Web 服务**是独立进程、一个 Nya 根，由 `anybox node web` 启动：复用通用客户端宿主（[client.ts](../src/host/client.ts)）、浏览器外壳与现有构建产物，应用目录只含一个“节点”应用。该应用的浏览器入口是节点设置页，其 `/api/client/v1/apps/<节点应用 ID>` 路由把请求转发到各单元的回环控制接口并读写节点配置；它不持有单元数据、单元凭证或业务库。默认只监听 `127.0.0.1`，以客户端宿主的无认证形态运行，页面沿用 Host/Origin 同源校验；需要从其他机器管理时经前置反向代理提供 HTTPS，并改用通用宿主的设备令牌认证形态（与 harness server 的 `host.access` 相同，令牌摘要存节点目录下独立的访问库）。单元令牌只在节点 Web 服务进程内使用，不进入浏览器。
+- **节点 Web 服务**是独立进程、一个 Nya 根，由 `anybox node web` 启动：复用通用客户端宿主（[client.ts](../packages/host/src/client.ts)）、浏览器外壳与现有构建产物，应用目录只含一个“节点”应用。该应用的浏览器入口是节点设置页，其 `/api/client/v1/apps/<节点应用 ID>` 路由把请求转发到各单元的回环控制接口并读写节点配置；它不持有单元数据、单元凭证或业务库。默认只监听 `127.0.0.1`，以客户端宿主的无认证形态运行，页面沿用 Host/Origin 同源校验；需要从其他机器管理时经前置反向代理提供 HTTPS，并改用通用宿主的设备令牌认证形态（与 harness server 的 `host.access` 相同，令牌摘要存节点目录下独立的访问库）。单元令牌只在节点 Web 服务进程内使用，不进入浏览器。
 
 ### 4.2 节点配置与数据目录
 
@@ -193,9 +193,9 @@ CLI 子命令只做参数校验与调用；单元逻辑全部留在各单元的�
 
 | 区域 | 改动 | 依赖 |
 | --- | --- | --- |
-| `src/entrypoints/` | 新增统一 CLI 入口（子命令分派、`service install` 模板生成）；现有 `computer-worker-main.ts`、`harness-server-main.ts` 成为子命令实现；npm 脚本保留为委托 | 无 |
+| `packages/distribution/src/entrypoints/` | 新增统一 CLI 入口（子命令分派、`service install` 模板生成）；现有 `computer-worker-main.ts`、`harness-server-main.ts` 成为子命令实现；npm 脚本保留为委托 | 无 |
 | worker 根 | 数据目录改为节点目录；`attach` 上报节点 ID 与显示名；可选拨入监听 | 节点配置 |
-| [组合根](../src/applications/harness/core/index.ts)、[server-config.ts](../src/applications/harness/server-config.ts) | 删除 `ANYBOX_COMPUTER_UNIT` 形态开关；总是安装 Worker 路由；本机 Computer 由附着记录发现并经回环连接已运行的单元进程，不再 spawn；`local:computer` 变为 origin 为本机的普通附着 | 评审[建议 5](harness-architecture-review-2026-10-15.md#建议-5computer-目录按进程侧拆分)先行 |
+| [组合根](../packages/app-harness/src/core/index.ts)、[server-config.ts](../packages/app-harness/src/server-config.ts) | 删除 `ANYBOX_COMPUTER_UNIT` 形态开关；总是安装 Worker 路由；本机 Computer 由附着记录发现并经回环连接已运行的单元进程，不再 spawn；`local:computer` 变为 origin 为本机的普通附着 | 评审[建议 5](harness-architecture-review-2026-10-15.md#建议-5computer-目录按进程侧拆分)先行 |
 | 单元传输 | 增加拨入传输与附着传输字段 | 附着账本迁移 v2 |
 | 节点 Web 服务 | 新增节点应用（工作目录 `src/applications/node/`，按正式目录注册）：浏览器“提供服务”设置页、附着/状态/撤销与系统服务登记的路由，转发到单元回环控制接口；`anybox node web` 以通用客户端宿主加只含该应用的目录装配；可选设备令牌认证形态 | 统一 CLI、节点配置 |
 | 文档 | naming.md 定名与命令表；部署说明改为节点安装步骤；Computer 模块与单元模块文档更新；AGENTS.md 对应段落 | 采纳后同步 |
@@ -232,4 +232,4 @@ N1 到 N3 不改 Session、Run 与 RunRuntime，只动入口、组合根、compu
 - 没有验证 Windows 服务账户与 Credential Manager、macOS LaunchAgent 与 Keychain 在无头 SSH 会话下的实际行为；表中的结论来自平台文档的一般规则。
 - 拨入传输的具体消息形状未设计，只给出约束。
 - 节点目录的平台默认路径为建议，需与现有 `./data` 默认路径及[部署说明](harness-server-deployment.md)的环境变量核对。
-- 以通用客户端宿主承载只含“节点”应用的目录未在代码中试验；`src/host/client.ts` 接受显式目录，但应用目录注册与设备令牌认证形态在客户端宿主上的组合尚未验证。
+- 以通用客户端宿主承载只含“节点”应用的目录未在代码中试验；`packages/host/src/client.ts` 接受显式目录，但应用目录注册与设备令牌认证形态在客户端宿主上的组合尚未验证。

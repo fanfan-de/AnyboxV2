@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
+import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,10 +8,10 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createAnthropicMessagesProtocol, createChatCompletionsProtocol, createGeminiInteractionsProtocol } from '@anybox/models'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
-import { projectProtocolRecords } from '../dist/applications/harness/core/protocol-agents/projection.js'
-import { decodeProtocolView } from '../dist/applications/harness/core/view/decode.js'
+import { projectProtocolRecords } from '../packages/app-harness/dist/core/protocol-agents/projection.js'
+import { decodeProtocolView } from '../packages/app-harness/dist/core/view/decode.js'
 
 const factories = { responses: createResponsesProtocol, 'anthropic-messages': createAnthropicMessagesProtocol,
   'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol }

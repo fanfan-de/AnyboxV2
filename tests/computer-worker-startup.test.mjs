@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { connectLocalComputerWorker } from '../dist/applications/harness/core/computer/worker-client.js'
+import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))

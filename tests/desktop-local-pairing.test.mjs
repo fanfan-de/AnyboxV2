@@ -4,9 +4,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHostAccessComponent, hostAccessServiceKey } from '../dist/host/access.js'
-import { createConnectionsComponent, connectionsServiceKey } from '../dist/host/connections.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createHostAccessComponent, hostAccessServiceKey } from '../packages/host/dist/access.js'
+import { createConnectionsComponent, connectionsServiceKey } from '../packages/app-harness/dist/client/connections.js'
 import { startClientGateway } from './helpers/client-gateway.mjs'
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }

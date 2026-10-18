@@ -3,9 +3,10 @@ import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createClientHost } from '../dist/host/client.js'
-import { createExecutionHost } from '../dist/host/execution.js'
-import { createApplicationCatalog } from '../dist/host/applications/registration.js'
+import { fileURLToPath } from 'node:url'
+import { createClientHost } from '../packages/host/dist/client.js'
+import { createExecutionHost } from '../packages/host/dist/execution.js'
+import { createApplicationCatalog } from '../packages/host/dist/applications/registration.js'
 import { testApplication } from './helpers/test-application.mjs'
 import { deferred } from './helpers/controlled-models.mjs'
 
@@ -49,6 +50,28 @@ test('empty and multi-application directories work without Models; factories are
   const row = await host.root.get('local-storage').read(reader => reader.get('SELECT desired_enabled FROM app_product_targets WHERE id=?', ['other']))
   assert.equal(row.desired_enabled, 1); await host.close()
   host = await start(directory); assert.equal((await api(host, 'other')).data.value, 'separate')
+})
+
+test('an interface-only application needs no background, HTTP, database target or business provider', async t => {
+  const start = await fixture(t), full = testApplication('calculator')
+  const application = { definition: full.definition, assets: full.assets.map(asset => asset.path.endsWith('.js') ? { ...asset, file: fileURLToPath(new URL('./helpers/shell-application.mjs', import.meta.url)) } : asset) }
+  let host = await start([application])
+  const app = host.products.get('calculator')
+  assert.equal(app.definition.runtime, false)
+  assert.equal(app.definition.http, false)
+  assert.equal(app.state, 'running')
+  assert.equal(app.desiredEnabled, false)
+  assert.equal((await host.products.open('calculator')).state, 'running')
+  assert.equal(host.root.get('test.calculator'), undefined)
+  assert.equal(host.root.get('models'), undefined)
+  assert.equal((await fetch(host.url + '/apps/calculator/index.js')).status, 200)
+  assert.equal((await fetch(host.url + '/api/client/v1/apps/calculator/value')).status, 404)
+  const target = await host.root.get('local-storage').read(reader => reader.get('SELECT * FROM app_product_targets WHERE id=?', ['calculator']))
+  assert.equal(target, undefined)
+  await host.close()
+  host = await start([application])
+  assert.equal(host.products.get('calculator').desiredEnabled, false)
+  assert.equal(host.root.get('test.calculator'), undefined)
 })
 
 test('generic execution hosts authenticate and persist registered applications without installing or advertising Harness', async t => {
@@ -167,4 +190,17 @@ test('one runtime admission failure still closes other applications and releases
   // Teardown also observes the same remembered failure; make only this fixture's after hook idempotent.
   host.close = async () => {}
   const restored = await start([]); assert.deepEqual(restored.products.list(), [])
+})
+
+test('capability requirements belong to the selected entry and are immutable static declarations', () => {
+  const app = testApplication('notes'), required = { 'execution.connections': '^1.0.0' }
+  let created = 0
+  const registration = { ...app, capabilityRequirements: { required, optional: { 'system.directory-picker': '^1.0.0' } }, createRuntime(root) { created++; return app.createRuntime(root) } }
+  const catalog = createApplicationCatalog([registration])
+  required['execution.connections'] = '^2.0.0'
+  assert.equal(catalog.applications[0].capabilityRequirements.required['execution.connections'], '^1.0.0')
+  assert.equal(created, 0)
+  assert.throws(() => createApplicationCatalog([{ ...app, capabilityRequirements: { required: { sql: '' } } }]), /capability requirement/)
+  assert.throws(() => createApplicationCatalog([{ ...app, capabilityRequirements: { required: { sql: '^1.0.0' }, optional: { sql: '^1.0.0' } } }]), /both required and optional/)
+  assert.throws(() => createApplicationCatalog([{ definition: app.definition, assets: app.assets, http: app.http }]), /HTTP entry requires a runtime/)
 })

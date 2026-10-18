@@ -2,51 +2,50 @@
 
 [文档首页](README.md) · [组件手册](modules/README.md) · [部署说明](harness-server-deployment.md)
 
-发行与进程目标以[统一发行与独立运行角色](runtime-roles-and-distribution.md)为准：每个平台统一交付完整 Anybox，桌面界面、客户端服务、harness server 与 Computer worker 独立进程并支持单独部署。下文描述现有代码与资源归属，目标中的平台打包和独立服务管理仍需补齐。
+目标边界以[应用模块化分发与按需安装](application-packages-design.md)为准：用户先下载最小 Anybox 核心，再安装独立应用。D0a 已完成源码工作区与最小契约拆分；应用客户端连接业务已独立归属，D0b 已完成生命周期接入与基础能力按消费者装配，应用包安装尚待实施。[发行与独立运行角色](runtime-roles-and-distribution.md)继续固定桌面、客户端服务、harness server 与 Computer worker 的独立进程和部署原则。
 
-Anybox 是 NyaCore 应用的宿主产品，正式目录提供 Anybox Harness 与 Claude Agent 两个应用；Anybox Harness 是其中的 Agent 产品，其通用服务端核心称为 harness server，Claude Agent 的边界见[其设计文档](claude-agent-design.md)。服务端可部署在本地或远端，浏览器工作区与网关归 Anybox Harness 客户端，执行设备连接库与本机目录窗口归宿主；完整规范见 [命名与边界](naming.md)。宿主与应用保持同仓库、同构建，通过独立目录、公开契约和资源所有权划分；不新增 Anybox Harness npm 包。Models 保持独立可复用包。
+D0a.1 先实现[应用业务服务独立运行](application-standalone-services.md)。应用自己的 HTTP、认证与服务入口不导入 host 或 distribution；Anybox 注册适配在已有根上复用相同业务装配，另加活动保护和统一启停。没有公共 HTTP/认证抽取，也不因独立运行改变原默认命令、进程划分、数据文件或迁移。
+
+Anybox 是宿主产品，Anybox Harness 与 Claude Agent 分别是独立应用包；SQL 与目录窗口为基础包，执行设备连接、凭据、配对和转发由各应用独立实现。`host` 仅依赖 `application-api`、自身控制记录使用的 SQL 提供方和 Nya，不依赖应用、连接、目录、Models 或业务 Vault。`distribution` 在核心之外保留当前静态默认组合、桌面/CLI 角色入口与兼容启动器；默认客户端只额外登记目录能力的惰性提供方，按兼容消费者启停，最后消费者实际退出后才释放；连接组件随所属应用启停。业务名称、稳定 ID 和数据归属见[命名规范](naming.md)。
 
 ## 实际目录
 
 ```text
-src/
+packages/
+  application-api/src/            核心身份/状态类型；可选 node、web、nya 适配
   host/
-    applications/                 注册契约、安装归属、目标与活动准入
-    execution.ts, client.ts        显式接收应用目录的通用宿主装配
-    access.ts                     实例身份与令牌摘要
-    connections.ts, connection-proxy.ts 客户端执行设备连接库、系统凭据与通用连接转发
-    directory-picker.ts           客户端本机系统目录窗口（各客户端应用网关按本机身份使用）
-    component.ts, http-server.ts   执行监听器、认证与应用分派
-    client-http.ts, assets.ts      客户端监听器与外壳资源
-    http-utils.ts, products-api.ts 通用 HTTP 辅助与应用管理接口
-    web/                          应用列表、左侧应用入口、全局路由与 Web 契约
-  applications/
-    harness/
-      registration.ts             服务端注册入口
-      definition.ts, assets.ts     共享纯元数据与资源清单
-      server.ts, server-runtime.ts harness server 组合入口与按需装配
-      server-config.ts           harness server 配置校验
-      server-models.ts           harness server Models 装配与旧配置迁入
-      core/                      Agent、Prompt、Projects、Session、Run、工具与协议 Loop
-      http/                      harness server 业务 HTTP/SSE 与 Models 管理路由
-      client/                    独立客户端 registration.ts、网关与客户端装配
-      web/                       Anybox Harness 浏览器入口、控制器与视图
-    claude-agent/
-      definition.ts, config.ts   Claude Agent 元数据与配置
-      registration.ts            执行端注册：索引、SDK 适配器、Run 与 HTTP
-      client/                    客户端注册、资源清单与到执行设备的网关
-      core/, http/, web/         索引存储、SDK 适配器、Run 准入、HTTP/SSE 与浏览器界面
-  entrypoints/                    正式应用目录、环境变量、进程信号与启动命令
-  storage/port.ts, sqlite.ts       宿主公共业务存储端口与 SQLite 提供方
-packages/models/                  通用 Models 模块及离线快照
-web/index.html, style.css         Anybox 外壳模板与样式
-web/apps/agent/                   Anybox Harness 模板、图标与样式
-web/apps/claude-agent/            Claude Agent 样式
+    src/applications/             注册校验、运行归属、目标与活动准入
+    src/client.ts, execution.ts   显式接收目录的通用宿主
+    src/access.ts                 实例身份与令牌摘要
+    src/component.ts, http-server.ts, client-http.ts 监听器与应用分派
+    src/web/, web/                外壳控制器、HTML 与样式
+    src/desktop/                  通用进程、RPC、页面协议、退出与消息契约
+  app-harness/
+    src/registration.ts           服务端注册入口
+    src/definition.ts, assets.ts  纯元数据与资源清单
+    src/server-*.ts               配置、Models 与按需业务装配
+    src/server.ts                 单应用独立服务与唯一根关闭
+    src/server-access.ts          独立服务访问组件，兼容既有身份/令牌表
+    src/core/, http/, client/, web/ Harness 业务、网关与浏览器实现
+    web/                          模板、图标与样式
+  app-claude-agent/
+    src/                          注册、配置、索引、SDK、Run、HTTP、客户端与界面
+    web/                          专属样式
+  storage-sqlite/src/             显式 SQL 端口、迁移账本与排他 SQLite 提供方
+  directory-picker/src/           目录窗口、Electron 取消适配与原生源码
+  distribution/src/
+    composition/                  默认兼容组合
+    entrypoints/                  CLI、桌面与角色启动器
+    desktop/                      默认路径配置与应用 smoke；通用适配已归 host
+    resource-probe.ts             H0 资源归属验证
+  models/                         通用 Models 与离线快照
+  api-key-manager/                系统凭据适配与旧凭据兼容
 ```
 
-`src/host/` 不导入具体应用。通用宿主工厂显式接收注册目录，空目录仍可启动；`src/entrypoints/` 在宿主之外选择正式应用和默认配置。新增应用修改其自身目录与组合入口。Anybox Harness 可以依赖宿主公开的注册、运行时和 HTTP 契约，核心业务不依赖浏览器、客户端网关或进程入口。
 
-客户端只导入 `applications/harness/client/registration.ts`；服务端只导入 `applications/harness/registration.ts`，共享 `definition.ts` 不加载两侧运行时。`entrypoints/anybox-main.ts` 在解析角色后动态导入相应 main，桌面后台也使用独立的 `desktop-client.ts` 与 `desktop-execution.ts`。`npm run web` 默认纯客户端，`web:local` 才使用组合启动器。
+`packages/host/src/` 不导入具体应用。通用宿主工厂显式接收注册目录，空目录仍可启动；`packages/distribution/src/entrypoints/` 在宿主之外选择正式应用和默认配置。新增应用修改其自身目录与组合入口。Anybox Harness 只依赖 `application-api` 公开的注册、运行时和 HTTP 契约，核心业务不依赖浏览器、客户端网关或进程入口。
+
+客户端只导入 `@anybox/app-harness/client/registration`；服务端只导入 `@anybox/app-harness/registration`，共享 `definition.ts` 不加载两侧运行时。`entrypoints/anybox-main.ts` 在解析角色后动态导入相应 main，桌面后台也使用独立的 `desktop-client.ts` 与 `desktop-execution.ts`。`npm run web` 默认纯客户端，`web:local` 才使用组合启动器。
 
 前端外壳管理左侧应用入口及其管理浮层、全局路由和界面生命周期；窄条右侧只提供无装饰的挂载容器，全部布局由当前应用内部组件从顶边开始呈现。宿主不在右侧显示标题栏、标签栏、操作栏、通知或加载失败页。关闭界面和停止应用控制位于窄条底部，应用列表、状态及重载入口位于管理浮层。应用拥有自己的导航、内容、操作、模板和样式。Anybox Harness 直接挂载项目与会话工作区，侧栏保留一处设备选择和连接管理；模型与 Prompt 是工作区设置分类，设备 Agent 启停放在连接管理，不另设功能页面顶栏。安全展示 DTO、校验和解码位于 `core/view/` 等无 DOM 入口，浏览器只导入允许的纯函数和 type-only 契约，不引入 execution。HTTP DTO 不包含凭据引用、原生恢复记录、execution、租约和 result/done 句柄。Models 驱动负责原生传输，协议 Loop 决定工具与续轮，RunRuntime 管理操作、取消与退出。
 
@@ -64,13 +63,15 @@ flowchart LR
   O --> OD[(另一电脑独立数据)]
 ```
 
-每个进程一个应用 Nya 根，不增加模块、项目或任务子 Context。执行宿主常驻通用业务存储、访问管理、产品控制、活动准入和 API；打开该设备上的 Anybox Harness 时装配完整 Models、Prompt 与 Agent 执行能力。Models 包含现有目录，Prompt 包含 Agent Prompt 绑定，Agent 依赖两者并装配 Projects、Session、图片/文件、Computer 协调及 worker 客户端、执行闭环。四种工具与执行账本安装在独立 computer worker 的唯一根，按需连接或启动；它不共享 Authority 业务 SQLite。客户端常驻自己的 SQLite、执行设备连接库、本机目录窗口、应用控制和 HTTP 外壳；打开 Anybox Harness 才安装代理，不安装执行服务。选择远程 Agent 不启动本地执行。
+每个进程一个应用 Nya 根，不增加模块、项目或任务子 Context。执行宿主常驻通用业务存储、访问管理、产品控制、活动准入和 API；打开该设备上的 Anybox Harness 时装配完整 Models、Prompt 与 Agent 执行能力。Models 包含现有目录，Prompt 包含 Agent Prompt 绑定，Agent 依赖两者并装配 Projects、Session、图片/文件、Computer 协调及 worker 客户端、执行闭环。四种工具与执行账本安装在独立 computer worker 的唯一根，按需连接或启动；它不共享 Authority 业务 SQLite。客户端常驻自己的 SQLite、应用控制和 HTTP 外壳；本机目录窗口按兼容消费者装配，最后消费者实际退出后释放。打开各应用时分别安装自己的连接、凭据与代理，不安装执行服务。选择远程 Agent 不启动本地执行。
 
-API 监听器及请求由 `host-application-api` 独占，常驻入口只依赖宿主访问、产品控制及活动准入，业务路由按请求取得已启用能力的当前服务；Models 路由仍是内部函数。客户端监听器和静态页面由 app-client-http 独占；Anybox Harness 内部上传和转发流由按需 client-gateway 独占，连接库由常驻 client-connections 独占，静态映射不是额外组件。依赖清理顺序由 Nya 决定。宿主 `prepareClose()` 同步关闭产品控制、业务、Run 与 HTTP 准入并等待控制和装配队列；`close()` 同时清理整个根与排空 HTTP 已受理写入、保留租约，避免先等待 Run 而延迟取消 Run。`installHarnessServerCore()` 返回的安装句柄 `close()` 只卸载该次安装的 harness server 核心组件，不关闭宿主提供的 Models、业务库、图片组件或整个根。运行期产品停用通过产品控制服务执行，忙碌时拒绝；直接 Run 服务同样检查关闭状态。网络连接 `dispose()` 只中止客户端读取和观察，不发远程取消或关闭命令。应用正常关闭取消并等待所属 Run，独立 idle worker 持续运行；停止 worker 服务才关闭其根。Runtime 进程异常退出后的工具等待接续与系统部署边界见 [Computer 资源设计](computer-resource-design.md)。
+上述常驻产品控制与活动服务是 Anybox 托管组合的职责。应用独立服务由自己的工厂创建唯一根及必需提供方，不安装宿主产品/活动组件。Harness 安装自己的 `harness-access` / `harness-listener`，Claude Agent 安装自己的 `claude-agent-access` / `claude-agent-listener`，再安装相同业务装配；应用自行完成准入、取消与退出等待。同一旧业务文件只允许一个持有者，切换运行方式先正常关闭原实例。
+
+API 监听器及请求由 `host-application-api` 独占，常驻入口只依赖宿主访问、产品控制及活动准入，业务路由按请求取得已启用能力的当前服务；Models 路由仍是内部函数。客户端监听器和静态页面由 app-client-http 独占；Anybox Harness 内部上传和转发流由按需 client-gateway 独占，连接与凭据由各应用私有组件独占并随所属应用启停，静态映射不是额外组件。依赖清理顺序由 Nya 决定。宿主 `prepareClose()` 同步关闭产品控制、业务、Run 与 HTTP 准入并等待控制和装配队列；`close()` 同时清理整个根与排空 HTTP 已受理写入、保留租约，避免先等待 Run 而延迟取消 Run。`installHarnessServerCore()` 返回的安装句柄 `close()` 只卸载该次安装的 harness server 核心组件，不关闭宿主提供的 Models、业务库、图片组件或整个根。运行期产品停用通过产品控制服务执行，忙碌时拒绝；直接 Run 服务同样检查关闭状态。网络连接 `dispose()` 只中止客户端读取和观察，不发远程取消或关闭命令。应用正常关闭取消并等待所属 Run，独立 idle worker 持续运行；停止 worker 服务才关闭其根。Runtime 进程异常退出后的工具等待接续与系统部署边界见 [Computer 资源设计](computer-resource-design.md)。
 
 ## 身份、请求与状态
 
-执行端业务库 `host-access` v2 保存稳定 instanceId、设备令牌摘要与可空受管 owner 元数据；旧 v1 令牌保持非受管身份。桌面本机配对仅撤销自己 owner 的令牌，公开列表不返回 owner 或秘密。所有设备令牌拥有相同单用户权限，Prompt 使用 `local-web-user`。客户端宿主的 `client-connections` v2 独占自己的数据库，并记录桌面本机连接 ID 与 instanceId 的归属，完整凭据由独立系统凭据命名空间保存，修改先登记意图再写凭据再提交引用，失败保留旧配置。
+执行端业务库 `host-access` v2 保存稳定 instanceId、设备令牌摘要与可空受管 owner 元数据；旧 v1 令牌保持非受管身份。桌面本机配对仅撤销自己 owner 的令牌，公开列表不返回 owner 或秘密。所有设备令牌拥有相同单用户权限，Prompt 使用 `local-web-user`。客户端根上的两个应用分别以 `agent-client-connections` v2 和 `claude-agent-client-connections` v2 复用该根唯一的 SQL 连接，各自拥有私有表和迁移域，并记录桌面本机连接 ID 与 instanceId 的归属，完整凭据由独立系统凭据命名空间保存，修改先登记意图再写凭据再提交引用，失败保留旧配置。
 
 网关只接受已登记 connectionId 和公开路由白名单。每个请求捕获配置版本、地址、凭据及期望实例，不跟随重定向、不自动重试写入，不传递浏览器认证头。修改地址必须重新验证原 instanceId。客户端 ID 编码为 `h:<instanceId>:<resourceId>`；传输时在资源字段解包，正文与模型原生参数不改写。跨实例输入拒绝发送。
 

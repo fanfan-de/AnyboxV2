@@ -16,7 +16,7 @@ Computer 是智能体按需使用的执行资源。Agent 身份、Session、Run 
 
 当前安装 Computers、Workspaces 和 Computer Operations，Session 在工具意图同一业务事务内接纳资源声明、固定工具批次及独立恢复游标。Operations 按需激活本机 worker、准备 pinned-local、固定实例/路径后派发。RunRuntime 不再注入四工具服务；[独立 worker](modules/computers/worker-executor.md)持有工具、进程 scope 及耐久 receipt/result。创建 Session、纯模型 Run 和计划工具不激活 computer。
 
-模型响应已保存后的工具等待、消费、清理及结算在 Runtime 进程异常重启后，由新 Runtime 提升 owner 并先授权 worker，接续原操作；没有恢复信封/游标的旧活动 Run、未保存模型响应的 Run 仍在[Session 启动恢复](../src/applications/harness/core/session/sqlite-records.ts)结算 interrupted。worker 自身故障无法证明执行的 starting/running 操作 outcome-unknown，不重放。显式 Nya 组件卸载/依赖撤销仍按现有 Run 控制取消并排空；目标中的纯观察换代尚未实现。多设备连接仍是不同完整 harness server，没有工作区同步或跨机器调度。
+模型响应已保存后的工具等待、消费、清理及结算在 Runtime 进程异常重启后，由新 Runtime 提升 owner 并先授权 worker，接续原操作；没有恢复信封/游标的旧活动 Run、未保存模型响应的 Run 仍在[Session 启动恢复](../packages/app-harness/src/core/session/sqlite-records.ts)结算 interrupted。worker 自身故障无法证明执行的 starting/running 操作 outcome-unknown，不重放。显式 Nya 组件卸载/依赖撤销仍按现有 Run 控制取消并排空；目标中的纯观察换代尚未实现。多设备连接仍是不同完整 harness server，没有工作区同步或跨机器调度。
 
 ### 1.1 三种部署角色
 
@@ -158,7 +158,7 @@ Authority 确认原始结果及其引用耐久可读之后，worker 才可释放
 | Computer Operations.markObservedIn / markIncorporatedIn | 同步参加消费事务，记录原结果已观察/进入请求，重复相同事实返回既有提交 |
 | Session 执行端口 claimRun / loadRunResume / commitResume | 校验 owner，读取固定输入、本 Run 事实与游标，提交原子推进；不暴露任意表写入 |
 
-这些是完整目标行为契约；实际已增加 Operations.claimRunIn/requestCancelIn/authorizeRun/recoverCancelledRuns、Session.loadRunResume/claimRunResume/saveRunResume、原观察幂等及独立 worker 的 submit/get/control，没有 portable checkpoint 或独立模型 watch。完整工具批次及 operation ID 先保存到 resume；单工具提交经 Session 复核 Run/声明/取消，在同一事务保存意图和 acceptIn 的声明及需求，引用已有游标。Runtime 不绕过事务直接执行。同步参与沿用 [图片 retainIn](../src/applications/harness/core/image/port.ts)与[文件快照 retainIn](../src/applications/harness/core/project-files/port.ts)。本地观察 done 不等于 worker operation/scope 实际退出。
+这些是完整目标行为契约；实际已增加 Operations.claimRunIn/requestCancelIn/authorizeRun/recoverCancelledRuns、Session.loadRunResume/claimRunResume/saveRunResume、原观察幂等及独立 worker 的 submit/get/control，没有 portable checkpoint 或独立模型 watch。完整工具批次及 operation ID 先保存到 resume；单工具提交经 Session 复核 Run/声明/取消，在同一事务保存意图和 acceptIn 的声明及需求，引用已有游标。Runtime 不绕过事务直接执行。同步参与沿用 [图片 retainIn](../packages/app-harness/src/core/image/port.ts)与[文件快照 retainIn](../packages/app-harness/src/core/project-files/port.ts)。本地观察 done 不等于 worker operation/scope 实际退出。
 
 ### 4.3 五个提交边界
 
@@ -255,7 +255,7 @@ unobserved 表示存在原结果但 Session 未观察；observed 表示原结果
 
 ### 5.4 活跃 Run 恢复流程
 
-原生 Run 的现有写入阶段仍是 active/terminal；[执行归约器](../src/applications/harness/core/run/execution.ts)中的 ready-model、model-in-flight 等阶段属于旧格式兼容读取，不恢复旧 writer。新增独立版本化 RunResumeRecord，使用 [Session 执行端口](../src/applications/harness/core/session/port.ts)提供 loadRunResume 和接管/提交入口，与成功父链 NativeHistory 分别建模。
+原生 Run 的现有写入阶段仍是 active/terminal；[执行归约器](../packages/app-harness/src/core/run/execution.ts)中的 ready-model、model-in-flight 等阶段属于旧格式兼容读取，不恢复旧 writer。新增独立版本化 RunResumeRecord，使用 [Session 执行端口](../packages/app-harness/src/core/session/port.ts)提供 loadRunResume 和接管/提交入口，与成功父链 NativeHistory 分别建模。
 
 恢复记录包含固定 Run 输入、初始化/工具声明、模型语义身份、父引用、本 Run 增量记录、稳定 exchange/operation ID、批次及消费位置、已计入的限额、取消/清理事实，以及协议 Loop 的不透明 cursor。Session 只保存和验证版本化信封，Runtime 管通用操作和 owner，协议 Loop 独占 cursor、工具结果编码及原生停止语义。
 

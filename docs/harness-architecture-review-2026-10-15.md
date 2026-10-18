@@ -14,7 +14,7 @@
 
 ## 评估依据
 
-方法：通读[组合根](../src/applications/harness/core/index.ts)、[Run](../src/applications/harness/core/run/component.ts)、[RunRuntime](../src/applications/harness/core/run/runtime-component.ts)、[Session 端口](../src/applications/harness/core/session/port.ts)与 [HTTP 门面](../src/applications/harness/http/handler.ts)；用脚本统计 `core/` 各目录间的 `import` 边（含 type-only 导入）与双向依赖；按关键字统计栅栏标识与兼容标记的出现次数。
+方法：通读[组合根](../packages/app-harness/src/core/index.ts)、[Run](../packages/app-harness/src/core/run/component.ts)、[RunRuntime](../packages/app-harness/src/core/run/runtime-component.ts)、[Session 端口](../packages/app-harness/src/core/session/port.ts)与 [HTTP 门面](../packages/app-harness/src/http/handler.ts)；用脚本统计 `core/` 各目录间的 `import` 边（含 type-only 导入）与双向依赖；按关键字统计栅栏标识与兼容标记的出现次数。
 
 | 指标 | 数值 |
 | --- | --- |
@@ -35,7 +35,7 @@
 - **资源归属与退出语义。** `OwnedCall` 把业务结果和实际退出分开，组件通过 Effect 登记清理，关闭先停准入再取消并等待退出。46 个测试文件使用真实 SQLite，覆盖 SIGKILL、取消窗口和恢复。这是 Agent 运行时最难做对的部分。
 - **耐久操作账本。** 意图、启动、观察三段持久屏障加 owner epoch 栅栏，让工具副作用在进程崩溃后可接续而不重放。
 - **原生协议不做统一消息抽象。** 四个 Loop 各三十余行、共用一个 exchange runner；原生记录版本化、只读兼容。避免了多协议翻译层的信息损失。
-- **硬边界。** Models 独立包不反向依赖 `src/`；`src/host/` 不导入应用；密钥只在 Vault；每进程一个 Nya 根，组合根显式列出全部组件。
+- **硬边界。** Models 独立包不反向依赖 `src/`；`packages/host/src/` 不导入应用；密钥只在 Vault；每进程一个 Nya 根，组合根显式列出全部组件。
 - **文档与代码同步。** 组件手册、架构图和设计文档有日期和源码链接，差异可追溯。
 
 ## 结构性代价
@@ -44,7 +44,7 @@
 
 现象：`harness.sessions` 与 `harness.session-runs` 持有会话、节点、Run、操作账本、恢复游标、单元绑定、图片与文件引用、默认模型、工具选择。
 
-证据：[sqlite-records.ts](../src/applications/harness/core/session/sqlite-records.ts) 1043 行，`run-state` 迁移域 12 张表，导入 run、tool、computer、unit、image、project-files、prompt、project 八个目录；其中直接调用 `validateToolBatch` 与 `needsComputer`，即 Session 已在解释工具与 Computer 语义。
+证据：[sqlite-records.ts](../packages/app-harness/src/core/session/sqlite-records.ts) 1043 行，`run-state` 迁移域 12 张表，导入 run、tool、computer、unit、image、project-files、prompt、project 八个目录；其中直接调用 `validateToolBatch` 与 `needsComputer`，即 Session 已在解释工具与 Computer 语义。
 
 影响："所有状态经 Session"原本是事务边界，现在成了职责边界。每个新领域（图片、文件、单元）都要进入 Session，Session 的变更面与其他所有组件相关。
 
@@ -66,7 +66,7 @@
 
 ### 4. 门面与路由重复声明
 
-现象：[core/index.ts](../src/applications/harness/core/index.ts) 的 `HarnessServerApi` 约 60 个转发方法；[http/handler.ts](../src/applications/harness/http/handler.ts) 的 `HarnessServerApiCommands` 再声明一遍，之后是 57 条 `method === … && path === …` 分支；Web 的 `Api` 是按路径字符串调用的函数，各客户端模块各自书写路径。
+现象：[core/index.ts](../packages/app-harness/src/core/index.ts) 的 `HarnessServerApi` 约 60 个转发方法；[http/handler.ts](../packages/app-harness/src/http/handler.ts) 的 `HarnessServerApiCommands` 再声明一遍，之后是 57 条 `method === … && path === …` 分支；Web 的 `Api` 是按路径字符串调用的函数，各客户端模块各自书写路径。
 
 影响：新增一个功能要依次改领域端口、core 门面、HTTP 命令接口、路由分支、Web 客户端路径与 DTO。U1 变更触及 89 个文件，一部分来自这个税。
 
@@ -74,7 +74,7 @@
 
 现象：对外 `Run.status`、持久化的 `RunExecution.phase`（当前只写 `active`，旧阶段只读）、`RunResumeState.stage`（`model-pending`、`response`、`cleanup`、`settling`）三套状态并存；RunRuntime 还用 `transferred`、`stateFailed`、`reason`、`closing`、`cleanupCategory`、`finalOutputExceeded` 等闭包变量表达中间状态。
 
-证据：Run 与 RunRuntime 两个文件 670 行里有 24 个 try 块；关键不变量如"检查取消与同步持有句柄之间不能有 await"靠注释维持。[Run 状态转换设计](run-state-machine-design.md)仍描述已删除的 AgentLoop 与 `ready-model`、`model-in-flight` 等不再写入的阶段。
+证据：Run 与 RunRuntime 两个文件 670 行里有 24 个 try 块；关键不变量如"检查取消与同步持有句柄之间不能有 await"靠注释维持。评估时的旧 Run 状态文档仍描述已删除的 AgentLoop 与 `ready-model`、`model-in-flight` 等不再写入的阶段；该历史稿已清理，当前契约见 [RunRuntime](modules/execution/run-runtime.md)。
 
 影响：这是正确性风险最集中的区域。每增加一种恢复路径（U3 远端 Models 会增加），都要在闭包标志的组合里再加一个分支。
 
@@ -116,7 +116,7 @@
 
 1. 把 `harness.session-runs` 中的 Run 方法（findAcceptedRun、registerRun、loadRunContext、loadRunResume、listRunResumes、claimRunResume、saveRunResume、getRunOperation、startOperation、observeOperation、getRun、getRunExecution、requestCancellation、settleRun）移到 `run/records-port.ts`，由新组件实现；readFileSnapshots、describeImages 留在 Session，它们是资源引用。
 2. `harness.sessions` 上的 Run 查询（getRun、getRunByKey、listRuns、getRunEvents、getRunRecords）改由 run-records 提供，组合根门面改转发目标。
-3. 接受事务与成功结算仍是单事务：Session 提供接收事务对象的入口，例如 `fixProtocol(tx, …)`、`retainInputs(tx, …)`、`commitNode(tx, …)`，由 run-records 在自己的事务内调用。这要求[存储端口](../src/storage/port.ts)明确"事务对象可以传给另一组件的方法"。
+3. 接受事务与成功结算仍是单事务：Session 提供接收事务对象的入口，例如 `fixProtocol(tx, …)`、`retainInputs(tx, …)`、`commitNode(tx, …)`，由 run-records 在自己的事务内调用。这要求[存储端口](../packages/storage-sqlite/src/port.ts)明确"事务对象可以传给另一组件的方法"。
 4. 第一步只拆文件与端口，`run-state` 迁移账本仍由一处登记；迁移账本是存储事实，不是职责边界。独立迁移域留到后续。
 
 验收：
@@ -131,14 +131,14 @@
 
 ### 建议 2：把 Run 生命周期写成显式状态机
 
-目标：阶段、转换与不变量成为数据和纯函数；RunRuntime 只执行副作用。这与[函数式开发方法](harness-server-functional-development.md)中"纯决策函数输出新快照与操作意图"的约定一致。
+目标：阶段、转换与不变量成为数据和纯函数；RunRuntime 只执行副作用。这与 [AGENTS.md](../AGENTS.md) 中纯函数承载状态转换、副作用集中于资源所有者的约定一致。
 
 做法：
 
 1. 新增 `run/lifecycle-domain.ts`：状态集合（preparing、accepted、running、cancelling、cleanup、settling、settled）、事实类型（操作启动、观察、取消请求、依赖撤销、写入失败、program 关闭）和纯函数 `advanceLifecycle(state, fact)`，返回新状态与操作意图列表；意图是"关闭 program"、"取消在途操作"、"持久化 stage"、"结算"之类的数据。
 2. RunRuntime 的 `perform`、`cancel`、`finish` 改为：归一化事实、调用 `advanceLifecycle`、执行意图。闭包里的布尔标志由状态字段替代。
 3. 合并 `RunExecution.phase` 与 `RunResumeState.stage`：选一个作为唯一写入来源，另一个只保留读旧数据。
-4. 重写 [Run 状态转换设计](run-state-machine-design.md)为当前状态表与转换表。
+4. 在 [Run](modules/execution/run.md) 与 [RunRuntime](modules/execution/run-runtime.md) 组件文档中补齐当前状态表与转换表。
 
 验收：
 
@@ -161,13 +161,13 @@
 | 标识 | 定义位置 | 递增时机 | 校验位置 | 挡住的竞争 |
 | --- | --- | --- | --- | --- |
 | `revision` | session、prompt、工具设置 domain | 每次用户修改 | `expectedRevision` 比较 | 并发编辑覆盖 |
-| `runOwnerEpoch` | [run/program.ts](../src/applications/harness/core/run/program.ts) | Runtime 接管 Run | Session 操作写入、worker 授权 | 旧 Runtime 进程的迟到写入 |
-| `generationId` | Models 原生类型、[协议注册表](../src/applications/harness/core/protocol-agents/registry.ts) | 协议驱动注册 | prepare 固定、续轮比对 | 注销后的驱动续轮 |
+| `runOwnerEpoch` | [run/program.ts](../packages/app-harness/src/core/run/program.ts) | Runtime 接管 Run | Session 操作写入、worker 授权 | 旧 Runtime 进程的迟到写入 |
+| `generationId` | Models 原生类型、[协议注册表](../packages/app-harness/src/core/protocol-agents/registry.ts) | 协议驱动注册 | prepare 固定、续轮比对 | 注销后的驱动续轮 |
 | `historyScopeEpoch` | Models 配置库 domain | Key、地址、认证方式变更 | 续接检查 | 跨账户续接历史 |
-| `instanceGeneration` | [computer/domain.ts](../src/applications/harness/core/computer/domain.ts) | Computers 换代 | Operations placement | 退役实例上的声明 |
-| `workspaceEpoch` | [workspace/domain.ts](../src/applications/harness/core/workspace/domain.ts) | 工作区重新绑定 | 工具执行绑定校验 | 旧绑定的工具执行 |
-| `bootId` | [worker-port.ts](../src/applications/harness/core/computer/worker-port.ts)、[unit/domain.ts](../src/applications/harness/core/unit/domain.ts) | worker 或单元每次启动 | `previousExited` 判定 | 旧 boot 的孤儿进程被接管 |
-| 附着 `epoch` | [unit/domain.ts](../src/applications/harness/core/unit/domain.ts)、[worker-attachments-domain.ts](../src/applications/harness/core/computer/worker-attachments-domain.ts) | 撤销或重新附着 | Run 恢复前 verify、worker 授权 | 已撤销附着的 Run 续接 |
+| `instanceGeneration` | [computer/domain.ts](../packages/app-harness/src/core/computer/domain.ts) | Computers 换代 | Operations placement | 退役实例上的声明 |
+| `workspaceEpoch` | [workspace/domain.ts](../packages/app-harness/src/core/workspace/domain.ts) | 工作区重新绑定 | 工具执行绑定校验 | 旧绑定的工具执行 |
+| `bootId` | [worker-port.ts](../packages/app-harness/src/core/computer/worker-port.ts)、[unit/domain.ts](../packages/app-harness/src/core/unit/domain.ts) | worker 或单元每次启动 | `previousExited` 判定 | 旧 boot 的孤儿进程被接管 |
+| 附着 `epoch` | [unit/domain.ts](../packages/app-harness/src/core/unit/domain.ts)、[worker-attachments-domain.ts](../packages/app-harness/src/core/computer/worker-attachments-domain.ts) | 撤销或重新附着 | Run 恢复前 verify、worker 授权 | 已撤销附着的 Run 续接 |
 
 2. 各 domain 文件为自己的标识定义 branded type，例如 `type RunOwnerEpoch = number & { readonly [brand]: 'run-owner-epoch' }`，只在递增处构造。
 

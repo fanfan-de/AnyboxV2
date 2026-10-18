@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createToolsSettingsClient } from '../dist/applications/harness/web/tools-client.js'
-import { mapResourceIds } from '../dist/applications/harness/web/harness-client.js'
-import { allowedProxyPath } from '../dist/applications/harness/client/gateway.js'
+import { createToolsSettingsClient } from '../packages/app-harness/dist/web/tools-client.js'
+import { mapResourceIds } from '../packages/app-harness/dist/web/harness-client.js'
+import { allowedProxyPath } from '../packages/app-harness/dist/client/gateway.js'
 
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const catalog = [{ toolId: 'codex.update_plan', name: 'update_plan', selectable: true, dependencies: [], definition: { name: 'codex_update_plan' }, source: { harnessId: 'codex' } },

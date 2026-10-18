@@ -4,7 +4,7 @@
 
 Reusable Nya module owning unified sourced Provider/Model definitions, account connections, runnable native configurations, credentials and protocol execution. Version 0.2 removes the unified message/result execution API. Requires Node.js 22.13+ and `@nya/core`. It has no dependency on Anybox Run, Session, tools or frontend code.
 
-迁移前组件布局参考图（包含来源接纳和配置关系；图中的旧执行接口不适用于 0.2，以本文原生契约为准）：[高清 PNG](docs/architecture.png) · [SVG](docs/architecture.svg)。统一定义、连接与执行配置的数据关系：[PNG](docs/architecture-data-flow.png) · [SVG](docs/architecture-data-flow.svg)。两页均保存在同一 [可编辑 draw.io](docs/architecture.drawio) 中；组件依赖与宿主接入见 [Models 模块架构](../../docs/architecture/models-module.md)。
+组件依赖、资源归属、统一定义与执行配置的数据关系见 [Models 模块手册](../../docs/modules/models/README.md#依赖与资源)。
 
 ## Install in an application
 

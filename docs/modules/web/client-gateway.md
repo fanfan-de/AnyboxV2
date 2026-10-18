@@ -2,7 +2,9 @@
 
 [宿主与客户端模块](README.md)
 
-`src/applications/harness/client/gateway.ts` 的 `createClientGatewayComponent({localInstanceId?})` 创建 Anybox Harness 内部 `client-gateway`，提供 `client.gateway: HarnessGateway`（handle、幂等 close）。inject `client.connections`、`host.directory-picker` 、`app.activity` 与 `client.computer`。组件仅在 Anybox Harness 客户端打开时安装，拥有在途连接、上传、SSE 和下载流；常驻监听器及静态页面属于 [Client Shell](client-shell.md)。`client.connections` 是宿主常驻的[连接库](client-connections.md)，`host.directory-picker` 是宿主常驻的[目录窗口](directory-picker.md)；转发的通用部分（请求绑定校验、租约获取、认证与实例头、重定向与实例不匹配拒绝、双向流管道与超时）是宿主 `src/host/connection-proxy.ts` 的 `forwardConnectionRequest`，网关只保留 Anybox Harness 的白名单、连接管理路由、本机状态与目录窗口。
+`packages/app-harness/src/client/gateway.ts` 的 `createClientGatewayComponent({localInstanceId?}, directoryPicker = false)` 创建 Anybox Harness 内部 `client-gateway`，提供 `client.gateway: HarnessGateway`（handle、幂等 close）。inject `client.connections`、`app.activity` 与 `client.computer`；仅本代已取得兼容的可选目录能力时，才由 `directoryPicker: true` 加入 `host.directory-picker`。组件仅在 Anybox Harness 客户端打开时安装，拥有在途连接、上传、SSE 和下载流；常驻监听器及静态页面属于 [Client Shell](client-shell.md)。`client.connections` 是随 Harness 应用启停的私有[连接组件](client-connections.md)，`host.directory-picker` 是由受信组合声明、按实际消费者装配的共享[目录窗口](directory-picker.md)，最后消费者完成清理后才卸载；转发的通用部分（请求绑定校验、租约获取、认证与实例头、重定向与实例不匹配拒绝、双向流管道与超时）是应用私有 `packages/app-harness/src/client/connection-proxy.ts` 的 `forwardConnectionRequest`，网关只保留 Anybox Harness 的白名单、连接管理路由、本机状态与目录窗口。
+
+客户端注册声明 required `storage.sqlite@^1.0.0` 与 optional `system.directory-picker@^1.0.0`，应用运行时从冻结的 `ApplicationRuntimeContext.capabilities` 判断本代是否取得目录能力。组件从本轮 `deps` 读取所选服务；缺少、平台不支持或版本冲突时不声明目录依赖，`picker` 保持 undefined，应用内路径流程继续可用。不能因根上存在其他消费者的目录服务而越过本代能力选择，也不能在请求中临时查找另一个版本作为后备。
 
 每个委托请求在首次异步读取之前登记 Anybox Harness Activity 租约。写入阻止关闭客户端应用，读操作可取消但等待实际退出。`createHarnessGateway` 为内部闭包工厂；`createHarnessGateway` 仅组合相同 Gateway 与 Shell 的嵌入/测试入口，没有第二套产品生命周期。
 
@@ -20,9 +22,9 @@ Shell 只监听 127.0.0.1 并检查精确 Host/Origin 和同源约束；通过�
 
 Effect 停止接收请求，取消网络、上传和流读取并等待实际关闭；连接组件与 SQLite 随后清理。客户端关闭不发送 Run 取消或 harness server 关闭；目录对话框关闭会释放自己的短期浏览会话，不影响执行。失败用稳定代码区分认证、实例不匹配、配置冲突和不可达。
 
-浏览器 `src/applications/harness/web/harness-client.ts` 实现固定连接的 settings Api 和多实例查询/命令/上传/资源/订阅。资源身份用 instanceId，SSE 按实例分组；dispose 只关闭本地连接资源。草稿、pending、位置与布局使用实例限定 ID；结果未知先向原实例按幂等键补查。旧状态处理由 `legacy-state.ts` 所属客户端逻辑完成，不是新组件。
+浏览器 `packages/app-harness/src/web/harness-client.ts` 实现固定连接的 settings Api 和多实例查询/命令/上传/资源/订阅。资源身份用 instanceId，SSE 按实例分组；dispose 只关闭本地连接资源。草稿、pending、位置与布局使用实例限定 ID；结果未知先向原实例按幂等键补查。旧状态处理由 `legacy-state.ts` 所属客户端逻辑完成，不是新组件。
 
-测试：`tests/remote-harness-server.test.mjs`、`tests/harness-client.test.mjs`、`tests/deployment-boundaries.test.mjs`；浏览器测试宿主 `tests/helpers/remote-browser-host.mjs` 提供三个受控实例。运行 `npm run check`。
+测试：`tests/application-optional-capabilities.test.mjs` 验证可选目录降级、条件依赖与跨版本隔离；`tests/remote-harness-server.test.mjs`、`tests/harness-client.test.mjs`、`tests/deployment-boundaries.test.mjs`；浏览器测试宿主 `tests/helpers/remote-browser-host.mjs` 提供三个受控实例。运行 `npm run check`。
 
 应用控制代理仅允许已知 `/products`、`/products/:id` 与 `/:id/open|stop|retry`，不提供模块列表、创建或定义写入。每个代理请求固定所属 Anybox Harness 应用及期望实例/连接 revision，业务端核验该设备的 Anybox Harness 运行目标。
 

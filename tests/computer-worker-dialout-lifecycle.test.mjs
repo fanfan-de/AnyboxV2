@@ -6,12 +6,12 @@ import { mkdtemp, writeFile, rm, realpath } from 'node:fs/promises'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { connectLocalComputerWorker } from '../dist/applications/harness/core/computer/worker-client.js'
-import { openComputerWorker } from '../dist/applications/harness/core/computer/worker-server.js'
-import { createWorkerDialoutComponent, workerDialoutServiceKey } from '../dist/applications/harness/core/computer/worker-dialout.js'
-import { computerWorkerServiceKey } from '../dist/applications/harness/core/computer/worker-port.js'
-import { workerAttachmentsServiceKey } from '../dist/applications/harness/core/computer/worker-attachments.js'
-import { imageAssetsServiceKey } from '../dist/applications/harness/core/image/port.js'
+import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
+import { openComputerWorker } from '../packages/app-harness/dist/core/computer/worker-server.js'
+import { createWorkerDialoutComponent, workerDialoutServiceKey } from '../packages/app-harness/dist/core/computer/worker-dialout.js'
+import { computerWorkerServiceKey } from '../packages/app-harness/dist/core/computer/worker-port.js'
+import { workerAttachmentsServiceKey } from '../packages/app-harness/dist/core/computer/worker-attachments.js'
+import { imageAssetsServiceKey } from '../packages/app-harness/dist/core/image/port.js'
 const deferred = () => { let resolve; const promise = new Promise(yes => { resolve = yes }); return {promise, resolve} }
 const within = async (promise, ms = 1_000) => {
   let timer

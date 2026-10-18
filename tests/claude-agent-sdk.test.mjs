@@ -4,11 +4,11 @@ import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createClaudeAgentSdkComponent } from '../dist/applications/claude-agent/core/sdk/adapter.js'
-import { claudeAgentSdkServiceKey } from '../dist/applications/claude-agent/core/sdk/port.js'
-import { createExecutionHost } from '../dist/host/execution.js'
-import { createClientHost } from '../dist/entrypoints/client-main.js'
-import { claudeAgentServerApplication } from '../dist/applications/claude-agent/registration.js'
+import { createClaudeAgentSdkComponent } from '../packages/app-claude-agent/dist/core/sdk/adapter.js'
+import { claudeAgentSdkServiceKey } from '../packages/app-claude-agent/dist/core/sdk/port.js'
+import { createExecutionHost } from '../packages/host/dist/execution.js'
+import { createClientHost } from '../packages/distribution/dist/entrypoints/client-main.js'
+import { claudeAgentServerApplication } from '../packages/app-claude-agent/dist/registration.js'
 
 /**
  * Exercises the user's own installed and logged-in `claude` executable through the real SDK adapter.
@@ -77,8 +77,8 @@ test('a browser-shaped client reaches the installed claude through the client ga
     const data = await response.json(); assert.equal(response.status, expected, `${path}: ${JSON.stringify(data)}`); return data
   }
   const token = await execution.root.get('host.access').issue('browser')
-  const saved = await client.root.get('client.connections').save({ name: 'This Mac', endpoint: execution.url, token: token.token })
   await request('/api/client/v1/products/claude-agent/open', {})
+  const saved = await client.root.get('claude-agent.connections').save({ name: 'This Mac', endpoint: execution.url, token: token.token })
   const device = `/api/client/v1/apps/claude-agent/connections/${saved.id}/v1`
   assert.equal((await request(device + '/products/claude-agent/open', {})).state, 'running')
   const environment = await request(device + '/apps/claude-agent/environment')

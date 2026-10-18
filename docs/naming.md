@@ -6,17 +6,17 @@
 
 | 名称 | 定位 | 当前实现 |
 | --- | --- | --- |
-| **Anybox** | 外层宿主产品，承载受信应用，管理目录、生命周期、访问、HTTP 分派和前端外壳 | `src/host/`；正式组合及进程入口在 `src/entrypoints/` |
-| **Anybox Harness** | Anybox 内的 Agent 产品，包含项目与会话工作区、客户端连接和服务端执行能力 | `src/applications/harness/`；稳定应用 ID 为 `agent` |
+| **Anybox** | 外层宿主产品，承载受信应用，管理目录、生命周期、访问、HTTP 分派和前端外壳 | `packages/host/src/`；正式组合及进程入口在 `packages/distribution/src/entrypoints/` |
+| **Anybox Harness** | Anybox 内的 Agent 产品，包含项目与会话工作区、客户端连接和服务端执行能力 | `packages/app-harness/src/`；稳定应用 ID 为 `agent` |
 | **harness server** | Anybox Harness 的通用服务端核心，可部署在本地设备或远端服务器 | `server.ts`、`server-runtime.ts`、`server-config.ts`、`server-models.ts`、`core/` 和 `http/` |
-| **Anybox Harness 客户端** | 产品的同源网关、目录选择和浏览器工作区；执行设备连接库归宿主 | 应用的 `client/`、`web/` 和 `web/apps/agent/`；运行在独立客户端进程及浏览器中 |
-| **Claude Agent** | Anybox 内的第二个正式应用，原生消费 Claude Agent SDK，驱动执行设备上用户自己的 Claude 环境 | `src/applications/claude-agent/`；稳定应用 ID `claude-agent`，Nya 服务前缀 `claude-agent.`，环境变量前缀 `ANYBOX_CLAUDE_AGENT_` |
+| **Anybox Harness 客户端** | 产品的同源网关、目录选择和浏览器工作区；执行设备连接与凭据归各应用私有实现，随应用装配和清理 | 应用的 `client/`、`web/` 和 `packages/app-harness/web/`；运行在独立客户端进程及浏览器中 |
+| **Claude Agent** | Anybox 内的第二个正式应用，原生消费 Claude Agent SDK，驱动执行设备上用户自己的 Claude 环境 | `packages/app-claude-agent/src/`；稳定应用 ID `claude-agent`，Nya 服务前缀 `claude-agent.`，环境变量前缀 `ANYBOX_CLAUDE_AGENT_` |
 
 Anybox Harness 是完整产品名。描述一次部署、执行设备上的 API、模型与工具资源、持久会话或 Run 时使用 harness server；描述界面和连接管理时使用 Anybox Harness 或 Anybox Harness 客户端。Claude Agent 也是完整产品名：它的界面与文案不出现“Claude Code”字样（提示用户运行 `claude` 命令除外），可使用“Powered by Claude”；它的线程就是 Claude 环境自己的会话。Agent、Session、Run、RunRuntime、Models 等领域名称继续表达各自职责。
 
 ## 文件、标识与命令
 
-宿主源码保留 `src/host/`，产品目录短名保留 `harness`。服务端组合入口使用 `server.ts`，配置、装配与模型接入使用 `server-config.ts`、`server-runtime.ts`、`server-models.ts`；CLI 入口为 `src/entrypoints/harness-server-main.ts`。产品和客户端文件继续使用 `harness-*` 表达所属产品，例如 `harness-client.ts`；通用宿主的 `execution.ts` 仍表达可承载不同应用的执行宿主。
+当前宿主源码位于 `packages/host/src/`，产品目录短名保留 `harness`；D0a Package 边界见[最小宿主与应用包设计](application-packages-design.md)，源码迁移不改变下述产品名称和稳定身份。默认服务端组合入口位于 `packages/distribution/src/composition/harness-server.ts`，配置、装配与模型接入使用 `server-config.ts`、`server-runtime.ts`、`server-models.ts`；CLI 入口为 `packages/distribution/src/entrypoints/harness-server-main.ts`。产品和客户端文件继续使用 `harness-*` 表达所属产品，例如 `harness-client.ts`；通用宿主的 `execution.ts` 仍表达可承载不同应用的执行宿主。
 
 服务端类型、工厂和核心安装入口使用 `HarnessServer*`、`createHarnessServer*`、`installHarnessServer*`，例如 `HarnessServerApi`、`createHarnessServer` 和 `installHarnessServerCore`。核心安装句柄通过 `api` 暴露服务端 API。客户端标识 `HarnessClient`、`HarnessGateway` 表达产品内部的客户端职责。`RunHost` 是协议 Loop 使用的运行操作契约，不表示部署宿主，不因产品改名而改写。
 
@@ -45,7 +45,7 @@ Anybox Harness 是完整产品名。描述一次部署、执行设备上的 API�
 | `ANYBOX_HARNESS_*`、`ANYBOX_MODELS_*`、`ANYBOX_CLIENT_*`、`ANYBOX_PROJECTS` 等环境变量 | 已部署配置兼容；服务端端口规范变量为 `ANYBOX_HARNESS_PORT`，配置解析仍接受旧 `ANYBOX_WEB_PORT` 入口 |
 | `npm run harness`、`npm run harness:init` | 分别委托规范的 `harness:server` 和 `harness:server:init` |
 | `harness.sqlite`、Models 与客户端数据库路径、表、迁移域及历史 JSON | 已有数据继续可读，命名变更不创建新数据身份 |
-| `anybox.models`、`anybox.client`、旧 `anybox` 凭据命名空间 | 系统凭据引用及明确的旧密钥读取兼容 |
+| `anybox.models`、`anybox.client.agent`、`anybox.client.claude-agent`、只读迁入的 `anybox.client` 及旧 `anybox` 凭据命名空间 | 系统凭据引用及明确的旧密钥读取兼容 |
 | sessionStorage 键、资源 ID、`instanceId` 和已保存连接 | 草稿、布局、幂等及多实例归属保持稳定 |
 | `AnyboxV2` 仓库目录与既有包的技术名称 | 仓库或包标识与面向用户的产品名称分别管理 |
 | 应用 ID `claude-agent`、`/apps/claude-agent/` 资源地址、`claude-agent.*` 服务与迁移域、`/api/v1/apps/claude-agent` | Claude Agent 的应用归属、路由、注入与索引数据身份稳定，不设旧别名 |

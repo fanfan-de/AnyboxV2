@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createSessionMenu } from '../dist/applications/harness/web/session-menu.js'
+import { createSessionMenu } from '../packages/app-harness/dist/web/session-menu.js'
 
 const ref = (projectId, sessionId) => ({ projectId, sessionId })
 

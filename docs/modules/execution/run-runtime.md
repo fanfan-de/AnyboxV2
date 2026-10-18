@@ -6,7 +6,7 @@ RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制�
 
 ## 实现与装配
 
-- 源码：[组件](../../../src/applications/harness/core/run/runtime-component.ts)、[RunHost / PreparedRunProgram](../../../src/applications/harness/core/run/program.ts)、[OwnedCall](../../../src/applications/harness/core/contracts.ts)、[工具校验和限制](../../../src/applications/harness/core/run/domain.ts)。
+- 源码：[组件](../../../packages/app-harness/src/core/run/runtime-component.ts)、[RunHost / PreparedRunProgram](../../../packages/app-harness/src/core/run/program.ts)、[OwnedCall](../../../packages/app-harness/src/core/contracts.ts)、[工具校验和限制](../../../packages/app-harness/src/core/run/domain.ts)。
 - 工厂：`createRunRuntimeComponent(inputs)`；组件名：`harness-run-runtime`；配置类型：`void`；`inputs` 提供 `now()` 和 `newId()`。
 - 提供 `harness.run-runtime: RunRuntimePort`。
 - 注入 [Session](../sessions/session.md) 的 `harness.session-runs` 与 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`。四种工具服务只由独立 worker 执行器持有，Runtime 不持有 OS 进程。

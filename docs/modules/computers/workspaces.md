@@ -6,7 +6,7 @@
 
 `createWorkspacesComponent(options?)` 安装根上的 `harness-workspaces`，提供 `harness.workspaces: WorkspacesPort`。组件 inject 本轮 `harness.projects` 和 `local-storage`，拥有项目到稳定工作区的映射、逻辑 scope reservation 及确切执行 binding。Projects 不反向依赖它；本阶段没有产物提供方或独立准备组件。
 
-源码：[组件](../../../src/applications/harness/core/workspace/component.ts)、[端口](../../../src/applications/harness/core/workspace/port.ts)、[领域值与校验](../../../src/applications/harness/core/workspace/domain.ts)。调用者为 [Computer Operations](computer-operations.md)；项目身份仍归 [Projects](../sessions/projects.md)。
+源码：[组件](../../../packages/app-harness/src/core/workspace/component.ts)、[端口](../../../packages/app-harness/src/core/workspace/port.ts)、[领域值与校验](../../../packages/app-harness/src/core/workspace/domain.ts)。调用者为 [Computer Operations](computer-operations.md)；项目身份仍归 [Projects](../sessions/projects.md)。
 
 `options` 可提供 `now()`、`newId()` 和受信的 `localProviderId`。默认提供方为 `local`；替代提供方仍须在本机解析目录，不能通过改名获得远端准备能力。远端 Computer 单元的实例（providerId `unit`，见[Worker 路由](worker-router.md)）同样按 pinned-local 准备：binding 路径仍是项目的绝对路径，只对所绑定单元有意义，harness server 不在本机检查该路径对单元是否存在；项目目录本身仍须在 harness server 可用，按项目绑定到单元属 U1 第 4 步。组件没有新增环境变量、浏览器设置、独立数据库连接或目录。
 

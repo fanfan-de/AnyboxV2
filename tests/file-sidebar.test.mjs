@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { clampFileTreeWidth, createFileSidebar, restoreFileSidebarSessionState } from '../dist/applications/harness/web/file-sidebar.js'
-import { createFileView } from '../dist/applications/harness/web/file-view.js'
-import { sameFileReference } from '../dist/applications/harness/web/session-client.js'
+import { clampFileTreeWidth, createFileSidebar, restoreFileSidebarSessionState } from '../packages/app-harness/dist/web/file-sidebar.js'
+import { createFileView } from '../packages/app-harness/dist/web/file-view.js'
+import { sameFileReference } from '../packages/app-harness/dist/web/session-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
-import { messageFor as apiMessageFor } from '../dist/applications/harness/web/client-errors.js'
+import { messageFor as apiMessageFor } from '../packages/app-harness/dist/web/client-errors.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 const ref = sessionId => ({ sessionId, projectId: `p-${sessionId}` })

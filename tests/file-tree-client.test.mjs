@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createFileTreeClient } from '../dist/applications/harness/web/file-tree-client.js'
+import { createFileTreeClient } from '../packages/app-harness/dist/web/file-tree-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))

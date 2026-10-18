@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createModelsStoreComponent, createModelsVaultComponent, createModelsComponent, createResponsesProtocolComponent, createChatCompletionsProtocolComponent } from '@anybox/models'
-import { installHarnessServerModels as installModels } from '../dist/applications/harness/server-models.js'
-import { parseHarnessServerConfig } from '../dist/applications/harness/server-config.js'
+import { installHarnessServerModels as installModels } from '../packages/app-harness/dist/server-models.js'
+import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
 
 
 async function openNative(root, modelId = 'default') {

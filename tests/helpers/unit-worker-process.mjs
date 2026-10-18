@@ -1,5 +1,5 @@
 import { readFile, writeFile } from 'node:fs/promises'
-import { openComputerWorker } from '../../dist/applications/harness/core/computer/worker-server.js'
+import { openComputerWorker } from '../../packages/app-harness/dist/core/computer/worker-server.js'
 
 // A real Computer worker process for fault tests: the parent SIGKILLs it mid-command and starts a replacement on the same
 // directory. Unit credentials live in a test-only JSON file so the replacement boot can read the attachment back; production

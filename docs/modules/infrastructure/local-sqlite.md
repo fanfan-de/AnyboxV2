@@ -4,13 +4,13 @@
 
 ## 职责与入口
 
-Local SQLite 为业务领域提供独占的文件数据库，集中管理连接、操作准入、串行化、事务和关闭。数据库驱动类型不越过端口，领域表和迁移由调用组件声明。
+Local SQLite 位于可选共享包 `@anybox/storage-sqlite`，为需要 SQL 的业务领域及宿主控制记录提供独占的文件数据库，集中管理连接、操作准入、串行化、事务和关闭。数据库驱动类型不越过端口，领域表和迁移由调用组件声明。
 
 | 项目 | 定义 |
 | --- | --- |
-| 实现 / 端口 | [sqlite.ts](../../../src/storage/sqlite.ts) / [port.ts](../../../src/storage/port.ts) |
-| 工厂 | `createLocalSqliteComponent(file: string)` |
-| Nya 名称 / 服务 | `local-sqlite` / `local-storage: LocalStoragePort` |
+| 实现 / 端口 | [sqlite.ts](../../../packages/storage-sqlite/src/sqlite.ts) / [port.ts](../../../packages/storage-sqlite/src/port.ts) |
+| 工厂 | `createLocalSqliteComponent(file: string, options?: LocalSqliteOptions)` |
+| Nya 名称 / 服务 | `local-sqlite` / 默认 `local-storage: LocalStoragePort`，可由 `options.serviceKey` 指定 |
 | `inject` | 无 |
 | 驱动 | Node.js 内置 `node:sqlite` 的 `DatabaseSync`；项目要求 Node.js `>=22.13.0` |
 
@@ -18,9 +18,11 @@ Local SQLite 为业务领域提供独占的文件数据库，集中管理连接�
 
 `file` 必须是非空文件路径，禁止 `:memory:`。组件解析绝对路径，按需创建父目录（创建时权限 `0700`）；既存文件用 realpath 规范化，新文件用真实父路径与 basename 组合。
 
+`LocalSqliteOptions` 只包含可选 `serviceKey`。服务名默认 `local-storage`，显式提供时必须是非空白且不含 NUL 的字符串；工厂同步验证，不安装组件、不访问文件。同一 Nya 根可以安装多个 `local-sqlite` 实例，用不同服务名分别提供不同文件的端口。各实例的操作队列、迁移账本和关闭等待相互独立，端口名称不改变文件排他规则。
+
 组件打开数据库前拒绝已有 `<path>.lock`，报告离线迁移要求且不删除旧目录。随后设置 `locking_mode=EXCLUSIVE` 并实际执行 `BEGIN EXCLUSIVE; COMMIT`，在整个连接生命周期跨事务保持 OS 锁。同文件（含文件别名）竞争返回 `occupied`；异常退出无需手工清理新锁。不得让外部连接同时读取此业务库。
 
-数据库与连接归本组件；客户端在自己的根以同一提供方拥有独立 client.sqlite。Models 配置和目录缓存仍由各自组件拥有。初始化失败或关闭通过 Effect 释放连接与锁，文件不删除。
+数据库与连接归本组件；客户端在自己的根以同一提供方拥有独立 client.sqlite。宿主安装事实与操作账本使用同根的独立命名端口及文件，不复用应用业务连接；具体表和迁移仍由账本所属组件声明。Models 配置和目录缓存仍由各自组件拥有。初始化失败或关闭通过 Effect 释放连接与锁，文件不删除。
 
 ## 公开存储接口
 
@@ -42,11 +44,11 @@ reader/transaction 仅在回调生命周期内有效，即使回调异步等待�
 
 不同领域的版本独立。数据库记录的领域版本高于应用提供的迁移数量时返回 `schema-version`，禁止用旧代码打开更新的领域结构。Session 的 `run-state` 账本、Prompt 和 Projects 表结构由各自组件解释，不写死在本组件工厂中。
 
-当前附件同样复用本连接：[Image Assets](../images/image-assets.md) 登记 `image-assets` v1，保存图片元数据及保留凭证；[Project Files](../sessions/project-files.md) 登记 `project-files` v1，保存文本 BLOB、准备批次及保留凭证。[Session](../sessions/session.md) 的 `run-state` 当前为 v8，v7 为归档增加列和索引，v8 增加按 Agent 保存的新会话默认模型，不新建存储组件。接受 Run 时，同一事务调用两个资源组件的同步 retainIn，附件引用与 Run 一起提交或回滚；通用存储不解释这些领域规则。
+当前附件同样复用本连接：[Image Assets](../images/image-assets.md) 登记 `image-assets` v1，保存图片元数据及保留凭证；[Project Files](../sessions/project-files.md) 登记 `project-files` v1，保存文本 BLOB、准备批次及保留凭证。[Session](../sessions/session.md) 的 `run-state` 当前为 v11，v8 增加默认模型、v9 固定工具快照、v10 保存恢复游标与 owner、v11 固定单元附着引用，不新建存储组件。接受 Run 时，同一事务调用两个资源组件的同步 retainIn，附件引用与 Run 一起提交或回滚；通用存储不解释这些领域规则。
 
 ## 准入、取消与关闭
 
-所有操作共享 Promise 队列，失败不会让后续队列永久拒绝。`read` 和 `transaction` 在准入时、取得队列位置时、每次 SQL 调用前及回调结束后检查 `AbortSignal`。事务回调结束时才检测到取消也会回滚。
+每个实例的所有操作共享一条 Promise 队列，失败不会让后续队列永久拒绝；不同实例不共享队列。`read` 和 `transaction` 在准入时、取得队列位置时、每次 SQL 调用前及回调结束后检查 `AbortSignal`。事务回调结束时才检测到取消也会回滚。
 
 这是一种合作式取消：它不会强制打断已经开始的同步 SQLite 调用，也不会中断回调自行创建且不结束的 Promise。调用方须让自己的异步工作可退出。迁移没有独立 signal 参数。
 
@@ -56,11 +58,11 @@ Effect 按资源顺序登记，清理时先禁止新操作并等待已接受队�
 
 `LocalStorageError` 使用稳定 `name` 与 `code`：`occupied`、`closed`、`open-failed`、`close-failed`、`operation-failed`、`migration-failed`、`schema-version`、`rollback-failed`。驱动错误归一化，不向业务层暴露数据库驱动类型；事务回调自身抛出的业务错误在回滚成功后仍原样返回。回滚本身失败则报告 `rollback-failed`。
 
-其他提供方可实现 `LocalStoragePort` 并替换 `local-storage`，但必须保留串行读写、事务原子性、迁移账本、作用域失效与关闭等待行为。当前消费者使用 SQL，替换并不自动意味着能直接换成任意非 SQL 存储。
+其他提供方可实现 `LocalStoragePort` 并替换消费者声明的服务名，但必须保留串行读写、事务原子性、迁移账本、作用域失效与关闭等待行为。当前消费者使用 SQL，替换并不自动意味着能直接换成任意非 SQL 存储。
 
 ## 验证依据
 
-- [local-sqlite.test.mjs](../../../tests/local-sqlite.test.mjs)：重启恢复、跨表事务、回滚后可用、独占连接、关闭等待、逐领域迁移与布局拒绝。
+- [storage.test.mjs](../../../packages/storage-sqlite/tests/storage.test.mjs)：重启恢复、跨表事务、回滚后可用、独占连接、关闭等待、逐领域迁移与布局拒绝；同根默认及命名端口分别持有文件、独立清理，命名端口仍拒绝同文件的第二所有者，非法服务名在文件访问前拒绝。
 - [prompt-sqlite-storage.test.mjs](../../../tests/prompt-sqlite-storage.test.mjs)：Prompt 卸载等待已接受写入、关闭后拒绝新写入及重装恢复读取。
 - [conversation-migration.test.mjs](../../../tests/conversation-migration.test.mjs)、[native-session.test.mjs](../../../tests/native-session.test.mjs)：Session 对旧数据读取及当前原生记录持久化的集成验证。
 

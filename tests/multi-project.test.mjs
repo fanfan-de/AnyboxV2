@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
+import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs'
@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { controlledModels } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', instructions: 'Shared instructions.', modelId: 'default' }]
@@ -106,8 +106,8 @@ test('a new process settles an abandoned Run as interrupted without replaying it
   const script = `
     import { Context } from '@nya/core'
     import { createTestHarnessServerCore } from './tests/helpers/harness-server-core.mjs'
-    import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
-    import { createImageAssetsComponent } from './dist/applications/harness/core/image/component.js'
+    import { createLocalSqliteComponent } from './packages/storage-sqlite/dist/sqlite.js'
+    import { createImageAssetsComponent } from './packages/app-harness/dist/core/image/component.js'
     import { controlledModels } from './tests/helpers/controlled-models.mjs'
     const root = new Context()
     await root.installComponent(controlledModels().component())

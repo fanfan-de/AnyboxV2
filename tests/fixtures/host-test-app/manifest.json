@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "appId": "host-test",
+  "version": "0.1.0",
+  "publisher": "local-test",
+  "displayName": "Anybox Test",
+  "applicationApi": "^0.1.0",
+  "target": { "os": "darwin", "arch": "arm64" },
+  "web": {
+    "entry": "payload/web/app.js",
+    "assets": "payload/assets.json",
+    "styles": ["payload/web/style.css"]
+  }
+}

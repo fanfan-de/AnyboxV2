@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { Context, FiberState } from '@nya/core'
-import { createResourceProbe, modelServiceKey, runServiceKey } from '../dist/resource-probe.js'
+import { createResourceProbe, modelServiceKey, runServiceKey } from '../packages/distribution/dist/resource-probe.js'
 
 function deferred() {
   let resolve

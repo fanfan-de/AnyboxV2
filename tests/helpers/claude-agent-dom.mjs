@@ -81,10 +81,12 @@ class TestElement extends EventTarget {
     if (this.parentElement) this.parentElement._children = this.parentElement._children.filter(child => child !== this)
     this.parentElement = null
   }
-  querySelectorAll(selector) { return descendants(this).filter(node => matches(node, selector)) }
+  querySelectorAll(selector) { return descendants(this).filter(node => selector.split(',').some(part => matches(node, part.trim()))) }
   querySelector(selector) { return this.querySelectorAll(selector)[0] ?? null }
   focus() { this.ownerDocument.activeElement = this }
   click() { if (!this.disabled) this.dispatchEvent(new Event('click', { cancelable: true })) }
+  showModal() { this.open = true }
+  reset() { for (const input of this.querySelectorAll('input, textarea')) input.value = input.getAttribute('value') ?? '' }
   close() { this.open = false }
 }
 

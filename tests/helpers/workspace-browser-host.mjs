@@ -1,6 +1,6 @@
-import { createHostAccessComponent } from '../../dist/host/access.js'
-import { createClientHost } from '../../dist/entrypoints/client-main.js'
-import { harnessClientApplication } from '../../dist/applications/harness/client/registration.js'
+import { createHostAccessComponent } from '../../packages/host/dist/access.js'
+import { createClientHost } from '../../packages/distribution/dist/entrypoints/client-main.js'
+import { harnessClientApplication } from '../../packages/app-harness/dist/client/registration.js'
 /** Local browser acceptance host. Uses disposable SQLite and a controlled model; never reads real keys/data. */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,10 +8,10 @@ import { join } from 'node:path'
 import { createServer, request as httpRequest } from 'node:http'
 import { Context } from '@nya/core'
 import { createTestHarnessServerCore } from './harness-server-core.mjs'
-import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
-import { createImageAssetsComponent } from '../../dist/applications/harness/core/image/component.js'
+import { createLocalSqliteComponent } from '../../packages/storage-sqlite/dist/sqlite.js'
+import { createImageAssetsComponent } from '../../packages/app-harness/dist/core/image/component.js'
 import { installManagedModels } from './managed-models.mjs'
-import { hostHttpServiceKey } from '../../dist/host/component.js'
+import { hostHttpServiceKey } from '../../packages/host/dist/component.js'
 import { createFixtureApplicationApiComponent } from './application-api.mjs'
 import { controlledModels, deferred } from './controlled-models.mjs'
 import { testApplication } from './test-application.mjs'
@@ -138,7 +138,7 @@ try {
   const values = new Map(), access = root.get('host.access')
   const openEntry = (_ns,id) => ({ async getPassword(){ return values.get(id) }, async setPassword(value){ values.set(id,value) }, async deleteCredential(){ return values.delete(id) } })
   client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [
-    harnessClientApplication({ localInstanceId: access.instance.instanceId }),
+    harnessClientApplication({ localInstanceId: access.instance.instanceId, openEntry }),
     testApplication(),
   ] })
   await client.products.open('agent')

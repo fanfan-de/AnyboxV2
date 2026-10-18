@@ -1,4 +1,4 @@
-import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
+import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -9,9 +9,9 @@ import {
   createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createChatCompletionsProtocol, createAnthropicMessagesProtocol, createGeminiInteractionsProtocol,
 } from '@anybox/models'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
-import { projectProtocolRecords } from '../dist/applications/harness/core/protocol-agents/projection.js'
+import { projectProtocolRecords } from '../packages/app-harness/dist/core/protocol-agents/projection.js'
 import sharp from 'sharp'
 
 // Live text/image/restart smoke; this is not live tool, search, streaming or OS Keyring acceptance.

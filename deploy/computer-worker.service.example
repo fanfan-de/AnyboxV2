@@ -7,7 +7,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/anybox-app
-ExecStart=/usr/bin/node %h/anybox-app/dist/entrypoints/computer-worker-main.js %h/.local/share/anybox/harness.sqlite.computer-worker
+ExecStart=/usr/bin/node %h/anybox-app/packages/distribution/dist/entrypoints/computer-worker-main.js %h/.local/share/anybox/harness.sqlite.computer-worker
 Restart=on-failure
 RestartSec=5
 KillMode=control-group

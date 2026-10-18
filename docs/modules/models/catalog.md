@@ -61,4 +61,4 @@ Effect 关闭同步停止新刷新、清掉调度器、取消当前获取，等�
 
 [catalog-responsiveness.test.mjs](../../../packages/models/tests/catalog-responsiveness.test.mjs) 验证接纳期间宿主获得执行机会、来源原子可见性、批次后段失败回滚，以及不可信可变输入不能命中验证缓存。
 
-可替换来源、缓存及 scheduler；来源查询统一走 Settings，不因扩展目录重新建立模型定义副本。参见 [目录来源](catalog-source.md)、[目录缓存](catalog-cache.md)、[Models 协调服务](models.md) 和 [目录验证记录](../../models-catalog-validation.md)。
+可替换来源、缓存及 scheduler；来源查询统一走 Settings，不因扩展目录重新建立模型定义副本。参见 [目录来源](catalog-source.md)、[目录缓存](catalog-cache.md) 和 [Models 协调服务](models.md)。

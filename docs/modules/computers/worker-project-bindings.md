@@ -2,7 +2,7 @@
 
 [返回 Computer 模块](README.md) · [Worker 执行器](worker-executor.md)
 
-独立 worker 的 `computer-worker-project-bindings` 在 worker 根提供 `harness.projects`，满足既有工具的声明依赖。它是服务端入口中的受信适配器，源码见 [worker-server.ts](../../../src/applications/harness/core/computer/worker-server.ts)，不创建第二个 Projects 数据库或跨进程 Context。
+独立 worker 的 `computer-worker-project-bindings` 在 worker 根提供 `harness.projects`，满足既有工具的声明依赖。它是服务端入口中的受信适配器，源码见 [worker-server.ts](../../../packages/app-harness/src/core/computer/worker-server.ts)，不创建第二个 Projects 数据库或跨进程 Context。
 
 该组件无 inject、无迁移域、无文件/网络资源，因此没有虚构 Effect。它不查询或修改项目，拒绝目录浏览、创建和 requireAvailable，getIn 不提供项目元数据。工具执行必须携带 Authority 已固定且 worker 校验过的 workspacePath；没有精确 binding 的调用失败。所有 Session/project 身份和准备仍归 Authority 的 Projects/Workspaces。
 

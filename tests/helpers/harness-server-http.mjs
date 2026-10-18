@@ -1,7 +1,7 @@
-import { createHarnessServerHttpHandler } from '../../dist/applications/harness/http/handler.js'
-import { startApplicationHttpServer } from '../../dist/host/http-server.js'
-import { createApplicationCatalog } from '../../dist/host/applications/registration.js'
-import { harnessDefinition, harnessServerHttp } from '../../dist/applications/harness/registration.js'
+import { createHarnessServerHttpHandler } from '../../packages/app-harness/dist/http/handler.js'
+import { startApplicationHttpServer } from '../../packages/host/dist/http-server.js'
+import { createApplicationCatalog } from '../../packages/host/dist/applications/registration.js'
+import { harnessDefinition, harnessServerHttp } from '../../packages/app-harness/dist/registration.js'
 
 // Exercise the registered adapter and the same generic listener as production.
 export async function startHarnessServerHttp(commands, port = 0, options = {}) {

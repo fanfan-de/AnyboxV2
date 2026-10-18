@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, displayItems, formatUsage, groupThreads, threadIndicator, relativeTime, filterDevices, composerBlock, composerBlockLabels, splitCodeFences } from '../dist/applications/claude-agent/web/state.js'
-import { createApplicationCatalog } from '../dist/host/applications/registration.js'
-import { shellAssets } from '../dist/host/assets.js'
-import { claudeAgentClientApplication } from '../dist/applications/claude-agent/client/registration.js'
-import { harnessClientApplication } from '../dist/applications/harness/client/registration.js'
+import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, displayItems, formatUsage, groupThreads, threadIndicator, relativeTime, filterDevices, composerBlock, composerBlockLabels } from '../packages/app-claude-agent/dist/web/state.js'
+import { createApplicationCatalog } from '../packages/host/dist/applications/registration.js'
+import { shellAssets } from '../packages/host/dist/assets.js'
+import { claudeAgentClientApplication } from '../packages/app-claude-agent/dist/client/registration.js'
+import { harnessClientApplication } from '../packages/app-harness/dist/client/registration.js'
 
 test('routes pin the device and thread, reject malformed segments and round-trip encoding', () => {
   assert.deepEqual(parseRoute(''), {}); assert.deepEqual(parseRoute('host/abc'), { hostId: 'abc' })
@@ -35,14 +35,6 @@ test('the composer names the single reason it cannot send, in resolution order',
   assert.equal(composerBlock({ ...base, productRunning: false, hasTarget: false }), 'not-running'); assert.equal(composerBlock({ ...base, hasTarget: false, runActive: true }), 'no-target')
   assert.equal(composerBlock({ ...base, runActive: true, submitting: true }), 'running'); assert.equal(composerBlock({ ...base, submitting: true }), 'submitting')
   for (const key of Object.keys(composerBlockLabels)) assert.doesNotMatch(composerBlockLabels[key], /Claude Code/)
-})
-test('fenced code is split out of plain text with its language, closing fences must match, and an unclosed fence runs to the end', () => {
-  assert.deepEqual(splitCodeFences('Run this:\n```bash\nnpm test\n```\nthen done.'), [{ kind: 'text', text: 'Run this:' }, { kind: 'code', text: 'npm test', language: 'bash' }, { kind: 'text', text: 'then done.' }])
-  assert.deepEqual(splitCodeFences('~~~\na\n```\nb\n~~~\n'), [{ kind: 'code', text: 'a\n```\nb', language: '' }])
-  assert.deepEqual(splitCodeFences('````\n```\ninner\n```\n````'), [{ kind: 'code', text: '```\ninner\n```', language: '' }], 'a shorter fence does not close a longer one')
-  assert.deepEqual(splitCodeFences('```js\nconst x = 1'), [{ kind: 'code', text: 'const x = 1', language: 'js' }], 'an unclosed fence is still code while streaming')
-  assert.deepEqual(splitCodeFences('plain\n\ntext'), [{ kind: 'text', text: 'plain\n\ntext' }]); assert.deepEqual(splitCodeFences(''), [])
-  assert.deepEqual(splitCodeFences('inline ``` not a fence'), [{ kind: 'text', text: 'inline ``` not a fence' }])
 })
 test('error copy prefers the product\'s own message and never mentions Claude Code', () => {
   const error = Object.assign(new Error('未找到 `claude` 命令。'), { status: 503, code: 'claude-binary-missing' })

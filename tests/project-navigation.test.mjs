@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createProjectSessionIndex, projectSidebar } from '../dist/applications/harness/web/workspace-client.js'
-import { scopedId } from '../dist/applications/harness/web/harness-client.js'
+import { createProjectSessionIndex, projectSidebar } from '../packages/app-harness/dist/web/workspace-client.js'
+import { scopedId } from '../packages/app-harness/dist/web/harness-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 function fixture() {

@@ -6,7 +6,7 @@
 
 ## 实现与装配
 
-- 源码：[注册与准备](../../../src/applications/harness/core/protocol-agents/registry.ts)、[公共契约](../../../src/applications/harness/core/run/program.ts)、[共享交换管道](../../../src/applications/harness/core/protocol-agents/shared.ts)、[展示投影](../../../src/applications/harness/core/protocol-agents/projection.ts)。
+- 源码：[注册与准备](../../../packages/app-harness/src/core/protocol-agents/registry.ts)、[公共契约](../../../packages/app-harness/src/core/run/program.ts)、[共享交换管道](../../../packages/app-harness/src/core/protocol-agents/shared.ts)、[展示投影](../../../packages/app-harness/src/core/protocol-agents/projection.ts)。
 - 工厂：`createProtocolAgentsComponent()`；组件名：`harness-protocol-agents`；配置类型：`void`。
 - 注入 `models`、`models.protocols` 和 `harness.image-assets`；提供 `harness.protocol-agents`，其运行接口为 `ProtocolAgentPort`，受信绑定接口为 `ProtocolAgentRegistry`。
 

@@ -4,15 +4,17 @@
 
 文档入口：[项目文档](docs/README.md) · [命名与边界](docs/naming.md) · [模块与组件手册](docs/modules/README.md)。组件按内聚职责分目录，每个组件有独立的接口、功能、数据归属、生命周期与测试说明。
 
-Anybox 是 NyaCore 应用的宿主应用，负责受信应用的注册、装配、启停、公共资源与界面承载。正式目录目前提供 Agent 产品 **Anybox Harness**，其可部署到本地或远端服务器的通用服务端核心称为 **harness server**；Agent 工作区、模型管理、Prompt 管理和本地/远程 Agent 连接均属于 Anybox Harness 内部。源码中通用宿主位于 `src/host/`，Anybox Harness 完整应用位于 `src/applications/harness/`，默认目录与进程入口位于 `src/entrypoints/`；详见 [应用宿主](docs/products-v1.md)与[目录边界](docs/harness-module-boundary.md)。[通用 Models 模块](packages/models/README.md) 已接入 Anybox Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Anybox Harness、业务 Session 或前端框架；[架构图](docs/architecture/models-module.md)说明其资源与扩展边界。
+Anybox 是 NyaCore 应用的宿主应用，负责受信应用的注册、装配、启停、公共资源与界面承载。正式目录目前提供 **Anybox Harness** 与 **Claude Agent** 两个独立应用包。Anybox Harness 是 Agent 产品，其可部署到本地或远端服务器的通用服务端核心称为 **harness server**；Agent 工作区、模型管理和 Prompt 管理属于 Anybox Harness；执行设备连接、凭据与转发由两个应用各自拥有，不设置应用间共享业务层。源码中通用宿主位于 `packages/host/src/`，Anybox Harness 完整应用位于 `packages/app-harness/src/`，默认目录与进程入口位于 `packages/distribution/src/entrypoints/`；详见 [应用宿主](docs/products-v1.md)与[目录边界](docs/harness-module-boundary.md)。[通用 Models 模块](packages/models/README.md) 已接入 Anybox Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Anybox Harness、业务 Session 或前端框架；[Models 模块手册](docs/modules/models/README.md)说明其资源与扩展边界。
 
 每个执行实例使用一个 Nya 根 Context，本机客户端另有独立根。Models 配置存储、系统凭据、模型服务、协议和目录组件，与 harness server 的 SQLite、Prompt、Projects、Session、Run、RunRuntime、协议应用绑定、Bash、Apply Patch 直接安装在同一根。Nya 管理依赖、重启和清理顺序；Provider、Model、项目和会话都是数据记录。
 
-当前原生协议框架见[组件说明](docs/harness-server-components.md)与[原生协议迁移设计](docs/native-protocol-agent-framework-design.md)。改造前的进程、组件注入与 Run 时序见[多实例架构图](docs/architecture/anybox-architecture-2026-09-29-multi-instance.md)；`docs/architecture/` 中较早的图保留历史记录，不作为当前执行契约。
+当前原生协议框架见[组件说明](docs/harness-server-components.md)与[原生协议迁移设计](docs/native-protocol-agent-framework-design.md)。进程与可组合单元的图示见[架构快照（2026-10-15）](docs/architecture/anybox-harness-architecture-2026-10-15.md)，当前包边界和独立服务装配以[应用包设计](docs/application-packages-design.md)与[独立业务服务](docs/application-standalone-services.md)为准。
 
 Session 持有完整轮次对话树，允许同一父节点启动多个 Run。新请求必须提供 `parentNodeId`（空会话用 `null`）；成功节点只继承祖先路径，并在资源退出后原子提交。Web 支持节点查看、分支选择、多 Run 状态及最多四个跨项目拖拽分屏，布局与查看位置在当前标签页内恢复。详见[对话树设计](docs/session-conversation-tree.md)。
 
 macOS Apple Silicon 桌面版使用 Electron，完整复用这套 Web 前端和服务。`npm run desktop:dev` 启动开发版，`npm run desktop:make` 生成 `.app`、DMG 和 ZIP；安装用户无需安装 Node.js。桌面内置本机 harness server 并支持远端设备，数据与 Web/CLI 隔离。关闭窗口隐藏应用，明确退出才关闭本机服务。详见[桌面构建与安装](docs/desktop-packaging.md)及[运行边界](docs/desktop-runtime.md)。
+
+源码通过 npm workspaces 拆为 `host`、`app-harness`、`app-claude-agent` 及独立共享包，最小接入契约位于 `application-api`。`distribution` 保留现有 CLI、桌面与默认应用组合；宿主不直接依赖具体应用、设备连接、目录适配或 Vault。纯界面应用无需后台和业务 HTTP。D0a 源码拆包之后，D0a.1 提供[应用业务服务独立运行](docs/application-standalone-services.md)：两个应用拥有各自的 HTTP、认证和独立入口，Anybox 复用同一业务装配；不要求安装 host、distribution 或另一个应用。D0b 已完成生命周期接入、能力版本门禁及按消费者装配，D1.1 已建立独立安装事实、操作账本与跨进程使用凭证；D1.2 提供独立空宿主、完整签名应用包和只读校验/准备工具，构建命令及信任策略见[产物手册](docs/modules/package-management/archives.md)。D1.3 已接入[本地文件安装与中断恢复](docs/modules/package-management/installation.md)：先登记再读取，验证签名与独立准备后提交不可变目录，成功保留为已安装待生效，不启动应用业务。客户端管理入口和离线 CLI 支持查询、取消及显式恢复，信任策略由宿主外部配置；D1.4 已接入[正式角色加载与受控生效](docs/modules/package-management/activation.md)：最小 CLI/桌面宿主通过固定角色入口、连续使用凭证与稳定连接交接；全部相关应用及页面通过关闭保护并实际退出后才重启，全部新代 ready 才显示完成，新装应用保持关闭。宿主始终只管生命周期，业务及数据归各应用。原 distribution 默认完整组合仍保留，旧全量桌面尚未整体迁入按需发行；D1.5 已接入本机卸载和代码回收：全部页面与角色实际退出后回收所有安装版本，默认保留数据，独立使用者阻塞、删除失败显式恢复，其他应用工作区保留；D2 接在线下载，D3 接旧发行迁入，见[应用包设计](docs/application-packages-design.md)。
 
 ## 最小调用
 
@@ -107,6 +109,8 @@ Anybox Harness 内的“Prompt 管理”可编辑、发布、预览并绑定版�
 
 执行端默认监听 `127.0.0.1:3001`，远端通过 HTTPS 反向代理和拥有者设备令牌接入。SIGINT/SIGTERM 通过应用宿主 `close()` 停止准入并等待整个执行根清理；单独客户端关闭只断开观察。异常退出的在途 Run 重启后结算 `interrupted`，不重放工具。详见 [Web 客户端设计](docs/web-client-design.md)。
 
+只运行单个应用的业务服务时，可使用应用自己的 `anybox-harness-server` 或 `anybox-claude-agent` 命令，均提供 `serve`、`init`、`recover-access` 和 `new-identity`。CLI 默认回环端口分别为 3001 和 3002；原 `anybox harness-server` 与 `npm run harness:server` 继续提供两个应用的默认组合。独立入口沿用既有数据与身份，同一数据文件必须先关闭原托管实例才能打开，不能仅更换端口并发运行。配置、公开工厂和验收边界见[独立业务服务](docs/application-standalone-services.md)。
+
 ## 本地验证
 
 Node.js 最低版本为 22.13。将 NyaCore 与本仓库放在同一目录，先在 NyaCore 运行 `npm ci` 和 `npm run build`，再在本仓库运行：
@@ -116,7 +120,7 @@ npm ci
 npm run check
 ```
 
-根检查同时构建和测试 `packages/models`，覆盖目录归一化、离线缓存、刷新调度、协议解析、配置版本、凭据日志、并发与生命周期，以及 Anybox Harness、迁移和 Web 行为。默认测试使用临时 SQLite、内存凭据和模拟 HTTP。本次浏览器验收完成目录建连接、修改代理地址、能力与 4096 参数预填、保存模型、会话选模和原生 Bash 工具续轮；刷新保留表单草稿。未调用真实模型或系统凭据库。可用 `node tests/helpers/catalog-browser-host.mjs` 复现目录流程，详情见 [验收记录](docs/models-catalog-validation.md)。
+根检查同时构建和测试 `packages/models`，覆盖目录归一化、离线缓存、刷新调度、协议解析、配置版本、凭据日志、并发与生命周期，以及 Anybox Harness、迁移和 Web 行为。默认测试使用临时 SQLite、内存凭据和模拟 HTTP。可用 `node tests/helpers/catalog-browser-host.mjs` 在隔离宿主中复验目录建连接、参数配置、会话选模和原生工具续轮，范围与操作见 [Web 客户端验收](docs/web-client-design.md#验收)。
 
 真实凭据验证需另行运行 `ANYBOX_KEYRING_TESTS=1 node --test tests/system-keyring.test.mjs`；Linux 无 Secret Service 时加 `ANYBOX_KEYRING_EXPECT_NO_STORE=1` 验证固定拒绝且无明文回退。2026-09-25 的 macOS 验收属于旧 API Key 组件，不能代替新 Models Vault 的平台验收；本次 macOS、Windows、Linux 原生凭据测试均未执行。`packages/api-key-manager` 保留独立通用包与旧凭据读取用途，旧应用 `llm` 和凭据 Nya 包装已删除。
 
@@ -125,21 +129,21 @@ npm run check
 | 路径 | 用途 |
 | --- | --- |
 | `packages/models/` | 通用 Models 服务、配置与凭据存储、协议实现及测试 |
-| `src/applications/harness/core/agent/`、`src/applications/harness/core/prompt/` | Agent 定义、Prompt 草稿、版本与绑定 |
-| `src/applications/harness/core/project/`、`src/applications/harness/core/session/` | 项目身份、会话树、Run 记录与恢复 |
-| `src/applications/harness/core/run/` | Run 准入、PreparedRunProgram 交接、RunRuntime 与操作事实 |
-| `src/applications/harness/core/tool/` | Bash 与 Apply Patch 资源组件 |
-| `src/storage/` | 宿主公共 SQLite 事务、领域迁移与排他所有权 |
-| `src/applications/harness/core/index.ts` | harness server 核心组合与 `HarnessServerApi` |
-| `src/applications/harness/server.ts`、`server-runtime.ts`、`server-config.ts`、`server-models.ts` | harness server 的宿主组合、按需装配、配置与 Models 接入 |
-| `src/host/` | 通用应用注册、生命周期、访问管理、HTTP 分派与前端外壳 |
-| `src/applications/harness/` | Anybox Harness 注册、装配、领域组件、业务 API、客户端网关与界面 |
-| `src/entrypoints/` | 正式应用目录、默认配置、启动命令与进程信号 |
-| `src/host/web/`、`web/index.html`、`web/style.css` | Anybox 应用列表、标签与全局路由 |
-| `src/applications/harness/web/`、`web/apps/agent/` | Anybox Harness 多实例工作区、连接与设置界面 |
+| `packages/app-harness/src/core/agent/`、`packages/app-harness/src/core/prompt/` | Agent 定义、Prompt 草稿、版本与绑定 |
+| `packages/app-harness/src/core/project/`、`packages/app-harness/src/core/session/` | 项目身份、会话树、Run 记录与恢复 |
+| `packages/app-harness/src/core/run/` | Run 准入、PreparedRunProgram 交接、RunRuntime 与操作事实 |
+| `packages/app-harness/src/core/tool/` | Bash 与 Apply Patch 资源组件 |
+| `packages/storage-sqlite/src/` | 可选 SQLite 端口、事务、领域迁移与排他所有权；保留既有单连接和数据位置 |
+| `packages/app-harness/src/core/index.ts` | harness server 核心组合与 `HarnessServerApi` |
+| `packages/distribution/src/composition/harness-server.ts`、`server-runtime.ts`、`server-config.ts`、`server-models.ts` | harness server 的宿主组合、按需装配、配置与 Models 接入 |
+| `packages/host/src/` | 通用应用注册、生命周期、访问管理、HTTP 分派与前端外壳 |
+| `packages/app-harness/src/` | Anybox Harness 注册、装配、领域组件、业务 API、客户端网关与界面 |
+| `packages/distribution/src/entrypoints/` | 正式应用目录、默认配置、启动命令与进程信号 |
+| `packages/host/src/web/`、`packages/host/web/index.html`、`packages/host/web/style.css` | Anybox 应用列表、标签与全局路由 |
+| `packages/app-harness/src/web/`、`packages/app-harness/web/` | Anybox Harness 多实例工作区、连接与设置界面 |
 | `tests/helpers/controlled-models.mjs` | 可控 Models 契约替身 |
 | `tests/helpers/managed-models.mjs` | 实际 Models 模块与可控协议的测试装配 |
 | `docs/harness-server-components.md` | 组件职责、依赖、状态归属与清理 |
 | `docs/harness-server-plan.md` | 阶段、边界与验收记录 |
 
-通用应用宿主支持按受信目录注册多个 NyaCore 应用，并在 Web 标签中独立打开、保留界面和停止。正式目录目前提供 Anybox Harness；开发入口见[应用接入说明](docs/application-development.md)，设计见[应用宿主](docs/products-v1.md)。
+通用应用宿主支持按受信目录注册多个 NyaCore 应用，并在 Web 工作区中独立打开、保留界面和停止。正式目录提供 Anybox Harness 与 Claude Agent；开发入口见[应用接入说明](docs/application-development.md)，设计见[应用宿主](docs/products-v1.md)。

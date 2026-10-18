@@ -8,9 +8,9 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import sharp from 'sharp'
 import { createSystemKeyringStore } from '@anybox/api-key-manager'
-import { createHarnessServer } from '../dist/entrypoints/harness-server-main.js'
-import { parseHarnessServerConfig } from '../dist/applications/harness/server-config.js'
-import { createClientHost } from '../dist/entrypoints/client-main.js'
+import { createHarnessServer } from '../packages/distribution/dist/entrypoints/harness-server-main.js'
+import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
+import { createClientHost } from '../packages/distribution/dist/entrypoints/client-main.js'
 
 test('real deployment platform: native credentials, headless host, Bash, image bytes and clean shutdown', { skip: process.env.ANYBOX_DEPLOYMENT_TESTS !== '1' }, async () => {
   assert.ok(['darwin', 'linux'].includes(process.platform), 'execution hosts support macOS/Linux')

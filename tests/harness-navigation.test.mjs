@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { harnessHash, parseHarnessRoute, harnessTargetRoute, harnessLocationRoute } from '../dist/applications/harness/web/harness-navigation.js'
-import { resolveLegacyRoute, restoreLegacyRoute } from '../dist/applications/harness/web/harness-app.js'
+import { harnessHash, parseHarnessRoute, harnessTargetRoute, harnessLocationRoute } from '../packages/app-harness/dist/web/harness-navigation.js'
+import { resolveLegacyRoute, restoreLegacyRoute } from '../packages/app-harness/dist/web/harness-app.js'
 
 test('Harness routes retain one workspace, its selected device and conversation location', () => {
   const route = { hostId: 'server-id', inner: '#/projects/p/sessions/s' }

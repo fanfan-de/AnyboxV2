@@ -8,11 +8,11 @@ const run = promisify(execFile)
 const repository = fileURLToPath(new URL('..', import.meta.url))
 
 /** Build the portable Node-API adapter separately from the shared Web build. */
-export async function buildDesktopNative(root, outputDirectory = join(root, 'dist/desktop/native')) {
+export async function buildDesktopNative(root, outputDirectory = join(root, 'packages/directory-picker/dist/native')) {
   if (process.platform !== 'darwin' || process.arch !== 'arm64') {
     throw new Error('The desktop native adapter currently requires macOS Apple Silicon')
   }
-  const source = resolve(root, 'src/desktop/native/mac-dialog.mm')
+  const source = resolve(root, 'packages/directory-picker/src/native/mac-dialog.mm')
   const includes = resolve(dirname(process.execPath), '../include/node')
   try { await access(join(includes, 'node_api.h')) }
   catch { throw new Error(`Desktop native build requires Node-API headers at ${includes}`) }
@@ -37,6 +37,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   if (args.length && (args.length !== 2 || args[0] !== '--output' || basename(args[1]) !== 'mac-dialog.node')) {
     throw new Error('Usage: node scripts/build-desktop-native.mjs [--output /path/to/mac-dialog.node]')
   }
-  const output = args.length ? dirname(resolve(args[1])) : join(repository, 'dist/desktop/native')
+  const output = args.length ? dirname(resolve(args[1])) : join(repository, 'packages/directory-picker/dist/native')
   console.log(await buildDesktopNative(repository, output))
 }

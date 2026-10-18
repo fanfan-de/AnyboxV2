@@ -1,8 +1,8 @@
 /** Disposable, memory-only acceptance surface for the real Session controller and panel. */
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { harnessAssets } from '../../dist/applications/harness/assets.js'
-import { shellAssets } from '../../dist/host/assets.js'
+import { harnessAssets } from '../../packages/app-harness/dist/assets.js'
+import { shellAssets } from '../../packages/host/dist/assets.js'
 
 const sessionId = 'branch-preview-session', projectId = 'branch-preview-project'
 const at = minute => new Date(Date.UTC(2026, 9, 4, 1, minute)).toISOString()

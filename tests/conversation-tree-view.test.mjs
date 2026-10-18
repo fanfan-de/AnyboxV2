@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { conversationNodeLabel, conversationTree } from '../dist/applications/harness/web/conversation-tree.js'
+import { conversationNodeLabel, conversationTree } from '../packages/app-harness/dist/web/conversation-tree.js'
 
 const session = { id: 'session', historyMode: 'native-local-v1' }
 const run = (id, parentNodeId = null, extra = {}) => ({

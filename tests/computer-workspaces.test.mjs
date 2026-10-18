@@ -5,9 +5,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createWorkspacesComponent } from '../dist/applications/harness/core/workspace/component.js'
-import { createProjectComponent } from '../dist/applications/harness/core/project/component.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createWorkspacesComponent } from '../packages/app-harness/dist/core/workspace/component.js'
+import { createProjectComponent } from '../packages/app-harness/dist/core/project/component.js'
 
 const instance = Object.freeze({ computerId: 'local:project', computerInstanceId: 'instance', instanceGeneration: 1,
   providerId: 'local', providerRef: 'local-host', platform: process.platform, architecture: process.arch,

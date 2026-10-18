@@ -36,7 +36,7 @@ if (!process.versions.electron) {
   } finally { await rm(profileDirectory, { recursive: true, force: true }) }
 } else {
   const { app, BrowserWindow } = await import('electron')
-  const { desktopBeforeUnloadProbe, prepareDesktopQuit } = await import('../../dist/desktop/quit.js')
+  const { desktopBeforeUnloadProbe, prepareDesktopQuit } = await import('../../packages/host/dist/desktop/quit.js')
   const directory = process.argv.find(argument => argument.startsWith('--qa-user-data='))?.slice('--qa-user-data='.length)
   assert.ok(directory, 'QA must use an explicitly isolated userData directory')
   app.setName('Anybox Isolated Quit QA')

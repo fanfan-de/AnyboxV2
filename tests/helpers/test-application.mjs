@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url'
-import { createApplicationRuntime } from '../../dist/host/applications/runtime.js'
-import { localStorageServiceKey } from '../../dist/storage/port.js'
-import { json, requestObject } from '../../dist/host/http-utils.js'
+import { createApplicationRuntime } from '../../packages/application-api/dist/nya.js'
+import { localStorageServiceKey } from '../../packages/storage-sqlite/dist/port.js'
+import { json, requestObject } from '../../packages/application-api/dist/node.js'
 
 /** A real registered application. No Harness or Models components are imported or installed. */
 export function testApplication(id = 'notes', options = {}) {

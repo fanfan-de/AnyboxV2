@@ -21,12 +21,10 @@ const assertPortable = async directory => {
 }
 try {
   const { manifest } = await stageApplication(root, stage, { desktop: true, build: !process.argv.includes('--no-build') })
-  await run(process.execPath, [join(root, 'scripts/build-desktop-native.mjs'),
-    '--output', join(stage, 'dist/desktop/native/mac-dialog.node')], root)
   await run('npm', ['ci', '--omit=dev', '--include=optional', '--no-audit', '--no-fund'], stage, { env: { ...process.env, SHARP_IGNORE_GLOBAL_LIBVIPS: '1' } })
   await rm(join(stage, 'node_modules/.bin'), { recursive: true, force: true })
   await assertPortable(stage)
-  await stat(join(stage, 'dist/entrypoints/desktop-main.js'))
+  await stat(join(stage, 'packages/distribution/dist/entrypoints/desktop-main.js'))
   if (manifest.devDependencies.electron !== '44.5.1') throw new Error('Desktop runtime must be pinned to Electron 44.5.1')
   utils.registerForgeConfigForDirectory(stage, forgeConfig)
   const options = { dir: stage, arch: 'arm64', platform: 'darwin', outDir: output, interactive: false }

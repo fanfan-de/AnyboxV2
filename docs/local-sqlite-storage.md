@@ -4,9 +4,9 @@
 
 ## 公开接口
 
-`src/storage/port.ts` 定义项目自有的 `LocalStoragePort`，并以 `localStorageServiceKey` 供 Nya 消费组件注入。消费者拿到 `read(work, signal?)`、`transaction(work, signal?)` 和 `migrate(domain, migrations)`：回调中的 `StorageReader` 提供参数化 `get`、`all`，`StorageTransaction` 额外提供 `execute`。一笔事务可同时修改不同领域的表；返回或异步完成后，回调中的操作句柄失效。SQL 文本由可信的领域实现提供，值通过参数绑定传入；不能把外部输入当 SQL 文本拼接。
+`packages/storage-sqlite/src/port.ts` 定义项目自有的 `LocalStoragePort`，并以 `localStorageServiceKey` 供 Nya 消费组件注入。消费者拿到 `read(work, signal?)`、`transaction(work, signal?)` 和 `migrate(domain, migrations)`：回调中的 `StorageReader` 提供参数化 `get`、`all`，`StorageTransaction` 额外提供 `execute`。一笔事务可同时修改不同领域的表；返回或异步完成后，回调中的操作句柄失效。SQL 文本由可信的领域实现提供，值通过参数绑定传入；不能把外部输入当 SQL 文本拼接。
 
-回调可异步执行，同一连接上的操作按接受顺序串行运行。事务回调抛错、拒绝或在提交前收到 `AbortSignal`，均执行回滚。取消不会假装异步回调已经退出：回调须自行响应信号，关闭会等待它实际结束。`read` 期间连接开启 SQLite 的只读模式，回调结束后恢复。驱动对象、驱动错误和连接生命周期留在 `src/storage/sqlite.ts` 内；占用、关闭、迁移和 SQL 失败由项目自有的 `LocalStorageError.code` 标识。业务回调主动抛出的错误在回滚成功后原样返回。
+回调可异步执行，同一连接上的操作按接受顺序串行运行。事务回调抛错、拒绝或在提交前收到 `AbortSignal`，均执行回滚。取消不会假装异步回调已经退出：回调须自行响应信号，关闭会等待它实际结束。`read` 期间连接开启 SQLite 的只读模式，回调结束后恢复。驱动对象、驱动错误和连接生命周期留在 `packages/storage-sqlite/src/sqlite.ts` 内；占用、关闭、迁移和 SQL 失败由项目自有的 `LocalStorageError.code` 标识。业务回调主动抛出的错误在回滚成功后原样返回。
 
 ## 初始化、迁移与所有权
 

@@ -31,7 +31,7 @@
 
 | 单元 | 职责 | 当前落点 |
 | --- | --- | --- |
-| harness server | Agent 定义、项目与会话、Run 准入与 RunRuntime、原生记录、恢复游标、Prompt、客户端 API | 执行端 Nya 根，`src/applications/harness/core/`、`http/` |
+| harness server | Agent 定义、项目与会话、Run 准入与 RunRuntime、原生记录、恢复游标、Prompt、客户端 API | 执行端 Nya 根，`packages/app-harness/src/core/`、`http/` |
 | Models | 模型定义与连接、系统 Vault 中的密钥、四种原生协议驱动、模型 execution、公开目录 | 同一执行端根上的 `@anybox/models` 组件 |
 | Computer | 工具契约执行、进程 scope、文件读写、工作区绑定、耐久执行账本 | 独立 worker 进程根，`core/computer/worker-*.ts` |
 
@@ -66,7 +66,7 @@
 | 独占状态 | 自己的持久存储；不与其他单元共享数据库；不假设跨单元原子性 | 业务 SQLite、Models JSON 与 Vault、worker SQLite |
 | 统一操作生命周期 | 声明（幂等 ID 加摘要）、启动、带游标的观察、`result`、`done`、取消请求、关闭报告 | OwnedOperation、Computer 回执、NativeExecution 与 PreparedNativeExchange |
 | 位置透明 | 在 harness server 的根上以同一服务名出现；本地实现与远端代理可互换，核心代码不改 | `models`、`models.settings`、`computer.worker`、`computer.instance-provider` |
-| 附着与信任 | 单元向 harness server 登记身份和凭据；harness server 持久记录附着及其代次与作用域 | U0 的[单元附着](modules/units/unit-attachments.md)账本与本机自动附着；远端拨出、凭证认证仍缺失，本机 worker 发现仍依赖共享目录中的 `endpoint.json`，见 [worker-client.ts](../src/applications/harness/core/computer/worker-client.ts) |
+| 附着与信任 | 单元向 harness server 登记身份和凭据；harness server 持久记录附着及其代次与作用域 | U0 的[单元附着](modules/units/unit-attachments.md)账本与本机自动附着；远端拨出、凭证认证仍缺失，本机 worker 发现仍依赖共享目录中的 `endpoint.json`，见 [worker-client.ts](../packages/app-harness/src/core/computer/worker-client.ts) |
 | 绑定固定 | Session 或 Run 接受时固定具体单元实例与代次；旧代次的提交被拒绝 | 协议绑定快照、instanceGeneration、workspaceEpoch、runOwnerEpoch |
 | 字节与控制分离 | 大对象走独立通道，按摘要寻址，字节先耐久保存再发布引用 | 图片导入凭证、文件快照保留凭证；目前只在本机目录 |
 
@@ -143,7 +143,7 @@ sequenceDiagram
 
 ### 4.3 操作生命周期
 
-所有跨单元操作使用同一形状，与 [RunHost.perform()](../src/applications/harness/core/run/program.ts) 的持久屏障顺序对齐。
+所有跨单元操作使用同一形状，与 [RunHost.perform()](../packages/app-harness/src/core/run/program.ts) 的持久屏障顺序对齐。
 
 | 步骤 | 内容 | 现有依据 |
 | --- | --- | --- |
@@ -199,15 +199,15 @@ harness server 的 RunRuntime 不感知单元在本地还是远端：它调用�
 
 | 现状 | 位置 | 目标 |
 | --- | --- | --- |
-| 只监听 127.0.0.1，拒绝非回环来源 | [worker-server.ts](../src/applications/harness/core/computer/worker-server.ts) | 已实施：[worker 拨出](modules/computers/worker-dialout.md)向远端 harness server 长轮询；本机保留回环传输 |
-| 通过共享目录中的 `endpoint.json` 发现 | [worker-client.ts](../src/applications/harness/core/computer/worker-client.ts) | 由附着记录与代理组件发现；`endpoint.json` 只保留给本机引导 |
+| 只监听 127.0.0.1，拒绝非回环来源 | [worker-server.ts](../packages/app-harness/src/core/computer/worker-server.ts) | 已实施：[worker 拨出](modules/computers/worker-dialout.md)向远端 harness server 长轮询；本机保留回环传输 |
+| 通过共享目录中的 `endpoint.json` 发现 | [worker-client.ts](../packages/app-harness/src/core/computer/worker-client.ts) | 由附着记录与代理组件发现；`endpoint.json` 只保留给本机引导 |
 | 没有附着与控制接口 | 无 | 已实施回环控制接口（消费附着码、列出与撤销附着，见 [worker 附着账本](modules/computers/worker-attachments.md)）；本机 harness server 的连接管理页面入口属第 5 步 |
-| 实例提供方只确认本机 worker | [worker-router.ts](../src/applications/harness/core/computer/worker-router.ts) | 已实施：[Worker 路由](modules/computers/worker-router.md)按附着把 `computer.worker` 路由到回环 worker 或单元传输，并按资源提供方 ID 确认本机或远端实例 |
-| 工作区只有 pinned-local，身份即绝对路径 | [workspace/port.ts](../src/applications/harness/core/workspace/port.ts) | 已实施（U1 范围）：保持 pinned-local，远端绑定项目的路径只对所绑定单元有意义；portable-managed 留给 Computer 资源设计阶段 3 剩余部分 |
+| 实例提供方只确认本机 worker | [worker-router.ts](../packages/app-harness/src/core/computer/worker-router.ts) | 已实施：[Worker 路由](modules/computers/worker-router.md)按附着把 `computer.worker` 路由到回环 worker 或单元传输，并按资源提供方 ID 确认本机或远端实例 |
+| 工作区只有 pinned-local，身份即绝对路径 | [workspace/port.ts](../packages/app-harness/src/core/workspace/port.ts) | 已实施（U1 范围）：保持 pinned-local，远端绑定项目的路径只对所绑定单元有意义；portable-managed 留给 Computer 资源设计阶段 3 剩余部分 |
 | 项目文件读取与目录浏览在 Authority 本机 | `harness.projects`、`harness.project-files` | 已实施：项目绑定 Computer 附着（`projects` v2），Project Files 与项目目录树按绑定经 `computer.worker.query` 的只读查询面读取，Projects 经组合根的查询入口解析远端目录；快照仍保存在 harness server，宿主目录选择器仍只浏览本机 |
-| 图片以 base64 内嵌回传 | [worker-port.ts](../src/applications/harness/core/computer/worker-port.ts) | 已实施：拨出传输先 `POST /units/unit/bytes` 推送字节，回执只带 `{ sha256, byteLength, mimeType, assetId }`；回环保留 base64 |
+| 图片以 base64 内嵌回传 | [worker-port.ts](../packages/app-harness/src/core/computer/worker-port.ts) | 已实施：拨出传输先 `POST /units/unit/bytes` 推送字节，回执只带 `{ sha256, byteLength, mimeType, assetId }`；回环保留 base64 |
 
-[ComputerWorkerPort](../src/applications/harness/core/computer/worker-port.ts) 的 `info`、`claimRun`、`submit`、`get`、`shutdown` 已经是契约的本地形态；远端代理实现同一接口，只替换传输与发现。`harness.computers`、`harness.workspaces`、`harness.computer-operations` 的事务参与方式不变。
+[ComputerWorkerPort](../packages/app-harness/src/core/computer/worker-port.ts) 的 `info`、`claimRun`、`submit`、`get`、`shutdown` 已经是契约的本地形态；远端代理实现同一接口，只替换传输与发现。`harness.computers`、`harness.workspaces`、`harness.computer-operations` 的事务参与方式不变。
 
 **只读查询面。** Computer 契约在 Run 所属的耐久操作之外增加只读查询面：列目录、搜索、读取文本文件的整文件或行范围，参数与现有 `harness.project-files` 和目录浏览一致。它不经过操作账本，原因是草稿阶段的文件引用由用户发起，不属于任何 Run，没有 owner 授权与进程 scope；读取幂等、可自由重试，只固定附着、`unitId` 与 instanceGeneration。读到的内容仍由 harness server 的 `harness.project-files` 以保留凭证保存为不可变快照，事实归属不变。依赖上，`harness.project-files` 与目录浏览按项目绑定选择本地文件系统提供方或经 `computer.worker` 的远端提供方；Session 注入 project-files，Operations 注入 worker，两者都不反向依赖 Session，不形成环。
 
@@ -227,7 +227,7 @@ harness server 的 RunRuntime 不感知单元在本地还是远端：它调用�
 
 每个独立 Models 单元恰有一个管理附着，作用域为 `manage`；其余为使用附着，作用域为 `execute` 并列出允许的模型配置与配额。管理附着由单元入口的 `attach` 命令在首次启动时建立，之后共享给其他 harness server 的操作都在拥有者的 Web 完成。一个 Models 单元被多个 harness server 共用是新情况，附着、调用方身份、作用域与配额属于 Models 单元服务端，不进入 `@anybox/models` 包：服务端在调用包之前把附着作用域映射为允许的配置 ID 并检查配额，包继续假设单一受信调用方，连接配置队列只由管理附着的操作进入。这保持包"不导入本项目 `src/`"的约束。
 
-Models 单元服务端是 Anybox Harness 应用职责内的组件，位于 `src/applications/harness/` 下 U2 实施时创建的目录，进程入口位于 `src/entrypoints/`，消费 `@anybox/models` 公共入口，不新增 npm 包。它独占 exchange 账本与字节暂存目录，并在单元所在机器的系统凭据命名空间保存附着凭证。
+Models 单元服务端是 Anybox Harness 应用职责内的组件，位于 `packages/app-harness/src/` 下 U2 实施时创建的目录，进程入口位于 `packages/distribution/src/entrypoints/`，消费 `@anybox/models` 公共入口，不新增 npm 包。它独占 exchange 账本与字节暂存目录，并在单元所在机器的系统凭据命名空间保存附着凭证。
 
 ### 5.3 harness server
 
@@ -251,7 +251,7 @@ harness server 是组合者，新增的东西集中在边缘：
 - 代理组件的 `apply` 只建立连接与登记观察后返回，不等待远端就绪阻塞启动；远端不可用表现为操作准入失败，不是组件 FAILED。
 - 代理的 Effect 取消并等待本地观察退出；远端已接受的操作继续到各自退出，由账本协调。这与现有"客户端 Effect 只关闭观察"的规则一致。
 - 组合根不复制依赖图，也不在运行期切换同一服务名的实现。切换单元形态需要重新装配 harness server。
-- 部署形态由 `src/entrypoints/` 的配置选择，使用环境变量声明每个单元的形态与附着引用；Computer 单元为 `ANYBOX_COMPUTER_UNIT=local|remote` 与 `ANYBOX_COMPUTER_ATTACHMENT`，见[部署说明](harness-server-deployment.md)；不引入 dotenv。
+- 部署形态由 `packages/distribution/src/entrypoints/` 的配置选择，使用环境变量声明每个单元的形态与附着引用；Computer 单元为 `ANYBOX_COMPUTER_UNIT=local|remote` 与 `ANYBOX_COMPUTER_ATTACHMENT`，见[部署说明](harness-server-deployment.md)；不引入 dotenv。
 - 单元进程使用自己的入口与根，不复用 harness server 的业务库。worker 的数据目录保存 computer-worker 账本与 `endpoint.json`，本机自动拉起的 worker 继续使用 `${harnessDatabasePath}.computer-worker`。同一目录同一时间只能由一个 worker 进程持有。同一台机器服务多个 harness server 时不启动第二个 worker，而是让同一个 worker 持有多个附着。
 
 ## 7. 信任与安全

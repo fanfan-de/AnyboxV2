@@ -1,0 +1,1335 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-18",
+  "applicationVersion": "0.1.4",
+  "sdkPackage": "@anthropic-ai/claude-agent-sdk",
+  "sdkVersion": "0.3.301",
+  "declaration": {
+    "path": "node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts",
+    "sha256": "26f9a0c91ad64e2020f0d3734932302e3cc09685bddf2b2f9ef60839ce278773"
+  },
+  "scope": "Production explicit application usage; excludes SDK internals, test imports and inherited CLI settings",
+  "counts": {
+    "rootFunctions": 18,
+    "rootFunctionsUsed": 4,
+    "queryMethods": 30,
+    "queryMethodsUsed": 3,
+    "options": 69,
+    "optionsUsed": 21,
+    "runOptionsUsed": 15,
+    "discoveryOnlyOptions": 6,
+    "optionsNeverExplicitlySet": 48
+  },
+  "rootFunctions": [
+    {
+      "name": "createSdkMcpServer",
+      "line": 631,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "deleteSession",
+      "line": 688,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "filterEscalatingDefaultMode",
+      "line": 815,
+      "used": false,
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "foldSessionSummary",
+      "line": 836,
+      "used": false,
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "forkSession",
+      "line": 854,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "getSessionInfo",
+      "line": 888,
+      "used": true,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "getSessionMessages",
+      "line": 918,
+      "used": true,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "getSubagentMessages",
+      "line": 955,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "importSessionToStore",
+      "line": 1016,
+      "used": false,
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "listSessions",
+      "line": 1122,
+      "used": true,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "listSubagents",
+      "line": 1177,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "prewarm",
+      "line": 2871,
+      "used": false,
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "query",
+      "line": 3297,
+      "used": true,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "renameSession",
+      "line": 3308,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "resolveSettings",
+      "line": 3364,
+      "used": false,
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "startup",
+      "line": 9718,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "tagSession",
+      "line": 9836,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "tool",
+      "line": 9905,
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    }
+  ],
+  "queryMethods": [
+    {
+      "name": "interrupt",
+      "line": 2906,
+      "signature": "interrupt(): Promise<SDKControlInterruptResponse | undefined>;",
+      "used": true,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "setPermissionMode",
+      "line": 2913,
+      "signature": "setPermissionMode(mode: PermissionMode): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "setMcpPermissionModeOverride",
+      "line": 2930,
+      "signature": "setMcpPermissionModeOverride(serverName: string, mode: 'default' | 'auto' | null): Promise<{\r\n        warning?: string;\r\n    }>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "setModel",
+      "line": 2942,
+      "signature": "setModel(model?: string): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "setMaxThinkingTokens",
+      "line": 2969,
+      "signature": "setMaxThinkingTokens(maxThinkingTokens: number | null, thinkingDisplay?: 'summarized' | 'omitted' | 'highlights' | null): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": true,
+      "experimental": false
+    },
+    {
+      "name": "applyFlagSettings",
+      "line": 2997,
+      "signature": "applyFlagSettings(settings: {\r\n        [K in keyof Settings]?: K extends 'effortLevel' ? EffortLevel | null : Settings[K] | null;\r\n    }): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "updateSettings",
+      "line": 3012,
+      "signature": "updateSettings(source: 'localSettings' | 'userSettings', settings: Record<string, unknown>): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "initializationResult",
+      "line": 3021,
+      "signature": "initializationResult(): Promise<SDKControlInitializeResponse>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "reinitialize",
+      "line": 3047,
+      "signature": "reinitialize(): Promise<SDKControlInitializeResponse>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "supportedCommands",
+      "line": 3053,
+      "signature": "supportedCommands(): Promise<SlashCommand[]>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "supportedModels",
+      "line": 3059,
+      "signature": "supportedModels(): Promise<ModelInfo[]>;",
+      "used": true,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "supportedAgents",
+      "line": 3065,
+      "signature": "supportedAgents(): Promise<AgentInfo[]>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "mcpServerStatus",
+      "line": 3071,
+      "signature": "mcpServerStatus(): Promise<McpServerStatus[]>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "getContextUsage",
+      "line": 3082,
+      "signature": "getContextUsage(opts?: {\r\n        detail?: 'summary' | 'full';\r\n    }): Promise<SDKControlGetContextUsageResponse>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET",
+      "line": 3102,
+      "signature": "usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(opts?: {\r\n        skipBehaviors?: boolean;\r\n    }): Promise<SDKControlGetUsageResponse>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": true
+    },
+    {
+      "name": "readFile",
+      "line": 3123,
+      "signature": "readFile(path: string, options?: {\r\n        maxBytes?: number;\r\n        encoding?: 'utf-8' | 'base64';\r\n    }): Promise<SDKControlReadFileResponse | null>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "reloadPlugins",
+      "line": 3146,
+      "signature": "reloadPlugins(options?: {\r\n        holdOnCacheImpact?: boolean;\r\n        addPlugins?: SdkPluginConfig[];\r\n    }): Promise<SDKControlReloadPluginsResponse>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "reloadSkills",
+      "line": 3155,
+      "signature": "reloadSkills(): Promise<SDKControlReloadSkillsResponse>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "reloadOutputStyles",
+      "line": 3165,
+      "signature": "reloadOutputStyles(): Promise<SDKControlReloadOutputStylesResponse>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "accountInfo",
+      "line": 3171,
+      "signature": "accountInfo(): Promise<AccountInfo>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "rewindFiles",
+      "line": 3180,
+      "signature": "rewindFiles(userMessageId: string, options?: {\r\n        dryRun?: boolean;\r\n    }): Promise<RewindFilesResult>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "seedReadState",
+      "line": 3193,
+      "signature": "seedReadState(path: string, mtime: number): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "reconnectMcpServer",
+      "line": 3208,
+      "signature": "reconnectMcpServer(serverName: string): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "toggleMcpServer",
+      "line": 3216,
+      "signature": "toggleMcpServer(serverName: string, enabled: boolean): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "readMcpResource",
+      "line": 3229,
+      "signature": "readMcpResource(serverName: string, uri: string): Promise<SDKControlMcpReadResourceResponse>;",
+      "used": false,
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "setMcpServers",
+      "line": 3258,
+      "signature": "setMcpServers(servers: Record<string, McpServerConfig>): Promise<McpSetServersResult>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "streamInput",
+      "line": 3265,
+      "signature": "streamInput(stream: AsyncIterable<SDKUserMessage>): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "stopTask",
+      "line": 3270,
+      "signature": "stopTask(taskId: string): Promise<void>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "backgroundTasks",
+      "line": 3285,
+      "signature": "backgroundTasks(toolUseId?: string): Promise<boolean>;",
+      "used": false,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "close",
+      "line": 3294,
+      "signature": "close(): void;",
+      "used": true,
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    }
+  ],
+  "options": [
+    {
+      "name": "abortController",
+      "line": 1557,
+      "run": true,
+      "modelDiscovery": true,
+      "note": "已用于取消和退出清理",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "additionalDirectories",
+      "line": 1562,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "额外工作目录；需要界面明确范围",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "projectConfigRoot",
+      "line": 1572,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "可信原 checkout 的配置根；工作树场景，需保持代码/配置归属",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "agent",
+      "line": 1591,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "主会话角色选择",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "agents",
+      "line": 1607,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "自定义子 Agent：提示词、工具、模型、技能、memory 等",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "allowedTools",
+      "line": 1615,
+      "run": true,
+      "modelDiscovery": true,
+      "note": "两处都固定空数组；未提供可配置自动允许规则",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "canUseTool",
+      "line": 1620,
+      "run": true,
+      "modelDiscovery": true,
+      "note": "已用于工具审批和 AskUserQuestion",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "continue",
+      "line": 1625,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "未用；应用按明确 sessionId resume，不隐式选最近会话",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "cwd",
+      "line": 1629,
+      "run": true,
+      "modelDiscovery": true,
+      "note": "已有执行设备项目路径",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "disallowedTools",
+      "line": 1635,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "工具禁用/限制预设",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "toolAliases",
+      "line": 1661,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "将模型工具名映射到应用自有工具，不代替禁用规则",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "tools",
+      "line": 1671,
+      "run": false,
+      "modelDiscovery": true,
+      "note": "仅目录查询用空数组禁用工具；正常 Run 未做工具选择器",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "env",
+      "line": 1691,
+      "run": true,
+      "modelDiscovery": true,
+      "note": "继承进程环境并固定应用标识；不是可编辑的任意环境变量入口",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "executable",
+      "line": 1698,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "执行 JavaScript CLI 的运行时选择，当前依赖 SDK 缺省",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "executableArgs",
+      "line": 1702,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "JavaScript CLI 运行时参数，属于部署适配",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "extraArgs",
+      "line": 1708,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "CLI 扩展参数；不能无校验开放给浏览器",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "fallbackModel",
+      "line": 1715,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "主模型不可用时的回退选择",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "enableFileCheckpointing",
+      "line": 1724,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "文件工具检查点与回退，需先启用",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "toolConfig",
+      "line": 1735,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "内置工具配置，如 AskUserQuestion 的 HTML/Markdown 选项预览",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "forkSession",
+      "line": 1740,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "resume 时分叉新 sessionId；不同于 Git 分支",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "betas",
+      "line": 1747,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "显式 beta 功能；取决于模型与服务支持",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "hooks",
+      "line": 1761,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "应用注入 hooks 未用；不等于原生 hooks 没有加载",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "onElicitation",
+      "line": 1782,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "MCP 表单/URL 交互",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "onUserDialog",
+      "line": 1796,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "宿主渲染 CLI 专用对话框",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "supportedDialogKinds",
+      "line": 1818,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "只声明界面真正支持的对话种类",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "perTaskStopAffordance",
+      "line": 1838,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "声明有单任务停止 UI，会改变中断/后台任务语义",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "persistSession",
+      "line": 1848,
+      "run": false,
+      "modelDiscovery": true,
+      "note": "仅目录查询设 false；正常 Run 使用原生持久历史的缺省行为",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "sessionStore",
+      "line": 1860,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "alpha；外部转录镜像，当前产品不采用",
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "sessionStoreFlush",
+      "line": 1868,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "alpha；镜像刷写策略，依赖 sessionStore",
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "loadTimeoutMs",
+      "line": 1878,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "alpha；外部镜像恢复的读取超时，依赖 sessionStore",
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "includeHookEvents",
+      "line": 1888,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "hook 生命周期的流式观察",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "includePartialMessages",
+      "line": 1893,
+      "run": true,
+      "modelDiscovery": false,
+      "note": "正常 Run 开启流式文本/思考/工具块",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "forwardSubagentText",
+      "line": 1900,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "子 Agent 正文和思考；还需移除当前主会话投影过滤",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "verbatimPrompts",
+      "line": 1924,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "不展开命令/@引用的产品组合提示词；同时影响附加上下文",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "thinking",
+      "line": 1937,
+      "run": true,
+      "modelDiscovery": false,
+      "note": "固定 adaptive + summarized；没有完整 thinking 配置入口",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "effort",
+      "line": 1944,
+      "run": true,
+      "modelDiscovery": false,
+      "note": "前端按 Run 设置；不是运行中 applyFlagSettings",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "maxThinkingTokens",
+      "line": 1953,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "deprecated；不建议新增使用",
+      "alpha": false,
+      "deprecated": true,
+      "experimental": false
+    },
+    {
+      "name": "maxTurns",
+      "line": 1958,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "本次 query 轮数上限",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "maxBudgetUsd",
+      "line": 1963,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "本次 query 费用预算",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "taskBudget",
+      "line": 1971,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "alpha；API 侧 token 任务预算",
+      "alpha": true,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "mcpServers",
+      "line": 1988,
+      "run": false,
+      "modelDiscovery": true,
+      "note": "仅目录查询设为空；正常 Run 未做 SDK MCP 管理入口",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "model",
+      "line": 1993,
+      "run": true,
+      "modelDiscovery": false,
+      "note": "已有每 Run 的模型选择",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "outputFormat",
+      "line": 2006,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "JSON Schema 结构化结果；需保留 structured_output",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "pathToClaudeCodeExecutable",
+      "line": 2010,
+      "run": true,
+      "modelDiscovery": true,
+      "note": "明确使用用户安装的 claude",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "permissionMode",
+      "line": 2025,
+      "run": true,
+      "modelDiscovery": false,
+      "note": "正常 Run 固定 default；未开放模式选择",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "planModeInstructions",
+      "line": 2032,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "计划模式的自定义工作流程文本",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "allowDangerouslySkipPermissions",
+      "line": 2037,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "绕过模式显式开关；不是推荐的默认能力",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "permissionPromptToolName",
+      "line": 2042,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "将审批委托给 MCP 工具的替代路径",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "permissionPrompts",
+      "line": 2051,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "是否提供审批面；none 会拒绝原本需要提问的请求",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "plugins",
+      "line": 2066,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "显式加载本地插件；不等于原生环境的插件未加载",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "pluginDelivery",
+      "line": 2081,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "插件由 argv 或初始化载入；需相应 CLI 版本",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "promptSuggestions",
+      "line": 2103,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "下一步输入建议，在 result 之后产生",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "agentProgressSummaries",
+      "line": 2113,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "模型生成的子 Agent 进度摘要，可能增加调用",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "resume",
+      "line": 2118,
+      "run": true,
+      "modelDiscovery": false,
+      "note": "按线程保存的原生 sessionId 续接",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "sessionId",
+      "line": 2124,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "显式新会话 ID；当前由 init 报告后固定",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "resumeSessionAt",
+      "line": 2132,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "从指定消息/链条位置续接",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "resumeDropsTurn",
+      "line": 2183,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "截断续接的丢弃范围校验，拒绝后不能盲目重试",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "sandbox",
+      "line": 2239,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "文件系统/网络/凭据隔离；需要真实平台依赖与退出验收",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "settings",
+      "line": 2257,
+      "run": false,
+      "modelDiscovery": true,
+      "note": "仅目录查询用于关闭 discretionary hooks；无用户设置编辑器",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "managedSettings",
+      "line": 2286,
+      "run": false,
+      "modelDiscovery": true,
+      "note": "仅目录查询用于 hooks 限制；仍受实际管理策略影响",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "settingSources",
+      "line": 2297,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "未指定，0.3.301 缺省加载全部文件来源",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "skills",
+      "line": 2320,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "技能过滤/启用配置；未指定不表示技能关闭",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "debug",
+      "line": 2328,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "受控诊断开关；注意日志内容与资源归属",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "debugFile",
+      "line": 2333,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "诊断日志文件；需要执行设备路径和清理约束",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "stderr",
+      "line": 2338,
+      "run": true,
+      "modelDiscovery": true,
+      "note": "正常 Run 有界尾部错误；目录查询限制输出",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "strictMcpConfig",
+      "line": 2346,
+      "run": false,
+      "modelDiscovery": true,
+      "note": "仅目录查询开启；正常 Run 未强制隔离原生 MCP",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "systemPrompt",
+      "line": 2448,
+      "run": true,
+      "modelDiscovery": false,
+      "note": "固定 claude_code preset + 应用追加说明",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "title",
+      "line": 2467,
+      "run": false,
+      "modelDiscovery": false,
+      "note": "未设置；应用标题不等于同步写入原生 session 标题",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    },
+    {
+      "name": "spawnClaudeCodeProcess",
+      "line": 2489,
+      "run": true,
+      "modelDiscovery": true,
+      "note": "进程所有权适配；正常 Run 在 Unix 使用，目录查询捕获进程",
+      "alpha": false,
+      "deprecated": false,
+      "experimental": false
+    }
+  ],
+  "rootClasses": [
+    {
+      "name": "AbortError",
+      "line": 17,
+      "used": false
+    },
+    {
+      "name": "InMemorySessionStore",
+      "line": 1053,
+      "used": false
+    }
+  ],
+  "rootConstants": [
+    {
+      "name": "BUILTIN_TOOL_NAMES",
+      "line": 216,
+      "used": false
+    },
+    {
+      "name": "EXIT_REASONS",
+      "line": 782,
+      "used": false
+    },
+    {
+      "name": "HOOK_EVENTS",
+      "line": 975,
+      "used": false
+    },
+    {
+      "name": "LEGACY_TOOL_NAME_ALIASES",
+      "line": 1101,
+      "used": false
+    },
+    {
+      "name": "ORG_POLICY_LIMIT_PREFIXES",
+      "line": 2499,
+      "used": false
+    },
+    {
+      "name": "SYSTEM_PROMPT_DYNAMIC_BOUNDARY",
+      "line": 9828,
+      "used": false
+    },
+    {
+      "name": "USAGE_LIMIT_ERROR_PREFIXES",
+      "line": 10000,
+      "used": false
+    },
+    {
+      "name": "USAGE_TRANSITION_PREFIXES",
+      "line": 10008,
+      "used": false
+    },
+    {
+      "name": "USAGE_WARNING_PREFIXES",
+      "line": 10018,
+      "used": false
+    }
+  ],
+  "additionalEntries": [
+    {
+      "declaration": "core.d.ts",
+      "used": false,
+      "declaredFunctions": [],
+      "declaredConstants": [],
+      "runtimeReexports": [
+        "AbortError",
+        "BUILTIN_TOOL_NAMES",
+        "createSdkMcpServer",
+        "deleteSession",
+        "EXIT_REASONS",
+        "filterEscalatingDefaultMode",
+        "HOOK_EVENTS",
+        "LEGACY_TOOL_NAME_ALIASES",
+        "ORG_POLICY_LIMIT_PREFIXES",
+        "query",
+        "renameSession",
+        "resolveSettings",
+        "startup",
+        "SYSTEM_PROMPT_DYNAMIC_BOUNDARY",
+        "tagSession",
+        "tool",
+        "USAGE_LIMIT_ERROR_PREFIXES",
+        "USAGE_TRANSITION_PREFIXES",
+        "USAGE_WARNING_PREFIXES"
+      ]
+    },
+    {
+      "declaration": "browser-sdk.d.ts",
+      "used": false,
+      "declaredFunctions": [
+        {
+          "name": "query",
+          "line": 126
+        },
+        {
+          "name": "getSseDropCounts",
+          "line": 141
+        },
+        {
+          "name": "getSseLastSequenceNum",
+          "line": 158
+        },
+        {
+          "name": "getCcrEvent",
+          "line": 179
+        }
+      ],
+      "declaredConstants": [
+        "G4_TEXT_ENVELOPE_ARM_PORTED"
+      ],
+      "runtimeReexports": [
+        "createSdkMcpServer",
+        "tool"
+      ]
+    },
+    {
+      "declaration": "bridge.d.ts",
+      "used": false,
+      "declaredFunctions": [
+        {
+          "name": "attachBridgeSession",
+          "line": 246
+        },
+        {
+          "name": "isCredentialsFailure",
+          "line": 310
+        },
+        {
+          "name": "isCredentialsRejection",
+          "line": 317
+        },
+        {
+          "name": "isCreateSessionFailure",
+          "line": 369
+        },
+        {
+          "name": "createCodeSession",
+          "line": 381
+        },
+        {
+          "name": "fetchRemoteCredentials",
+          "line": 396
+        }
+      ],
+      "declaredConstants": [],
+      "runtimeReexports": []
+    },
+    {
+      "declaration": "extractFromBunfs.d.ts",
+      "used": false,
+      "declaredFunctions": [
+        {
+          "name": "extractFromBunfs",
+          "line": 1
+        }
+      ],
+      "declaredConstants": [],
+      "runtimeReexports": []
+    }
+  ],
+  "sdkMessageTypes": [
+    "SDKAssistantMessage",
+    "SDKUserMessage",
+    "SDKUserMessageReplay",
+    "SDKResultMessage",
+    "SDKSystemMessage",
+    "SDKPartialAssistantMessage",
+    "SDKCompactBoundaryMessage",
+    "SDKStatusMessage",
+    "SDKAPIRetryMessage",
+    "SDKControlRequestProgressMessage",
+    "SDKModelRefusalFallbackMessage",
+    "SDKModelRefusalNoFallbackMessage",
+    "SDKLocalCommandOutputMessage",
+    "SDKHookStartedMessage",
+    "SDKHookProgressMessage",
+    "SDKHookResponseMessage",
+    "SDKPluginInstallMessage",
+    "SDKToolProgressMessage",
+    "SDKAuthStatusMessage",
+    "SDKTaskNotificationMessage",
+    "SDKTaskStartedMessage",
+    "SDKTaskUpdatedMessage",
+    "SDKTaskProgressMessage",
+    "SDKBackgroundTasksChangedMessage",
+    "SDKThinkingTokensMessage",
+    "SDKSessionStateChangedMessage",
+    "SDKWorkerShuttingDownMessage",
+    "SDKCommandsChangedMessage",
+    "SDKNotificationMessage",
+    "SDKFilesPersistedEvent",
+    "SDKToolUseSummaryMessage",
+    "SDKMemoryRecallMessage",
+    "SDKRateLimitEvent",
+    "SDKElicitationCompleteMessage",
+    "SDKPermissionDeniedMessage",
+    "SDKPromptSuggestionMessage",
+    "SDKMirrorErrorMessage",
+    "SDKInformationalMessage",
+    "SDKConversationResetMessage"
+  ]
+}

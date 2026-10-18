@@ -3,9 +3,9 @@ import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createResponsesProtocol, createAnthropicMessagesProtocol, createChatCompletionsProtocol, createGeminiInteractionsProtocol } from '@anybox/models'
 import { createExecution, validateRestore } from '../packages/models/dist/execution.js'
-import { createProtocolAgentsComponent, createProtocolAgentBindingComponent } from '../dist/applications/harness/core/protocol-agents/registry.js'
+import { createProtocolAgentsComponent, createProtocolAgentBindingComponent } from '../packages/app-harness/dist/core/protocol-agents/registry.js'
 import { modelSnapshot } from './helpers/controlled-models.mjs'
-import { bashToolDefinition } from '../dist/applications/harness/core/tool/bash-component.js'
+import { bashToolDefinition } from '../packages/app-harness/dist/core/tool/bash-component.js'
 
 const factories = { responses: createResponsesProtocol, 'anthropic-messages': createAnthropicMessagesProtocol,
   'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol }

@@ -2,7 +2,7 @@
 
 [返回 Computer 模块](README.md) · [单元传输](../units/unit-transport.md) · [本机 worker 客户端](local-worker-client.md) · [Computers](computers.md)
 
-`createWorkerRouterComponent({ local, claimTimeoutMs?, replyTimeoutMs? })` 在 harness server 根安装 `computer-worker-router`，提供 `computer.worker: ComputerWorkerPort` 与 `computer.instance-provider: ComputerInstanceProvider`。inject `harness.unit-transport` 与 `harness.unit-attachments`；本机形态（`local: true`）另 inject `computer.local-worker`。它是核心代码看到的唯一 Computer 契约：每个调用按授权中的附着路由——`local:computer` 经回环交给本 harness server 自己的 worker，其他附着经单元传输投递到拨出的远端 worker。Computer Operations、Computers、Projects、Project Files 与 RunRuntime 不感知差别。源码：[组件](../../../src/applications/harness/core/computer/worker-router.ts)。
+`createWorkerRouterComponent({ local, claimTimeoutMs?, replyTimeoutMs? })` 在 harness server 根安装 `computer-worker-router`，提供 `computer.worker: ComputerWorkerPort` 与 `computer.instance-provider: ComputerInstanceProvider`。inject `harness.unit-transport` 与 `harness.unit-attachments`；本机形态（`local: true`）另 inject `computer.local-worker`。它是核心代码看到的唯一 Computer 契约：每个调用按授权中的附着路由——`local:computer` 经回环交给本 harness server 自己的 worker，其他附着经单元传输投递到拨出的远端 worker。Computer Operations、Computers、Projects、Project Files 与 RunRuntime 不感知差别。源码：[组件](../../../packages/app-harness/src/core/computer/worker-router.ts)。
 
 ## 配置与接口
 

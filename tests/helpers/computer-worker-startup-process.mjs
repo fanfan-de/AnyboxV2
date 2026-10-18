@@ -35,10 +35,10 @@ if (mode === 'lock') {
   syncBuiltinESMExports()
   try {
     if (mode === 'cli') {
-      const { main } = await import('../../dist/entrypoints/computer-worker-main.js')
+      const { main } = await import('../../packages/distribution/dist/entrypoints/computer-worker-main.js')
       await main(['start', directory])
     } else {
-      const { connectLocalComputerWorker } = await import('../../dist/applications/harness/core/computer/worker-client.js')
+      const { connectLocalComputerWorker } = await import('../../packages/app-harness/dist/core/computer/worker-client.js')
       const client = connectLocalComputerWorker({ directory, autoStart: false, startupTimeoutMs: 10_000 })
       try { await client.start(); process.stdout.write(JSON.stringify(await client.status())) }
       finally { await client.closeObserver() }

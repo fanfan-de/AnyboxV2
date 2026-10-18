@@ -6,11 +6,11 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createWorkerAttachmentsComponent } from '../dist/applications/harness/core/computer/worker-attachments.js'
-import { createComputerWorkerExecutorComponent } from '../dist/applications/harness/core/computer/worker-component.js'
-import { computerDeclarationDigest } from '../dist/applications/harness/core/computer/operations-domain.js'
-import { getToolById } from '../dist/applications/harness/core/tool/catalog.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createWorkerAttachmentsComponent } from '../packages/app-harness/dist/core/computer/worker-attachments.js'
+import { createComputerWorkerExecutorComponent } from '../packages/app-harness/dist/core/computer/worker-component.js'
+import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
+import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 
 const ceiling = { kind: 'computer', projects: 'all', tools: 'all' }
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }

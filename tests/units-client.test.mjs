@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { setupUnitsSettings, setupLocalAttachments, parseGrantList, computerScope, describeAttachment, describeLocalAttachment } from '../dist/applications/harness/web/units-client.js'
-import { allowedProxyPath } from '../dist/applications/harness/client/gateway.js'
+import { setupUnitsSettings, setupLocalAttachments, parseGrantList, computerScope, describeAttachment, describeLocalAttachment } from '../packages/app-harness/dist/web/units-client.js'
+import { allowedProxyPath } from '../packages/app-harness/dist/client/gateway.js'
 
 class Element extends EventTarget {
   hidden = false; disabled = false; value = ''; textContent = ''; className = ''; children = []; dataset = {}

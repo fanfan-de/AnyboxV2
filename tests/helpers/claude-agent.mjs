@@ -1,8 +1,8 @@
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../../dist/storage/sqlite.js'
-import { createClaudeAgentStoreComponent, claudeAgentStoreServiceKey } from '../../dist/applications/claude-agent/core/store/component.js'
-import { claudeAgentSdkServiceKey } from '../../dist/applications/claude-agent/core/sdk/port.js'
-import { createClaudeAgentRunsComponent, claudeAgentRunsServiceKey, claudeAgentRunAdmissionServiceKey } from '../../dist/applications/claude-agent/core/runs/component.js'
+import { createLocalSqliteComponent } from '../../packages/storage-sqlite/dist/sqlite.js'
+import { createClaudeAgentStoreComponent, claudeAgentStoreServiceKey } from '../../packages/app-claude-agent/dist/core/store/component.js'
+import { claudeAgentSdkServiceKey } from '../../packages/app-claude-agent/dist/core/sdk/port.js'
+import { createClaudeAgentRunsComponent, claudeAgentRunsServiceKey, claudeAgentRunAdmissionServiceKey } from '../../packages/app-claude-agent/dist/core/runs/component.js'
 
 export const tick = () => new Promise(resolve => setImmediate(resolve))
 export async function waitFor(condition, attempts = 200) {
@@ -21,6 +21,7 @@ export function fakeSdk(options = {}) {
   const runs = []
   const port = {
     environment: () => options.environment ?? fakeEnvironment,
+    async listAvailableModels(cwd, signal) { return options.models ? options.models(cwd, signal) : { schemaVersion: 1, models: [] } },
     openRun(request, hooks) {
       if (options.failOpen) throw options.failOpen
       let finish, exit

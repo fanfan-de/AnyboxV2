@@ -2,7 +2,7 @@
 
 [返回可组合单元模块](README.md) · [单元附着](unit-attachments.md) · [worker 拨出](../computers/worker-dialout.md)
 
-`createUnitTransportComponent(inputs)` 在 harness server 根安装 `harness-unit-transport`，提供 `harness.unit-transport: UnitTransportPort`。inject `harness.unit-attachments`。它是单元拨出传输在 harness server 这一端的入口：远端单元用自己的凭证长轮询领取请求，再用 POST 回传回执；harness server 侧的代理组件通过它向单元发请求。源码：[组件](../../../src/applications/harness/core/unit/transport-component.ts)、[纯规则](../../../src/applications/harness/core/unit/transport-domain.ts)。
+`createUnitTransportComponent(inputs)` 在 harness server 根安装 `harness-unit-transport`，提供 `harness.unit-transport: UnitTransportPort`。inject `harness.unit-attachments`。它是单元拨出传输在 harness server 这一端的入口：远端单元用自己的凭证长轮询领取请求，再用 POST 回传回执；harness server 侧的代理组件通过它向单元发请求。源码：[组件](../../../packages/app-harness/src/core/unit/transport-component.ts)、[纯规则](../../../packages/app-harness/src/core/unit/transport-domain.ts)。
 
 ## 配置与接口
 

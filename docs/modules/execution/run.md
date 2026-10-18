@@ -6,7 +6,7 @@ Run 把外部请求验证为一个已接受的执行计划，并把所有权交�
 
 ## 实现与装配
 
-- 源码：[组件](../../../src/applications/harness/core/run/component.ts)、[输入和状态转换](../../../src/applications/harness/core/run/domain.ts)、[程序契约](../../../src/applications/harness/core/run/program.ts)、[等待者](../../../src/applications/harness/core/run/waiters.ts)。
+- 源码：[组件](../../../packages/app-harness/src/core/run/component.ts)、[输入和状态转换](../../../packages/app-harness/src/core/run/domain.ts)、[程序契约](../../../packages/app-harness/src/core/run/program.ts)、[等待者](../../../packages/app-harness/src/core/run/waiters.ts)。
 - 工厂：`createRunComponent(inputs, agents, isHarnessServerClosing?, closingSignal?)`；组件名：`harness-runs`；配置类型：`void`。
 - `inputs` 提供 `now()`、`newId()`；`agents` 是已验证的只读 Agent 定义；可选 `isHarnessServerClosing()` 默认为 false，用于区分整个应用关闭与依赖失效。
 - 提供 `harness.runs: RunPort` 和受信宿主控制服务 `harness.run-admission: RunAdmissionPort`。

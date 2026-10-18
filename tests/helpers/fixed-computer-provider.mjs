@@ -1,5 +1,5 @@
-import { computerError, computerIdentity } from '../../dist/applications/harness/core/computer/domain.js'
-import { computerInstanceProviderServiceKey } from '../../dist/applications/harness/core/computer/port.js'
+import { computerError, computerIdentity } from '../../packages/app-harness/dist/core/computer/domain.js'
+import { computerInstanceProviderServiceKey } from '../../packages/app-harness/dist/core/computer/port.js'
 
 /** A deterministic fixed resource for resource/Authority tests; production uses the independent worker. */
 export function createLocalComputerProvider(options = {}) {

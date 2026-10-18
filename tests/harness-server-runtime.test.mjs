@@ -5,14 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context, FiberState } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createProductActivityComponent } from '../dist/host/applications/activity.js'
-import { createApplicationRuntime } from '../dist/host/applications/runtime.js'
-import { createHarnessServerRuntime } from '../dist/applications/harness/server-runtime.js'
-import { parseHarnessServerConfig } from '../dist/applications/harness/server-config.js'
-import { installHarnessServerCore, createHarnessServerAgentComponents } from '../dist/applications/harness/core/index.js'
-import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
-import { runAdmissionServiceKey } from '../dist/applications/harness/core/run/component.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createApplicationRuntime } from '../packages/application-api/dist/nya.js'
+import { createHarnessServerRuntime } from '../packages/app-harness/dist/server-runtime.js'
+import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
+import { installHarnessServerCore, createHarnessServerAgentComponents } from '../packages/app-harness/dist/core/index.js'
+import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
+import { runAdmissionServiceKey } from '../packages/app-harness/dist/core/run/component.js'
 import { controlledModels, deferred } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Test.' }]
@@ -21,7 +20,6 @@ async function fixture(t) {
   const root = new Context()
   const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
   await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
-  await root.installComponent(createProductActivityComponent())
   const secrets = new Map()
   const runtime = createHarnessServerRuntime(root, config, { authenticated: false, models: { catalogAutoRefresh: false, readLegacyCredential: async () => undefined,
     openEntry(namespace, id) { const key = `${namespace}:${id}`; return {
@@ -39,6 +37,8 @@ test('harness server owns its full installation and reopening preserves data in 
   assert.equal(existsSync(config.modelsDatabasePath), false)
   await runtime.open()
   assert.equal(runtime.inspect(), 'active')
+  assert.equal(root.get('app.activity'), undefined, 'business startup requires no Anybox activity service')
+  assert.equal(root.get('host.access'), undefined, 'business startup requires no Anybox authentication service')
   for (const key of ['models', 'models.catalog', 'harness.prompts', 'harness.sessions', 'harness.computers', 'harness.workspaces', 'harness.computer-operations', 'computer.worker', 'harness.http']) assert.ok(root.get(key), key)
   for (const key of ['tools.bash', 'tools.apply-patch', 'tools.processes', 'tools.files']) assert.equal(root.get(key), undefined, `${key} is owned by the independent worker`)
   const components = createHarnessServerAgentComponents(root, { agents }, { isClosing: () => false })
@@ -119,10 +119,10 @@ test('Run admission protects preparation and real exit, and installation close l
 test('startup failure cleans every registered Fiber and effect, and requires explicit retry', async () => {
   const root = new Context(), shared = {}, release = root.provide('shared', shared)
   let broken = true, cleanups = 0, effects = 0
-  const runtime = createApplicationRuntime(root, install => {
+  const runtime = createApplicationRuntime(root, async install => {
     install.effect(() => () => { effects++ }, 'fixture')
-    install.install(ctx => { ctx.effect(() => () => { cleanups++ }); ctx.provide('app', {}) })
-    install.install(() => { if (broken) throw new Error('startup failed') })
+    await install.install(ctx => { ctx.effect(() => () => { cleanups++ }); ctx.provide('app', {}) })
+    if (broken) throw new Error('startup failed')
   })
   try {
     await assert.rejects(runtime.open(), /startup failed/)

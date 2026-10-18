@@ -36,7 +36,7 @@ Anybox Harness 内部工作区分为项目导航、Thread View 与文件侧栏�
 
 按展开逐层读取目录，每页最多 100 项，扫描预算 1,000 项或 200ms；空页仍可能有下一页。前端对已加载条目按目录优先与名称排序，提供加载更多、目录级重试和手动刷新。目录顶部的筛选输入高 28px，树行高 24px；筛选仅匹配已加载目录快照中的名称与相对路径，临时展示匹配祖先及已加载的匹配子项，同时保留分页、错误和重试入口。筛选输入不改变持久展开集合，不新扫目录、不发起新的文件搜索请求；用户显式展开、加载更多或重试仍通过原目录客户端读取。清空后按原展开集合显示，不把筛选结果当作项目全部文件，也不增加文件监视器。前端可保留刚加载的 `FileTreeEntry[]`，用于目录收起后的临时筛选展示；缓存不含服务端游标或分页句柄，目录 close 仍取消读取并释放游标，会话或设备切换、整个文件区隐藏及刷新时清除缓存。成功重读包含空目录时替换旧缓存，避免已知过期条目重新出现。
 
-目录、文件类型和操作图标采用 Microsoft Codicons 的本地 SVG 副本，固定来源版本与许可见[图标说明](../web/apps/agent/icons/README.md)。图标经 Anybox Harness 的精确静态资源图注册，通过同源图片呈现；文件名和动作仍由文本与无障碍名称说明，不依赖图标传达文件归属或快照身份。
+目录、文件类型和操作图标采用 Microsoft Codicons 的本地 SVG 副本，固定来源版本与许可见[图标说明](../packages/app-harness/web/icons/README.md)。图标经 Anybox Harness 的精确静态资源图注册，通过同源图片呈现；文件名和动作仍由文本与无障碍名称说明，不依赖图标传达文件归属或快照身份。
 
 树页包含 `cursorId`、`page`、相对目录 `path`、`entries` 和 `nextPage`。游标绑定 Session、项目、相对目录、HTTP actor 与组件代，不持久化。最多 16 个存活游标，60 秒空闲回收；扫描与现有文件操作共享并发 2 队列。结束、取消、显式关闭或过期均关闭句柄；清理失败停止新的树浏览准入，并由组件关闭报告。
 
@@ -60,7 +60,7 @@ Anybox Harness 内部工作区分为项目导航、Thread View 与文件侧栏�
 
 Thread 视图切换的验收应覆盖默认及损坏模式恢复、全会话记录、活动数量、草稿及独立滚动保留、持续挂载的协议 Turn、切换期间在途运行及自动跟随；检查成功、失败、取消、中断和实际工具结果，以及“查看回答”和“关注过程”的定位。浏览器验收使用同一隔离宿主，覆盖 1440px、1024px、390px 与四分屏，检查两个入口可见、键盘切换、无横向溢出、流式回答、应用切换和关闭重开。
 
-目录与 HTTP 生命周期测试位于 `tests/project-file-tree.test.mjs`、`tests/project-file-tree-http.test.mjs` 和 `tests/host-access-lifecycle.test.mjs`；前端状态与竞态测试位于 `tests/sidebar-layout.test.mjs`、`tests/file-tree-client.test.mjs`、`tests/file-sidebar.test.mjs`、`tests/session-client.test.mjs` 和 `tests/session-view.test.mjs`。
+目录与 HTTP 生命周期测试位于 `tests/project-file-tree.test.mjs`、`tests/project-file-tree-http.test.mjs` 和 `tests/host-access-lifecycle.test.mjs`；前端状态与竞态测试位于 `packages/app-harness/tests/sidebar-layout.test.mjs`、`tests/file-tree-client.test.mjs`、`tests/file-sidebar.test.mjs`、`tests/session-client.test.mjs` 和 `tests/session-view.test.mjs`。
 
 构建后运行 `node tests/helpers/workspace-browser-host.mjs`，打开输出的 `qaUrl`。该页面通过同源测试代理提供真实 iframe 容器，可选择三种验收宽度或连续调宽；目录中的 Notes 仅为独立测试应用，用于验证切换后 Anybox Harness 的草稿与文件视图保留。退出测试宿主会关闭代理、客户端和执行端，并清理临时数据库与项目目录。
 
@@ -74,6 +74,6 @@ Thread 视图切换的验收应覆盖默认及损坏模式恢复、全会话记�
 
 同日完成对话与运行记录切换后，隔离浏览器验证了三个验收宽度与跨项目四分屏、键盘切换、草稿保留、流式回答、取消及失败记录、后台完成时保留记录模式、刷新和关闭重开恢复、Notes 切换，以及对话滚动位置在切换和重开后保持；浏览器控制台无 error/warn。新增行为测试覆盖隐藏及零尺寸面板、首次挂载和重开时恢复两个滚动位置、原生 Turn 持续挂载、失败/取消/中断不生成节点。最终 `npm run check` 为 807 项通过、13 项门控跳过、0 失败。
 
-同日参考 Codex 文件区布局改为左预览、右目录，增加已加载条目筛选、类型图标、紧凑文件标签和路径面包屑。隔离浏览器验证 1440px、1024px、390px 容器、筛选与 Escape、标签键盘切换、行范围引用、跨项目文件与刷新恢复，以及窄屏抽屉关闭后的焦点返回。修正长路径挤出末段文件名的问题；视觉比较与验证限制见[布局验收](../design-qa.md)。`npm run check` 为 818 项通过、13 项门控跳过、0 失败，最终构建通过精确资源图校验。
+同日参考 Codex 文件区布局改为左预览、右目录，增加已加载条目筛选、类型图标、紧凑文件标签和路径面包屑。隔离浏览器验证 1440px、1024px、390px 容器、筛选与 Escape、标签键盘切换、行范围引用、跨项目文件与刷新恢复，以及窄屏抽屉关闭后的焦点返回。修正长路径挤出末段文件名的问题；`npm run check` 为 818 项通过、13 项门控跳过、0 失败，最终构建通过精确资源图校验。
 
 2026-10-03 将两处外侧分隔与文件内部目录分隔统一为 1px 单线，去除停靠面板的重复边框和空槽。隔离浏览器在 1440px 布局确认三处分隔线均占 1px，透明命中区实际约 8px，并从线外 3px 处分别拖动成功；键盘调宽、目录双击复位、1024px 布局及 390px 抽屉展开与 Escape 关闭均通过。窄屏外分隔及堆叠目录分隔隐藏，抽屉自身保留单边框。实际客户端刷新后确认三处分隔均占 1px。`npm run check` 为 900 项通过、13 项门控跳过、0 失败。

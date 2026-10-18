@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 for (const local of [false, true]) test(`desktop main ${local ? '--local explicitly combines roles' : 'starts client-only and enables the server only on request'}`, { timeout: 20000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-desktop-main-'))
-  const child = fork(fileURLToPath(new URL('../dist/entrypoints/desktop-main.js', import.meta.url)), local ? ['--local'] : [], {
+  const child = fork(fileURLToPath(new URL('../packages/distribution/dist/entrypoints/desktop-main.js', import.meta.url)), local ? ['--local'] : [], {
     cwd: directory, execArgv: ['--import', new URL('./helpers/desktop-main-preload.mjs', import.meta.url).href],
     env: { ...process.env, ANYBOX_DESKTOP_USER_DATA: directory, ANYBOX_DESKTOP_SMOKE: '0', ANYBOX_TEST_FAIL_EXECUTION_FORK: local ? '0' : '1' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   })

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { formatTraceDuration, runTrace, traceElapsed } from '../dist/applications/harness/web/run-trace.js'
-import { toolTrace } from '../dist/applications/harness/web/tool-trace.js'
+import { formatTraceDuration, runTrace, traceElapsed } from '../packages/app-harness/dist/web/run-trace.js'
+import { toolTrace } from '../packages/app-harness/dist/web/tool-trace.js'
 
 const at = seconds => new Date(Date.UTC(2026, 9, 2, 1, 0, seconds)).toISOString()
 const run = (status = 'completed', extra = {}) => ({ id: 'run', sessionId: 'session', input: 'Find the project', status,

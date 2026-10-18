@@ -54,4 +54,4 @@ v3 当前配置保存 `{ protocolId, formatVersion, value }`，连接具有非�
 
 [storage.test.mjs](../../../packages/models/tests/storage.test.mjs) 覆盖事务回滚、关联不可变、baseline、同步守卫、连接删除、排他与进程退出；[storage-migration.test.mjs](../../../packages/models/tests/storage-migration.test.mjs) 覆盖 v1 兼容；[native-migration.test.mjs](../../../packages/models/tests/native-migration.test.mjs) 覆盖 v3 与扩展延迟转换。
 
-替换提供方需实现 `ModelsStore` 的读写契约和相同原子、版本、所有权语义，不把 SQLite 类型带过边界。参见 [Vault](vault.md)、[目录缓存](catalog-cache.md) 和 [Models 架构](../../architecture/models-module.md)。
+替换提供方需实现 `ModelsStore` 的读写契约和相同原子、版本、所有权语义，不把 SQLite 类型带过边界。参见 [Vault](vault.md)、[目录缓存](catalog-cache.md) 和 [Models 模块](README.md)。

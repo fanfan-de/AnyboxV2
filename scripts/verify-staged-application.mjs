@@ -35,8 +35,8 @@ export async function verifyStagedApplication(root, output) {
   await verifyDefaultWebAssets(root, output)
   const base = pathToFileURL(root + sep)
   const [{ harnessClientApplication }, { claudeAgentClientApplication }, { shellAssets }, { createApplicationCatalog }] = await Promise.all([
-    import(new URL('dist/applications/harness/client/registration.js', base)), import(new URL('dist/applications/claude-agent/client/registration.js', base)),
-    import(new URL('dist/host/assets.js', base)), import(new URL('dist/host/applications/registration.js', base)),
+    import(new URL('packages/app-harness/dist/client/registration.js', base)), import(new URL('packages/app-claude-agent/dist/client/registration.js', base)),
+    import(new URL('packages/host/dist/assets.js', base)), import(new URL('packages/host/dist/applications/registration.js', base)),
   ])
   const catalog = createApplicationCatalog([harnessClientApplication(), claudeAgentClientApplication()], shellAssets)
   for (const [url, asset] of catalog.assets) {
@@ -45,18 +45,14 @@ export async function verifyStagedApplication(root, output) {
     const [source, copied] = await Promise.all([readFile(asset.file), readFile(join(output, path))])
     if (hash(source) !== hash(copied)) throw new Error(`Shared Web asset changed during release: ${url}`)
   }
-  const source = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   const manifest = JSON.parse(await readFile(join(output, 'package.json'), 'utf8'))
   const release = JSON.parse(await readFile(join(output, 'release.json'), 'utf8'))
   const lockBytes = await readFile(join(output, 'package-lock.json'))
   if (hash(lockBytes) !== release.lockSha256) throw new Error('Release lock integrity mismatch')
-  const search = verifySearchDependencyLock(manifest, JSON.parse(lockBytes.toString('utf8')))
-  for (const [name, spec] of Object.entries(source.dependencies)) {
+  const harness = JSON.parse(await readFile(join(output, 'packages/app-harness/package.json'), 'utf8'))
+  const search = verifySearchDependencyLock(harness, JSON.parse(lockBytes.toString('utf8')))
+  for (const name of Object.keys(release.artifacts)) {
     const copied = manifest.dependencies[name]
-    if (!spec.startsWith('file:')) {
-      if (copied !== spec) throw new Error(`Dependency changed during release: ${name}`)
-      continue
-    }
     if (typeof copied !== 'string' || !/^file:vendor\/[^/]+\.tgz$/.test(copied)) throw new Error(`Non-portable local dependency: ${name}`)
     const path = join(output, copied.slice(5))
     if (!(await stat(path)).isFile()) throw new Error(`Missing vendored dependency: ${name}`)
@@ -101,7 +97,7 @@ export async function verifyDesktopNativeFiles(appPath) {
     throw new Error('Desktop package is missing unpacked native binaries')
   }
   await Promise.all([stat(join(modules, '@napi-rs/keyring/index.js')), stat(join(modules, 'sharp/package.json'))])
-  const dialog = join(appPath, 'Contents/Resources/app.asar.unpacked/dist/desktop/native/mac-dialog.node')
+  const dialog = join(appPath, 'Contents/Resources/app.asar.unpacked/node_modules/@anybox/directory-picker/dist/native/mac-dialog.node')
   if (!(await lstat(dialog)).isFile()) throw new Error('Desktop native dialog adapter is not a regular file')
   const binary = await readFile(dialog)
   if (binary.length < 32 || binary.readUInt32LE(0) !== 0xfeedfacf || binary.readUInt32LE(4) !== 0x0100000c) {

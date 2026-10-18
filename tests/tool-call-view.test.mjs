@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { summarizeToolRequest, latestRunPlan, toolSelectionDisplayName } from '../dist/applications/harness/web/tool-call-view.js'
+import { summarizeToolRequest, latestRunPlan, toolSelectionDisplayName } from '../packages/app-harness/dist/web/tool-call-view.js'
 
 const request = (name = 'bash', arguments_ = '{"command":"requested-command"}') => ({ id: 'request', name, arguments: arguments_ })
 const bash = (state, extra = {}) => ({ id: 'call', name: 'bash', state, command: 'real-command', ...extra })

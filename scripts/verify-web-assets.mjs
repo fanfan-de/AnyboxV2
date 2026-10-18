@@ -5,7 +5,19 @@ import { resolve, relative, join } from 'node:path'
 import ts from 'typescript'
 
 export async function verifyWebAssets(catalog) {
+  const imports = new Map()
+  const shell = catalog.assets.get('/')
+  if (shell) {
+    const html = await readFile(shell.file, 'utf8')
+    for (const match of html.matchAll(/<script\s+type="importmap">([^<]+)<\/script>/g)) {
+      for (const [name, target] of Object.entries(JSON.parse(match[1]).imports ?? {})) {
+        if (typeof target !== 'string' || !target.startsWith('/')) throw new Error(`Invalid browser public interface: ${name}`)
+        imports.set(name, target)
+      }
+    }
+  }
   const check = (from, specifier) => {
+    if (imports.has(specifier)) specifier = imports.get(specifier)
     if (!/^(?:\.\.?\/|\/)/.test(specifier)) throw new Error(`Browser import must be a registered URL: ${from} -> ${specifier}`)
     const target = new URL(specifier, `https://application.invalid${from}`).pathname
     if (!catalog.assets.has(target)) throw new Error(`Missing browser dependency: ${from} -> ${target}`)
@@ -38,8 +50,8 @@ export async function verifyWebAssets(catalog) {
 export async function verifyDefaultWebAssets(directory, copiedDirectory) {
   const root = pathToFileURL(resolve(directory) + '/')
   const [{ harnessClientApplication }, { claudeAgentClientApplication }, { shellAssets }, { createApplicationCatalog }] = await Promise.all([
-    import(new URL('dist/applications/harness/client/registration.js', root)), import(new URL('dist/applications/claude-agent/client/registration.js', root)),
-    import(new URL('dist/host/assets.js', root)), import(new URL('dist/host/applications/registration.js', root)),
+    import(new URL('packages/app-harness/dist/client/registration.js', root)), import(new URL('packages/app-claude-agent/dist/client/registration.js', root)),
+    import(new URL('packages/host/dist/assets.js', root)), import(new URL('packages/host/dist/applications/registration.js', root)),
   ])
   const catalog = createApplicationCatalog([harnessClientApplication(), claudeAgentClientApplication()], shellAssets)
   await verifyWebAssets(copiedDirectory ? { ...catalog, assets: new Map([...catalog.assets].map(([path, asset]) => [path, { ...asset, file: join(copiedDirectory, relative(resolve(directory), asset.file)) }])) } : catalog)

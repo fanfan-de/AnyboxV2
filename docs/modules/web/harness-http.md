@@ -2,19 +2,23 @@
 
 [宿主模块](README.md) · [通用监听器](web-frontend.md)
 
-`src/applications/harness/http/harness-http.ts` 的 `createHarnessServerHttpComponent(root,agents,{authenticated?})` 创建 `harness-http`，提供 `harness.http: HarnessServerHttpHandler`。它是 harness server 安装的一部分，不持有监听端口。注入 app.activity 及认证模式下的 host.access；受信请求入口同步从根捕获当前 Session、Run、Projects、Models、Prompt 和单元附着服务快照，缺失服务只影响对应业务。Agent 列表为只读配置。
+`packages/app-harness/src/http/harness-http.ts` 的 `createHarnessServerHttpComponent(root, agents, integration?)` 创建 `harness-http`，提供 `harness.http: HarnessServerHttpHandler`。它是 harness server 安装的一部分，不持有监听端口。业务实现没有必需宿主依赖；可选集成来源以 `inject` 和 `resolve(deps)` 声明本轮适配端口：Anybox 注册适配消费 `app.activity` / `host.access`，独立服务消费自己安装的 `harness.access`。依赖撤销关闭旧代适配器及观察，再由 Nya 重绑。受信请求入口同步从根捕获当前 Session、Run、Projects、Models、Prompt 和单元附着服务快照，缺失服务只影响对应业务。Agent 列表为只读配置。
+
+`HarnessServerHttpIntegrationSource` 的 `inject` 列出本轮集成依赖，`resolve(deps)` 返回 `HarnessServerHttpIntegration`。其中 `directoryPicker?: DirectoryPickerPort | null` 明确区分本代已选服务、禁用和独立装配：Anybox 注册声明 optional `system.directory-picker@^1.0.0`，取得时才将 `host.directory-picker` 加入条件 inject 并传入本轮 deps 的服务；未取得时传入 null，明确关闭此能力。即使根上有其他消费者持有的目录服务，也不能回退读取该服务或跨版本使用。undefined 仅保留独立或嵌入装配原有的根快照读取，不替代 Anybox 的能力选择。目录提供方按消费者装配、最后释放时等待实际退出，不属于常驻 HTTP 或应用业务层。
 
 内部 `createHarnessServerHttpHandler`、`models-api.ts` 负责业务路由、DTO、图片/文件、Models 管理和通知 SSE，`validation.ts` 保留 Prompt revision 等业务输入转换；不创建额外组件。每次调用固定该代服务；重启不重放旧请求。Run 通知订阅由此组件持有，通用监听器不导入任何 Anybox Harness 服务。
 
-浏览器轨迹由 `session-view.ts` 挂载 `trajectory-view.ts`，默认以连续角色表展示本会话全部 Run，提供三通道时间轴、折叠、搜索和行明细。纯函数 `trajectory.ts` 复用 `run-trace.ts`、`tool-trace.ts` 的真实步骤与工具事实，模型内容只消费匹配 Run/协议的 `/view` 白名单投影。`session-client.ts` 用共享两个并发槽按活动、聚焦和可见运行读取事件/视图，非空搜索逐步补读其余运行，终态复用缓存；实时刷新保留选中行、折叠与独立滚动位置。旧记录缺失值不推断、未观察操作和中断恢复不伪造退出时间，取消及清理失败仍展示真实工具结果和部分补丁变更。没有新 HTTP 路由、Nya 组件、恢复语义或原生记录格式。行为入口为 `tests/trajectory.test.mjs`、`tests/run-trace.test.mjs`、`tests/tool-trace.test.mjs`、`tests/session-view.test.mjs` 和 `tests/session-client.test.mjs`，说明见[Web 客户端设计](../../web-client-design.md)。
+浏览器轨迹由 `session-view.ts` 挂载 `trajectory-view.ts`，默认以连续角色表展示本会话全部 Run，提供三通道时间轴、折叠、搜索和行明细。纯函数 `trajectory.ts` 复用 `run-trace.ts`、`tool-trace.ts` 的真实步骤与工具事实，模型内容只消费匹配 Run/协议的 `/view` 白名单投影。`session-client.ts` 用共享两个并发槽按活动、聚焦和可见运行读取事件/视图，非空搜索逐步补读其余运行，终态复用缓存；实时刷新保留选中行、折叠与独立滚动位置。旧记录缺失值不推断、未观察操作和中断恢复不伪造退出时间，取消及清理失败仍展示真实工具结果和部分补丁变更。没有新 HTTP 路由、Nya 组件、恢复语义或原生记录格式。行为入口为 `packages/app-harness/tests/trajectory.test.mjs`、`tests/run-trace.test.mjs`、`packages/app-harness/tests/tool-trace.test.mjs`、`tests/session-view.test.mjs` 和 `tests/session-client.test.mjs`，说明见[Web 客户端设计](../../web-client-design.md)。
 
 Thread 对话和轨迹明细共同使用四协议各自的内容组件，正文及可公开推理文本复用内部 `web/markdown.ts` 渲染 CommonMark/GFM；用户输入、协议状态和工具事实保留原文。解析器由 `scripts/build-web-vendors.mjs` 打包为同源、无运行期导入的 ESM，许可证随 dist 发行，通过应用精确资源图校验。渲染仅创建固定标签与文本节点；HTML 按字面显示，HTTP(S) 链接复用来源 URL 校验，远程图片只显示链接。引用使用 Markdown 源位置添加编号，实体、代码或链接边界的编号放在相应节点之后，并保留来源列表；无位置的安全引用作为块级来源。代码提供复制，宽表格与代码在块内滚动。展示升级不新增 Nya 组件、HTTP 路由或原生持久格式。细节及 `tests/session-view.test.mjs` 验证入口见[Web 客户端设计](../../web-client-design.md)。
 
-请求按注册归属获得 Activity 租约。已接受 Run 使用 retainUntil(waitRun) 延续租约到实际退出；关闭监听器不取消 Run。SSE/等待/目录/资源请求响应监听器 signal，OwnedCall 等待 result/done。目录浏览保留自己的观察租约，绑定认证令牌和创建它的服务代；新建目录使用该会话捕获的创建端口，不跨组件重启转交写入。创建请求同样响应断开、令牌撤销和关闭，并等待文件系统操作及清理实际退出。业务 DTO 不暴露恢复句柄、凭据或 execution。
+Anybox 接入时请求按注册归属获得 Activity 租约；独立监听器直接管理请求，不安装宿主活动服务。已接受 Run 使用 retainUntil(waitRun) 保留到实际退出；关闭监听器不取消 Run。SSE/等待/目录/资源请求响应监听器 signal，OwnedCall 等待 result/done。目录浏览保留自己的观察租约，绑定认证令牌和创建它的服务代；新建目录使用该会话捕获的创建端口，不跨组件重启转交写入。创建请求同样响应断开、令牌撤销和关闭，并等待文件系统操作及清理实际退出。业务 DTO 不暴露恢复句柄、凭据或 execution。
 
 Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录浏览句柄及通知订阅。普通已接受写入完成真实提交；整根退出仍由宿主先关闭准入与 HTTP，再交由 Nya 卸载领域资源。关闭失败保留诊断。
 
-验证：`harness-server-http.test.mjs`、`remote-harness-server.test.mjs`、`products-api.test.mjs`、`products-host.test.mjs`，根入口 npm run check。
+应用独立入口 `createStandaloneHarnessServer()` 复用相同业务装配，自行在 `http/server.ts` 持有监听、拥有者认证、实例校验、旧路由别名、单元自认证入口与请求排空。其关闭将 HTTP 排空和唯一根清理并行等待；配置和命令见[独立业务服务](../../application-standalone-services.md)。HTTP/认证实现没有提取为公共模块。
+
+验证：`tests/application-optional-capabilities.test.mjs` 覆盖可选目录的显式禁用与跨版本隔离；`harness-server-http.test.mjs`、`remote-harness-server.test.mjs`、`products-api.test.mjs`、`products-host.test.mjs`，根入口 npm run check。
 
 ## API：项目、会话与 Run
 
@@ -126,7 +130,7 @@ selection 为 `{ kind: 'project-file', path, range? }` 或 `{ kind: 'snapshot', 
 | `POST /models/configurations/:id` | `{ patch, expectedRevision }` |
 | `GET /models/configurations/:id/history` | 执行配置历史 |
 
-定义查询接受 `sourceId`、`providerId`、`search` 和字符串布尔值 `includeDeprecated`、`includeMissing`、`textOnly`。写操作的主字段白名单与完整类型以 [server.ts](../../../src/applications/harness/http/handler.ts) 及 [Models 模块](../models/README.md) 为准。`expectedRevision` 必须为大于零的安全整数，并交由领域服务执行版本冲突检查。
+定义查询接受 `sourceId`、`providerId`、`search` 和字符串布尔值 `includeDeprecated`、`includeMissing`、`textOnly`。写操作的主字段白名单与完整类型以 [server.ts](../../../packages/app-harness/src/http/handler.ts) 及 [Models 模块](../models/README.md) 为准。`expectedRevision` 必须为大于零的安全整数，并交由领域服务执行版本冲突检查。
 
 Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返回 Key 内容的 GET 接口。目录建议来自定义与显式 sourceMappings，不按 hostname 猜协议。保存连接/Key 后适用模型的基础配置补齐、失败重试和来源删除保留既有配置均由 Models 负责。
 
@@ -172,11 +176,11 @@ Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返
 
 `apply` 创建业务 handler、登记清理 Effect 和本轮事件订阅后返回，不创建监听端口。Nya 停止本轮组件时撤销事件订阅并等待 handler 清理；稳定控制依赖恢复后创建新 handler。业务组件不构成 handler 的注入依赖，其卸载由应用活动屏障或整根关闭顺序保护。每个请求同步捕获当前服务，旧请求不转交给重启后的服务。
 
-应用宿主先调用 `host.http.close()` 停止 HTTP 准入并排空已接受写入，再卸载可选业务组件和整个根；关闭监听器不等待已交接的 Run。
+服务先同步关闭控制、Run 与 HTTP 准入并启动监听排空，再并行等待根清理和 HTTP 请求退出。监听请求可通过 `retainUntil()` 保留已接受 Run 的租约，直到实际退出；因此不能先等待监听器排空再开始卸载 Run 组件。
 
-`HarnessServerHttpHandler.close()` 幂等：先停止业务准入，中止未完成请求体、目录选择、图片上传/读取、项目文件操作和正在等待远端的 Models 请求，释放 Run waiters，关闭 SSE，再等待已登记 handler、流、Models/附件任务和目录浏览清理实际退出。监听 socket 和通用 HTTP 请求集合由宿主监听器关闭。普通已接受的 Prompt/配置写入、归档/恢复及附件续期由所属服务完成，handler 等待对应请求结束。附件请求断开会显式取消 `OwnedCall`；HTTP 成功响应和关闭都等待 `result` 与 `done`，不能以结果已就绪代替真实退出。
+`HarnessServerHttpHandler.close()` 幂等：先停止业务准入，中止未完成请求体、目录选择、图片上传/读取、项目文件操作和正在等待远端的 Models 请求，释放 Run waiters，关闭 SSE，再等待已登记 handler、流、Models/附件任务和目录浏览清理实际退出。监听 socket 和 HTTP 请求集合由当前运行方式的监听组件关闭：Anybox 集成使用 `host.http`，独立服务使用 `harness.listener`。普通已接受的 Prompt/配置写入、归档/恢复及附件续期由所属服务完成，handler 等待对应请求结束。附件请求断开会显式取消 `OwnedCall`；HTTP 成功响应和关闭都等待 `result` 与 `done`，不能以结果已就绪代替真实退出。
 
-单独替换/卸载 Web 不取消已经接受的 Run；完整应用宿主 `close()` 先同步关闭控制与 Run 准入并取消准备，再等待 API 请求和装配操作结束，最后由 Nya 卸载 Run 组件、取消并等待执行。模型发现、连通性检查和目录刷新因请求断开而取消；普通等待断开只释放 waiter。目录选择的具体退出保证见 [Directory Picker](directory-picker.md)。
+单独替换/卸载业务 HTTP 适配器不取消已经接受的 Run；完整服务 `close()` 同步关闭控制与 Run 准入并取消准备，等待已接受装配操作退出，然后由 Nya 卸载组件、取消并等待执行，同时完成 HTTP 排空。模型发现、连通性检查和目录刷新因请求断开而取消；普通等待断开只释放 waiter。目录选择的具体退出保证见 [Directory Picker](directory-picker.md)。
 
 HTTP 只返回安全 `{ error: { code, fileIndex? } }`，fileIndex 仅在有效文件位置错误时返回：非法输入 400，JSON 类型 415，体积上限 413，不存在 404，revision/幂等/协议/历史冲突及归档限制通常 409，超时 504，不可用 503，未知异常 500 `internal-error`。已发头后的异常直接关闭响应，避免追加不匹配的 JSON。原始内部异常不直接发送到浏览器。
 
@@ -198,7 +202,7 @@ HTTP 只返回安全 `{ error: { code, fileIndex? } }`，fileIndex 仅在有效�
 
 输入框支持 @ 搜索或“引用项目文件”，默认整文件，预览可选择闭区间行范围。搜索包含点文件及 ignore 文件，仅排除元数据和依赖目录。发送时通过 Session 准备不可变快照，再以 ID 提交 Run。pending v3 先保存准备键，取得快照后先保存 ID，再发送；重试和重新生成默认复用快照。历史预览读取快照，编辑可显式更新为当前文件。
 
-HTTP 路由见上方接口表，跨组件恢复规则见[文件引用设计](../../project-file-references-design.md)。文件操作使用既有请求取消/实际退出包装，错误只暴露固定 code 及可选 fileIndex。[draft-client](../../../src/applications/harness/web/draft-client.ts) 是通用草稿存储，[file-client](../../../src/applications/harness/web/file-client.ts) 管理文件待提交和 5 分钟租期，[file-view](../../../src/applications/harness/web/file-view.ts) 拥有各面板的候选查询与附件卡片；右栏文件标签拥有预览，内部树客户端拥有分页和游标关闭。组件关闭/面板卸载取消对应展示操作，不取消 Run。三栏状态、抽屉和文件引用规则见[工作区设计](../../harness-three-column-workspace.md)。
+HTTP 路由见上方接口表，跨组件恢复规则见[文件引用设计](../../project-file-references-design.md)。文件操作使用既有请求取消/实际退出包装，错误只暴露固定 code 及可选 fileIndex。[draft-client](../../../packages/app-harness/src/web/draft-client.ts) 是通用草稿存储，[file-client](../../../packages/app-harness/src/web/file-client.ts) 管理文件待提交和 5 分钟租期，[file-view](../../../packages/app-harness/src/web/file-view.ts) 拥有各面板的候选查询与附件卡片；右栏文件标签拥有预览，内部树客户端拥有分页和游标关闭。组件关闭/面板卸载取消对应展示操作，不取消 Run。三栏状态、抽屉和文件引用规则见[工作区设计](../../harness-three-column-workspace.md)。
 
 ## 会话归档
 

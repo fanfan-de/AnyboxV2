@@ -1,8 +1,16 @@
 # harness server 独立部署与多设备连接
 
-[统一发行与独立运行角色](runtime-roles-and-distribution.md)已确定从各平台完整 Anybox 产品包按需部署客户端服务、harness server 与 Computer worker，各角色独立进程和生命周期。统一角色入口已接入当前 Node 发行；随包无头运行时及三平台服务管理仍待补齐，现有平台限制继续适用。
+[应用模块化分发与按需安装](application-packages-design.md)已确定最小宿主、可选公共能力与具体应用独立安装的方向；SQL 业务存储、设备连接和目录能力按实际消费者选择；客户端服务、harness server 与 Computer worker 继续遵守[独立进程和生命周期约定](runtime-roles-and-distribution.md)。下文记录当前静态目录的 Node 发行和部署步骤；应用包管理、随包无头运行时及三平台服务管理仍待补齐，现有平台限制继续适用。
 
 harness server 是 Anybox Harness 的通用服务端核心，可部署在本地设备或远端服务器。执行端支持 macOS / Linux，要求 Node.js >=22.13.0。命名与客户端边界见 [命名规范](naming.md)。每台设备独立运行一个应用宿主，在同一个根上按 Anybox Harness 打开目标装配内部 Models、Prompt 和 Agent 能力，并独立保存配置、业务数据库与附件目录。本机客户端拥有独立 `client.sqlite` 与系统凭据命名空间，不需要本机 harness server 在线。
+
+D1.2 的最小宿主与完整 `.anybox-app` 构建、离线验证命令见[产物手册](modules/package-management/archives.md)。它们不替换下文当前组合发行，也不在验证时启动 harness server；应用安装和受控生效仍待 D1.3/D1.4。
+
+## 只运行一个应用的业务服务
+
+[D0a.1](application-standalone-services.md)为两个应用提供自己的服务入口：Harness 的 `anybox-harness-server` 与 Claude Agent 的 `anybox-claude-agent`，均支持 `serve`、`init`、`recover-access`、`new-identity`。只安装目标应用及其声明依赖即可运行，无需 host、distribution 或另一应用；各自负责 HTTP、设备认证、流式和信号关闭。CLI 默认回环端口分别为 3001、3002，配置与工厂见 [Harness README](../packages/app-harness/README.md) 和 [Claude Agent README](../packages/app-claude-agent/README.md)。
+
+原 `anybox harness-server` / `npm run harness:server` 保留两个正式应用的 Anybox 默认组合，桌面和客户端入口不变。应用独立运行沿用 `ANYBOX_HARNESS_DATABASE` 与默认 `./data/harness.sqlite`、原实例身份、令牌和迁移；先停止原持有者再切换入口。同一文件不能由托管或两个独立服务并发打开，单独更换端口不足以并行运行。独立服务不提供宿主应用管理页面或独立客户端界面，下文默认命令仍描述原兼容组合。
 
 ## 开发仓库启动
 
@@ -18,15 +26,15 @@ npm run web:local
 共享构建后，开发目录和 Node 发行物均可使用以下入口；分派器只动态加载选中的角色。`--help` 和未知角色不装配任何服务。原角色 main 保留独立调用能力，已有 systemd 与 worker 进程入口无需迁移。
 
 ```sh
-node dist/entrypoints/anybox-main.js client
-node dist/entrypoints/anybox-main.js harness-server
-node dist/entrypoints/anybox-main.js harness-server init
-node dist/entrypoints/anybox-main.js computer-worker /absolute/worker-data
+node packages/distribution/dist/entrypoints/anybox-main.js client
+node packages/distribution/dist/entrypoints/anybox-main.js harness-server
+node packages/distribution/dist/entrypoints/anybox-main.js harness-server init
+node packages/distribution/dist/entrypoints/anybox-main.js computer-worker /absolute/worker-data
 ```
 
 这些命令仍使用当前 Node 运行时；Windows Computer 的 Unix 限制尚未解除。Computer 独立附着管理 CLI 已补齐，见 [独立管理](computer-worker-management.md)；系统服务安装器仍待实现。
 
-新安装显示代码注册的应用目录，正式目录目前提供 Anybox Harness。点击打开后直接进入项目与会话工作区，在侧栏「管理连接」中配对本地或远程设备，并启动对应 Agent；侧栏「执行设备」选择新增项目的归属及模型、Prompt 设置的管理范围，已有会话保持所属设备。已有 run-state 的安装在首次迁移时保留 Agent 运行目标。模型与 Prompt 管理统一从工作区「设置」进入，按所选设备管理，不提供独立功能页面或应用。选择设备不启动其执行组件，选择远程设备不启动本机执行服务。
+新安装显示代码注册的应用目录，正式目录提供 Anybox Harness 与 Claude Agent。点击 Anybox Harness 后直接进入项目与会话工作区，在侧栏「管理连接」中配对本地或远程设备，并启动对应 Agent；侧栏「执行设备」选择新增项目的归属及模型、Prompt 设置的管理范围，已有会话保持所属设备。已有 run-state 的安装在首次迁移时保留 Agent 运行目标。模型与 Prompt 管理统一从工作区「设置」进入，按所选设备管理，不提供独立功能页面或应用。选择设备不启动其执行组件，选择远程设备不启动本机执行服务。
 
 添加项目时固定所选设备的身份和连接版本。组合启动器确认的本机实例且客户端平台支持时，直接打开系统目录窗口，确认后立即向固定目标登记，取消不登记，也不打开应用内对话框。远程设备、本机身份未确认或原生能力检查未确认可用时打开应用内目录选择器，首次定位**目标 harness server 运行账户的主目录**，可浏览、筛选或输入绝对路径跳转；原生窗口启动或登记失败通过通知显示，不自动回退或换设备登记。`ANYBOX_PROJECTS='["/srv/my-project"]'` 在 Agent 能力每次成功装配时幂等登记项目，包括首次在运行中启用。真实目录浏览要求客户端、网关与目标 harness server 升级；旧 API v1 harness server 缺少 projects.browse 时显示升级说明及应用内手动路径入口。没有数据库迁移，已有项目 ID、会话和资源保持不变。协议与资源边界见[项目目录选择](project-directory-picker.md)。
 
@@ -121,11 +129,11 @@ worker 目录固定给一个 Authority，不与其他业务库或设备实例共
 
 认证后的 `POST /api/v1/access/tokens {"name":"Laptop"}` 发行设备令牌并只返回一次完整值；GET 同路径只列元数据；`POST /api/v1/access/tokens/:id/revoke {}` 幂等撤销，关闭该令牌的观察连接、拒绝后续请求，保留已接受 Run。客户端「连接管理 → 访问令牌」提供同样操作。
 
-丢失全部有效令牌时停止服务，再执行 `node dist/entrypoints/harness-server-main.js recover-access "Recovery device"`。命令必须取得数据库排他锁，在线服务仍运行时拒绝恢复。正常重启、同一实例的备份恢复保留 instanceId；复制数据创建另一台独立实例时，停机执行 `node dist/entrypoints/harness-server-main.js new-identity "New owner"`，生成新身份并撤销全部继承令牌，然后按新实例配对。
+丢失全部有效令牌时停止服务，再执行 `node packages/distribution/dist/entrypoints/harness-server-main.js recover-access "Recovery device"`。命令必须取得数据库排他锁，在线服务仍运行时拒绝恢复。正常重启、同一实例的备份恢复保留 instanceId；复制数据创建另一台独立实例时，停机执行 `node packages/distribution/dist/entrypoints/harness-server-main.js new-identity "New owner"`，生成新身份并撤销全部继承令牌，然后按新实例配对。
 
 ## 旧数据与异常恢复
 
-Session、Models 与附件原有格式不因部署拆分或产品停用改变。只读 Anybox Harness 应用定义来自代码，打开目标保存在各进程业务库 app-products v2 独立迁移域。停用保留全部领域数据；重新启用时重新建立组件运行代。执行端 Models 配置和系统凭据仅在打开所选 Agent 时初始化；客户端连接凭据仅在打开 Anybox Harness 时初始化。空应用外壳不启动 Models 目录刷新或图片目录。业务 SQLite 使用实际取得且跨事务保留的 `locking_mode=EXCLUSIVE` 锁；进程退出即由 OS 释放。若存在旧版无所有者 `.lock` 目录，**在打开数据库前拒绝启动**。停止所有旧宿主、离线确认没有持有者、备份数据库后，由运维显式移走该旧目录；应用不会猜测并自动删除。
+Session、Models 与附件原有格式不因部署拆分或产品停用改变。只读 Anybox Harness 应用定义来自代码，打开目标保存在各进程业务库 app-products v2 独立迁移域。停用保留全部领域数据；重新启用时重新建立组件运行代。执行端 Models 配置和系统凭据仅在打开所选 Agent 时初始化；两个客户端应用各自在打开时安装私有连接组件，凭据仅在该应用连接管理、租约或本机配对需要时访问；应用停止等待自己的连接操作退出，基础目录适配的按需装配留 D0b。空应用外壳不启动 Models 目录刷新或图片目录。业务 SQLite 使用实际取得且跨事务保留的 `locking_mode=EXCLUSIVE` 锁；进程退出即由 OS 释放。若存在旧版无所有者 `.lock` 目录，**在打开数据库前拒绝启动**。停止所有旧宿主、离线确认没有持有者、备份数据库后，由运维显式移走该旧目录；应用不会猜测并自动删除。
 
 浏览器新状态以 instanceId 限定项目、会话、资源和模型；连接 ID 只负责本机路由。旧键完整保留。只有组合启动器确认本机身份，且旧会话与项目在该实例验证匹配后，才复制旧布局、草稿、位置和 pending 到新命名空间；无法确认时保留待确认提示，不重发旧 pending。未知请求结果始终向原实例查询。
 
@@ -137,7 +145,7 @@ Session、Models 与附件原有格式不因部署拆分或产品停用改变。
 
 ## 多应用宿主
 
-源码中 `src/host/` 是不依赖具体应用的 Anybox 宿主，`src/applications/harness/` 是完整 Anybox Harness 应用。`src/entrypoints/` 组合正式目录，服务端规范命令为 `harness:server` / `harness:server:init`，保留 `harness` / `harness:init` 兼容别名以及 `client` / `web` 命令；通用宿主工厂显式接收应用目录。目录调整不改变 API 路径、稳定应用 ID、数据库迁移或浏览器持久格式，当前结构见[目录边界](harness-module-boundary.md)。
+源码中 `packages/host/src/` 是不依赖具体应用的 Anybox 宿主，`packages/app-harness/src/` 是完整 Anybox Harness 应用。`packages/distribution/src/entrypoints/` 组合正式目录，服务端规范命令为 `harness:server` / `harness:server:init`，保留 `harness` / `harness:init` 兼容别名以及 `client` / `web` 命令；通用宿主工厂显式接收应用目录。目录调整不改变 API 路径、稳定应用 ID、数据库迁移或浏览器持久格式，当前结构见[目录边界](harness-module-boundary.md)。
 
 客户端与执行端分别通过受信目录注册应用，详见[接入说明](application-development.md)。应用默认关闭，按 ID 分别保存和恢复目标；移出目录不删除数据。Web 标签状态只保存在当前浏览器 sessionStorage。关闭标签不停止后台应用，显式“停止应用”成功后才卸载组件并清理标签。Anybox Harness 连接与目标控制在自身页面，修改连接不重载其他应用。服务端清理失败禁止本应用重装，需重启进程；其他应用保留自己的状态。
 

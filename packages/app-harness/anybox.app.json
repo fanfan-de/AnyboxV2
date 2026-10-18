@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "lifecycleVersion": 1,
+  "appId": "agent",
+  "version": "0.1.1",
+  "publisher": "anybox",
+  "displayName": "Anybox Harness",
+  "applicationApi": "^0.1.0",
+  "entries": {
+    "client": "dist/package/client.js",
+    "execution": "dist/package/execution.js",
+    "computerWorker": "dist/entrypoints/computer-worker-main.js"
+  },
+  "web": { "entry": "dist/web/harness-app.js", "styles": ["web/style.css"], "assets": "generated" },
+  "runtimeRequirements": {
+    "client": { "profile": "anybox-node-runtime-1", "sharedRuntime": "nya-runtime-1", "node": ">=22.15.0", "nodeApi": 9, "sqlite": true },
+    "execution": { "profile": "anybox-node-runtime-1", "sharedRuntime": "nya-runtime-1", "node": ">=22.15.0", "nodeApi": 9, "sqlite": true },
+    "computerWorker": { "profile": "anybox-node-runtime-1", "sharedRuntime": "nya-runtime-1", "node": ">=22.15.0", "nodeApi": 9, "sqlite": true, "platforms": ["darwin", "linux"] }
+  },
+  "capabilityRequirements": {
+    "client": { "required": { "storage.sqlite": "^1.0.0" }, "optional": { "system.directory-picker": "^1.0.0" } },
+    "execution": { "required": { "storage.sqlite": "^1.0.0" }, "optional": { "system.directory-picker": "^1.0.0" } }
+  },
+  "dataCompatibility": "generated"
+}

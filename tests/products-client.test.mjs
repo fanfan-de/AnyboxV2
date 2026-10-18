@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createPageRequests } from '../dist/applications/harness/web/page-lifecycle.js'
-import { createHarnessClient, scopedId, connectionResourceURL } from '../dist/applications/harness/web/harness-client.js'
-import { openChangeStream } from '../dist/applications/harness/web/event-stream.js'
+import { createPageRequests } from '../packages/app-harness/dist/web/page-lifecycle.js'
+import { createHarnessClient, scopedId, connectionResourceURL } from '../packages/app-harness/dist/web/harness-client.js'
+import { openChangeStream } from '../packages/app-harness/dist/web/event-stream.js'
 const a = '11111111-1111-4111-8111-111111111111', b = '22222222-2222-4222-8222-222222222222'
 const connection = (instanceId, id = instanceId) => ({ instanceId, id, revision: 4, name: id })
 const tick = () => new Promise(resolve => setImmediate(resolve))

@@ -16,17 +16,17 @@ Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResu
 | --- | --- | --- |
 | Models 原生内核 | `packages/models/src/native-types.ts`、`execution.ts`、`component.ts` | 固定配置与凭据、驱动代租约、prepare/start、实际退出屏障、记录与恢复 |
 | 协议驱动 | `packages/models/src/protocols/` | 原生参数、请求构建、JSON/SSE 消费、私有候选状态、restore/commit |
-| 协议应用绑定 | `src/applications/harness/core/protocol-agents/registry.ts` | 固定驱动代、Loop、根输入/工具编码、历史策略与 program 闭包 |
-| 四协议 Loop | `src/applications/harness/core/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案 |
-| Run | `src/applications/harness/core/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
-| RunRuntime | `src/applications/harness/core/run/runtime-component.ts` | program、模型操作、工具观察、取消/清理协调、持久屏障与结算 |
-| Computer / worker | `src/applications/harness/core/computer/`、`workspace/` | Authority 固定声明/绑定，独立 worker 持有工具及耐久执行账本 |
-| 工具目录与执行器 | `src/applications/harness/core/tool/` | 静态来源契约、参数校验、Run 管道进程、文本读写及搜索；Nya 组件按资源拆分 |
-| 图片资源 | `src/applications/harness/core/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
-| Session | `src/applications/harness/core/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
-| 服务端展示 | `src/applications/harness/core/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
-| 协议 Web | `src/applications/harness/web/protocols/` | 安全 decoder/reducer、输入编码和稳定 Turn 生命周期 |
-| 共享 Web | `src/applications/harness/web/{session-client,session-view,workspace-client,run-change-client}.ts` | 分支、控制、订阅、重连、滚动与四面板 |
+| 协议应用绑定 | `packages/app-harness/src/core/protocol-agents/registry.ts` | 固定驱动代、Loop、根输入/工具编码、历史策略与 program 闭包 |
+| 四协议 Loop | `packages/app-harness/src/core/protocol-agents/{responses,anthropic,chat,gemini}.ts` | 原生停止原因、工具调用/回填、pause_turn、应用结束提案 |
+| Run | `packages/app-harness/src/core/run/component.ts` | 幂等、选模、Prompt/历史检查、准备、接受事务与资源交接 |
+| RunRuntime | `packages/app-harness/src/core/run/runtime-component.ts` | program、模型操作、工具观察、取消/清理协调、持久屏障与结算 |
+| Computer / worker | `packages/app-harness/src/core/computer/`、`workspace/` | Authority 固定声明/绑定，独立 worker 持有工具及耐久执行账本 |
+| 工具目录与执行器 | `packages/app-harness/src/core/tool/` | 静态来源契约、参数校验、Run 管道进程、文本读写及搜索；Nya 组件按资源拆分 |
+| 图片资源 | `packages/app-harness/src/core/image/` | 原始字节、校验、目录排他、同事务保留、草稿续期与 GC |
+| Session | `packages/app-harness/src/core/session/` | 会话、Run、节点、原生记录、账本、不可变恢复链和恢复规则 |
+| 服务端展示 | `packages/app-harness/src/core/protocol-agents/projection.ts` | 白名单投影和原生流事件到有界展示状态 |
+| 协议 Web | `packages/app-harness/src/web/protocols/` | 安全 decoder/reducer、输入编码和稳定 Turn 生命周期 |
+| 共享 Web | `packages/app-harness/src/web/{session-client,session-view,workspace-client,run-change-client}.ts` | 分支、控制、订阅、重连、滚动与四面板 |
 
 Models 不导入应用源码、Session、数据库业务表或工具实现。Session 只理解公共信封、归属与引用，不解释协议块。RunRuntime 不识别 finish_reason、stop_reason 或任何协议的停止条件。
 

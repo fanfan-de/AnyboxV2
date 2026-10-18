@@ -1,9 +1,9 @@
-import { installHarnessServerCore } from '../../dist/applications/harness/core/index.js'
-import { runAdmissionServiceKey } from '../../dist/applications/harness/core/run/component.js'
-import { createBashComponent } from '../../dist/applications/harness/core/tool/bash-component.js'
-import { createApplyPatchComponent } from '../../dist/applications/harness/core/tool/apply-patch-component.js'
-import { createProcessToolsComponent } from '../../dist/applications/harness/core/tool/process-component.js'
-import { createFileToolsComponent } from '../../dist/applications/harness/core/tool/files-component.js'
+import { installHarnessServerCore } from '../../packages/app-harness/dist/core/index.js'
+import { runAdmissionServiceKey } from '../../packages/app-harness/dist/core/run/component.js'
+import { createBashComponent } from '../../packages/app-harness/dist/core/tool/bash-component.js'
+import { createApplyPatchComponent } from '../../packages/app-harness/dist/core/tool/apply-patch-component.js'
+import { createProcessToolsComponent } from '../../packages/app-harness/dist/core/tool/process-component.js'
+import { createFileToolsComponent } from '../../packages/app-harness/dist/core/tool/files-component.js'
 import { createControlledComputerWorker } from './computer-services.mjs'
 
 /** Test application host: its close owns the root; the Harness facade has no close method. */

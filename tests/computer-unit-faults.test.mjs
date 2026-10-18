@@ -10,17 +10,17 @@ import { fileURLToPath } from 'node:url'
 import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHostAccessComponent } from '../dist/host/access.js'
-import { hostHttpServiceKey } from '../dist/host/component.js'
-import { installHarnessServerCore } from '../dist/applications/harness/core/index.js'
-import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
-import { fullScope } from '../dist/applications/harness/core/unit/domain.js'
-import { unitTransportServiceKey } from '../dist/applications/harness/core/unit/transport-component.js'
-import { openComputerWorker } from '../dist/applications/harness/core/computer/worker-server.js'
-import { connectLocalComputerWorker } from '../dist/applications/harness/core/computer/worker-client.js'
-import { computerDeclarationDigest } from '../dist/applications/harness/core/computer/operations-domain.js'
-import { workerBootOf } from '../dist/applications/harness/core/computer/worker-port.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createHostAccessComponent } from '../packages/host/dist/access.js'
+import { hostHttpServiceKey } from '../packages/host/dist/component.js'
+import { installHarnessServerCore } from '../packages/app-harness/dist/core/index.js'
+import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
+import { fullScope } from '../packages/app-harness/dist/core/unit/domain.js'
+import { unitTransportServiceKey } from '../packages/app-harness/dist/core/unit/transport-component.js'
+import { openComputerWorker } from '../packages/app-harness/dist/core/computer/worker-server.js'
+import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
+import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
+import { workerBootOf } from '../packages/app-harness/dist/core/computer/worker-port.js'
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
 
@@ -172,7 +172,10 @@ test('revoking an attachment while a command runs rejects new declarations, canc
   const revoked = await f.api.revokeUnitAttachment(f.attached.attachmentId)
   assert.equal(revoked.state, 'revoked'); assert.equal(revoked.epoch, 2)
   const local = await until(async () => (await f.control.control.listAttachments()).find(item => item.attachmentId === f.attached.attachmentId && item.state === 'revoked'), 'the unit observes the revocation')
-  assert.equal(local.connection, 'revoked'); assert.equal(f.memory.size, 0, 'the unit dropped its credential')
+  assert.equal(local.connection, 'revoked')
+  // The durable revoked state precedes listeners and credential cleanup; observe actual deletion separately.
+  await until(() => f.memory.size === 0, 'the unit dropped its credential')
+  assert.equal(f.memory.size, 0, 'the unit dropped its credential')
   await assert.rejects(f.api.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'more', idempotencyKey: 'after-revoke' }), error => ['project-unavailable', 'unit-attachment-state', 'unit-attachment-mismatch'].includes(error.code), 'new declarations for the revoked attachment are refused')
   const finished = await f.api.waitRun(run.id)
   assert.equal(finished.status, 'failed')

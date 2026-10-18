@@ -38,4 +38,4 @@ HTTP/网络失败为固定 `unavailable`，无效内容为 `invalid-response`，
 
 要换其他目录来源，应实现 `ModelsCatalogSource`，提供隔离的 `id/cacheKey`、规范化快照及可靠的 `result/done/cancel`，无需修改模型执行链路。通用目录调度对非 models.dev 来源默认使用空初始快照，可注入匹配的 `bundledSnapshot`。
 
-[catalog-source.test.mjs](../../../packages/models/tests/catalog-source.test.mjs) 验证匿名请求、分块 UTF-8、ETag、固定错误、迟到 fetch、reader 清理及组件卸载；[catalog.test.mjs](../../../packages/models/tests/catalog.test.mjs) 验证快照身份、版本与集成刷新。关联：[目录调度](catalog.md)、[目录验收记录](../../models-catalog-validation.md)。
+[catalog-source.test.mjs](../../../packages/models/tests/catalog-source.test.mjs) 验证匿名请求、分块 UTF-8、ETag、固定错误、迟到 fetch、reader 清理及组件卸载；[catalog.test.mjs](../../../packages/models/tests/catalog.test.mjs) 验证快照身份、版本与集成刷新。浏览器复验见 [Web 客户端验收](../../web-client-design.md#验收)，调度行为见 [目录调度](catalog.md)。

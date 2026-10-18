@@ -12,8 +12,8 @@
 | Nya 组件名 | `h0-resource-probe` |
 | 提供服务 | `h0.runs`，接口 `RunProbePort` |
 | 注入依赖 | `h0.model`，接口 `ProbeModelPort` |
-| 入口 | [resource-probe.ts](../../../src/resource-probe.ts) |
-| 通用调用契约 | [contracts.ts](../../../src/applications/harness/core/contracts.ts) 中的 `OwnedCall<Result>` |
+| 入口 | [resource-probe.ts](../../../packages/distribution/src/resource-probe.ts) |
+| 通用调用契约 | [contracts.ts](../../../packages/app-harness/src/core/contracts.ts) 中的 `OwnedCall<Result>` |
 
 `ProbeModelPort.call(prompt: string)` 返回 `OwnedCall<string>`，由测试安装可控替身。这里保留字符串输入是探针本身的契约，不代表项目仍提供统一文本模型执行 API。
 

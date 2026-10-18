@@ -2,7 +2,9 @@
 
 [宿主与客户端模块](README.md)
 
-`src/host/access.ts` 的 `createHostAccessComponent(name?)` 创建 `host-access`，通过 `host.access: HostAccessPort` 提供实例信息、认证、令牌发行/元数据/撤销与离线身份重置。只 inject `local-storage`，复用执行端业务连接；`apply` 登记 `host-access` v2 后读取稳定 UUID 与有效摘要并返回，不运行长期循环。v2 为令牌增加可空 `managed_owner` 与索引，原 v1 令牌保持普通令牌，不根据名称推断归属。
+`packages/host/src/access.ts` 的 `createHostAccessComponent(name?)` 创建 `host-access`，通过 `host.access: HostAccessPort` 提供实例信息、认证、令牌发行/元数据/撤销与离线身份重置。只 inject `local-storage`，复用执行端业务连接；`apply` 登记 `host-access` v2 后读取稳定 UUID 与有效摘要并返回，不运行长期循环。v2 为令牌增加可空 `managed_owner` 与索引，原 v1 令牌保持普通令牌，不根据名称推断归属。
+
+此组件仍归 Anybox 托管组合。应用独立入口由各应用自己的 [Harness Access](harness-access.md) 或 [Claude Agent Access](../claude-agent/access.md) 实现相同持久兼容规则，不导入宿主实现，也不新增公共认证模块。不同运行方式只允许一个持有者打开同一数据文件；同一根不并列安装两个对原表负责的访问组件。
 
 独占 `host_identity`、`host_access_tokens` 表和内存认证索引；随机令牌由 UUID 和 256 位随机秘密组成，仅发行返回完整值，持久化 SHA-256 摘要。使用常量时间比较；普通日志、元数据、历史不含完整令牌。`resetIdentity()` 是受信离线入口，HTTP 不暴露该方法。设备令牌均为拥有者权限，不作为新的业务用户。
 

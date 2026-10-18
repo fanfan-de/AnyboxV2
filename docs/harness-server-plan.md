@@ -213,3 +213,164 @@ macOS / Node.js 24.16.0 上以 `TMPDIR=/private/tmp caffeinate -i npm run check`
 回归使用真实 worker、独立 CLI 进程、SQLite、工具子进程以及可控请求与退出门闩；覆盖权限失败后的准入、控制重试、新 boot 恢复，启动竞争、锁拥有者强杀、观察关闭与失败启动，以及新本机配对、设备换代、草稿/Run 观察保留和页面关闭等待。
 
 macOS / Node.js 24.16.0 上以 `TMPDIR=/private/tmp caffeinate -i npm run check` 完成类型检查、构建、浏览器资源校验与全量测试：1465 项中 1451 项通过、14 项按既有门控跳过，零失败、零取消，用时约 150 秒；相较桌面角色试合新增的 16 项回归全部通过，修复前构建已确认原缺陷触发断言。真实 Electron utility process 的有限复验覆盖纯客户端不启动本机服务、客户端只创建自身数据库、两个正式应用登记及执行端独立启动/关闭，详见[角色边界](runtime-roles-and-distribution.md)。未修改 NyaCore，未调用真实模型或读写系统 Vault，未做完整桌面 smoke、成品安装及新的跨机器验收；平台发行与 Windows 真实 worker 仍属后续范围。
+
+## D0a.1 应用业务服务独立运行（2026-10-17）
+
+两个应用分别提供自己的独立服务工厂、HTTP 监听、兼容认证和 CLI：`createStandaloneHarnessServer` / `anybox-harness-server`、`createClaudeAgentServer` / `anybox-claude-agent`。独立入口创建唯一 Nya 根，Anybox 注册适配在已有根复用同一业务装配并增加活动保护；原 `anybox harness-server`、npm 与桌面默认组合保持。没有提取公共 HTTP/认证模块，没有拆数据库或改变既有运行角色，D0b 按消费者装配与应用下载安装仍属后续阶段。设计与接口见[独立业务服务](application-standalone-services.md)。
+
+应用自己持有访问及监听组件，沿用 `host-access` v2 表、迁移、实例身份与令牌格式；监听依赖本轮访问服务，认证重启后同端口重绑，并在首次异步步骤前捕获业务服务。监听安装在业务之前，关闭同步停止准入、启动请求排空，再并行等待根清理及保留操作；Run 的 `result` 就绪不能代替 `done` 和真实资源退出。Claude Agent 同时补齐开始中索引操作的等待及 SDK 启动前准入复核，避免关闭期间持久化完成后漏启动新进程。
+
+macOS / Node.js 24.16.0 上运行 `npm run check`：类型检查、工作区构建、Web 资产校验通过，1499 项测试中 1485 通过、14 跳过、0 失败、0 取消，测试约 154 秒。新增行为覆盖无宿主业务装配、两应用独立认证与 SSE、正常完成及取消、在途 SIGTERM、实际退出等待、认证组件重启重绑、端口绑定失败后的清理，以及“托管关闭 → Harness 独立打开 → Claude Agent 独立打开 → 托管重开”的历史、令牌、实例与目标状态兼容；同库双开被排他拒绝。
+
+隔离回归把单个应用的声明生产依赖物理复制到仓库外并禁用 `NODE_PATH`，确认 host、distribution 和另一应用不可解析。另分别执行真实 `npm pack` 与 `npm install --offline --omit=dev --include=optional --ignore-scripts`，只安装目标应用及所需依赖，实际安装的 `.bin` 命令通过帮助、访问恢复、`serve`、认证业务查询、SSE 和 SIGTERM 退出；公开服务工厂在该安装中完成受控业务 Run。两个进程正常以 0 退出，监听实际释放。新 CLI 的入口判断支持 `.bin` 符号链接及 macOS `/var` 的真实路径。
+
+受控执行使用内存凭据、模拟模型网络与 SDK，CLI 验收禁用外部网络；没有调用真实模型或读取系统 Vault，也未执行最终桌面成品及新的跨平台验收。独立服务只提供业务 HTTP 和身份管理，当前 Web 客户端依赖的宿主产品管理接口未纳入独立入口。
+
+
+## 2026-10-17 D0a.2 应用客户端业务独立归属
+
+取消应用间共享业务层并移除 `@anybox/execution-connections`。Harness 与 Claude Agent 各自持有连接存储、系统凭据、本机配对、白名单转发和管理 UI；连接组件由所属应用打开时安装、停止时取消并等待实际退出，互不使用另一应用的业务服务。旧共享元数据按应用只读迁入一次，凭据首次使用时复制到私有 namespace，来源保留；失败复制和清理可直接重试，不重放或恢复旧共享写入。桌面配对的 managed owner 按应用区分，Claude Agent 不再要求打开 Harness 配置设备。SQL 与原生目录窗口保持基础能力。边界、组件及兼容规则见[应用客户端业务独立归属](application-client-isolation.md)。
+
+`npm run check` 最终通过：1509 项测试，1495 通过、14 跳过、0 失败。新增应用装配/退出、连接与凭据隔离、旧格式迁入与失败重试、独立取消等待、桌面 token owner 及连接管理窗口清理测试。验证中修正 Computer 撤销故障测试的观察时序：撤销状态先持久化，再等待凭据实际删除，不以状态查询代替清理完成；worker 实现未改动。真实系统凭据、真实 Claude SDK、其他受门控平台及成品包未在本轮验收；host-only 发行及应用下载安装仍属后续阶段。
+
+## D0b 生命周期接入与基础能力按需装配（2026-10-17）
+
+宿主按应用入口的必需/可选能力声明选择兼容提供方，固定运行代版本并协调共享消费者。提供方工厂在实际消费者打开时才创建组件；全部组件仍在进程唯一 Nya 根，由 Nya 处理真实依赖和清理顺序。必需能力未满足时不调用业务工厂，运行中失效停止对应入口的新 HTTP 准入；可选目录能力缺失、不支持或不兼容时，两应用自己的连接管理及显式路径仍可用。目录提供方最后消费者退出后释放，宿主自用 SQL 保留原连接和控制记录，不引入另一数据库或写入者。纯界面应用不创建后台、业务 HTTP 或假运行目标。
+
+应用自己初始化、冻结业务、取消和排空实际资源。宿主只调用通用生命周期及 Activity；桌面执行端移除对 Harness Run 准入的直接读取，忙碌与退出检查覆盖注册的全部应用。已接受的初始化可取消且等待实际退出，过期代不能向新代安装资源。应用或提供方清理失败会保留所有权，阻止同进程重开并在根退出时报告；组件此前 `FAILED` 的回滚不能由后续成功的 `dispose()` 自动证明，沿用保守栅栏。明确清理完成的装配错误可显式重试。
+
+行为测试覆盖空宿主、纯界面、必需能力门禁与恢复、可选能力降级、SemVer 冲突、共享最后消费者及系统目录窗口实际退出、常驻 SQL、取消初始化、其他应用独立运行、过期代、运行中依赖撤销、失败清理与整根退出。测试及组件契约见[应用包设计](application-packages-design.md#123-已完成阶段与验收边界)和[应用接入](application-development.md)。
+
+最终 `npm run check` 退出码 0：类型检查、工作区构建及 Web 资源校验通过，1556 项测试中 1542 通过、14 项按既有门控跳过，0 失败、0 取消，测试约 154 秒。相对 D0a.2 新增 47 项测试。进程清理回归以显式退出门闩验证关闭等待，忽略 TERM 后的强制终止由独立用例覆盖，避免用过窄的测试宽限替代实际退出证明。
+
+真实加载实验在 macOS 15.6 arm64 的独立 Node 24.16.0（ABI 137）及 Electron 44.5.1 主进程/utility process（Node 24.21.0，ABI 149）执行。通过各包公开入口解析同一个 `@nya/core` 0.1.0-rc.1 和 `Context`；实际 SQLite、通用宿主、惰性目录提供方开/停/重开及最后消费者释放通过，宿主 SQL 身份保持。`@napi-rs/keyring` 的平台原生模块仅加载、没有凭据调用；`sharp` 完成内存 PNG；编译后的 Cocoa 取消绑定在 Electron 主进程完成加载。没有创建窗口或系统面板，没有读写用户凭据和用户应用数据。
+
+本次未修改 NyaCore。该实验采用工作区公开入口与当前依赖安装，不等于无工作区链接的独立 `.anybox-app`、正式 Forge/签名成品、真实 Keychain 操作、系统窗口交互或 Windows/Linux 验收。D1 本地包安装、生效和卸载及 D2 在线下载仍待实施。
+
+## D1.1 安装事实与操作账本（2026-10-17）
+
+新增独立的 `host-package-registry` 组件和 `host.package-registry` 端口，注入同根具名 SQLite 提供方 `host.package-registry-storage`。`registry.sqlite` 与原宿主控制及应用业务库分离，原数据和迁移不搬动。通用 SQLite 工厂支持显式服务名，仍保留相同的操作队列、事务和操作系统排他所有权。正式 CLI 客户端默认使用 `${clientDatabase}.applications`，可由 `ANYBOX_APPLICATION_DIRECTORY` 指定；桌面客户端使用 `<userData>/applications`，执行端不成为第二写入者。
+
+包身份固定应用 ID、版本、内容摘要和目标平台；installed、selected、pending、入口运行目标和角色实际 ready 快照分别记录。幂等 requestId 查回原 operationId，操作阶段和事实提交使用预期修订 CAS。管理者接管提升 owner epoch，未完成操作进入待恢复状态，保留回执并要求显式核对，不重放未知外部效果。
+
+角色使用快照在返回前提交 reservation，提供方所属包也参与固定与占用。秘密只返回一次、存储只留 SHA-256；角色导入前取得独立 usage 锚的实际 SHARED 锁并 claim。子 reservation 先于父释放提交，子锁独立于注册库管理者；旧快照失效不释放已在使用的旧版本。退出确认先栅栏新 claim，再以 EXCLUSIVE 锁证明读锁退出、持久撤销锚并记录 exited；锚缺失、损坏或退出不明继续阻止回收。锚始终保留在包目录之外，不按 PID、超时或删锁文件判断退出。
+
+受控回收回调在选中/待生效指针、全部使用记录及历史锚复核之后进入，并持有同一操作的控制栅栏。回调成功提交 removed，失败保留 reclaiming 与待恢复结果；完成及待恢复回执都无法写入，或锁资源清理失败时，关闭本代准入并在根退出时报错，阻止未知副作用重放。关闭只取消并排空本地已接受操作，不等待外部角色或依赖自身退出的交接。
+
+验证覆盖同根独立注册库、路径和文件别名拒绝、幂等与 CAS、身份不可变、待生效与实际版本并存、快照失效、父子连续交接、回收控制竞争、缺失锚、回执写入故障、配置固定和持久引用校验。真实 Node 子进程验证注册库写入互斥、管理者 SIGKILL 后接管，以及管理者关闭/重启后子进程持锁继续阻止退出确认；杀死对应子进程并等实际退出后，操作系统锁才允许确认。
+
+最终 `npm run check` 退出码 0：类型检查、工作区构建及 Web 资源校验通过，1594 项测试中 1580 通过、14 项按既有门控跳过，0 失败、0 取消，测试约 155 秒。相对 D0b 新增 38 项测试，最终源码的 35 项包管理定向测试也全部通过。
+
+真实运行时实验在 macOS arm64 的 Node 24.16.0 和 Electron 44.5.1 主进程/utility process（Node 24.21.0、SQLite 3.53.4）通过。独立注册库与控制库、空目录快照、claim/ready、关闭重开及 epoch 递增均通过；Node 子进程持有 SHARED 锁时，Electron 在自身读锁释放和管理者重启后仍拒绝退出确认。只有子进程实际释放并退出后，管理者才记录 exited，旧凭证随后无法重新获取锁。实验使用临时数据与工作区公开产物，所有自建进程正常退出，没有窗口、应用业务、Models 或 Vault 调用。
+
+本次仍由静态默认目录加载正式应用，不把已有源码登记成已验证安装；没有新增用户安装、下载、切换或卸载按钮。D1.2 接入签名归档与独立产物验证，D1.3 接入真实文件安装，D1.4 将角色加载及激活接到快照契约，D1.5 接入文件回收和卸载。组件不读取 Models、Session、Run、连接或凭据业务，也没有业务迁移、密钥读写或第三方代码执行。实验不代表正式签名成品、真实安装包、GUI 或其他平台验收；未修改 NyaCore。
+
+## D1.2 最小宿主、完整应用包与验证器（2026-10-17）
+
+新增独立空宿主 Node CLI、固定 Electron 主入口和客户端 utility entry；没有应用、连接、Models、Vault、目录窗口或本机执行服务选择。空宿主沿用已有 Products、Activity、Shell 与独立注册库，每个服务进程仍只有一个 Nya 根。原 `distribution`、npm 与 Forge 默认命令继续保留静态完整组合。
+
+`artifacts:build` 生成独立宿主目录及两个 `.anybox-app`：按实际物理依赖和声明范围复制预构建生产闭包，保留嵌套版本冲突、目标原生文件和许可证，排除开发脚本、普通 TypeScript 源码、工作区链接及不使用的 Claude SDK 平台可执行包。归档构建需要显式 Ed25519 私钥及 key ID；示例策略只含公钥，不被自动信任。目标使用预先提供的 Node/Electron 运行时，不运行 npm 或编译。
+
+受限 ZIP v1 验证器检查大小、目录与本地头、路径与平台别名、模式、CRC、外部发布者/appId 授权、原始 manifest/files 签名、全部索引字节及逐角色运行条件。Web 图通过静态 AST、CSS/HTML/SVG 资源引用和既有注册目录检查。Node 注册工厂在独立准备进程中只构造描述；公共 Nya/API/SQL 固定到宿主模块，归档外依赖和私有共享副本均拒绝。worker main 不执行，纯界面包不需要 Node。取消、超时和成功均核对准备进程与所属进程组实际退出；退出不明保留临时载荷并报错。
+
+新增 44 项行为测试，覆盖归档签名与破坏、限制与跨平台路径、静态闭包、资源 URL、角色兼容、注册冲突与声明一致性、共享运行时、实际取消/退出，以及生产依赖、版本冲突和空宿主退出。原宿主隔离夹具增加对没有 `files` 清单的合法第三方已发布包的支持，仍禁止工作区包省略公开产物声明。
+
+最终 `npm run check` 退出码 0：类型检查、工作区构建及 Web 资源验证通过，1638 项测试中 1624 通过、14 项按既有门控跳过，0 失败、0 取消，测试约 157 秒。44 项新增定向测试全部通过。最终回归之后只同步验收文档，没有继续修改源码或测试。
+
+真实仓库外实验使用 macOS 15.6 arm64、Node 24.16.0 和 Electron 44.5.1。独立宿主只有七个物理生产包，目录约 2.4 MiB，不含 Node/Electron 自身；普通 Node 空外壳、帮助和关闭通过。Electron 使用该独立目录创建隐藏窗口及实际客户端 utility process，`anybox-app://app` 下读取空 Products 得到 200/[]，关闭等待客户端退出，主进程退出码 0。没有窗口交互、目录面板或 Vault 业务调用。
+
+| 独立应用 | 签名 ZIP 字节数 | 物理生产包数 | 独立验证结果 |
+| --- | ---: | ---: | --- |
+| Anybox Harness | 37,986,120 | 74 | 静态资源、client/execution 注册准备通过；worker 只检查兼容 |
+| Claude Agent | 36,026,566 | 113 | 静态资源、client/execution 注册准备通过 |
+
+两包的验证 CLI 都来自复制后的独立宿主，未借用仓库模块；另一个签名纯界面夹具没有 Node、后台、SQL 或运行条件，也通过。共检查 9,770 个产物文件，无链接、普通 TypeScript 源码或 SDK 平台 Claude 可执行包。独立 Node 原生检查完成 sharp 的 2×3 PNG、Keyring 绑定加载、ripgrep 15.0.0 执行和 Cocoa 目录绑定加载；没有构造 Keyring Entry、读写凭据、打开系统窗口或初始化应用业务。两个应用及 Computer worker 的独立 `--help` 均正常退出。所有自建子进程均已等待退出，临时签名私钥已删除，原有客户端和 worker 未重启。
+
+契约与命令见[归档及产物手册](modules/package-management/archives.md)。本阶段没有向 D1.1 注册库写安装事实，也没有安装、生效或卸载入口；不把准备结果当作应用业务就绪。D1.3 接真实文件安装，D1.4 接正式角色加载/快照/激活，D1.5 接卸载。Node 准备的进程树适配当前仅 Unix Node >=22.15；Electron 和 Windows 保守报告准备运行时不可用，纯界面验证仍可单独运行。自包含运行时、正式 Forge/平台签名与公证、Windows/Linux 成品和其他平台实测仍待后续阶段；未修改 NyaCore。
+
+
+## D1.3 本地文件安装与中断恢复（2026-10-17）
+
+新增同根 `host-package-installer`，注入既有注册库并持有上传、暂存、签名验证、独立准备、文件提交、取消和恢复资源。`host-package-registry` v2 原地保留 v1 的操作、安装、快照、使用凭证与 epoch，增加预身份文件任务。`accept` 在任何受管读取之前保存 requestId、文件名、原始 SHA-256、大小及可选应用修订；相同输入查回原任务，不同输入冲突，不因重试再次读取或安装。任务和操作分别使用 CAS，验证后的身份才进入应用级串行 preparing 操作，不阻塞其他应用。
+
+完整原始归档先保存并核对长度、摘要、文件同步；D1.2 验证器校验签名、索引、兼容与资源闭包，独立 Node 工厂只构造注册描述。准备成功后生成独立候选，保存全部生产载荷、签名元数据、原始归档和宿主回执，同步文件和目录再 rename 至 `packages/<appId>/<version>/<digest>`。提交前后重验目录、身份和字节，最后同事务写 installed 文件任务、安装事实和 awaiting-activation 操作，只更新 pending；selected、Products 运行目标、当前正式角色目录均不改变。同身份重新导入仍验证输入及既有目录，再复用原安装和来源；同版本不同摘要拒绝覆盖。
+
+每次工作先耐久追加 `workGuardIds`，实际准备子进程取得 SHARED 锚。历史锚不随阶段或回执替换消失；旧管理者关闭或异常退出不释放子进程的真实使用。新管理者在清理、恢复或再次准备前必须排他证明全部历史锚退出并永久撤销；未知、缺失、损坏或仍被占用均保留待恢复，不用 PID、超时或客户端断开推断完成。取消与根关闭等待已接受生产源、读取、写入、句柄、准备进程和所属进程组实际退出。回执或清理失败不能伪造未安装，恢复记录也无法提交时停止本代准入并保留根清理错误。
+
+重启后非终态任务进入 recovery-required，不自动消费半个上传流、重跑工厂或覆盖提交目录；已 installed 文件任务保持终态，后续生效操作恢复单独记录。默认 inspect 只查事实，显式 resume 在旧工作退出后重新校验完整原始包和真实目录，再接纳提交事实。discard 只清理确认未提交的任务暂存，已提交或提交阶段不明时保留版本。没有对应任务的孤儿暂存仅报告，不自动回收未知归属目录。
+
+本机客户端增加 `/api/client/v1/app-packages` 状态和任务查询、意图接收、字节上传、取消及显式恢复；界面从用户选择的 File 上传，保留其他应用挂载和草稿。管理响应只含生命周期投影，不泄露绝对目录、原始工厂输出或凭证；不接收服务端路径、任意 URL、执行命令或请求自授信密钥。`ANYBOX_APPLICATION_TRUST` 指定外部发布者授权策略，未配置时不授信，不自动信任示例公钥。离线 `anybox-host install/operations/installations/cancel/recover` 使用同一根、同一单写锁；运行中管理者占用时拒绝第二写入者。安装器不读取应用业务库，不迁移业务、不改连接或凭据，也不调用应用业务取消接口。
+
+行为测试覆盖预身份幂等/CAS、v1→v2 保留迁移、同应用串行绑定、原子事实与待生效、重新导入、无业务初始化、签名与目录破坏、取消等待、历史锚、子进程及所属资源实际退出。真实子进程 SIGKILL 用例包含 accepted、received、after-rename 和 before-ledger 四个边界，并新增同步准备工厂阻塞期间杀死管理者的第 5 个用例；重启先查回事实，旧子进程实际退出与历史锚证明完备后才显式恢复。独立准备生命周期用例继续检查管理者和子进程的实际资源归属；Unix 短暂 EPERM 保留监护进程实际 SHARED 并重查，只有真实进程组退出才释放，错误或超时不构成证明。界面回归覆盖恢复期间并行取消、迟到 list/PUT 响应的修订单调性，以及变更成功后重新读取完整安装事实。最终 `npm run check` 通过：1700 项测试，1686 通过、14 跳过、0 失败、0 取消，耗时 158818.996541 ms（约 159 秒）。14 项安装界面回归已在最终编译产物中通过；真实进程故障、HTTP、CLI、迁移及既有业务行为均纳入本轮检查。
+
+实际完整应用归档的 HTTP 安装实验使用 macOS arm64、Node 24.16.0，以及独立临时安装根 `anybox-d13-real-install-*` 和外部公钥策略。两个输入均为 D1.2 构建的完整应用归档，经过真实意图接收、原始字节上传、签名验证、client/execution 描述准备及目录登记，结果如下：
+
+| 应用归档 | 原始字节数 | 安装结果 |
+| --- | ---: | --- |
+| `agent-0.1.0-darwin-arm64.anybox-app` | 37,986,120 | installed；selected 为 null，pending 固定该身份 |
+| `claude-agent-0.1.0-darwin-arm64.anybox-app` | 36,026,566 | installed；selected 为 null，pending 固定该身份 |
+
+安装后及关闭重开的 Products 都是空数组；Models、Harness Run/Session、Computer、应用连接与 Claude Run 服务均不存在。重开后两个安装事实和 pending 保持，说明完整应用包可持久安装而不装配业务或切换当前空目录。实验没有模型请求、业务迁移、连接或凭据操作；它不把应用准备构造结果解释为业务就绪，也不扩大为角色激活、正式签名发行或其他平台验收。
+
+仓库外最小宿主 CLI 实验使用最终构建的 `stageMinimalHost` 复制产物，临时目录命名为 `anybox-d13-external-host-*`。宿主只有七个生产包，没有应用生产依赖；在外部目录作为 cwd、清空 `NODE_OPTIONS` 和 `NODE_PATH`、不运行 npm 安装的条件下，通过 `host/anybox.mjs` 的真实命令分派依次执行 `install`、`installations` 和 `operations`，三个命令均退出 0。签名纯界面夹具登记为 installed，selected 为 null、pending 固定其身份，actual 为空。后续查询进程接管时仅把 awaiting-activation 包操作保留为待恢复，文件安装终态与事实不变。私钥只在实验进程内生成，未写磁盘；显式信任文件只含公钥。这验证了独立空宿主可以从外部目录完成本地安装及查询，范围仍是 macOS arm64 Node 24.16.0、纯界面包和外部运行时，不包含正式签名成品或角色业务启动。
+
+安装器进一步把准备进程的临时载荷固定在 `staging/<installId>/preparation/<temporaryId>`，受同一任务和工作锚归属。旧管理者退出后仍可能使用的字节保留在可核对的位置；只有取得全部历史工作退出证明并撤销旧凭证后，才清理这些任务私有临时目录，不在全局临时目录遗留无任务归属的载荷。
+
+当前验收范围是 macOS Node。Electron/Windows 的 Node 后台注册准备仍保守报告运行时不可用，不静默跳过需要的工厂；纯界面包不要求 Node 准备。原 Node/Electron 运行时外部提供、自包含成品及其他平台限制保持事实描述。正式运行目录仍为静态组合，D1.4 才接入快照加载、角色重启和生效，D1.5 才接入卸载，D2 才增加在线下载；本次没有重启现有客户端或独立 worker。实现契约见[安装组件](modules/package-management/installation.md)，未修改 NyaCore。
+
+## D1.4 正式角色加载与版本生效（2026-10-17）
+
+新增同根 `host-package-activation`，只注入安装注册库、Products 和 Activity。注册库 v3 原地增加耐久生效批次，保留 v1/v2 安装、文件任务和历史使用证明。installed、selected、pending、实际 ready 目录及 Products 后台目标各自保留事实；commit 不等于新代码运行，全部计划角色提交精确就绪回执、旧使用实际退出后才完成批次并清除 pending。新装后台继续关闭，纯界面入口不产生模拟后台。
+
+固定加载器在导入前取得真实 SHARED 使用锁、claim 确切快照，重验不可变目录、签名、运行条件、能力和 Web 资源闭包。公开 Nya/API/SQL 解析到宿主同一实例，私有依赖保持应用自己的生产闭包；包含延迟导入在内的实际模块读取仍核验索引。只构造注册，实际业务初始化和迁移继续由应用的运行入口及 Nya 组件负责。代码使用证明保持到进程实际退出，关闭一个 JavaScript handle 不能证明模块或原生代码已卸载。仅受管包字节、目录或签名损坏会隔离对应身份；应用工厂读取自己的配置文件失败、信任策略或运行时变化不冒充包损坏。
+
+最小 CLI 和最小 Electron 入口使用同一生命周期监督器、固定角色 bootstrap 及稳定 origin 代理。父进程没有 Nya 根、数据库连接或应用导入；客户端子进程独占注册库写锁，execution 通过私有 RPC 使用同一账本。父子 reservation 连续持有，旧角色实际退出后才交接写锁，新管理者取得当前 owner 的确切凭证后再导入。失去 IPC、超时和退出错误都不能替代实际资源退出。初始加载或交接失败会在确认旧角色退出后退回空管理宿主；不自动重放应用启动，查询和显式恢复仍可用。
+
+生效冻结受影响进程中全部应用的 open/stop/retry 和 Activity 准入，再检查应用自己的 guard。所有已登记同源页面（含隐藏页面）分别检查全部挂载界面的 canClose 并等待真实 dispose。耐久 prepared 与当前短期 protected 证明分开，丢失响应只查原请求/操作，不提前清理页面或重复 mutation。其他应用的工作、草稿、断连或未知清理都会阻止切换，不由宿主查询业务表或取消 Run。已有后台目标和可恢复工作区位置保留，新装应用不自动打开或插入标签。
+
+应用可以通过运行期上下文的可选 `startRole` 启动同一签名包声明的独立 worker。应用继续拥有其参数、目录、endpoint 和实际 worker 业务；宿主只核验身份、预留版本及启动固定入口。声明独立 worker 的包须显式 `lifecycleVersion: 1`，旧签名包保持可验证但正式加载要求更新，不静默使用旧的无账本 spawn。成功交接后 worker 独立持锁，宿主退出不停止它；版本生效遇到相关独立使用者时阻塞，等待应用自己的显式停止及实际退出证明。
+
+`anybox-host apply/activation` 只调用显式回环管理 origin，不打开第二个注册库写入者。离线 install/operations/installations/cancel/recover 保持原语义。HTTP、CLI 和界面仅投影生命周期结果，不输出使用秘密、内部路径或原始工厂错误。组件关闭排空本地已接受控制，再释放写入所有权；不会等待必须先关闭自身根才能进行的角色重启。
+
+专项行为入口包括 `package-activation-ledger`、`package-lifecycle-coordination`、`package-loader`、`package-managed-process`、`package-independent-role`、`package-role-proxy`、`package-activation-command`，以及页面、HTTP、真实 shell 和桌面 utility 适配测试。覆盖两角色升级、真实 SIGKILL、父子连续锁、初始损坏隔离、显式恢复、交接锁获取失败、独立 worker 存活、跨页面草稿、丢失回执和旧后台目标保护。
+
+实际仓库外 macOS arm64 Node 实验重新构建了只有七个物理生产包的宿主，以及两份带 `lifecycleVersion: 1` 的完整签名归档。签名私钥只在构建进程内生成，未写入文件或输出；管理者仅接收显式公钥策略。运行使用独立物理依赖闭包，没有源码、工作区链接或目标设备 npm 安装步骤。
+
+| 完整应用归档 | 原始字节数 | 生产包数 | 正式加载结果 |
+| --- | ---: | ---: | --- |
+| Anybox Harness | 37,991,277 | 74 | client/execution 均有精确 ready 回执，后台保持关闭 |
+| Claude Agent | 36,028,341 | 113 | client/execution 均有精确 ready 回执，后台保持关闭 |
+
+两包通过 HTTP 意图、原始字节上传、验证、准备和不可变目录提交，安装后 Products 仍为 `[]`、selected 为 null，pending 固定对应身份。随后原批次只提交一次 commit，最终 completed；客户端与执行端各加载两个应用，pending 清空，两个后台目标均为 disabled。正常关闭并重开后，selected 保留，两个新角色仍实际 ready；客户端库仅 `app-products` v2，执行库仅 `app-products` v2 和 `host-access` v2。没有 Models、Run、Session、连接或 worker 目录和业务组件初始化；所有实验管理者及角色进程均确认退出。完整包允许携带独立运行所需共享库副本，托管实际导入仍固定宿主公共实例，并拒绝相对绕入私有共享运行时。
+
+真实 Electron 44.5.1 / Node 24.21.0 实验使用独立 userData 和隐藏窗口，经相同生产监督器、utility 入口、协议桥和完整 Shell 安装纯界面 1.0.0。首次生效得到新角色 ready 并安全 reload，`runtime: false`、未打开，无 execution 进程。挂载后安装 2.0.0，实际草稿拒绝返回 409，selected 1.0.0、pending 2.0.0 与原界面保留；放行后等待 123 ms 的实际 dispose 退出，再完成新角色 ready、reload 和 2.0.0 挂载。原标签、活动位置、hash 和稳定 origin 保留，最终 selected/actual 2.0.0、pending 为空；共三次页面加载，主进程 exit 0、stderr 为空，全部自有进程退出。
+
+该实际复测补齐了页面 SSE 随 HTTP lifetime 退出、代理 GET/HEAD 断连真实注销旧订阅的回归，避免关闭等待循环和旧页面登记阻塞下一次生效；完整 body 已接受的 mutation 仍继续原操作。较慢的完整包准备期间，CLI 对丢失响应按同一 requestId 有界轮询，只等待与查询，不重发 mutation；默认整体观察窗口为 120 秒，单次请求最多 5 秒，超时仍不伪造完成。
+
+最新 CLI 又在上述双完整包已选定的独立数据根中追加一个 1,747 字节的签名纯界面包，以原生 `anybox-host apply` 实际执行，13,622 ms 后 exit 0、completed。客户端实际目录为两完整应用加纯界面入口，执行端仍为两完整应用，两个后台目标继续 disabled；纯界面包没有增加持久后台目标，两个控制数据库的原行值保留，全部实验进程确认退出。CLI 整体观察不因准备阶段的暂时空查询而提前结束，也没有重复提交变更。
+
+最终 `npm run check` 通过：1816 项测试，1802 通过、14 跳过、0 失败、0 取消；耗时 161680.871083 ms（约 162 秒），相对 D1.3 新增 116 项。该检查包含最终编译的当前 protected 证明、受管进程初始及交接故障回退、工厂配置文件缺失不隔离应用包、完整归档共享库副本的实际导入边界，以及运行中独立 worker 不被生效探测栅栏的回归；HTTP lifetime 结束 SSE、代理 GET/HEAD 注销旧观察和 CLI 延迟接纳查询也已纳入。`git diff --check` 同时通过。
+
+实现及使用契约见[正式加载与生效组件](modules/package-management/activation.md)。当前 macOS arm64 Node 与隔离最小 Electron 验证不扩大为 Windows/Linux 成品、真实系统凭据或正式签名发行；Electron/Windows 的 Node 准备及独立 worker 启动限制保留。旧默认完整 distribution 桌面仍由 D3 迁入，D1.5 卸载和 D2 在线下载尚未实施；未重启用户现有客户端或独立 worker，未修改 NyaCore。
+
+## D1.5 卸载与代码回收（2026-10-18）
+
+复用既有 `host-package-activation` 接入显式 kind remove，不新增业务层或 Nya 组件。注册库 v4 原地规范旧批次的 activate 类型与 ownedUsageIds，仍保留安装、文件任务和使用历史。卸载意图固定目标应用全部未 removed 的版本，各自登记 remove 操作；prepare 不改指针或运行目标。全部相关角色的 Products 控制、Activity guard 和所有页面 canClose 通过后，实际 dispose 退出，才保存 client/execution 的关闭目标、原子清 selected/pending，并交接到排除目标应用的新目录。纯界面应用不产生后台目标；最后一个 execution 应用移除后不启动空 execution 进程。
+
+新角色 ready 与卸载完成分开：先证明旧角色、父 reservation、历史失败尝试及所有本机登记使用者实际退出，再进入 reclaiming。文件适配器只在 `withReclamation` 排他保护下回收固定身份容器，保留业务 SQLite、Models JSON、Vault、图片、项目、worker 及远端服务归属。每个版本实际删除并同步目录后才登记 removed；所有目标成功后 `completeRemoval` 才使批次 completed。审计历史与 usage-locks 不随代码删除；部分成功保留已 removed 事实，失败项和原批次待显式恢复。重装以新请求登记原身份，沿用应用兼容数据并保持关闭。
+
+注册库通过 Effect 固定最初的真实根目录、O_NOFOLLOW/O_DIRECTORY 句柄与 dev/ino，并在受控文件回调前传递私有根身份锚。适配器核对捕获的根与该锚，逐层持有并复核目录身份，内部符号链接及硬链接仅 unlink 本目录项，不跟随外部目标。根、祖先或容器替换均拒绝，不以 fresh realpath 重新授权删除根；并发 interrupt 先检查全部回收目标，不得改写尚在删除的操作。启动失败、正常关闭和在途回收等待均验证句柄实际释放；回收资源未退出前不释放根锚。Windows 当前保留宿主、账本和纯界面安装，不能取得该安全目录句柄时只拒绝破坏性回收，不声称已完成 Windows 卸载验收。
+
+HTTP 及“我的应用”通过同一 /activations 卸载流程工作，默认保留数据；未完成回收、独立使用或未知退出均明确尚未卸载。所有页面在原 remove 批次 completed 后才移除目标标签和路由，保留其他应用位置；重启核对旧卸载还要求当前事实仍全部 removed，避免误清后来重新安装的工作区。在线 `anybox-host uninstall <appId> --endpoint <显式回环origin> --request-id <id>` 不另开注册库写入者；同 requestId 重跑只观察原批次，不重新准备或提交。恢复仍使用 `activation <id> --action resume`，查询、丢失回执和 CLI 中断不重放删除。
+
+新增及扩展行为入口包括 `package-removal-ledger`、`package-reclamation`、`package-removal-managed`、`package-lifecycle-coordination`、`package-activation-command`、页面/管理界面与 HTTP 测试。覆盖运行中卸载、同应用多版本、隔离包、待生效包、被省略的旧 execution 退出证明、独立 worker 占用阻塞、部分回收及损坏目录恢复、根重定向、回收并发、同身份重装默认关闭、回收失败后其他应用在 client/execution 的开启目标保留、全页面草稿与工作区清理。宿主始终只处理通用生命周期，不查询或迁移业务，也不取消远端 Run。
+
+最终 `npm run check` 通过：1867 项测试，1853 通过、14 跳过、0 失败、0 取消，耗时 164339.996416 ms（约 164 秒），相对 D1.4 新增 51 项。
+
+最终构建的 macOS arm64 Electron 44.5.1 / Node 24.21.0 隐藏窗口实验使用独立 userData、实际 utility 角色和协议桥。纯界面 1.0.0→2.0.0 正常交接后，真实草稿使卸载返回 409，selected 2.0.0 和原界面保留；放行后等待 122 ms 的实际 dispose 退出，全部版本回收完成才安全 reload。目标标签清除、路由变为 `#/apps`，Products 为空，只保留 client 管理角色，无虚构后台或 execution 初始化。共四次页面加载，实验进程 exit 0，管理者和自有角色正常关闭。
+
+仓库外 macOS arm64 Node 24.16.0 实验重新复制最终最小宿主的七个物理生产包，并复制 D1.4 隔离数据与两份原始完整签名应用包的安装目录，不借用工作区模块或运行 npm 安装。v3 的未完成批次原地迁入 v4，先保持管理目录为空，再由原 ID 的显式 resume 完成 client/execution 的精确加载；两个应用业务仍关闭。
+
+实际在线 CLI 卸载 Anybox Harness 在 14,544 ms 内完成，全部 Harness 代码容器消失，Claude Agent 的完整代码和 client/execution ready 保留，特意放置的应用数据标记原字节保留。同 requestId 再运行卸载退出 0、查回原 completed 批次，没有再次准备或删除。随后卸载 Claude Agent，最后一个代码容器回收，Products 为空，只剩实际存活的 client 管理角色。关闭后注册库迁移为 v4，两个控制数据库的既有目标均为关闭，未新增 Models、Session、Run 或 Computer 业务表；所有自有角色确认退出。完整包仍为 D1.4 的 37,991,277 字节 Harness 与 36,028,341 字节 Claude Agent，验证的是实际完整载荷的卸载和保留边界，不是新正式签名发行。
+
+`git diff --check` 通过。实现和命令见[生效与卸载组件](modules/package-management/activation.md#d15-本机卸载与代码回收)。当前验收不扩大为 Windows/Linux 成品、真实系统凭据或业务数据迁移；D2 在线下载和 D3 旧默认完整发行迁入继续单列。未重启用户原有客户端或独立 worker，未修改 NyaCore。

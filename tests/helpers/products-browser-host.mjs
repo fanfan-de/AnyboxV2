@@ -3,13 +3,13 @@ import { mkdtemp, mkdir, rm, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
-import { createHarnessServer } from '../../dist/entrypoints/harness-server-main.js'
-import { createClientHost } from '../../dist/entrypoints/client-main.js'
-import { harnessClientApplication } from '../../dist/applications/harness/client/registration.js'
-import { claudeAgentClientApplication } from '../../dist/applications/claude-agent/client/registration.js'
-import { claudeAgentServerApplication } from '../../dist/applications/claude-agent/registration.js'
+import { createHarnessServer } from '../../packages/distribution/dist/entrypoints/harness-server-main.js'
+import { createClientHost } from '../../packages/distribution/dist/entrypoints/client-main.js'
+import { harnessClientApplication } from '../../packages/app-harness/dist/client/registration.js'
+import { claudeAgentClientApplication } from '../../packages/app-claude-agent/dist/client/registration.js'
+import { claudeAgentServerApplication } from '../../packages/app-claude-agent/dist/registration.js'
 import { testApplication } from './test-application.mjs'
-import { parseHarnessServerConfig } from '../../dist/applications/harness/server-config.js'
+import { parseHarnessServerConfig } from '../../packages/app-harness/dist/server-config.js'
 
 const directory = await mkdtemp(join(tmpdir(), 'anybox-products-browser-'))
 const secrets = new Map()
@@ -46,7 +46,7 @@ try {
     },
   } })
   await host.ready
-  client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [harnessClientApplication({ localInstanceId: host.instance.instanceId }), claudeAgentClientApplication({ localInstanceId: host.instance.instanceId }), notesRegistration] })
+  client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [harnessClientApplication({ localInstanceId: host.instance.instanceId, openEntry }), claudeAgentClientApplication({ localInstanceId: host.instance.instanceId, openEntry }), notesRegistration] })
   await client.products.open('agent')
   const issued = await host.root.get('host.access').issue('Disposable browser acceptance')
   await client.root.get('client.connections').save({ name: '本地测试 Agent', endpoint: host.url, token: issued.token })

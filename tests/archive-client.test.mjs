@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createArchiveIndex, setupArchivePanel } from '../dist/applications/harness/web/archive-client.js'
+import { createArchiveIndex, setupArchivePanel } from '../packages/app-harness/dist/web/archive-client.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))

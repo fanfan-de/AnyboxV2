@@ -8,9 +8,9 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 
 | 项目 | 定义 |
 | --- | --- |
-| 组件入口 | [apply-patch-component.ts](../../../src/applications/harness/core/tool/apply-patch-component.ts) |
-| 纯领域逻辑 | [apply-patch-domain.ts](../../../src/applications/harness/core/tool/apply-patch-domain.ts)：`parsePatch`、`validatePatchText`、`applyPatchText` |
-| 项目自有类型 | [apply-patch-types.ts](../../../src/applications/harness/core/tool/apply-patch-types.ts) |
+| 组件入口 | [apply-patch-component.ts](../../../packages/app-harness/src/core/tool/apply-patch-component.ts) |
+| 纯领域逻辑 | [apply-patch-domain.ts](../../../packages/app-harness/src/core/tool/apply-patch-domain.ts)：`parsePatch`、`validatePatchText`、`applyPatchText` |
+| 项目自有类型 | [apply-patch-types.ts](../../../packages/app-harness/src/core/tool/apply-patch-types.ts) |
 | 工厂 / Nya 名称 | `createApplyPatchComponent(options?)` / `apply-patch-tool` |
 | 服务 / `inject` | `tools.apply-patch: ApplyPatchPort` / `harness.projects` |
 | 工具名 / 消费方 | `apply_patch` / 独立 [worker 执行器](../computers/worker-executor.md) |
@@ -80,9 +80,9 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 
 ## 验证依据
 
-- [apply-patch-domain.test.mjs](../../../tests/apply-patch-domain.test.mjs)：语法、精确匹配、锚点/EOF、Unicode/BOM、换行、大文件匹配。
+- [apply-patch-domain.test.mjs](../../../packages/app-harness/tests/apply-patch-domain.test.mjs)：语法、精确匹配、锚点/EOF、Unicode/BOM、换行、大文件匹配。
 - [apply-patch-component.test.mjs](../../../tests/apply-patch-component.test.mjs)：全部预检、跨项目队列、路径别名、并发外部编辑、部分提交、Move 事实、取消及清理失败。
 - [apply-patch-loop.test.mjs](../../../tests/apply-patch-loop.test.mjs)：混合工具顺序、失败后修正、参数预检、旧事件读取及在途补丁恢复为 interrupted。
-- [harness-server-http.test.mjs](../../../tests/harness-server-http.test.mjs)、[tool-trace.test.mjs](../../../tests/tool-trace.test.mjs)：浏览器补丁预览截断与部分/取消结果展示。
+- [harness-server-http.test.mjs](../../../tests/harness-server-http.test.mjs)、[tool-trace.test.mjs](../../../packages/app-harness/tests/tool-trace.test.mjs)：浏览器补丁预览截断与部分/取消结果展示。
 
 完整验收运行 `npm run check`。

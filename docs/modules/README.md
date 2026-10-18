@@ -2,14 +2,17 @@
 
 [返回文档首页](../README.md)
 
-本手册按实际组件与资源边界组织，文档模块不必镜像源码目录。每个执行宿主与本机客户端分别拥有一个 Nya 根，应用不创建子 Context。通用宿主与外壳位于 `src/host/`，Anybox Harness 的核心、HTTP、客户端和浏览器实现位于 `src/applications/harness/`，Claude Agent 位于 `src/applications/claude-agent/`，默认组合入口位于 `src/entrypoints/`；Models 保持独立包。完整产品名和服务端称呼见[命名规范](../naming.md)。详见[模块边界](../harness-module-boundary.md)与[部署说明](../harness-server-deployment.md)。
+本手册按实际组件与资源边界组织，文档模块不必镜像源码目录。每个执行宿主与本机客户端分别拥有一个 Nya 根，应用不创建子 Context。D0a 已完成独立 workspace 边界：通用宿主与外壳位于 `packages/host/src/`，Anybox Harness 的核心、HTTP、客户端和浏览器实现位于 `packages/app-harness/src/`，Claude Agent 位于 `packages/app-claude-agent/src/`，默认组合入口位于 `packages/distribution/src/entrypoints/`；SQL 与目录归基础包，连接/凭据/配对/转发由各应用私有实现，Models 保持独立包。D0b 已完成按消费者装配，D1.1 的包管理账本独立保存安装与版本归属，D1.2 的[归档与产物工具](package-management/archives.md)提供签名校验和独立准备，不另建 Nya 组件；D1.3 的[本地文件安装](package-management/installation.md)接入受管暂存、目录提交与显式恢复。D1.4 的[正式加载与生效](package-management/activation.md)接入最小宿主、角色交接与全部页面保护。D1.5 复用原组件接入卸载、代码回收与显式恢复。默认静态组合仍位于 distribution，旧发行迁入和在线下载继续按后续阶段实施。完整产品名和服务端称呼见[命名规范](../naming.md)。详见[模块边界](../harness-module-boundary.md)与[部署说明](../harness-server-deployment.md)。
+
+[D0a.1 独立业务服务](../application-standalone-services.md)由各应用提供自己的入口、HTTP 与认证；Anybox 接入复用同一业务装配。同进程不增加根，独立运行也不依赖宿主活动或应用管理。新增 Harness 与 Claude Agent 的访问、监听组件分别记录在手册；服务工厂和配置函数在所属组件及阶段文档说明。
 
 ## 模块目录
 
 | 目录 | 内聚职责 | 独立组件文档数 |
 | --- | --- | --- |
 | [products/](./products/README.md) | 固定应用目录、按需装配与活动准入 | 2 |
-| [claude-agent/](./claude-agent/README.md) | Claude Agent：线程索引、SDK 适配器、Run 准入与审批、HTTP/SSE、客户端网关 | 5 |
+| [package-management/](./package-management/README.md) | 独占安装注册库、耐久操作、版本快照、跨进程使用凭证、本地文件安装、正式加载、生效、卸载回收与恢复，以及归档/产物辅助工具 | 3 |
+| [claude-agent/](./claude-agent/README.md) | Claude Agent：线程索引、SDK 适配器、Run 准入与审批、HTTP/SSE、本机角色通道、独立服务访问和监听、客户端远端连接与网关 | 9 |
 | [models/](./models/README.md) | 可复用模型配置、凭据、原生驱动及可选公开目录 | 11 |
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 7 |
 | [computers/](./computers/README.md) | 按需本机资源、独立 worker、固定工作区、耐久工具操作协调、单元拨出与按附着路由 | 9 |
@@ -19,7 +22,7 @@
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
 | [tools/](./tools/README.md) | 来源工具契约、进程会话、文件变更与搜索 | 4 |
 | [infrastructure/](./infrastructure/README.md) | 业务数据库与可替换存储端口 | 1 |
-| [web/](./web/README.md) | 执行 API、访问管理、客户端外壳与连接库、Anybox Harness 网关、目录选择 | 7 |
+| [web/](./web/README.md) | 执行 API、宿主及 Harness 独立访问管理和监听、客户端外壳与连接库、Anybox Harness 网关、目录选择 | 10 |
 | [diagnostics/](./diagnostics/README.md) | 资源归属探针 | 1 |
 
 ## 完整组件索引
@@ -30,6 +33,9 @@
 | --- | --- | --- | --- |
 | 产品 | [产品控制](./products/products.md) | `app-products` | `app.products` |
 | 产品 | [活动准入](./products/activity.md) | `app-activity` | `app.activity` |
+| 包管理 | [安装事实与操作账本](./package-management/registry.md) | `host-package-registry` | `host.package-registry`；注入独立 `host.package-registry-storage` |
+| 包管理 | [正式角色加载、生效与卸载](./package-management/activation.md) | `host-package-activation` | `host.package-activation`；注入注册库、Products 与 Activity |
+| 包管理 | [本地文件安装](./package-management/installation.md) | `host-package-installer` | `host.package-installer`；注入 `host.package-registry` |
 | Models | [协调服务](./models/models.md) | `models` | `models`、`models.settings`、`models.protocols`、`models.source-data` |
 | Models | [JSON 配置存储](./models/json-store.md) | `models-json-store` | `models.store` |
 | Models | [SQLite 配置替换提供方](./models/store.md) | `models-store` | `models.store` |
@@ -69,12 +75,14 @@
 | 工具 | [Apply Patch](./tools/apply-patch.md) | `apply-patch-tool` | `tools.apply-patch` |
 | 工具 | [进程工具](./tools/processes.md) | `process-tools` | `tools.processes` |
 | 工具 | [文件工具](./tools/files.md) | `file-tools` | `tools.files` |
-| 基础存储 | [业务 SQLite](./infrastructure/local-sqlite.md) | `local-sqlite` | `local-storage` |
+| 基础存储 | [业务与注册库 SQLite](./infrastructure/local-sqlite.md) | `local-sqlite` | 默认 `local-storage`；独立命名实例可提供 `host.package-registry-storage` |
 | 宿主 | [Application HTTP](./web/web-frontend.md) | `host-application-api` | `host.http` |
 | harness server 接入 | [harness server HTTP](./web/harness-http.md) | `harness-http` | `harness.http` |
-| Web | [本机目录选择器](./web/directory-picker.md) | `host-directory-picker` | `host.directory-picker` |
+| 可选目录适配 | [本机目录选择器](./web/directory-picker.md) | `host-directory-picker` | `host.directory-picker` |
 | 宿主 | [访问管理](./web/host-access.md) | `host-access` | `host.access` |
-| 宿主 | [连接库](./web/client-connections.md) | `client-connections` | `client.connections` |
+| Harness 独立服务 | [访问管理](./web/harness-access.md) | `harness-access` | `harness.access` |
+| Harness 独立服务 | [HTTP 监听](./web/harness-listener.md) | `harness-listener` | `harness.listener` |
+| Anybox Harness 客户端 | [连接组件](./web/client-connections.md) | `client-connections` | `client.connections` |
 | 客户端外壳 | [应用 HTTP](./web/client-shell.md) | `app-client-http` | `app.client-http` |
 | Anybox Harness 客户端 | [Computer 管理](./web/client-computer.md) | `client-computer` | `client.computer` |
 | Anybox Harness 客户端 | [同源网关](./web/client-gateway.md) | `client-gateway` | `client.gateway` |
@@ -83,11 +91,15 @@
 | Claude Agent | [SDK 适配器](./claude-agent/sdk.md) | `claude-agent-sdk` | `claude-agent.sdk` |
 | Claude Agent | [Runs](./claude-agent/runs.md) | `claude-agent-runs` | `claude-agent.runs`、`claude-agent.run-admission` |
 | Claude Agent | [HTTP](./claude-agent/http.md) | `claude-agent-http` | `claude-agent.http` |
+| Claude Agent 独立服务 | [访问管理](./claude-agent/access.md) | `claude-agent-access` | `host.access`（既有键兼容） |
+| Claude Agent 独立服务 | [HTTP 监听](./claude-agent/listener.md) | `claude-agent-listener` | `claude-agent.listener` |
+| Claude Agent | [本机执行](./claude-agent/local-execution.md) | `claude-agent-local-execution` | `claude-agent.local-execution` |
+| Claude Agent | [客户端连接](./claude-agent/client-connections.md) | `claude-agent-client-connections` | `claude-agent.connections` |
 | Claude Agent | [Client Gateway](./claude-agent/client-gateway.md) | `claude-agent-client-gateway` | `claude-agent.gateway` |
 
 ## 从一次请求理解模块协作
 
-1. [Web](./web/web-frontend.md) 或 [harness server API](../../src/applications/harness/core/index.ts) 接收请求，通过当前服务进行调用。
+1. [Web](./web/web-frontend.md) 或 [harness server API](../../packages/app-harness/src/core/index.ts) 接收请求，通过当前服务进行调用。
 2. [Run](./execution/run.md) 先检查已接受幂等键，再检查 [Session](./sessions/session.md) 的归档状态、项目、Prompt 与模型选择；新请求经 Session 受管读取已准备的[文件快照](./sessions/project-files.md)。
 3. [协议应用注册](./execution/protocol-agent-registry.md) 在模板后附加文件资料并编码图片引用，固定驱动代与对应 Loop，通过 [Models](./models/models.md) 准备独立 execution/program；Run 解析本机 Models 与 Computer 的[单元附着](./units/unit-attachments.md)引用，Session 在接受事务复核归档状态、协议、父恢复引用及附着引用，同时永久保留图片与文件引用。
 4. [RunRuntime](./execution/run-runtime.md) 同步接管 program，管理操作意图、实际启动、取消、退出和观察提交。计算工具声明和 resume cursor 由 Session 同事务接纳到 [Computer Operations](./computers/computer-operations.md)，后者按需准备确切实例和工作区，再交独立 [worker](./computers/worker-executor.md) 的工具执行器；纯模型和计划调用不激活 computer。进程异常退出后，新 Runtime 提升 owner，查回原操作与游标。
@@ -103,6 +115,7 @@ Models 配置库、目录缓存库和业务 SQLite 是三套独立连接，不�
 | --- | --- | --- |
 | Models 配置库 / 原生参数 | 配置库 v3；参数 `{ protocolId, formatVersion: 1, value }` | 未知扩展保留待迁移状态；历史 JSON 不改写 |
 | 应用目标迁移账本 | `app-products` v2；按注册 ID 保存打开目标 | 执行库首次按 run-state 保留 Agent；旧组合只迁入内置目标；客户端默认关闭 |
+| 包管理注册库 | 独立 `registry.sqlite` 中的 `host-package-registry` v2 | 原地保留 v1；新增预身份文件安装任务、CAS 回执与工作锚历史；安装、操作、快照与使用凭证分表，与 Products 目标及应用业务库分开；未知退出阻塞恢复和回收 |
 | Session 迁移账本 | `run-state` v11 | v11 在 `harness_runs` 增加固定的单元附着引用；v10 独立 Run 恢复游标与 owner；保留 v5 原生记录、v6 图片引用、v7 归档、v8 默认模型、v9 工具选择；旧 `dialogue-v1` 只读，没有引用的旧 Run 按本机形态解释 |
 | 单元附着迁移域 | `unit-attachments` v1 | 附着记录与审计事件；附着码和单元凭证只存 SHA-256 摘要；本机附着 ID 固定为 `local:<kind>` |
 | worker 附着迁移域 | `computer-worker-attachments` v1 | 独立 worker 服务的 harness server 记录、作用域上限与凭据意图；单元凭证只在系统凭据命名空间 |
@@ -116,6 +129,6 @@ Models 配置库、目录缓存库和业务 SQLite 是三套独立连接，不�
 
 ## 组件之外的代码
 
-[src/applications/harness/core/index.ts](../../src/applications/harness/core/index.ts) 和 [src/entrypoints/serve.ts](../../src/entrypoints/serve.ts) 是组合根/宿主入口；AgentDefinition 是只读配置；`execution`、`PreparedRunProgram`、协议 Loop、内部 SQLite 提供方及浏览器视图是所属组件持有或调用的实现。它们在相关文档中说明，不独立计作组件。`packages/api-key-manager` 保留独立工具包和旧凭据读取用途，说明见 [包 README](../../packages/api-key-manager/README.md)，不是当前应用的额外 Nya 凭据组件。
+[packages/app-harness/src/core/index.ts](../../packages/app-harness/src/core/index.ts) 和 [packages/distribution/src/entrypoints/serve.ts](../../packages/distribution/src/entrypoints/serve.ts) 是组合根/宿主入口；AgentDefinition 是只读配置；`execution`、`PreparedRunProgram`、协议 Loop、内部 SQLite 提供方及浏览器视图是所属组件持有或调用的实现。它们在相关文档中说明，不独立计作组件。`packages/api-key-manager` 保留独立工具包和旧凭据读取用途，说明见 [包 README](../../packages/api-key-manager/README.md)，不是当前应用的额外 Nya 凭据组件。
 
 新增或调整组件时，按 [文档维护约定](../README.md#维护约定) 同步更新本清单和模块目录。组件文档描述当前实现，设计文档保存跨模块决策和迁移背景。

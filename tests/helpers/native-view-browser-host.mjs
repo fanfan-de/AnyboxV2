@@ -1,8 +1,8 @@
 /** Disposable browser acceptance surface for the published four-protocol assets. */
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { harnessAssets } from '../../dist/applications/harness/assets.js'
-import { projectNativeExchange } from '../../dist/applications/harness/core/protocol-agents/projection.js'
+import { harnessAssets } from '../../packages/app-harness/dist/assets.js'
+import { projectNativeExchange } from '../../packages/app-harness/dist/core/protocol-agents/projection.js'
 
 const text = '原生输出保留协议的内容顺序。\n\n```ts\nconst protocol = "native"\n```'
 const citation = { url: 'https://example.com/native', title: '原生引用', start_index: 0, end_index: 4 }

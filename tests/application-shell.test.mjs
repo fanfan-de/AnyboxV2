@@ -63,11 +63,12 @@ function shellDocument() {
   return document
 }
 
-async function fixture(t, request) {
+async function fixture(t, request, options = {}) {
   const document = shellDocument(), listeners = new Map(), calls = [], storage = new Map()
+  options.configureDocument?.(document)
   const previous = new Map()
-  storage.set('anybox.apps.workspace.v1', JSON.stringify({ tabs: [{ id: 'agent', route: 'saved' }], activeId: 'agent' }))
-  const location = { hash: '#/apps/agent/saved', origin: 'file:///' }
+  storage.set('anybox.apps.workspace.v1', JSON.stringify(options.workspace ?? { tabs: [{ id: 'agent', route: 'saved' }], activeId: 'agent' }))
+  const location = { hash: '#/apps/agent/saved', origin: 'file:///', reloads: 0, reload() { this.reloads++ } }
   const window = {
     addEventListener(type, callback, options) { const values = listeners.get(type) ?? []; values.push({ callback, signal: options?.signal }); listeners.set(type, values) },
     dispatch(type, event = {}) { for (const listener of listeners.get(type) ?? []) if (!listener.signal?.aborted) listener.callback(event) },
@@ -85,7 +86,7 @@ async function fixture(t, request) {
     window.dispatch('pagehide', { persisted: false })
     for (const [key, descriptor] of previous) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]
   })
-  await import(`../dist/host/web/client.js?shellFixture=${++fixtureId}`)
+  await import(`../packages/host/dist/web/client.js?shellFixture=${++fixtureId}`)
   const find = id => document.getElementById(id)
   const waitFor = async predicate => {
     const deadline = Date.now() + 2000
@@ -93,9 +94,9 @@ async function fixture(t, request) {
     assert.ok(predicate(), 'shell did not reach the expected state')
   }
   const state = () => find('application-list').querySelector('.application-state')?.textContent
-  const cardButton = label => find('application-list').querySelectorAll('button').find(button => button.textContent === label)
+  const cardButton = label => find('application-list').querySelectorAll('button').find(button => button.textContent === label || button.getAttribute('aria-label') === label)
   await waitFor(() => find('app-panel-agent')?.textContent === 'Mounted application')
-  return { document, calls, storage, find, state, cardButton, waitFor, notice: () => find('workbench-notice'),
+  return { document, window, location, calls, storage, find, state, cardButton, waitFor, notice: () => find('workbench-notice'),
     refresh() { document.dispatch('visibilitychange') }, async settle() { for (let count = 0; count < 4; count++) await tick() } }
 }
 
@@ -103,9 +104,11 @@ test('an unreachable host replaces cached running status, fences controls and pr
   let connected = true
   const f = await fixture(t, async () => { if (!connected) throw new TypeError('Failed to fetch'); return Response.json([product('running')]) })
   assert.equal(f.state(), '运行中')
+  assert.equal(f.find('application-list').querySelector('.application-state').dataset.state, 'running')
   const panel = f.find('app-panel-agent')
   connected = false; f.refresh(); await f.settle()
   assert.equal(f.state(), '暂时无法确认状态')
+  assert.equal(f.find('application-list').querySelector('.application-state').dataset.state, 'unknown')
   assert.equal(f.cardButton('打开 Anybox Harness').disabled, true)
   assert.equal(f.cardButton('停止应用').disabled, true)
   assert.equal(f.find('app-shortcut-agent').disabled, true)
@@ -116,6 +119,43 @@ test('an unreachable host replaces cached running status, fences controls and pr
   connected = true; f.refresh(); await f.waitFor(() => f.state() === '运行中')
   assert.equal(f.cardButton('停止应用').disabled, false); assert.equal(f.find('stop-application').disabled, false)
   assert.equal(f.notice().hidden, true)
+})
+
+test('an unavailable optional directory picker explains the limited feature while retaining application access', async t => {
+  const app = { ...product('running'), capabilities: [{ id: 'system.directory-picker', range: '^1.0.0', required: false, status: 'missing' }] }
+  const f = await fixture(t, async (_url, options) => Response.json(options.method === 'POST' ? app : [app]))
+  const card = f.find('application-list').querySelector('.application-card')
+  const details = card.querySelector('.application-capabilities')
+  assert.equal(details.tagName, 'details')
+  assert.match(details.querySelector('summary').textContent, /系统目录选择暂不可用/)
+  assert.match(details.textContent, /system\.directory-picker/)
+  assert.equal(card.querySelector('.application-required-capabilities'), null)
+  assert.equal(f.cardButton('打开 Anybox Harness').disabled, false)
+  f.find('close-application').click(); await f.waitFor(() => !f.find('app-panel-agent'))
+  f.cardButton('打开 Anybox Harness').click()
+  await f.waitFor(() => f.find('app-panel-agent')?.textContent === 'Mounted application')
+  const mutations = f.calls.filter(call => call.options.method === 'POST')
+  assert.equal(mutations.length, 1)
+  assert.ok(mutations[0].url.endsWith('/products/agent/open'), 'the optional feature never requires a stop or recovery mutation')
+})
+
+test('required capability failures remain visible and optional capability disclosure stays expanded across catalog updates', async t => {
+  let current = { ...product('running'), capabilities: [{ id: 'system.directory-picker', range: '^1.0.0', required: false, status: 'missing' }] }
+  const f = await fixture(t, async () => Response.json([current]))
+  const details = f.find('application-list').querySelector('.application-capabilities')
+  details.open = true; details.dispatch('toggle')
+  current = { ...current, definition: { ...current.definition, description: 'Updated application details' } }
+  f.refresh(); await f.waitFor(() => f.find('application-list').textContent.includes('Updated application details'))
+  assert.equal(f.find('application-list').querySelector('.application-capabilities').open, true)
+  current = { ...current, state: 'blocked', capabilities: [...current.capabilities, { id: 'storage.sqlite', range: '^1.0.0', required: true, status: 'missing' }] }
+  f.refresh(); await f.waitFor(() => f.state() === '依赖未就绪')
+  const required = f.find('application-list').querySelector('.application-required-capabilities')
+  assert.ok(required)
+  assert.equal(required.hidden, false)
+  assert.notEqual(required.tagName, 'details', 'required failures cannot be hidden behind a collapsed disclosure')
+  assert.match(required.textContent, /storage\.sqlite/)
+  assert.equal(f.find('application-list').querySelector('.application-state').dataset.state, 'blocked')
+  assert.ok(f.calls.every(call => call.options.method !== 'POST'), 'capability status refresh only observes the host')
 })
 
 test('a lost stop response reconciles the disabled target and closes its interface without repeating the mutation', async t => {
@@ -223,14 +263,192 @@ test('a cleanup failure discovered after a lost stop response reports the restar
   assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 1)
 })
 
-test('a local interface cleanup rejection keeps a successful catalog read authoritative and controls available', async t => {
+test('a local interface cleanup rejection keeps the catalog authoritative and fences access to its unconfirmed interface', async t => {
   let current = product('running')
   const f = await fixture(t, async () => Response.json([current]))
   f.find('app-panel-agent').dataset.failDispose = 'true'
   current = product('disabled'); f.refresh(); await f.settle()
   assert.equal(f.state(), '尚未打开')
-  assert.equal(f.cardButton('打开 Anybox Harness').disabled, false)
-  assert.equal(f.find('app-shortcut-agent').disabled, false)
+  assert.equal(f.cardButton('打开 Anybox Harness').disabled, true)
+  assert.equal(f.find('app-shortcut-agent').disabled, true)
   assert.match(f.notice().textContent, /应用界面清理失败/)
   assert.doesNotMatch(f.notice().textContent, /无法连接应用宿主/)
+})
+
+
+test('an interface-only application mounts and closes without a business API or background controls', async t => {
+  const app = { ...product('running'), definition: { ...product('running').definition, runtime: false, http: false }, desiredEnabled: false }
+  const f = await fixture(t, async (_url, options) => {
+    assert.equal(options.method, 'GET')
+    return Response.json([app])
+  })
+  assert.equal(f.state(), '可打开')
+  assert.equal(f.find('app-panel-agent').dataset.apiBase, 'none')
+  assert.equal(f.find('stop-application').hidden, true)
+  assert.equal(f.cardButton('停止应用'), undefined)
+  f.find('close-application').click()
+  await f.waitFor(() => !f.find('app-panel-agent'))
+  assert.deepEqual(JSON.parse(f.storage.get('anybox.apps.workspace.v1')), { tabs: [], activeId: null })
+  assert.ok(f.calls.every(call => call.options.method === 'GET'))
+})
+
+const packageIdentity = { appId: 'new-app', version: '1.0.0', digest: 'a'.repeat(64), target: { os: 'darwin', arch: 'arm64' } }
+const packageStatus = () => ({ available: true, trustedPublisherCount: 1, registryRevision: 7, lifecycleAvailable: true, browserLifecycleAvailable: false, actual: [], operations: [], activations: [], installations: [{ appId: 'new-app', selected: null, pending: packageIdentity, installed: [{ identity: packageIdentity, state: 'installed' }] }] })
+const activationReceipt = (phase, requestId = 'activation-request') => ({ id: 'activation-1', requestId, revision: 1, phase, protected: true, roles: [{ role: 'client', ready: phase === 'completed' }] })
+const workspaceTwoApplications = { tabs: [{ id: 'agent', route: 'saved' }, { id: 'second-app', route: 'draft' }], activeId: 'agent' }
+const secondProduct = () => ({ ...product('running'), definition: { ...product('running').definition, id: 'second-app', name: 'Second application' } })
+const packageButton = (f, label) => f.find('application-manager').querySelectorAll('button').find(button => button.textContent === label)
+async function showPackageManager(f) { f.find('application-manager').showPopover(); await f.waitFor(() => packageButton(f, '应用更改') && !packageButton(f, '应用更改').disabled) }
+
+test('a failed ordinary close remains unconfirmed through another close, reload request and version activation', async t => {
+  const f = await fixture(t, async url => Response.json(url.includes('/app-packages') ? packageStatus() : [product('running')]))
+  const panel = f.find('app-panel-agent'), context = panel.testContext
+  panel.dataset.failDispose = 'true'
+  f.find('close-application').click(); await f.settle()
+  assert.equal(f.find('app-panel-agent'), panel); assert.equal(panel.dataset.disposed, undefined)
+  assert.equal(context.signal.aborted, true); assert.match(f.notice().textContent, /应用界面清理失败/)
+  assert.equal(f.cardButton('打开 Anybox Harness').disabled, true); assert.equal(f.find('stop-application').disabled, true)
+  // A rejected dispose cannot be retried or forgotten even if a later invocation would succeed.
+  panel.dataset.failDispose = 'false'
+  f.find('close-application').click(); f.cardButton('打开 Anybox Harness').click(); f.refresh(); await f.settle()
+  assert.equal(f.find('app-panel-agent'), panel); assert.equal(panel.testContext, context); assert.equal(panel.dataset.disposed, undefined)
+  assert.deepEqual(JSON.parse(f.storage.get('anybox.apps.workspace.v1')), { tabs: [{ id: 'agent', route: 'saved' }], activeId: 'agent' })
+  const unload = { prevented: false, preventDefault() { this.prevented = true } }
+  f.window.dispatch('beforeunload', unload); assert.equal(unload.prevented, true); assert.equal(unload.returnValue, '')
+  await showPackageManager(f); packageButton(f, '应用更改').click(); await f.settle()
+  assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 0)
+  assert.equal(f.location.reloads, 0); assert.equal(f.find('app-panel-agent'), panel)
+  assert.match(f.find('application-manager').textContent, /保存所有已打开应用/)
+})
+
+test('failed initialization with a rejected dispose preserves the returned mount and prevents replacement or activation', async t => {
+  let activations = 0, disposals = 0
+  const f = await fixture(t, async url => Response.json(url.includes('/app-packages') ? packageStatus() : [product('running')]), {
+    configureDocument(document) {
+      const createElement = document.createElement
+      document.createElement = tag => {
+        const element = createElement(tag)
+        Object.defineProperties(element.dataset, {
+          active: { set() { activations++; throw Error('setActive failed after mount') } },
+          failDispose: { get() { disposals++; return 'true' } },
+        })
+        return element
+      }
+    },
+  })
+  await f.settle()
+  const panel = f.find('app-panel-agent'), context = panel.testContext
+  assert.equal(activations, 1); assert.equal(disposals, 1); assert.equal(context.signal.aborted, true)
+  assert.match(f.notice().textContent, /应用界面清理失败/)
+  const reload = f.cardButton('重新加载界面'); assert.ok(reload); assert.equal(reload.disabled, true)
+  reload.click(); f.find('close-application').click(); f.refresh(); await f.settle()
+  assert.equal(f.find('app-panel-agent'), panel); assert.equal(panel.testContext, context)
+  assert.equal(activations, 1); assert.equal(disposals, 1)
+  await showPackageManager(f); packageButton(f, '应用更改').click(); await f.settle()
+  assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 0); assert.equal(f.location.reloads, 0)
+})
+
+test('closing during mount waits for its returned handle and retains a failed cleanup', async t => {
+  const f = await fixture(t, async url => Response.json(url.includes('/app-packages') ? packageStatus() : [product('running')]), {
+    configureDocument(document) {
+      const createElement = document.createElement
+      document.createElement = tag => {
+        const element = createElement(tag), append = element.append
+        element.append = function(...children) {
+          append.call(this, ...children)
+          if (this.dataset.appId === 'agent' && children.some(child => child.textContent === 'Mounted application')) {
+            this.dataset.failDispose = 'true'
+            document.getElementById('close-application').click()
+          }
+        }
+        return element
+      }
+    },
+  })
+  await f.settle()
+  const panel = f.find('app-panel-agent'), context = panel.testContext
+  assert.equal(context.signal.aborted, true); assert.equal(panel.dataset.active, undefined)
+  assert.match(f.notice().textContent, /应用界面清理失败/)
+  panel.dataset.failDispose = 'false'; f.find('close-application').click(); await f.settle()
+  assert.equal(f.find('app-panel-agent'), panel); assert.equal(panel.testContext, context); assert.equal(panel.dataset.disposed, undefined)
+  await showPackageManager(f); packageButton(f, '应用更改').click(); await f.settle()
+  assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 0); assert.equal(f.location.reloads, 0)
+})
+
+test('version activation freezes shell controls and route changes until all interfaces have exited', async t => {
+  const preparing = deferred(); let posted = false, activationRequestId
+  const f = await fixture(t, async (url, options) => {
+    if (url.endsWith('/activations') && options.method === 'POST') { posted = true; activationRequestId = JSON.parse(options.body).requestId; return preparing.promise }
+    if (url.endsWith('/commit')) {
+      assert.equal(f.find('app-panel-agent').dataset.disposed, 'true'); assert.equal(f.find('app-panel-second-app').dataset.disposed, 'true')
+      return Response.json(activationReceipt('completed', activationRequestId))
+    }
+    if (url.includes('/app-packages')) return Response.json(packageStatus())
+    return Response.json([product('running'), secondProduct()])
+  }, { workspace: workspaceTwoApplications })
+  await f.waitFor(() => f.find('app-panel-second-app')?.textContent === 'Mounted application')
+  await showPackageManager(f); packageButton(f, '应用更改').click(); await f.waitFor(() => posted)
+  assert.equal(f.find('application-panels').inert, true); assert.equal(f.find('close-application').disabled, true); assert.equal(f.find('stop-application').disabled, true); assert.equal(f.find('app-shortcut-second-app').disabled, true)
+  const context = f.find('app-panel-agent').testContext; context.route.navigate('should-not-change')
+  assert.equal(context.route.read(), 'saved')
+  f.location.hash = '#/apps/second-app/should-not-change'; f.window.dispatch('hashchange'); await f.settle(); assert.equal(f.location.hash, '#/apps/agent/saved')
+  assert.equal(f.find('app-panel-agent').dataset.disposed, undefined)
+  preparing.resolve(Response.json(activationReceipt('prepared', activationRequestId))); await f.waitFor(() => f.location.reloads === 1)
+  assert.deepEqual(JSON.parse(f.storage.get('anybox.apps.workspace.v1')), workspaceTwoApplications)
+  assert.equal(f.calls.filter(call => call.url.includes('/products/') && call.options.method === 'POST').length, 0)
+})
+
+test('a draft in another mounted application prevents version activation and preserves both panels', async t => {
+  const f = await fixture(t, async url => Response.json(url.includes('/app-packages') ? packageStatus() : [product('running'), secondProduct()]), { workspace: workspaceTwoApplications })
+  await f.waitFor(() => f.find('app-panel-second-app')?.textContent === 'Mounted application'); const panel = f.find('app-panel-second-app'); panel.dataset.blockClose = 'true'
+  await showPackageManager(f); packageButton(f, '应用更改').click(); await f.settle()
+  assert.equal(f.calls.filter(call => call.url.endsWith('/activations') && call.options.method === 'POST').length, 0)
+  assert.equal(f.find('app-panel-second-app'), panel); assert.equal(panel.dataset.disposed, undefined); assert.equal(f.find('app-panel-agent').dataset.disposed, undefined)
+  assert.equal(f.find('application-panels').inert, false); assert.match(f.find('application-manager').textContent, /保存所有已打开应用/)
+  panel.dataset.blockClose = 'false'
+})
+
+test('failed interface disposal retains the shell fence and cannot request a process restart', async t => {
+  let activationRequestId
+  const f = await fixture(t, async (url, options) => {
+    if (url.endsWith('/cancel')) return Response.json(activationReceipt('cancelled', activationRequestId))
+    if (url.endsWith('/activations') && options.method === 'POST') { activationRequestId = JSON.parse(options.body).requestId; return Response.json(activationReceipt('prepared', activationRequestId)) }
+    return Response.json(url.includes('/app-packages') ? packageStatus() : [product('running'), secondProduct()])
+  }, { workspace: workspaceTwoApplications })
+  await f.waitFor(() => f.find('app-panel-second-app')?.textContent === 'Mounted application'); f.find('app-panel-agent').dataset.failDispose = 'true'
+  await showPackageManager(f); packageButton(f, '应用更改').click(); await f.waitFor(() => f.calls.some(call => call.url.endsWith('/cancel'))); await f.settle()
+  assert.equal(f.calls.filter(call => call.url.endsWith('/commit')).length, 0); assert.equal(f.location.reloads, 0)
+  assert.equal(f.find('application-panels').inert, true); assert.equal(f.find('close-application').disabled, true)
+  assert.equal(f.find('app-panel-second-app').dataset.disposed, 'true', 'another accepted disposal is joined even after one fails')
+})
+
+test('completed uninstall removes only its workspace view and replaces the active route before safe reload', async t => {
+  const identity = { ...packageIdentity, appId: 'agent' }; let requestId
+  const f = await fixture(t, async (url, options) => {
+    if (url.endsWith('/activations') && options.method === 'POST') { const body = JSON.parse(options.body); requestId = body.requestId; assert.equal(body.kind, 'remove'); assert.deepEqual(body.appIds, ['agent']); return Response.json({ ...activationReceipt('prepared', requestId), kind: 'remove', targets: [{ identity }] }) }
+    if (url.endsWith('/commit')) {
+      assert.equal(f.find('app-panel-agent').dataset.disposed, 'true'); assert.equal(f.find('app-panel-second-app').dataset.disposed, 'true')
+      return Response.json({ ...activationReceipt('completed', requestId), kind: 'remove', targets: [{ identity }, { identity: { ...identity, version: '0.9.0' } }] })
+    }
+    if (url.includes('/app-packages')) return Response.json({ ...packageStatus(), installations: [{ appId: 'agent', selected: identity, pending: null, installed: [{ identity, state: 'installed' }] }] })
+    return Response.json([product('running'), secondProduct()])
+  }, { workspace: workspaceTwoApplications })
+  await f.waitFor(() => f.find('app-panel-second-app')?.textContent === 'Mounted application')
+  f.find('application-manager').showPopover(); await f.waitFor(() => packageButton(f, '卸载 agent') && !packageButton(f, '卸载 agent').disabled)
+  packageButton(f, '卸载 agent').click(); await f.waitFor(() => f.location.reloads === 1)
+  assert.equal(f.find('app-panel-agent'), null); assert.ok(f.find('app-panel-second-app'))
+  assert.equal(f.location.hash, '#/apps/second-app/draft')
+  assert.deepEqual(JSON.parse(f.storage.get('anybox.apps.workspace.v1')), { tabs: [workspaceTwoApplications.tabs[1]], activeId: 'second-app' })
+  assert.equal(f.calls.filter(call => call.url.includes('/products/') && call.options.method === 'POST').length, 0)
+})
+
+test('restart drops stale removed views from completed uninstall facts while preserving every other application', async t => {
+  const identity = { ...packageIdentity, appId: 'second-app' }
+  const f = await fixture(t, async url => {
+    if (url.includes('/app-packages')) return Response.json({ ...packageStatus(), activations: [{ ...activationReceipt('completed'), kind: 'remove', targets: [{ identity }] }], installations: [{ appId: 'second-app', selected: null, pending: null, installed: [{ identity, state: 'removed' }] }] })
+    return Response.json([product('running')])
+  }, { workspace: workspaceTwoApplications })
+  await f.settle(); assert.equal(f.find('app-panel-second-app'), null)
+  assert.deepEqual(JSON.parse(f.storage.get('anybox.apps.workspace.v1')), { tabs: [workspaceTwoApplications.tabs[0]], activeId: 'agent' })
+  assert.ok(f.calls.every(call => call.options.method !== 'POST'))
 })

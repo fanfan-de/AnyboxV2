@@ -3,9 +3,9 @@ import { test } from 'node:test'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createPrivateRpc } from '../dist/desktop/rpc.js'
-import { installDesktopWorkerRpc } from '../dist/desktop/worker-runtime.js'
-import { startDesktopClient } from '../dist/entrypoints/desktop-client.js'
+import { createPrivateRpc } from '../packages/host/dist/desktop/rpc.js'
+import { installDesktopWorkerRpc } from '../packages/host/dist/desktop/worker-runtime.js'
+import { startDesktopClient } from '../packages/distribution/dist/entrypoints/desktop-client.js'
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const tick = () => new Promise(resolve => setImmediate(resolve))

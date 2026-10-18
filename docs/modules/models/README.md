@@ -39,7 +39,7 @@ flowchart TD
 
 箭头表示服务提供方向。组件全部安装在应用的同一个 Nya 根上；这是文档按职责组织的模块，不是新增 Context。各 `apply(ctx, config, deps)` 使用当前依赖快照，资源清理由 Effect 和 Nya 依赖顺序驱动。
 
-模型配置数据库、目录缓存数据库和业务数据库分别独占连接且路径不可相同。Key 值仅在 Vault 与私有 execution 中存在。Models 保存非秘密引用与 `historyScopeEpoch`；原生增量记录交由受信 Session 保存。原生事件可能包含签名、加密 continuation 或工具 ID，浏览器只能消费宿主生成的白名单展示投影。
+当前模型配置使用独占 JSON 文件，目录缓存和业务数据分别独占 SQLite 连接；配置 JSON、旧配置导入库、目录缓存库和业务库路径不可相同。可替换的 SQLite 配置提供方同样要求排他所有权。Key 值仅在 Vault 与私有 execution 中存在。Models 保存非秘密引用与 `historyScopeEpoch`；原生增量记录交由受信 Session 保存。原生事件可能包含签名、加密 continuation 或工具 ID，浏览器只能消费宿主生成的白名单展示投影。
 
 ## 核心数据关系
 
@@ -49,9 +49,9 @@ flowchart TD
 
 ## 装配与使用
 
-包要求 Node.js 22.13+。当前宿主在打开所选执行端 Agent 时调用 [installHarnessServerModels](../../../src/applications/harness/server-models.ts)，一般装配关系为：
+包要求 Node.js 22.13+。当前宿主在打开所选执行端 Agent 时调用 [installHarnessServerModels](../../../packages/app-harness/src/server-models.ts)，一般装配关系为：
 
-1. 安装 `createModelsStoreComponent({ path })`、`createModelsVaultComponent({ namespace })` 和 `createModelsComponent()`，等待 Nya 激活。
+1. 安装 `createModelsJsonStoreComponent({ path })`、`createModelsVaultComponent({ namespace })` 和 `createModelsComponent()`，等待 Nya 激活；需要 SQLite 配置提供方时替换为 `createModelsStoreComponent({ path })`。
 2. 安装需要的协议组件。没有驱动时仍可查看和保存非秘密配置，执行保持不可用。
 3. 按需安装来源、独立缓存和 `createModelsCatalogComponent()`。目录故障不应成为已配置模型执行的实时依赖。
 4. 用根控制面的 `context.get()` 获取当前 `models.settings` / `models`；配置连接后通过 `models.list()` 选择配置 ID。
@@ -65,4 +65,4 @@ flowchart TD
 
 模块检查：`npm --prefix packages/models test`。项目完整验收：`npm run check`。测试使用内存 Vault、模拟流和回环 HTTP，不代表所有真实平台凭据存储或线上服务已验收。
 
-关联资料：[Models 架构](../../architecture/models-module.md)、[原生协议框架设计](../../native-protocol-agent-framework-design.md)、[目录验证记录](../../models-catalog-validation.md)。这些专题保留设计与验收背景，本目录按当前组件职责提供查阅入口。
+关联资料：[Models 包公共契约](../../../packages/models/README.md)、[原生协议框架设计](../../native-protocol-agent-framework-design.md)、[Web 客户端验收](../../web-client-design.md#验收)。本目录按当前组件职责提供查阅入口。

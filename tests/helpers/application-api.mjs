@@ -1,9 +1,10 @@
-import { createApplicationApiComponent } from '../../dist/host/component.js'
-import { createHarnessServerHttpComponent } from '../../dist/applications/harness/http/harness-http.js'
-import { createProductActivity } from '../../dist/host/applications/activity.js'
-import { createApplicationCatalog } from '../../dist/host/applications/registration.js'
-import { harnessDefinition, harnessServerHttp } from '../../dist/applications/harness/registration.js'
-import { productsServiceKey, productActivityServiceKey } from '../../dist/host/applications/contracts.js'
+import { createApplicationApiComponent } from '../../packages/host/dist/component.js'
+import { createHarnessServerHttpComponent } from '../../packages/app-harness/dist/http/harness-http.js'
+import { createProductActivity } from '../../packages/host/dist/applications/activity.js'
+import { createApplicationCatalog } from '../../packages/host/dist/applications/registration.js'
+import { harnessDefinition, harnessServerHttp } from '../../packages/app-harness/dist/registration.js'
+import { productsServiceKey, productActivityServiceKey } from '../../packages/application-api/dist/index.js'
+import { hostAccessServiceKey } from '../../packages/application-api/dist/node.js'
 
 /** Fixtures install one enabled Harness; production uses the persistent controller. */
 export function createFixtureApplicationApiComponent(root, agents, port = 0, options = {}) {
@@ -20,7 +21,14 @@ export function createFixtureApplicationApiComponent(root, agents, port = 0, opt
   return { name: 'test-http-installation', async apply(ctx) {
     let handler, listener
     ctx.effect(() => async () => { await listener?.dispose(); await handler?.dispose() })
-    handler = root.installComponent(createHarnessServerHttpComponent(root, agents, options)); await handler
+    handler = root.installComponent(createHarnessServerHttpComponent(root, agents, {
+      inject: [productActivityServiceKey, ...(options.authenticated ? [hostAccessServiceKey] : [])],
+      resolve: deps => ({
+        activity: deps[productActivityServiceKey],
+        instanceId: () => deps[hostAccessServiceKey]?.instance.instanceId ?? null,
+        ...(options.authenticated ? { onRevoked: callback => deps[hostAccessServiceKey].onRevoked(callback) } : {}),
+      }),
+    })); await handler
     listener = root.installComponent(createApplicationApiComponent(root, catalog, port, options)); await listener
   } }
 }

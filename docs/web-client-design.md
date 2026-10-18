@@ -1,26 +1,26 @@
 # 薄 Web 客户端第一版
 
-> Anybox Harness 浏览器与客户端网关分别位于 `src/applications/harness/web/` 和 `src/applications/harness/client/`；Anybox 外壳位于 `src/host/web/`。所有正式业务请求经连接 ID 路由。以下原有业务 API、对话树和展示语义沿用；旧本机直连与单进程启动描述已由[模块边界](harness-module-boundary.md)、[部署说明](harness-server-deployment.md)取代。
+> Anybox Harness 浏览器与客户端网关分别位于 `packages/app-harness/src/web/` 和 `packages/app-harness/src/client/`；Anybox 外壳位于 `packages/host/src/web/`。所有正式业务请求经连接 ID 路由。以下原有业务 API、对话树和展示语义沿用；旧本机直连与单进程启动描述已由[模块边界](harness-module-boundary.md)、[部署说明](harness-server-deployment.md)取代。
 
 状态：本机单用户参考实现，2026-10-02。已接入公共模型目录、四种原生协议、原生参数配置、按会话绑定协议与安全 Turn 视图，以及项目导航、会话、项目文件的三栏工作区；保留最多四个跨项目会话面板、拖拽分屏、标签页内布局恢复、会话树显式查看位置、多 Run 状态和 Nya Event → SSE 变更通知。旧文本会话仅供查看。验证使用临时数据库与受控模型，不访问真实凭据或工作区数据库。
 
 ## 边界
 
-浏览器通过同源连接网关转发到宿主 `/api/v1`。应用宿主在同一个 Nya 根上常驻业务存储、访问认证、产品管理、活动准入及 `host-application-api`；打开 harness server 时安装 `packages/models` 的配置存储、系统凭据、模型服务、公开目录来源/缓存/服务、Responses、标准 Chat Completions、Anthropic Messages 和 Gemini Interactions，同时装配 harness server 的执行组件。客户端外壳常驻 app.client-http 与连接库 client.connections，打开 Anybox Harness 后才在客户端根安装目录选择器和代理；本地/远程目标的管理界面属于 Anybox Harness。统一 Provider/Model 定义带 user/external 来源，多个 ProviderConnection 同时可用，实际执行使用 ModelConfiguration；这些都是数据记录，不为每条连接创建 Context 或组件。Models 配置直接使用独立的 `data/models.json`，公开目录使用 `data/models-catalog.sqlite`，业务会话保留在 `data/harness.sqlite`；JSON、旧 SQLite 导入源和各数据库不能共用文件或文件别名。路径和凭据命名空间可由启动配置指定。JSON 配置只保存凭据引用，密钥值仅存入系统凭据库。
+浏览器通过同源连接网关转发到宿主 `/api/v1`。应用宿主在同一个 Nya 根上常驻业务存储、访问认证、产品管理、活动准入及 `host-application-api`；打开 harness server 时安装 `packages/models` 的配置存储、系统凭据、模型服务、公开目录来源/缓存/服务、Responses、标准 Chat Completions、Anthropic Messages 和 Gemini Interactions，同时装配 harness server 的执行组件。客户端外壳常驻 app.client-http；目录基础适配由默认组合登记惰性提供方，按兼容消费者装配和最后释放；可选目录能力缺失时由应用降级。打开 Anybox Harness 后在客户端根安装本应用的连接组件 client.connections 和代理；本地/远程目标的管理界面属于 Anybox Harness。统一 Provider/Model 定义带 user/external 来源，多个 ProviderConnection 同时可用，实际执行使用 ModelConfiguration；这些都是数据记录，不为每条连接创建 Context 或组件。Models 配置直接使用独立的 `data/models.json`，公开目录使用 `data/models-catalog.sqlite`，业务会话保留在 `data/harness.sqlite`；JSON、旧 SQLite 导入源和各数据库不能共用文件或文件别名。路径和凭据命名空间可由启动配置指定。JSON 配置只保存凭据引用，密钥值仅存入系统凭据库。
 
 `ANYBOX_LLM_*` 保留为新 Models 数据库的初次迁入参数；已有连接/配置不会被环境变量覆盖。Models 能力首次启用时建立显式用户定义、迁入连接和稳定 `default` 配置，将旧参数转换为对应协议的 `parameters`，并尝试把旧凭据复制到 Models 管理的系统凭据条目；旧密钥缺失或系统凭据库暂不可访问时仍允许进入设置。后续连接、模型、生成参数及 Key 可通过 `models.settings` 修改并原子保存 JSON，不需要重启应用。能力在界面只读展示，人工修正需停止所属执行设备的 Agent，编辑 `configurations[].capabilities` 后重新启动；文件是实际配置存储，无运行期监听，运行中改文件使后续保存返回冲突。文件结构与兼容导入见 [JSON 配置存储](modules/models/json-store.md)。变量详情见 [README](../README.md#本机-web-界面)。执行宿主拥有稳定业务 HTTP 监听器，客户端应用外壳提供静态页面；进程信号由入口处理，经应用宿主 `close()` 关闭整个根。harness server 负责项目、Session、Run 准入、幂等、工具执行、取消和结算；协议 Driver/Loop 通过 Runtime 执行并生成安全视图，Models 提供原生 execution、凭据和传输边界。
 
-页面使用原生 TypeScript、HTML 和 CSS。`src/host/web/client.ts` 只负责应用目录、打开和关闭，`harness-page-client.ts` 在 Anybox Harness 内管理连接、设备目标和工作区生命周期，`agent-client.ts` 挂载工作区及设置分类，`models-client.ts` 管理连接/模型配置表单及跨面板共享的已保存模型列表，`models-directory-client.ts` 独立管理公共目录状态、查询、刷新和短暂轮询；`workspace-layout.ts` 提供纯布局函数，`workspace-client.ts` 管理工作区，`session-client.ts` 管理各会话请求与 Run 视图快照，`session-view.ts` 管理面板和稳定的 Turn 挂载点，`protocols/view.ts` 管理共享 Turn 容器，四协议内容模块分别实现块渲染并使用服务端公共展示白名单与 reducer，`tool-trace.ts` 归并统一工具库及旧 Bash/Apply Patch 的展示状态，`prompt-client.ts` 保留 Prompt 设置，`tools-client.ts` 管理固定执行设备上的 Agent 工具选择。浏览器运行时代码只使用浏览器 API；Models 类型导入仅用于编译检查，不向浏览器加载 Nya 或 Models 的服务端代码。
+页面使用原生 TypeScript、HTML 和 CSS。`packages/host/src/web/client.ts` 只负责应用目录、打开和关闭，`harness-page-client.ts` 在 Anybox Harness 内管理连接、设备目标和工作区生命周期，`agent-client.ts` 挂载工作区及设置分类，`models-client.ts` 管理连接/模型配置表单及跨面板共享的已保存模型列表，`models-directory-client.ts` 独立管理公共目录状态、查询、刷新和短暂轮询；`workspace-layout.ts` 提供纯布局函数，`workspace-client.ts` 管理工作区，`session-client.ts` 管理各会话请求与 Run 视图快照，`session-view.ts` 管理面板和稳定的 Turn 挂载点，`protocols/view.ts` 管理共享 Turn 容器，四协议内容模块分别实现块渲染并使用服务端公共展示白名单与 reducer，`tool-trace.ts` 归并统一工具库及旧 Bash/Apply Patch 的展示状态，`prompt-client.ts` 保留 Prompt 设置，`tools-client.ts` 管理固定执行设备上的 Agent 工具选择。浏览器运行时代码只使用浏览器 API；Models 类型导入仅用于编译检查，不向浏览器加载 Nya 或 Models 的服务端代码。
 
 模型服务主页面展示“我的连接”；添加连接流程以可搜索、可滚动的列表同时展示多个 Provider 定义，按定义 ID 显示来源、已有连接数量及当前选中项。点击提供方后在右侧填写连接配置，连接方案、模型目录预览和自定义连接入口沿用原流程。列表选择仅填写草稿，不创建连接或修改会话选模；目录状态更新保留列表按钮焦点。
 
-`src/host/component.ts` 只注入常驻的产品、活动及访问服务，接收通用应用目录；`http-server.ts` 根据已注册路由确定应用并登记活动。harness server 自己的 `harness-http.ts` 在首次异步工作前从受信根捕获本次服务快照，`http/handler.ts` 处理业务路由。业务查询取自 `harness.sessions`，执行控制取自 `harness.runs`，已保存模型查询取自 `models`，配置和 Key 操作取自 `models.settings`，统一目录定义也取自 `models.settings`；`models.catalog` 仅提供来源状态和刷新。Web 不依赖旧 `credentials.settings`，也不向前端提供凭据读取服务或协议注册服务。
+`packages/host/src/component.ts` 只注入常驻的产品、活动及访问服务，接收通用应用目录；`http-server.ts` 根据已注册路由确定应用并登记活动。harness server 自己的 `harness-http.ts` 在首次异步工作前从受信根捕获本次服务快照，`http/handler.ts` 处理业务路由。业务查询取自 `harness.sessions`，执行控制取自 `harness.runs`，已保存模型查询取自 `models`，配置和 Key 操作取自 `models.settings`，统一目录定义也取自 `models.settings`；`models.catalog` 仅提供来源状态和刷新。Web 不依赖旧 `credentials.settings`，也不向前端提供凭据读取服务或协议注册服务。
 
 公开 Session 包含选定的 `modelId`、`historyMode` 和首次原生 Run 固定的 `protocolId`；公开 Run 包含实际 `modelId`、调用者显式指定的 `requestedModelId`、`protocolBinding` 和不含秘密的 `modelSnapshot`（新写入 schemaVersion 3，含原生参数；旧快照只读且不重写）。Agent 指令、Prompt 内容快照、execution 句柄、原生续轮记录与密钥不进入普通 Session/Run DTO。Bash 命令和输出摘要、Apply Patch 预览和结果仍可展示；Prompt 管理单独返回可管理文档和版本。模型管理接口仅返回 Key 是否已配置，绝不回传密钥值或内部凭据引用。
 
 工作区设置增加“Agent 工具”，按所选执行设备和 Agent 查询统一工具目录及独立修订。用户按功能分类、名称/描述与来源过滤后自由勾选单个工具，来源不绑定模型或其他工具；明确依赖由用户补选后才可保存。保存仅影响新会话，空选择明确关闭工具。每个 Agent 保留独立草稿，设备请求目标固定，冲突保留当前选择并要求显式重新加载；未保存或进行中的保存参与离开检查，关闭取消读取并等待已提交写入。toolId 和固定声明不添加 instanceId，会话等业务资源仍归原设备。
 
-Session 创建事务复制工具 ID、版本和完整声明，输入区只读显示原始工具名称与来源。首次 Run 保存 initialization v2，此后同会话所有分支和重新生成使用固定声明；已有 v1 历史保留原 Bash/Apply Patch 读取兼容。工具卡显示真实命令、进程状态/退出码/信号、输出、文件事实及搜索结果，原始 JSON 可展开。图片只按本会话已保留引用生成认证缩略图 URL；每个 Run 的轨迹组展示最新已观察计划或 todo 列表。通用进程关闭事件仅白名单公开退出字段，并补充对应 exec/stdin 卡的最终状态；取消、清理失败仍展示已发生的退出、部分文件变更和图片事实。验证见 `tests/agent-tools.test.mjs`、`tests/tools-client.test.mjs`、`tests/tool-call-view.test.mjs` 和 `tests/tool-trace.test.mjs`。
+Session 创建事务复制工具 ID、版本和完整声明，输入区只读显示原始工具名称与来源。首次 Run 保存 initialization v2，此后同会话所有分支和重新生成使用固定声明；已有 v1 历史保留原 Bash/Apply Patch 读取兼容。工具卡显示真实命令、进程状态/退出码/信号、输出、文件事实及搜索结果，原始 JSON 可展开。图片只按本会话已保留引用生成认证缩略图 URL；每个 Run 的轨迹组展示最新已观察计划或 todo 列表。通用进程关闭事件仅白名单公开退出字段，并补充对应 exec/stdin 卡的最终状态；取消、清理失败仍展示已发生的退出、部分文件变更和图片事实。验证见 `tests/agent-tools.test.mjs`、`tests/tools-client.test.mjs`、`tests/tool-call-view.test.mjs` 和 `packages/app-harness/tests/tool-trace.test.mjs`。
 
 停止 harness server 时同步冻结准入：有用户任务或写入则拒绝；空闲时结束观察并等待只读请求退出，再释放执行组件。关闭 Anybox Harness 客户端只释放连接、目录选择和代理，不停止远程 Run。稳定 HTTP 监听器保持运行。应用整体关闭先关闭准入并等待控制与装配退出，再同时进行 Nya 根清理与 HTTP 排空；HTTP 的 Run 保留租约需要根清理取消后实际退出，不能在根清理前等待这些租约。目录刷新请求断连会取消其来源操作并等待 reader 实际退出。Web 单独关闭不取消已交给 harness server 的 Run，应用根关闭则按依赖顺序取消并等待所有执行。前端不保存权威业务状态，不直接连接 Provider、SQLite 或系统凭据库。
 
@@ -153,7 +153,7 @@ HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run
 
 ## 页面流程
 
-页面按浏览器可视高度布局，采用旧版 Anybox 桌面端经典主题的中性灰形态。桌面由宿主 54px 应用窄条、Anybox Harness 的 236px 项目与会话侧栏、剩余宽度的会话工作区组成；工作区顶栏与各面板标签式标题栏均为 40px。主画布为 `#f2f2f2`，侧栏为 `#e8e8e8`，应用窄条为 `#ededed`，使用细分割线、小圆角和低对比度选中背景。应用窄条呈现目录入口和宿主控制，工作区工具栏控制侧栏显隐；侧栏顶部仅保留右侧添加项目按钮，不显示应用名称文字；下方直接呈现项目与会话树，不重复显示设备名称标题。底部一行呈现紧凑执行设备选择器与设置图标，连接管理移入设置分类。选择器保留屏幕阅读器标签，完整设备名称通过 title 提示。项目树仅展示所选 instanceId 的项目，各项目的会话缩进显示在对应项目下，首次默认展开，可通过项目行左侧箭头独立折叠；折叠状态按完整项目 ID 保存在当前标签页的边栏偏好中，刷新网页或重建工作区后恢复，恢复选中项目不会自动展开，用户点击项目或新建会话时才展开该项目。整棵项目树使用剩余空间统一滚动，子会话列表不单独滚动；项目树与对话记录独立滚动，消息增长不会撑高整页。收起侧栏释放水平空间，已有面板、草稿与查看位置保持不变。来源和迁移边界见[桌面界面迁移记录](./anybox-desktop-ui-migration.md)。
+页面按浏览器可视高度布局，采用旧版 Anybox 桌面端经典主题的中性灰形态。桌面由宿主 54px 应用窄条、Anybox Harness 的 236px 项目与会话侧栏、剩余宽度的会话工作区组成；工作区顶栏与各面板标签式标题栏均为 40px。主画布为 `#f2f2f2`，侧栏为 `#e8e8e8`，应用窄条为 `#ededed`，使用细分割线、小圆角和低对比度选中背景。应用窄条呈现目录入口和宿主控制，工作区工具栏控制侧栏显隐；侧栏顶部仅保留右侧添加项目按钮，不显示应用名称文字；下方直接呈现项目与会话树，不重复显示设备名称标题。底部一行呈现紧凑执行设备选择器与设置图标，连接管理移入设置分类。选择器保留屏幕阅读器标签，完整设备名称通过 title 提示。项目树仅展示所选 instanceId 的项目，各项目的会话缩进显示在对应项目下，首次默认展开，可通过项目行左侧箭头独立折叠；折叠状态按完整项目 ID 保存在当前标签页的边栏偏好中，刷新网页或重建工作区后恢复，恢复选中项目不会自动展开，用户点击项目或新建会话时才展开该项目。整棵项目树使用剩余空间统一滚动，子会话列表不单独滚动；项目树与对话记录独立滚动，消息增长不会撑高整页。收起侧栏释放水平空间，已有面板、草稿与查看位置保持不变。视觉参考相邻旧仓库 Anybox 的 Classic light；字体优先 IBM Plex Sans，再使用系统与中文后备，图标使用内嵌 SVG。
 
 对话和输入框以不超过 880px 的阅读列居中。已保存回答、原生流式回答、消息操作和生成提示共用该列；分屏和窄窗口按各自面板的可用宽度收缩。用户消息靠右显示为浅灰小气泡，助手正文直接置于画布；面板顶部保留起点、上一级和后续分支导航。输入框为细边框、6px 圆角，显示当前 Agent、会话模型选择器、发送起点、发送和取消按钮，文本区按内容增高；Enter 发送，Shift + Enter 换行。新会话与空工作区复用页面内嵌的 `anybox-mark` SVG symbol，点阵猫盒来自旧版静止帧，不请求外部品牌图片。根节点有已有分支时，空状态说明当前查看位置并显示最多三个快捷分支按钮，完整后续分支仍由顶部选择器分页访问；不会自动把最后完成节点当作查看位置。图标操作提供 `title` 悬停提示与 `aria-label` 或屏幕阅读器文本，键盘焦点使用可见描边。
 
@@ -171,7 +171,7 @@ HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run
 
 用户点击“添加项目”先固定目标设备名称、实例身份和连接版本。组合启动器确认本机身份匹配且平台支持时，直接打开系统目录窗口；用户确认后立即向该固定目标登记，取消则结束流程，不再打开应用内对话框。原生能力未确认可用时采用应用内流程；窗口启动或登记失败显示工作区通知，不自动回退或换设备重试。界面停用或关闭会取消启动器并等待本轮操作退出，忽略迟到结果。
 
-远程设备、本机身份未确认或原生能力未确认可用时，打开应用内目录对话框，默认从目标 harness server 的主目录开始，可浏览真实目录、编辑路径、筛选、切换隐藏项和分页。失败保留输入和位置，只有确认当前文件夹后才登记，取消不改变项目列表。有效目录链接进入后显示规范路径。旧版 harness server 缺少浏览能力时在同一对话框手动输入路径并显示升级说明，不使用 window.prompt；对话框不再提供原生窗口快捷按钮。目录启动器、状态控制器和 DOM 视图位于 src/applications/harness/web，HarnessClient 只负责固定目标请求；接口、键盘与焦点、分页清理及升级边界见[项目目录选择](project-directory-picker.md)。列表常驻显示当前设备的项目名称，完整路径通过悬停提示查看，目录不可访问时额外显示状态。页面路由记录项目与可选 Session ID。无需切换项目即可浏览当前设备各项目展开的会话；项目行从文件夹图标开始，不显示独立折叠箭头；点击项目名称选择空工作区“新建会话”的所属项目并切换该项目的会话展开状态，项目行右侧的新建按钮直接在该项目中创建会话，均使用设置中选定的全局 Agent。空工作区新建入口使用该设备项目，原选择属于另一设备时重新选择当前设备的项目；无项目或所选项目不可用时禁用，不沿用另一设备的隐藏项目。行内新建按钮在悬停或键盘聚焦项目行时显示，触屏始终显示。会话行的三个点打开带图标、圆角和阴影的悬浮操作菜单，提供右侧打开、下方打开和归档；菜单不改变列表布局，按窗口边缘向上或向下展开。点击外部、Esc 或执行操作后关闭，Esc 返回触发按钮；方向键与 Home/End 可选择可用操作，停用应用或重绘所属项目列表时清理菜单。已加载会话从首条可用输入在页面内派生标题，依次取祖先路径、直接子节点或已读 Run；未打开、尚无已知输入的列表项回退为 Session ID 摘要，不新增标题接口或持久字段。项目目录后来不可访问时，项目、Session 和 Run 历史数据仍保留，创建会话与新 Run 返回 `project-unavailable`。
+远程设备、本机身份未确认或原生能力未确认可用时，打开应用内目录对话框，默认从目标 harness server 的主目录开始，可浏览真实目录、编辑路径、筛选、切换隐藏项和分页。失败保留输入和位置，只有确认当前文件夹后才登记，取消不改变项目列表。有效目录链接进入后显示规范路径。旧版 harness server 缺少浏览能力时在同一对话框手动输入路径并显示升级说明，不使用 window.prompt；对话框不再提供原生窗口快捷按钮。目录启动器、状态控制器和 DOM 视图位于 packages/app-harness/src/web，HarnessClient 只负责固定目标请求；接口、键盘与焦点、分页清理及升级边界见[项目目录选择](project-directory-picker.md)。列表常驻显示当前设备的项目名称，完整路径通过悬停提示查看，目录不可访问时额外显示状态。页面路由记录项目与可选 Session ID。无需切换项目即可浏览当前设备各项目展开的会话；项目行从文件夹图标开始，不显示独立折叠箭头；点击项目名称选择空工作区“新建会话”的所属项目并切换该项目的会话展开状态，项目行右侧的新建按钮直接在该项目中创建会话，均使用设置中选定的全局 Agent。空工作区新建入口使用该设备项目，原选择属于另一设备时重新选择当前设备的项目；无项目或所选项目不可用时禁用，不沿用另一设备的隐藏项目。行内新建按钮在悬停或键盘聚焦项目行时显示，触屏始终显示。会话行的三个点打开带图标、圆角和阴影的悬浮操作菜单，提供右侧打开、下方打开和归档；菜单不改变列表布局，按窗口边缘向上或向下展开。点击外部、Esc 或执行操作后关闭，Esc 返回触发按钮；方向键与 Home/End 可选择可用操作，停用应用或重绘所属项目列表时清理菜单。已加载会话从首条可用输入在页面内派生标题，依次取祖先路径、直接子节点或已读 Run；未打开、尚无已知输入的列表项回退为 Session ID 摘要，不新增标题接口或持久字段。项目目录后来不可访问时，项目、Session 和 Run 历史数据仍保留，创建会话与新 Run 返回 `project-unavailable`。
 
 面板持有明确的 `viewNodeId` 和 `focusedRunId`，起点默认为虚拟根，不推断最后完成节点。分支导航行右侧提供“对话 / 轨迹”切换，默认对话只显示选中节点的祖先路径和实时回答，保留消息内的思考、工具及引用；后续分支通过直接子节点选择器分页浏览。原生完整节点提供继续、编辑重发和重新生成。轨迹视图按开始时间和 ID 排列整个会话所有分支的 Run，各组标明运行序号、起点及状态，以紧凑角色行展示系统、上下文、用户、助手与工具；记录视图隐藏分支控件并显示“本会话全部运行”，无记录时显示空态。入口显示 `running` 与 `cancelling` 总数，零时隐藏，窄面板缩为数字并保持两项入口可见。失败、取消、中断不会伪装成成功助手回复，主动跟随的 Run 在对话显示简短提示及对应记录入口；旧版 Run 的起点未知标记也保留。“查看回答”切回对话并定位结果节点，“查看步骤”关注并定位对应运行首行和明细。`dialogue-v1` Session 与归档会话均可切换浏览，旧格式输入、选模、编辑重发与重新生成全部禁用，并提示新建会话；不自动导入或拼接为原生历史。
 
@@ -201,7 +201,7 @@ HTTP 等待超时、断开或 Web 单独关闭只释放等待者，不取消 Run
 
 ## 验收
 
-`tests/workspace-layout.test.mjs` 覆盖四方向分割、跨项目移动、上限、关闭收拢、尺寸约束、损坏记录恢复和 URL；`tests/session-client.test.mjs` 覆盖独立运行/取消、关闭和延迟响应、丢响应查键、旧 pending、存储拒绝、revision 合并、显式节点与乱序完成。HTTP 测试验证新增浏览器模块白名单，继续阻止访问宿主模块。
+`packages/app-harness/tests/workspace-layout.test.mjs` 覆盖四方向分割、跨项目移动、上限、关闭收拢、尺寸约束、损坏记录恢复和 URL；`tests/session-client.test.mjs` 覆盖独立运行/取消、关闭和延迟响应、丢响应查键、旧 pending、存储拒绝、revision 合并、显式节点与乱序完成。HTTP 测试验证新增浏览器模块白名单，继续阻止访问宿主模块。
 
 Thread 对话与记录的验收应覆盖模式默认及恢复、全会话记录、活动数量、草稿和两套滚动位置保留、失败/取消/中断提示、查看回答与查看步骤，以及切换时协议 Turn 和自动跟随不丢失。隔离浏览器宿主需检查 1440px、1024px、390px、四分屏、键盘切换、横向溢出、流式输出、应用切换与关闭重开；后端 API、数据库和协议记录格式不因展示切换改变。
 
@@ -217,7 +217,7 @@ Thread 对话与记录的验收应覆盖模式默认及恢复、全会话记录�
 
 `/view` 仍是约 48KiB 的有界安全替换帧，额外的可选 exchange.inputs 与响应 blocks 共用预算，协议记录不改变。轨迹只读已解码的展示字段和工具事件；签名、continuation、认证头及图片 base64 不向浏览器暴露。展示截断、工具摘要截断、读取失败、尚未加载和旧记录缺失分别提示；provisional 明确标为临时。取消、失败及 interrupted 保留真实观察和部分文件事实，恢复发现中断的时间不能伪装为执行结束。没有事件只展示已知输入、已存输出/可用安全展示和状态，不伪造调用与耗时。完整长历史分页和全历史搜索属于后续范围。
 
-`tests/trajectory.test.mjs`、`tests/run-trace.test.mjs`、`tests/tool-trace.test.mjs`、会话控制器/视图、协议投影及 Web HTTP 测试使用本地受控事实验证顺序、设备作用域、四协议输入、工具重复 ID、取消与部分补丁、真实时间重叠、截断、读取并发与缓存、搜索和键盘操作；此验证不访问真实模型或工作区数据库。
+`packages/app-harness/tests/trajectory.test.mjs`、`tests/run-trace.test.mjs`、`packages/app-harness/tests/tool-trace.test.mjs`、会话控制器/视图、协议投影及 Web HTTP 测试使用本地受控事实验证顺序、设备作用域、四协议输入、工具重复 ID、取消与部分补丁、真实时间重叠、截断、读取并发与缓存、搜索和键盘操作；此验证不访问真实模型或工作区数据库。
 
 `tests/run-notifications.test.mjs` 验证提交时序、准确版本、回滚/幂等不通知、监听器故障隔离和分发清理；`tests/run-change-stream.test.mjs` 验证按会话合并、背压、超时和断开清理；`tests/run-change-client.test.mjs` 验证四会话共享连接、重连补查、订阅替换与旧回调失效。会话控制器测试覆盖刷新/写请求/节点导航中的通知；HTTP 测试覆盖真实 Nya→SSE 路径、资源退出后才发布成功、订阅校验、关闭准入竞态及组件重启。
 
@@ -226,13 +226,6 @@ Thread 对话与记录的验收应覆盖模式默认及恢复、全会话记录�
 同日的布局调整另验证了侧栏折叠后保留草稿、800px 阅读列、跨项目四分屏及键盘调宽、390px 窄屏面板切换、抽屉 Tab 循环与 Esc 关闭、设置关闭后的焦点返回、抽屉打开时转回桌面、新建会话与消息提交，以及刷新恢复分屏。`npm run check` 通过（223 项通过，2 项系统凭据库测试按默认门控跳过）。
 
 2026-09-27 的 Event/SSE 浏览器验收使用同一受控宿主，验证跨项目四面板、两个项目中提交后的完成状态及回答自动展示、运行取消、页面刷新后四面板与终态恢复，控制台无错误。`npm run check` 通过（236 项通过，2 项真实凭据库测试按默认门控跳过）。
-
-### 桌面形态迁移验收（2026-09-27）
-
-沿用旧版 Classic 主题与桌面比例，分析与范围见[迁移说明](./anybox-desktop-ui-migration.md)，截图与逐项核对见[视觉验收](../design-qa.md)。本轮仅修改 Web 页面、客户端展示和样式，没有新增后端组件、迁移或模型功能。
-
-`npm run check` 完成：240 项通过，2 项真实凭据库测试按默认门控跳过，0 失败。隔离数据库和本地模型预览验证了发送与回答保存、已有分支选择、跨项目四分屏、390px 窄屏会话切换、五行草稿高度保留、导航抽屉及设置/Prompt 弹窗焦点。两个验证标签页控制台无 error/warn。测试未向真实模型发送请求、未写入真实 Key 或现有工作区数据库。
-
 
 ### 项目分组侧栏验收（2026-09-27）
 
@@ -257,9 +250,9 @@ Chrome 验收使用真正的 Models/Anybox Harness/Web 与临时 SQLite，凭据
 
 `tests/models-directory-web.test.mjs` 使用真实 Nya、三套临时 SQLite、本地 HTTP 和原生 JSON/SSE mock，验证 Anthropic 与 Gemini 的文本、Bash 工具续轮、最终答案，以及代理地址、4096 默认参数、目录移除保留配置、双账号自动基础配置、参数预设、幂等同步重试、失败保旧、断连和关闭等待实际 reader 退出。`tests/models-client.test.mjs` 补充新表单默认值、模态与协议匹配、独立目录读取代次、刷新/查询乱序、分通道错误保留、预先取消不发请求以及关闭后过期成功/失败响应不发布。模块内测试覆盖缓存/ETag/退避、实际退出、旧配置、参数校验、签名私有化和分页发现。
 
-2026-09-28 统一定义接入阶段的 Chrome 验收（此次布局整理前）使用临时 Models/Anybox Harness/Web 宿主和内存凭据、HTTP 替身：在目录选择 Anthropic、调整代理地址并保存一次测试 Key 后，兼容模型自动加入可用列表，基础配置持久保存 4096 输出默认值，弃用模型显示原因。高级模型设置默认折叠；新增 8192 输出的参数预设后基础配置仍在。会话选择自动模型后完成流式文本和 Bash 续轮至最终答案；手动刷新保留未保存的名称/地址，页面重载后会话选择与答案仍在，控制台无 error/warn。复现入口为 `node tests/helpers/catalog-browser-host.mjs`；测试标签页和临时宿主已关闭并清理，完整范围见[验收记录](models-catalog-validation.md)。
+2026-09-28 统一定义接入阶段的 Chrome 验收（此次布局整理前）使用临时 Models/Anybox Harness/Web 宿主和内存凭据、HTTP 替身：在目录选择 Anthropic、调整代理地址并保存一次测试 Key 后，兼容模型自动加入可用列表，基础配置持久保存 4096 输出默认值，弃用模型显示原因。高级模型设置默认折叠；新增 8192 输出的参数预设后基础配置仍在。会话选择自动模型后完成流式文本和 Bash 续轮至最终答案；手动刷新保留未保存的名称/地址，页面重载后会话选择与答案仍在，控制台无 error/warn。复现入口为 `node tests/helpers/catalog-browser-host.mjs`；测试标签页和临时宿主已关闭并清理。
 
-同日的模型服务整理使用 Codex 内置浏览器验证独立添加流程、账号连接列表、模型搜索/状态筛选、统一保存连接与 Key、删除 Key 后整组不可用、参数预设保留原基础配置，以及保存/刷新/切换账号后保留非秘密草稿。新增模型与预设收起后仍能恢复，明确放弃才清除；受控外部修改后保存旧草稿返回冲突，表单内容保留，放弃修改可载入最新参数。窄屏验证单列布局和操作可达性，浏览器无 warning/error。截图与具体步骤见[界面验收](models-catalog-validation.md#模型服务排布与交互整理)。最终 `npm run check`：426 项通过，2 项系统凭据测试按门控跳过，0 失败。
+同日的模型服务整理使用 Codex 内置浏览器验证独立添加流程、账号连接列表、模型搜索/状态筛选、统一保存连接与 Key、删除 Key 后整组不可用、参数预设保留原基础配置，以及保存/刷新/切换账号后保留非秘密草稿。新增模型与预设收起后仍能恢复，明确放弃才清除；受控外部修改后保存旧草稿返回冲突，表单内容保留，放弃修改可载入最新参数。窄屏验证单列布局和操作可达性，浏览器无 warning/error。最终 `npm run check`：426 项通过，2 项系统凭据测试按门控跳过，0 失败。
 
 ### 原生 Turn 视图与只读历史验收（2026-09-28）
 
@@ -289,7 +282,7 @@ Web 相关 115 项测试通过，覆盖原生参数与启动转换、Session 选
 
 ## 通用应用工作区
 
-根 HTML 仅包含外壳、应用入口与无装饰挂载容器；Anybox Harness 模板和专属样式位于 `web/apps/agent`，入口为 `src/applications/harness/web/harness-app.ts`。外壳动态加载注册 Web 入口，保持后台应用挂载；全局路由、应用切换与恢复见[通用宿主设计](products-v1.md)。Anybox Harness 直接呈现一个工作区，不再添加功能页顶栏。侧栏底部将一处紧凑“执行设备”选择器和设置图标放在同一行，项目列表在其上方独立滚动。选择器控制侧栏项目与会话树、新增项目及模型、Prompt 设置的设备范围；离线或未启动的目标不会回退展示其他设备项目，其所属的不可用占位项目可以保留。已有会话与跨设备分屏保持各自归属，全量资源继续用于面板及全局归档查询；设置内的“管理连接”分类管理设备连接、状态及显式 Agent 启停。设备选择不会自动启动 Agent。设置中的模型与 Prompt 使用所选设备的接口，保存后刷新工作区的模型列表；“已归档会话”分类使用全局查询并提供查看与恢复。连接和归档分类隐藏当前执行设备提示。
+根 HTML 仅包含外壳、应用入口与无装饰挂载容器；Anybox Harness 模板和专属样式位于 `packages/app-harness/web/`，入口为 `packages/app-harness/src/web/harness-app.ts`。外壳动态加载注册 Web 入口，保持后台应用挂载；全局路由、应用切换与恢复见[通用宿主设计](products-v1.md)。Anybox Harness 直接呈现一个工作区，不再添加功能页顶栏。侧栏底部将一处紧凑“执行设备”选择器和设置图标放在同一行，项目列表在其上方独立滚动。选择器控制侧栏项目与会话树、新增项目及模型、Prompt 设置的设备范围；离线或未启动的目标不会回退展示其他设备项目，其所属的不可用占位项目可以保留。已有会话与跨设备分屏保持各自归属，全量资源继续用于面板及全局归档查询；设置内的“管理连接”分类管理设备连接、状态及显式 Agent 启停。设备选择不会自动启动 Agent。设置中的模型与 Prompt 使用所选设备的接口，保存后刷新工作区的模型列表；“已归档会话”分类使用全局查询并提供查看与恢复。连接和归档分类隐藏当前执行设备提示。
 
 Anybox Harness 组件只订阅 `context.route`，连接变更在应用内刷新；关闭界面不改变后台目标。执行设备切换先更新路由中的 host，再重建界面；重建前的工作区更新查看位置时读取当前 host，保留最近的设备选择，只在路由没有 host 时使用装配时的设备。旧模型、Prompt 页面地址只读兼容为统一工作区位置，保留设备归属但丢弃已移除页面的内部位置，不自动打开设置；历史项目与会话位置继续兼容。宿主窄条的应用启停与连接管理内的设备 Agent 启停保持独立，切换已有应用、刷新和恢复位置均不自动启动设备。
 

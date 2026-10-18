@@ -6,7 +6,7 @@
 
 `createComputersComponent(inputs)` 安装根上的 `harness-computers`，提供 `harness.computers: ComputersPort`。组件 inject 本轮 `local-storage` 和 `computer.instance-provider`，登记稳定逻辑资源、按需共享实例激活及持久固定引用。实例提供方实现留在独立端口内，不把 SDK、认证或进程句柄写入业务库。
 
-源码：[component.ts](../../../src/applications/harness/core/computer/component.ts)、[port.ts](../../../src/applications/harness/core/computer/port.ts)、[domain.ts](../../../src/applications/harness/core/computer/domain.ts)。实例提供方见[Worker 路由](worker-router.md)，它按资源的 providerId（`local`/`unit`）确认本机 worker 或远端单元。
+源码：[component.ts](../../../packages/app-harness/src/core/computer/component.ts)、[port.ts](../../../packages/app-harness/src/core/computer/port.ts)、[domain.ts](../../../packages/app-harness/src/core/computer/domain.ts)。实例提供方见[Worker 路由](worker-router.md)，它按资源的 providerId（`local`/`unit`）确认本机 worker 或远端单元。
 
 实例激活按需确认独立本机 worker 的固定 workerId/bootId；命令执行与重启接续由 Operations、Session 和 worker 协作，Computers 本身不执行命令。Computers 不消费 Session、RunRuntime 或 Computer Operations，不反查操作队列。当前不提供跨机器迁移。
 

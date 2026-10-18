@@ -1,0 +1,77 @@
+# Claude Agent 应用业务核心 · 直接消费 Claude Agent SDK
+# 渲染参数见同名 Markdown；容器表示实际进程边界。
+direction: down
+vars: {
+  d2-config: {layout-engine: elk; theme-id: 0}
+}
+classes: {
+  process: {
+    style: {fill: "#f7f9fc"; stroke: "#58718e"; stroke-width: 2; border-radius: 10; font-size: 22}
+  }
+  component: {
+    style: {fill: "#e6f3f0"; stroke: "#35877a"; border-radius: 6; font-size: 19}
+  }
+  adapter: {
+    style: {fill: "#fff0e7"; stroke: "#b8774a"; border-radius: 6; font-size: 19}
+  }
+  subprocess: {
+    style: {fill: "#fff0e7"; stroke: "#b8774a"; stroke-width: 2; border-radius: 6; font-size: 19}
+  }
+  resource: {
+    style: {fill: "#ffffff"; stroke: "#7e8c9b"; border-radius: 6; font-size: 18}
+  }
+  store: {
+    shape: cylinder
+    style: {fill: "#fff8df"; stroke: "#a48936"; font-size: 18}
+  }
+  call: {
+    style: {stroke: "#3b627d"; stroke-width: 2; font-size: 16}
+  }
+  data: {
+    style: {stroke: "#877a52"; stroke-dash: 5; font-size: 16}
+  }
+}
+
+title: |md
+  # Claude Agent 应用 · SDK 消费架构
+  @anybox/app-claude-agent · 应用 ID：claude-agent · 2026-10-18 当前源码
+| {near: top-center}
+
+caller: "Claude Agent Web / API 调用方\n发送消息 · 查看历史 · 回答审批 · 取消 Run" {class: resource}
+
+application: "Claude Agent 执行业务 · 一个进程、一个 Nya 根" {
+  class: process
+  http: "HTTP 组件 · claude-agent.http\n业务路由 · 自有 DTO · 有界 SSE" {class: component}
+  runs: "Runs 组件 · claude-agent.runs\n线程 / Run 准入 · 幂等 · 审批 · 实时投影\n同线程单 Run；跨线程并行\n等待 result + done 后结算" {class: component}
+  store: "Store 组件 · claude-agent.store\n线程与原生 sessionId 映射\nRun / 审批事实 · 重启标记 interrupted" {class: component}
+  sdk: "SDK 适配组件 · claude-agent.sdk\n直接消费进程内 npm 依赖：\n@anthropic-ai/claude-agent-sdk 0.3.301\n帧翻译 · 启停与退出 · 历史读取" {class: adapter}
+  sqlite: "SQLite · claude-agent v2\nthreads / runs / approvals\n保存索引、提示词与结果" {class: store}
+
+  http -> runs: "线程 / Run / 审批 / 历史" {class: call}
+  runs -> store: "索引读写" {class: call}
+  runs -> sdk: "openRun / 取消 / 审批" {class: call}
+  store -> sqlite: "迁移 / 事务 / 查询" {class: data}
+}
+
+claude: "Claude 执行子进程 · 每 Run 一个\n用户安装的 claude\n原生 Agent 循环 · 工具执行 · hooks / 插件" {class: subprocess}
+history: "历史读取子进程 · 每次读取一个\nhistory-worker + SDK 历史 API\ngetSessionMessages / listSessions / getSessionInfo" {class: subprocess}
+
+environment: "用户的 Claude 环境与原生会话文件\n既有登录 / 设置 · 默认 ~/.claude\n完整转录由 Claude 保存，线程用 sessionId 续接" {class: store}
+project: "执行设备上的项目目录\nClaude 工具读取 / 写入 / 执行" {class: resource}
+model: "Claude 环境配置的模型后端\nClaude 自己处理认证与模型请求" {class: resource; shape: cloud}
+
+caller -> application.http: "HTTP 请求 / SSE 事件" {class: call}
+application.sdk -> claude: "query / resume" {class: call}
+application.sdk -> history: "读取历史" {class: call}
+claude -> environment: "继承环境 / 原生会话读写" {class: data}
+history -> environment: "经 SDK 读取原生历史" {class: data}
+claude -> project: "实际工具执行" {class: call}
+claude -> model: "模型调用" {class: call}
+
+footer: |md
+  **执行链**　应用 Runs → 应用 SDK 适配器 → Claude Agent SDK（进程内库）→ 用户 claude 子进程。
+
+  **生命周期**　断开页面只结束观察；取消先 deny 待审批，再 interrupt，超时 close。Unix 等实际子进程退出；Windows 依赖 SDK，退出证明有限。
+
+  **装配**　四个业务组件可在 Anybox 执行根或独立服务根复用；子进程不建立 Nya 根。
+| {near: bottom-center; style.font-size: 17}

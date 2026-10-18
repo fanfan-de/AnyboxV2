@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { getProtocolWebModule, decodeProtocolWebView } from '../dist/applications/harness/web/protocols/modules.js'
-import { projectNativeExchange } from '../dist/applications/harness/core/protocol-agents/projection.js'
+import { getProtocolWebModule, decodeProtocolWebView } from '../packages/app-harness/dist/web/protocols/modules.js'
+import { projectNativeExchange } from '../packages/app-harness/dist/core/protocol-agents/projection.js'
 
 const content = {
   responses: [{ id: 'item-0', type: 'responses.message', phase: 'final_answer', content: [

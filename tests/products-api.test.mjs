@@ -3,13 +3,13 @@ import { test } from 'node:test'
 import { createServer, request as httpRequest } from 'node:http'
 import { Context, FiberState } from '@nya/core'
 import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
-import { hostHttpServiceKey } from '../dist/host/component.js'
-import { createProductActivity } from '../dist/host/applications/activity.js'
-import { productsServiceKey, productActivityServiceKey } from '../dist/host/applications/contracts.js'
+import { hostHttpServiceKey } from '../packages/host/dist/component.js'
+import { createProductActivity } from '../packages/host/dist/applications/activity.js'
+import { productsServiceKey, productActivityServiceKey } from '../packages/application-api/dist/index.js'
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
-import { promptServiceKey } from '../dist/applications/harness/core/prompt/component.js'
+import { promptServiceKey } from '../packages/app-harness/dist/core/prompt/component.js'
 import { startClientGateway } from './helpers/client-gateway.mjs'
-import { allowedProxyPath } from '../dist/applications/harness/client/gateway.js'
+import { allowedProxyPath } from '../packages/app-harness/dist/client/gateway.js'
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const prompt = { id: 'p', name: 'Prompt', description: '', draft: { revision: 1, kind: 'instruction', role: 'system', content: 'test' }, versionIds: [] }

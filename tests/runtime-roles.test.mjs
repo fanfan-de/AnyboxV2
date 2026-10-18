@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 
 const preload = new URL('./helpers/client-role-process.mjs', import.meta.url).href
 function launch(entry, args, directory, guard = 'client') {
-  const child = fork(fileURLToPath(new URL(`../dist/entrypoints/${entry}.js`, import.meta.url)), args, {
+  const child = fork(fileURLToPath(new URL(`../packages/distribution/dist/entrypoints/${entry}.js`, import.meta.url)), args, {
     cwd: directory, execArgv: ['--import', preload], stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     env: { ...process.env, ANYBOX_TEST_ROLE_GUARD: guard, ANYBOX_WEB_PORT: '0', ANYBOX_CLIENT_DATABASE: join(directory, 'client.sqlite'),
       ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_CONFIG: join(directory, 'models.json'),

@@ -1,10 +1,16 @@
 # Anybox 桌面构建与安装
 
-发行目标见[统一发行与独立运行角色](runtime-roles-and-distribution.md)：Windows、macOS、Linux 各自一个完整 Anybox 产品包，包含可独立启动的各角色，支持无头部署。本文的 macOS arm64、DMG/ZIP 与 Node staging 描述均为当前实现，三平台统一成品包和随包无头入口尚待补齐。
+发行目标见[应用模块化分发与按需安装](application-packages-design.md)：Windows、macOS、Linux 使用统一 Anybox 产品与宿主入口，具体应用在线或从本地包安装，所选公共提供方随应用闭包交付，空宿主不默认装配连接/目录/Vault；各角色继续按[发行与运行约定](runtime-roles-and-distribution.md)独立部署。本文的 macOS arm64、DMG/ZIP 与全应用 Node staging 描述均为当前实现；D1.2 另有独立宿主目录和应用归档，正式桌面包装、三平台成品包和随包无头入口尚待补齐。
 
 桌面版与 Web 使用同一份前端源码和 `npm run build` 产物：宿主浏览器外壳、应用 ESM 入口、样式、模板和 Markdown vendor 都继续由现有登记资源图提供。Electron 仅增加桌面窗口、固定 `anybox-app://app/` origin、原生能力适配和后台进程管理。修改前端后，两种交付方式都使用新的构建；已安装桌面版需要更换安装包获取修改。
 
 首版目标是 macOS Apple Silicon（arm64）。Electron 固定为 44.5.1，内置 Node 24.21.0；使用 Electron Forge 8.0.1 生成 `.app`、DMG 和 ZIP。安装用户不需要安装 Node、npm、相邻 NyaCore 或项目源码。此阶段不配置 Developer ID 签名、公证、自动更新、开机启动或 Windows/Linux 桌面发行。打包在重命名、ASAR 和 fuse 修改完成后，以本机 ad hoc 签名修复整个 app 及 helper，并自动运行 `codesign --verify --deep --strict`；保留 Electron 原有 entitlements。这保证本机运行与系统 Keychain 访问，不代表 Developer ID 签名或公证。
+
+## D1.2 独立空宿主与应用包
+
+新增 `npm run artifacts:build -- --out <空目录>` 构建独立空宿主和签名 `.anybox-app`，完整命令、显式 Ed25519 密钥及外部信任配置见[产物手册](modules/package-management/archives.md)。`--host-only` 无需签名私钥。宿主闭包不含应用、Models、Vault 或目录提供方；应用携带各自的离线生产依赖与目标原生文件，安装用户不执行 npm。
+
+该 Node/Electron 目录产物与下文既有完整组合 Forge 命令分开；空宿主的 `desktop.mjs` 是固定 Electron 入口，Node/Electron 运行时仍外部提供。D1.2 不将其宣称为正式 `.app`、签名/公证成品、自包含无头发行或已经接通应用安装。现有 fuse 配置保持不变，后装角色加载在 D1.4 接入。
 
 ## 开发与验证
 
@@ -49,9 +55,9 @@ npm run desktop:make
 
 ## 产物与原生依赖边界
 
-Node release 和桌面打包共同调用 `scripts/stage-application.mjs`。它构建一次、将本地 Models、API-key-manager、NyaCore `npm pack` 为固定 tarball、复制 `dist/` 与 `web/`、验证同一登记资源图与各浏览器资产内容 SHA-256，并记录本地包完整性及锁文件 SHA-256。桌面随后在临时 staging 目录用 `npm ci --omit=dev --include=optional` 安装目标平台依赖；不复制开发目录的 node_modules 或相邻仓库链接。临时目录在成功与失败后都清理，最终安装包独立运行。`node scripts/verify-staged-application.mjs <release-directory>` 可重新核对某次 Node/桌面 staging 产物与当前构建；构建已改变时内容检查会失败。
+Node release 和桌面打包共同调用 `scripts/stage-application.mjs`。它按工作区构建一次，将各 workspace 包和 NyaCore `npm pack` 为固定 tarball，并保留当前物理 CLI 入口与包内静态资源；桌面 staging 在打包 directory-picker tarball 前先编译其原生适配，保证安装后的包也包含该二进制、验证同一登记资源图与各浏览器资产内容 SHA-256，并记录本地包完整性及锁文件 SHA-256。桌面随后在临时 staging 目录用 `npm ci --omit=dev --include=optional` 安装目标平台依赖；不复制开发目录的 node_modules 或相邻仓库链接。临时目录在成功与失败后都清理，最终安装包独立运行。`node scripts/verify-staged-application.mjs <release-directory>` 可重新核对某次 Node/桌面 staging 产物与当前构建；构建已改变时内容检查会失败。
 
-Sharp、`@img` 的 libvips 库与 Keyring 平台二进制完整保留在 `app.asar.unpacked`，打包完成后自动检查 `.node`、`.dylib` 与包入口存在。它们保持原生外部包，不混入浏览器代码、不使用系统全局 libvips；同架构 Node-API 预编译包在 Electron 内实际验证。桌面 staging 单独编译 `dist/desktop/native/mac-dialog.node`，同样解包、检查 arm64 Mach-O 与签名，由 Main 对指定窗口所属的原生目录面板执行取消。发行关闭 `RunAsNode`、`NODE_OPTIONS` 和 Node inspector 的 fuses。离线 Models 目录快照随 Models 包携带，普通构建或打包不刷新目录快照。
+Sharp、`@img` 的 libvips 库与 Keyring 平台二进制完整保留在 `app.asar.unpacked`，打包完成后自动检查 `.node`、`.dylib` 与包入口存在。它们保持原生外部包，不混入浏览器代码、不使用系统全局 libvips；同架构 Node-API 预编译包在 Electron 内实际验证。桌面 staging 单独编译 `packages/directory-picker/dist/native/mac-dialog.node`，同样解包、检查 arm64 Mach-O 与签名，由 Main 对指定窗口所属的原生目录面板执行取消。发行关闭 `RunAsNode`、`NODE_OPTIONS` 和 Node inspector 的 fuses。离线 Models 目录快照随 Models 包携带，普通构建或打包不刷新目录快照。
 
 文件工具的 `@vscode/ripgrep` 和 `picomatch` 保持固定版本；发行验证锁文件中所有 ripgrep 平台可选包的版本、完整性与平台声明，供目标设备 `npm ci` 选择。桌面同时解包 `@vscode` 下的 wrapper 和 arm64 `rg` 可执行文件，执行时把 archive 中的解析路径转换为实际 `app.asar.unpacked` 路径。成品验证拒绝缺失、符号链接、无执行权限或错误架构的二进制，并直接执行随包 `rg --version`；不依赖用户 PATH。`tests/search-release.test.mjs` 用真实 ASAR 打包覆盖解包配置和损坏包拒绝。
 

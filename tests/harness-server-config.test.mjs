@@ -4,8 +4,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@nya/core'
-import { parseHarnessServerConfig } from '../dist/applications/harness/server-config.js'
-import { installHarnessServerModels } from '../dist/applications/harness/server-models.js'
+import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
+import { installHarnessServerModels } from '../packages/app-harness/dist/server-models.js'
 
 test('harness server startup separates persistent Models storage from the one-time legacy import', () => {
   const config = parseHarnessServerConfig({})

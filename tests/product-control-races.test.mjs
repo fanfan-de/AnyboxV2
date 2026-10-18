@@ -4,9 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createProductActivity, createProductActivityComponent } from '../dist/host/applications/activity.js'
-import { createProductsComponent } from '../dist/host/applications/component.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createProductActivity, createProductActivityComponent } from '../packages/host/dist/applications/activity.js'
+import { createProductsComponent } from '../packages/host/dist/applications/component.js'
 import { fakeRuntime, definition } from './helpers/application-runtime.mjs'
 import { deferred } from './helpers/controlled-models.mjs'
 
@@ -152,4 +152,43 @@ test('activity stop closes admission even if one observer cancellation throws', 
   await Promise.resolve(); assert.equal(finished, false)
   first.release(); second.release()
   await assert.rejects(waiting, error => error.phase === 'cleanup')
+})
+
+test('uninstall saves only closed lifecycle targets under control protection and preserves business tables', async t => {
+  const { products, db, calls } = await fixture(t)
+  await products.open('agent')
+  await db.transaction(tx => { tx.execute('CREATE TABLE business_owned (value TEXT)'); tx.execute('INSERT INTO business_owned VALUES(?)', ['keep']) })
+  await assert.rejects(products.setClosedTargets(['agent']), { code: 'product-busy' })
+  const freeze = products.freezeControls(); await freeze.drain()
+  const count = calls.length
+  await products.setClosedTargets(['agent', 'unregistered'])
+  assert.equal(products.get('agent').desiredEnabled, false)
+  assert.equal(products.get('agent').state, 'running')
+  assert.equal(calls.length, count)
+  assert.equal((await db.read(reader => reader.get('SELECT desired_enabled FROM app_product_targets WHERE id=?', ['agent']))).desired_enabled, 0)
+  assert.equal(await db.read(reader => reader.get('SELECT desired_enabled FROM app_product_targets WHERE id=?', ['unregistered'])), undefined)
+  assert.equal((await db.read(reader => reader.get('SELECT value FROM business_owned'))).value, 'keep')
+  await assert.rejects(products.open('agent'), { code: 'product-busy' })
+  freeze.release()
+})
+
+test('a failed uninstall target write leaves the saved target intact and shutdown joins an accepted write', async t => {
+  const { products, db } = await fixture(t)
+  await products.open('agent')
+  const freeze = products.freezeControls(); await freeze.drain()
+  const original = db.transaction.bind(db)
+  db.transaction = async () => { throw Error('target unavailable') }
+  await assert.rejects(products.setClosedTargets(['agent']), { code: 'product-storage-failed' })
+  assert.equal(products.get('agent').desiredEnabled, true)
+  const entered = deferred(), release = deferred()
+  db.transaction = async work => { entered.resolve(); await release.promise; return original(work) }
+  const writing = products.setClosedTargets(['agent']); await entered.promise
+  let stopped = false
+  const stopping = products.stop().then(() => { stopped = true })
+  await Promise.resolve(); assert.equal(stopped, false)
+  release.resolve(); await writing; await stopping
+  db.transaction = original
+  assert.equal(products.get('agent').desiredEnabled, false)
+  await assert.rejects(products.setClosedTargets(['agent']), { code: 'service-unavailable' })
+  freeze.release()
 })

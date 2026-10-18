@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createSessionDefaultsClient, defaultModelDescription, setupSessionDefaults } from '../dist/applications/harness/web/session-defaults-client.js'
+import { createSessionDefaultsClient, defaultModelDescription, setupSessionDefaults } from '../packages/app-harness/dist/web/session-defaults-client.js'
 
 const settle = () => new Promise(resolve => setImmediate(resolve))
 const defaults = (agentId, modelId = null, revision = 0, fallbackModelId = 'startup') =>

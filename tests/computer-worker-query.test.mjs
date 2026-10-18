@@ -5,9 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createComputerWorkerExecutorComponent } from '../dist/applications/harness/core/computer/worker-component.js'
-import { createProjectFilesComponent } from '../dist/applications/harness/core/project-files/component.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createComputerWorkerExecutorComponent } from '../packages/app-harness/dist/core/computer/worker-component.js'
+import { createProjectFilesComponent } from '../packages/app-harness/dist/core/project-files/component.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))

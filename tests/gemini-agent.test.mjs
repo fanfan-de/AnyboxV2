@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { runGemini } from '../dist/applications/harness/core/protocol-agents/gemini.js'
+import { runGemini } from '../packages/app-harness/dist/core/protocol-agents/gemini.js'
 
 const initial = { input: [{ type: 'user_input', content: [{ type: 'text', text: 'Use the tool' }] }] }
 const emptyOutput = { type: 'model_output' }

@@ -98,11 +98,11 @@ Session 增加 `renameSession(sessionId, title, expectedRevision)`，经 harness
 
 ## 相关依据
 
-- [Session 领域与当前摘要函数](../src/applications/harness/core/session/domain.ts)
-- [Session 接受事务与迁移](../src/applications/harness/core/session/sqlite-records.ts)
-- [Session 服务端口](../src/applications/harness/core/session/port.ts)
+- [Session 领域与当前摘要函数](../packages/app-harness/src/core/session/domain.ts)
+- [Session 接受事务与迁移](../packages/app-harness/src/core/session/sqlite-records.ts)
+- [Session 服务端口](../packages/app-harness/src/core/session/port.ts)
 - [Models 原生执行契约](../packages/models/src/native-types.ts)
-- [现有协议绑定](../src/applications/harness/core/protocol-agents/registry.ts)
-- [Run 变更流](../src/applications/harness/http/run-change-stream.ts)
+- [现有协议绑定](../packages/app-harness/src/core/protocol-agents/registry.ts)
+- [Run 变更流](../packages/app-harness/src/http/run-change-stream.ts)
 - [应用活动与停止约定](modules/products/activity.md)
 - [Codex App Server 文档](https://learn.chatgpt.com/docs/app-server)：公开命名保存接口 `thread/name/set`、名称更新事件及列表与读取时返回名称；本计划的组件和恢复策略依据本仓库约束制定。

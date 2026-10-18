@@ -14,7 +14,7 @@ export default {
     executableName: 'Anybox',
     appBundleId: 'com.anybox.desktop',
     appCategoryType: 'public.app-category.productivity',
-    asar: { unpack: '{**/node_modules/{sharp,@img,@napi-rs,@vscode}/**/*,**/dist/desktop/native/mac-dialog.node}' },
+    asar: { unpack: '{**/node_modules/{sharp,@img,@napi-rs,@vscode}/**/*,**/dist/native/mac-dialog.node}' },
     ignore: [/^\/vendor(?:\/|$)/, /^\/deploy(?:\/|$)/, /^\/package-lock\.json$/, /^\/README\.md$/],
     osxSign: false,
     osxNotarize: false,
@@ -32,7 +32,7 @@ export default {
         await execute('/usr/bin/codesign', ['--force', '--deep', '--sign', '-',
           '--preserve-metadata=entitlements,requirements,flags,runtime', app])
         await execute('/usr/bin/codesign', ['--verify', '--strict',
-          join(app, 'Contents/Resources/app.asar.unpacked/dist/desktop/native/mac-dialog.node')])
+          join(app, 'Contents/Resources/app.asar.unpacked/node_modules/@anybox/directory-picker/dist/native/mac-dialog.node')])
         await execute('/usr/bin/codesign', ['--verify', '--deep', '--strict', app])
       }
     },

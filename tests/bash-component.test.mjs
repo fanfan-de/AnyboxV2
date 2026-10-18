@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { projectServiceKey } from '../dist/applications/harness/core/project/component.js'
-import { bashServiceKey, createBashComponent } from '../dist/applications/harness/core/tool/bash-component.js'
+import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
+import { bashServiceKey, createBashComponent } from '../packages/app-harness/dist/core/tool/bash-component.js'
 
 async function fixture(options = {}) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-bash-')))

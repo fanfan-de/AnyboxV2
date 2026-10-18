@@ -2,7 +2,7 @@
 
 [返回 Computer 模块](README.md) · [本机客户端](local-worker-client.md) · [固定项目绑定](worker-project-bindings.md)
 
-`createComputerWorkerExecutorComponent({workerId,bootId})` 在独立 worker 进程的唯一 Nya 根安装 `computer-worker-executor`，提供该根的 `computer.worker`。源码：[执行器](../../../src/applications/harness/core/computer/worker-component.ts)、[执行适配器](../../../src/applications/harness/core/computer/worker-execution.ts)、[服务生命周期](../../../src/applications/harness/core/computer/worker-server.ts)。Authority 根中的同名服务是 HTTP 代理，两个进程不直接 inject 彼此。
+`createComputerWorkerExecutorComponent({workerId,bootId})` 在独立 worker 进程的唯一 Nya 根安装 `computer-worker-executor`，提供该根的 `computer.worker`。源码：[执行器](../../../packages/app-harness/src/core/computer/worker-component.ts)、[执行适配器](../../../packages/app-harness/src/core/computer/worker-execution.ts)、[服务生命周期](../../../packages/app-harness/src/core/computer/worker-server.ts)。Authority 根中的同名服务是 HTTP 代理，两个进程不直接 inject 彼此。
 
 执行器 inject worker 独占的 `local-storage`、`tools.bash`、`tools.apply-patch`、`tools.processes`、`tools.files`、`harness.image-assets` 和 [`computer.worker-attachments`](worker-attachments.md)。每个 Run scope 固定工具依赖代及精确 WorkspaceBinding；所有调用传入 binding.path，不读取 Authority 项目目录或 Session 表。worker 自己安装 Bash、补丁、管道进程、文件与图片组件，资源仍由各组件 Effect 持有。内部 `createWorkerExecution` 是闭包适配器，不另注册组件。
 

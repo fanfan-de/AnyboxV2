@@ -2,7 +2,7 @@
 
 [客户端模块](README.md) · [独立管理操作](../../computer-worker-management.md) · [本机传输](../computers/local-worker-client.md)
 
-`src/applications/harness/client/computer-worker.ts` 的 `createClientComputerComponent(options)` 创建 `client-computer`，提供 `client.computer: ClientComputerPort`。组件无 inject，随 Anybox Harness 客户端安装；`client.gateway` 注入它，按本代 deps 使用服务。它复用 `connectLocalComputerWorker` 的回环观察，固定 `autoStart: false`，不导入 worker 服务装配，不建立额外 Nya 根。
+`packages/app-harness/src/client/computer-worker.ts` 的 `createClientComputerComponent(options)` 创建 `client-computer`，提供 `client.computer: ClientComputerPort`。组件无 inject，随 Anybox Harness 客户端安装；`client.gateway` 注入它，按本代 deps 使用服务。它复用 `connectLocalComputerWorker` 的回环观察，固定 `autoStart: false`，不导入 worker 服务装配，不建立额外 Nya 根。
 
 配置为受信宿主提供的 `directory`、可选 `executable`、`startupTimeoutMs` 与 `requestTimeoutMs`。目录不是浏览器可修改的请求参数。客户端默认控制超时 120 秒；状态读取最多 5 秒。创建／卸载组件不会读写 worker 账本、读取系统单元凭据或启动／停止 worker。
 

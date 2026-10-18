@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { computerScopeAllowsTool } from '../dist/applications/harness/core/unit/domain.js'
+import { computerScopeAllowsTool } from '../packages/app-harness/dist/core/unit/domain.js'
 
 test('Computer tool grants reject empty selections and preserve explicit stable tool IDs', () => {
   const scope = { kind: 'computer', projects: 'all', tools: ['anybox.apply_patch'] }

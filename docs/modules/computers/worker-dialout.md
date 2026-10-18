@@ -2,7 +2,7 @@
 
 [返回 Computer 模块](README.md) · [worker 附着账本](worker-attachments.md) · [单元传输](../units/unit-transport.md) · [本机 worker 客户端](local-worker-client.md)
 
-`createWorkerDialoutComponent({ fetch?, pollWaitMs?, getWaitMs?, requestTimeoutMs? })` 在独立 worker 根安装 `computer-worker-dialout`，提供 `computer.worker-dialout: WorkerDialoutPort`。inject 该根的 `computer.worker`、`computer.worker-attachments` 与 `harness.image-assets`（读取工具图片的原字节）。它是 Computer 单元的网络面：消费附着码、为每个 approved 附着维持一条到远端 harness server 的长轮询循环、把领取到的请求交给本地执行器并回传回执。源码：[组件](../../../src/applications/harness/core/computer/worker-dialout.ts)。
+`createWorkerDialoutComponent({ fetch?, pollWaitMs?, getWaitMs?, requestTimeoutMs? })` 在独立 worker 根安装 `computer-worker-dialout`，提供 `computer.worker-dialout: WorkerDialoutPort`。inject 该根的 `computer.worker`、`computer.worker-attachments` 与 `harness.image-assets`（读取工具图片的原字节）。它是 Computer 单元的网络面：消费附着码、为每个 approved 附着维持一条到远端 harness server 的长轮询循环、把领取到的请求交给本地执行器并回传回执。源码：[组件](../../../packages/app-harness/src/core/computer/worker-dialout.ts)。
 
 ## 配置与接口
 

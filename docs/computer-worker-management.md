@@ -21,21 +21,21 @@ Computer worker 可以由本机客户端或命令行直接管理，无须安装�
 
 ## 无界面命令
 
-构建后使用 `node dist/entrypoints/anybox-main.js computer-worker …`；源码启动也可用 `npm run computer:worker -- …`，后者会先构建。
+构建后使用 `node packages/distribution/dist/entrypoints/anybox-main.js computer-worker …`；源码启动也可用 `npm run computer:worker -- …`，后者会先构建。
 
 ```sh
 # 前台运行，适用于系统服务（旧形式 <directory> 仍兼容）
-node dist/entrypoints/anybox-main.js computer-worker serve ./data/worker
+node packages/distribution/dist/entrypoints/anybox-main.js computer-worker serve ./data/worker
 # 明确启动后台进程或复用现有实例
-node dist/entrypoints/anybox-main.js computer-worker start ./data/worker
+node packages/distribution/dist/entrypoints/anybox-main.js computer-worker start ./data/worker
 # 只读，不创建数据目录或启动进程
-node dist/entrypoints/anybox-main.js computer-worker status ./data/worker
+node packages/distribution/dist/entrypoints/anybox-main.js computer-worker status ./data/worker
 # 已运行的 worker 消费标准输入中的 JSON
-node dist/entrypoints/anybox-main.js computer-worker attach ./data/worker
-node dist/entrypoints/anybox-main.js computer-worker permissions ./data/worker <attachment-id>
-node dist/entrypoints/anybox-main.js computer-worker revoke ./data/worker <attachment-id>
+node packages/distribution/dist/entrypoints/anybox-main.js computer-worker attach ./data/worker
+node packages/distribution/dist/entrypoints/anybox-main.js computer-worker permissions ./data/worker <attachment-id>
+node packages/distribution/dist/entrypoints/anybox-main.js computer-worker revoke ./data/worker <attachment-id>
 # 停止全部附着服务，取消并等待 worker 工具及根清理
-node dist/entrypoints/anybox-main.js computer-worker stop ./data/worker
+node packages/distribution/dist/entrypoints/anybox-main.js computer-worker stop ./data/worker
 ```
 
 `attach` / `permissions` 必须通过管道提供 JSON 标准输入；直接以交互终端调用会提示输入方式。附着码不作为命令行参数，不在输出中回显。输出为非秘密 JSON，错误退出码为 1。attach / permissions / revoke 要求 worker 已运行，不隐式启动它。

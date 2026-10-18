@@ -1,0 +1,50 @@
+{
+  "name": "@anybox/host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "anybox-host": "./dist/main.js"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "web",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "@anybox/application-api": "0.1.0",
+    "@anybox/storage-sqlite": "0.1.0",
+    "acorn": "8.15.0",
+    "semver": "7.8.5"
+  },
+  "peerDependencies": {
+    "@nya/core": "^0.1.0-rc.1",
+    "electron": "44.5.1"
+  },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/semver": "7.8.0"
+  }
+}

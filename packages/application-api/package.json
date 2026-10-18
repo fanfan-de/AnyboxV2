@@ -1,0 +1,47 @@
+{
+  "name": "@anybox/application-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "default": "./dist/web.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
+    "./nya": {
+      "types": "./dist/nya.d.ts",
+      "default": "./dist/nya.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@nya/core": "^0.1.0-rc.1"
+  },
+  "peerDependenciesMeta": {
+    "@nya/core": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

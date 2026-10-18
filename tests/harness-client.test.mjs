@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createHarnessClient, scopedId, splitScopedId, connectionResourceURL, mapResourceIds } from '../dist/applications/harness/web/harness-client.js'
-import { migrateLegacyState } from '../dist/applications/harness/web/legacy-state.js'
-import { emptyWorkspace, splitSession, openSession, panes, restoreWorkspace, waitForProjectSnapshot } from '../dist/applications/harness/web/workspace-layout.js'
-import { createPendingStore } from '../dist/applications/harness/web/session-client.js'
-import { createDraftStore } from '../dist/applications/harness/web/draft-client.js'
+import { createHarnessClient, scopedId, splitScopedId, connectionResourceURL, mapResourceIds } from '../packages/app-harness/dist/web/harness-client.js'
+import { migrateLegacyState } from '../packages/app-harness/dist/web/legacy-state.js'
+import { emptyWorkspace, splitSession, openSession, panes, restoreWorkspace, waitForProjectSnapshot } from '../packages/app-harness/dist/web/workspace-layout.js'
+import { createPendingStore } from '../packages/app-harness/dist/web/session-client.js'
+import { createDraftStore } from '../packages/app-harness/dist/web/draft-client.js'
 const a = '11111111-1111-4111-8111-111111111111', b = '22222222-2222-4222-8222-222222222222'
 const connections = [{ id: 'a', name: 'Laptop', instanceId: a, revision: 1 }, { id: 'b', name: 'Server', instanceId: b, revision: 1 }]
 const store = () => { const map = new Map(); return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value) } }

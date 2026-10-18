@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { canUseModel, createModelsCatalog, nativeParameterValues, initialNativeParameters, settingsConnectionSelection, settingsModelEditorSelection } from '../dist/applications/harness/web/models-client.js'
-import { catalogSupportsText, catalogMatchesConnection, createModelsDirectory } from '../dist/applications/harness/web/models-directory-client.js'
+import { canUseModel, createModelsCatalog, nativeParameterValues, initialNativeParameters, settingsConnectionSelection, settingsModelEditorSelection } from '../packages/app-harness/dist/web/models-client.js'
+import { catalogSupportsText, catalogMatchesConnection, createModelsDirectory } from '../packages/app-harness/dist/web/models-directory-client.js'
 
 const fields = [
   { key: 'temperature', label: 'Temperature', type: 'number', min: 0, max: 2 },

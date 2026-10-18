@@ -8,7 +8,7 @@
 
 读取来源按项目绑定选择：绑定 `local:computer` 的项目用本机文件系统提供方；绑定远端附着的项目经 [Worker 路由](../computers/worker-router.md)的只读查询面（`search`、`read`、`list`）由单元读取。远端目录树的每个游标是一次最多扫描 1,000 个目录项（含忽略项）的列表快照，分页不再回到单元；达到上限且还有条目时明确报 `file-tree-truncated`，不返回伪装完整的前缀，也不承诺后续远端续页。搜索与手工路径预览/引用仍可访问该目录中未列出的文件。读到的内容仍由本组件保存为不可变快照并保留，事实归属不变。
 
-源码：[组件](../../../src/applications/harness/core/project-files/component.ts)、[端口](../../../src/applications/harness/core/project-files/port.ts)、[文件系统提供方](../../../src/applications/harness/core/project-files/filesystem.ts)、[纯规则与浏览器共享类型](../../../src/applications/harness/core/project-files/domain.ts)。文件系统提供方、内部树浏览器和规则不是独立组件。树浏览器由该组件独占，`treeBrowser` 仅提供受控测试的目录访问及时间替身。
+源码：[组件](../../../packages/app-harness/src/core/project-files/component.ts)、[端口](../../../packages/app-harness/src/core/project-files/port.ts)、[文件系统提供方](../../../packages/app-harness/src/core/project-files/filesystem.ts)、[纯规则与浏览器共享类型](../../../packages/app-harness/src/core/project-files/domain.ts)。文件系统提供方、内部树浏览器和规则不是独立组件。树浏览器由该组件独占，`treeBrowser` 仅提供受控测试的目录访问及时间替身。
 
 ## 功能与边界
 

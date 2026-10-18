@@ -7,9 +7,9 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { test } from 'node:test'
-import { connectLocalComputerWorker } from '../dist/applications/harness/core/computer/worker-client.js'
-import { computerDeclarationDigest } from '../dist/applications/harness/core/computer/operations-domain.js'
-import { getToolById } from '../dist/applications/harness/core/tool/catalog.js'
+import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
+import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
+import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 
 const unix = process.platform !== 'win32'
 const childFixture = fileURLToPath(new URL('./helpers/computer-runtime-process.mjs', import.meta.url))

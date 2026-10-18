@@ -3,9 +3,9 @@ import { test } from 'node:test'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mergeRecentProjects, normalizeProjectPath } from '../dist/applications/claude-agent/core/projects.js'
-import { listDirectory, parseDirectoryRequest } from '../dist/applications/claude-agent/core/directories.js'
-import { sessionInfo, sessionProjects } from '../dist/applications/claude-agent/core/sdk/translate.js'
+import { mergeRecentProjects, normalizeProjectPath } from '../packages/app-claude-agent/dist/core/projects.js'
+import { listDirectory, parseDirectoryRequest } from '../packages/app-claude-agent/dist/core/directories.js'
+import { sessionInfo, sessionProjects } from '../packages/app-claude-agent/dist/core/sdk/translate.js'
 
 test('recent projects merge thread and Claude sources by directory, newest first, bounded, with trailing separators ignored', () => {
   assert.equal(normalizeProjectPath('/a/b/'), '/a/b'); assert.equal(normalizeProjectPath('/'), '/'); assert.equal(normalizeProjectPath('/a//b/./c'), '/a/b/c')

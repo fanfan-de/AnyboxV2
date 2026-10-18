@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mount } from '../dist/applications/claude-agent/web/app.js'
-import { emptyRunView } from '../dist/applications/claude-agent/core/events.js'
+import { mount } from '../packages/app-claude-agent/dist/web/app.js'
+import { emptyRunView } from '../packages/app-claude-agent/dist/core/events.js'
 import { installClaudeAgentDOM } from './helpers/claude-agent-dom.mjs'
 
 const apiBase = '/api/client/v1/apps/claude-agent'
@@ -20,19 +20,20 @@ async function until(check, description) {
 }
 
 /** Mounts the real controller/client. Only the network and DOM are replaced. */
-async function fixture(t, initial = [], initialRoute = '') {
+async function fixture(t, initial = [], initialRoute = '', localDevice) {
   const dom = installClaudeAgentDOM(t, { autoRestore: false }), originalFetch = globalThis.fetch
-  const state = { connections: initial, localInstanceId: null, product: 'running', environment, offline: new Set(), unsupported: new Set() }
+  const state = { connections: initial, localInstanceId: localDevice?.instanceId ?? null, localDevice, product: 'running', environment, offline: new Set(), unsupported: new Set() }
   const requests = [], streams = [], holds = [], listeners = new Set(), abort = new AbortController()
   let location = initialRoute, mounted
   globalThis.fetch = async (input, init = {}) => {
     const url = new URL(String(input), 'https://client.example'), path = url.pathname, method = init.method ?? 'GET'
-    const match = new RegExp(`^${apiBase}/connections/([^/]+)/v1(.*)$`).exec(path)
+    const localMatch = new RegExp(`^${apiBase}/local/v1(.*)$`).exec(path)
+    const match = new RegExp(`^${apiBase}/connections/([^/]+)/v1(.*)$`).exec(path) ?? (localMatch ? [localMatch[0], 'local', localMatch[1]] : null)
     const request = { path, target: match?.[2] ?? path, device: match?.[1], method, signal: init.signal, headers: init.headers }
     requests.push(request)
     let response
     if (path === `${apiBase}/connections`) response = Response.json({ connections: state.connections, localInstanceId: state.localInstanceId })
-    else if (path === `${apiBase}/local`) response = Response.json({ instanceId: state.localInstanceId, picker: state.localInstanceId !== null })
+    else if (path === `${apiBase}/local`) response = Response.json({ instanceId: state.localInstanceId, picker: state.localInstanceId !== null, ...(state.localDevice ? { managed: true, device: state.localDevice } : {}) })
     else {
       assert.ok(match, `Unexpected request: ${method} ${path}`)
       const target = request.target
@@ -217,4 +218,23 @@ test('dispose also joins an explicit start-button request and prevents its late 
   held.release(); await disposal
   assert.equal(f.starts().length, 0)
   assert.equal(f.container.children.length, 0)
+})
+
+test('the managed local role is selectable without a saved connection and only explicit open starts business', async t => {
+  const local = { id: 'local', kind: 'local', name: '本机', instanceId: 'instance-local', revision: 1 }
+  const f = await fixture(t, [], '', local)
+  assert.equal(f.find('.ca-device-name').textContent, '本机')
+  assert.equal(f.find('.ca-manage-connections').textContent, '管理远端连接')
+  assert.deepEqual(f.state.connections, [])
+  assert.ok(f.requests.some(item => item.path === `${apiBase}/local/v1/instance`))
+  assert.ok(f.requests.every(item => !item.path.includes('/connections/')))
+  assert.equal(f.starts().length, 0)
+  f.state.product = 'disabled'
+  await f.mounted.setActive(true, 'select')
+  assert.equal(f.find('.ca-start').hidden, false)
+  assert.equal(f.starts().length, 0)
+  await f.mounted.setActive(true, 'open')
+  assert.equal(f.starts().length, 1)
+  assert.equal(f.starts()[0].path, `${apiBase}/local/v1/products/claude-agent/open`)
+  assert.deepEqual(f.state.connections, [])
 })

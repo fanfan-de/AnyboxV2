@@ -4,9 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createProductActivity, createProductActivityComponent } from '../dist/host/applications/activity.js'
-import { createProductsComponent } from '../dist/host/applications/component.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createProductActivity, createProductActivityComponent } from '../packages/host/dist/applications/activity.js'
+import { createProductsComponent } from '../packages/host/dist/applications/component.js'
 
 import { fakeRuntime, definition } from './helpers/application-runtime.mjs'
 async function open(path, runtime = fakeRuntime(), legacy = false) {

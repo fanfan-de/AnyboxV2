@@ -9,19 +9,19 @@ import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { modelsError } from '@anybox/models'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
-import { hostHttpServiceKey } from '../dist/host/component.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
+import { hostHttpServiceKey } from '../packages/host/dist/component.js'
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
-import { createDirectoryPickerComponent } from '../dist/host/directory-picker.js'
+import { createDirectoryPickerComponent } from '../packages/directory-picker/dist/index.js'
 import { controlledModels, deferred } from './helpers/controlled-models.mjs'
-import { promptServiceKey } from '../dist/applications/harness/core/prompt/component.js'
+import { promptServiceKey } from '../packages/app-harness/dist/core/prompt/component.js'
 import { installManagedModels } from './helpers/managed-models.mjs'
-import { installHarnessServerModels } from '../dist/applications/harness/server-models.js'
-import { parseHarnessServerConfig } from '../dist/applications/harness/server-config.js'
-import { runChangedEvent } from '../dist/applications/harness/core/run/notifications.js'
-import { decodeProtocolView } from '../dist/applications/harness/core/view/decode.js'
+import { installHarnessServerModels } from '../packages/app-harness/dist/server-models.js'
+import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
+import { runChangedEvent } from '../packages/app-harness/dist/core/run/notifications.js'
+import { decodeProtocolView } from '../packages/app-harness/dist/core/view/decode.js'
 import sharp from 'sharp'
 
 async function fixture(directory, pickerOptions = {}, startup) {
@@ -1083,7 +1083,7 @@ test('disconnecting wait and closing the harness server HTTP adapter release wai
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-wait-close-'))
   const f = await fixture(directory)
   try {
-    const { runServiceKey } = await import('../dist/applications/harness/core/run/component.js')
+    const { runServiceKey } = await import('../packages/app-harness/dist/core/run/component.js')
     const port = f.root.get(runServiceKey)
     const original = port.waitRun.bind(port)
     const registrations = []

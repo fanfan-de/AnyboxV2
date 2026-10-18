@@ -4,8 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createHostAccessComponent } from '../dist/host/access.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createHostAccessComponent } from '../packages/host/dist/access.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))

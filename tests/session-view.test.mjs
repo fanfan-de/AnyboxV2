@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createSessionPanel } from '../dist/applications/harness/web/session-view.js'
-import { conversationTree } from '../dist/applications/harness/web/conversation-tree.js'
-import { createConversationTreeView } from '../dist/applications/harness/web/conversation-tree-view.js'
-import { mapResourceIds, scopedId } from '../dist/applications/harness/web/harness-client.js'
-import { renderMarkdown } from '../dist/applications/harness/web/markdown.js'
+import { createSessionPanel } from '../packages/app-harness/dist/web/session-view.js'
+import { conversationTree } from '../packages/app-harness/dist/web/conversation-tree.js'
+import { createConversationTreeView } from '../packages/app-harness/dist/web/conversation-tree-view.js'
+import { mapResourceIds, scopedId } from '../packages/app-harness/dist/web/harness-client.js'
+import { renderMarkdown } from '../packages/app-harness/dist/web/markdown.js'
 
 // A local DOM surface keeps these tests about panel behavior without a browser dependency.
 function documentFixture() {

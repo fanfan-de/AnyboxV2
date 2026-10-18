@@ -2,7 +2,7 @@
 
 [返回 Computer 模块](README.md) · [Worker 执行器](worker-executor.md)
 
-`createLocalComputerWorkerComponent(options)` 在 Authority 根安装 `computer-local-worker-client`，提供 `computer.local-worker: ComputerWorkerPort` 与 `computer.local-worker-control: LocalComputerWorkerControl`；核心组件消费的 `computer.worker` 由 [Worker 路由](worker-router.md)提供，`local:computer` 的调用经路由到达这里。它只拥有本代 HTTP 请求、超时和观察连接；不拥有 worker 的工具进程。源码：[客户端](../../../src/applications/harness/core/computer/worker-client.ts)、[受信端口](../../../src/applications/harness/core/computer/worker-port.ts)、[独立入口](../../../src/entrypoints/computer-worker-main.ts)。
+`createLocalComputerWorkerComponent(options)` 在 Authority 根安装 `computer-local-worker-client`，提供 `computer.local-worker: ComputerWorkerPort` 与 `computer.local-worker-control: LocalComputerWorkerControl`；核心组件消费的 `computer.worker` 由 [Worker 路由](worker-router.md)提供，`local:computer` 的调用经路由到达这里。它只拥有本代 HTTP 请求、超时和观察连接；不拥有 worker 的工具进程。源码：[客户端](../../../packages/app-harness/src/core/computer/worker-client.ts)、[受信端口](../../../packages/app-harness/src/core/computer/worker-port.ts)、[独立入口](../../../packages/distribution/src/entrypoints/computer-worker-main.ts)。
 
 组件没有 inject。受信装配固定 `directory`，生产默认目录为业务库路径附加 `.computer-worker`，一个目录只归一个 worker，受信本机管理端共享同一 endpoint；可选 executable、startupTimeoutMs、requestTimeoutMs 用于指定启动设备的 Node 和连接期限。创建组件或查询 Session 不启动 worker。第一次实例激活/计算调用才检查独占目录的 endpoint，查回存活 worker，或 detached 启动独立进程；之后每次调用先检查已连接 worker 的 PID 仍存活，worker 异常退出后下一次本地调用即重新查回或启动，而不是先失败一次。客户端只在有本地调用时才会这样做，不监督空闲 worker：仅为远端 harness server 服务的设备上，异常退出的 worker 直到下一次本地调用（例如执行端激活本机计算资源）才会重启，生产部署应由 systemd 等外部监督。worker 的 stdio 和进程组不依附 Runtime，Runtime 进程 PID 的 SIGKILL 不终止它。detached 不脱离 systemd cgroup，生产接续需预先启动独立 worker unit，见[部署说明](../../harness-server-deployment.md)。
 
@@ -25,3 +25,14 @@ worker 根装配继承 Bash/进程工具的 Unix guard，适用于 Linux/macOS�
 客户端与 CLI 使用 `autoStart: false`：附着、修改权限、撤销要求已运行，`status()` 无条件保持只读，不创建目录、不启动／重启 worker，最多等待状态 HTTP 5 秒。`start()` 才明确启动或复用实例。既有执行端适配器保留按需启动行为。管理观察支持 AbortSignal，关闭只终止 HTTP 等待，已被 worker 接纳的变更仍由 worker 完成。完整入口见 [独立管理](../../computer-worker-management.md)。
 
 被动连接与显式启动不共享失败结果；同一观察端的并发启动合并为一次。跨进程启动使用目录内独立 `startup.sqlite` 的短期 SQLite 排他事务，取得锁后重新读取 endpoint，避免多个客户端或 CLI 同时生成 worker。协调文件限制为私有权限，不打开 worker 业务库；文件存在不表示锁，进程退出由操作系统释放锁，不删除或猜测残留 PID 文件。只有显式或执行端按需启动才创建这些资源。锁等待与启动共用 `startupTimeoutMs` 期限，仅 BUSY/LOCKED 异步重试，其他锁错误立即失败。endpoint 发布前生成的子进程属于本次启动，超时或失败须终止并等待其真实退出后才释放锁；endpoint 发布后由独立 worker 自己持有资源，观察关闭不会停止它。
+
+
+## 安装包的独立角色启动
+
+`ComputerWorkerOptions.launch(directory)` 是应用私有的可选启动适配。客户端应用包与执行端应用包从 `ApplicationPackageRuntimeContext.startRole` 构造该回调，把 `['serve', directory]` 作为不透明参数交给通用生命周期入口；宿主不解释 endpoint、Computer 附着、工具或 Run。执行端由 `HarnessServerCoreOptions.localWorkerLaunch` 传到同一本机观察客户端。未提供回调的独立应用服务与静态组合继续使用既有直接启动入口。
+
+回调在取得 `startup.sqlite` 排他锁、二次确认没有存活 endpoint 后才调用，并发启动仍合并为一次；启动后的 endpoint 发布、认证、`/info` 确认与错误处理继续由应用拥有。观察关闭等待已接受的启动移交，不停止已经发布的独立 worker，也不取消其远端工作。
+
+正式加载带 worker 的安装包要求签名清单声明 `lifecycleVersion: 1`。固定宿主 bootstrap 在导入 worker 前持有该包的独立使用凭证和实际 SHARED 锚；就绪后断开父 IPC，worker 仍持有进程级代码使用锁。客户端、执行端及生命周期管理者退出均不释放这个子进程的锁。worker 实际退出后才可由注册库排他证明并撤销；仍运行的独立 worker 会阻止相关版本切换，宿主不自动停止它。旧签名包仍可查看与安装，但缺少该声明时需要更新后才能正式加载，不把它归为损坏。
+
+行为验证：[应用启动适配](../../../packages/app-harness/tests/worker-package-lifecycle.test.mjs)、[独立角色与真实使用锁](../../../packages/host/tests/package-independent-role.test.mjs)、[加载器生命周期门禁](../../../packages/host/tests/package-loader.test.mjs)。

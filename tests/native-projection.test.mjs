@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { boundProtocolView, reduceNativeView, reduceNativeExchange, projectProtocolRecords, projectNativeRequest, projectNativeResponse, projectNativeExchange } from '../dist/applications/harness/core/protocol-agents/projection.js'
-import { decodeProtocolView } from '../dist/applications/harness/core/view/decode.js'
+import { boundProtocolView, reduceNativeView, reduceNativeExchange, projectProtocolRecords, projectNativeRequest, projectNativeResponse, projectNativeExchange } from '../packages/app-harness/dist/core/protocol-agents/projection.js'
+import { decodeProtocolView } from '../packages/app-harness/dist/core/view/decode.js'
 const envelope = (protocolId, exchanges) => ({ envelopeVersion: 1, viewSchemaVersion: 2, protocolId,
   sessionId: 'session', runId: 'run', viewRevision: 1, status: 'provisional', exchanges })
 const exchange = (protocolId, response, diagnostic = false) => ({ id: 'e', ...projectNativeExchange(protocolId, response, diagnostic) })

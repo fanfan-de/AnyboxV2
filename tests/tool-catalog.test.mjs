@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { listTools, createToolSelection, validateToolSelection, validateLibraryArguments, defaultToolIds, legacyToolSelection } from '../dist/applications/harness/core/tool/catalog.js'
-import { bashToolDefinition } from '../dist/applications/harness/core/tool/bash-component.js'
-import { applyPatchToolDefinition } from '../dist/applications/harness/core/tool/apply-patch-component.js'
+import { listTools, createToolSelection, validateToolSelection, validateLibraryArguments, defaultToolIds, legacyToolSelection } from '../packages/app-harness/dist/core/tool/catalog.js'
+import { bashToolDefinition } from '../packages/app-harness/dist/core/tool/bash-component.js'
+import { applyPatchToolDefinition } from '../packages/app-harness/dist/core/tool/apply-patch-component.js'
 
 test('the built-in catalog has distinct versioned source contracts and the recommended mixed subset', () => {
   const tools = listTools()

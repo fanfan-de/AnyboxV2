@@ -6,7 +6,7 @@
 
 createComputerOperationsComponent(inputs, options?) 安装 Authority 根的 harness-computer-operations，提供 harness.computer-operations。inject 本轮 local-storage、harness.computers、harness.workspaces、computer.worker、harness.image-assets 和 harness.unit-attachments，拥有声明、待派发事实、执行回收及 scope 固定引用。Session/Runtime 消费它，它不反向依赖这两个组件，不写 Session 表。
 
-源码：[组件](../../../src/applications/harness/core/computer/operations-component.ts)、[端口](../../../src/applications/harness/core/computer/operations-port.ts)、[声明和摘要](../../../src/applications/harness/core/computer/operations-domain.ts)、[worker 接口](../../../src/applications/harness/core/computer/worker-port.ts)。inputs 提供 now/newId，options 固定 computerId/spec，默认本机 local 及当前平台/架构；远端策略尚未安装。
+源码：[组件](../../../packages/app-harness/src/core/computer/operations-component.ts)、[端口](../../../packages/app-harness/src/core/computer/operations-port.ts)、[声明和摘要](../../../packages/app-harness/src/core/computer/operations-domain.ts)、[worker 接口](../../../packages/app-harness/src/core/computer/worker-port.ts)。inputs 提供 now/newId，options 固定 computerId/spec，默认本机 local 及当前平台/架构；远端策略尚未安装。
 
 ## 接纳与接口
 

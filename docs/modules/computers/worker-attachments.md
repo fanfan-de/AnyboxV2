@@ -2,7 +2,7 @@
 
 [返回 Computer 模块](README.md) · [worker 执行器](worker-executor.md) · [worker 拨出](worker-dialout.md) · [单元附着](../units/unit-attachments.md)
 
-`createWorkerAttachmentsComponent({ namespace?, openEntry?, now? })` 在独立 worker 根安装 `computer-worker-attachments`，提供 `computer.worker-attachments: WorkerAttachmentsPort`。inject worker 独占的 `local-storage`。它是 Computer 单元自己的附着记录：这台 worker 为哪些 harness server 服务、设备拥有者为每个附着设定的作用域上限，以及保存在系统凭据命名空间中的单元凭证。源码：[组件](../../../src/applications/harness/core/computer/worker-attachments.ts)、[纯规则](../../../src/applications/harness/core/computer/worker-attachments-domain.ts)。
+`createWorkerAttachmentsComponent({ namespace?, openEntry?, now? })` 在独立 worker 根安装 `computer-worker-attachments`，提供 `computer.worker-attachments: WorkerAttachmentsPort`。inject worker 独占的 `local-storage`。它是 Computer 单元自己的附着记录：这台 worker 为哪些 harness server 服务、设备拥有者为每个附着设定的作用域上限，以及保存在系统凭据命名空间中的单元凭证。源码：[组件](../../../packages/app-harness/src/core/computer/worker-attachments.ts)、[纯规则](../../../packages/app-harness/src/core/computer/worker-attachments-domain.ts)。
 
 ## 配置与接口
 

@@ -12,7 +12,7 @@ import { verifySearchDependencyLock, verifyDesktopSearchBinary } from '../script
 const root = fileURLToPath(new URL('..', import.meta.url))
 
 test('release search dependency graph pins portable binaries for target-platform npm ci', async () => {
-  const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  const manifest = JSON.parse(await readFile(join(root, 'packages/app-harness/package.json'), 'utf8'))
   const lock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'))
   const verified = verifySearchDependencyLock(manifest, lock)
   assert.equal(verified.ripgrep, manifest.dependencies['@vscode/ripgrep'])

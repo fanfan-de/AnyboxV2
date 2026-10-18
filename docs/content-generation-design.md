@@ -20,7 +20,7 @@
 
 ## 组件与业务边界
 
-建议新增根上 Nya 组件 `harness.content-generation`，实现位于 `src/applications/harness/core/generation/`。它提供生成端口和内容生成设置端口，注入现有 Models、协议及业务存储服务，不依赖 Session、RunRuntime、Git 或 PR。
+建议新增根上 Nya 组件 `harness.content-generation`，实现位于 `packages/app-harness/src/core/generation/`。它提供生成端口和内容生成设置端口，注入现有 Models、协议及业务存储服务，不依赖 Session、RunRuntime、Git 或 PR。
 
 ```mermaid
 flowchart LR
@@ -124,8 +124,8 @@ execution.prepareExchange(nativeIntent, {
 - [Models 原生端口](../packages/models/src/native-types.ts)与[原生 execution](../packages/models/src/execution.ts)
 - [Models 配置与凭据捕获](../packages/models/src/component.ts)
 - [原生流式及 JSON 行为测试](../packages/models/tests/streaming-defaults.test.mjs)
-- [协议 Loop](../src/applications/harness/core/protocol-agents/registry.ts)
-- [Web 模型目录与配置](../src/applications/harness/web/models-client.ts)
-- [已有选模设置交互](../src/applications/harness/web/session-defaults-client.ts)
-- [执行应用安装与停止 guard](../src/applications/harness/server-runtime.ts)
+- [协议 Loop](../packages/app-harness/src/core/protocol-agents/registry.ts)
+- [Web 模型目录与配置](../packages/app-harness/src/web/models-client.ts)
+- [已有选模设置交互](../packages/app-harness/src/web/session-defaults-client.ts)
+- [执行应用安装与停止 guard](../packages/app-harness/src/server-runtime.ts)
 - [会话自动命名计划](session-titles-design.md)

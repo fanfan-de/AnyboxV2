@@ -2,7 +2,7 @@
 
 [返回可组合单元模块](README.md) · [Session](../sessions/session.md) · [Run](../execution/run.md)
 
-`createUnitAttachmentsComponent(inputs, { localUnits? })` 在 harness server 根安装 `harness-unit-attachments`，提供 `harness.unit-attachments: UnitAttachmentsPort`。inject `local-storage`，在 `apply` 中登记 `unit-attachments` v1 迁移域。源码：[组件](../../../src/applications/harness/core/unit/component.ts)、[纯规则](../../../src/applications/harness/core/unit/domain.ts)、[端口](../../../src/applications/harness/core/unit/port.ts)。
+`createUnitAttachmentsComponent(inputs, { localUnits? })` 在 harness server 根安装 `harness-unit-attachments`，提供 `harness.unit-attachments: UnitAttachmentsPort`。inject `local-storage`，在 `apply` 中登记 `unit-attachments` v1 迁移域。源码：[组件](../../../packages/app-harness/src/core/unit/component.ts)、[纯规则](../../../packages/app-harness/src/core/unit/domain.ts)、[端口](../../../packages/app-harness/src/core/unit/port.ts)。
 
 ## 配置与接口
 

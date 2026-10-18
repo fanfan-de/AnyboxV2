@@ -6,15 +6,15 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createWorkerAttachmentsComponent } from '../dist/applications/harness/core/computer/worker-attachments.js'
-import { createWorkerDialoutComponent } from '../dist/applications/harness/core/computer/worker-dialout.js'
-import { createComputerWorkerExecutorComponent } from '../dist/applications/harness/core/computer/worker-component.js'
-import { createComputerWorkerHttpServer } from '../dist/applications/harness/core/computer/worker-server.js'
-import { connectLocalComputerWorker } from '../dist/applications/harness/core/computer/worker-client.js'
-import { computerDeclarationDigest } from '../dist/applications/harness/core/computer/operations-domain.js'
-import { getToolById } from '../dist/applications/harness/core/tool/catalog.js'
-import { createClientHost } from '../dist/entrypoints/client-main.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createWorkerAttachmentsComponent } from '../packages/app-harness/dist/core/computer/worker-attachments.js'
+import { createWorkerDialoutComponent } from '../packages/app-harness/dist/core/computer/worker-dialout.js'
+import { createComputerWorkerExecutorComponent } from '../packages/app-harness/dist/core/computer/worker-component.js'
+import { createComputerWorkerHttpServer } from '../packages/app-harness/dist/core/computer/worker-server.js'
+import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
+import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
+import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
+import { createClientHost } from '../packages/distribution/dist/entrypoints/client-main.js'
 
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -168,7 +168,7 @@ test('saved worker permissions survive restarting the attachment ledger and keep
 
 function cli(args, input, cwd) {
   const child = spawn(process.execPath, ['--import', new URL('./helpers/client-role-process.mjs', import.meta.url).href,
-    fileURLToPath(new URL('../dist/entrypoints/anybox-main.js', import.meta.url)), 'computer-worker', ...args],
+    fileURLToPath(new URL('../packages/distribution/dist/entrypoints/anybox-main.js', import.meta.url)), 'computer-worker', ...args],
     { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ANYBOX_TEST_ROLE_GUARD: 'client' } })
   let out = '', err = ''; child.stdout.on('data', value => { out += value }); child.stderr.on('data', value => { err += value })
   child.stdin.end(input === undefined ? '' : JSON.stringify(input))

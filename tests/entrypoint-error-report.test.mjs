@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { describeError } from '../dist/entrypoints/error-report.js'
+import { describeError } from '../packages/distribution/dist/entrypoints/error-report.js'
 
 test('describeError flattens AggregateError members and cause links on indented lines', () => {
   const inner = new Error('disk full')

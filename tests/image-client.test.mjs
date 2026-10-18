@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createImageUploads, createImageLeaseKeeper, imageURL } from '../dist/applications/harness/web/image-client.js'
-import { createDraftStore, draftFromInput, draftsKey } from '../dist/applications/harness/web/draft-client.js'
-import { createPendingStore } from '../dist/applications/harness/web/session-client.js'
-import { imageLimits } from '../dist/applications/harness/core/image/limits.js'
+import { createImageUploads, createImageLeaseKeeper, imageURL } from '../packages/app-harness/dist/web/image-client.js'
+import { createDraftStore, draftFromInput, draftsKey } from '../packages/app-harness/dist/web/draft-client.js'
+import { createPendingStore } from '../packages/app-harness/dist/web/session-client.js'
+import { imageLimits } from '../packages/app-harness/dist/core/image/limits.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
 const ref = id => ({ assetId: id, sha256: 'a'.repeat(64), mediaType: 'image/png', byteLength: 4, width: 2, height: 2, expiresAt: '2030-01-01T00:00:00.000Z' })

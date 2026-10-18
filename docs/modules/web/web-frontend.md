@@ -2,7 +2,9 @@
 
 [宿主模块](README.md) · [harness server 业务适配器](harness-http.md)
 
-`src/host/component.ts` 的 `createApplicationApiComponent(root,catalog,port,{authenticated,host})` 创建 `host-application-api`，提供 `host.http: ApplicationHttpServer`（url、幂等 close）。注入 app.products、app.activity，以及认证模式的 host.access。它不导入 Anybox Harness/Models 类型，应用失败或缺依赖时仍提供目录和控制。
+`packages/host/src/component.ts` 的 `createApplicationApiComponent(root,catalog,port,{authenticated,host})` 创建 `host-application-api`，提供 `host.http: ApplicationHttpServer`（url、幂等 close）。注入 app.products、app.activity，以及认证模式的 host.access。它不导入 Anybox Harness/Models 类型，应用失败或缺依赖时仍提供目录和控制。
+
+此监听器服务于 Anybox 的管理与承载。应用自己的独立入口不导入这套实现：Harness 的 [独立监听组件](harness-listener.md) 与 Claude Agent 包内监听分别由应用持有，复用各自业务适配器。D0a.1 不提取公共 HTTP 或认证模块，见[独立业务服务](../../application-standalone-services.md)。
 
 内部 `startApplicationHttpServer` 是客户端和执行端共用的监听器实现。执行端使用 `/api/v1`；客户端 Shell 使用 `/api/client/v1`。组件持有监听 socket、请求集合、监听器生命周期信号及撤销订阅。注册目录拥有精确静态地址与业务前缀；静态文件只从映射读取，不遍历任意路径。
 
@@ -10,11 +12,13 @@
 
 桌面客户端额外配置私有 `transportSecret` 时，监听器先以常量时间摘要比较校验 `X-Anybox-Desktop-Transport`，再执行原 Host/Origin 及目录规则。校验覆盖静态资源和全部 API，不能以回环地址替代桥接授权；凭证由桌面受信进程在转发时添加，页面脚本不持有它。执行端访问令牌与此传输凭证的职责和归属独立，普通 Web 监听行为不变。
 
-ApplicationHttpContext 提供 appId、actorId、signal 和 retainUntil。handle Promise 代表请求/流实际退出；finally 等待 retainUntil 保留操作退出后释放租约和 HTTP 任务。监听器关闭会等待这些已受理任务，宿主必须与根资源取消同时排空。GET 是可取消观察，写入默认为阻塞活动。资源或 SSE 应响应 signal 并等待实际退出。接口说明见 src/host/applications/registration.ts。
+ApplicationHttpContext 提供 appId、actorId、signal 和 retainUntil。handle Promise 代表请求/流实际退出；finally 等待 retainUntil 保留操作退出后释放租约和 HTTP 任务。监听器关闭会等待这些已受理任务，宿主必须与根资源取消同时排空。GET 是可取消观察，写入默认为阻塞活动。资源或 SSE 应响应 signal 并等待实际退出。接口说明见 `packages/application-api/src/node.ts`，目录校验位于 host 的 `applications/registration.ts`。
 
 close 同步停止 HTTP 准入、发送关闭信号并取消未完成请求体，等待已接受处理完成和 socket 释放；已接受普通写入可完成响应。令牌撤销关闭其活动响应。应用业务取消、DTO 和通知属于应用适配器。Effect 调用同一 close 并报告故障；宿主聚合 HTTP 与 Nya 清理错误。
 
 通用客户端与执行宿主的 `prepareClose()` 同步开始监听器关闭，同时停止产品控制和应用运行时准入；它等待控制与装配退出，保留组件与存储直到宿主 `close()` 卸载整根。HTTP 排空还等待 `retainUntil()` 保留操作及租约实际退出，因此只在 `close()` 中与 Nya 根清理一起等待，避免 Run 需要根清理取消而 HTTP 先等待 Run 的死锁。执行端的 `closing` 从准备阶段开始即为 true，Run 准备同步关闭；已接纳运行的取消与实际退出仍由后续根清理负责。两个方法均幂等，准备失败不跳过后续资源清理。
+
+宿主 shell 在普通关闭、首次 setActive 失败和挂载中关闭时都等待界面 dispose 实际结束，成功前保留 mounted；失败保留同一清理 Promise 与句柄，禁止重挂载和后台控制，并继续参与 canClose、beforeunload 及版本生效检查。页面 SSE 断线只冻结交互，不注销仍存活的界面；重连、ACK 和显式退出均绑定当前 document 的内存登记凭据，全部界面清理成功后才发送 keepalive 退出证明。受控 reload 等退出确认后重载；强制关页中断清理则保留退出未知，不能凭新页面或超时自动清除。协议、恢复边界与回归入口见[页面生命周期协调](../package-management/activation.md#全部页面的关闭保护)及 `tests/application-shell.test.mjs`。
 
 浏览器入口归各应用静态资源。Anybox Harness 只挂载项目与会话工作区，侧栏底部将一处紧凑设备选择器与设置图标放在同一行，连接、模型、Prompt 与单元附着在工作区设置的分类面板中管理；设备的“启动 Agent”“停止 Agent”和“附着到远端 harness server”位于“管理连接”分类，“单元附着”分类展示所选设备 harness server 的附着列表并生成一次性附着码。此布局不改变宿主监听器、HTTP 分派和应用启停契约，具体展示与恢复见[Web 客户端设计](../../web-client-design.md)和[宿主设计](../../products-v1.md)。
 
@@ -42,6 +46,6 @@ Anybox Harness 对话与轨迹明细共同挂载四协议各自的展示 v2 内�
 
 客户端、执行设备和 Web 静态资源同步升级到展示 v2，旧或未知展示格式明确显示不兼容；旧原生记录 v1/v2 和旧绑定版本仍在服务端重新投影，不增加数据库迁移。旧 dialogue-v1 继续只读。
 
-协议展示的行为入口为 `tests/tool-call-view.test.mjs`、`tests/protocol-web-modules.test.mjs`、`tests/session-view.test.mjs` 与 `tests/trajectory.test.mjs`。运行 `node tests/helpers/native-view-browser-host.mjs` 可启动隔离浏览器验收宿主，使用内存样本复验四协议内容、1→2→3 工具增长和终态更新、长输出/失败/部分补丁、默认紧凑与详细模式以及约 320px/四分屏布局；不访问真实模型、凭据或工作区数据库。
+协议展示的行为入口为 `tests/tool-call-view.test.mjs`、`tests/protocol-web-modules.test.mjs`、`tests/session-view.test.mjs` 与 `packages/app-harness/tests/trajectory.test.mjs`。运行 `node tests/helpers/native-view-browser-host.mjs` 可启动隔离浏览器验收宿主，使用内存样本复验四协议内容、1→2→3 工具增长和终态更新、长输出/失败/部分补丁、默认紧凑与详细模式以及约 320px/四分屏布局；不访问真实模型、凭据或工作区数据库。
 
 验证：tests/desktop-host-boundaries.test.mjs、tests/products-api.test.mjs、tests/application-host.test.mjs、tests/remote-harness-server.test.mjs、tests/deployment-boundaries.test.mjs；npm run check。

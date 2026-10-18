@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createComputersComponent } from '../dist/applications/harness/core/computer/component.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createComputersComponent } from '../packages/app-harness/dist/core/computer/component.js'
 import { createLocalComputerProvider } from './helpers/fixed-computer-provider.mjs'
-import { computerServiceKey, computerInstanceProviderServiceKey } from '../dist/applications/harness/core/computer/port.js'
+import { computerServiceKey, computerInstanceProviderServiceKey } from '../packages/app-harness/dist/core/computer/port.js'
 
 const inputs = { now: () => new Date().toISOString(), newId: randomUUID }
 const spec = { providerId: 'local', platform: process.platform, architecture: process.arch }

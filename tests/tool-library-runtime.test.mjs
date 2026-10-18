@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { createImageAssetsComponent } from '../dist/applications/harness/core/image/component.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
 

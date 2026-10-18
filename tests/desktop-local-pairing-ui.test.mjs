@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { setupConnections } from '../dist/applications/harness/web/connections-view.js'
+import { setupConnections } from '../packages/app-harness/dist/web/connections-view.js'
 
 class Element extends EventTarget {
   hidden = false

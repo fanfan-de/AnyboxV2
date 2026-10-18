@@ -4,8 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
-import { createLocalSqliteComponent } from '../dist/storage/sqlite.js'
-import { localStorageServiceKey } from '../dist/storage/port.js'
+import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { localStorageServiceKey } from '../packages/storage-sqlite/dist/port.js'
 import { createRunsFixture, fakeSdk, sampleResult, tick, waitFor } from './helpers/claude-agent.mjs'
 
 async function fixture(t, options = {}) {
@@ -14,7 +14,7 @@ async function fixture(t, options = {}) {
   const open = async (overrides = {}) => { const f = await createRunsFixture(join(directory, 'claude-agent.sqlite'), { ...options, ...overrides }); fixtures.push(f); return f }
   return { directory, open }
 }
-const permission = (toolUseId = 't1', extra = {}) => ({ toolUseId, toolName: 'Bash', input: { command: 'ls' }, title: 'Run ls', description: null, reason: null, defaultToNo: false, allowSessionAvailable: true, questions: null, signal: new AbortController().signal, ...extra })
+const permission = (toolUseId = 't1', extra = {}) => ({ toolUseId, toolName: 'Bash', input: { command: 'ls' }, title: 'Run ls', description: null, reason: null, defaultToNo: false, allowSessionAvailable: true, reusablePermissions: { allow: [{ tool: 'Bash', pattern: 'ls:*' }], directories: [] }, questions: null, signal: new AbortController().signal, ...extra })
 
 test('threads require an existing absolute directory and runs are admitted one per thread with idempotent keys', async t => {
   const { open } = await fixture(t, { directoryExists: async path => path === '/projects/a' || path === '/projects/b' })
@@ -100,6 +100,7 @@ test('approvals block the agent until answered, persist decisions and are denied
   const thread = await f.runs.createThread({ projectPath: '/p' })
   const run = await f.runs.startRun(thread.id, { prompt: 'do things', idempotencyKey: 'k' })
   const active = f.sdk.runs[0]
+  active.hooks.onEvent({ type: 'init', init: { nativeSessionId: 'session-approval', model: 'model', cwd: '/p', permissionMode: 'default', claudeCodeVersion: 'test', toolCount: 1 } })
   const first = active.hooks.canUseTool(permission('t1'))
   const question = active.hooks.canUseTool(permission('q1', { toolName: 'AskUserQuestion', input: { questions: [] }, questions: [{ question: 'Which?', header: 'Pick', options: [{ label: 'A', description: '' }, { label: 'B', description: '' }], multiSelect: true }] }))
   await waitFor(() => f.runs.listPendingApprovals(thread.id).length === 2)

@@ -6,7 +6,7 @@ Session 是会话、新会话初始化默认值、不可变对话节点、Run �
 
 ## 实现与装配
 
-- 源码：[组件](../../../src/applications/harness/core/session/component.ts)、[完整端口](../../../src/applications/harness/core/session/port.ts)、[领域值与路径校验](../../../src/applications/harness/core/session/domain.ts)、[SQLite 记录实现](../../../src/applications/harness/core/session/sqlite-records.ts)、[Run 事件读写](../../../src/applications/harness/core/run/execution.ts)。
+- 源码：[组件](../../../packages/app-harness/src/core/session/component.ts)、[完整端口](../../../packages/app-harness/src/core/session/port.ts)、[领域值与路径校验](../../../packages/app-harness/src/core/session/domain.ts)、[SQLite 记录实现](../../../packages/app-harness/src/core/session/sqlite-records.ts)、[Run 事件读写](../../../packages/app-harness/src/core/run/execution.ts)。
 - 工厂：`createSessionComponent(inputs, agents)`；组件名：`harness-sessions`；配置类型：`void`。
 - `inputs` 注入 now/newId；`agents` 是组合根启动时校验的只读定义，用于创建校验与默认模型。
 - 注入 `local-storage`、`harness.projects`、`harness.image-assets`、`harness.project-files` 和 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。

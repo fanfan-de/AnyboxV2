@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { decodeProtocolView, reduceProtocolView, safeSourceUrl } from '../dist/applications/harness/core/view/decode.js'
+import { decodeProtocolView, reduceProtocolView, safeSourceUrl } from '../packages/app-harness/dist/core/view/decode.js'
 const message = text => ({ id: 'message', type: 'responses.message', content: [{ id: 'part', type: 'output_text', text }] })
 const snapshot = (patch = {}) => ({ envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'responses', sessionId: 'session', runId: 'run', viewRevision: 1, status: 'provisional',
   exchanges: [{ id: 'first', blocks: [message('First answer')] }], ...patch })

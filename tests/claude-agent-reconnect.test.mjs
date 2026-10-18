@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { mount } from '../dist/applications/claude-agent/web/app.js'
-import { emptyRunView } from '../dist/applications/claude-agent/core/events.js'
+import { mount } from '../packages/app-claude-agent/dist/web/app.js'
+import { emptyRunView } from '../packages/app-claude-agent/dist/core/events.js'
 import { installClaudeAgentDOM } from './helpers/claude-agent-dom.mjs'
 
 const apiBase = '/api/client/v1/apps/claude-agent'
@@ -24,7 +24,7 @@ async function fixture(t, ids = ['one'], initialize = () => {}) {
   initialize(state)
   const initialRuns = new Map([...state.values()].map(current => [current.run.id, current.run]))
   const reads = [], streams = [], submissions = [], decisions = []
-  let held
+  let held, heldSubmission
   const thread = id => ({ schemaVersion: 1, id, projectPath: `/projects/${id}`, title: `Thread ${id}`, titleSource: 'user', nativeSessionId: 'native-session', createdAt: stamp, updatedAt: stamp, lastRun: { id: state.get(id).run.id, status: state.get(id).run.status }, pendingApprovals: state.get(id).approvals.length })
   const originalFetch = globalThis.fetch
   globalThis.fetch = async (input, init = {}) => {
@@ -53,6 +53,8 @@ async function fixture(t, ids = ['one'], initialize = () => {}) {
       init.signal?.addEventListener('abort', () => { if (!closed) { closed = true; controller.error(new DOMException('Aborted', 'AbortError')) } }, { once: true })
       return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })
     }
+    const queued=/^\/apps\/claude-agent\/runs\/([^/]+)\/messages$/.exec(target)
+    if(queued){const current=[...state.values()].find(x=>x.run.id===queued[1]);assert.ok(current);current.queuedMessages??=[];if(method==='POST'){const body=JSON.parse(init.body);const message={id:'queued-'+current.queuedMessages.length,runId:queued[1],prompt:body.prompt,attachments:[],status:'queued',createdAt:stamp};current.queuedMessages.push(message);return Response.json(message,{status:202})}return Response.json(current.queuedMessages)}
     const match = /^\/apps\/claude-agent\/threads\/([^/]+)(?:\/(messages|runs|approvals))?$/.exec(target)
     if (match) {
       const [, id, kind] = match, current = state.get(id)
@@ -61,8 +63,16 @@ async function fixture(t, ids = ['one'], initialize = () => {}) {
         assert.equal(kind, 'runs')
         const body = JSON.parse(init.body)
         submissions.push({ threadId: id, body })
-        current.run = { ...makeRun(id), id: `next-${id}`, prompt: body.prompt }
-        return Response.json(current.run)
+        const rejected = heldSubmission?.threadId === id && heldSubmission.failure
+        if (!rejected) current.run = { ...makeRun(id), id: `next-${id}`, prompt: body.prompt }
+        const response = rejected
+          ? Response.json({ error: { code: 'product-unavailable', message: 'The previous submission failed' } }, { status: 503 })
+          : Response.json(current.run)
+        if (heldSubmission?.threadId === id && !heldSubmission.started) {
+          heldSubmission.started = true
+          await new Promise(resolve => { heldSubmission.release = resolve })
+        }
+        return response
       }
       const value = kind === 'messages' ? { nativeSessionId: 'native-session', messages: current.history } : kind === 'runs' ? [current.run] : kind === 'approvals' ? current.approvals : thread(id)
       if (held?.threadId === id && kind === 'messages' && !held.started) {
@@ -102,6 +112,7 @@ async function fixture(t, ids = ['one'], initialize = () => {}) {
   let mounted
   t.after(async () => {
     held?.release?.()
+    heldSubmission?.release?.()
     try { await mounted?.dispose(); abort.abort(); await dom.flush() }
     finally { globalThis.fetch = originalFetch; dom.restore() }
   })
@@ -114,8 +125,9 @@ async function fixture(t, ids = ['one'], initialize = () => {}) {
   streams[0].ready()
   await dom.flush()
   const count = suffix => reads.filter(read => read.path.endsWith(suffix) && read.method === 'GET').length
-  return { ...dom, state, streams, submissions, decisions, count,
+  return { ...dom, mounted, state, streams, submissions, decisions, count,
     holdMessages(threadId) { held = { threadId, started: false }; return () => held },
+    holdSubmission(threadId, { failure = false } = {}) { heldSubmission = { threadId, started: false, failure }; return () => heldSubmission },
     async reconnect(stream, change) {
       const before = streams.length
       stream.disconnect(); change()
@@ -137,12 +149,14 @@ test('SSE ready reconciles a Run completed while disconnected and restores sendi
     current.run = { ...current.run, status: 'completed', finishedAt: stamp }
     current.history = [message('final-one', 'The durable answer produced during the outage')]
   })
-  await until(() => send.disabled === false, 'ready re-reads the completed Run and enables sending')
+  const prompt = f.find('textarea[name="prompt"]')
+  prompt.value = 'Continue after reconnecting'
+  f.fire(prompt, 'input')
+  await until(() => send.disabled === false && f.find('.ca-cancel').hidden && f.find('.ca-transcript').textContent.includes('The durable answer produced during the outage'), 'ready reconciles the completed Run and durable history')
   for (const [index, suffix] of suffixes.entries()) assert.ok(f.count(suffix) > before[index], `Reconnect refreshes ${suffix}`)
   assert.match(f.find('.ca-transcript').textContent, /The durable answer produced during the outage/)
   assert.doesNotMatch(f.find('.ca-transcript').textContent, /Initial transcript/)
   assert.equal(f.find('.ca-cancel').hidden, true)
-  f.find('textarea[name="prompt"]').value = 'Continue after reconnecting'
   f.fire(f.find('.ca-composer'), 'submit')
   await until(() => f.submissions.length === 1 && f.find('textarea[name="prompt"]').value === '' && !f.find('.ca-cancel').hidden, 'the restored composer finishes sending through the real device client')
   await f.flush()
@@ -155,7 +169,7 @@ test('SSE ready restores approvals missed during disconnection and removes appro
   let stream = await f.reconnect(f.streams[0], () => { f.state.get('one').approvals = [makeApproval('one')] })
   await until(() => !f.find('.ca-approvals').hidden, 'a missed approval appears after reconnecting')
   assert.match(f.find('.ca-approvals').textContent, /Run the project check/)
-  const allow = f.all('.ca-approval-actions button').find(button => button.textContent === '允许')
+  const allow = f.all('.ca-approval-actions button').find(button => button.textContent === '仅允许这次')
   f.fire(allow, 'click')
   await until(() => f.decisions.length === 1 && f.find('.ca-approvals').hidden, 'the recovered approval remains actionable')
   assert.deepEqual(f.decisions[0], { id: 'approval', decision: 'allow' })
@@ -227,4 +241,212 @@ test('a new Run event supersedes an older reconnect snapshot still waiting for t
   assert.doesNotMatch(f.find('.ca-transcript').textContent, /A stale reconnect snapshot/)
   assert.equal(f.find('.ca-composer button[type="submit"]').disabled, true)
   assert.equal(f.find('.ca-cancel').hidden, false)
+})
+
+test('an active Run accepts one queued follow-up through Enter and prevents a concurrent duplicate form submission', async t => {
+  const f = await fixture(t)
+  const prompt = f.find('textarea[name="prompt"]')
+  prompt.value = 'The follow-up I am writing while Claude works'
+  f.fire(prompt, 'input')
+  assert.equal(prompt.disabled, false, 'the next message can be prepared during execution')
+  assert.equal(f.find('.ca-composer button[type="submit"]').disabled, false)
+  const enter = f.fire(prompt, 'keydown', { key: 'Enter', shiftKey: false, isComposing: false })
+  assert.equal(enter.defaultPrevented, true)
+  f.fire(f.find('.ca-composer'), 'submit')
+  await f.flush()
+  assert.equal(f.submissions.length, 0, 'neither submission path starts a competing Run')
+  assert.equal(prompt.value, '')
+  assert.equal(f.state.get('one').queuedMessages.length,1)
+  assert.equal(f.state.get('one').queuedMessages[0].prompt,'The follow-up I am writing while Claude works')
+  assert.equal(f.find('.ca-notice-close').parentElement.hidden, true, 'blocked input does not produce an avoidable server error')
+})
+
+test('reading earlier transcript content pauses scrolling until the user returns to the latest content', async t => {
+  const f = await fixture(t)
+  const transcript = f.find('.ca-transcript'), latest = f.find('.ca-latest')
+  transcript.scrollHeight = 1_400; transcript.clientHeight = 400; transcript.scrollTop = 120
+  f.fire(transcript, 'scroll')
+  assert.equal(latest.hidden, false)
+  const current = f.state.get('one')
+  const project = (seq, text) => ({ ...emptyRunView(current.run.id, 'one'), seq, items: [{ id: `answer-${seq}`, role: 'assistant', blocks: [{ block: { kind: 'text', text, truncated: false }, state: 'streaming' }] }] })
+  current.live = project(1, 'New output arrived while reading earlier messages')
+  transcript.scrollHeight = 1_800
+  f.streams[0].ready()
+  await until(() => transcript.textContent.includes('New output arrived while reading earlier messages'), 'the activity refresh reaches the real transcript')
+  assert.equal(transcript.scrollTop, 120, 'new output does not steal the reading position')
+  assert.equal(latest.hidden, false)
+  f.fire(latest, 'click')
+  assert.equal(transcript.scrollTop, 1_800)
+  assert.equal(latest.hidden, true)
+  transcript.scrollHeight = 2_200
+  current.live = project(2, 'Output after following the latest content again')
+  f.streams[0].ready()
+  await until(() => transcript.textContent.includes('Output after following the latest content again'), 'the next activity refresh is rendered')
+  assert.equal(transcript.scrollTop, 2_200, 'the explicit action restores automatic following')
+})
+
+test('each thread restores its own draft and settings and all unsent drafts protect closing', async t => {
+  const f = await fixture(t, ['one', 'two'], state => {
+    for (const current of state.values()) current.run = { ...current.run, status: 'completed', finishedAt: stamp }
+  })
+  const prompt = f.find('textarea[name="prompt"]'), model = f.find('input[name="model"]'), effort = f.find('select[name="effort"]')
+  assert.equal(await f.mounted.canClose(), true)
+  prompt.value = 'Draft for the first project'; f.fire(prompt, 'input')
+  model.value = 'custom-first-model'; f.fire(model, 'input')
+  effort.value = 'high'; f.fire(effort, 'change')
+  assert.equal(await f.mounted.canClose(), false)
+  f.fire(f.find('button[data-thread-id="two"]'), 'click')
+  await until(() => f.find('.ca-thread-title').textContent === 'Thread two' && f.find('.ca-transcript').textContent.includes('Initial transcript for two'), 'the second thread opens')
+  assert.equal(prompt.value, '')
+  assert.equal(model.value, '')
+  assert.equal(effort.value, '')
+  assert.equal(await f.mounted.canClose(), false, 'a draft in the other thread still prevents closing')
+  prompt.value = 'Different draft for the second project'; f.fire(prompt, 'input')
+  model.value = 'custom-second-model'; f.fire(model, 'input')
+  effort.value = 'low'; f.fire(effort, 'change')
+  f.fire(f.find('button[data-thread-id="one"]'), 'click')
+  await until(() => f.find('.ca-thread-title').textContent === 'Thread one', 'the first thread opens again')
+  assert.equal(prompt.value, 'Draft for the first project')
+  assert.equal(model.value, 'custom-first-model')
+  assert.equal(effort.value, 'high')
+  prompt.value = ''; f.fire(prompt, 'input')
+  assert.equal(await f.mounted.canClose(), false, 'clearing one draft preserves the other draft guard')
+  f.fire(f.find('button[data-thread-id="two"]'), 'click')
+  await until(() => f.find('.ca-thread-title').textContent === 'Thread two', 'the second draft can be revisited')
+  assert.equal(prompt.value, 'Different draft for the second project')
+  assert.equal(model.value, 'custom-second-model')
+  assert.equal(effort.value, 'low')
+  prompt.value = '   '; f.fire(prompt, 'input')
+  assert.equal(await f.mounted.canClose(), true, 'clearing every unsent draft allows closing')
+})
+
+test('thread search filters navigation without changing the selected conversation or its draft', async t => {
+  const f = await fixture(t, ['one', 'two'])
+  const prompt = f.find('textarea[name="prompt"]'), search = f.find('.ca-thread-search')
+  prompt.value = 'Keep this draft in the selected first thread'; f.fire(prompt, 'input')
+  const subscriptions = f.streams.length, historyReads = f.count('/threads/one/messages')
+  search.value = 'Thread two'; f.fire(search, 'input')
+  assert.equal(f.all('button[data-thread-id]').length, 1)
+  assert.equal(f.find('button[data-thread-id="two"]').textContent.includes('Thread two'), true)
+  assert.equal(f.find('button[data-thread-id="one"]'), null)
+  assert.equal(f.find('.ca-thread-title').textContent, 'Thread one')
+  assert.match(f.find('.ca-transcript').textContent, /Initial transcript for one/)
+  assert.equal(prompt.value, 'Keep this draft in the selected first thread')
+  assert.equal(f.streams.length, subscriptions, 'search does not switch subscriptions')
+  assert.equal(f.count('/threads/one/messages'), historyReads, 'search does not reload the selected history')
+  search.value = 'there-is-no-such-project'; f.fire(search, 'input')
+  assert.equal(f.all('button[data-thread-id]').length, 0)
+  assert.match(f.find('.ca-thread-list').textContent, /没有匹配/)
+  assert.equal(f.find('.ca-thread-title').textContent, 'Thread one')
+  search.value = ''; f.fire(search, 'input')
+  assert.equal(f.all('button[data-thread-id]').length, 2)
+  assert.equal(f.find('button[data-thread-id="one"]').getAttribute('aria-current'), 'true')
+  assert.equal(prompt.value, 'Keep this draft in the selected first thread')
+})
+
+test('a submission accepted after switching threads cannot replace the selected transcript, status or draft', async t => {
+  const f = await fixture(t, ['one', 'two'], state => {
+    for (const current of state.values()) current.run = { ...current.run, status: 'completed', finishedAt: stamp }
+  })
+  const held = f.holdSubmission('one'), prompt = f.find('textarea[name="prompt"]')
+  prompt.value = 'A request submitted to the first thread'; f.fire(prompt, 'input')
+  f.fire(f.find('.ca-composer'), 'submit')
+  await until(() => held().started, 'the first submission is awaiting its response')
+  assert.equal(await f.mounted.canClose(), false, 'an unsettled submission prevents closing')
+  f.fire(f.find('button[data-thread-id="two"]'), 'click')
+  await until(() => f.find('.ca-thread-title').textContent === 'Thread two' && f.find('.ca-transcript').textContent.includes('Initial transcript for two'), 'another thread remains accessible while submitting')
+  await f.flush()
+  prompt.value = 'Keep the second thread draft'; f.fire(prompt, 'input')
+  held().release()
+  await until(() => f.find('.ca-composer button[type="submit"]').disabled === false, 'the pending request settles without blocking the second composer')
+  await f.flush()
+  assert.equal(f.submissions.length, 1)
+  assert.equal(f.submissions[0].threadId, 'one')
+  assert.equal(f.find('.ca-thread-title').textContent, 'Thread two')
+  assert.match(f.find('.ca-transcript').textContent, /Initial transcript for two/)
+  assert.doesNotMatch(f.find('.ca-transcript').textContent, /A request submitted to the first thread/)
+  assert.equal(f.find('.ca-cancel').hidden, true, 'the old response cannot mark the selected completed thread running')
+  assert.equal(prompt.value, 'Keep the second thread draft')
+  f.fire(f.find('button[data-thread-id="one"]'), 'click')
+  await until(() => f.find('.ca-thread-title').textContent === 'Thread one' && !f.find('.ca-cancel').hidden, 'the accepted Run is observed by returning to its original thread')
+  assert.equal(prompt.value, '', 'the accepted message is removed from only its original draft')
+})
+
+test('a failed submission after switching threads preserves its original draft without showing an error in the selected thread', async t => {
+  const f = await fixture(t, ['one', 'two'], state => {
+    for (const current of state.values()) current.run = { ...current.run, status: 'completed', finishedAt: stamp }
+  })
+  const held = f.holdSubmission('one', { failure: true }), prompt = f.find('textarea[name="prompt"]')
+  prompt.value = 'Retain the rejected message for a retry'; f.fire(prompt, 'input')
+  f.fire(f.find('.ca-composer'), 'submit')
+  await until(() => held().started, 'the first request is waiting for its rejection')
+  f.fire(f.find('button[data-thread-id="two"]'), 'click')
+  await until(() => f.find('.ca-thread-title').textContent === 'Thread two' && f.find('.ca-transcript').textContent.includes('Initial transcript for two'), 'the second thread loads before the rejection')
+  await f.flush()
+  prompt.value = 'The second thread remains independent'; f.fire(prompt, 'input')
+  held().release()
+  await until(() => !f.find('.ca-composer button[type="submit"]').disabled, 'the rejected request releases submission admission')
+  assert.equal(f.find('.ca-notice-close').parentElement.hidden, true, 'the first thread error is not attributed to the second thread')
+  assert.equal(prompt.value, 'The second thread remains independent')
+  assert.match(f.find('.ca-transcript').textContent, /Initial transcript for two/)
+  f.fire(f.find('button[data-thread-id="one"]'), 'click')
+  await until(() => f.find('.ca-thread-title').textContent === 'Thread one', 'the rejected draft can be revisited')
+  assert.equal(prompt.value, 'Retain the rejected message for a retry')
+})
+
+test('a late accepted submission keeps a newer draft written in its original thread while another thread is selected', async t => {
+  const f = await fixture(t, ['one', 'two'], state => {
+    for (const current of state.values()) current.run = { ...current.run, status: 'completed', finishedAt: stamp }
+  })
+  const held = f.holdSubmission('one'), prompt = f.find('textarea[name="prompt"]')
+  const open = async id => {
+    f.fire(f.find(`button[data-thread-id="${id}"]`), 'click')
+    await until(() => f.find('.ca-thread-title').textContent === `Thread ${id}` && f.find('.ca-transcript').textContent.includes(`Initial transcript for ${id}`), `thread ${id} loads`)
+    await f.flush()
+  }
+  prompt.value = 'The message whose response is delayed'; f.fire(prompt, 'input')
+  f.fire(f.find('.ca-composer'), 'submit')
+  await until(() => held().started, 'the first response is delayed')
+  await open('two')
+  await open('one')
+  prompt.value = 'A new follow-up that has not been sent'; f.fire(prompt, 'input')
+  await open('two')
+  held().release()
+  await until(() => !f.find('.ca-composer-hint').textContent.includes('正在发送'), 'the delayed response settles')
+  await open('one')
+  assert.equal(prompt.value, 'A new follow-up that has not been sent', 'only the accepted message is cleared, not later work')
+  assert.equal(await f.mounted.canClose(), false)
+})
+
+test('the draft manager can discard another thread draft without changing the selected conversation', async t => {
+  const f = await fixture(t, ['one', 'two'], state => {
+    for (const current of state.values()) current.run = { ...current.run, status: 'completed', finishedAt: stamp }
+  })
+  const prompt = f.find('textarea[name="prompt"]')
+  prompt.value = 'A draft that is no longer needed'; f.fire(prompt, 'input')
+  f.fire(f.find('button[data-thread-id="two"]'), 'click')
+  await until(() => f.find('.ca-thread-title').textContent === 'Thread two' && f.find('.ca-transcript').textContent.includes('Initial transcript for two'), 'the other conversation finishes loading')
+  await f.flush()
+  assert.equal(prompt.value, '')
+  assert.equal(await f.mounted.canClose(), false, 'the first thread draft still protects closing')
+  const subscriptions = f.streams.length, button = f.find('.ca-drafts-button')
+  assert.equal(button.hidden, false)
+  f.fire(button, 'click')
+  const dialog = f.find('.ca-drafts-dialog')
+  assert.equal(dialog.open, true)
+  assert.match(dialog.textContent, /Thread one/)
+  assert.match(dialog.textContent, /A draft that is no longer needed/)
+  const discard = f.find('.ca-draft-discard', dialog)
+  assert.equal(discard.getAttribute('aria-label'), '丢弃 Thread one 的草稿')
+  f.fire(discard, 'click')
+  assert.equal(await f.mounted.canClose(), true, 'the explicit discard removes the final draft guard')
+  assert.equal(button.hidden, true)
+  assert.match(dialog.textContent, /没有未发送草稿/)
+  assert.equal(f.find('.ca-thread-title').textContent, 'Thread two')
+  assert.match(f.find('.ca-transcript').textContent, /Initial transcript for two/)
+  assert.doesNotMatch(f.find('.ca-transcript').textContent, /A draft that is no longer needed/)
+  assert.equal(prompt.value, '')
+  assert.equal(f.find('button[data-thread-id="two"]').getAttribute('aria-current'), 'true')
+  assert.equal(f.streams.length, subscriptions, 'discarding a draft does not navigate or replace the current subscription')
+  assert.equal(f.submissions.length, 0)
 })

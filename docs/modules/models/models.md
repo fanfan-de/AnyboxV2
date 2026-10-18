@@ -8,7 +8,7 @@
 
 工厂 `createModelsComponent()`，组件名 `models`，注入 `models.store` 与 `models.vault`，一次提供四个服务。它不依赖目录组件、Session、Run、工具或浏览器。
 
-Anybox Harness 在 [server-models.ts](../../../src/applications/harness/server-models.ts) 只装配 Responses、标准 Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议。DeepSeek 使用标准 `chat-completions`。旧 DeepSeek 当前配置由停机时的一次性配置迁移改为标准协议，保留连接与配置 ID、凭据引用、epoch 和不可变历史；运行期不提供旧驱动或协议别名。旧协议历史保留供查看，不能续接执行，需要新建标准协议会话。
+Anybox Harness 在 [server-models.ts](../../../packages/app-harness/src/server-models.ts) 只装配 Responses、标准 Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议。DeepSeek 使用标准 `chat-completions`。旧 DeepSeek 当前配置由停机时的一次性配置迁移改为标准协议，保留连接与配置 ID、凭据引用、epoch 和不可变历史；运行期不提供旧驱动或协议别名。旧协议历史保留供查看，不能续接执行，需要新建标准协议会话。
 
 通用配置格式迁移不能无损转换参数时，保留原始 `value` 并标记 `formatVersion: 0` 只读待迁移，不能执行或静默丢弃未知字段。受信恢复数据必须与已安装协议、配置、账户、记录格式和执行语义兼容，不转换协议身份。
 

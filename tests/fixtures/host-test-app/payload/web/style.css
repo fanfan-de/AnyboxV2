@@ -1,0 +1,56 @@
+.abx-host-test {
+  --test-ink: #25272b;
+  --test-muted: #72767e;
+  --test-line: #e4e6e9;
+  box-sizing: border-box;
+  width: min(100%, 820px);
+  margin: 0 auto;
+  padding: 28px;
+  color: var(--test-ink);
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.abx-host-test *, .abx-host-test *::before, .abx-host-test *::after { box-sizing: border-box; }
+.abx-host-test [hidden] { display: none !important; }
+.abx-host-test .test-header, .abx-host-test .test-title, .abx-host-test .test-actions { display: flex; align-items: center; gap: 10px; }
+.abx-host-test .test-header { justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.abx-host-test h1 { margin: 0; font-size: 25px; line-height: 1.3; letter-spacing: -.6px; }
+.abx-host-test h2 { margin: 0 0 5px; font-size: 15px; font-weight: 650; }
+.abx-host-test .test-version { padding: 1px 7px; border: 1px solid var(--test-line); border-radius: 5px; color: var(--test-muted); font-size: 11px; }
+.abx-host-test .test-intro { margin: 9px 0 23px; color: var(--test-muted); }
+.abx-host-test .test-badge { padding: 4px 9px; border-radius: 6px; background: #edf3ee; color: #42714c; font-size: 12px; }
+.abx-host-test .test-badge[data-blocked="true"] { background: #fff4df; color: #8a611f; }
+.abx-host-test .test-tabs { display: flex; gap: 20px; margin-bottom: 20px; border-bottom: 1px solid var(--test-line); }
+.abx-host-test button { appearance: none; min-height: 34px; padding: 6px 11px; border: 1px solid #d9dce1; border-radius: 6px; background: #fff; color: var(--test-ink); font: inherit; font-size: 13px; cursor: pointer; }
+.abx-host-test button:hover:not(:disabled) { background: #f2f3f5; border-color: #b8bec7; }
+.abx-host-test button:focus-visible, .abx-host-test textarea:focus-visible, .abx-host-test [role="tabpanel"]:focus-visible { outline: 2px solid #657895; outline-offset: 3px; }
+.abx-host-test button:disabled { opacity: .4; cursor: default; }
+.abx-host-test button.test-primary { border-color: #353a43; background: #353a43; color: #fff; }
+.abx-host-test button.test-primary:hover:not(:disabled) { background: #20252c; }
+.abx-host-test .test-tabs button { min-height: 39px; padding: 0 1px 11px; border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; color: var(--test-muted); }
+.abx-host-test .test-tabs button[aria-selected="true"] { border-bottom-color: #353a43; color: var(--test-ink); font-weight: 600; }
+.abx-host-test .test-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+.abx-host-test .test-card { min-width: 0; padding: 19px; border: 1px solid var(--test-line); border-radius: 10px; background: #fff; }
+.abx-host-test .test-hint { margin: 0; color: var(--test-muted); font-size: 12px; }
+.abx-host-test .test-count { display: block; margin: 15px 0; font-size: 36px; line-height: 1; font-variant-numeric: tabular-nums; }
+.abx-host-test .test-task-status { min-height: 36px; margin: 15px 0; padding-top: 8px; color: #545963; font-size: 13px; }
+.abx-host-test .test-actions { flex-wrap: wrap; gap: 8px; }
+.abx-host-test .test-draft-card { grid-column: 1 / -1; }
+.abx-host-test label { display: block; margin: 17px 0 6px; font-size: 12px; font-weight: 600; }
+.abx-host-test textarea { display: block; width: 100%; min-height: 96px; margin: 0 0 12px; padding: 10px 11px; resize: vertical; border: 1px solid #d9dce1; border-radius: 6px; background: #fcfcfd; color: var(--test-ink); font: inherit; }
+.abx-host-test textarea::placeholder { color: #999da5; }
+.abx-host-test .test-lifecycle { display: grid; gap: 15px; }
+.abx-host-test .test-details { margin: 15px 0 0; }
+.abx-host-test .test-detail-row { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 14px; padding: 7px 0; border-top: 1px solid #f0f1f3; font-size: 12px; }
+.abx-host-test dt { color: var(--test-muted); }
+.abx-host-test dd { margin: 0; overflow-wrap: anywhere; }
+.abx-host-test .test-log { max-height: 230px; overflow: auto; margin: 13px 0 0; padding: 0; list-style: none; font-size: 12px; }
+.abx-host-test .test-log li { display: flex; gap: 15px; padding: 5px 0; overflow-wrap: anywhere; }
+.abx-host-test .test-log time { flex: 0 0 auto; color: #8a8f98; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .abx-host-test { padding: 20px 16px; }
+  .abx-host-test h1 { font-size: 22px; }
+  .abx-host-test .test-grid { grid-template-columns: 1fr; }
+  .abx-host-test .test-card { padding: 16px; }
+  .abx-host-test .test-draft-card { grid-column: auto; }
+  .abx-host-test .test-actions .test-hint { width: 100%; margin-top: 3px; }
+}

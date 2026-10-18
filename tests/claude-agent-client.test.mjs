@@ -4,16 +4,16 @@ import { createServer } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { startApplicationHttpServer } from '../dist/host/http-server.js'
-import { createApplicationCatalog } from '../dist/host/applications/registration.js'
-import { shellAssets } from '../dist/host/assets.js'
-import { createExecutionHost } from '../dist/host/execution.js'
-import { createClientHost } from '../dist/entrypoints/client-main.js'
-import { allowedClaudeAgentProxyPath, createClaudeAgentGateway } from '../dist/applications/claude-agent/client/gateway.js'
-import { claudeAgentClientApplication } from '../dist/applications/claude-agent/client/registration.js'
-import { claudeAgentServerApplication } from '../dist/applications/claude-agent/registration.js'
-import { claudeAgentSdkServiceKey } from '../dist/applications/claude-agent/core/sdk/port.js'
-import { DirectoryPickerFailure } from '../dist/host/directory-picker.js'
+import { startApplicationHttpServer } from '../packages/host/dist/http-server.js'
+import { createApplicationCatalog } from '../packages/host/dist/applications/registration.js'
+import { shellAssets } from '../packages/host/dist/assets.js'
+import { createExecutionHost } from '../packages/host/dist/execution.js'
+import { createClientHost } from '../packages/distribution/dist/entrypoints/client-main.js'
+import { allowedClaudeAgentProxyPath, createClaudeAgentGateway } from '../packages/app-claude-agent/dist/client/gateway.js'
+import { claudeAgentClientApplication } from '../packages/app-claude-agent/dist/client/registration.js'
+import { claudeAgentServerApplication } from '../packages/app-claude-agent/dist/registration.js'
+import { claudeAgentSdkServiceKey } from '../packages/app-claude-agent/dist/core/sdk/port.js'
+import { DirectoryPickerFailure } from '../packages/directory-picker/dist/index.js'
 import { fakeSdk, sampleResult, waitFor } from './helpers/claude-agent.mjs'
 
 const base = '/api/client/v1/apps/claude-agent'
@@ -30,10 +30,10 @@ test('the proxy whitelist admits only product control and this application\'s ro
     ['POST', '/apps/claude-agent/threads/t/runs', true], ['GET', '/apps/claude-agent/runs/r/view', true], ['GET', '/apps/claude-agent/runs/r/wait', true], ['POST', '/apps/claude-agent/runs/r/cancel', true],
     ['POST', '/apps/claude-agent/approvals/a', true], ['GET', '/apps/claude-agent/events', true], ['GET', '/apps/agent/sessions', false], ['GET', '/models', false], ['POST', '/apps/claude-agent/threads/%2e%2e/runs', false],
     ['GET', '/apps/claude-agent/runs/r/events', false], ['POST', '/apps/claude-agent/threads/t', false],
-    ['GET', '/apps/claude-agent/projects/recent', true], ['GET', '/apps/claude-agent/models/recent', true], ['GET', '/apps/claude-agent/directories', true], ['POST', '/apps/claude-agent/directories', false], ['GET', '/apps/claude-agent/projects', false],
+    ['GET', '/apps/claude-agent/projects/recent', true], ['GET', '/apps/claude-agent/models', true], ['POST', '/apps/claude-agent/models', false], ['GET', '/apps/claude-agent/models/recent', true], ['GET', '/apps/claude-agent/directories', true], ['POST', '/apps/claude-agent/directories', false], ['GET', '/apps/claude-agent/projects', false],
   ]) assert.equal(allowedClaudeAgentProxyPath(method, path), expected, `${method} ${path}`)
 })
-test('the gateway lists host connections, forwards only whitelisted routes with the device credentials and streams SSE through', async () => {
+test('the gateway lists application connections, forwards only whitelisted routes with device credentials and streams SSE through', async () => {
   const instanceId = '11111111-1111-1111-1111-111111111111', received = []
   const upstream = createServer((req, res) => {
     received.push({ url: req.url, headers: req.headers })
@@ -74,7 +74,7 @@ test('the gateway lists host connections, forwards only whitelisted routes with 
     await reader.cancel().catch(() => {})
   } finally { await gateway.close(); await new Promise(resolve => upstream.close(resolve)) }
 })
-test('both client applications share the host connection library and the Claude Agent client reaches a remote execution device', { timeout: 30_000 }, async t => {
+test('Claude Agent owns its connections and reaches a remote execution device while Harness stays closed', { timeout: 30_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-claude-agent-client-')), secrets = new Map()
   const openEntry = (namespace, id) => { const key = `${namespace}:${id}`; return { getPassword: async () => secrets.get(key), setPassword: async value => { secrets.set(key, value) }, deleteCredential: async () => secrets.delete(key) } }
   const sdk = fakeSdk({ onClose(run) { run.finish({ kind: 'failed', error: { code: 'cancelled', message: 'terminated' } }); setTimeout(() => run.exit(), 10) } })
@@ -92,8 +92,9 @@ test('both client applications share the host connection library and the Claude 
   assert.equal(client.products.get('claude-agent').state, 'disabled')
   await request(base + '/connections', undefined, 503)
   const token = await execution.root.get('host.access').issue('client')
-  const saved = await client.root.get('client.connections').save({ name: 'Local device', endpoint: execution.url, token: token.token })
   assert.equal((await request('/api/client/v1/products/claude-agent/open', {})).state, 'running')
+  assert.equal(client.root.get('client.connections'), undefined)
+  const saved = await request(base + '/connections', { name: 'Local device', endpoint: execution.url, token: token.token })
   assert.ok(client.root.get('claude-agent.gateway')); assert.equal(client.root.get('client.gateway'), undefined, 'the Harness client application stays closed')
   const listed = await request(base + '/connections')
   assert.equal(listed.connections[0].id, saved.id); assert.equal(listed.localInstanceId, execution.instance.instanceId)
@@ -111,7 +112,7 @@ test('both client applications share the host connection library and the Claude 
   assert.equal((await request(device + `/apps/claude-agent/threads/${thread.id}`)).nativeSessionId, 's')
   await request(device + '/apps/agent/sessions', undefined, 404)
   await request('/api/client/v1/products/claude-agent/stop', {})
-  assert.equal(client.root.get('claude-agent.gateway'), undefined); assert.ok(client.root.get('client.connections'), 'connections remain a resident host provider')
+  assert.equal(client.root.get('claude-agent.gateway'), undefined); assert.equal(client.root.get('claude-agent.connections'), undefined, 'connections exit with their application')
   assert.equal(execution.products.get('claude-agent').state, 'running', 'closing the client application does not stop the execution device')
 })
 test('the native directory window is offered only for the confirmed local connection, with the connection binding and picker failures mapped', async () => {

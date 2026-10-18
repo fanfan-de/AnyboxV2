@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createPendingStore, createSessionController } from '../dist/applications/harness/web/session-client.js'
+import { createPendingStore, createSessionController } from '../packages/app-harness/dist/web/session-client.js'
 
 const exchange = (id, text) => ({ id, blocks: [{ id: 'item-0', type: 'responses.message', content: [{ id: 'item-0:part-0', type: 'output_text', text }] }] })
 

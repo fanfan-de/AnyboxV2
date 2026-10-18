@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { projectServiceKey } from '../dist/applications/harness/core/project/component.js'
-import { processToolsServiceKey, createProcessToolsComponent } from '../dist/applications/harness/core/tool/process-component.js'
+import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
+import { processToolsServiceKey, createProcessToolsComponent } from '../packages/app-harness/dist/core/tool/process-component.js'
 
 async function fixture(options = {}, projectLookup) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-process-tools-')))
@@ -62,12 +62,21 @@ test('stdin remains open for Codex and process session IDs cannot cross Run scop
 })
 
 test('normal scope cleanup cancels live groups and waits for actual exit', async () => {
-  const f = await fixture()
+  // Leave escalation headroom; this test controls exit explicitly rather than racing
+  // a 20 ms trap against the fixture's normal 40 ms forced-kill timer under suite load.
+  const f = await fixture({ terminationGraceMs: 5_000 })
   try {
     const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    await result(scope.execute('codex_exec_command', { cmd: "trap 'sleep 0.02; printf cleaned > cleaned; exit' TERM; printf ready > started; while :; do sleep 1; done", login: false, yield_time_ms: 0 }))
+    await result(scope.execute('codex_exec_command', { cmd: "trap 'printf cleaning > cleaning; while [ ! -e release-cleanup ]; do sleep 0.01; done; printf cleaned > cleaned; exit' TERM; printf ready > started; while :; do sleep 1; done", login: false, yield_time_ms: 0 }))
     await untilFile(join(f.directory, 'started'))
-    const cleanup = await result(scope.close())
+    const closing = scope.close()
+    let exited = false
+    void closing.done.then(() => { exited = true })
+    await untilFile(join(f.directory, 'cleaning'))
+    assert.equal(exited, false)
+    assert.equal(existsSync(join(f.directory, 'cleaned')), false)
+    writeFileSync(join(f.directory, 'release-cleanup'), '')
+    const cleanup = await result(closing)
     assert.equal(cleanup.cleanup, 'completed')
     assert.equal(cleanup.processes[0].terminated, true)
     assert.ok(existsSync(join(f.directory, 'cleaned')))
