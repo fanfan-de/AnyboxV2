@@ -34,7 +34,7 @@ Claude Agent 是 Anybox 正式目录中的第二个应用（稳定 ID `claude-ag
 ### 进程与取消
 
 - 每个 Run 一个 SDK 子进程，归属由 Nya 的 Fiber/Effect 登记。每轮原生 `result` 推进追加队列，输入与所属后台工作收束后才确定 Run 的业务结果（`result`），子进程实际退出才是 `done`，两者不混淆：Run 状态只在 `done` 之后结算。
-- Unix 上通过 `spawnClaudeCodeProcess` 以 `detached: true` 启动进程组，自行接管 stderr 尾部用于错误展示；子进程退出时对整个进程组 SIGKILL，迭代器结束后 10 秒仍未退出也 SIGKILL。Windows 没有进程组，交给 SDK 自己 spawn，`done` 以迭代器结束并 `close()` 近似。
+- Unix 上通过 `spawnClaudeCodeProcess` 以 `detached: true` 启动进程组，自行接管 stderr 尾部用于错误展示；子进程退出时对整个进程组 SIGKILL，迭代器结束后 10 秒仍未退出也 SIGKILL。Windows 同样由本应用的 SDK spawn 回调保留真实 CLI 句柄，隐藏窗口、显式终止并等待进程及管道 close；不再以迭代器结束近似实际退出。此实现仍不承诺 Harness Job Object 的工具树清理。SDK 对 JavaScript 入口选择裸 node 时，普通 Node 宿主使用当前 process.execPath，不依赖启动 shim 的 PATH；原生 claude.exe 继续直接运行。
 - 浏览器或客户端断开不取消 Run；待审批请求在断开后继续等待。用户取消 Run 时，待审批请求一律以 deny 结清，再执行取消流程。应用停止或整根关闭时先关准入，再取消并等待全部子进程退出。Run 不跨进程重启存活（重启时索引里的 running/cancelling 行标为 interrupted），线程可以凭原生 session id 继续。
 
 ### 边界与品牌

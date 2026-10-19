@@ -88,7 +88,7 @@ GET/HEAD 的响应观察断开会关闭代理的上游请求与流，使旧页�
 
 独立 worker、系统服务及其他管理者拥有的角色仍持使用凭证时返回 version-in-use 或 use-unavailable，不替其管理者关闭资源。冻结只使用通用 Activity/Products 保护，应用忙碌不会默认取消工作。远端实例、已接受 Run、附着与连接均不受本机卸载控制。
 
-新角色 ready 不等于卸载完成。批次先进入 reclaiming，由 [reclamation.ts](../../../packages/host/src/package-management/reclamation.ts) 在新客户端中逐个调用注册库 `withReclamation`，排他复核使用退出及永久凭证栅栏，再回收固定身份容器。它不导入应用、不调用迁移，也不扫描业务目录。注册库装配时持有固定真实根目录句柄和 dev/ino，在文件回调前复核，并通过私有根锚与适配器捕获根比较；fresh realpath 不能把已替换的原路径重新授权为其他删除根。目录身份和祖先路径必须保持原样；符号链接只删除链接目录项，硬链接只删除该目录项，不读写外部目标；不跟随链接扩大删除范围。受管容器缺失可在显式回收尝试中确认无需继续删除。使用锚、注册历史与业务数据保留。原根或句柄改变固定返回 reclamation-root-changed；Windows 目前没有受支持的安全目录句柄，回收返回 reclamation-root-unavailable，账本及纯界面安装仍可使用；页面明确尚未卸载并保留恢复记录。注册库 Effect 在受控文件工作实际退出后释放原根句柄。
+新角色 ready 不等于卸载完成。批次先进入 reclaiming，由 [reclamation.ts](../../../packages/host/src/package-management/reclamation.ts) 在新客户端中逐个调用注册库 `withReclamation`，排他复核使用退出及永久凭证栅栏，再回收固定身份容器。它不导入应用、不调用迁移，也不扫描业务目录。注册库装配时持有固定真实根目录句柄和 dev/ino，在文件回调前复核，并通过私有根锚与适配器捕获根比较；fresh realpath 不能把已替换的原路径重新授权为其他删除根。目录身份和祖先路径必须保持原样；符号链接只删除链接目录项，硬链接只删除该目录项，不读写外部目标；不跟随链接扩大删除范围。受管容器缺失可在显式回收尝试中确认无需继续删除。使用锚、注册历史与业务数据保留。原根或句柄改变固定返回 reclamation-root-changed；Windows Node 使用同样的持有目录句柄、dev/ino、祖先身份及使用锚核对；文件数据仍逐个同步，目录同步差异见[安装文件系统边界](installation.md#文件系统平台边界)。注册库 Effect 在受控文件工作实际退出后释放原根句柄。
 
 只有全部目标安装为 removed、对应 remove 操作为 completed，才由 `completeRemoval` 完成原批次。部分删除、fsync 失败、路径身份变化或关闭中断均保留 reclaiming/恢复事实，不能显示已卸载或推断磁盘已释放；父监督器在失败角色实际退出后进入空管理客户端，供用户显式 resume 原批次，不自动重放应用启动或删除。界面显示“核对并恢复卸载”，CLI 使用原 `activation <id> --action resume`。GET/inspect 只查事实。
 

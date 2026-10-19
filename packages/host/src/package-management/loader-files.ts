@@ -1,3 +1,4 @@
+import { packageFileModeMatches } from './filesystem-platform.js'
 import { constants } from 'node:fs'
 import { lstat, open, readdir, realpath } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -106,7 +107,7 @@ async function verifyContainer(directory: string, identity: PackageIdentity, opt
       if (info.isDirectory()) { if (![...expected.keys()].some(path => path.startsWith(local + '/'))) fail('package-loader-unindexed-content'); await tree(child, local) }
       else {
         const item = expected.get(local)
-        if (!item || !info.isFile() || info.nlink !== 1 || info.size !== item.size || (info.mode & 0o777) !== item.mode) fail('package-loader-content-changed')
+        if (!item || !info.isFile() || info.nlink !== 1 || info.size !== item.size || !packageFileModeMatches(info.mode, item.mode)) fail('package-loader-content-changed')
         if (hash(await read(child, item.size)) !== item.sha256) fail('package-loader-content-changed')
         seen.add(local)
       }

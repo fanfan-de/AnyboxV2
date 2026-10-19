@@ -2,7 +2,7 @@
 
 [文档首页](README.md) · [Computer 模块](modules/computers/README.md) · [工具模块](modules/tools/README.md) · [部署](harness-server-deployment.md)
 
-2026-10-19 将 `feat/composable-units-u0` 的 `a2150b2` 中 Windows Computer 实现迁入当前 workspace 结构。功能属于 `@anybox/app-harness` 0.1.2；Claude Agent 的 SDK、版本和执行路径没有变化。
+2026-10-19 将 `feat/composable-units-u0` 的 `a2150b2` 中 Windows Computer 实现迁入当前 workspace 结构。功能属于 `@anybox/app-harness` 0.1.2。Claude Agent 的 SDK 适配独立维护，不使用此 Computer 后端；后续全仓 Windows 兼容修复见其[SDK 手册](modules/claude-agent/sdk.md#windows-兼容验证2026-10-19)。
 
 ## 归属与运行边界
 
@@ -63,3 +63,13 @@ Worker CLI 仍是本包 `entrypoints/computer-worker-main`，distribution 只提
 - `tests/native-worker-lifecycle.test.mjs`、`computer-worker-startup.test.mjs`、`computer-worker-resume.test.mjs`：真实 worker、启动竞争、观察关闭、失败清理与重启恢复。
 
 真实模型和系统凭据仍按原门控分别记录；测试替身不代表真实平台 Vault、跨机器服务或桌面发行已验收。
+
+## Windows 全仓兼容收尾（2026-10-19）
+
+在上述 Computer 迁入之后，继续修复宿主、Models 与 Claude 应用各自的 Windows 兼容边界：宿主使用 NTFS 可表示属性核对签名载荷，保留原始逻辑模式与内容摘要，安装和回收区分目录同步与普通文件同步，并实际持有目录身份句柄；Models 归一系统凭据缺失值；Claude SDK JavaScript 入口使用当前 Node，所有查询与 Run 等待真实 ChildProcess 及管道 close。`web:local` 在 Windows 经继承的私有 IPC 关闭子角色并等待退出，Unix 保留信号关闭；各应用仍拥有自己的业务和资源清理。
+
+测试夹具修正本机路径、CRLF 文档读取、无特权 junction、真实计时等待及 SQLite 所有者关闭顺序。活跃 SQLite 替换被 Windows 内核拒绝时验证拒绝本身，并在退出后继续验证复制锚的身份拒绝；没有用跳过或放宽完整性、退出和清理断言消除失败。
+
+最终根 `npm run check` 退出 0：全部 workspace 的严格类型检查、重新构建和资源校验通过；**2,086 项测试，2,033 通过、0 失败、0 取消、53 项既有门控跳过**，测试耗时 175,224.3656 ms。没有新增跳过项。完整日志为 `data/windows-full-compat-check.log`；专项日志为 `data/windows-models-compat-check.log`、`data/windows-claude-agent-final.log`、`data/windows-host-command-recheck.log`、`data/windows-host-package-third.log` 与 `data/windows-root-runtime-recheck.log`。
+
+本节替代初始迁入结果中“全仓未通过”的当前状态，历史记录保留。Windows Node 目录同步的断电保证及宿主 prepare / 独立包角色 / Electron 成品的既有支持范围仍按各模块手册说明；真实模型与系统凭据门控没有启用。

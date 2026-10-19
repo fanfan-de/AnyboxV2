@@ -261,9 +261,13 @@ test('independent launch failures before child creation release the managed pare
       Object.defineProperty(process.versions, 'electron', { value: 'fixture', configurable: true })
       restore = () => { if (descriptor) Object.defineProperty(process.versions, 'electron', descriptor); else delete process.versions.electron }
     } else if (kind === 'fork') {
+      // Reach the injected pre-spawn failure independently of the platform's
+      // installed-role support gate; no real child may start in this case.
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+      if (process.platform === 'win32') Object.defineProperty(process, 'platform', { ...platform, value: 'linux' })
       const mock = t.mock.method(childProcess, 'fork', () => { throw Object.assign(Error('fork rejected before spawn'), { code: 'fixture-fork-failed' }) })
       syncBuiltinESMExports()
-      restore = () => { mock.mock.restore(); syncBuiltinESMExports() }
+      restore = () => { mock.mock.restore(); syncBuiltinESMExports(); Object.defineProperty(process, 'platform', platform) }
     }
     try {
       const response = await fetch(host.url + '/fixture/launch', { method: 'POST', headers: { Origin: host.url } })

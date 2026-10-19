@@ -2,6 +2,7 @@
 import { fork } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { installProcessShutdown } from './process-shutdown.js'
 const children = new Set<ChildProcess>()
 let clientStarted = false, stopping = false
 const start = (file: string, env = process.env) => {
@@ -21,5 +22,14 @@ harnessServer.on('message', value => {
   }
 })
 harnessServer.once('exit', () => { clearTimeout(timer); startClient() })
-const stop = () => { if (stopping) return; stopping = true; clearTimeout(timer); for (const child of children) child.kill('SIGTERM') }
-process.once('SIGINT', stop); process.once('SIGTERM', stop)
+installProcessShutdown(async () => {
+  stopping = true; clearTimeout(timer)
+  await Promise.all([...children].map(child => new Promise<void>(resolve => {
+    child.once('exit', () => resolve())
+    // Windows kill('SIGTERM') terminates Node immediately, bypassing resource cleanup.
+    if (process.platform === 'win32') {
+      // A role disconnects only after close has finished; join its pending exit.
+      if (child.connected) child.send({ type: 'anybox-role-stop' }, () => {})
+    } else child.kill('SIGTERM')
+  })))
+}, () => { process.stderr.write('Anybox launcher shutdown failed\n') })

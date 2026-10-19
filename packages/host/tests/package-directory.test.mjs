@@ -1,3 +1,4 @@
+import { symbolicAlias } from './helpers/filesystem-alias.mjs'
 import assert from 'node:assert/strict'
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
@@ -115,7 +116,12 @@ test('unsigned directories without an index use the same ordinary modes through 
   assert.equal(explicit.files.find(file => file.path.startsWith('payload/')).mode, 493)
   await chmod(join(root, 'payload/web/app.js'), 0o644)
   const mismatched = await readApplicationDirectory(root)
-  assert.throws(() => verifyApplicationPackage(mismatched, options()), failure('file-integrity-mismatch'))
+  if (process.platform === 'win32') {
+    assert.equal(verifyApplicationPackage(mismatched, options()).files.find(file => file.path.startsWith('payload/')).mode, 493, 'NTFS preserves the signed executable mode as logical metadata')
+    await writeFile(join(root, 'payload/web/app.js'), 'tampered content')
+    const tampered = await readApplicationDirectory(root)
+    assert.throws(() => verifyApplicationPackage(tampered, options()), failure('file-integrity-mismatch'))
+  } else assert.throws(() => verifyApplicationPackage(mismatched, options()), failure('file-integrity-mismatch'))
 })
 
 test('filesystem directories are copied without altering source files or requiring compression', async t => {
@@ -133,7 +139,7 @@ test('filesystem directories are copied without altering source files or requiri
 test('filesystem directory reader rejects links, hard links, unknown empty directories and oversized files', async t => {
   const root = await temporary(t)
   await materialize(root, localEntries())
-  await symlink(join(root, 'payload/web/app.js'), join(root, 'payload/link.js'))
+  await symbolicAlias(join(root, 'payload/web/app.js'), join(root, 'payload/link.js'))
   await assert.rejects(readApplicationDirectory(root), failure('unsafe-file-kind'))
   await rm(join(root, 'payload/link.js'))
   await link(join(root, 'payload/web/app.js'), join(root, 'payload/hard.js'))
@@ -144,7 +150,7 @@ test('filesystem directory reader rejects links, hard links, unknown empty direc
   await rm(join(root, 'payload/unused'), { recursive: true })
   await assert.rejects(readApplicationDirectory(root, { limits: { fileBytes: 1 } }), failure('expanded-size-limit'))
   const alias = `${root}-link`
-  await symlink(root, alias); t.after(() => rm(alias, { force: true }))
+  await symbolicAlias(root, alias); t.after(() => rm(alias, { force: true }))
   await assert.rejects(readApplicationDirectory(alias), failure('unsafe-file-kind'))
 })
 

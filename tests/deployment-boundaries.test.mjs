@@ -44,7 +44,7 @@ test('client has its own root without Models or Harness services and cleans up f
 test('combined launcher still starts the client when local Harness startup fails and joins its child on stop', { timeout: 10000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'anybox-launcher-')); let child
   try {
-    child = spawn(process.execPath, ['packages/distribution/dist/entrypoints/serve.js'], { cwd, env: { ...process.env, ANYBOX_LLM_API: 'invalid-for-test', ANYBOX_WEB_PORT: '0', ANYBOX_CLIENT_DATABASE: join(dir, 'client.sqlite') }, stdio: ['ignore', 'pipe', 'pipe'] })
+    child = spawn(process.execPath, ['packages/distribution/dist/entrypoints/serve.js'], { cwd, env: { ...process.env, ANYBOX_LLM_API: 'invalid-for-test', ANYBOX_WEB_PORT: '0', ANYBOX_CLIENT_DATABASE: join(dir, 'client.sqlite') }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
     let output = ''
     const ready = new Promise((resolve, reject) => {
       child.stdout.on('data', bytes => { output += bytes; const url = /Anybox Client: (http:\/\/127.0.0.1:\d+)/.exec(output)?.[1]; if (url) resolve(url) })
@@ -55,7 +55,10 @@ test('combined launcher still starts the client when local Harness startup fails
     const response = await fetch(url + '/api/client/v1/products/agent/open', { method: 'POST', headers: { Origin: url, 'Content-Type': 'application/json' }, body: '{}' })
     assert.equal(response.status, 200)
     assert.equal((await fetch(url + '/api/client/v1/connections')).status, 200)
-    const exited = once(child, 'exit'); child.kill('SIGTERM'); assert.equal((await exited)[0], 0)
+    const exited = once(child, 'exit')
+    if (process.platform === 'win32') child.send({ type: 'anybox-role-stop' })
+    else child.kill('SIGTERM')
+    assert.equal((await exited)[0], 0)
     await assert.rejects(fetch(url))
     const root = new Context(); await root.installComponent(createLocalSqliteComponent(join(dir, 'client.sqlite'))); await root.fiber.dispose()
   } finally { child?.kill('SIGKILL'); await rm(dir, { recursive: true, force: true }) }

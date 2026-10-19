@@ -38,4 +38,6 @@ SQLite 使用 `catalog_cache(cache_key, record)` 和自身 `user_version=1`，�
 
 [catalog.test.mjs](../../../packages/models/tests/catalog.test.mjs) 覆盖持久化重开、来源隔离、排他释放、初始化后备、保留路径及链接别名、旧记录转换与损坏缓存启动。当前宿主的 [installHarnessServerModels](../../../packages/app-harness/src/server-models.ts) 将 Models 配置和业务数据库传入 `reservedPaths`。
 
+链接别名测试在 Windows 使用目录 junction 指向同一个真实数据库，保留独立硬链接校验，不要求启用开发者模式或提升权限；Unix 继续覆盖文件符号链接。临时目录删除前先等待缓存组件关闭并释放 SQLite。
+
 替换缓存只需实现 `ModelsCatalogCache`，保持原子替换和可观察存储状态。参见 [目录调度](catalog.md) 与 [配置存储](store.md)。

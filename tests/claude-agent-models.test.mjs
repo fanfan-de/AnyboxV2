@@ -61,6 +61,12 @@ test('model discovery uses the current environment initialization without a prom
   assert.deepEqual(validateRunInput({ prompt: 'hello', idempotencyKey: 'model', model: model.value }).model, model.value, 'advertised long context aliases can be executed')
   assert.equal(validateRunInput({ prompt: 'hello', idempotencyKey: 'provider', model: model.resolvedModel }).model, model.resolvedModel)
 })
+test('JavaScript SDK entrypoints use the running Node interpreter when PATH contains no node launcher', async t => {
+  const f = await fixture(t, 'reply', { env: { ...process.env, PATH: '', Path: '' } })
+  assert.deepEqual(await f.sdk.listAvailableModels(f.directory), { schemaVersion: 1, models: [model] })
+  assert.equal(exited((await f.started()).pid), true, 'the exact interpreter is joined through actual child exit')
+})
+
 test('unexpected tool permission requests during discovery are denied without asking the user', async t => {
   const f = await fixture(t, 'permission')
   assert.deepEqual(await f.sdk.listAvailableModels(f.directory), { schemaVersion: 1, models: [model] })

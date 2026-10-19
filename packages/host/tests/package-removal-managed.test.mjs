@@ -1,3 +1,4 @@
+import { symbolicAlias } from './helpers/filesystem-alias.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { generateKeyPairSync, createHash, randomUUID } from 'node:crypto'
@@ -120,7 +121,7 @@ test('unsafe code container reclamation remains recoverable and never touches it
   await f.restart()
   const path = container(f.packageDirectory, identity), held = `${path}.held`, outside = join(f.directory, 'outside-business')
   await writeFile(outside, 'must survive')
-  await rename(path, held); await symlink(f.directory, path)
+  await rename(path, held); await symbolicAlias(f.directory, path)
   const batch = await f.prepare('remove', ['one']), blocked = await f.commit(batch, 'recovery-required')
   assert.equal(blocked.activations.find(item => item.id === batch.id).phase, 'recovery-required')
   assert.notEqual(blocked.installations.find(item => item.appId === 'one').installed[0].state, 'removed')

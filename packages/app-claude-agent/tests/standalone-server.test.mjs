@@ -36,9 +36,12 @@ function sdk() {
   }
   return { calls, component: { name: 'standalone-test-sdk', apply(ctx) { ctx.provide(claudeAgentSdkServiceKey, port) } } }
 }
+const cleanups = new WeakMap()
+const afterClose = (t, close) => cleanups.get(t).push(close)
 async function directory(t) {
   const path = await mkdtemp(join(tmpdir(), 'claude-agent-standalone-'))
-  t.after(() => rm(path, { recursive: true, force: true }))
+  const closing = []; cleanups.set(t, closing)
+  t.after(async () => { for (const close of closing.reverse()) await close(); await rm(path, { recursive: true, force: true }) })
   return path
 }
 const config = path => parseClaudeAgentServerConfig({ ANYBOX_HARNESS_DATABASE: path })
@@ -56,7 +59,7 @@ test('standalone configuration keeps the existing business path and only adds ap
 
 test('business runtime opens without application activity or owner authentication services', async t => {
   const path = join(await directory(t), 'harness.sqlite'), root = new Context(), fake = sdk()
-  t.after(() => root.fiber.dispose())
+  afterClose(t, () => root.fiber.dispose())
   await root.installComponent(createLocalSqliteComponent(path))
   const runtime = createClaudeAgentRuntime(root, {}, { sdkComponent: fake.component })
   await runtime.open()
@@ -76,7 +79,7 @@ test('standalone listener reads legacy identity and tokens, streams events and w
   old.close()
   const fake = sdk(), server = await createClaudeAgentServer(config(path), { sdkComponent: fake.component, runs: { cancel: { interruptTimeoutMs: 1, resultTimeoutMs: 1, exitTimeoutMs: 1 } } })
   let released = false
-  t.after(async () => { for (const call of fake.calls) { call.finish(result); call.exit() } await server.close() })
+  afterClose(t, async () => { for (const call of fake.calls) { call.finish(result); call.exit() } await server.close() })
   assert.equal(server.instance.instanceId, instanceId)
   const anonymous = await fetch(server.url + '/api/v1/apps/claude-agent/threads')
   assert.equal(anonymous.status, 401)
@@ -115,7 +118,7 @@ test('standalone listener reads legacy identity and tokens, streams events and w
 
 test('token revocation closes authenticated streams and prevents subsequent requests', async t => {
   const server = await createClaudeAgentServer(config(join(await directory(t), 'harness.sqlite')), { sdkComponent: sdk().component })
-  t.after(() => server.close())
+  afterClose(t, () => server.close())
   const access = server.root.get(hostAccessServiceKey), owner = await access.issue('Owner'), viewer = await access.issue('Viewer')
   const stream = await request(server, viewer.token, 'GET', '/api/v1/apps/claude-agent/events?threadId=test')
   const reader = stream.body.getReader(); await reader.read()
@@ -128,7 +131,7 @@ test('token revocation closes authenticated streams and prevents subsequent requ
 
 test('shutdown joins a Run still persisting its index and cannot launch it after admission closes', async t => {
   const fake = sdk(), server = await createClaudeAgentServer(config(join(await directory(t), 'harness.sqlite')), { sdkComponent: fake.component })
-  t.after(() => server.close())
+  afterClose(t, () => server.close())
   const runs = server.root.get(claudeAgentRunsServiceKey), store = server.root.get('claude-agent.store')
   const thread = await runs.createThread({ projectPath: process.cwd() })
   let release, stored
@@ -161,7 +164,7 @@ test('CLI help lists commands before reading invalid configuration or creating r
 
 test('access component restart replaces listener authentication and revocation while retaining the same port and token', async t => {
   const root = new Context(), path = join(await directory(t), 'harness.sqlite')
-  t.after(() => root.fiber.dispose())
+  afterClose(t, () => root.fiber.dispose())
   await root.installComponent(createLocalSqliteComponent(path))
   const accessFiber = root.installComponent(createClaudeAgentAccessComponent())
   await accessFiber

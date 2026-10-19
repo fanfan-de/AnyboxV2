@@ -244,9 +244,6 @@ export function createPackageRegistryComponent(config: { directory: string; now?
         const initial = lstatSync(directory)
         if (!initial.isDirectory() || initial.isSymbolicLink() || realpathSync(directory) !== directory) throw fail('reclamation-root-changed')
         reclamationRoot = frozen({ directory, device: initial.dev, inode: initial.ino })
-        // Windows may reject directory handles; its existing ledger and interface-only
-        // installation remain usable, while destructive reclamation stays unavailable.
-        if (process.platform === 'win32') return
         rootDescriptor = openSync(directory, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY)
         assertReclamationRoot()
       } catch (error) {

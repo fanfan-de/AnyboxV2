@@ -11,10 +11,13 @@ import { startManagedApplicationHost } from '../dist/package-management/managed-
 
 test('the minimal host CLI opens an empty lifecycle shell, persists only host domains and exits on SIGTERM', { timeout: 15000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-minimum-cli-'))
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../dist/main.js', import.meta.url)), 'serve'], {
+  // Deliver the existing shutdown handler over the test's private channel on Windows;
+  // Windows kill('SIGTERM') terminates Node before its handler can run.
+  const preload = 'data:text/javascript,' + encodeURIComponent("process.on('message', message => { if (message === 'test-stop') process.emit('SIGTERM') })")
+  const child = spawn(process.execPath, [...(process.platform === 'win32' ? ['--import', preload] : []), fileURLToPath(new URL('../dist/main.js', import.meta.url)), 'serve'], {
     cwd: directory, env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '', ANYBOX_WEB_PORT: '0',
       ANYBOX_CLIENT_DATABASE: join(directory, 'control.sqlite'), ANYBOX_APPLICATION_DIRECTORY: join(directory, 'applications') },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true,
   })
   let stderr = '', exited = false
   const done = once(child, 'exit').then(result => { exited = true; return result })
@@ -35,7 +38,8 @@ test('the minimal host CLI opens an empty lifecycle shell, persists only host do
   assert.deepEqual(await (await fetch(url + '/api/client/v1/products')).json(), [])
   assert.equal((await fetch(url + '/api/client/v1/apps/agent/projects')).status, 404)
   assert.equal((await stat(join(directory, 'applications', 'registry.sqlite'))).isFile(), true)
-  child.kill('SIGTERM')
+  if (process.platform === 'win32') child.send('test-stop')
+  else child.kill('SIGTERM')
   assert.deepEqual(await done, [0, null], stderr)
   for (const [path, expected] of [[join(directory, 'control.sqlite'), 'app-products'], [join(directory, 'applications', 'registry.sqlite'), 'host-package-registry']]) {
     const db = new DatabaseSync(path, { readOnly: true })

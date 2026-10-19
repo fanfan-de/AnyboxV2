@@ -5,9 +5,13 @@ import { claudeAgentSdkServiceKey } from '../../packages/app-claude-agent/dist/c
 import { createClaudeAgentRunsComponent, claudeAgentRunsServiceKey, claudeAgentRunAdmissionServiceKey } from '../../packages/app-claude-agent/dist/core/runs/component.js'
 
 export const tick = () => new Promise(resolve => setImmediate(resolve))
-export async function waitFor(condition, attempts = 200) {
-  for (let i = 0; i < attempts; i++) { if (condition()) return; await tick() }
-  throw new Error('condition not met')
+export async function waitFor(condition, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (condition()) return
+    if (Date.now() >= deadline) throw new Error('condition not met')
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
 }
 export function clock() {
   let second = 0, id = 0

@@ -10,7 +10,7 @@ import { prepareApplicationArchive } from '../packages/host/dist/package-managem
 
 test('the documented Agent application folder verifies and implements the complete mounted lifecycle', async t => {
   const documentText = await readFile(new URL('../docs/application-development.md', import.meta.url), 'utf8')
-  const script = documentText.match(/node --input-type=module <<'JS'\n([\s\S]*?)\nJS\n/)?.[1]
+  const script = documentText.replace(/\r\n/g, '\n').match(/node --input-type=module <<'JS'\n([\s\S]*?)\nJS\n/)?.[1]
   assert.ok(script, 'The runnable Agent folder creation example must remain in the application guide')
   const temporary = await mkdtemp(join(tmpdir(), 'anybox-folder-guide-'))
   t.after(() => rm(temporary, { recursive: true, force: true }))

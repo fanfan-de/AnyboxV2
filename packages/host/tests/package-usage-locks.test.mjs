@@ -1,3 +1,4 @@
+import { symbolicAliasSync } from './helpers/filesystem-alias.mjs'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -123,15 +124,22 @@ test('a copied replacement anchor cannot prove exit or admit another holder whil
   prepareUsageLock(directory, usageId, digest)
   const holder = await child(t, directory, usageId)
   const path = join(directory, 'usage-locks', `${usageId}.sqlite`), original = path + '.original'
+  if (process.platform === 'win32') {
+    assert.throws(() => renameSync(path, original), { code: 'EBUSY' }, 'the native SQLite handle prevents replacing a live anchor')
+    assert.equal(tryAcquirePackageUsageExitLock(directory, usageId), undefined)
+    holder.process.send({ type: 'release' }); await holder.exited
+  }
   renameSync(path, original); copyFileSync(original, path)
   assert.throws(() => tryAcquirePackageUsageExitLock(directory, usageId), { code: 'unavailable' })
   assert.throws(() => acquirePackageUsageLock(directory, { usageId, secret }), { code: 'unavailable' })
   assert.throws(() => prepareUsageLock(directory, usageId, digest), { code: 'unavailable' })
   const originalConnection = new DatabaseSync(original)
-  try { assert.throws(() => originalConnection.exec('BEGIN EXCLUSIVE'), /locked/) } finally { originalConnection.close() }
+  try { if (process.platform === 'win32') originalConnection.exec('BEGIN EXCLUSIVE; ROLLBACK'); else assert.throws(() => originalConnection.exec('BEGIN EXCLUSIVE'), /locked/) } finally { originalConnection.close() }
   rmSync(path); renameSync(original, path)
-  assert.equal(tryAcquirePackageUsageExitLock(directory, usageId), undefined)
-  holder.process.send({ type: 'release' }); await holder.exited
+  if (process.platform !== 'win32') {
+    assert.equal(tryAcquirePackageUsageExitLock(directory, usageId), undefined)
+    holder.process.send({ type: 'release' }); await holder.exited
+  }
   const proof = tryAcquirePackageUsageExitLock(directory, usageId)
   assert.ok(proof); proof.revoke(); await proof.release()
 })
@@ -139,7 +147,7 @@ test('a copied replacement anchor cannot prove exit or admit another holder whil
 test('symbolic and hard-link anchor aliases are rejected without repurposing the original file', async t => {
   const directory = workspace(t), source = join(directory, 'usage-locks/source.sqlite'), alias = join(directory, 'usage-locks/alias.sqlite')
   prepareUsageLock(directory, 'source', digest)
-  for (const createAlias of [symlinkSync, linkSync]) {
+  for (const createAlias of [symbolicAliasSync, linkSync]) {
     createAlias(source, alias)
     assert.throws(() => tryAcquirePackageUsageExitLock(directory, 'alias'), { code: 'unavailable' })
     assert.throws(() => acquirePackageUsageLock(directory, { usageId: 'alias', secret }), { code: 'unavailable' })
@@ -166,6 +174,15 @@ test('an acquired exit proof rechecks physical identity before writing a revocat
   const directory = workspace(t), path = join(directory, 'usage-locks/replaced-before-revoke.sqlite')
   prepareUsageLock(directory, 'replaced-before-revoke', digest)
   const proof = tryAcquirePackageUsageExitLock(directory, 'replaced-before-revoke')
+  if (process.platform === 'win32') {
+    assert.throws(() => renameSync(path, path + '.original'), { code: 'EBUSY' }, 'an acquired native exit lock also blocks file substitution')
+    proof.revoke(); await proof.release()
+    renameSync(path, path + '.original'); copyFileSync(path + '.original', path)
+    assert.throws(() => tryAcquirePackageUsageExitLock(directory, 'replaced-before-revoke'), { code: 'unavailable' })
+    const original = new DatabaseSync(path + '.original', { readOnly: true })
+    try { assert.equal(original.prepare('SELECT revoked FROM package_usage_identity').get().revoked, 1) } finally { original.close() }
+    return
+  }
   renameSync(path, path + '.original'); copyFileSync(path + '.original', path)
   assert.throws(() => proof.revoke(), { name: 'PackageUsageLockError', code: 'unavailable' })
   await proof.release()

@@ -23,7 +23,8 @@ function run(args, main = false) {
 }
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-install-cli-')), packages = join(directory, 'applications'), path = join(directory, 'calculator.anybox-app'), policy = join(directory, 'trust.json')
-  t.after(() => rm(directory, { recursive: true, force: true }))
+  const roots = new Set()
+  t.after(async () => { for (const root of roots) await root.fiber.dispose(); await rm(directory, { recursive: true, force: true }) })
   const input = { keyId: 'fixture-key', privateKey,
     manifest: { schemaVersion: 1, appId: 'calculator', version: '1.0.0', publisher: 'fixture', displayName: 'Calculator', applicationApi: '^0.1.0', target, web: { entry: 'payload/web/app.js', assets: 'payload/assets.json' } },
     files: [{ path: 'licenses/LICENSE', bytes: Buffer.from('MIT fixture') }, { path: 'payload/web/app.js', bytes: Buffer.from('export const value=1') }, { path: 'payload/assets.json', bytes: Buffer.from(JSON.stringify({ schemaVersion: 1, assets: [{ path: '/apps/calculator/1.0.0/app.js', file: 'payload/web/app.js', type: 'text/javascript' }] })) }],
@@ -33,7 +34,7 @@ async function fixture(t) {
     await mkdir(dirname(join(folder, entry.path)), { recursive: true }); await writeFile(join(folder, entry.path), entry.bytes, { mode: entry.mode ?? 0o644 })
   }
   await writeFile(path, archive); await writeFile(policy, JSON.stringify({ schemaVersion: 1, publishers: [{ publisher: 'fixture', keyId: 'fixture-key', publicKey: publicKey.export({ type: 'spki', format: 'pem' }).toString(), appIds: ['calculator'] }] }))
-  return { directory, packages, path, policy, archive, folder }
+  return { directory, packages, path, policy, archive, folder, own(root) { roots.add(root) } }
 }
 
 test('offline install CLI verifies a local file and reports installation facts and operations as safe JSON', async t => {
@@ -93,6 +94,7 @@ test('read-only verify CLI accepts signed and explicitly trusted local directori
 
 test('offline CLI refuses a package directory owned by a live host without deleting its writer lock', async t => {
   const env = await fixture(t), root = new Context()
+  env.own(root)
   await root.installComponent(createLocalSqliteComponent(join(env.packages, 'registry.sqlite'), { serviceKey: packageRegistryStorageServiceKey }))
   await root.installComponent(createPackageRegistryComponent({ directory: env.packages }))
   t.after(() => root.fiber.dispose())
@@ -105,6 +107,7 @@ test('offline CLI refuses a package directory owned by a live host without delet
 
 test('explicit offline inspection and discard settle an interrupted unreceived intent without any publisher trust', async t => {
   const env = await fixture(t), root = new Context()
+  env.own(root)
   await root.installComponent(createLocalSqliteComponent(join(env.packages, 'registry.sqlite'), { serviceKey: packageRegistryStorageServiceKey }))
   await root.installComponent(createPackageRegistryComponent({ directory: env.packages }))
   const job = await root.get(packageRegistryServiceKey).acceptFileInstall({ requestId: 'interrupted', filename: 'calculator.anybox-app', archiveDigest: createHash('sha256').update(env.archive).digest('hex'), archiveSize: env.archive.length })

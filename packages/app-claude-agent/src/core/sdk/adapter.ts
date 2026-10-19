@@ -58,6 +58,9 @@ const createTail = (limit: number) => {
 const describe = (summary: string, tail: string) => tail ? `${summary}\n${tail}` : summary
 const killGroup = (child: ChildProcess) => { if (child.pid) try { process.kill(-child.pid, 'SIGKILL') } catch { /* already gone */ } }
 const exitedAlready = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null
+// The SDK selects `node` by name for JavaScript entrypoints. A running Node
+// already provides the exact interpreter even when its launcher is absent from PATH.
+const spawnCommand = (command: string) => command === 'node' && !process.versions.electron ? process.execPath : command
 
 /**
  * The only module that touches SDK objects. Owns every agent process and history worker it starts; cleanup joins their exits.
@@ -72,6 +75,7 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
   return { name: 'claude-agent-sdk', apply(ctx) {
     const executable = resolveClaudeExecutable({ override: options.executableOverride, env: options.env ?? process.env, platform, homeDirectory: options.homeDirectory ?? homedir(), isFile })
     const environment: EnvironmentView = Object.freeze({ schemaVersion: 1, platform, executable: Object.freeze({ ...executable }) })
+    const terminateChild = (child: ChildProcess) => { if (platform === 'win32') child.kill('SIGKILL'); else killGroup(child) }
     let accepting = true
     const handles = new Set<SdkRunHandle>(), workers = new Set<{ child: ChildProcess; exited: Promise<void> }>()
     const discoveries = new Set<{ close(): void; done: Promise<void> }>()
@@ -91,8 +95,7 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
         stopped = true; finishInput(); abort.abort()
         try { running?.close() } catch { /* already closed */ }
         if (child && !exitedAlready(child)) {
-          if (platform === 'win32') child.kill('SIGKILL')
-          else killGroup(child)
+          terminateChild(child)
         }
       }
       const discovery = { close, done: completed.promise }
@@ -120,11 +123,11 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
           env: { ...(options.env ?? process.env), CLAUDE_AGENT_SDK_CLIENT_APP: 'anybox' }, abortController: abort,
           stderr: () => {},
           spawnClaudeCodeProcess(spawnOptions) {
-            const process = spawn(spawnOptions.command, spawnOptions.args, { cwd: spawnOptions.cwd, env: spawnOptions.env,
+            const process = spawn(spawnCommand(spawnOptions.command), spawnOptions.args, { cwd: spawnOptions.cwd, env: spawnOptions.env,
               stdio: ['pipe', 'pipe', 'pipe'], detached: platform !== 'win32', windowsHide: true })
             child = process
-            process.once('error', () => exited.resolve())
-            process.once('exit', () => { if (platform !== 'win32') killGroup(process); exited.resolve() })
+            process.once('exit', () => { if (platform !== 'win32') killGroup(process) })
+            process.once('close', () => exited.resolve())
             let size = 0
             const observeOutput = (chunk: Buffer) => { size += chunk.length; if (size > (options.modelsLimitBytes ?? modelDiscoveryLimitBytes)) { overflow = true; close() } }
             process.stdout?.on('data', observeOutput); process.stderr?.on('data', observeOutput)
@@ -170,14 +173,14 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
         controls.add(task); void task.finally(() => controls.delete(task)).catch(() => {})
         return task
       }
-      // Unix: own the process group so helpers the agent leaves behind die with it. Windows has no groups; the SDK spawns there.
-      const spawnGroup = platform === 'win32' ? undefined : (spawnOptions: SpawnOptions): SpawnedProcess => {
-        const process = spawn(spawnOptions.command, spawnOptions.args, { cwd: spawnOptions.cwd, env: spawnOptions.env, signal: spawnOptions.signal, stdio: ['pipe', 'pipe', 'pipe'], detached: true })
+      // Own the real child on every platform. Unix also owns its process group.
+      const spawnGroup = (spawnOptions: SpawnOptions): SpawnedProcess => {
+        const process = spawn(spawnCommand(spawnOptions.command), spawnOptions.args, { cwd: spawnOptions.cwd, env: spawnOptions.env, signal: spawnOptions.signal, stdio: ['pipe', 'pipe', 'pipe'], detached: platform !== 'win32', windowsHide: true })
         child = process
         process.stderr?.setEncoding('utf8')
         process.stderr?.on('data', (chunk: string) => stderr.push(chunk))
-        process.once('error', () => exited.resolve())
-        process.once('exit', (code, signal) => { killGroup(process); hooks.onEvent({ type: 'exit', code, signal }); exited.resolve() })
+        process.once('exit', (code, signal) => { if (platform !== 'win32') killGroup(process); hooks.onEvent({ type: 'exit', code, signal }) })
+        process.once('close', () => exited.resolve())
         return process
       }
       const input = createInputQueue({ type:'user',uuid:promptId,message:{role:'user',content:content(request.prompt,request.attachments)},parent_tool_use_id:null,origin:{kind:'human'} }, message => {if(message.status==='sent')outcome=undefined;hooks.onEvent({type:'input',message})})
@@ -190,7 +193,7 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
         permissionMode: request.permissionMode ?? 'default', ...nativeSessionPermissions(request.sessionPermissions), includePartialMessages: true, forwardSubagentText: true, thinking: { type: 'adaptive', display: 'summarized' },
         env: { ...(options.env ?? process.env), CLAUDE_AGENT_SDK_CLIENT_APP: 'anybox' },
         abortController: abort, stderr: chunk => stderr.push(chunk),
-        ...(spawnGroup ? { spawnClaudeCodeProcess: spawnGroup } : {}),
+        spawnClaudeCodeProcess: spawnGroup,
         canUseTool: async (toolName, input, callbackOptions) => permissionResult(await hooks.canUseTool(permissionRequest(toolName, input, callbackOptions)), toolName, input, callbackOptions),
         onElicitation: async (request, callback) => { try { const answer = await hooks.onElicitation?.(elicitationView(request), callback.signal); return answer ? { action: answer.action, ...(answer.content ? { content: { ...answer.content } } : {}) } : { action: 'decline' as const } } catch { return { action: 'cancel' as const } } },
       }
@@ -224,8 +227,8 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
           input.close(); endInput()
           if (!child) exited.resolve()
           else if (!exitedAlready(child)) {
-            const current = child, timer = setTimeout(() => killGroup(current), forcedExitDelayMs)
-            timer.unref(); void exited.promise.then(() => clearTimeout(timer))
+            const current = child, timer = setTimeout(() => terminateChild(current), forcedExitDelayMs)
+            void exited.promise.then(() => clearTimeout(timer))
           }
         }
       })()
@@ -249,7 +252,7 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
           }
         }),
         async interrupt() { input.close(); try { await Promise.race([running?.interrupt(), done]) } catch { /* the control channel is gone; close() still applies */ } },
-        close() { input.close(); abort.abort(); try { running?.close() } catch { /* already closed */ } if (child && !exitedAlready(child)) killGroup(child) },
+        close() { input.close(); abort.abort(); try { running?.close() } catch { /* already closed */ } if (child && !exitedAlready(child)) terminateChild(child) },
       }
       handles.add(handle); void done.finally(() => handles.delete(handle))
       return handle
@@ -261,8 +264,8 @@ export function createClaudeAgentSdkComponent(options: ClaudeAgentSdkOptions = {
       const chunks: Buffer[] = []; let size = 0, overflow = false, failure: unknown
       const errors = createTail(stderrTailLimit)
       const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
-        child.once('error', error => { failure = error; resolve({ code: null, signal: null }) })
-        child.once('exit', (code, signal) => resolve({ code, signal }))
+        child.once('error', error => { failure = error })
+        child.once('close', (code, signal) => resolve({ code, signal }))
       })
       const entry = { child, exited: exited.then(() => {}) }
       workers.add(entry)

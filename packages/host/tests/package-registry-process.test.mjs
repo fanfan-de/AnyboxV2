@@ -116,13 +116,21 @@ test('manager takeover cannot confirm a live child exit through a copied replace
   const locked = once(child, 'message'); child.send(credential); assert.equal((await locked)[0], 'locked')
   await owner.service.claim(credential); await owner.service.ready(credential)
   const path = join(directory, 'usage-locks', `${credential.usageId}.sqlite`)
+  if (process.platform === 'win32') {
+    await assert.rejects(rename(path, path + '.original'), { code: 'EBUSY' })
+    await owner.close(); owner = await open(directory)
+    await assert.rejects(owner.service.confirmExit({ usageId: credential.usageId }), { code: 'version-in-use' })
+    await stop(child)
+  }
   await rename(path, path + '.original'); await copyFile(path + '.original', path)
   await owner.close(); owner = await open(directory)
   await assert.rejects(owner.service.confirmExit({ usageId: credential.usageId }), { code: 'unavailable' })
   assert.equal((await owner.service.listUsages()).find(use => use.id === credential.usageId).state, 'exit-unconfirmed')
-  assert.equal(child.exitCode, null); assert.equal(child.signalCode, null)
+  if (process.platform !== 'win32') { assert.equal(child.exitCode, null); assert.equal(child.signalCode, null) }
   await rm(path); await rename(path + '.original', path)
-  await assert.rejects(owner.service.confirmExit({ usageId: credential.usageId }), { code: 'version-in-use' })
-  await stop(child)
+  if (process.platform !== 'win32') {
+    await assert.rejects(owner.service.confirmExit({ usageId: credential.usageId }), { code: 'version-in-use' })
+    await stop(child)
+  }
   assert.equal((await owner.service.confirmExit({ usageId: credential.usageId })).state, 'exited')
 })

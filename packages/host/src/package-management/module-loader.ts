@@ -1,3 +1,4 @@
+import { packageFileModeMatches } from './filesystem-platform.js'
 import { createHash } from 'node:crypto'
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import { registerHooks } from 'node:module'
@@ -43,7 +44,7 @@ function verifyFile(graph: Graph, path: string, source?: string | ArrayBuffer | 
     directory = dirname(directory)
   }
   const info = lstatSync(path)
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size !== item.size || (info.mode & 0o777) !== item.mode) throw loaderFailure('package-loader-module-changed')
+  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size !== item.size || !packageFileModeMatches(info.mode, item.mode)) throw loaderFailure('package-loader-module-changed')
   const bytes = typeof source === 'string' ? Buffer.from(source) : source instanceof ArrayBuffer ? Buffer.from(source) : source && ArrayBuffer.isView(source) ? Buffer.from(source.buffer, source.byteOffset, source.byteLength) : readFileSync(path)
   if (createHash('sha256').update(bytes).digest('hex') !== item.sha256) throw loaderFailure('package-loader-module-changed')
 }

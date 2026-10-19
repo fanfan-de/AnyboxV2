@@ -12,6 +12,7 @@ import type { HarnessClientRuntimeOptions } from '@anybox/app-harness/client/run
 import type { ApplicationRegistration } from '@anybox/application-api/nya'
 import { defaultModelsConfigPath } from '@anybox/app-harness/server-config'
 import { describeError } from './error-report.js'
+import { installProcessShutdown } from './process-shutdown.js'
 
 export interface DefaultClientHostOptions extends HarnessClientRuntimeOptions {
   readonly applications?: readonly ApplicationRegistration[]
@@ -50,8 +51,7 @@ export async function main(args: readonly string[] = process.argv.slice(2)) {
     computer: { directory: process.env.ANYBOX_COMPUTER_WORKER_DIRECTORY ?? `${process.env.ANYBOX_HARNESS_DATABASE ?? './data/harness.sqlite'}.computer-worker` } })
   process.stdout.write(`Anybox Client: ${host.url}\n`)
   process.send?.({ type: 'ready', role: 'client', url: host.url })
-  const stop = () => { void host.close().finally(() => { if (process.connected) process.disconnect() }).catch((error: unknown) => { process.exitCode = 1; process.stderr.write(`Client shutdown failed: ${describeError(error)}\n`) }) }
-  process.once('SIGINT', stop); process.once('SIGTERM', stop)
+  installProcessShutdown(() => host.close(), error => { process.stderr.write(`Client shutdown failed: ${describeError(error)}\n`) })
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main().catch(error => {
   if (process.connected) process.disconnect()

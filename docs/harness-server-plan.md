@@ -382,3 +382,9 @@ HTTP 及“我的应用”通过同一 /activations 卸载流程工作，默认�
 本次不迁入旧提交的系统服务安装器、全量随包运行时或桌面目录选择功能；宿主包管理的 Windows prepare/independent-role 限制保留。旧分支的 1402 项测试及成品记录仅作历史证据。
 
 Windows x64 的严格类型、全部包构建与资源校验通过，Harness 包 79 项全过，平台工具专项 92 通过/2 个 macOS 跳过，worker 启动与路由复测 12 项全过，应用边界及原生打包资源 6 项全过。已修复普通文件目录身份检查与未发布 worker 提前解除进程引用的回归；管理 API 已确认本机 `win32/x64` worker 正常运行。根 `npm run check` 的 2086 项测试为 1883 通过、143 失败、7 取消、53 跳过，未修改模块仍有 Windows 兼容失败，整体未通过；详细范围与日志见[原生平台支持](native-platform-support.md)。未修改 NyaCore、Claude Agent 或宿主业务实现，未运行真实模型/凭据门控或桌面成品验收。
+
+## Windows 全仓兼容收尾（2026-10-19）
+
+继续修复各模块自己的平台边界：宿主安装、加载和回收的目录同步及 NTFS 逻辑模式、真实目录 pin；Models 的缺失凭据归一；Claude SDK 的 Node 解释器选择及实际 close 等待；静态组合启动器的 Windows 子角色优雅关闭。测试继续覆盖内容签名、路径身份、排他使用锁、实际退出、取消和恢复，只修正平台路径、换行、链接、计时与关闭夹具，不新增跳过。
+
+最终 `npm run check` 完整通过：严格类型、全部 workspace 重新构建及资源校验成功，2,086 项测试中 2,033 通过、0 失败、0 取消、53 项既有门控跳过，测试耗时 175,224.3656 ms。完整日志 `data/windows-full-compat-check.log`。未修改 NyaCore；Harness Computer 与 Claude 执行路径继续独立，真实模型、系统凭据和桌面成品验收范围不变，详见[原生平台支持](native-platform-support.md#windows-全仓兼容收尾2026-10-19)。

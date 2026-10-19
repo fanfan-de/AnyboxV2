@@ -1,3 +1,4 @@
+import { symbolicAlias } from './helpers/filesystem-alias.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { mkdtemp, mkdir, writeFile, readFile, access, rm, rename, symlink, link, realpath, lstat } from 'node:fs/promises'
@@ -60,7 +61,7 @@ test('reclamation removes all recorded versions including quarantined content an
 
 test('internal symbolic and hard links are unlinked without reading, rewriting or deleting their external targets', async t => {
   const f = await fixture(t, [identity()]), outside = join(f.directory, 'business.sqlite'), payload = join(f.path(identity()), 'application/payload')
-  await symlink(outside, join(payload, 'symbolic')); await link(outside, join(payload, 'hard'))
+  await symbolicAlias(outside, join(payload, 'symbolic')); await link(outside, join(payload, 'hard'))
   assert.equal((await f.reclaim()).phase, 'completed')
   assert.equal(await readFile(outside, 'utf8'), 'application business data')
 })
@@ -68,7 +69,7 @@ test('internal symbolic and hard links are unlinked without reading, rewriting o
 test('a version container or any ancestor that is a symbolic alias is rejected before deletion', async t => {
   for (const selected of ['container', 'app']) {
     const f = await fixture(t, [identity()]), target = selected === 'container' ? f.path(identity()) : join(f.directory, 'packages/calculator'), original = target + '.original'
-    await rename(target, original); await symlink(original, target)
+    await rename(target, original); await symbolicAlias(original, target)
     await assert.rejects(f.reclaim(), code('package-reclamation-path-unsafe'))
     assert.equal(await readFile(join(original, selected === 'container' ? 'application/payload/code.js' : '1.0.0/' + 'a'.repeat(64) + '/application/payload/code.js'), 'utf8'), 'export const value = 1')
     assert.equal(f.state.completed, 0); assert.equal(f.state.guarded.length, 0)
@@ -78,8 +79,15 @@ test('a version container or any ancestor that is a symbolic alias is rejected b
 test('captured root, application ancestor and container identities are rechecked after the registry guard awaits', async t => {
   for (const selected of ['root', 'app', 'container']) {
     const f = await fixture(t, [identity()]), target = selected === 'root' ? f.directory : selected === 'app' ? join(f.directory, 'packages/calculator') : f.path(identity()), original = target + '.original'
-    f.state.beforeWork = async () => { await rename(target, original); await mkdir(target); await writeFile(join(target, 'preserve'), 'replacement must survive') }
-    await assert.rejects(f.reclaim(), code('package-reclamation-directory-changed'))
+    let moved = false
+    f.state.beforeWork = async () => { await rename(target, original); moved = true; await mkdir(target); await writeFile(join(target, 'preserve'), 'replacement must survive') }
+    await assert.rejects(f.reclaim(), error => error.code === 'package-reclamation-directory-changed' || process.platform === 'win32' && ['EPERM', 'EBUSY'].includes(error.code))
+    if (!moved) {
+      assert.equal(process.platform, 'win32', 'only a native Windows namespace lock may prevent the replacement itself')
+      assert.equal(await readFile(join(f.path(identity()), 'application/payload/code.js'), 'utf8'), 'export const value = 1')
+      assert.equal(f.state.operations[0].phase, 'recovery-required'); assert.equal(f.state.completed, 0)
+      continue
+    }
     assert.equal(await readFile(join(target, 'preserve'), 'utf8'), 'replacement must survive')
     assert.equal(f.state.operations[0].phase, 'recovery-required'); assert.equal(f.state.completed, 0)
     const codeFile = selected === 'container' ? 'application/payload/code.js' : selected === 'app' ? '1.0.0/' + 'a'.repeat(64) + '/application/payload/code.js' : 'packages/calculator/1.0.0/' + 'a'.repeat(64) + '/application/payload/code.js'
@@ -128,7 +136,7 @@ test('a root replaced before adapter capture cannot redirect deletion into an ex
   t.after(() => rm(external, { recursive: true, force: true }))
   const externalContainer = join(external, 'packages/calculator/1.0.0', 'a'.repeat(64))
   await mkdir(externalContainer, { recursive: true }); await writeFile(join(externalContainer, 'preserve'), 'external matching identity must survive')
-  await rename(f.directory, held); await symlink(external, f.directory)
+  await rename(f.directory, held); await symbolicAlias(external, f.directory)
   await assert.rejects(f.reclaim(), code('package-reclamation-directory-changed'))
   assert.equal(await readFile(join(externalContainer, 'preserve'), 'utf8'), 'external matching identity must survive')
   assert.equal(await readFile(join(held, 'packages/calculator/1.0.0', 'a'.repeat(64), 'application/payload/code.js'), 'utf8'), 'export const value = 1')

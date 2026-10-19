@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtemp, rm, mkdir, link, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '@anybox/storage-sqlite/sqlite'
@@ -36,14 +36,18 @@ test('the client composes an empty installation registry separately from static 
 test('registry path aliases are rejected before changing the existing control database', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-package-alias-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const path = join(directory, 'client.sqlite')
+  const path = join(directory, 'control', 'registry.sqlite')
   const first = await createClientHost({ applications: [], path })
   await first.root.get('local-storage').transaction(db => { db.execute('CREATE TABLE retained (value TEXT)'); db.execute('INSERT INTO retained VALUES (?)', ['original']) })
   await first.close()
   for (const alias of ['hard', 'symbolic']) {
-    const target = join(directory, alias); await mkdir(target)
-    if (alias === 'hard') await link(path, join(target, 'registry.sqlite'))
-    else await symlink(path, join(target, 'registry.sqlite'))
+    const target = join(directory, alias)
+    if (alias === 'symbolic' && process.platform === 'win32') await symlink(dirname(path), target, 'junction')
+    else {
+      await mkdir(target)
+      if (alias === 'hard') await link(path, join(target, 'registry.sqlite'))
+      else await symlink(path, join(target, 'registry.sqlite'), 'file')
+    }
     await assert.rejects(createClientHost({ applications: [], path, packageDirectory: target }), /must be different files/)
   }
   const reopened = await createClientHost({ applications: [], path })

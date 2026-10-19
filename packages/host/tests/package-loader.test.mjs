@@ -1,3 +1,4 @@
+import { symbolicAlias } from './helpers/filesystem-alias.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { generateKeyPairSync, createHash, randomUUID } from 'node:crypto'
@@ -6,6 +7,7 @@ import { once } from 'node:events'
 import { mkdtemp, mkdir, rm, readFile, writeFile, chmod, symlink, link, access } from 'node:fs/promises'
 import { join, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
+import { pathToFileURL } from 'node:url'
 import { createApplicationArchive, verifyApplicationArchive } from '../dist/package-management/archive.js'
 import { isInstalledPackageCorruption } from '../dist/package-management/loader.js'
 import { currentApplicationRuntimeProfile } from '../dist/package-management/policy.js'
@@ -18,7 +20,7 @@ const supported = Number(process.versions.node.split('.')[0]) > 22 || Number(pro
 const verification = { target, applicationApiVersion: '0.1.0', trustedPublishers: [{ publisher: 'fixture', keyId: 'fixture', publicKey, appIds: ['calculator', 'second'] }], runtimeProfiles: { client: profile, execution: profile, computerWorker: profile } }
 function factory(id = 'calculator', { extra = '', name = 'Calculator', web = true, requirements = {}, before = '', runtime = true } = {}) {
   const prefix = `/apps/${id}/1.0.0`
-  return `${before}\nexport async function createRegistration(context,config) { ${extra}; return { definition: { id: '${id}', name: '${name}', icon: '${id}', description: typeof config?.label === 'string' ? config.label : 'fixture', ${web ? `web: {entry: '${prefix}/app.js', styles: []}` : ''} }, capabilityRequirements: ${JSON.stringify(requirements)}, ${runtime ? "createRuntime(){throw new Error('business-must-not-initialize')}," : ''} assets: ${web ? `[{path: '${prefix}/app.js',file: new URL('./web/app.js', import.meta.url).pathname,type: 'text/javascript'}]` : '[]'} } }`
+  return `import {fileURLToPath} from 'node:url';${before}\nexport async function createRegistration(context,config) { ${extra}; return { definition: { id: '${id}', name: '${name}', icon: '${id}', description: typeof config?.label === 'string' ? config.label : 'fixture', ${web ? `web: {entry: '${prefix}/app.js', styles: []}` : ''} }, capabilityRequirements: ${JSON.stringify(requirements)}, ${runtime ? "createRuntime(){throw new Error('business-must-not-initialize')}," : ''} assets: ${web ? `[{path: '${prefix}/app.js',file: fileURLToPath(new URL('./web/app.js', import.meta.url)),type: 'text/javascript'}]` : '[]'} } }`
 }
 function archive({ lifecycleVersion = 1, id = 'calculator', version = '1.0.0', entries, files = {}, requirements, web = true, profiles, code } = {}) {
   const prefix = `/apps/${id}/${version}`
@@ -122,10 +124,11 @@ test('lazy imports remain checked after load and after the host handle closes', 
 })
 
 test('raw metadata, unimported payload and extra files are revalidated before any module import', async t => {
-  for (const mutation of ['manifest', 'unimported', 'extra']) {
+  for (const mutation of ['manifest', 'unimported', 'extra', 'readonly']) {
     const env = await setup(t), installed = await env.materialize(archive({ files: { 'payload/unused.txt': 'original' } }))
     if (mutation === 'manifest') await writeFile(join(installed.application, 'manifest.json'), '{}')
     if (mutation === 'unimported') await writeFile(join(installed.application, 'payload/unused.txt'), 'modified')
+    if (mutation === 'readonly') await chmod(join(installed.application, 'payload/web/app.js'), 0o444)
     if (mutation === 'extra') await writeFile(join(installed.application, 'payload/extra.txt'), 'outside-index')
     const role = await env.role([{ package: installed.identity, entry: 'web' }]); assert.match((await role.wait('failed')).code, /^package-loader-(content-changed|unindexed-content)$/); assert.equal(role.pinned(), true)
   }
@@ -135,7 +138,7 @@ test('symlinks and hardlinked payload replacements cannot be imported', async t 
   for (const mutation of ['symlink', 'hardlink']) {
     const env = await setup(t), installed = await env.materialize(archive()), file = join(installed.application, 'payload/web/app.js'), outside = join(env.directory, 'outside.js')
     await writeFile(outside, await readFile(file)); await rm(file)
-    if (mutation === 'symlink') await symlink(outside, file); else await link(outside, file)
+    if (mutation === 'symlink') await symbolicAlias(outside, file); else await link(outside, file)
     const role = await env.role([{ package: installed.identity, entry: 'web' }]); assert.match((await role.wait('failed')).code, /^package-loader-(file-unsafe|content-changed)$/)
   }
 })
@@ -151,7 +154,7 @@ test('role, entry, registration identity and selected capability version mismatc
 test('an import escaping the production closure or reaching a private shared runtime is rejected and keeps its process pin', { skip: !supported }, async t => {
   for (const variant of ['outside', 'private']) {
     const env = await setup(t), outside = join(env.directory, 'outside.mjs'); await writeFile(outside, 'export const value=1')
-    const installed = await env.materialize(nodeFixture({ before: variant === 'outside' ? `import ${JSON.stringify(outside)}` : "import './node_modules/@nya/core/index.js'", ...(variant === 'private' ? { files: { 'payload/node_modules/@nya/core/index.js': 'export const value=1' } } : {}) }))
+    const installed = await env.materialize(nodeFixture({ before: variant === 'outside' ? `import ${JSON.stringify(pathToFileURL(outside).href)}` : "import './node_modules/@nya/core/index.js'", ...(variant === 'private' ? { files: { 'payload/node_modules/@nya/core/index.js': 'export const value=1' } } : {}) }))
     const role = await env.role([{ package: installed.identity, entry: 'client' }]); assert.equal((await role.wait('failed')).code, variant === 'outside' ? 'package-loader-module-outside-payload' : 'package-loader-private-shared-runtime'); assert.equal(role.pinned(), true)
     await role.exit(); await role.exited()
   }
@@ -183,7 +186,7 @@ test('quarantine classification excludes policy changes, stale reservations, una
 
 
 test('optional independent role launch is app-scoped and gated by the actual application runtime lifecycle', { skip: !supported }, async t => {
-  const env = await setup(t), code = `export function createRegistration(context){globalThis.__loaderStart=context.startRole;return {definition:{id:'calculator',name:'Calculator',icon:'calculator',web:{entry:'/apps/calculator/1.0.0/app.js',styles:[]}},assets:[{path:'/apps/calculator/1.0.0/app.js',file:new URL('./web/app.js',import.meta.url).pathname,type:'text/javascript'}],createRuntime(){return {async open(){await context.startRole('computer-worker',{ownership:'independent',args:['serve','opaque-directory']})},async stop(){},async retry(){},inspect(){return 'active'},closeAdmission(){},async awaitIdle(){}}}}}`
+  const env = await setup(t), code = `import {fileURLToPath} from 'node:url';export function createRegistration(context){globalThis.__loaderStart=context.startRole;return {definition:{id:'calculator',name:'Calculator',icon:'calculator',web:{entry:'/apps/calculator/1.0.0/app.js',styles:[]}},assets:[{path:'/apps/calculator/1.0.0/app.js',file:fileURLToPath(new URL('./web/app.js',import.meta.url)),type:'text/javascript'}],createRuntime(){return {async open(){await context.startRole('computer-worker',{ownership:'independent',args:['serve','opaque-directory']})},async stop(){},async retry(){},inspect(){return 'active'},closeAdmission(){},async awaitIdle(){}}}}}`
   const installed = await env.materialize(archive({ entries: { client: 'payload/registration.js', computerWorker: 'payload/worker.js' }, code, files: { 'payload/worker.js': 'export async function main(){}' } })), role = await env.role([{ package: installed.identity, entry: 'client' }], { options: { enableStartRole: true } })
   await role.wait('loaded'); role.send({ type: 'invoke-role' }); assert.equal((await role.wait('failed')).code, 'package-role-inactive')
   role.send({ type: 'open' }); const opened = await role.wait('opened'); assert.equal(opened.launched.length, 1); assert.deepEqual(opened.launched[0], { identity: installed.identity, role: 'computer-worker', ownership: 'independent', args: ['serve', 'opaque-directory'] })
@@ -197,7 +200,7 @@ test('a package factory cannot start an independent role during registration con
 })
 
 test('private runtime channel is bound to one installed identity and closes with the client application', { skip: !supported }, async t => {
-  const env = await setup(t), code = `export function createRegistration(context){globalThis.__loaderChannel=context.channel;return {definition:{id:'calculator',name:'Calculator',icon:'calculator',web:{entry:'/apps/calculator/1.0.0/app.js',styles:[]}},assets:[{path:'/apps/calculator/1.0.0/app.js',file:new URL('./web/app.js',import.meta.url).pathname,type:'text/javascript'}],createRuntime(){return {async open(){},async stop(){},async retry(){},inspect(){return 'active'},closeAdmission(){},async awaitIdle(){}}}}}`
+  const env = await setup(t), code = `import {fileURLToPath} from 'node:url';export function createRegistration(context){globalThis.__loaderChannel=context.channel;return {definition:{id:'calculator',name:'Calculator',icon:'calculator',web:{entry:'/apps/calculator/1.0.0/app.js',styles:[]}},assets:[{path:'/apps/calculator/1.0.0/app.js',file:fileURLToPath(new URL('./web/app.js',import.meta.url)),type:'text/javascript'}],createRuntime(){return {async open(){},async stop(){},async retry(){},inspect(){return 'active'},closeAdmission(){},async awaitIdle(){}}}}}`
   const installed = await env.materialize(archive({ entries: { client: 'payload/registration.js' }, code })), role = await env.role([{ package: installed.identity, entry: 'client' }], { options: { enableChannel: true } })
   await role.wait('loaded')
   role.send({ type: 'invoke-channel', payload: { op: 'echo' } }); assert.equal((await role.wait('failed')).code, 'package-role-inactive')

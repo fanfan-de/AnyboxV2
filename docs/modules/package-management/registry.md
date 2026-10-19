@@ -20,7 +20,7 @@
 
 注册库由同根的通用 SQLite 组件以 `host.package-registry-storage` 服务名提供；默认 `local-storage` 连接继续管理既有宿主目标及应用数据。两者的队列、领域迁移和文件锁独立，注册库不得与控制库使用同一个真实文件或文件别名。连接、排他锁与实际关闭由 [Local SQLite](../infrastructure/local-sqlite.md) 所有，包管理组件只拥有自身表与迁移。
 
-工厂在依赖就绪后固定目录的真实路径。Unix 装配时通过 Effect 持有原根的 O_NOFOLLOW/O_DIRECTORY 目录句柄及 dev/ino 身份，回收准入和进入文件回调前同时复核原真实路径与持有句柄；路径被重命名、替换或改成别名均拒绝 reclamation-root-changed，不让 fresh realpath 重新授权另一个删除根。Effect 在受控工作取消并实际退出后关闭句柄，启动失败也清理已打开句柄。Windows 当前不取得该目录 fd，安装和账本仍可用，破坏性回收固定拒绝 reclamation-root-unavailable；不扩大跨平台验收。后续修改配置对象或改变工作目录不会把退出证明切换到另一个锁目录。
+工厂在依赖就绪后固定目录的真实路径。装配时通过 Effect 持有原根的 O_NOFOLLOW/O_DIRECTORY 目录句柄及 dev/ino 身份，回收准入和进入文件回调前同时复核原真实路径与持有句柄；路径被重命名、替换或改成别名均拒绝 reclamation-root-changed，不让 fresh realpath 重新授权另一个删除根。Effect 在受控工作取消并实际退出后关闭句柄，启动失败也清理已打开句柄。Windows Node 同样取得并复核目录句柄；NTFS 上 SQLite 持有的文件通常直接阻止活跃锚或其所在根被重命名，拒绝替换不等于已证明进程退出，仍须实际 EXCLUSIVE 退出锁及永久撤销。后续修改配置对象或改变工作目录不会把退出证明切换到另一个锁目录。
 
 组件拥有 `host-package-registry` v4 迁移域。v1 的 `package_registry_meta`、`package_registry_applications`、`package_registry_operations`、`package_registry_snapshots` 和 `package_registry_usages` 原地保留，v2 增加 `package_registry_file_installs`，v3 增加 `package_registry_activations`，v4 不加新表，规范旧生效 JSON 的 kind 为 activate、ownedUsageIds 为 []，读取仍兼容旧缺省字段。注册库发现其他领域迁移时拒绝装配，避免误用已有业务文件；持久 JSON 在每次读取时重新验证身份、状态、引用和修订，损坏时拒绝继续写入。
 

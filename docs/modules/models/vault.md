@@ -8,7 +8,7 @@
 
 `namespace` 和每个 `slotId` 必须非空且不能包含 NUL。`openEntry(namespace, slotId)` 是测试或宿主系统安全存储适配的替换点，返回 `getPassword(signal)`、`setPassword(value, signal)`、`deleteCredential(signal)`；它不是明文文件后备入口。
 
-默认后端为 `@napi-rs/keyring` 的 `AsyncEntry`，使用 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，Linux 显式选 `secret-service`。系统存储不可用就报告错误，不回退到内核 keyring、SQLite 或明文文件。
+默认后端为 `@napi-rs/keyring` 的 `AsyncEntry`，使用 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，Linux 显式选 `secret-service`。系统存储不可用就报告错误，不回退到内核 keyring、SQLite 或明文文件。 原生后端以 `null` 或 `undefined` 表示槽不存在时，适配器统一返回公共契约的 `undefined`；这仍是正常的缺失结果，不报告为后端故障。
 
 ## 服务接口与流程
 

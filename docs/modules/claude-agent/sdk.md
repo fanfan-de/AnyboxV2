@@ -33,17 +33,17 @@
 
 ## 功能流程
 
-解析顺序：覆盖 → PATH（Windows 结合 PATHEXT，`.cmd/.bat/.ps1` 垫片换成同目录包内的 `bin/claude.exe` 或 `cli.js`）→ Unix `~/.local/bin/claude`。缺失不让组件失败，而是记录到 `environment()`，`openRun` 以同样的错误码同步拒绝。
+解析顺序：覆盖 → PATH（Windows 结合 PATHEXT，`.cmd/.bat/.ps1` 垫片换成同目录包内的 `bin/claude.exe` 或 `cli.js`）→ Unix `~/.local/bin/claude`。缺失不让组件失败，而是记录到 `environment()`，`openRun` 以同样的错误码同步拒绝。对于 `cli.js`、`.mjs` 等 JavaScript 入口，SDK 选择裸 `node` 命令时，普通 Node 宿主固定使用自身 `process.execPath`，不依赖 fnm/npm shim 是否仍在 PATH。原生 `claude.exe` 不经该解释器；Electron 不把自身可执行文件当成普通 Node。
 
 Run 固定 SDK 选项：`pathToClaudeCodeExecutable`、`cwd`、`resume`（线程已有 session 时）、`systemPrompt` preset + append、`permissionMode`（线程选择，缺省 default）、`allowedTools`（缺省空，会话授权按原生规则复用）、`includePartialMessages: true`、`thinking: { type: 'adaptive', display: 'summarized' }`、`env: { ...process.env, CLAUDE_AGENT_SDK_CLIENT_APP: 'anybox' }`、`abortController`、`stderr` 回调、可选 `model`/`effort`。不设置 `settingSources`、`strictMcpConfig`、`persistSession`、`sessionStore`，不覆盖 `HOME`。
 
-模型目录查询单独使用 `persistSession: false`、空工具与 MCP 列表、`strictMcpConfig: true`，以 settings 和 restrictive managedSettings 请求禁用 hooks；如设备存在管理员策略且不接纳父设置，管理员强制的启动 hooks 仍按策略执行。保留当前设备/项目的模型及认证设置，不覆盖 HOME。不 yield 用户消息，不调用模型、不生成业务 Run 或可恢复会话。查询成功、失败、超时、超限、请求取消与组件关闭均终止该查询进程；Unix 清理所拥有进程组，Windows 等待该子进程实际退出；查询 Promise 在退出确认后才完成。此实现不代表 Windows 已完成实机验收。
+模型目录查询单独使用 `persistSession: false`、空工具与 MCP 列表、`strictMcpConfig: true`，以 settings 和 restrictive managedSettings 请求禁用 hooks；如设备存在管理员策略且不接纳父设置，管理员强制的启动 hooks 仍按策略执行。保留当前设备/项目的模型及认证设置，不覆盖 HOME。不 yield 用户消息，不调用模型、不生成业务 Run 或可恢复会话。查询成功、失败、超时、超限、请求取消与组件关闭均终止该查询进程；Unix 清理所拥有进程组，Windows 等待该子进程实际退出；查询 Promise 在退出确认后才完成。受控 CLI 的 Windows SDK 协议与进程退出已有专项验证；真实已登录 Claude、外部工具树与平台成品仍单独验收。
 
-prompt 是只 yield 一条用户消息的异步迭代器，收到 `result` 后结束输入，SDK 关闭 stdin，CLI 自行退出。Unix 上 `spawnClaudeCodeProcess` 以 `detached: true` 启动进程组，接管 stderr 尾部（8 KiB），子进程退出时对进程组 SIGKILL 并发出 `exit` 事件；迭代器结束 10 秒后仍未退出也 SIGKILL。Windows 交给 SDK spawn，`done` 以迭代器结束近似。
+输入队列按原生结果推进，结束输入后 SDK 关闭 stdin，CLI 自行退出。各平台均经本应用 `spawnClaudeCodeProcess` 保存真实 ChildProcess，并在进程及管道 `close` 后完成退出凭证；`done` 同时等待结果、实际退出及在途控制。Unix 使用 detached 进程组，退出时 SIGKILL 整组；Windows 隐藏窗口并终止所持 CLI 进程，仍不承诺 Harness Job Object 的工具树语义。迭代器结束 10 秒后仍未退出则强制终止，计时器保留至实际退出，不能提前丢失清理等待。stderr 仅保留 8 KiB 尾部。
 
 `translate.ts`：`system/init`→`init`（带 session id、模型、cwd、权限模式、版本）、`stream_event`→`message-start`/`block-start`/`text-delta`/`thinking-delta`/`block-stop`（只在 `message_start` 之后有效）、`assistant`→完整块、`user` 的 `tool_result`→`tool-result`、`status`、`compact_boundary`、`permission_denied`/`api_retry`/`rate_limit_event`→`notice`、`result`→`RunResultView`；子 Agent 完成消息进入独立有界输出，流式子帧与未知帧忽略，不混入主线程。`canUseTool` 把 `toolUseID`、`title/description/decisionReason`、`defaultToNo`、`suggestions` 与 `AskUserQuestion` 的问题投影为 `SdkPermissionRequest`；决定转回 `PermissionResult`（`allow` 带 `updatedInput`，会话级允许附 destination 为 `session` 的 `updatedPermissions`，问题类以 `updatedInput.answers` 回答）。
 
-会话文件读取用 `process.execPath` 启动 `history-worker.js`（`ELECTRON_RUN_AS_NODE=1`，与本机 computer worker 一致），每次一个子进程：`messages <sessionId> [dir]` 调用 `getSessionMessages` 输出转录，`sessions <limit>` 调用 `listSessions` 输出 `{ sessionId, cwd, lastModified }` 列表，`info <sessionId> [dir]` 调用 `getSessionInfo` 输出标题字段或 `null`。父进程按各命令的时间与字节上限收集 JSON，超时或超限 SIGKILL，取消信号同样终止；纯投影 `historyMessages`、`sessionProjects`、`sessionInfo` 位于 `translate.ts`。
+会话文件读取用 `process.execPath` 启动 `history-worker.js`（保留 Claude 自有的 `ELECTRON_RUN_AS_NODE=1` 兼容路径，不与 Harness Computer worker 共用运行时适配），每次一个子进程：`messages <sessionId> [dir]` 调用 `getSessionMessages` 输出转录，`sessions <limit>` 调用 `listSessions` 输出 `{ sessionId, cwd, lastModified }` 列表，`info <sessionId> [dir]` 调用 `getSessionInfo` 输出标题字段或 `null`。父进程按各命令的时间与字节上限收集 JSON，超时或超限 SIGKILL，取消信号同样终止；读取结果与清理均等待子进程及 stdout/stderr 的 close，不能在 exit 时先解析未排空 JSON；纯投影 `historyMessages`、`sessionProjects`、`sessionInfo` 位于 `translate.ts`。
 
 ## 执行、取消与清理
 
@@ -106,3 +106,9 @@ openRun 的 sessionPermissions 由 Runs 读取当前线程的有效授权传入�
 上下文支持用户显式请求 full 分类计数及记忆、工具、Agent、技能明细；默认摘要不增加逐项计数请求。文件读取使用原生权限，返回 UTF-8 文本或白名单图片/PDF，二进制最多 384 KiB、文本显示最多 128 KiB；截断内容不能被展示为完整文件。原生历史分页通过独立 worker 输出有界页面，默认取最新 100 条；支持更早消息、项目内原生会话发现、打开已有会话和显式删除历史。
 
 验证入口：`tests/claude-agent-interactive.test.mjs`，包含队列、停止/未知状态、分块幂等与资产私有性、重启不重放、子线程投影及真实 SDK 控制协议。真实 Claude 验证另记录到 `/tmp/anybox-claude-ui-audit/real-interactive-0.1.8.json`。
+
+## Windows 兼容验证（2026-10-19）
+
+`node --test --test-timeout=60000 "packages/app-claude-agent/tests/*.test.mjs" "tests/claude-agent-*.test.mjs"` 在原生 Windows Node 上完成 173 项：171 通过、0 失败、0 取消、2 项原有真实 Claude 登录/模型门控跳过，日志 `data/windows-claude-agent-final.log`。使用真实 SDK 控制协议和本地 JavaScript CLI 子进程，覆盖 PATH 无 Node 启动器、模型/账号/能力发现、流式追加输入、授权复用、取消及实际 close；未访问远端模型。
+
+目录夹具使用本机路径与 Windows junction 验证链接拒绝，deadline 等待使用真实时钟；独立服务与重开数据库的测试先关闭全部拥有者再删除临时目录，不以删除重试掩盖资源占用。上述结果属于应用专项，完整仓库检查另行记录；真实安装的 Claude 和外部工具树不由受控子进程测试替代。

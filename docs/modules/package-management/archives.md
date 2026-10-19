@@ -46,7 +46,7 @@ D1.4 增加可选 `lifecycleVersion: 1` 声明；其他值拒绝。声明 `compu
 
 每个 Node 入口单独声明 `runtimeRequirements`：`profile`、可选 `sharedRuntime`、Node 范围、`nodeApi` 下限、`modules` ABI、`sqlite`、Linux `libc` 及 `platforms` 系统列表。宿主使用实际运行条件比较，不能把包的要求当作当前能力。不支持的入口单独报告原因，不阻止同包其他入口的静态验证。`capabilityRequirements` 按入口声明 required/optional 范围，准备工厂返回的声明必须与清单一致；基础提供方的实际就绪仍在打开入口时检查。
 
-`files.json` 为 `{ schemaVersion: 1, files: [{ path, size, sha256, mode }] }`，覆盖全部 payload 与 licenses，执行位只允许 0644 或 0755。固定元数据只允许 0644。目录和归档共同校验内容摘要和模式，拒绝穿越、绝对路径、链接、重复、父文件冲突、大小写/Unicode 目录别名及 Windows 保留名；ZIP 额外检查本地头、中央目录、CRC 与大小。JSON 拒绝重复成员、未知元数据字段和超出限制的结构。
+`files.json` 为 `{ schemaVersion: 1, files: [{ path, size, sha256, mode }] }`，覆盖全部 payload 与 licenses，执行位只允许 0644 或 0755。固定元数据只允许 0644。目录和归档共同校验内容摘要和逻辑模式；Windows NTFS 按显式索引保留执行模式，安装后核对其可表示属性，Unix 继续逐位核对（见[文件系统平台边界](installation.md#文件系统平台边界)）。拒绝穿越、绝对路径、链接、重复、父文件冲突、大小写/Unicode 目录别名及 Windows 保留名；ZIP 额外检查本地头、中央目录、CRC 与大小。JSON 拒绝重复成员、未知元数据字段和超出限制的结构。
 
 默认上限：归档 256 MiB、展开总量 512 MiB、单文件 128 MiB、单个固定元数据 4 MiB、载荷 30000 文件、压缩比 200。校验调用可显式收紧限制；无签名的载荷不进行解压，固定元数据在独立大小限制内读取。
 

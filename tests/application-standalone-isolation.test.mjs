@@ -89,7 +89,7 @@ for (const [application, packageName, binary] of [['agent', '@anybox/app-harness
     assert.equal(active.status, 'running')
     // Windows kill('SIGTERM') forcibly terminates Node rather than delivering a signal.
     // Exercise the same fixture shutdown handler over IPC and keep real signals on Unix.
-    if (application === 'agent' && process.platform === 'win32') child.send('test-stop')
+    if (process.platform === 'win32') child.send('test-stop')
     else child.kill('SIGTERM')
     assert.deepEqual(await exited, { code: 0, signal: null }, output)
     await assert.rejects(fetch(ready.url + '/api/v1/instance'))

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, normalize } from 'node:path'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { localStorageServiceKey } from '../packages/storage-sqlite/dist/port.js'
@@ -228,8 +228,8 @@ test('thread history is read through the adapter with the pinned session and pro
   await assert.rejects(f.runs.readThreadMessages('missing'), { code: 'thread-not-found', status: 404 })
 })
 test('recent projects merge thread directories with the Claude environment, keep only existing directories and flag a failed environment read', async t => {
-  const existing = new Set(['/projects/a', '/projects/b', '/projects/claude-only'])
-  const { open } = await fixture(t, { directoryExists: async path => existing.has(path) })
+  const existing = new Set(['/projects/a', '/projects/b', '/projects/claude-only'].map(normalize))
+  const { open } = await fixture(t, { directoryExists: async path => existing.has(normalize(path)) })
   let fail = false
   const sdk = fakeSdk({ sessionProjects: async () => {
     if (fail) throw new Error('no projects directory')
@@ -239,11 +239,11 @@ test('recent projects merge thread directories with the Claude environment, keep
   const a = await f.runs.createThread({ projectPath: '/projects/a' }); await f.runs.createThread({ projectPath: '/projects/b' })
   const recent = await f.runs.listRecentProjects()
   assert.equal(recent.partial, false)
-  assert.deepEqual(recent.projects.map(project => [project.path, project.source]), [['/projects/a', 'both'], ['/projects/b', 'threads']], 'the newest two existing directories; the missing one is dropped')
+  assert.deepEqual(recent.projects.map(project => [project.path, project.source]), [[normalize('/projects/a'), 'both'], [normalize('/projects/b'), 'threads']], 'the newest two existing directories; the missing one is dropped')
   assert.equal(recent.projects[0].lastUsedAt, '2030-01-01T00:00:00.000Z'); assert.equal(recent.projects[0].name, 'a')
   fail = true
   const fallback = await f.runs.listRecentProjects()
-  assert.equal(fallback.partial, true); assert.deepEqual(fallback.projects.map(project => project.path), ['/projects/b', '/projects/a'])
+  assert.equal(fallback.partial, true); assert.deepEqual(fallback.projects.map(project => project.path), ['/projects/b', '/projects/a'].map(normalize))
   assert.ok(a.id)
 })
 test('threads take the first prompt as title, then the Claude environment\'s session title; user titles, reported models and pending counts are kept', async t => {

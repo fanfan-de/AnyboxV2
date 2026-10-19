@@ -1,3 +1,4 @@
+import { packageFileModeMatches, syncPackageDirectory } from './filesystem-platform.js'
 import { constants } from 'node:fs'
 import { lstat, mkdir, open, readdir, realpath, rename, unlink, rmdir } from 'node:fs/promises'
 import { dirname, join, relative, resolve, sep } from 'node:path'
@@ -67,7 +68,7 @@ export async function createInstallationFiles(input: string): Promise<Installati
       if (!info.isDirectory() || info.isSymbolicLink()) fail('installation-path-unsafe')
       if (created) {
         const parent = await open(dirname(current), constants.O_RDONLY | constants.O_NOFOLLOW)
-        try { if (!(await parent.stat()).isDirectory()) fail('installation-path-unsafe'); await parent.sync() } finally { await parent.close() }
+        try { if (!(await parent.stat()).isDirectory()) fail('installation-path-unsafe'); await syncPackageDirectory(parent) } finally { await parent.close() }
       }
     }
   }
@@ -99,7 +100,7 @@ export async function createInstallationFiles(input: string): Promise<Installati
   async function syncDirectory(path: string) {
     await assertDirectory(path)
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
-    try { if (!(await handle.stat()).isDirectory()) fail('installation-path-unsafe'); await handle.sync() } finally { await handle.close() }
+    try { if (!(await handle.stat()).isDirectory()) fail('installation-path-unsafe'); await syncPackageDirectory(handle) } finally { await handle.close() }
   }
   const stage = (job: PackageFileInstall) => join(directory, 'staging', job.id)
   const final = (identity: PackageIdentity) => join(directory, 'packages', identity.appId, identity.version, identity.digest)
@@ -171,7 +172,7 @@ export async function createInstallationFiles(input: string): Promise<Installati
         if (info.isDirectory()) { if (![...expected.keys()].some(path => path.startsWith(name + '/'))) fail('installation-unindexed-content'); await checkTree(file, name) }
         else {
           const entry = expected.get(name)
-          if (!entry || !info.isFile() || info.nlink !== 1 || info.size !== entry.size || (info.mode & 0o777) !== entry.mode) fail('installation-content-changed')
+          if (!entry || !info.isFile() || info.nlink !== 1 || info.size !== entry.size || !packageFileModeMatches(info.mode, entry.mode)) fail('installation-content-changed')
           if (hash(await read(file, entry.size)) !== entry.hash) fail('installation-content-changed')
           seen.add(name)
         }

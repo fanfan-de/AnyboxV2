@@ -1,3 +1,4 @@
+import { syncPackageDirectory } from './filesystem-platform.js'
 import { constants, fstatSync, lstatSync, realpathSync, rmdirSync, unlinkSync } from 'node:fs'
 import { open, readdir, realpath } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
@@ -61,13 +62,13 @@ async function removeDirectory(item: Directory, parents: readonly Directory[], s
     }
   }
   assertDirectories(chain, signal)
-  await item.handle.sync()
+  await syncPackageDirectory(item.handle)
   // The last identity check and namespace mutation share one synchronous turn.
   assertDirectories(chain, signal)
   rmdirSync(item.path)
   const parent = parents[parents.length - 1]!
   assertDirectories(parents, signal)
-  await parent.handle.sync()
+  await syncPackageDirectory(parent.handle)
   assertDirectories(parents, signal)
 }
 
@@ -88,7 +89,7 @@ async function captureContainer(root: Directory, value: PackageIdentity): Promis
         if (absent) {
           // An earlier attempt may have deleted this exact container before its ledger commit.
           try { lstatSync(absent); throw failure('package-reclamation-directory-changed') } catch (error) { if (!missing(error)) throw error }
-          await chain[chain.length - 1]!.handle.sync()
+          await syncPackageDirectory(chain[chain.length - 1]!.handle)
           assertDirectories(chain, signal)
           try { lstatSync(absent); throw failure('package-reclamation-directory-changed') } catch (error) { if (!missing(error)) throw error }
         } else await removeDirectory(chain[chain.length - 1]!, chain.slice(0, -1), signal)

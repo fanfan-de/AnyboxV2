@@ -1,3 +1,4 @@
+import { symbolicAlias } from './helpers/filesystem-alias.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { generateKeyPairSync, createHash } from 'node:crypto'
@@ -139,7 +140,7 @@ test('recovery never trusts a corrupt, missing or symlink-substituted committed 
     const env = await setup(t, { onBoundary(boundary) { if (boundary === 'after-rename') throw Object.assign(new Error('injected'), { code: 'injected-interruption' }) } }), bytes = archive()
     const first = await upload(env.installer, await env.installer.accept(intent(bytes)), bytes), path = join(final(env.directory, first.identity), 'application', 'payload/web/app.js')
     if (variant === 'corrupt') await writeFile(path, 'export const value=9')
-    else { await rm(path); if (variant === 'symlink') await symlink(join(env.directory, 'outside.js'), path) }
+    else { await rm(path); if (variant === 'symlink') await symbolicAlias(join(env.directory, 'outside.js'), path) }
     await env.reopen({ onBoundary: undefined })
     const result = await env.installer.recover(first.id, { action: 'resume' })
     assert.equal(result.phase, 'recovery-required', variant)
@@ -168,7 +169,7 @@ test('unknown staging is reported without adoption or deletion and a staging sym
   assert.deepEqual(await env.installer.inspectOrphans(), ['orphan'])
   const job = await env.installer.accept(intent(bytes)), outside = join(env.directory, 'outside')
   await mkdir(outside); await writeFile(join(outside, 'retained'), 'outside')
-  await symlink(outside, join(env.directory, 'staging', job.id))
+  await symbolicAlias(outside, join(env.directory, 'staging', job.id))
   // Unsafe cleanup is fenced and retained; no resource is claimed to have exited.
   const result = await upload(env.installer, job, bytes)
   assert.equal(result.phase, 'recovery-required')

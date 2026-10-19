@@ -177,7 +177,7 @@ test('uninstall rejects data deletion, server paths, duplicate selectors and for
 
 test('the distributable main dispatches uninstall to the online command without opening a local registry', async () => {
   const execute = promisify(execFile)
-  await assert.rejects(execute(process.execPath, [fileURLToPath(new URL('../dist/main.js', import.meta.url)), 'uninstall', 'calculator', '--endpoint', 'http://example.com:3000', '--request-id', 'main-dispatch']), error => error.code === 1 && JSON.parse(error.stderr).error.code === 'invalid-endpoint')
+  await assert.rejects(execute(process.execPath, ['--no-warnings', fileURLToPath(new URL('../dist/main.js', import.meta.url)), 'uninstall', 'calculator', '--endpoint', 'http://example.com:3000', '--request-id', 'main-dispatch']), error => error.code === 1 && JSON.parse(error.stderr).error.code === 'invalid-endpoint')
 })
 
 test('repeating a completed uninstall request observes its original batch despite a newer registry revision', async t => {

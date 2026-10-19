@@ -110,6 +110,19 @@ export async function readApplicationDirectory(path: string, options: Applicatio
   check()
   // Browser File objects have no POSIX permissions. An explicit index is required
   // for executable payloads; otherwise both local entrypoints use ordinary 0644 files.
-  const normalized = entries.some(entry => entry.path === 'files.json') ? entries : entries.map(entry => metadata.has(entry.path) ? entry : { ...entry, mode: 420 as const })
+  const index = entries.find(entry => entry.path === 'files.json')
+  let declared = new Map<string, 420 | 493>()
+  if (process.platform === 'win32' && index) {
+    // Preserve the index's logical executable mode without changing signed bytes.
+    // The verifier still validates its complete schema, hashes and signature.
+    try {
+      const parsed = JSON.parse(Buffer.from(index.bytes).toString('utf8')) as { files?: unknown }
+      if (Array.isArray(parsed.files)) for (const file of parsed.files) {
+        if (file && typeof file === 'object' && typeof file.path === 'string' && (file.mode === 420 || file.mode === 493)) declared.set(file.path, file.mode)
+      }
+    } catch { /* Invalid index bytes remain untouched for the archive verifier. */ }
+  }
+  const normalized = entries.map(entry => !metadata.has(entry.path) && (!index || process.platform === 'win32')
+    ? { ...entry, mode: declared.get(entry.path) ?? 420 as const } : entry)
   return encodeApplicationDirectory(normalized, options)
 }

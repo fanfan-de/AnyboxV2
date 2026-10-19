@@ -1,3 +1,4 @@
+import { symbolicAlias } from './helpers/filesystem-alias.mjs'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { fstatSync, lstatSync, readdirSync, realpathSync } from 'node:fs'
@@ -17,7 +18,8 @@ const deferred = () => { let resolve; const promise = new Promise(yes => { resol
 const code = expected => error => error?.code === expected
 const rootDescriptors = directory => {
   const expected = lstatSync(directory)
-  return readdirSync(process.platform === 'linux' ? '/proc/self/fd' : '/dev/fd').filter(name => {
+  const descriptors = process.platform === 'win32' ? Array.from({ length: 1024 }, (_, fd) => String(fd)) : readdirSync(process.platform === 'linux' ? '/proc/self/fd' : '/dev/fd')
+  return descriptors.filter(name => {
     try { const actual = fstatSync(Number(name)); return actual.isDirectory() && actual.dev === expected.dev && actual.ino === expected.ino } catch { return false }
   })
 }
@@ -294,11 +296,16 @@ test('a replaced canonical registry root cannot enter reclamation through an ext
   const expected = await input(), outside = await mkdtemp(join(tmpdir(), 'anybox-registry-outside-')), held = directory + '-pinned'
   let entered = 0, moved = false, alias = false
   try {
+    if (process.platform === 'win32') {
+      await assert.rejects(rename(directory, held), error => ['EPERM', 'EBUSY'].includes(error.code), 'the open registry prevents replacing its containing namespace')
+      assert.equal(entered, 0)
+    } else {
     await rename(directory, held); moved = true
-    await symlink(outside, directory); alias = true
+    await symbolicAlias(outside, directory); alias = true
     await assert.rejects(service.withReclamation(expected, async () => { entered++ }), code('reclamation-root-changed'))
     assert.equal(entered, 0)
     assert.equal((await service.getOperation(expected.operationId)).phase, 'prepared')
+    }
   } finally {
     if (alias) await unlink(directory)
     if (moved) await rename(held, directory)

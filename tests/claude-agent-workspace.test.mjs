@@ -14,7 +14,7 @@ const nativeId = '11111111-1111-4111-8111-111111111111', forkId = '22222222-2222
 const context = { schemaVersion: 1, model: 'test', totalTokens: 10, maxTokens: 100, percentage: 10, estimated: true, categories: [] }
 const catalog = { schemaVersion: 1, source: 'project', permissionMode: 'default', skills: [], agents: [], mcp: [] }
 const finish = async (f, id, index = 0) => { f.sdk.runs[index].finish({ kind: 'result', result: sampleResult() }); f.sdk.runs[index].exit(); await f.runs.waitRun(id) }
-const fixture = async (t, sdk = fakeSdk()) => { const original = sdk.port.openRun; sdk.port.openRun = (...args) => { const handle = original(...args), run = sdk.runs.at(-1), close = handle.close; handle.close = () => { close(); run.finish({ kind: 'failed', error: { code: 'cancelled', message: 'closed' } }); run.exit() }; return handle }; const dir = await mkdtemp(join(tmpdir(), 'claude-workspace-')); const f = await createRunsFixture(join(dir, 'index.sqlite'), { sdk }); t.after(async () => { await f.close(); await rm(dir, { recursive: true, force: true }) }); return { ...f, dir } }
+const fixture = async (t, sdk = fakeSdk()) => { const original = sdk.port.openRun; sdk.port.openRun = (...args) => { const handle = original(...args), run = sdk.runs.at(-1), close = handle.close; handle.close = () => { close(); run.finish({ kind: 'failed', error: { code: 'cancelled', message: 'closed' } }); run.exit() }; return handle }; const dir = await mkdtemp(join(tmpdir(), 'claude-workspace-')); const f = await createRunsFixture(join(dir, 'index.sqlite'), { sdk }), cleanups = []; t.after(async () => { for (const close of cleanups.reverse()) await close(); await f.close(); await rm(dir, { recursive: true, force: true }) }); return { ...f, dir, onCleanup: close => cleanups.push(close) } }
 
 test('budget snapshots, context and checkpoint metadata persist across restart while native transcripts stay external', async t => {
   let f = await fixture(t), thread = await f.runs.createThread({ projectPath: '/project' })
@@ -31,7 +31,7 @@ test('budget snapshots, context and checkpoint metadata persist across restart w
   await finish(f, run.id)
   await f.close()
   const restarted = await createRunsFixture(join(f.dir, 'index.sqlite'))
-  t.after(() => restarted.close())
+  f.onCleanup(() => restarted.close())
   assert.deepEqual((await restarted.runs.getThread(thread.id)).options, settings)
   assert.deepEqual((await restarted.runs.getRun(run.id)).contextUsage, context)
   assert.equal((await restarted.runs.checkpoints(thread.id))[0].id, 'own-message')

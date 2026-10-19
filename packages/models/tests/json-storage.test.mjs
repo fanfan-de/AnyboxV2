@@ -228,7 +228,7 @@ test('manual capability structure errors reject the whole edit while preserving 
 test('the JSON store holds exclusive ownership across aliases and rejects reserved storage paths', async t => {
   const { directory, path } = await temporary(t), first = await open(path)
   const aliasDirectory = join(directory, 'alias')
-  await symlink(directory, aliasDirectory)
+  await symlink(directory, aliasDirectory, process.platform === 'win32' ? 'junction' : 'dir')
   await assert.rejects(open(join(aliasDirectory, 'models.json')))
   await first.root.fiber.dispose()
   await assert.rejects(open(path, { reservedPaths: [path] }))

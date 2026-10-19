@@ -81,7 +81,7 @@ test('only an explicit HTTP loopback origin is accepted and offline policy flags
 
 test('local source symlinks and hard-linked package files are rejected before HTTP', async t => {
   const env = await files(t), linked = join(env.directory, 'linked.anybox-app'), symbolic = join(env.directory, 'symbolic.anybox-app')
-  await symlink(env.archive, symbolic)
+  await symlink(process.platform === 'win32' ? env.folder : env.archive, symbolic, process.platform === 'win32' ? 'junction' : 'file')
   let result = await run(args(symbolic), { fetch: async () => assert.fail('must not send linked content') }); assert.equal(result.error.code, 'unsafe-file-kind')
   await link(env.archive, linked)
   result = await run(args(linked), { fetch: async () => assert.fail('must not send linked content') }); assert.equal(result.error.code, 'unsafe-file-kind')
@@ -179,5 +179,5 @@ test('online install works against a running minimum host with the registry alre
 test('the distributed install entry dispatches online before it can open an offline registry', async t => {
   const env = await files(t), execute = promisify(execFile), input = args(env.folder, ['--trust-local'])
   input[input.indexOf('--endpoint') + 1] = 'http://example.com:3000'
-  await assert.rejects(execute(process.execPath, [fileURLToPath(new URL('../dist/main.js', import.meta.url)), ...input]), failure => failure.code === 1 && JSON.parse(failure.stderr).error.code === 'invalid-endpoint')
+  await assert.rejects(execute(process.execPath, ['--no-warnings', fileURLToPath(new URL('../dist/main.js', import.meta.url)), ...input]), failure => failure.code === 1 && JSON.parse(failure.stderr).error.code === 'invalid-endpoint')
 })

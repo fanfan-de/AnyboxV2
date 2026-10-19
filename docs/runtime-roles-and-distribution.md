@@ -70,6 +70,8 @@ Anybox Harness 客户端经现有认证的 HTTP/SSE 接口访问 harness server�
 
 Linux systemd、macOS launchd 与 Windows 服务的配置分别验收独立启动、停止、重启和状态观察。需要跨 harness server 进程故障继续工作的 worker 必须位于独立服务停止范围；现有 detached 启动不等于脱离 systemd cgroup。进程隔离缩小故障影响，实际恢复能力仍受接口、资源所有权、持久记录及操作系统管理规则约束。
 
+当前静态组合的 `web:local` 启动器在 Windows 通过继承的私有父子 IPC 请求关闭客户端及 harness server，等待两者实际退出后才退出；Unix 继续发送 SIGTERM。两种入口都执行角色自身同一个 `close()`，独立运行仍可使用进程信号且不要求 IPC。该关闭消息只存在于创建时继承的父子通道，不新增 HTTP 控制入口，也不停止独立 Computer worker。
+
 ## 5. 产品组合与实现范围
 
 桌面负责宿主及应用安装后的默认组合、本机角色选择、状态展示和有归属的启停；后台角色也提供无界面入口。包安装、版本激活与业务启停分别管理，更新需协调受影响进程的实际退出；技术方案见[应用包设计](application-packages-design.md)。面向用户统一使用 Anybox、Anybox Harness、harness server 与 Computer 等现有名称，不因为拆包或多进程另建产品品牌。当前 CLI 命令见[部署说明](harness-server-deployment.md)，桌面默认纯客户端，本机服务经明确操作启用。
