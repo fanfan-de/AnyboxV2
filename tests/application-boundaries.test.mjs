@@ -7,7 +7,10 @@ import ts from 'typescript'
 
 const root = resolve('.')
 const name = path => relative(root, path).split(sep).join('/')
-const inside = (file, directory) => file === directory || file.startsWith(directory + '/')
+const inside = (file, directory) => {
+  const target = file.split(sep).join('/'), root = directory.split(sep).join('/')
+  return target === root || target.startsWith(root + '/')
+}
 const packageName = specifier => specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0]
 const exists = path => access(path).then(() => true, () => false)
 
@@ -54,6 +57,7 @@ function exportTarget(manifest, specifier) {
   return replacement === undefined ? path : path.replaceAll('*', replacement)
 }
 async function sourcePath(path, phase) {
+  path = path.split(sep).join('/')
   const options = phase === 'source' ? [path.replace(/\/dist\//, '/src/').replace(/\.js$/, '.ts'), path.replace(/\.js$/, '.ts'), path.replace(/\.js$/, '.d.ts'), path] : [path]
   for (const candidate of options) if (await exists(candidate)) return candidate
   assert.fail(`Missing ${phase} dependency ${name(path)}`)

@@ -12,7 +12,7 @@
 - `foreground({command, timeoutMs?, maxOutputTokens?, workdir?}): OwnedCall<JsonValue>`，用于其他来源的前台命令适配。
 - 幂等 `close(): OwnedCall<JsonValue>`，关闭准入，取消调用、终止进程组并等待实际退出。
 
-当前仅支持 Unix 的管道模式。Codex 默认 `/bin/bash -lc`，可显式保存 `shell` 和 `login`；前台命令使用 `/bin/bash -c`。PTY 和独立后台作业不受支持。项目路径为相对工作目录基准，并非文件系统沙箱；绝对 `workdir` 可以位于项目外。
+支持 Windows 与 Unix 原生管道模式。Codex 在 Windows 默认 PowerShell 7，在 Unix 默认 Bash，可显式保存 `shell` 和 `login`；固定 Bash 前台契约仍使用 Bash，Windows 为 Git Bash/PortableGit，不启动 WSL。`src/core/platform/` 的私有适配不注册 Nya 服务，Node 与可选 shell 运行时配置见[原生平台支持](../../native-platform-support.md)。PTY 和独立后台作业不受支持。项目路径为相对工作目录基准，并非文件系统沙箱；绝对 `workdir` 可以位于项目外。
 
 ## 配置和数据归属
 
@@ -20,12 +20,12 @@
 | --- | --- | --- |
 | `timeoutMs` | 120000 | 启动后的进程执行期限 |
 | `maxBufferedOutputBytes` | 131072 | 每进程未读取的合并输出字节上限 |
-| `terminationGraceMs` | 5000 | SIGTERM 后的 SIGKILL 宽限期 |
+| `terminationGraceMs` | 5000 | Unix SIGTERM 后的 SIGKILL 宽限期；Windows 终止独占 Job |
 | `maxProcessesPerRun` | 32 | 同一 Run 同时存活的进程上限 |
 
-子进程仅继承 `PATH`、`HOME`、`TMPDIR`、`LANG`。stdout/stderr 经独立 UTF-8 解码器按观察到达顺序合并，缓冲及返回输出均在完整字符边界截断。stdin 始终有错误监听，写入串行；前台模式关闭 stdin，Codex 会话保留它供后续输入。
+子进程仅继承平台 shell 白名单中的路径、用户目录、临时目录、语言及必要 Windows 系统变量，不带模型 Key 或应用配置。stdout/stderr 经独立 UTF-8 解码器按观察到达顺序合并，缓冲及返回输出均在完整字符边界截断。stdin 始终有错误监听，写入串行；前台模式关闭 stdin，Codex 会话保留它供后续输入。
 
-进程 ID 在组件代内单调分配，查找还必须属于当前 Run scope。实际 ChildProcess、流、缓冲和运行句柄仅存在内存中；持久观察中的 `session_id` 不是恢复凭证，不能跨 Run 读取、重启恢复或自动重放。
+进程 ID 在组件代内单调分配，查找还必须属于当前 Run scope。实际 ManagedProcess、流、缓冲和运行句柄仅存在内存中；持久观察中的 `session_id` 不是恢复凭证，不能跨 Run 读取、重启恢复或自动重放。
 
 ## 执行、取消与清理
 
@@ -33,9 +33,9 @@
 
 每次工具调用的 `done` 等待的是该次启动、输出观察和取消清理，提前返回的进程由 scope 继续持有。取消工具调用会终止关联进程组，并等待其实际退出。项目查询期间取消会等待查询结束，禁止之后启动命令。
 
-scope 关闭和 Nya Effect 卸载先阻止新调用，再取消所有已接收调用，向存活进程组发 SIGTERM，宽限后发 SIGKILL，最后等待进程、管道和调用退出。shell 已退出的遗留子进程也会清理，包括重定向了输出的子进程。关闭业务结果保存全部进程的实际退出、剩余输出、截断、超时和终止事实；无法确认清理时，结果含 `cleanup: failed`，`done` 以 `cleanup-failure` 拒绝。正常 Run 结束调用这个入口属于资源清理，不等于用户取消 Run。
+scope 关闭和 Nya Effect 卸载先阻止新调用，再取消所有已接收调用，通过本包受管进程后端终止存活树：Unix SIGTERM 后升级 SIGKILL，Windows 终止独占 Job，最后等待树、管道和调用退出。shell 已退出的遗留子进程也会清理，包括重定向了输出的子进程。关闭业务结果保存全部进程的实际退出、剩余输出、截断、超时和终止事实；无法确认清理时，结果含 `cleanup: failed`，`done` 以 `cleanup-failure` 拒绝。正常 Run 结束调用这个入口属于资源清理，不等于用户取消 Run。
 
-信号发送可能与进程正常退出竞争，最终以观察到进程组确实消失为清理成功依据。进程 scope 由独立 worker 的内部执行适配器持有；computer scope 等它实际退出后，才原子释放实例 pin 与工作区 reservation。RunRuntime 等待 computer scope 的 `done` 后持久化清理观察并结算；失败不得生成成功节点。应用关闭通过持久 Run 控制等待所属 scope；停止 worker 服务等待此组件的全部 scope，并聚合清理错误。
+终止请求可能与进程正常退出竞争，最终以监督器确认整棵树、管道和清理确实退出为依据；Windows helper 自身死亡时即使 Job 清理了树，缺少回执仍报告失败。进程 scope 由独立 worker 的内部执行适配器持有；computer scope 等它实际退出后，才原子释放实例 pin 与工作区 reservation。RunRuntime 等待 computer scope 的 `done` 后持久化清理观察并结算；失败不得生成成功节点。应用关闭通过持久 Run 控制等待所属 scope；停止 worker 服务等待此组件的全部 scope，并聚合清理错误。
 
 ## 内部纯目录与选择契约
 
@@ -45,4 +45,4 @@ scope 关闭和 Nya Effect 卸载先阻止新调用，再取消所有已接收�
 
 ## 验证入口
 
-`tests/process-tools.test.mjs` 验证增量输出、stdin、跨 Run 句柄拒绝、正常关闭和卸载等待、超时、UTF-8 截断及项目查询取消。`tests/tool-catalog.test.mjs` 验证目录来源、推荐默认、依赖拒绝、固定快照、旧契约、参数范围与计划约束。集成行为由 RunRuntime 与原生协议测试覆盖。完整验证使用根 `npm run check`。
+`tests/managed-process-runtime.test.mjs` 验证原生 Job/进程组隔离、owner/helper 强杀和实际退出，`tests/native-tool-platform.test.mjs` 验证平台 shell。`tests/process-tools.test.mjs` 验证增量输出、stdin、跨 Run 句柄拒绝、正常关闭和卸载等待、超时、UTF-8 截断及项目查询取消。`tests/tool-catalog.test.mjs` 验证目录来源、推荐默认、依赖拒绝、固定快照、旧契约、参数范围与计划约束。集成行为由 RunRuntime 与原生协议测试覆盖。完整验证使用根 `npm run check`。

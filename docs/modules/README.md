@@ -6,6 +6,8 @@
 
 [D0a.1 独立业务服务](../application-standalone-services.md)由各应用提供自己的入口、HTTP 与认证；Anybox 接入复用同一业务装配。同进程不增加根，独立运行也不依赖宿主活动或应用管理。新增 Harness 与 Claude Agent 的访问、监听组件分别记录在手册；服务工厂和配置函数在所属组件及阶段文档说明。
 
+Anybox Harness 的[原生 Computer 支持](../native-platform-support.md)由既有 Computer 与工具组件内部的 `packages/app-harness/src/core/platform/` 适配提供，不新增 Nya 组件或组件文档数；不归宿主与 Claude Agent。
+
 ## 模块目录
 
 | 目录 | 内聚职责 | 独立组件文档数 |

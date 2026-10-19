@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
 import { once } from 'node:events'
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -10,8 +10,23 @@ import { test } from 'node:test'
 import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
 import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
+import { promisify } from 'node:util'
+import { nodeCommand } from './helpers/native-shell.mjs'
 
-const unix = process.platform !== 'win32'
+const runFile = promisify(execFile)
+async function denyDirectoryWrites(directory) {
+  if (process.platform !== 'win32') {
+    await chmod(directory, 0o555)
+    return () => chmod(directory, 0o755)
+  }
+  const system32 = join(process.env.SystemRoot, 'System32')
+  const { stdout } = await runFile(join(system32, 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true })
+  const sid = stdout.match(/S-1-\d+(?:-\d+)+/)?.[0]
+  assert.ok(sid, 'the test must identify its current Windows security principal')
+  const icacls = join(system32, 'icacls.exe')
+  await runFile(icacls, [directory, '/deny', `*${sid}:(WD,AD)`], { windowsHide: true })
+  return () => runFile(icacls, [directory, '/remove:d', `*${sid}`], { windowsHide: true })
+}
 const childFixture = fileURLToPath(new URL('./helpers/computer-runtime-process.mjs', import.meta.url))
 const boundary = 30_000
 
@@ -97,7 +112,7 @@ function facts(report, expectedOutput = 'original-result\n') {
   assert.equal(tools[0].observed, 1)
 }
 
-test('SIGKILL Runtime leaves its independent worker alive; a new Runtime obtains the original Bash result without replay', { skip: !unix, timeout: 90_000 }, async t => {
+test('SIGKILL Runtime leaves its independent worker alive; a new Runtime obtains the original Bash result without replay', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const first = f.start({ mode: 'begin', command: "printf 'once\\n' >> effect.log; printf 'started\\n' > started.flag; while [ ! -f release.flag ]; do sleep 0.02; done; printf 'original-result\\n'" })
   const started = await first.event('started')
@@ -152,7 +167,7 @@ async function workerFixture(t) {
   return { ...f, connection, identity, owner, binding, submit, done, close }
 }
 
-test('worker receipts survive confirmation loss and ownership takeover rejects stale dispatch, reads and controls', { skip: !unix, timeout: 90_000 }, async t => {
+test('worker receipts survive confirmation loss and ownership takeover rejects stale dispatch, reads and controls', { timeout: 90_000 }, async t => {
   const f = await workerFixture(t)
   const input = f.submit('original', 'bash', { command: "printf 'once\\n' >> effect.log; printf 'original-result\\n'" })
   const receipt = await f.connection.submit(input)
@@ -174,7 +189,7 @@ test('worker receipts survive confirmation loss and ownership takeover rejects s
   assert.equal((await f.close()).state, 'succeeded')
 })
 
-test('worker cancellation can pass its execution queue and durably cancel a never-started command', { skip: !unix, timeout: 90_000 }, async t => {
+test('worker cancellation can pass its execution queue and durably cancel a never-started command', { timeout: 90_000 }, async t => {
   const f = await workerFixture(t)
   const first = f.submit('blocked', 'bash', { command: "printf 'started\\n' > started.flag; while [ ! -f release.flag ]; do sleep 0.02; done" })
   const queued = f.submit('queued', 'bash', { command: "printf 'must-not-run\\n' > queued-effect.log" })
@@ -203,9 +218,9 @@ test('worker cancellation can pass its execution queue and durably cancel a neve
   assert.equal((await f.close()).state, 'succeeded')
 })
 
-test('a worker crash preserves unknown execution facts and refuses replay, new side effects or a false scope exit', { skip: !unix, timeout: 90_000 }, async t => {
+test('a worker crash preserves unknown execution facts and refuses replay, new side effects or a false scope exit', { timeout: 90_000 }, async t => {
   const f = await workerFixture(t)
-  const original = f.submit('unknown', 'bash', { command: "printf '%s\\n' \"$$\" > shell.pid; printf 'once\\n' >> effect.log; while [ ! -f release.flag ]; do sleep 0.02; done; printf 'too-late\\n'" })
+  const original = f.submit('unknown', 'bash', { command: nodeCommand("const fs=require('node:fs');fs.appendFileSync('effect.log','once\\n');fs.writeFileSync('shell.pid',String(process.pid));setInterval(()=>{},1000)", true) })
   await f.connection.submit(original)
   const shellPid = Number(await until(() => f.read('shell.pid').catch(() => false)))
   const endpoint = JSON.parse(await f.read('worker/endpoint.json'))
@@ -214,6 +229,7 @@ test('a worker crash preserves unknown execution facts and refuses replay, new s
     process.kill(endpoint.pid, 'SIGKILL')
     await f.connection.closeObserver()
     await until(() => { try { process.kill(endpoint.pid, 0); return false } catch (error) { return error.code === 'ESRCH' } })
+    await until(() => { try { process.kill(shellPid, 0); return false } catch (error) { return error.code === 'ESRCH' } })
     recovered = connectLocalComputerWorker({ directory: join(f.directory, 'worker') })
     const newWorker = await recovered.info()
     assert.notEqual(newWorker.bootId, f.identity.bootId)
@@ -238,18 +254,18 @@ test('a worker crash preserves unknown execution facts and refuses replay, new s
     assert.equal(await f.read('effect.log'), 'once\n')
     assert.equal(await f.read('new-effect.log').catch(() => 'absent'), 'absent')
   } finally {
-    // This PID came from our isolated command before the crash. The implementation
-    // itself deliberately does not treat a persisted PID as a recovery credential.
-    try { process.kill(-shellPid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
+    // A native supervisor cleans the actual process, but the replacement worker
+    // still cannot invent the durable cleanup receipt lost with its old boot.
+    assert.throws(() => process.kill(shellPid, 0), error => error.code === 'ESRCH')
     if (recovered) await assert.rejects(recovered.shutdown(), { code: 'worker-cleanup-failed' })
     await recovered?.closeObserver()
   }
 })
 
-test('Codex process identity survives observer replacement; repeated stdin and output receipt do not write or drain twice', { skip: !unix, timeout: 90_000 }, async t => {
+test('Codex process identity survives observer replacement; repeated stdin and output receipt do not write or drain twice', { timeout: 90_000 }, async t => {
   const f = await workerFixture(t)
   const exec = f.submit('exec', 'codex_exec_command', {
-    cmd: 'while IFS= read -r line; do printf \'%s\\n\' "$line" >> stdin.log; printf \'echo=%s\\n\' "$line"; done',
+    cmd: nodeCommand("const fs=require('node:fs');require('node:readline').createInterface({input:process.stdin}).on('line',line=>{fs.appendFileSync('stdin.log',line+'\\n');process.stdout.write('echo='+line+'\\n')})"),
     yield_time_ms: 0,
   }, 'codex.exec_command')
   await f.connection.submit(exec)
@@ -264,7 +280,7 @@ test('Codex process identity survives observer replacement; repeated stdin and o
   t.after(() => fresh.closeObserver())
   f.owner.runOwnerEpoch = 2
   await fresh.claimRun(f.owner)
-  const write = f.submit('stdin', 'codex_write_stdin', { session_id: sessionId, chars: 'hello\n', yield_time_ms: 100 }, 'codex.write_stdin')
+  const write = f.submit('stdin', 'codex_write_stdin', { session_id: sessionId, chars: 'hello\n', yield_time_ms: 3000 }, 'codex.write_stdin')
   const receipt = await fresh.submit(write)
   const observation = await until(async () => {
     const value = await fresh.get({ ...f.owner, operationId: write.operationId })
@@ -296,7 +312,7 @@ test('Codex process identity survives observer replacement; repeated stdin and o
   assert.deepEqual((await fresh.submit(close)).observation, closed.observation)
 })
 
-test('losing worker acceptance confirmation returns the original receipt and executes and counts Bash once', { skip: !unix, timeout: 90_000 }, async t => {
+test('losing worker acceptance confirmation returns the original receipt and executes and counts Bash once', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const child = f.start({ mode: 'begin', fault: 'accept-confirmation', command: "printf 'once\\n' >> effect.log; printf 'original-result\\n'" })
   await child.event('started')
@@ -308,7 +324,7 @@ test('losing worker acceptance confirmation returns the original receipt and exe
   await child.request('shutdown')
 })
 
-test('SIGKILL after Session commits observation but before confirmation does not consume or count the result twice', { skip: !unix, timeout: 90_000 }, async t => {
+test('SIGKILL after Session commits observation but before confirmation does not consume or count the result twice', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const first = f.start({ mode: 'begin', fault: 'consume-confirmation', command: "printf 'once\\n' >> effect.log; printf 'original-result\\n'" })
   const started = await first.event('started')
@@ -323,12 +339,12 @@ test('SIGKILL after Session commits observation but before confirmation does not
   await second.request('shutdown')
 })
 
-test('a real second-file permission failure and Runtime crash retain the original partial patch without replay', { skip: !unix || process.getuid?.() === 0, timeout: 90_000 }, async t => {
+test('a real second-file permission failure and Runtime crash retain the original partial patch without replay', { skip: process.platform !== 'win32' && process.getuid?.() === 0, timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const protectedDirectory = join(f.directory, 'protected')
   await mkdir(protectedDirectory)
-  await chmod(protectedDirectory, 0o555)
-  t.after(() => chmod(protectedDirectory, 0o755).catch(() => {}))
+  const restorePermissions = await denyDirectoryWrites(protectedDirectory)
+  t.after(() => restorePermissions().catch(() => {}))
   const patch = '*** Begin Patch\n*** Add File: first.txt\n+original\n*** Add File: protected/second.txt\n+pending\n*** End Patch'
   const first = f.start({ mode: 'begin', fault: 'consume-confirmation', patch })
   const started = await first.event('started')
@@ -351,10 +367,10 @@ test('a real second-file permission failure and Runtime crash retain the origina
   assert.equal(await f.read('protected/second.txt').catch(() => 'absent'), 'absent')
   assert.equal((await f.calls()).length, 2)
   await second.request('shutdown')
-  await chmod(protectedDirectory, 0o755)
+  await restorePermissions()
 })
 
-test('a persisted cancellation during a transport outage resumes cancelling and waits for the original worker exit', { skip: !unix, timeout: 90_000 }, async t => {
+test('a persisted cancellation during a transport outage resumes cancelling and waits for the original worker exit', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const first = f.start({ mode: 'begin', fault: 'cancel-offline', command: "printf 'once\\n' >> effect.log; printf 'started\\n' > started.flag; printf 'before-cancel\\n'; while [ ! -f release.flag ]; do sleep 0.02; done" })
   const started = await first.event('started')
@@ -378,7 +394,7 @@ test('a persisted cancellation during a transport outage resumes cancelling and 
   await second.request('shutdown')
 })
 
-test('SIGKILL after a durable scope close receipt resumes original cleanup and creates only one successful node', { skip: !unix, timeout: 90_000 }, async t => {
+test('SIGKILL after a durable scope close receipt resumes original cleanup and creates only one successful node', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const first = f.start({ mode: 'begin', fault: 'close-confirmation', command: "printf 'once\\n' >> effect.log; printf 'original-result\\n'" })
   const started = await first.event('started')
@@ -393,7 +409,7 @@ test('SIGKILL after a durable scope close receipt resumes original cleanup and c
   await second.request('shutdown')
 })
 
-test('SIGKILL after final settlement commits returns the original successful node and terminal event', { skip: !unix, timeout: 90_000 }, async t => {
+test('SIGKILL after final settlement commits returns the original successful node and terminal event', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const first = f.start({ mode: 'begin', fault: 'settlement-confirmation', command: "printf 'once\\n' >> effect.log; printf 'original-result\\n'" })
   const started = await first.event('started')
@@ -411,7 +427,7 @@ test('SIGKILL after final settlement commits returns the original successful nod
   await second.request('shutdown')
 })
 
-test('a model request without a saved response is interrupted after SIGKILL and is not reissued or allowed to activate computer', { skip: !unix, timeout: 90_000 }, async t => {
+test('a model request without a saved response is interrupted after SIGKILL and is not reissued or allowed to activate computer', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const first = f.start({ mode: 'model-pending', command: 'must never execute' })
   const started = await first.event('started')
@@ -428,7 +444,7 @@ test('a model request without a saved response is interrupted after SIGKILL and 
   await second.request('shutdown')
 })
 
-test('an account epoch change rejects resume and fails only after the original worker command exits and pins release', { skip: !unix, timeout: 90_000 }, async t => {
+test('an account epoch change rejects resume and fails only after the original worker command exits and pins release', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const first = f.start({ mode: 'begin', command: "printf 'once\\n' >> effect.log; printf 'started\\n' > started.flag; while [ ! -f release.flag ]; do sleep 0.02; done" })
   const started = await first.event('started')
@@ -454,14 +470,15 @@ test('an account epoch change rejects resume and fails only after the original w
   await second.request('shutdown')
 })
 
-test('SIGKILL while the next model response is pending interrupts the Run but drains its previously yielded process', { skip: !unix, timeout: 90_000 }, async t => {
+test('SIGKILL while the next model response is pending interrupts the Run but drains its previously yielded process', { timeout: 90_000 }, async t => {
   const f = await fixture(t)
   const first = f.start({ mode: 'process-model-pending', toolName: 'codex_exec_command', toolArgs: {
-    cmd: "printf 'once\\n' >> effect.log; printf 'started\\n' > started.flag; while [ ! -f release.flag ]; do sleep 0.02; done",
+    cmd: nodeCommand("const fs=require('node:fs');fs.appendFileSync('effect.log','once\\n');fs.writeFileSync('started.flag','started');setInterval(()=>{},1000)"),
     yield_time_ms: 100,
   } })
   const started = await first.event('started')
   await first.event('model-pending')
+  await until(() => f.read('started.flag').catch(() => false))
   await first.kill()
   const second = f.start({ mode: 'resume', runId: started.runId })
   await second.event('restarted')

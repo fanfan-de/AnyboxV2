@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -17,8 +18,8 @@ import { computerDeclarationDigest } from '../packages/app-harness/dist/core/com
 import { ceilingPermits, localWorkerAttachment, validateHarnessUrl, validateWorkerAttachment } from '../packages/app-harness/dist/core/computer/worker-attachments-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
+import { nodeCommand } from './helpers/native-shell.mjs'
 
-const unix = process.platform !== 'win32'
 const terminal = state => ['succeeded', 'failed', 'cancelled', 'outcome-unknown'].includes(state)
 const memoryEntries = () => {
   const memory = new Map()
@@ -70,7 +71,7 @@ test('worker attachment rules are pure: harness URLs, ceilings and records', () 
   assert.throws(() => validateWorkerAttachment({ ...local, state: 'pending' }), { code: 'worker-attachment-invalid' })
 })
 
-test('a worker serves a remote harness server through dial-out under the device owner\'s ceiling, and either side can revoke', { skip: !unix, timeout: 120_000 }, async t => {
+test('a worker serves a remote harness server through dial-out under the device owner\'s ceiling, and either side can revoke', { timeout: 120_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-worker-attach-')))
   const allowed = join(directory, 'allowed'), other = join(directory, 'other')
   await mkdir(allowed); await mkdir(other)
@@ -118,8 +119,15 @@ test('a worker serves a remote harness server through dial-out under the device 
   }
   await assert.rejects(request('submit', tool('outside', 'anybox.bash', { command: 'touch escaped' }, other)), { code: 'worker-scope-rejected' })
   await assert.rejects(request('submit', tool('patch', 'anybox.apply_patch', { patch: '*** Begin Patch\n*** End Patch\n' }, allowed)), { code: 'worker-scope-rejected' })
+  if (process.platform === 'win32') {
+    assert.deepEqual(await request('query', { query: { kind: 'stat', path: allowed.toUpperCase() } }), { kind: 'stat', directory: true, canonical: allowed }, 'case aliases use actual filesystem identity')
+    const escape = join(allowed, 'outside-junction')
+    await symlink(other, escape, 'junction')
+    await assert.rejects(request('query', { query: { kind: 'stat', path: escape } }), { code: 'worker-scope-rejected' })
+    await assert.rejects(request('submit', tool('junction-outside', 'anybox.bash', { command: 'touch escaped' }, escape)), { code: 'worker-scope-rejected' })
+  }
   await assert.rejects(readFile(join(other, 'escaped')), { code: 'ENOENT' })
-  const run = tool('inside', 'anybox.bash', { command: "printf 'remote %s' \"$PWD\" > marker.txt; cat marker.txt" }, allowed)
+  const run = tool('inside', 'anybox.bash', { command: nodeCommand("const value = 'remote ' + process.cwd(); require('node:fs').writeFileSync('marker.txt', value); process.stdout.write(value)", true) }, allowed)
   const accepted = await request('submit', run)
   assert.equal(accepted.state, 'queued'); assert.equal(typeof accepted.receipt, 'string')
   let fact = accepted
@@ -166,7 +174,7 @@ test('a worker serves a remote harness server through dial-out under the device 
   assert.equal(badAttach.status, 409); assert.equal((await badAttach.json()).error.code, 'unit-code-invalid')
 })
 
-test('a worker restart keeps approved attachments and resumes dial-out from the stored credential', { skip: !unix, timeout: 120_000 }, async t => {
+test('a worker restart keeps approved attachments and resumes dial-out from the stored credential', { timeout: 120_000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-worker-attach-restart-'))
   const remote = await harnessServer(t, directory)
   const { memory, openEntry } = memoryEntries()
@@ -194,13 +202,14 @@ test('unit credentials round-trip through the real system keyring', { skip: !pro
   const { AsyncEntry } = await import('@napi-rs/keyring')
   const directory = await mkdtemp(join(tmpdir(), 'anybox-worker-attach-keyring-'))
   const remote = await harnessServer(t, directory)
-  const namespace = `anybox.computer-worker.test.${process.pid}`
+  const namespace = `anybox.computer-worker.test.${randomUUID()}`
   const worker = await openComputerWorker(join(directory, 'worker'), { credentialNamespace: namespace, dialout: { pollWaitMs: 300 } })
   const local = connectLocalComputerWorker({ directory: join(directory, 'worker') })
-  t.after(async () => { await local.closeObserver(); await worker.close(); await rm(directory, { recursive: true, force: true }) })
+  let entry
+  t.after(async () => { try { await local.closeObserver(); await worker.close() } finally { await entry?.deleteCredential().catch(() => {}); await rm(directory, { recursive: true, force: true }) } })
   const issued = await (await remote.owner('POST', '/units/attach-codes', { unitKind: 'computer', scope: fullScope('computer') })).json()
   const attached = await local.control.consumeAttachCode({ harnessUrl: remote.web.url, code: issued.code, ceiling: fullScope('computer') })
-  const entry = new AsyncEntry(namespace, `unit-attachment/${attached.attachmentId}`, { linux: { store: 'secret-service' } })
+  entry = new AsyncEntry(namespace, `unit-attachment/${attached.attachmentId}`, { linux: { store: 'secret-service' } })
   const credential = await entry.getPassword()
   assert.equal(typeof credential, 'string'); assert.ok(credential.length >= 32)
   assert.equal((await remote.transport.authenticate(unitAuthorization(attached.attachmentId, credential))).attachmentId, attached.attachmentId)
@@ -209,7 +218,7 @@ test('unit credentials round-trip through the real system keyring', { skip: !pro
   assert.equal(await entry.getPassword(), null)
 })
 
-test('attach repeats only failures that prove the request never left: connect refusals are retried, ambiguous failures surface at once', { skip: !unix, timeout: 60_000 }, async t => {
+test('attach repeats only failures that prove the request never left: connect refusals are retried, ambiguous failures surface at once', { timeout: 60_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-worker-attach-retry-')))
   const remote = await harnessServer(t, directory)
   const { openEntry } = memoryEntries()

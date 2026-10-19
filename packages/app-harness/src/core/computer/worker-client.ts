@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, open } from 'node:fs/promises'
+import { readFile, open } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
@@ -8,6 +8,9 @@ import type { JsonValue } from '@anybox/models'
 import { localComputerWorkerServiceKey, localComputerWorkerControlServiceKey, workerError } from './worker-port.js'
 import type { ComputerWorkerOptions, ComputerWorkerPort, LocalComputerWorkerControl, LocalComputerWorkerStatus, WorkerOperation } from './worker-port.js'
 import type { WorkerEndpoint } from './worker-server.js'
+import { ensurePrivateDirectory } from '../platform/private-directory.js'
+import { processRuntimeAvailable } from '../platform/process-runtime.js'
+import { resolveBackgroundRuntime } from '../platform/runtime-path.js'
 
 const wait = (ms: number) => new Promise<void>(yes => setTimeout(yes, ms))
 function live(pid: number): boolean {
@@ -74,9 +77,12 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
     if (!accepting) throw workerError('worker-observer-closed')
     if (previous && live(previous.pid)) { await send(previous, '/info', {}); return previous }
     if (!start) throw workerError('worker-not-running')
-    if (process.platform === 'win32') throw workerError('worker-platform-unsupported')
+    // A service launcher must own the worker's independent role instead of
+    // placing it in the harness server's Job/cgroup through direct spawning.
+    if (!options.launch && process.env.ANYBOX_SYSTEM_SERVICE_ROLE === 'harness-server') throw workerError('worker-service-start-required')
+    if (!processRuntimeAvailable()) throw workerError('worker-platform-unsupported')
     const until = Date.now() + (options.startupTimeoutMs ?? 15_000)
-    await mkdir(directory, { recursive: true, mode: 0o700 })
+    try { await ensurePrivateDirectory(directory) } catch { throw workerError('worker-directory-unavailable') }
     const lock = await startupLock(until)
     try {
       // Another process may have finished startup while this manager waited for the lock.
@@ -89,7 +95,10 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
       let done: Promise<void> | undefined
       const stopUnpublished = async () => {
         if (child?.pid && !exited) {
-          try { process.kill(-child.pid, 'SIGKILL') }
+          try {
+            if (process.platform === 'win32') child.kill('SIGKILL')
+            else process.kill(-child.pid, 'SIGKILL')
+          }
           catch (failure) { if (!(failure instanceof Error && 'code' in failure && failure.code === 'ESRCH')) throw failure }
         }
         await done
@@ -104,11 +113,13 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
           const errorLog = await open(join(directory, 'worker.log'), 'a', 0o600)
           try {
             if (!accepting) throw workerError('worker-observer-closed')
-            child = spawn(options.executable ?? process.execPath, [fileURLToPath(new URL('../../entrypoints/computer-worker-main.js', import.meta.url)), directory],
-              { detached: true, stdio: ['ignore', 'ignore', errorLog.fd], windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } })
+            const runtime = options.executable ? { executable: options.executable, prefixArgs: [] } : resolveBackgroundRuntime()
+            child = spawn(runtime.executable, [...runtime.prefixArgs, fileURLToPath(new URL('../../entrypoints/computer-worker-main.js', import.meta.url)), directory],
+              { detached: true, stdio: ['ignore', 'ignore', errorLog.fd], windowsHide: true, env: { ...process.env } })
             child.once('error', error => { spawnFailure = error })
             done = new Promise<void>(yes => child!.once('close', () => { exited = true; yes() }))
-            child.unref()
+            // Keep the child referenced until publication or failed-start cleanup
+            // finishes; awaiting close alone does not keep Node's event loop alive.
           } finally { await errorLog.close() }
         }
         while (Date.now() < until) {
@@ -136,6 +147,10 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
         }
         if (!published) await stopUnpublished()
         throw error
+      } finally {
+        // Publication transfers ownership even if its first observation failed.
+        // Closing this client must not keep that independent worker attached.
+        if (published) child?.unref()
       }
     } finally { lock.close() }
   }
@@ -167,7 +182,7 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
     start: () => tracked(ensure(true).then(() => {})),
     status: signal => tracked((async () => {
       if (!accepting) throw workerError('worker-observer-closed')
-      const supported = process.platform !== 'win32', target = await endpoint(directory)
+      const supported = processRuntimeAvailable(), target = await endpoint(directory)
       if (!target || !live(target.pid)) return { state: 'stopped', supported, attachments: [] }
       try {
         const info = await send<Awaited<ReturnType<ComputerWorkerPort['info']>>>(target, '/info', {}, signal)

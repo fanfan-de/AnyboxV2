@@ -14,7 +14,7 @@ export default {
     executableName: 'Anybox',
     appBundleId: 'com.anybox.desktop',
     appCategoryType: 'public.app-category.productivity',
-    asar: { unpack: '{**/node_modules/{sharp,@img,@napi-rs,@vscode}/**/*,**/dist/native/mac-dialog.node}' },
+    asar: { unpack: '{**/node_modules/{sharp,@img,@napi-rs,@vscode}/**/*,**/dist/native/mac-dialog.node,**/app-harness/dist/core/platform/native/**}' },
     ignore: [/^\/vendor(?:\/|$)/, /^\/deploy(?:\/|$)/, /^\/package-lock\.json$/, /^\/README\.md$/],
     osxSign: false,
     osxNotarize: false,

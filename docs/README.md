@@ -53,6 +53,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | [Anybox 宿主与 Anybox Harness 应用边界](./harness-module-boundary.md) | 当前目录、宿主与应用依赖方向、组合入口与资源归属 |
 | [harness server 组件协作总览](./harness-server-components.md) | 单根装配、资源所有权与关键调用路径 |
 | [原生协议框架设计](./native-protocol-agent-framework-design.md) | 协议边界、迁移、恢复、验收矩阵和真实 API 测试入口 |
+| [Anybox Harness 原生 Computer 支持](./native-platform-support.md) | Windows worker、Job/Unix 进程组、私有平台适配、工具运行时与宿主包管理边界；历史和本轮验证分开记录 |
 | [Computer 资源设计](./computer-resource-design.md) | 本机按需资源、独立 worker 与工具等待重启接续；跨机器工作区及独立模型 exchange 按后续阶段实施 |
 | [可组合部署单元设计](./composable-units-design.md) | harness server、Models、Computer 三个单元各自独立部署与任意跨机器组合的通用规则、附着与绑定、契约形状及分阶段验收；U0 附着登记与 U1 远端 Computer 已实施，远端 Models 等后续阶段待实施 |
 | [节点程序设计（2026-10-15）](./anybox-node-program-design.md) | Computer、Models 与后续单元控制面的未采纳草案；发行及桌面关系以已确定的统一发行与独立运行角色约定为准，额外节点应用、拨入与 Models 拆分等提议仍未采纳 |

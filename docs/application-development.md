@@ -78,7 +78,7 @@ Agent 迭代时修改工作目录，提升 `manifest.version`，同步资源索�
 
 签名包的 `createRegistration(context, config)` 只构造描述，`context.phase` 区分 prepare/runtime，`role` 区分 client/execution/computerWorker，不能在导入或构造时打开资源。配置由 `ANYBOX_APPLICATION_CONFIG` 指向的非秘密 JSON 按 `applications[appId][role]` 传入，应用自有 schema 和默认路径；宿主不解释这些业务配置，也不接收浏览器提供的配置或秘密。
 
-含 Computer worker 的包须声明 `lifecycleVersion: 1`。正式 runtime 上下文在确有同包声明时提供 `startRole('computer-worker', { ownership: 'independent', args })`；准备时没有该能力。它只启动签名包自己的 main，不接受命令、路径或其他包。调用须属于存活的应用受管运行入口；父子 usage 连续持实际锚，成功确认后 worker 独立拥有生命周期，关闭客户端不停止它。原 worker 协议、数据、附着和凭据仍由应用自己持有。旧未声明版本的 worker 包须重新构建升级，不能回退旧 spawn 路径；当前独立启动仅支持 Unix Node。
+含 Computer worker 的包须声明 `lifecycleVersion: 1`。正式 runtime 上下文在确有同包声明时提供 `startRole('computer-worker', { ownership: 'independent', args })`；准备时没有该能力。它只启动签名包自己的 main，不接受命令、路径或其他包。调用须属于存活的应用受管运行入口；父子 usage 连续持实际锚，成功确认后 worker 独立拥有生命周期，关闭客户端不停止它。原 worker 协议、数据、附着和凭据仍由应用自己持有。旧未声明版本的 worker 包须重新构建升级，不能回退旧 spawn 路径；当前宿主包管理的独立角色启动仅支持 Unix Node；这与 Harness 自有入口的[Windows 原生 Computer](native-platform-support.md)支持分开，应用内部后端不会替代宿主的代码使用锁和角色适配。
 
 同包本机角色需要内部通信时，可在正式 runtime 客户端上下文使用 `context.channel.request(payload, signal)`，由执行端注册的 `channel.handle(root, payload, context)` 接收。宿主固定同一 appId、确切包身份及实际 ready 的角色，转送有界 JSON 并传播取消；应用定义协议和业务路由，负责 handler 在取消后的实际退出。准备阶段不提供通道，纯注册不得初始化业务。通道不要求创建执行设备连接或发行长期令牌；远端地址、认证及连接管理继续属于应用。角色未 ready、冻结、退出或版本不匹配时应显示不可用，不回退旧服务。完整界限见[同包角色私有通道](modules/package-management/activation.md#同包角色私有通道)。
 

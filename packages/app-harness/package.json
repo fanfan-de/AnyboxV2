@@ -1,6 +1,6 @@
 {
   "name": "@anybox/app-harness",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "engines": {
@@ -23,7 +23,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-web-vendors.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/build-process-native.mjs && node scripts/build-web-vendors.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs"
   },

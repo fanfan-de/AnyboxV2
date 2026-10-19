@@ -6,7 +6,7 @@
 
 执行器 inject worker 独占的 `local-storage`、`tools.bash`、`tools.apply-patch`、`tools.processes`、`tools.files`、`harness.image-assets` 和 [`computer.worker-attachments`](worker-attachments.md)。每个 Run scope 固定工具依赖代及精确 WorkspaceBinding；所有调用传入 binding.path，不读取 Authority 项目目录或 Session 表。worker 自己安装 Bash、补丁、管道进程、文件与图片组件，资源仍由各组件 Effect 持有。内部 `createWorkerExecution` 是闭包适配器，不另注册组件。
 
-此根继承 Bash/Processes 的 Unix 平台检查：当前 Linux/macOS 可装配，真实验收在 Linux 完成；Windows 的纯模型与受控契约测试不代表 Windows worker 已可用。文件工具同样需要完整 worker 根，因此也受此限制。
+此根支持 Harness 私有原生后端：Windows 工具进程由 Job Object 监督，Unix 使用进程组；Bash、Processes、Files 与图片仍由现有组件持有，不新增平台组件。Windows 目录授权在 canonical 路径检查之上核对真实目录身份，同时保留设备 ceiling 与批准 scope 的交集，junction 与大小写别名不能扩大范围。平台配置、宿主启动边界及分轮验证见[原生平台支持](../../native-platform-support.md)。
 
 ## 账本与执行提交
 

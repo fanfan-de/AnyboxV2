@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { hostname } from 'node:os'
-import { mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 import { imageAssetError, isImageAssetError } from './port.js'
 
@@ -27,9 +27,22 @@ export async function acquireImageDirectoryLock(directory: string): Promise<() =
     const handle = await open(join(candidate, filename), 'wx', 0o600)
     try { await handle.writeFile(JSON.stringify(owner)); await handle.sync() } finally { await handle.close() }
     for (let attempt = 0; attempt < 16; attempt++) {
+      let sawLockDirectory = false
+      try { const info = await lstat(lock); sawLockDirectory = info.isDirectory() && !info.isSymbolicLink() }
+      catch (error) { if (!code(error, 'ENOENT')) throw imageAssetError('asset-unavailable') }
       try { await rename(candidate, lock); acquired = true; break }
       catch (error) {
-        if (!code(error, 'ENOTEMPTY') && !code(error, 'EEXIST')) throw imageAssetError('asset-unavailable')
+        // Windows reports EPERM when the destination is an existing directory.
+        // An arbitrary permission failure is not evidence of an occupied lock.
+        const windowsConflict = process.platform === 'win32' && code(error, 'EPERM')
+        if (!code(error, 'ENOTEMPTY') && !code(error, 'EEXIST') && !windowsConflict) throw imageAssetError('asset-unavailable')
+        try {
+          const info = await lstat(lock)
+          if (!info.isDirectory() || info.isSymbolicLink()) throw imageAssetError('asset-unavailable')
+        } catch (inspection) {
+          if (code(inspection, 'ENOENT') && (!windowsConflict || sawLockDirectory)) continue
+          throw imageAssetError('asset-unavailable')
+        }
       }
       let names: string[]
       try { names = await readdir(lock) } catch (error) { if (code(error, 'ENOENT')) continue; throw imageAssetError('asset-occupied') }

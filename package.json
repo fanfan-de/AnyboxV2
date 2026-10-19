@@ -12,7 +12,7 @@
     "web": "npm run client",
     "web:local": "npm run build && node packages/distribution/dist/entrypoints/serve.js",
     "typecheck": "node scripts/build-workspaces.mjs --typecheck",
-    "test": "npm run build && node --test tests/*.test.mjs packages/*/tests/*.test.mjs",
+    "test": "npm run build && node --test --test-concurrency=4 --test-timeout=180000 tests/*.test.mjs packages/*/tests/*.test.mjs",
     "check": "npm run typecheck && npm test",
     "nya:build": "npm --prefix ../NyaCore run build",
     "nya:watch": "npm --prefix ../NyaCore run dev:core",

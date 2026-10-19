@@ -10,6 +10,7 @@ import { createModelsComponent, createModelsStoreComponent, createModelsVaultCom
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
+import { nodeCommand } from './helpers/native-shell.mjs'
 
 const factories = { responses: createResponsesProtocol, 'chat-completions': createChatCompletionsProtocol,
   'anthropic-messages': createAnthropicMessagesProtocol, 'gemini-interactions': createGeminiInteractionsProtocol }
@@ -70,7 +71,7 @@ for (const protocol of Object.keys(factories)) for (const imageInput of [true, f
     await f.harness.setAgentTools('assistant', { toolIds, expectedRevision: 0 })
     const session = await f.harness.createSession(f.project.id, 'assistant')
     state.responses.push(response(protocol, [
-      call('exec', 'codex_exec_command', { cmd: 'printf ready; read line; printf "%s" "$line"', yield_time_ms: 0 }),
+      call('exec', 'codex_exec_command', { cmd: nodeCommand("process.stdout.write('ready'); process.stdin.once('data', bytes => { process.stdout.write(bytes.toString().trim()); process.exit(0) });"), yield_time_ms: 0 }),
       call('plan', 'codex_update_plan', { plan: [{ step: 'inspect', status: 'in_progress' }] }),
       call('write', 'claude_code_Write', { file_path: 'new.txt', content: 'cross-source text\n' }),
       call('read', 'deepseek_harness_read', { file_path: 'new.txt' }),
@@ -98,6 +99,10 @@ for (const protocol of Object.keys(factories)) for (const imageInput of [true, f
     const cleanup = await f.root.get('local-storage').read(reader => reader.all("SELECT observation_json FROM harness_run_operations WHERE run_id = ? AND kind = 'operation'", [first.id]))
     assert.ok(cleanup.some(row => JSON.parse(row.observation_json ?? '{}').result?.processes), 'process final exits must be durably observed')
     const history = await f.root.get('harness.session-runs').loadNativeHistory(session.id, first.resultNodeId)
+    const environment = history.initialization.prompts.find(prompt => prompt.documentId === 'builtin:computer-environment')
+    assert.ok(environment, 'generic command Sessions fix their target shell environment')
+    assert.ok(environment.content.includes(`Operating system: ${process.platform}.`))
+    assert.ok(environment.content.includes(JSON.stringify(directory)))
     const incompatible = structuredClone(history.initialization)
     incompatible.toolSelection.tools[0].version = '99.0.0'
     await assert.rejects(f.root.get('harness.protocol-agents').prepare({ runId: 'unsupported-tools', sessionId: session.id, modelId: 'default',

@@ -8,7 +8,7 @@ import { createApplyPatchComponent } from '../packages/app-harness/dist/core/too
 import { createProcessToolsComponent } from '../packages/app-harness/dist/core/tool/process-component.js'
 import { createFileToolsComponent } from '../packages/app-harness/dist/core/tool/files-component.js'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -24,6 +24,7 @@ import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqli
 import { localStorageServiceKey } from '../packages/storage-sqlite/dist/port.js'
 import { bashServiceKey, bashToolDefinition } from '../packages/app-harness/dist/core/tool/bash-component.js'
 import { controlledModels, modelSnapshot, deferred } from './helpers/controlled-models.mjs'
+import { nodeCommand } from './helpers/native-shell.mjs'
 
 const agents = [{ id: 'assistant', instructions: 'Use Bash when useful.', modelId: 'default' }]
 
@@ -215,24 +216,33 @@ test('cancelling an active Bash command waits for exit and starts no subsequent 
 
 test('closing Harness waits for an active Bash command to exit', async () => {
   const f = await fixture()
+  const releaseExit = deferred(), actualExit = deferred()
   try {
+    const bash = f.root.get(bashServiceKey), execute = bash.execute.bind(bash)
+    bash.execute = input => {
+      const call = execute(input)
+      return { ...call, done: call.done.then(async () => { actualExit.resolve(); await releaseExit.promise }) }
+    }
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Close', idempotencyKey: 'close-bash' })
     const waiting = f.harness.waitRun(run.id)
     f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [
-      request('tool-1', "trap 'sleep 0.25; printf stopped > stopped; exit' TERM; printf ready > started; while :; do sleep 1; done"),
+      request('tool-1', nodeCommand("const fs=require('node:fs');fs.writeFileSync('pid',String(process.pid));fs.writeFileSync('started','ready');setInterval(()=>{},1000)", true)),
     ] })
     f.llm.calls[0].done.resolve()
     await until(() => existsSync(join(f.directory, 'started')))
+    const pid = Number(readFileSync(join(f.directory, 'pid'), 'utf8'))
+    process.kill(pid, 0)
     let closed = false
     const closing = f.harness.close().then(() => { closed = true })
-    await new Promise(resolve => setTimeout(resolve, 50))
+    await actualExit.promise
+    assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH')
     assert.equal(closed, false)
+    releaseExit.resolve()
     await closing
     assert.equal(closed, true)
-    assert.equal(existsSync(join(f.directory, 'stopped')), true)
     assert.equal((await waiting).status, 'cancelled')
     assert.equal(f.llm.calls.length, 1)
-  } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
+  } finally { releaseExit.resolve(); for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
 test('cancelling while the first model step starts cannot settle ahead of its call', async () => {

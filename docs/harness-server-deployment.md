@@ -32,7 +32,7 @@ node packages/distribution/dist/entrypoints/anybox-main.js harness-server init
 node packages/distribution/dist/entrypoints/anybox-main.js computer-worker /absolute/worker-data
 ```
 
-这些命令仍使用当前 Node 运行时；Windows Computer 的 Unix 限制尚未解除。Computer 独立附着管理 CLI 已补齐，见 [独立管理](computer-worker-management.md)；系统服务安装器仍待实现。
+这些命令使用当前 Node 运行时；Anybox Harness 0.1.2 已接入 Windows 原生 Computer，命令和可选工具运行时见[原生平台支持](native-platform-support.md)。Computer 独立附着管理 CLI 已补齐，见 [独立管理](computer-worker-management.md)；系统服务安装器仍待实现。
 
 新安装显示代码注册的应用目录，正式目录提供 Anybox Harness 与 Claude Agent。点击 Anybox Harness 后直接进入项目与会话工作区，在侧栏「管理连接」中配对本地或远程设备，并启动对应 Agent；侧栏「执行设备」选择新增项目的归属及模型、Prompt 设置的管理范围，已有会话保持所属设备。已有 run-state 的安装在首次迁移时保留 Agent 运行目标。模型与 Prompt 管理统一从工作区「设置」进入，按所选设备管理，不提供独立功能页面或应用。选择设备不启动其执行组件，选择远程设备不启动本机执行服务。
 
@@ -121,7 +121,7 @@ worker 目录固定给一个 Authority，不与其他业务库或设备实例共
 
 独立 worker 自己的 unit 仍用 `KillMode=control-group` 管理其进程组；应用正常关闭会取消并排空所属 Run，停止 worker unit 或共同 cgroup 还会终止执行服务，这些都与 Runtime 进程异常退出不同。worker 永久丢失后 starting/running 操作只能 outcome-unknown，保留已知事实并拒绝重放，不能把这个场景宣传为接续成功。worker 异常退出后由下一次本地调用重新启动（例如旧服务端附着 API 或新的本机 Run；新版独立管理需明确点击启动），没有本地调用就不会重启：只作为远端 harness server 单元使用的设备（U1 的 Mac 等）必须由 systemd、launchd 等外部监督 worker，否则 worker 崩溃后该单元一直离线，远端 Run 保持 running 直到单元回来或被取消。升级或重启远端 harness server 时，远端单元的拨出循环在产品 `applying` 期间收到 `product-unavailable` 而 offline，并按最长 15 秒的退避自动重连，不需要重新附着；绑定该单元的项目在此期间不可用，新 Run 准入被拒绝。当前故障注入实测的是 Runtime PID 的 SIGKILL 与存活 worker 身份；systemd 服务和真实 macOS 部署需按实际运维环境另行验收。
 
-独立 worker 继承现有 Bash/进程组件的 Unix guard，Linux/macOS 可装配，本次仅 Linux 实测。Windows 可运行纯模型和受控资源契约测试，真实 worker 激活尚未支持；全部文件计算工具也依赖这个根，不能单独绕过平台限制。
+独立 worker 已使用 Anybox Harness 包内的原生进程适配，支持 Windows 的 Job Object 与 Unix 进程组；Windows 通用命令默认 PowerShell 7，固定 Bash 契约使用原生 Git Bash，文件工具安装在同一 worker 根。此能力不依赖 Claude Agent。Windows 需要匹配的 helper 和 shell；普通 Node 默认本机运行时，Electron 需独立 Node 或已有 launch 适配。当前宿主包管理 prepare 与独立角色在 Windows 的限制仍保留，不能把原生 worker 支持扩大为宿主安装、系统服务或成品发行验收。具体配置与历史/本轮记录见[原生平台支持](native-platform-support.md)。
 
 ## 令牌管理与恢复
 

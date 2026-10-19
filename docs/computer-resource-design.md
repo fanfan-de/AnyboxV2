@@ -397,7 +397,7 @@ worker 没有模型 Key 和 Session 通用写权限，不接受浏览器任意 U
 | 账户 epoch 不兼容 / 下一模型响应未保存 | 不重新发送原模型；不兼容恢复先排空 Bash 再失败，model-pending 结算 interrupted 后独立排空 Codex；仅释放可证明退出的引用 |
 | worker 自身 SIGKILL、执行事实未知、旧 boot 迟到提交 | 原操作 outcome-unknown，原 executeCount/receipt 保留；旧 boot 新操作及未知 scope 新副作用被拒绝，不伪造安全退出 |
 
-验收入口：[真实故障](../tests/computer-worker-resume.test.mjs)、[worker](../tests/computer-worker.test.mjs)、[取消窗口](../tests/computer-runtime-cancel-window.test.mjs)、[恢复等待](../tests/computer-run-wait.test.mjs)、[Session](../tests/computer-session-resume.test.mjs)、[四协议](../tests/computer-protocol-resume.test.mjs)。当前 Windows 真实 worker 尚未支持；显式 Nya 卸载仍取消并排空，systemd 独立 unit/macOS 部署与跨机器 checkpoint 未实测，不能以这次 Linux PID 强杀验收替代。
+验收入口：[真实故障](../tests/computer-worker-resume.test.mjs)、[worker](../tests/computer-worker.test.mjs)、[取消窗口](../tests/computer-runtime-cancel-window.test.mjs)、[恢复等待](../tests/computer-run-wait.test.mjs)、[Session](../tests/computer-session-resume.test.mjs)、[四协议](../tests/computer-protocol-resume.test.mjs)。该 Linux PID 强杀验收时 Windows 真实 worker 尚未支持；这条历史记录不替代后续平台验收。2026-10-19 已将 a2150b2 的原生 Windows worker 迁入 Anybox Harness，当前范围见[原生平台支持](native-platform-support.md)。显式 Nya 卸载仍取消并排空；systemd 独立 unit/macOS 部署与跨机器 checkpoint 未由这次 Linux 验收覆盖。
 
 每个阶段同时维护对应实际组件手册和导航，并运行 npm run check。普通行为测试使用临时存储、内存凭据、受控模型和提供方，不在构建/测试中隐式创建云资源。真实两机及系统凭据验收单独记录设备、版本、故障注入与退出事实，模拟通过不代替真实跨机器验收。
 

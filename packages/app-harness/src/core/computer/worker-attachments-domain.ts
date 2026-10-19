@@ -38,12 +38,13 @@ export function validateComputerCeiling(value: unknown): Extract<UnitScope, { ki
   if (scope.projects !== 'all' && scope.projects.some(path => resolve(path) !== path)) throw workerError('worker-attachment-invalid')
   return scope
 }
-function within(path: string, directory: string): boolean {
+export type DirectoryContainsPath = (path: string, directory: string) => boolean
+export function lexicalDirectoryContainsPath(path: string, directory: string): boolean {
   const target = resolve(path), base = resolve(directory)
   return target === base || target.startsWith(base.endsWith(sep) ? base : base + sep)
 }
 /** The ceiling admits a tool declaration only when the fixed workspace path and the tool contract are both granted. */
-export function ceilingPermits(ceiling: Extract<UnitScope, { kind: 'computer' }>, input: { readonly path: string; readonly toolId: string }): boolean {
+export function ceilingPermits(ceiling: Extract<UnitScope, { kind: 'computer' }>, input: { readonly path: string; readonly toolId: string }, within: DirectoryContainsPath = lexicalDirectoryContainsPath): boolean {
   const projectAllowed = ceiling.projects === 'all' || ceiling.projects.some(directory => within(input.path, directory))
   const toolAllowed = ceiling.tools === 'all' || ceiling.tools.includes(input.toolId)
   return projectAllowed && toolAllowed

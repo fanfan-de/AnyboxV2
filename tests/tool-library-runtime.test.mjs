@@ -8,6 +8,7 @@ import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqli
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
+import { nodeCommand } from './helpers/native-shell.mjs'
 
 async function fixture() {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-process-runtime-'))), root = new Context(), llm = controlledModels()
@@ -31,7 +32,9 @@ async function until(check) {
 }
 async function running(f, waitForPid = true) {
   const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'process', idempotencyKey: 'one' })
-  f.llm.calls[0].result.resolve({ toolCalls: [{ id: 'exec', name: 'codex_exec_command', arguments: { cmd: 'printf "%s" "$$" > process.pid; sleep 30', yield_time_ms: 0 } }] })
+  f.llm.calls[0].result.resolve({ toolCalls: [{ id: 'exec', name: 'codex_exec_command', arguments: {
+    cmd: nodeCommand("require('node:fs').writeFileSync('process.pid',String(process.pid));setInterval(()=>{},1000)"), yield_time_ms: 0,
+  } }] })
   f.llm.calls[0].done.resolve()
   await until(() => f.llm.calls.length === 2 && (!waitForPid || existsSync(join(f.directory, 'process.pid'))))
   return run
@@ -126,7 +129,7 @@ test('output captured at final process close participates in the Run output limi
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'output', idempotencyKey: 'one' })
     f.llm.calls[0].result.resolve({ toolCalls: [{ id: 'exec', name: 'codex_exec_command', arguments: {
-      cmd: "head -c 200000 /dev/zero | tr '\\0' 'x'; printf ready > output.ready; sleep 30", yield_time_ms: 0,
+      cmd: nodeCommand("process.stdout.write('x'.repeat(200000)+'\\n',()=>require('node:fs').writeFileSync('output.ready','ready'));setInterval(()=>{},1000)"), yield_time_ms: 0,
     } }] })
     f.llm.calls[0].done.resolve()
     await until(() => f.llm.calls.length === 2 && existsSync(join(f.directory, 'output.ready')))

@@ -17,7 +17,7 @@ async function until(check, timeout = 5000) {
   throw new Error('startup test condition did not become true')
 }
 function live(pid) { try { process.kill(pid, 0); return true } catch { return false } }
-function killWorker(pid) { try { process.kill(-pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error } }
+function killWorker(pid) { try { process.kill(process.platform === 'win32' ? pid : -pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error } }
 async function fixture(t) {
   const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'anybox-worker-startup-')))
   const workerDirectory = join(directory, 'worker'), gate = join(directory, 'gate')
@@ -50,7 +50,7 @@ async function fixture(t) {
   return { directory, workerDirectory, gate, client, launch, workers }
 }
 
-test('a passive connect cannot consume the same observer explicit start', { timeout: 10000, skip: process.platform === 'win32' }, async t => {
+test('a passive connect cannot consume the same observer explicit start', { timeout: 10000 }, async t => {
   const f = await fixture(t), entered = deferred(), release = deferred(), readFile = fs.readFile
   let first = true
   fs.readFile = async (path, ...args) => {
@@ -76,7 +76,7 @@ test('a passive connect cannot consume the same observer explicit start', { time
   } finally { release.resolve(); fs.readFile = readFile; syncBuiltinESMExports(); await Promise.allSettled([reading, starting]) }
 })
 
-test('real CLI and observer starters serialize before spawning and reuse one worker', { timeout: 15000, skip: process.platform === 'win32' }, async t => {
+test('real CLI and observer starters serialize before spawning and reuse one worker', { timeout: 15000 }, async t => {
   const f = await fixture(t), cli = f.launch('cli'), observer = f.launch('observer')
   await until(() => [cli, observer].every(manager => manager.messages.some(message => message.type === 'reading')))
   cli.child.send('read'); observer.child.send('read')
@@ -93,7 +93,7 @@ test('real CLI and observer starters serialize before spawning and reuse one wor
   assert.equal(f.workers.size, 1)
 })
 
-test('a killed startup lock owner leaves a reusable OS lock', { timeout: 15000, skip: process.platform === 'win32' }, async t => {
+test('a killed startup lock owner leaves a reusable OS lock', { timeout: 15000 }, async t => {
   const f = await fixture(t)
   await fs.mkdir(f.workerDirectory)
   const holder = f.launch('lock')
@@ -111,7 +111,7 @@ test('a killed startup lock owner leaves a reusable OS lock', { timeout: 15000, 
   assert.equal(result.code, 0, result.err); assert.equal(JSON.parse(result.out).state, 'running')
 })
 
-test('observer close cancels startup lock waiting without spawning or stopping another owner', { timeout: 5000, skip: process.platform === 'win32' }, async t => {
+test('observer close cancels startup lock waiting without spawning or stopping another owner', { timeout: 5000 }, async t => {
   const f = await fixture(t)
   await fs.mkdir(f.workerDirectory)
   const db = new DatabaseSync(join(f.workerDirectory, 'startup.sqlite'))
@@ -128,7 +128,7 @@ test('observer close cancels startup lock waiting without spawning or stopping a
   } finally { db.close(); fs.open = open; syncBuiltinESMExports(); await Promise.allSettled([starting]) }
 })
 
-test('startup timeout joins its unpublished child before releasing the startup lock', { timeout: 10000, skip: process.platform === 'win32' }, async t => {
+test('startup timeout joins its unpublished child before releasing the startup lock', { timeout: 10000 }, async t => {
   const f = await fixture(t), spawn = childProcess.spawn, previous = process.env.NODE_OPTIONS
   const client = connectLocalComputerWorker({ directory: f.workerDirectory, autoStart: false, startupTimeoutMs: 1000 })
   let child
@@ -154,7 +154,7 @@ test('startup timeout joins its unpublished child before releasing the startup l
   }
 })
 
-test('observer close joins a spawned startup handoff and leaves the published worker running', { timeout: 10000, skip: process.platform === 'win32' }, async t => {
+test('observer close joins a spawned startup handoff and leaves the published worker running', { timeout: 10000 }, async t => {
   const f = await fixture(t), previous = process.env.NODE_OPTIONS
   process.env.NODE_OPTIONS = `${previous ?? ''} --import=${new URL('./helpers/computer-worker-startup-gate.mjs', import.meta.url).href}`
   process.env.ANYBOX_TEST_WORKER_STARTUP_GATE = f.gate
@@ -184,7 +184,7 @@ test('observer close joins a spawned startup handoff and leaves the published wo
   }
 })
 
-test('a failed executable releases startup coordination and reports failure promptly', { timeout: 5000, skip: process.platform === 'win32' }, async t => {
+test('a failed executable releases startup coordination and reports failure promptly', { timeout: 5000 }, async t => {
   const f = await fixture(t)
   const client = connectLocalComputerWorker({ directory: f.workerDirectory, autoStart: false, executable: join(f.directory, 'missing-node'), startupTimeoutMs: 4000 })
   try {

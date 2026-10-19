@@ -30,7 +30,6 @@ import { createFixtureApplicationApiComponent } from './helpers/application-api.
 import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
 
-const unix = process.platform !== 'win32'
 const terminal = state => ['succeeded', 'failed', 'cancelled', 'outcome-unknown'].includes(state)
 const memoryEntries = () => {
   const memory = new Map()
@@ -106,7 +105,7 @@ async function remoteHarness(t, directory, proxyOptions) {
   return { root, web, units, transport, worker, local, attached, memory, proxyFiber, inputs, images }
 }
 
-test('the router routes by attachment and its Effect abandons only local observations while the unit keeps executing', { skip: !unix, timeout: 120_000 }, async t => {
+test('the router routes by attachment and its Effect abandons only local observations while the unit keeps executing', { timeout: 120_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-unit-proxy-effect-')))
   const f = await remoteHarness(t, directory)
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -180,7 +179,7 @@ test('the router routes by attachment and its Effect abandons only local observa
   assert.equal(bytesRoute.status, 401, 'the byte channel requires the unit credential')
 })
 
-test('a harness server in the remote Computer form runs Bash and Apply Patch on an attached worker and fails admission while the unit is offline', { skip: !unix, timeout: 180_000 }, async t => {
+test('a harness server in the remote Computer form runs Bash and Apply Patch on an attached worker and fails admission while the unit is offline', { timeout: 180_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-unit-proxy-run-')))
   const projectDirectory = join(directory, 'project'); await mkdir(projectDirectory)
   const root = new Context()
@@ -284,7 +283,7 @@ test('a harness server in the remote Computer form runs Bash and Apply Patch on 
   assert.equal(await readFile(join(projectDirectory, 'back.txt'), 'utf8'), 'back')
 })
 
-test('the local form serves local projects over loopback and remote-bound projects through their unit', { skip: !unix, timeout: 180_000 }, async t => {
+test('the local form serves local projects over loopback and remote-bound projects through their unit', { timeout: 180_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-worker-router-mixed-')))
   const localProject = join(directory, 'local-project'), remoteProject = join(directory, 'remote-project'), outside = join(directory, 'outside')
   await mkdir(localProject); await mkdir(remoteProject); await mkdir(outside)

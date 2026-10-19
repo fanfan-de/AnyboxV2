@@ -56,7 +56,7 @@ Anybox 是应用的安装和承载平台。只安装宿主时，用户可以查�
 
 `app-products` v2 的 `desired_enabled` 是运行目标，不是文件安装状态；`ApplicationInstallation.install()` 是本代 Nya 组件装配，也不等于安装软件包。可选能力端口、安装记录和运行目标须分别管理。
 
-当前桌面成品仍限定 macOS arm64，本机 ad hoc 签名不代表正式签名与公证；Node 发行仍需外部 Node/npm，Windows 真实 Computer worker 尚不支持。拆包与可选能力声明不改变这些验收事实。
+当前桌面成品仍限定 macOS arm64，本机 ad hoc 签名不代表正式签名与公证；Node 发行仍需外部 Node/npm。Anybox Harness 0.1.2 已接入[Windows 原生 Computer](native-platform-support.md)，归属应用自己的工具与 worker；宿主 Windows prepare、独立角色启动和成品发行限制仍分别保留。拆包与可选能力声明不扩大这些验收事实。
 
 ### 2.2 生命周期能力对照
 

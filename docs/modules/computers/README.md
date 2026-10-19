@@ -86,4 +86,4 @@ sequenceDiagram
 
 本模块不提供跨机器迁移、portable-managed、checkpoint 或独立模型 exchange。模型请求已发出而响应未保存时停止自动重发；任意 Runtime 阶段接续属于第四阶段。远端项目仍以绝对路径登记，宿主的目录选择器只浏览 harness server 本机。验收与后续边界见[设计文档](../../computer-resource-design.md)与[可组合单元设计](../../composable-units-design.md)。
 
-实际 worker 保留 Unix 工具装配限制，Linux/macOS 可装配，本次仅 Linux 完成真实进程故障验收。Windows 纯模型、资源契约与受控 worker 测试不代表真实 worker（包括文件工具）已支持。
+Anybox Harness 0.1.2 已从 a2150b2 迁入原生 Windows worker、工具进程树与文件工具支持；`src/core/platform/` 是应用内部适配，不新增 Nya 组件，不与 Claude Agent 或宿主共享业务资源。原 Linux 故障记录、旧分支 Windows 证据及本轮验证分别见[原生平台支持](../../native-platform-support.md)；宿主包管理的 Windows prepare/独立角色启动限制保持独立。

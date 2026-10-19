@@ -24,7 +24,7 @@
   "dependencies": {
     "@anybox/host": "0.1.0",
     "@anybox/application-api": "0.1.0",
-    "@anybox/app-harness": "0.1.1",
+    "@anybox/app-harness": "0.1.2",
     "@anybox/app-claude-agent": "0.1.10",
     "@anybox/storage-sqlite": "0.1.0",
     "@anybox/directory-picker": "0.1.0",

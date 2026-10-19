@@ -50,7 +50,7 @@ Web 支持显式节点查看、同父节点并发、跨项目四面板和标签�
 
 WSL Linux / Node.js 24.16.0 完整 npm run check 退出码 0，类型检查与构建通过；1307 项测试中 1293 项通过、14 项按原门控跳过、0 项失败。新增 36 项第二阶段测试全部通过，无跳过：真实 Runtime/worker 故障 14 项、worker 行为 5 项、取消准入窗口 3 项、恢复等待隔离 1 项、Session 恢复 8 项与四协议恢复 5 项。Runtime PID SIGKILL 后原 Bash 副作用/receipt/result 只一次；两端确认丢失、旧 owner、Codex stdin/output、取消断网、真实部分补丁、清理/结算、账户 epoch 拒绝及未知 worker 事实均覆盖。暂离线授权或遗留排空不阻塞其他 Run 的等待，观察中止不取消原 worker 操作，关闭仍等待实际退出。完整证据与限制见 [资源设计验收记录](computer-resource-design.md#71-阶段退出标准)。
 
-当前恢复限于已保存模型响应的工具等待、消费、清理及结算；model-pending 仍 interrupted，不重发模型，但排空已有 worker scope。显式 Nya 卸载/依赖撤销继续取消并排空 Run，idle worker 作为设备服务独立运行。真实 worker 继承 Unix guard，本次仅 Linux 实测，Windows 真实 worker 尚未支持；systemd/macOS 实际部署、阶段 3 的跨机器托管工作区及阶段 4 模型 exchange 不在此次验收内。
+当前恢复限于已保存模型响应的工具等待、消费、清理及结算；model-pending 仍 interrupted，不重发模型，但排空已有 worker scope。显式 Nya 卸载/依赖撤销继续取消并排空 Run，idle worker 作为设备服务独立运行。此阶段验收时真实 worker 仍继承 Unix guard，仅 Linux 实测，Windows 尚未支持；该历史范围不覆盖后续 Windows 原生实现。2026-10-19 的 Harness 0.1.2 迁入与当前验证另见[原生平台支持](native-platform-support.md)。systemd/macOS 实际部署、阶段 3 的跨机器托管工作区及阶段 4 模型 exchange 不在该次验收内。
 
 ### Computer 第一阶段（2026-10-10，历史交付记录）
 
@@ -200,7 +200,7 @@ Computer 契约新增不经操作账本的只读查询面 `query({ attachmentId,
 
 整合修复覆盖八项问题：Authority 在新工具置位前检查批准的工具许可，worker 在接纳事务与查询中按本机 canonical 身份检查批准 scope 与设备 ceiling；已领取提交因 boot 变化失效后保留执行不确定性，后续 claim/get/控制继续查回原事实，恢复时不把无回执等同于未执行，而本代明确尚未发送的新调用仍可取消退出；worker 关闭与附着撤销等待查询及真实文件句柄退出，拨出关闭等待已接受的管理调用，清理失败仍关闭 worker 根并留下失败回执；远端默认形态禁用 Authority 本机目录浏览、创建和系统窗口，保留手工远端绝对路径输入；查询目录别名不能扩大权限；远端目录恰好 1000 项可完整浏览，超过扫描上限明确返回 `file-tree-truncated` 并提示改用搜索或路径引用；附着面板同步清除秘密和自身 DOM，再等待旧请求退出，旧代清理不删除新表单。
 
-回归使用真实 SQLite、HTTP、worker、文件句柄与受控退出门闩，覆盖禁止工具零副作用、丢回执后只消费一次成功事实、无回执恢复及未发送取消窗口、查询/管理调用关闭等待、目录上限及界面换代。跨机器单次只读查询取消仍只结束 Authority 观察，不宣称远端文件资源已经退出；worker 独立持有并清理这些查询，本次没有新增跨机器取消确认协议。当前真实 worker 支持范围仍为 Unix，Windows 与其他平台发行保持原阶段边界。
+回归使用真实 SQLite、HTTP、worker、文件句柄与受控退出门闩，覆盖禁止工具零副作用、丢回执后只消费一次成功事实、无回执恢复及未发送取消窗口、查询/管理调用关闭等待、目录上限及界面换代。跨机器单次只读查询取消仍只结束 Authority 观察，不宣称远端文件资源已经退出；worker 独立持有并清理这些查询，本次没有新增跨机器取消确认协议。该次交付时真实 worker 支持范围仍为 Unix，保留当时的平台发行边界；当前 Harness Windows worker 状态见[原生平台支持](native-platform-support.md)。
 
 macOS / Node.js 24.16.0 上以 `TMPDIR=/private/tmp caffeinate -i npm run check` 完成类型检查、构建、浏览器资源校验和全量测试：1432 项中 1418 项通过、14 项按既有门控跳过，零失败、零取消；相较初始 U1 试合净增加 32 项测试。各组定向回归也全部通过，修复前构建已验证对应缺陷会触发断言。worker 测试临时目录统一正规化，避免 macOS `/var` 别名影响原有读图用例。未修改 NyaCore，未调用真实模型或系统 Vault，未重新进行跨机器 HTTPS 验收。
 
@@ -374,3 +374,11 @@ HTTP 及“我的应用”通过同一 /activations 卸载流程工作，默认�
 实际在线 CLI 卸载 Anybox Harness 在 14,544 ms 内完成，全部 Harness 代码容器消失，Claude Agent 的完整代码和 client/execution ready 保留，特意放置的应用数据标记原字节保留。同 requestId 再运行卸载退出 0、查回原 completed 批次，没有再次准备或删除。随后卸载 Claude Agent，最后一个代码容器回收，Products 为空，只剩实际存活的 client 管理角色。关闭后注册库迁移为 v4，两个控制数据库的既有目标均为关闭，未新增 Models、Session、Run 或 Computer 业务表；所有自有角色确认退出。完整包仍为 D1.4 的 37,991,277 字节 Harness 与 36,028,341 字节 Claude Agent，验证的是实际完整载荷的卸载和保留边界，不是新正式签名发行。
 
 `git diff --check` 通过。实现和命令见[生效与卸载组件](modules/package-management/activation.md#d15-本机卸载与代码回收)。当前验收不扩大为 Windows/Linux 成品、真实系统凭据或业务数据迁移；D2 在线下载和 D3 旧默认完整发行迁入继续单列。未重启用户原有客户端或独立 worker，未修改 NyaCore。
+
+## Anybox Harness 0.1.2 Windows Computer（2026-10-19）
+
+将 `feat/composable-units-u0` 的 `a2150b2` 原生 Computer 部分迁入 `packages/app-harness`：Windows Job Object、PowerShell/Git Bash、工具与搜索进程清理、worker 私有目录及目录身份检查，沿用当前 U1 授权、包角色回调、启动锁与真实退出等待。`src/core/platform/` 是现有组件的应用私有适配，不新增 Nya 组件，不依赖 Claude Agent 或宿主新业务。
+
+本次不迁入旧提交的系统服务安装器、全量随包运行时或桌面目录选择功能；宿主包管理的 Windows prepare/independent-role 限制保留。旧分支的 1402 项测试及成品记录仅作历史证据。
+
+Windows x64 的严格类型、全部包构建与资源校验通过，Harness 包 79 项全过，平台工具专项 92 通过/2 个 macOS 跳过，worker 启动与路由复测 12 项全过，应用边界及原生打包资源 6 项全过。已修复普通文件目录身份检查与未发布 worker 提前解除进程引用的回归；管理 API 已确认本机 `win32/x64` worker 正常运行。根 `npm run check` 的 2086 项测试为 1883 通过、143 失败、7 取消、53 跳过，未修改模块仍有 Windows 兼容失败，整体未通过；详细范围与日志见[原生平台支持](native-platform-support.md)。未修改 NyaCore、Claude Agent 或宿主业务实现，未运行真实模型/凭据门控或桌面成品验收。

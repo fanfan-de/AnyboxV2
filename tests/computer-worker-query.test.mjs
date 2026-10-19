@@ -177,9 +177,9 @@ test('revoking an attachment cancels and joins its outstanding stat query', { ti
   }
 })
 
-for (const restriction of ['ceiling', 'approved scope']) test(`worker queries check canonical roots against the ${restriction}`, { skip: process.platform === 'win32' }, async t => {
+for (const restriction of ['ceiling', 'approved scope']) test(`worker queries check canonical roots against the ${restriction}`, async t => {
   const f = await fixture(t), outside = join(f.directory, 'outside'), alias = join(f.project, 'alias')
-  await fs.mkdir(outside); await fs.writeFile(join(outside, 'outside-secret-name.txt'), 'secret'); await fs.symlink(outside, alias)
+  await fs.mkdir(outside); await fs.writeFile(join(outside, 'outside-secret-name.txt'), 'secret'); await fs.symlink(outside, alias, process.platform === 'win32' ? 'junction' : 'dir')
   const limited = { kind: 'computer', projects: [f.project], tools: [] }, all = { kind: 'computer', projects: 'all', tools: 'all' }
   f.scopes(restriction === 'ceiling' ? limited : all, restriction === 'ceiling' ? all : limited)
   for (const query of [{ kind: 'stat', path: alias }, { kind: 'search', root: alias, query: '' }, { kind: 'list', root: alias, path: '' }]) {
@@ -188,11 +188,15 @@ for (const restriction of ['ceiling', 'approved scope']) test(`worker queries ch
   assert.deepEqual(await f.query({ kind: 'stat', path: f.project }), { kind: 'stat', directory: true, canonical: f.project })
   assert.deepEqual(await f.query({ kind: 'stat', path: join(f.project, 'missing') }), { kind: 'stat', directory: false, canonical: null })
   assert.deepEqual((await f.query({ kind: 'search', root: f.project, query: '' })).search.paths, [])
+  const inside = join(f.project, 'inside.txt')
+  await fs.writeFile(inside, 'inside')
+  assert.deepEqual(await f.query({ kind: 'stat', path: inside }), { kind: 'stat', directory: false, canonical: inside }, 'an approved ordinary file remains a valid stat target')
+  await assert.rejects(f.query({ kind: 'stat', path: join(outside, 'outside-secret-name.txt') }), { code: 'worker-scope-rejected' })
 })
 
-test('explicitly granted directory aliases use their worker-local canonical identity', { skip: process.platform === 'win32' }, async t => {
+test('explicitly granted directory aliases use their worker-local canonical identity', async t => {
   const f = await fixture(t), alias = join(f.directory, 'alias')
-  await fs.symlink(f.project, alias)
+  await fs.symlink(f.project, alias, process.platform === 'win32' ? 'junction' : 'dir')
   f.scopes({ kind: 'computer', projects: [alias], tools: [] })
   assert.deepEqual(await f.query({ kind: 'stat', path: alias }), { kind: 'stat', directory: true, canonical: f.project })
   assert.deepEqual(await f.query({ kind: 'stat', path: f.project }), { kind: 'stat', directory: true, canonical: f.project })

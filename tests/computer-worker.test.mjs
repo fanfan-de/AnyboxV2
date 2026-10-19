@@ -13,7 +13,7 @@ import { connectLocalComputerWorker, createLocalComputerWorkerComponent } from '
 import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 
-const unix = process.platform !== 'win32'
+import { nodeCommand } from './helpers/native-shell.mjs'
 async function finish(port, input) {
   for (let n = 0; n < 1000; n++) {
     const op = await port.get(input)
@@ -50,17 +50,33 @@ async function fixture(t) {
     async nextRun(runId, changes) { owner = { runId, runOwnerEpoch: 1, attachmentId: 'local:computer' }; binding = { ...binding, scopeId: runId, bindingId: `binding-${runId}`, reservationId: `reservation-${runId}`, ...changes }; await port.claimRun(owner) } }
 }
 
-test('a worker that died since the last call is replaced by the next call instead of failing it', { skip: !unix, timeout: 60000 }, async t => {
+test('a worker that died since the last call is replaced by the next call instead of failing it', { timeout: 60000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-worker-respawn-'))
   const port = connectLocalComputerWorker({ directory: join(directory, 'worker') })
   t.after(async () => { try { await port.shutdown(); await port.closeObserver() } finally { await rm(directory, { recursive: true, force: true }) } })
-  const first = await port.info()
-  const endpoint = JSON.parse(await readFile(join(directory, 'worker', 'endpoint.json'), 'utf8'))
-  process.kill(endpoint.pid, 'SIGKILL')
-  for (let n = 0; n < 400; n++) { try { process.kill(endpoint.pid, 0); await delay(25) } catch { break } }
-  const second = await port.info()
-  assert.equal(second.workerId, first.workerId, 'the directory keeps the worker identity')
-  assert.notEqual(second.bootId, first.bootId, 'the first call after the death already talks to a replacement boot')
+  let phase = 'initial startup'
+  try {
+    const first = await port.info()
+    const endpoint = JSON.parse(await readFile(join(directory, 'worker', 'endpoint.json'), 'utf8'))
+    phase = 'waiting for killed worker'
+    process.kill(endpoint.pid, 'SIGKILL')
+    let exited = false
+    for (let n = 0; n < 400; n++) {
+      try { process.kill(endpoint.pid, 0); await delay(25) }
+      catch (error) { if (error.code !== 'ESRCH') throw error; exited = true; break }
+    }
+    assert.equal(exited, true, 'the killed fixture worker must exit before requesting a replacement')
+    phase = 'replacement startup'
+    const second = await port.info()
+    assert.equal(second.workerId, first.workerId, 'the directory keeps the worker identity')
+    assert.notEqual(second.bootId, first.bootId, 'the first call after the death already talks to a replacement boot')
+  } catch (error) {
+    // This random fixture has no credentials or user tools. Keep the worker's
+    // fixed startup diagnostic before cleanup removes evidence of a failure.
+    const log = await readFile(join(directory, 'worker', 'worker.log'), 'utf8').catch(() => '<worker log absent>')
+    t.diagnostic(`worker respawn failed during ${phase}: ${log.trim()}`)
+    throw error
+  }
 })
 
 test('installing and disposing the worker proxy does not allocate computer or create a ledger', async t => {
@@ -75,7 +91,7 @@ test('installing and disposing the worker proxy does not allocate computer or cr
   await assert.rejects(readFile(join(directory, 'worker', 'worker.sqlite')), { code: 'ENOENT' })
 })
 
-test('worker freezes file bindings and remembers maximum workspace and instance generations after scope exit', { skip: !unix, timeout: 60000 }, async t => {
+test('worker freezes file bindings and remembers maximum workspace and instance generations after scope exit', { timeout: 60000 }, async t => {
   const f = await fixture(t)
   const initial = f.tool('write', 'claude-code.Write', { file_path: 'value.txt', content: 'one' })
   await f.port.submit(initial)
@@ -94,12 +110,13 @@ test('worker freezes file bindings and remembers maximum workspace and instance 
   await assert.rejects(readFile(join(f.directory, 'stale.effect')), { code: 'ENOENT' })
 })
 
-test('whole Run cancellation persists before acknowledgement and rejects new tools while keeping old facts and cleanup', { skip: !unix, timeout: 60000 }, async t => {
+test('whole Run cancellation persists before acknowledgement and rejects new tools while keeping old facts and cleanup', { timeout: 60000 }, async t => {
   const f = await fixture(t)
-  const original = f.tool('command', 'codex.exec_command', { cmd: "printf 'alive\\n'; sleep 30", yield_time_ms: 0 })
+  const original = f.tool('command', 'codex.exec_command', { cmd: nodeCommand("process.stdout.write('alive'); setInterval(()=>{},1000)"), yield_time_ms: 100 })
   await f.port.submit(original)
   const observed = await finish(f.port, original)
   assert.equal(observed.state, 'succeeded')
+  assert.equal(typeof observed.observation.result.session_id, 'number')
   const cancel = { ...f.owner, operationId: 'cancel-run', kind: 'cancel', declarationDigest: 'cancel-run' }
   const receipt = await f.port.submit(cancel)
   const cancelled = await finish(f.port, cancel)
@@ -112,7 +129,7 @@ test('whole Run cancellation persists before acknowledgement and rejects new too
   assert.deepEqual((await f.close('close-cancelled')).observation, closed.observation)
 })
 
-test('worker image results retain immutable raw bytes and stable receipt through replacement observers', { skip: !unix, timeout: 60000 }, async t => {
+test('worker image results retain immutable raw bytes and stable receipt through replacement observers', { timeout: 60000 }, async t => {
   const f = await fixture(t)
   const bytes = await sharp({ create: { width: 2, height: 2, channels: 4, background: '#123456' } }).png().toBuffer()
   await writeFile(join(f.directory, 'image.png'), bytes)

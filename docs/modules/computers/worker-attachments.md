@@ -4,6 +4,8 @@
 
 `createWorkerAttachmentsComponent({ namespace?, openEntry?, now? })` 在独立 worker 根安装 `computer-worker-attachments`，提供 `computer.worker-attachments: WorkerAttachmentsPort`。inject worker 独占的 `local-storage`。它是 Computer 单元自己的附着记录：这台 worker 为哪些 harness server 服务、设备拥有者为每个附着设定的作用域上限，以及保存在系统凭据命名空间中的单元凭证。源码：[组件](../../../packages/app-harness/src/core/computer/worker-attachments.ts)、[纯规则](../../../packages/app-harness/src/core/computer/worker-attachments-domain.ts)。
 
+Windows 的目录上限在 worker 接纳端经真实路径与目录身份验证，不对整个 NTFS 路径统一折叠大小写；junction 不能扩大设备 ceiling 与批准 scope 的交集。适配归 Harness 私有平台代码，详见[原生平台支持](../../native-platform-support.md)。
+
 ## 配置与接口
 
 `namespace` 是系统凭据命名空间，默认 `anybox.computer-worker`，独立 worker 入口由 `ANYBOX_COMPUTER_WORKER_NAMESPACE` 指定；`openEntry` 仅供测试用内存替身替换 `@napi-rs/keyring` 条目，生产使用 macOS Keychain、Windows Credential Manager 或 Linux Secret Service。凭证 ID 为 `unit-attachment/<attachmentId>`。没有系统凭据服务的宿主不能记录附着：凭据操作失败返回固定 `worker-credential-unavailable`，不回退到文件或 SQLite。

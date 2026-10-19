@@ -35,7 +35,7 @@ test('projects identify canonical directories and isolate sessions while allowin
   const b = join(directory, 'b')
   mkdirSync(a)
   mkdirSync(b)
-  symlinkSync(a, join(directory, 'alias'))
+  symlinkSync(a, join(directory, 'alias'), process.platform === 'win32' ? 'junction' : 'dir')
   const f = await host(join(directory, 'state.sqlite'))
   try {
     await assert.rejects(f.harness.openProject('relative'), /absolute/)

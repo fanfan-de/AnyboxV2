@@ -3,6 +3,7 @@ import type { UnitScope } from '../unit/domain.js'
 import { fileError, validateFilePath, validateFileRange, validateFileTreePath } from '../project-files/domain.js'
 import type { FilePreview, FileRange, FileSearch, FileTreeEntry } from '../project-files/domain.js'
 import { ceilingPermits } from './worker-attachments-domain.js'
+import type { DirectoryContainsPath } from './worker-attachments-domain.js'
 import { workerError } from './worker-port.js'
 
 /**
@@ -47,6 +48,6 @@ export function validateComputerQuery(value: unknown): ComputerQuery {
 }
 /** The root a query reads is checked against the attachment's project directories; tools are irrelevant to reads. */
 export function queryRoot(query: ComputerQuery): string { return query.kind === 'stat' ? query.path : query.root }
-export function ceilingPermitsRoot(ceiling: Extract<UnitScope, { kind: 'computer' }>, root: string): boolean {
-  return ceilingPermits({ ...ceiling, tools: 'all' }, { path: root, toolId: 'read' })
+export function ceilingPermitsRoot(ceiling: Extract<UnitScope, { kind: 'computer' }>, root: string, within?: DirectoryContainsPath): boolean {
+  return ceilingPermits({ ...ceiling, tools: 'all' }, { path: root, toolId: 'read' }, within)
 }

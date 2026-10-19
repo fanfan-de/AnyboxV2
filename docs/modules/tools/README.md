@@ -17,6 +17,8 @@
 
 组件通过 inject 获取真实依赖和本轮 deps 快照。项目路径是相对路径基准，不是文件系统沙箱；命令具有应用用户的文件及网络访问权限。文件 Write/Edit 共用 Apply Patch 的预检与串行提交所有权，工具目录不会复制一套生命周期或写入队列。
 
+Windows 原生进程、shell 与目录适配位于本应用 `src/core/platform/`，由上述组件私有调用，不新增平台 Nya 服务。Windows 通用命令默认 PowerShell 7，明确的 Bash 契约仍运行原生 Bash；Files 搜索同样进入受管进程后端。当前配置与验证边界见[原生平台支持](../../native-platform-support.md)。
+
 ## 工具选择和历史
 
 Session 在业务库保存该执行设备按 Agent 的工具 ID 列表与修订号；创建 Session 时原子复制完整选择快照，之后不可修改。更新 Agent 只影响新 Session，旧会话、分支、在途 Run 和编辑/重新生成沿用原选择。默认选择 Codex 五项及 Claude Read/Write/Edit/Glob/Grep；Codex exec/write 必须成对选择，服务器拒绝缺失依赖，不静默补入工具。用户也可明确选择空集。

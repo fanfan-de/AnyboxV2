@@ -16,14 +16,14 @@ async function stub(t) {
   return { directory, server, async publish() { await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'endpoint.json'), JSON.stringify({ workerId, bootId, token, pid: process.pid, url: `http://127.0.0.1:${server.address().port}` })) } }
 }
 
-test('package worker startup uses one application-owned launch hook under the existing startup lock and preserves the independent observer boundary', { skip: process.platform === 'win32' }, async t => {
+test('package worker startup uses one application-owned launch hook under the existing startup lock and preserves the independent observer boundary', async t => {
   const env = await stub(t), calls = [], worker = connectLocalComputerWorker({ directory: env.directory, autoStart: false, async launch(directory) { calls.push(directory); await env.publish() } })
   t.after(() => worker.closeObserver())
   await Promise.all([worker.start(), worker.start()]); assert.deepEqual(calls, [resolve(env.directory)])
   assert.equal((await worker.status()).state, 'running'); await worker.closeObserver(); assert.equal(env.server.listening, true)
 })
 
-test('closing the observer joins an accepted package launch without stopping its independently published worker', { skip: process.platform === 'win32' }, async t => {
+test('closing the observer joins an accepted package launch without stopping its independently published worker', async t => {
   const env = await stub(t)
   let release, entered
   const accepted = new Promise(resolve => { entered = resolve }), worker = connectLocalComputerWorker({ directory: env.directory, autoStart: false, async launch() { entered(); await new Promise(resolve => { release = resolve }); await env.publish() } })

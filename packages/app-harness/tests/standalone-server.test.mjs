@@ -114,11 +114,13 @@ test('standalone Harness keeps the existing exclusive database owner', async t =
 })
 
 
-test('the standalone CLI follows bin symlinks and validates help and arguments without creating data', async t => {
+test('the standalone CLI resolves its platform launcher and validates help and arguments without creating data', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-harness-bin-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const bin = join(directory, 'anybox-harness-server')
-  await symlink(fileURLToPath(new URL('../dist/entrypoints/server-main.js', import.meta.url)), bin)
+  const entry = fileURLToPath(new URL('../dist/entrypoints/server-main.js', import.meta.url))
+  // npm's Windows shims invoke the JS entry directly; file symlinks require an unrelated OS privilege.
+  const bin = process.platform === 'win32' ? entry : join(directory, 'anybox-harness-server')
+  if (process.platform !== 'win32') await symlink(entry, bin)
   const run = promisify(execFile)
   const env = { ...process.env, ANYBOX_HARNESS_PORT: 'invalid', ANYBOX_HARNESS_DATABASE: join(directory, 'data', 'harness.sqlite') }
   for (const help of ['--help', '-h']) {

@@ -6,7 +6,7 @@ const root = fileURLToPath(new URL('..', import.meta.url))
 const packages = ['api-key-manager', 'application-api', 'storage-sqlite', 'directory-picker', 'models', 'app-harness', 'app-claude-agent', 'host', 'distribution']
 const typecheck = process.argv.includes('--typecheck')
 const run = (command, args) => new Promise((resolve, reject) => {
-  const child = spawn(command, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' })
+  const child = spawn(command, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' && command === 'npm' })
   child.once('error', reject)
   child.once('exit', code => code === 0 ? resolve() : reject(new Error(`${command} exited ${code}`)))
 })

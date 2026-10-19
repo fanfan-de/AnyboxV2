@@ -22,6 +22,7 @@ import { createRunRuntimeComponent } from '../packages/app-harness/dist/core/run
 import { createRunComponent, runServiceKey } from '../packages/app-harness/dist/core/run/component.js'
 import { controlledModels, ids } from './helpers/controlled-models.mjs'
 import { installTestProtocolAgents } from './helpers/native-records.mjs'
+import { nodeCommand } from './helpers/native-shell.mjs'
 
 async function until(predicate) {
   for (let attempt = 0; attempt < 500; attempt++) {
@@ -66,7 +67,7 @@ test('worker dependency revocation joins the next model call and yielded process
     let settled = false
     const waiting = runs.waitRun(run.id).then(value => { settled = true; return value })
     llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [{ id: 'process', name: 'codex_exec_command', arguments: {
-      cmd: "printf '%s' $$ > pid; trap 'printf stopping > stopping; sleep 0.25; printf stopped > stopped; exit' TERM; printf ready > started; while :; do sleep 1; done",
+      cmd: process.platform === 'win32' ? nodeCommand("const fs=require('node:fs');fs.writeFileSync('pid',String(process.pid));fs.writeFileSync('started','ready');setInterval(()=>{},1000)") : "printf '%s' $$ > pid; trap 'printf stopping > stopping; sleep 0.25; printf stopped > stopped; exit' TERM; printf ready > started; while :; do sleep 1; done",
       login: false, yield_time_ms: 20,
     } }] })
     llm.calls[0].done.resolve()
@@ -85,16 +86,18 @@ test('worker dependency revocation joins the next model call and yielded process
     assert.equal((await records.getRun(run.id)).status, 'running')
 
     llm.calls[1].done.resolve()
-    await until(() => existsSync(join(directory, 'stopping')))
-    assert.equal(disposed, false, 'model exit alone must not complete process dependency disposal')
-    assert.equal(settled, false, 'Run settlement must still wait for the yielded process')
-    assert.equal(existsSync(join(directory, 'stopped')), false)
+    if (process.platform !== 'win32') {
+      await until(() => existsSync(join(directory, 'stopping')))
+      assert.equal(disposed, false, 'model exit alone must not complete process dependency disposal')
+      assert.equal(settled, false, 'Run settlement must still wait for the yielded process')
+      assert.equal(existsSync(join(directory, 'stopped')), false)
+    }
     const terminal = await waiting
     await stopping
     assert.equal(terminal.status, 'failed')
     assert.equal(terminal.errorCategory, 'dependency-unavailable')
     assert.equal(terminal.resultNodeId, undefined)
-    assert.equal(existsSync(join(directory, 'stopped')), true)
+    if (process.platform !== 'win32') assert.equal(existsSync(join(directory, 'stopped')), true)
     assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH')
     assert.equal(llm.calls.length, 2, 'revocation must not admit a further model exchange')
     assert.deepEqual(await root.get(localStorageServiceKey).read(reader => reader.all('SELECT id FROM harness_nodes WHERE session_id=?', [session.id])), [])
@@ -108,7 +111,7 @@ test('worker dependency revocation joins the next model call and yielded process
     assert.equal(result.result.cleanup, 'completed')
     assert.equal(result.result.processes[0].session_id, observed.result.session_id)
     assert.equal(result.result.processes[0].terminated, true)
-    assert.equal(result.result.processes[0].exit_code, 0)
+    assert.equal(result.result.processes[0].exit_code, process.platform === 'win32' ? 1 : 0)
     assert.equal(result.result.processes[0].signal, null)
   } finally {
     for (const call of llm.calls) call.done.resolve()

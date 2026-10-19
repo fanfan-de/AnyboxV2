@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
 import { processToolsServiceKey, createProcessToolsComponent } from '../packages/app-harness/dist/core/tool/process-component.js'
+import { nodeCommand } from './helpers/native-shell.mjs'
 
 async function fixture(options = {}, projectLookup) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-process-tools-')))
@@ -28,11 +29,29 @@ async function untilFile(path) {
   assert.ok(existsSync(path))
 }
 
+test('concurrent project lookups cannot exceed the per-Run process limit', async () => {
+  let release
+  const gate = new Promise(resolve => { release = resolve })
+  const f = await fixture({ maxProcessesPerRun: 1 }, () => gate)
+  try {
+    const scope = f.processes.openRun({ runId: 'limited', projectId: 'project' })
+    const calls = Array.from({ length: 2 }, () => scope.execute('codex_exec_command', { cmd: nodeCommand('setInterval(()=>{},1000)'), yield_time_ms: 0 }))
+    const outcomes = Promise.allSettled(calls.map(result))
+    release()
+    const settled = await outcomes
+    assert.equal(settled.filter(value => value.status === 'fulfilled').length, 1)
+    assert.equal(settled.find(value => value.status === 'rejected').reason.category, 'unavailable')
+    const cleanup = await result(scope.close())
+    assert.equal(cleanup.processes.length, 1)
+    assert.equal(cleanup.cleanup, 'completed')
+  } finally { release(); await f.close() }
+})
+
 test('pipe execution yields a scoped session and later observations only consume new output', async () => {
   const f = await fixture()
   try {
     const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    const first = await result(scope.execute('codex_exec_command', { cmd: 'printf first; sleep 0.1; printf second', login: false, yield_time_ms: 20 }))
+    const first = await result(scope.execute('codex_exec_command', { cmd: nodeCommand("process.stdout.write('first');setTimeout(()=>process.stdout.write('second'),100)"), login: false, yield_time_ms: 20 }))
     assert.equal(typeof first.session_id, 'number')
     let output = first.output, next = first
     for (let attempt = 0; next.session_id && attempt < 30; attempt++) {
@@ -52,11 +71,12 @@ test('stdin remains open for Codex and process session IDs cannot cross Run scop
   const f = await fixture()
   try {
     const a = f.processes.openRun({ runId: 'a', projectId: 'project' }), b = f.processes.openRun({ runId: 'b', projectId: 'project' })
-    const first = await result(a.execute('codex_exec_command', { cmd: 'printf ready; IFS= read -r line; printf "got:%s" "$line"', login: false, yield_time_ms: 20 }))
+    const first = await result(a.execute('codex_exec_command', { cmd: nodeCommand("process.stdout.write('ready');process.stdin.once('data',b=>{process.stdout.write('got:'+b.toString().trim());process.exit(0)})"), login: false, yield_time_ms: 20 }))
     const foreign = await result(b.execute('codex_write_stdin', { session_id: first.session_id, chars: 'intrusion\n', yield_time_ms: 0 }))
     assert.equal(foreign.error, 'session-unavailable')
-    const actual = await result(a.execute('codex_write_stdin', { session_id: first.session_id, chars: 'answer\n', yield_time_ms: 200 }))
-    assert.equal(first.output + actual.output, 'readygot:answer')
+    let actual = await result(a.execute('codex_write_stdin', { session_id: first.session_id, chars: 'answer\n', yield_time_ms: 200 })), output = first.output + actual.output
+    for (let attempt = 0; actual.session_id && attempt < 30; attempt++) { actual = await result(a.execute('codex_write_stdin', { session_id: first.session_id, yield_time_ms: 100 })); output += actual.output }
+    assert.equal(output, 'readygot:answer')
     await result(a.close()); await result(b.close())
   } finally { await f.close() }
 })
@@ -67,19 +87,25 @@ test('normal scope cleanup cancels live groups and waits for actual exit', async
   const f = await fixture({ terminationGraceMs: 5_000 })
   try {
     const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    await result(scope.execute('codex_exec_command', { cmd: "trap 'printf cleaning > cleaning; while [ ! -e release-cleanup ]; do sleep 0.01; done; printf cleaned > cleaned; exit' TERM; printf ready > started; while :; do sleep 1; done", login: false, yield_time_ms: 0 }))
+    await result(scope.execute('codex_exec_command', { cmd: process.platform === 'win32' ? nodeCommand("require('node:fs').writeFileSync('pid',String(process.pid));require('node:fs').writeFileSync('started','ready');setInterval(()=>{},1000)") : "trap 'printf cleaning > cleaning; while [ ! -e release-cleanup ]; do sleep 0.01; done; printf cleaned > cleaned; exit' TERM; printf ready > started; while :; do sleep 1; done", login: false, yield_time_ms: 0 }))
     await untilFile(join(f.directory, 'started'))
     const closing = scope.close()
     let exited = false
     void closing.done.then(() => { exited = true })
-    await untilFile(join(f.directory, 'cleaning'))
-    assert.equal(exited, false)
-    assert.equal(existsSync(join(f.directory, 'cleaned')), false)
-    writeFileSync(join(f.directory, 'release-cleanup'), '')
+    if (process.platform !== 'win32') {
+      await untilFile(join(f.directory, 'cleaning'))
+      assert.equal(exited, false)
+      assert.equal(existsSync(join(f.directory, 'cleaned')), false)
+      writeFileSync(join(f.directory, 'release-cleanup'), '')
+    }
     const cleanup = await result(closing)
     assert.equal(cleanup.cleanup, 'completed')
     assert.equal(cleanup.processes[0].terminated, true)
-    assert.ok(existsSync(join(f.directory, 'cleaned')))
+    if (process.platform === 'win32') {
+      assert.equal(cleanup.processes[0].exit_code, 1)
+      const pid = Number(readFileSync(join(f.directory, 'pid'), 'utf8'))
+      assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH')
+    } else assert.ok(existsSync(join(f.directory, 'cleaned')))
     assert.throws(() => scope.execute('codex_exec_command', { cmd: 'touch forbidden' }))
   } finally { await f.close() }
 })
@@ -88,18 +114,19 @@ test('foreground helpers honor cwd, nonzero exit, output bounds and timeout', as
   const f = await fixture({ maxBufferedOutputBytes: 8, timeoutMs: 50 })
   try {
     const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    const cwd = await result(scope.foreground({ command: 'printf correct > cwd-marker', workdir: '/tmp', timeoutMs: 500 }))
+    const cwd = await result(scope.foreground({ command: 'printf correct > cwd-marker', workdir: f.directory, timeoutMs: 2000 }))
     assert.equal(cwd.exit_code, 0)
-    assert.ok(existsSync('/tmp/cwd-marker'))
-    rmSync('/tmp/cwd-marker')
-    const bounded = await result(scope.foreground({ command: "printf '你好你好你好'; exit 7", timeoutMs: 500 }))
+    assert.ok(existsSync(join(f.directory, 'cwd-marker')))
+    rmSync(join(f.directory, 'cwd-marker'))
+    const bounded = await result(scope.foreground({ command: "printf '你好你好你好'; exit 7", timeoutMs: 2000 }))
     assert.equal(bounded.exit_code, 7)
     assert.equal(bounded.truncated, true)
     assert.ok(Buffer.byteLength(bounded.output) <= 8)
     assert.ok(!bounded.output.includes('\ufffd'))
     const timeout = await result(scope.foreground({ command: "trap '' TERM; while :; do sleep 1; done" }))
     assert.equal(timeout.timed_out, true)
-    assert.ok(['SIGTERM', 'SIGKILL'].includes(timeout.signal), 'timeout joins the process even when it occurs before the shell installs its trap')
+    if (process.platform === 'win32') assert.equal(timeout.exit_code, 1)
+    else assert.ok(['SIGTERM', 'SIGKILL'].includes(timeout.signal), 'timeout joins the process even when it occurs before the shell installs its trap')
     await result(scope.close())
   } finally { await f.close() }
 })
@@ -108,11 +135,12 @@ test('cleanup escalates after an initialized process ignores TERM and waits for 
   const f = await fixture()
   try {
     const scope = f.processes.openRun({ runId: 'ignores-term', projectId: 'project' })
-    await result(scope.execute('codex_exec_command', { cmd: "trap '' TERM; printf ready > ignores-term; while :; do sleep 1; done", login: false, yield_time_ms: 0 }))
+    await result(scope.execute('codex_exec_command', { cmd: "trap '' TERM; printf ready > ignores-term; while :; do sleep 1; done", shell: 'bash', login: false, yield_time_ms: 0 }))
     await untilFile(join(f.directory, 'ignores-term'))
     const cleanup = await result(scope.close())
     assert.equal(cleanup.cleanup, 'completed')
-    assert.equal(cleanup.processes[0].signal, 'SIGKILL')
+    if (process.platform === 'win32') assert.equal(cleanup.processes[0].exit_code, 1)
+    else assert.equal(cleanup.processes[0].signal, 'SIGKILL')
     assert.equal(cleanup.processes[0].terminated, true)
   } finally { await f.close() }
 })
@@ -142,11 +170,12 @@ test('component disposal joins accepted process scopes without requiring the cal
   const f = await fixture()
   try {
     const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    await result(scope.execute('codex_exec_command', { cmd: "trap '' TERM; printf ready > started; while :; do sleep 1; done", login: false, yield_time_ms: 0 }))
+    await result(scope.execute('codex_exec_command', { cmd: "trap '' TERM; printf ready > started; while :; do sleep 1; done", shell: 'bash', login: false, yield_time_ms: 0 }))
     await untilFile(join(f.directory, 'started'))
     await f.root.fiber.dispose()
     const cleanup = await result(scope.close())
-    assert.equal(cleanup.processes[0].signal, 'SIGKILL')
+    if (process.platform === 'win32') assert.equal(cleanup.processes[0].exit_code, 1)
+    else assert.equal(cleanup.processes[0].signal, 'SIGKILL')
     assert.throws(() => f.processes.openRun({ runId: 'new', projectId: 'project' }))
   } finally { await f.close() }
 })

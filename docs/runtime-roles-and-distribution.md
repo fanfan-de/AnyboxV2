@@ -2,7 +2,7 @@
 
 [文档首页](README.md) · [桌面运行边界](desktop-runtime.md) · [桌面打包](desktop-packaging.md) · [部署说明](harness-server-deployment.md) · [组件手册](modules/README.md)
 
-状态：运行角色原则于 2026-10-15 确定；2026-10-17 发行方向调整为轻量宿主与应用按需安装，替代此前完整单包目标。下载、安装、打开运行、关闭与卸载的完整状态图见[宿主目标生命周期](products-v1.md)，能力差距、应用包技术设计与实施顺序见[模块化分发与按需安装](application-packages-design.md)。当前实现及待补齐事项见第 6 节，不表示应用包安装、卸载、三平台发行、独立服务管理或 Windows Computer 已完成。
+状态：运行角色原则于 2026-10-15 确定；2026-10-17 发行方向调整为轻量宿主与应用按需安装，替代此前完整单包目标。下载、安装、打开运行、关闭与卸载的完整状态图见[宿主目标生命周期](products-v1.md)，能力差距、应用包技术设计与实施顺序见[模块化分发与按需安装](application-packages-design.md)。当前实现及待补齐事项见第 6 节，不表示三平台应用包安装、卸载、发行或独立服务管理已完成。Anybox Harness 的 Windows 原生 Computer 状态单列于[原生平台支持](native-platform-support.md)。
 
 D0a 源码拆包后先推进 [D0a.1 应用业务服务独立运行](application-standalone-services.md)：两个应用自己提供 HTTP、认证与服务入口，Anybox 复用相同业务装配。独立运行不要求每应用新建进程；现有同进程组合仍使用唯一根，原默认命令和数据布局保持，D0b 已完成按消费者装配和通用生命周期接入，下载安装继续按 D1/D2 推进。
 
@@ -88,7 +88,7 @@ Linux systemd、macOS launchd 与 Windows 服务的配置分别验收独立启�
 | 应用完整生命周期 | 现有目录接口为 list/get/open/stop/retry；运行时组件装配、界面关闭与后台停止已有各自边界；没有包下载、安装、卸载或卸载恢复 | 按[目标状态图](products-v1.md)补齐包状态、版本使用证明、关闭/卸载协调和失败恢复；实施依赖统一见[路线图](application-packages-design.md) |
 | Computer 独立控制 | [独立管理](computer-worker-management.md)提供客户端本机入口与 CLI；附着、权限、状态与撤销直接访问 worker，读取状态不启动 | 真实平台、系统服务与成品包验收 |
 | 模块化发行 | [桌面打包](desktop-packaging.md)当前限定 macOS arm64且仍捆绑应用；[Node 发行](harness-server-deployment.md)仍依赖目标机器安装 Node/npm 依赖 | 三平台宿主与独立应用包、在线及本地安装、无桌面环境安装与按角色启动 |
-| 平台支持 | Linux/macOS worker 沿用 Unix 工具与进程管理；Windows 真实 worker 尚不支持 | Windows 工具契约与进程清理实现，以及三平台独立服务、系统凭据和成品包验收 |
+| 平台支持 | Harness 0.1.2 worker 使用应用私有的 Windows Job/Unix 进程组适配；Windows 通用命令为 PowerShell 7，Bash 契约仍为 Bash | 宿主 Windows prepare/独立角色限制、三平台独立服务、系统凭据和成品包仍分别验收，见[原生平台支持](native-platform-support.md) |
 
 2026-10-15 首轮已实现独立角色入口与按需启动，未改变持久数据格式或 Windows Computer 支持范围。`npm run client`/`web` 只运行客户端，`web:local` 显式组合。随后已补齐 Computer 独立控制面；服务管理和平台发行继续独立推进。
 

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "lifecycleVersion": 1,
   "appId": "agent",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "anybox",
   "displayName": "Anybox Harness",
   "applicationApi": "^0.1.0",
@@ -15,7 +15,7 @@
   "runtimeRequirements": {
     "client": { "profile": "anybox-node-runtime-1", "sharedRuntime": "nya-runtime-1", "node": ">=22.15.0", "nodeApi": 9, "sqlite": true },
     "execution": { "profile": "anybox-node-runtime-1", "sharedRuntime": "nya-runtime-1", "node": ">=22.15.0", "nodeApi": 9, "sqlite": true },
-    "computerWorker": { "profile": "anybox-node-runtime-1", "sharedRuntime": "nya-runtime-1", "node": ">=22.15.0", "nodeApi": 9, "sqlite": true, "platforms": ["darwin", "linux"] }
+    "computerWorker": { "profile": "anybox-node-runtime-1", "sharedRuntime": "nya-runtime-1", "node": ">=22.15.0", "nodeApi": 9, "sqlite": true, "platforms": ["darwin", "linux", "win32"] }
   },
   "capabilityRequirements": {
     "client": { "required": { "storage.sqlite": "^1.0.0" }, "optional": { "system.directory-picker": "^1.0.0" } },

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
+import { createDirectoryIdentityCheck } from '../platform/path-identity.js'
 import { readProjectFile, searchProjectFiles } from '../project-files/filesystem.js'
 import { listProjectDirectory } from '../project-files/tree-access.js'
 import { fileTreeLimits } from '../project-files/domain.js'
@@ -106,13 +107,14 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
       const canonicalPermitted = async (scope: UnitScope, canonical: string, signal: AbortSignal) => {
         if (scope.kind !== 'computer') return false
         if (scope.projects === 'all') return true
+        const within = process.platform === 'win32' ? createDirectoryIdentityCheck() : undefined
         for (const directory of scope.projects) {
           if (!isAbsolute(directory)) continue
           signal.throwIfAborted()
           let granted: string
           try { granted = await realpath(directory) } catch { signal.throwIfAborted(); continue }
           signal.throwIfAborted()
-          if (ceilingPermitsRoot({ ...scope, projects: [granted] }, canonical)) return true
+          if (ceilingPermitsRoot({ ...scope, projects: [granted] }, canonical, within)) return true
         }
         return false
       }

@@ -75,6 +75,7 @@ try {
     void server.close().then(() => { process.send({ type: 'closed' }); process.disconnect() }, error => { console.error(error); process.exitCode = 1; process.disconnect() })
   }
   process.once('SIGINT', stop); process.once('SIGTERM', stop)
+  if (application === 'agent' && process.platform === 'win32') process.on('message', message => { if (message === 'test-stop') stop() })
 } catch (error) {
   console.error(error); await server?.close(); process.exitCode = 1
   if (process.connected) process.disconnect()

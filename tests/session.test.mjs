@@ -206,7 +206,10 @@ test('Session revocation joins executing consumers and a new owner preserves con
     assert.equal((await current.getRunEvents(second.id)).at(-1).status, 'failed')
     assert.deepEqual((await current.getNodePath(session.id, completed.resultNodeId)).map(node => node.output), ['Saved answer'])
     const next = await f.root.get(runServiceKey).startRun({ sessionId: session.id, parentNodeId: completed.resultNodeId, input: 'Continue', idempotencyKey: 'third' })
-    assert.deepEqual(f.llm.calls[2].input.messages.map(message => message.content), ['Answer briefly.', 'First', 'Saved answer', 'Continue'])
+    // Reopening Session must preserve the original instructions, including the
+    // immutable native shell environment, rather than resolve new prompts.
+    assert.deepEqual(f.llm.calls[2].input.messages.map(message => message.content),
+      [...f.llm.calls[0].input.messages.map(message => message.content), 'Saved answer', 'Continue'])
     f.llm.calls[2].result.resolve('Continued')
     f.llm.calls[2].done.resolve()
     assert.equal((await f.root.get(runServiceKey).waitRun(next.id)).status, 'completed')
