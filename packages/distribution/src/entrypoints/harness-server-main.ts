@@ -9,6 +9,8 @@ import { parseClaudeAgentConfig } from '@anybox/app-claude-agent/config'
 import { claudeAgentServerApplication } from '@anybox/app-claude-agent/registration'
 import { describeError } from './error-report.js'
 import { installProcessShutdown } from './process-shutdown.js'
+import { rpcFailure } from '@anybox/host/desktop/rpc'
+import { createProcessPairingTransport, installLocalPairingAccess } from './local-pairing.js'
 export { createHarnessServer }
 
 export async function main(args: readonly string[] = process.argv.slice(2)) {
@@ -31,11 +33,29 @@ export async function main(args: readonly string[] = process.argv.slice(2)) {
   if (command !== 'serve') throw new Error('Use serve, init, recover-access or new-identity')
   const projects: unknown = JSON.parse(process.env.ANYBOX_PROJECTS ?? '[]')
   if (!Array.isArray(projects) || projects.some(path => typeof path !== 'string')) throw new Error('ANYBOX_PROJECTS must be a JSON array of absolute paths')
-  const host = await createHarnessServer(config, { name: process.env.ANYBOX_HARNESS_NAME, host: process.env.ANYBOX_HARNESS_BIND ?? '127.0.0.1', projects,
-    additionalApplications: [claudeAgentServerApplication(parseClaudeAgentConfig(process.env))] })
-  process.stdout.write(`harness server: ${host.url} (${host.instance.instanceId})\n`)
-  process.send?.({ type: 'ready', instanceId: host.instance.instanceId, url: host.url })
-  installProcessShutdown(() => host.close(), error => { process.stderr.write(`harness server shutdown failed: ${describeError(error)}\n`) })
+  const pairing = createProcessPairingTransport()
+  try {
+    const host = await createHarnessServer(config, { name: process.env.ANYBOX_HARNESS_NAME, host: process.env.ANYBOX_HARNESS_BIND ?? '127.0.0.1', projects,
+      additionalApplications: [claudeAgentServerApplication(parseClaudeAgentConfig(process.env))] })
+    if (pairing) installLocalPairingAccess(pairing.rpc, () => {
+      const access = host.root.get<HostAccessPort>(hostAccessServiceKey)
+      if (!access) throw rpcFailure('service-unavailable')
+      return access
+    })
+    let closing: Promise<void> | undefined
+    const close = () => closing ??= (async () => {
+      pairing?.rpc.disconnect()
+      // Close public admission immediately while private access mutations finish against live storage.
+      void host.prepareClose().catch(() => {})
+      try { await pairing?.rpc.drain(); await host.close() } finally { await pairing?.close() }
+    })()
+    const report = (error: unknown) => { process.stderr.write(`harness server shutdown failed: ${describeError(error)}\n`) }
+    pairing?.onDisconnect(() => { void close().catch(error => { process.exitCode = 1; report(error) }).finally(() => { if (process.connected) process.disconnect() }) })
+    if (pairing?.disconnected) { await close(); if (process.connected) process.disconnect(); return }
+    process.stdout.write(`harness server: ${host.url} (${host.instance.instanceId})\n`)
+    process.send?.({ type: 'ready', instanceId: host.instance.instanceId, url: host.url }, () => {})
+    installProcessShutdown(close, report)
+  } catch (error) { await pairing?.close(); throw error }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main().catch(error => {
   if (process.connected) process.disconnect()

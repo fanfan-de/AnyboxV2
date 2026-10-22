@@ -61,6 +61,33 @@ async function start(f, session, parentNodeId = null, key = 'first') {
   return f.harness.waitRun(accepted.id)
 }
 
+test('Chat initial requests send the built-in Computer environment as system and preserve user prompt roles', async () => {
+  const protocol = 'chat-completions', directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-chat-environment-')))
+  const state = { secrets: new Map(), requests: [], responses: [response(protocol, [])] }
+  const f = await open(directory, protocol, state)
+  try {
+    const context = await f.harness.createPrompt('owner', { name: 'Explicit developer context', kind: 'context', role: 'developer', content: 'Keep my chosen role.' })
+    await f.harness.bindPrompt('owner', 'assistant', (await f.harness.publishPrompt('owner', context.id)).id)
+    const session = await f.harness.createSession(f.project.id, 'assistant')
+    const finished = await start(f, session)
+    assert.equal(finished.status, 'completed', JSON.stringify(finished))
+    assert.equal(state.requests.length, 1)
+    const messages = state.requests[0].messages
+    const environment = messages.find(message => message.content.startsWith('Computer execution environment:\n'))
+    assert.ok(environment, 'the initial wire request includes the fixed Computer environment')
+    assert.equal(environment.role, 'system')
+    assert.ok(environment.content.includes(`Operating system: ${process.platform}.`))
+    assert.ok(environment.content.includes(`Project directory (JSON string): ${JSON.stringify(directory)}.`))
+    assert.deepEqual(messages.map(message => message.role), ['system', 'developer', 'system', 'user'])
+    assert.equal(messages[1].content, 'Keep my chosen role.')
+    const history = await f.root.get('harness.session-runs').loadNativeHistory(session.id, finished.resultNodeId)
+    const fixed = history.initialization.prompts.find(prompt => prompt.documentId === 'builtin:computer-environment')
+    assert.equal(fixed.role, 'system')
+    assert.equal(fixed.content, environment.content)
+    assert.match(fixed.versionId, /^builtin:computer-environment:v2:/)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
 for (const protocol of Object.keys(factories)) for (const imageInput of [true, false]) test(`${protocol}: mixed contracts, stdin and tool images continue from committed observations (images=${imageInput})`, { timeout: 15000 }, async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-library-'))), state = { secrets: new Map(), requests: [], responses: [] }
   let f = await open(directory, protocol, state, imageInput)

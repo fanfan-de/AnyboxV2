@@ -72,6 +72,8 @@ Linux systemd、macOS launchd 与 Windows 服务的配置分别验收独立启�
 
 当前静态组合的 `web:local` 启动器在 Windows 通过继承的私有父子 IPC 请求关闭客户端及 harness server，等待两者实际退出后才退出；Unix 继续发送 SIGTERM。两种入口都执行角色自身同一个 `close()`，独立运行仍可使用进程信号且不要求 IPC。该关闭消息只存在于创建时继承的父子通道，不新增 HTTP 控制入口，也不停止独立 Computer worker。
 
+`web:local` 也为它实际创建的两个子进程提供私有配对转送：打开客户端应用时，Anybox Harness 与 Claude Agent 分别建立「本机」连接，分别保存系统 Vault 凭据、复用自己的受管令牌并回收自己未保留的令牌。令牌只经过继承的父子 IPC 和所属应用 Vault，不传给浏览器或写入环境变量、日志。该组合行为不改变 `client`/`web` 的独立客户端入口，不自动打开执行端 Agent，也不接管另一个已运行的 harness server；配对失败保留客户端和显式重试入口。
+
 ## 5. 产品组合与实现范围
 
 桌面负责宿主及应用安装后的默认组合、本机角色选择、状态展示和有归属的启停；后台角色也提供无界面入口。包安装、版本激活与业务启停分别管理，更新需协调受影响进程的实际退出；技术方案见[应用包设计](application-packages-design.md)。面向用户统一使用 Anybox、Anybox Harness、harness server 与 Computer 等现有名称，不因为拆包或多进程另建产品品牌。当前 CLI 命令见[部署说明](harness-server-deployment.md)，桌面默认纯客户端，本机服务经明确操作启用。

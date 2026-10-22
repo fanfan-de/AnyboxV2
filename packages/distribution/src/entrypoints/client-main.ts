@@ -13,6 +13,7 @@ import type { ApplicationRegistration } from '@anybox/application-api/nya'
 import { defaultModelsConfigPath } from '@anybox/app-harness/server-config'
 import { describeError } from './error-report.js'
 import { installProcessShutdown } from './process-shutdown.js'
+import { createLocalPairingOptions, createProcessPairingTransport } from './local-pairing.js'
 
 export interface DefaultClientHostOptions extends HarnessClientRuntimeOptions {
   readonly applications?: readonly ApplicationRegistration[]
@@ -45,13 +46,26 @@ export async function main(args: readonly string[] = process.argv.slice(2)) {
   if (forbidden.some(other => resolve(other) === resolve(path))) throw new Error('Client and execution databases must be different files')
   const port = Number(process.env.ANYBOX_WEB_PORT ?? 3000)
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid client port')
-  const host = await createClientHost({ path, port, packageDirectory: process.env.ANYBOX_APPLICATION_DIRECTORY ?? `${path}.applications`,
-    packageTrustPolicy: process.env.ANYBOX_APPLICATION_TRUST ? await readApplicationTrustPolicy(process.env.ANYBOX_APPLICATION_TRUST) : undefined,
-    namespace: process.env.ANYBOX_CLIENT_NAMESPACE, localInstanceId: process.env.ANYBOX_LOCAL_INSTANCE_ID,
-    computer: { directory: process.env.ANYBOX_COMPUTER_WORKER_DIRECTORY ?? `${process.env.ANYBOX_HARNESS_DATABASE ?? './data/harness.sqlite'}.computer-worker` } })
-  process.stdout.write(`Anybox Client: ${host.url}\n`)
-  process.send?.({ type: 'ready', role: 'client', url: host.url })
-  installProcessShutdown(() => host.close(), error => { process.stderr.write(`Client shutdown failed: ${describeError(error)}\n`) })
+  const pairing = createProcessPairingTransport()
+  try {
+    const host = await createClientHost({ path, port, packageDirectory: process.env.ANYBOX_APPLICATION_DIRECTORY ?? `${path}.applications`,
+      packageTrustPolicy: process.env.ANYBOX_APPLICATION_TRUST ? await readApplicationTrustPolicy(process.env.ANYBOX_APPLICATION_TRUST) : undefined,
+      namespace: process.env.ANYBOX_CLIENT_NAMESPACE, localInstanceId: process.env.ANYBOX_LOCAL_INSTANCE_ID,
+      localPairing: pairing ? createLocalPairingOptions(pairing.rpc, 'agent') : undefined,
+      claudeAgent: pairing ? { localPairing: createLocalPairingOptions(pairing.rpc, 'claude-agent') } : undefined,
+      computer: { directory: process.env.ANYBOX_COMPUTER_WORKER_DIRECTORY ?? `${process.env.ANYBOX_HARNESS_DATABASE ?? './data/harness.sqlite'}.computer-worker` } })
+    let closing: Promise<void> | undefined
+    const close = () => closing ??= (async () => {
+      pairing?.rpc.disconnect()
+      try { await host.close() } finally { await pairing?.close() }
+    })()
+    const report = (error: unknown) => { process.stderr.write(`Client shutdown failed: ${describeError(error)}\n`) }
+    pairing?.onDisconnect(() => { void close().catch(error => { process.exitCode = 1; report(error) }).finally(() => { if (process.connected) process.disconnect() }) })
+    if (pairing?.disconnected) { await close(); if (process.connected) process.disconnect(); return }
+    process.stdout.write(`Anybox Client: ${host.url}\n`)
+    process.send?.({ type: 'ready', role: 'client', url: host.url }, () => {})
+    installProcessShutdown(close, report)
+  } catch (error) { await pairing?.close(); throw error }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main().catch(error => {
   if (process.connected) process.disconnect()

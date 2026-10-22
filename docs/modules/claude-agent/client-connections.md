@@ -22,6 +22,10 @@
 
 旧桌面回调仅提供本机服务描述、显式启动、发行与 reconcile。本应用对应 managed owner `anybox.desktop.local.claude-agent`，不撤销 Harness 的 token。初始化异步观察已经运行的服务；服务不存在时不启动、不发行凭据，不阻塞组件就绪。`localStatus` 只返回状态；`retryLocal` 是显式启动/重试入口。
 
+旧 distribution 的显式 `web:local` 组合也注入本机配对：打开本应用后，经启动器继承的私有父子 IPC 自动连接该启动器实际创建的执行端，无须手工复制令牌。本应用使用 `anybox.web.local.claude-agent` managed owner、自己的连接表与 `anybox.client.claude-agent` Vault namespace；不撤销 Harness 或桌面的凭据。重启保留原连接、身份及有效 token，仅本机端口变化时修订地址。token 不进入环境变量、日志或浏览器，Vault 失败保留非秘密状态与显式重试，不改用明文后备。该回调不提供启动动作，也不打开执行端业务；独立 `client`/`web` 入口仍按既有方式管理连接。它没有把旧完整发行迁入正式同包角色通道。
+
+`tests/web-local-pairing.test.mjs` 以真实组合子进程和测试父进程内存 Vault 验证两个应用自动配对、重启复用和凭据隔离、失败重试、关闭等待及启动期间接收关闭请求；`tests/runtime-roles.test.mjs` 继续验证独立客户端不启动执行端或自动配对。
+
 客户端应用停止后 Effect 拒绝新调用，取消并等待网络、配对、配置及系统凭据操作实际退出，再关闭本应用 Vault 与只读迁入句柄。停止仅释放本应用资源并保留数据，不取消执行设备上已接受的 Run，不停止本机服务或其他应用。旧门面在停止后拒绝调用，重新打开创建新一代。
 
 同目录 `connection-proxy.ts` 与 `connection-failure.ts` 是本组件/网关的私有函数和错误边界，不是额外组件。请求绑定、认证头、实例校验和双向管道语义见[客户端网关](client-gateway.md)。
