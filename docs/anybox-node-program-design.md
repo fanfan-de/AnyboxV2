@@ -48,7 +48,7 @@
 
 1. **Computer 单元没有自己的控制面。** 消费附着码只能经该机器上的 harness server 连接管理页面，由它转发到 worker 的回环控制接口（[本机 worker 客户端](modules/computers/local-worker-client.md)）。没有 harness server 的机器无法附着；现有页面与网关都属于 Anybox Harness 客户端，没有面向节点本身的页面与路由。
 2. **单元身份挂在 harness server 上。** worker 数据目录默认是业务库路径加 `.computer-worker` 后缀，由 harness server 在第一次本地调用时懒启动（[worker-client.ts](../packages/app-harness/src/core/computer/worker-client.ts)）；`local:computer` 是写死的附着 ID，路由、Projects、Operations 各有专门分支。
-3. **形态是启动期决定。** `ANYBOX_COMPUTER_UNIT=local|remote`（[server-config.ts](../packages/app-harness/src/server-config.ts)）固定 harness server 有没有本机 worker，切换要重启。
+3. **全局 Computer 形态（已解决）。** 当前实现已取消该二选一，本机与多个远端环境并存，默认本机，按项目选择；以下保留提案时的问题： `ANYBOX_COMPUTER_UNIT=local|remote`（[server-config.ts](../packages/app-harness/src/server-config.ts)）固定 harness server 有没有本机 worker，切换要重启。
 4. **只有拨出传输。** worker 只监听回环，远端 harness server 必须能被单元访问；harness server 在 NAT 后、单元在服务器上的场景要靠隧道。
 5. **代码边界。** worker 入口的导入闭包仍包含 `run/`、`prompt/`、`workspace/`、`unit/` 与 `core/index.ts` 的文件以及 `@anybox/api-key-manager`；单独构建会带上半个 harness server。
 6. **平台。** Windows 真实 worker 不支持（Bash 与进程组语义为 Unix）；无头 Linux 的系统凭据服务需要手工准备。

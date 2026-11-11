@@ -14,7 +14,7 @@ export function createCapabilitiesPanel(domId: (value: string) => string, option
   insert(text: string): void
   report(message: string): void
 }) {
-  const closeButton = el('button', { type: 'button', text: '×', 'aria-label': '关闭能力面板' })
+  const closeButton = el('button', { type: 'button', text: '×', 'aria-label': '关闭能力面板', title: '关闭能力面板' })
   const refresh = el('button', { type: 'button', text: '刷新', class: 'ca-capability-refresh' })
   const subtitle = el('p', { class: 'ca-capability-subtitle' })
   const search = el('input', { type: 'search', placeholder: '搜索技能', 'aria-label': '搜索技能或能力', class: 'ca-capability-search' })

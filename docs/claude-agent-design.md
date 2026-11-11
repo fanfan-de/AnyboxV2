@@ -86,7 +86,7 @@ packages/app-claude-agent/src/
 packages/app-claude-agent/web/style.css
 ```
 
-Nya 服务前缀 `claude-agent.`，迁移域 `claude-agent`，环境变量前缀 `ANYBOX_CLAUDE_AGENT_`。执行端 `/api/v1/apps/claude-agent`，客户端 `/api/client/v1/apps/claude-agent`，不加旧别名。两侧注册加入 `packages/distribution/src/entrypoints/` 的正式目录（客户端、执行端、`serve`、桌面 worker）；`createHarnessServer` 通过 `additionalApplications` 并列装配，不在 Harness 内导入本应用。products 表把新 ID 默认关闭，用户从“我的应用”打开。各组件的服务、依赖、资源与清理见[组件手册](modules/claude-agent/README.md)。
+Nya 服务前缀 `claude-agent.`，迁移域 `claude-agent`，环境变量前缀 `ANYBOX_CLAUDE_AGENT_`。执行端 `/api/v1/apps/claude-agent`，客户端 `/api/client/v1/apps/claude-agent`，不加旧别名。两侧注册加入 `packages/distribution/src/entrypoints/` 的正式目录（客户端、执行端、`serve`、桌面 worker）；`createHarnessServer` 通过 `additionalApplications` 并列装配，不在 Harness 内导入本应用。products 表把新 ID 默认关闭，用户从宿主悬浮应用菜单或“应用管理”打开。各组件的服务、依赖、资源与清理见[组件手册](modules/claude-agent/README.md)。
 
 ## 输入模式与 Run 生命周期
 

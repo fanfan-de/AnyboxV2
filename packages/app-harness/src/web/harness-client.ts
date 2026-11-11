@@ -2,6 +2,7 @@ import { requestJSON } from '@anybox/application-api/web'
 export { requestJSON } from '@anybox/application-api/web'
 import type { Api, ImageRef, ProjectView } from './client-types.js'
 import type { ProtocolViewSnapshot } from '../core/view/types.js'
+import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
 import { createRunChangeClient } from './run-change-client.js'
 import { openChangeStream } from './event-stream.js'
 export interface HarnessConnection { readonly id: string; readonly name: string; readonly endpoint: string; readonly instanceId: string; readonly revision: number; readonly credentialConfigured: boolean }
@@ -63,7 +64,10 @@ export interface HarnessClient extends Api {
 /** A selector holds this immutable binding until it closes, including its final write. */
 export interface ProjectDirectoryTarget {
   readonly connection: HarnessConnection
+  readonly environment?: ComputerEnvironment
   readonly api: Api
+  environments(signal: AbortSignal): Promise<ComputerEnvironments>
+  forEnvironment(environment: ComputerEnvironment): ProjectDirectoryTarget
   nativeAvailable(signal: AbortSignal): Promise<boolean>
   pickNative(signal: AbortSignal): Promise<string | null>
   register(path: string, signal: AbortSignal): Promise<ProjectView>
@@ -148,23 +152,35 @@ export function createHarnessClient(inputConnections: readonly HarnessConnection
       if (!value || disposed) return undefined
       const connection = Object.freeze({ ...value })
       const fixed: Api = (path, body, signal) => call(connection, path, body, signal, true)
-      return {
-        connection, api: fixed,
-        async nativeAvailable(signal) {
-          return localDirectorySelection(connection, signal)
-        },
-        async pickNative(signal) {
-          if (!await localDirectorySelection(connection, signal)) throw Object.assign(new Error('picker-unavailable'), { status: 403, code: 'picker-unavailable' })
-          return (await call<{ path: string | null }>(connection, `/connections/${encodeURIComponent(connection.id)}/pick`, {}, signal, true, true)).path
-        },
-        async register(path, signal) {
-          const raw = await fixed<ProjectView>('/projects', { path }, signal)
-          const key = `${connection.id}:/projects`
-          cache.set(key, [...(cache.get(key) ?? []).filter(value => (value as ProjectView).id !== raw.id), raw])
-          const project = mapResourceIds(raw, id => scopedId(connection.instanceId, id)) as ProjectView
-          return { ...project, instanceId: connection.instanceId, harnessName: connection.name }
-        },
+      const bind = (input?: ComputerEnvironment): ProjectDirectoryTarget => {
+        const environment = input ? Object.freeze({ ...input }) : undefined
+        if (environment && environment.state !== 'approved') throw Object.assign(new Error('computer-environment-unavailable'), { code: 'computer-environment-unavailable' })
+        const remote = environment?.origin === 'remote'
+        return {
+          connection, api: (path, body, signal) => remote && /^\/projects\/(directories\/|pick)/.test(path)
+            ? Promise.reject(Object.assign(new Error('directory-browse-unsupported'), { code: 'directory-browse-unsupported' })) : fixed(path, body, signal),
+          ...(environment ? { environment } : {}),
+          environments: signal => fixed<ComputerEnvironments>('/computer-environments', undefined, signal),
+          forEnvironment: bind,
+          async nativeAvailable(signal) {
+            if (remote) return false
+            return localDirectorySelection(connection, signal)
+          },
+          async pickNative(signal) {
+            if (remote) throw Object.assign(new Error('picker-unavailable'), { code: 'picker-unavailable' })
+            if (!await localDirectorySelection(connection, signal)) throw Object.assign(new Error('picker-unavailable'), { status: 403, code: 'picker-unavailable' })
+            return (await call<{ path: string | null }>(connection, `/connections/${encodeURIComponent(connection.id)}/pick`, {}, signal, true, true)).path
+          },
+          async register(path, signal) {
+            const raw = await fixed<ProjectView>('/projects', { path, ...(environment ? { computerAttachmentId: environment.environmentId } : {}) }, signal)
+            const key = `${connection.id}:/projects`
+            cache.set(key, [...(cache.get(key) ?? []).filter(value => (value as ProjectView).id !== raw.id), raw])
+            const project = mapResourceIds(raw, id => scopedId(connection.instanceId, id)) as ProjectView
+            return { ...project, instanceId: connection.instanceId, harnessName: connection.name }
+          },
+        }
       }
+      return bind()
     },
     resource(path: string) { const target = route(path); return resourceURL(target.connection, target.path, productId) },
     async upload(sessionId: string, file: File, signal: AbortSignal): Promise<ImageRef> {

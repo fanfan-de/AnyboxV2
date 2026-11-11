@@ -160,11 +160,6 @@ export function toolDisplayName(name: string): string {
   }
   return name || '工具'
 }
-export function toolSelectionDisplayName(toolId: string): string {
-  const separator = toolId.indexOf('.'), source = toolId.slice(0, separator), name = toolId.slice(separator + 1)
-  const label = ({ codex: 'Codex', 'claude-code': 'Claude Code', 'deepseek-harness': 'DeepSeek Harness', anybox: 'Anybox' } as Readonly<Record<string, string>>)[source]
-  return separator > 0 && label ? `${label} · ${name}` : toolId
-}
 function argumentPreview(args: Readonly<Record<string, unknown>> | undefined): string {
   if (!args) return '参数生成中'
   for (const key of ['cmd', 'command', 'file_path', 'path', 'pattern', 'explanation']) {

@@ -181,6 +181,17 @@ test('owner unit controls retain their application route through the authenticat
     const connection = await c.connections.save({ name: 'unit owner', endpoint: host.server.url, token: host.token.token })
     gateway = await startClientGateway(c.connections)
     const base = `/api/connections/${connection.id}/v1/units`
+    const environmentsPath = `/api/connections/${connection.id}/v1/computer-environments`
+    const environments = await call(gateway.url, environmentsPath)
+    assert.equal(environments.status, 200)
+    assert.equal(environments.data.defaultEnvironmentId, 'local:computer')
+    assert.deepEqual(environments.data.environments.map(environment => [environment.environmentId, environment.connectionState]), [['local:computer', 'on-demand']])
+    assert.equal((await call(host.server.url, '/api/v1/apps/agent/computer-environments')).status, 401)
+    assert.equal((await call(gateway.url, environmentsPath, {})).status, 404, 'environment listing is read-only')
+    assert.equal((await call(gateway.url, environmentsPath + '?unknown=true')).status, 400)
+    assert.equal((await call(host.server.url, '/api/v1/computer-environments', undefined,
+      { Authorization: `Bearer ${host.token.token}`, 'X-Anybox-Instance-Id': host.auth.instance.instanceId })).status, 404, 'new environment routes have no legacy host alias')
+
     const local = await call(gateway.url, `${base}/attachments`)
     assert.equal(local.status, 200)
     assert.deepEqual(local.data.map(attachment => attachment.attachmentId), ['local:computer', 'local:models'])

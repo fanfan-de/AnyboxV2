@@ -1,7 +1,7 @@
 import { anthropicImages, withImages } from './images.js';
-import { modelsError } from '../errors.js';
+import { modelsError, normalizeError } from '../errors.js';
 import { assert } from '../domain.js';
-import { terminalDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
+import { nativeDiagnostic, terminalDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
 import type { DeclaredCapabilities, DiscoveredModel, JsonValue } from '../types.js';
 import type { NativeObject, NativeProtocol } from '../native-types.js';
 import { array, captureOptions, connectionFields, conversation, effectiveCapabilities, effortOption, index, mergeTools, native, nonempty, numberOption, object, optionKeys, parseJson, protocolComponent, requireLocalTools, restoreRecords, string, textBlocks, validateProvider, validateServerTools, type ProtocolOptions } from './shared.js';
@@ -140,39 +140,44 @@ export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): 
         if (!input.request.stream) return validateResponse(await reader.json());
         let message: Record<string, JsonValue> | undefined, finished = false, stopped = false;
         const blocks = new Map<number, { value: Record<string, JsonValue>; stopped: boolean; arguments?: string }>();
-        await reader.sse(data => {
-          if (data === '[DONE]') throw modelsError('invalid-response');
-          const event = native(parseJson(data)), type = string(event.type);
-          if (type === 'ping') return;
-          if (type === 'error') throw withNativeDiagnostic(modelsError('provider-failure'), terminalDiagnostic({ ...message, ...event }, { field: 'content', values: [...blocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => ({ ...block.value, ...(block.arguments === undefined ? {} : { input: block.arguments }) })) }));
-          if (finished) throw modelsError('invalid-response');
-          if (type === 'message_start') { if (message) throw modelsError('invalid-response'); message = { ...object(event.message) }; if (array(message.content).length) throw modelsError('invalid-response'); }
-          else if (!message) throw modelsError('invalid-response');
-          else if (type === 'content_block_start') {
-            const at = index(event.index); if (blocks.has(at) || stopped) throw modelsError('invalid-response'); blocks.set(at, { value: { ...object(event.content_block) }, stopped: false });
-          } else if (type === 'content_block_delta') {
-            const block = blocks.get(index(event.index)); if (!block || block.stopped || stopped) throw modelsError('invalid-response'); const delta = object(event.delta);
-            if (delta.type === 'text_delta' && block.value.type === 'text') block.value.text = string(block.value.text ?? '') + string(delta.text);
-            else if (delta.type === 'thinking_delta' && block.value.type === 'thinking') block.value.thinking = string(block.value.thinking ?? '') + string(delta.thinking);
-            else if (delta.type === 'signature_delta' && block.value.type === 'thinking') block.value.signature = string(block.value.signature ?? '') + string(delta.signature);
-            else if (delta.type === 'input_json_delta' && ['tool_use', 'server_tool_use'].includes(string(block.value.type))) block.arguments = (block.arguments ?? '') + string(delta.partial_json);
-            else if (delta.type === 'citations_delta' && block.value.type === 'text') block.value.citations = [...(block.value.citations === undefined ? [] : array(block.value.citations)), object(delta.citation)];
-            else throw modelsError('invalid-response');
-          } else if (type === 'content_block_stop') {
-            const block = blocks.get(index(event.index)); if (!block || block.stopped) throw modelsError('invalid-response'); block.stopped = true;
-            // A truncated tool fragment remains native data and never becomes executable input.
-            if (block.arguments !== undefined) { try { block.value.input = object(parseJson(block.arguments)); } catch { block.value.input = block.arguments; } }
-          } else if (type === 'message_delta') {
-            if (stopped || [...blocks.values()].some(block => !block.stopped)) throw modelsError('invalid-response'); stopped = true;
-            message = { ...message, ...object(event.delta), ...(event.usage === undefined ? {} : { usage: { ...(message.usage === undefined ? {} : object(message.usage)), ...object(event.usage) } }) };
-          } else if (type === 'message_stop') {
-            if (!stopped || [...blocks.values()].some(block => !block.stopped)) throw modelsError('invalid-response');
-            const ordered = [...blocks.entries()].sort(([a], [b]) => a - b); if (ordered.some(([at], index) => at !== index)) throw modelsError('invalid-response');
-            message.content = ordered.map(([, block]) => block.value); finished = true; validateResponse(message); input.onEvent(event); return true;
-          } else throw modelsError('invalid-response');
-          input.onEvent(event);
-        });
-        if (!finished || !message) throw modelsError('invalid-response'); return validateResponse(message);
+        const partialContent = () => [...blocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => ({ ...block.value, ...(block.arguments === undefined ? {} : { input: block.arguments }) }));
+        try {
+          await reader.sse(data => {
+            if (data === '[DONE]') throw modelsError('invalid-response');
+            const event = native(parseJson(data)), type = string(event.type);
+            if (type === 'ping') return;
+            if (type === 'error') throw withNativeDiagnostic(modelsError('provider-failure'), terminalDiagnostic({ ...message, ...event }, { field: 'content', values: partialContent() }));
+            if (finished) throw modelsError('invalid-response');
+            if (type === 'message_start') { if (message) throw modelsError('invalid-response'); const started = object(event.message); if (array(started.content).length) throw modelsError('invalid-response'); message = { ...started }; }
+            else if (!message) throw modelsError('invalid-response');
+            else if (type === 'content_block_start') {
+              const at = index(event.index); if (blocks.has(at) || stopped) throw modelsError('invalid-response'); blocks.set(at, { value: { ...object(event.content_block) }, stopped: false });
+            } else if (type === 'content_block_delta') {
+              const block = blocks.get(index(event.index)); if (!block || block.stopped || stopped) throw modelsError('invalid-response'); const delta = object(event.delta);
+              if (delta.type === 'text_delta' && block.value.type === 'text') block.value.text = string(block.value.text ?? '') + string(delta.text);
+              else if (delta.type === 'thinking_delta' && block.value.type === 'thinking') block.value.thinking = string(block.value.thinking ?? '') + string(delta.thinking);
+              else if (delta.type === 'signature_delta' && block.value.type === 'thinking') block.value.signature = string(block.value.signature ?? '') + string(delta.signature);
+              else if (delta.type === 'input_json_delta' && ['tool_use', 'server_tool_use'].includes(string(block.value.type))) block.arguments = (block.arguments ?? '') + string(delta.partial_json);
+              else if (delta.type === 'citations_delta' && block.value.type === 'text') block.value.citations = [...(block.value.citations === undefined ? [] : array(block.value.citations)), object(delta.citation)];
+              else throw modelsError('invalid-response');
+            } else if (type === 'content_block_stop') {
+              const block = blocks.get(index(event.index)); if (!block || block.stopped) throw modelsError('invalid-response'); block.stopped = true;
+              // A truncated tool fragment remains native data and never becomes executable input.
+              if (block.arguments !== undefined) { try { block.value.input = object(parseJson(block.arguments)); } catch { block.value.input = block.arguments; } }
+            } else if (type === 'message_delta') {
+              if (stopped || [...blocks.values()].some(block => !block.stopped)) throw modelsError('invalid-response'); stopped = true;
+              message = { ...message, ...object(event.delta), ...(event.usage === undefined ? {} : { usage: { ...(message.usage === undefined ? {} : object(message.usage)), ...object(event.usage) } }) };
+            } else if (type === 'message_stop') {
+              if (!stopped || [...blocks.values()].some(block => !block.stopped)) throw modelsError('invalid-response');
+              const ordered = [...blocks.entries()].sort(([a], [b]) => a - b); if (ordered.some(([at], index) => at !== index)) throw modelsError('invalid-response');
+              message.content = ordered.map(([, block]) => block.value); finished = true; validateResponse(message); input.onEvent(event); return true;
+            } else throw modelsError('invalid-response');
+            input.onEvent(event);
+          });
+          if (!finished || !message) throw modelsError('invalid-response'); return validateResponse(message);
+        } catch (error) {
+          throw withNativeDiagnostic(normalizeError(error), nativeDiagnostic(error) ?? (message ? terminalDiagnostic(message, { field: 'content', values: partialContent() }) : undefined));
+        }
       }, requestOptions));
     },
     commit: input => commit(input.state, input.intent, input.response),

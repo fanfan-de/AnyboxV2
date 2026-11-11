@@ -19,7 +19,7 @@ async function fixture(t, options = {}) {
   const directory = options.directory ?? await mkdtemp(join(tmpdir(), 'anybox-workspaces-'))
   const root = new Context()
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
-  const project = Object.freeze({ id: 'project', path: directory, name: 'project', createdAt: 'now', available: true })
+  const project = Object.freeze({ id: 'project', path: options.projectPath ?? directory, name: 'project', createdAt: 'now', available: true })
   const counts = { checks: 0 }
   root.provide('harness.projects', { getIn: (_tx, id) => id === project.id ? project : undefined,
     requireAvailable: async id => { counts.checks++; assert.equal(id, project.id); return options.requireAvailable ? options.requireAvailable(project) : project } })
@@ -54,6 +54,19 @@ test('workspaces stay lazy and register pinned-local identity only in the explic
   await assert.rejects(f.reserve('scope', 'other-run'), { code: 'workspace-reservation-conflict' })
   await assert.rejects(f.db.transaction(tx => f.workspaces.reserveIn(tx,
     { reservationId: 'missing', scopeId: 'run', projectId: 'missing' })), { code: 'workspace-missing' })
+})
+
+test('workspace bindings keep the target environment path without interpreting it on the Authority platform', async t => {
+  for (const projectPath of ['C:\\work\\demo', '/work/demo']) {
+    const f = await fixture(t, { projectPath })
+    const remote = { ...instance, providerId: 'unit', computerId: 'unit:remote', platform: projectPath.startsWith('C:') ? 'win32' : 'linux' }
+    await f.reserve()
+    const prepared = await f.prepare('scope', remote)
+    const bound = await f.bind(prepared)
+    assert.equal(bound.path, projectPath)
+    assert.equal(bound.computerId, 'unit:remote')
+    assert.equal((await f.workspaces.getBinding('scope')).path, projectPath)
+  }
 })
 
 test('an existing project maps to a workspace without changing its canonical path or checking availability during reservation', async t => {

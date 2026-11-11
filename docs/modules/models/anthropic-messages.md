@@ -12,6 +12,8 @@
 
 生成端点为 POST `/messages`，API Key 通过 `x-api-key` 发送，固定 `anthropic-version: 2023-06-01`；使用适用于该工作区的 Key。无认证连接不发送凭据头。连接表单提供 API 根地址、认证方式与请求超时。
 
+连接 `timeoutMs` 对模型交换表示无新原生事件的等待上限；每个已接纳的流式事件都续期，持续 thinking、文本或工具 JSON 输出可超过该时长。驱动忽略的 ping 与 SSE 注释不续期。首个事件及 complete 模式的完整响应仍受初始等待约束，响应结果到达后仍等待实际清理，见 [Models execution 流程](models.md#原生-execution-流程)。
+
 参数封套的 protocolId 为 `anthropic-messages`、formatVersion 为 1，允许字段如下：
 
 | 字段 | 条件 |
@@ -46,7 +48,9 @@ readText 只接受 end_turn/stop_sequence，按原生顺序提取 content 的 te
 
 终态要求原生 message/assistant，接受 `end_turn`、`stop_sequence`、`tool_use`、`max_tokens`、`model_context_window_exceeded`、`pause_turn`、`refusal`。保留原生停止原因，未归一化为共享 success/failed。thinking 在非截断结果必须有非空 signature；工具 ID 必须唯一。截断工具 input 可以保持原生片段，不能作为完整工具参数执行。
 
-SSE 严格处理 message_start、content_block_start/delta/stop、message_delta、message_stop，按 index 还原内容块。文本、thinking、签名、工具 JSON 和 citation 增量分别匹配对应块类型；ping 忽略，错误事件保存已有块的脱敏诊断。不完整块、重复或乱序终结、delta 类型错配、`[DONE]` 都被拒绝。
+SSE 严格处理 message_start、content_block_start/delta/stop、message_delta、message_stop，按 index 还原内容块。文本、thinking、签名、工具 JSON 和 citation 增量分别匹配对应块类型；ping 忽略。不完整块、重复或乱序终结、delta 类型错配、`[DONE]` 都被拒绝。
+
+错误事件、超时、取消、断连和解析失败均把已经接纳的有序 content 块保存为原生 message 形状的 diagnostic，包括文本、thinking、签名、引用和未完成的工具 JSON 分片；原始失败帧不写入记录。签名等私有字段只保留在受信记录，浏览器继续使用白名单投影，认证字段与捕获凭据由 execution 脱敏。失败诊断不能提交上下文、生成可恢复状态或执行工具分片。
 
 ## 发现、资源与生命周期
 

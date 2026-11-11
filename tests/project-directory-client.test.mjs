@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createDirectoryPositions, createProjectDirectoryController, createProjectDirectoryLauncher } from '../packages/app-harness/dist/web/project-directory-client.js'
+import { createDirectoryPositions, createProjectDirectoryController, createProjectDirectoryLauncher, createProjectEnvironmentController } from '../packages/app-harness/dist/web/project-directory-client.js'
 import { directoryMessageFor } from '../packages/app-harness/dist/web/project-directory-view.js'
 import { deferred } from './helpers/controlled-models.mjs'
 
@@ -12,6 +12,7 @@ function fixture(options = {}) {
   const calls = [], selected = [], paths = new Map(), positions = options.positions ?? createDirectoryPositions()
   let counter = 0, updates = 0
   const target = {
+    environment: options.environment,
     connection: { id: 'connection', instanceId: options.instance ?? instance, revision: 3, name: 'Remote', endpoint: 'https://remote.invalid', credentialConfigured: true },
     nativeAvailable: options.nativeAvailable ?? (async () => false),
     pickNative: options.pickNative ?? (async () => '/native/project'),
@@ -445,4 +446,126 @@ test('creation binding failures block future reads and writes on the captured ta
   f.controller.setDirectoryName('other'); await f.controller.createDirectory(); await f.controller.navigate('/other'); await f.controller.retry(); await f.controller.submit()
   assert.equal(f.calls.length, count)
   f.controller.close()
+})
+
+
+const localEnvironment = { environmentId: 'local:computer', origin: 'local', state: 'approved', unitId: 'computer-local', platform: 'linux', architecture: 'x64', connectionState: 'on-demand' }
+const remoteEnvironment = { environmentId: 'remote-one', origin: 'remote', state: 'approved', unitId: 'worker-one', platform: 'win32', architecture: 'x64', connectionState: 'offline' }
+
+test('remembered project paths are isolated by harness instance and Computer environment', async () => {
+  const values = new Map(), storage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) }
+  const positions = createDirectoryPositions(storage)
+  positions.set(instance, '/local/path')
+  positions.set(instance, 'C:\\remote\\project', 'remote-one')
+  positions.set(instance, '/another/remote', 'remote-two')
+  positions.set('another-instance', '/other/harness', 'remote-one')
+  const restored = createDirectoryPositions(storage)
+  assert.equal(restored.get(instance, 'local:computer'), '/local/path', 'the old local-only position remains the local environment position')
+  assert.equal(restored.get(instance, 'remote-one'), 'C:\\remote\\project')
+  assert.equal(restored.get(instance, 'remote-two'), '/another/remote')
+  assert.equal(restored.get('another-instance', 'remote-one'), '/other/harness')
+  assert.equal(restored.get(instance, 'unvisited-environment'), undefined)
+  const remote = fixture({ environment: remoteEnvironment, positions: restored })
+  await remote.controller.initialize()
+  assert.equal(remote.controller.snapshot().pathInput, 'C:\\remote\\project')
+  assert.equal(remote.calls.length, 0)
+  remote.controller.close()
+})
+
+test('a remote environment uses manual absolute paths and never touches harness-local browsing or creation', async () => {
+  const f = fixture({ environment: remoteEnvironment, api() { throw new Error('remote selection must not browse the harness filesystem') } })
+  await f.controller.initialize()
+  assert.equal(f.controller.snapshot().mode, 'manual')
+  assert.equal(f.controller.snapshot().creationSupported, false)
+  assert.equal(f.controller.snapshot().canSelect, false)
+  f.controller.beginCreate(); f.controller.setDirectoryName('must-not-create')
+  await f.controller.navigate('/server/local'); await f.controller.createDirectory()
+  assert.deepEqual(f.calls, [])
+  f.controller.setPath('C:\\remote\\project')
+  await f.controller.submit()
+  assert.deepEqual(f.calls.map(call => call.url), ['/projects'])
+  assert.equal(f.selected[0].path, 'C:\\remote\\project')
+  assert.equal(f.positions.get(instance, 'remote-one'), 'C:\\remote\\project')
+  assert.equal(f.positions.get(instance, 'local:computer'), undefined)
+  f.controller.close()
+})
+
+test('an offline or revoked remote selection never retries registration on the local environment', async () => {
+  const f = fixture({ environment: remoteEnvironment, register: async () => { throw failure('project-unavailable') } })
+  await f.controller.initialize(); f.controller.setPath('/remote/project'); await f.controller.submit()
+  assert.equal(f.controller.snapshot().error.code, 'project-unavailable')
+  assert.equal(f.controller.snapshot().pathInput, '/remote/project')
+  assert.equal(f.selected.length, 0)
+  assert.deepEqual(f.calls.map(call => call.url), ['/projects'])
+  assert.equal(f.calls[0].body.path, '/remote/project')
+  f.controller.close()
+})
+
+function environmentFixture(options = {}) {
+  const calls = [], captured = [], changes = []
+  const environments = options.environments ?? [remoteEnvironment, localEnvironment,
+    { ...remoteEnvironment, environmentId: 'pending-one', state: 'pending', connectionState: 'pending' },
+    { ...remoteEnvironment, environmentId: 'revoked-one', state: 'revoked', connectionState: 'revoked' }]
+  const target = {
+    connection: { id: 'fixed', instanceId: instance, revision: 3, name: 'Captured harness' },
+    async environments(signal) {
+      calls.push({ signal })
+      return options.load ? options.load(signal) : { defaultEnvironmentId: 'local:computer', environments }
+    },
+    forEnvironment(environment) { const fixed = { connection: target.connection, environment }; captured.push(fixed); return fixed },
+  }
+  const controller = createProjectEnvironmentController(target, { changed() { changes.push(controller.snapshot()) } })
+  return { controller, target, calls, captured, changes }
+}
+
+test('environment selection defaults to the local identity and preserves explicit approved offline selections', async () => {
+  const f = environmentFixture()
+  assert.equal(f.controller.target(), undefined, 'a target requires a successfully loaded environment list')
+  await f.controller.initialize()
+  assert.equal(f.controller.snapshot().selectedEnvironmentId, 'local:computer', 'the server default wins over list order')
+  assert.equal(f.controller.target().environment.environmentId, 'local:computer')
+  assert.equal(f.controller.select('remote-one'), true, 'an approved offline environment remains an explicit choice')
+  const captured = f.controller.target()
+  assert.equal(captured.environment.environmentId, 'remote-one')
+  assert.equal(captured.connection.instanceId, instance)
+  assert.equal(f.controller.select('pending-one'), false)
+  assert.equal(f.controller.select('revoked-one'), false)
+  assert.equal(f.controller.select('missing'), false)
+  assert.equal(f.controller.snapshot().selectedEnvironmentId, 'remote-one')
+  f.controller.select('local:computer')
+  assert.equal(captured.environment.environmentId, 'remote-one', 'changing the visible selection cannot mutate a target already captured for registration')
+  await f.controller.close()
+})
+
+test('environment discovery failures block all selection until an explicit successful reload', async () => {
+  let fail = true
+  const f = environmentFixture({ load: async () => {
+    if (fail) throw failure('connection-unavailable')
+    return { defaultEnvironmentId: 'local:computer', environments: [localEnvironment, remoteEnvironment] }
+  } })
+  await f.controller.initialize()
+  assert.equal(f.controller.snapshot().loading, false)
+  assert.equal(f.controller.snapshot().error.code, 'connection-unavailable')
+  assert.equal(f.controller.snapshot().selectedEnvironmentId, undefined)
+  assert.equal(f.controller.target(), undefined)
+  assert.equal(f.controller.select('local:computer'), false)
+  fail = false; await f.controller.initialize()
+  assert.equal(f.controller.snapshot().error, undefined)
+  assert.equal(f.controller.target().environment.environmentId, 'local:computer')
+  await f.controller.close()
+})
+
+test('closing environment discovery aborts and joins the request while ignoring a late list', async () => {
+  const response = deferred(), f = environmentFixture({ load: () => response.promise })
+  const loading = f.controller.initialize(); await tick()
+  let exited = false
+  const closing = f.controller.close().then(() => { exited = true })
+  assert.equal(f.calls[0].signal.aborted, true)
+  await tick(); assert.equal(exited, false, 'abort is not completion of the captured request')
+  const updates = f.changes.length
+  response.resolve({ defaultEnvironmentId: 'local:computer', environments: [localEnvironment] })
+  await Promise.all([loading, closing])
+  assert.equal(f.changes.length, updates)
+  assert.equal(f.controller.target(), undefined)
+  assert.equal(f.controller.snapshot().closed, true)
 })

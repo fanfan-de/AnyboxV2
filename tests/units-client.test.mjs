@@ -88,6 +88,7 @@ test('the owner-side units settings list, issue one-time codes and revoke throug
   let attachments = [{ attachmentId: 'local:computer', unitKind: 'computer', origin: 'local', state: 'approved', unitId: 'computer-local', epoch: 1, scope: { kind: 'computer', projects: 'all', tools: 'all' }, requestedScope: { kind: 'computer', projects: 'all', tools: 'all' } }]
   const { source, calls } = api({
     '/units/attachments': () => attachments,
+    '/computer-environments': () => ({ defaultEnvironmentId: 'local:computer', environments: attachments.filter(a => a.unitKind === 'computer').map(a => ({ environmentId: a.attachmentId, origin: a.origin, state: a.state, unitId: a.unitId, platform: null, architecture: null, connectionState: a.state === 'approved' ? a.origin === 'local' ? 'on-demand' : 'offline' : a.state })) }),
     '/units/attach-codes': body => { const attachment = { attachmentId: 'remote-1', unitKind: body.unitKind, origin: 'remote', state: 'pending', unitId: null, epoch: 1, scope: null, requestedScope: body.scope }; attachments = [...attachments, attachment]; return { attachment, code: 'secret-code' } },
     '/units/attachments/remote-1/revoke': () => { attachments = attachments.map(a => a.attachmentId === 'remote-1' ? { ...a, state: 'revoked', epoch: 2 } : a); return attachments[1] },
   })
@@ -96,10 +97,10 @@ test('the owner-side units settings list, issue one-time codes and revoke throug
   t.after(() => view.dispose())
   await flush()
   assert.equal(view.snapshot().attachments.length, 1)
-  assert.ok(panel.find(node => node.textContent === '尚无附着记录。') === undefined)
+  assert.ok(panel.find(node => node.textContent === '本机（默认）')); assert.ok(panel.find(node => node.textContent === '执行环境'))
   const code = await view.issue({ projects: ['/work'], tools: [] })
   assert.equal(code, 'secret-code')
-  assert.deepEqual(calls[1], { path: '/units/attach-codes', body: { unitKind: 'computer', scope: { kind: 'computer', projects: ['/work'], tools: 'all' } } })
+  assert.deepEqual(calls.find(call => call.path === '/units/attach-codes'), { path: '/units/attach-codes', body: { unitKind: 'computer', scope: { kind: 'computer', projects: ['/work'], tools: 'all' } } })
   assert.ok(panel.find(node => typeof node.textContent === 'string' && node.textContent.includes('secret-code')), 'the code is shown once after issuing')
   assert.equal(view.snapshot().attachments.length, 2)
   const row = panel.find(node => node.dataset?.attachmentId === 'remote-1')
@@ -107,8 +108,8 @@ test('the owner-side units settings list, issue one-time codes and revoke throug
   assert.equal(panel.find(node => node.dataset?.attachmentId === 'local:computer').find(node => node.textContent === '撤销附着'), undefined, 'local attachments cannot be revoked')
   await view.revoke('remote-1')
   assert.equal(view.snapshot().attachments[1].state, 'revoked')
-  assert.equal(calls.at(-2).path, '/units/attachments/remote-1/revoke')
-  const failing = api({ '/units/attachments': () => { throw Object.assign(new Error('closed'), { status: 503, code: 'unit-attachments-closed' }) } })
+  assert.ok(calls.some(call => call.path === '/units/attachments/remote-1/revoke'))
+  const failing = api({ '/units/attachments': () => { throw Object.assign(new Error('closed'), { status: 503, code: 'unit-attachments-closed' }) }, '/computer-environments': () => ({ defaultEnvironmentId: 'local:computer', environments: [] }) })
   const broken = setupUnitsSettings(failing.source, messageFor, new Element())
   t.after(() => broken.dispose())
   await flush()
@@ -147,6 +148,32 @@ test('the device-owner attachment entry consumes codes with explicit ceilings an
   assert.equal(view.snapshot().attachments[0].state, 'revoked')
 })
 
+test('execution environment settings show Computer sources and their connection states without including Models', async t => {
+  dom(t)
+  const attachments = [
+    { attachmentId: 'local:computer', unitKind: 'computer', origin: 'local', state: 'approved', unitId: 'computer-local', epoch: 1, scope: computerScope([], []), requestedScope: computerScope([], []) },
+    { attachmentId: 'local:models', unitKind: 'models', origin: 'local', state: 'approved', unitId: 'models-local', epoch: 1, scope: { kind: 'models', access: 'manage', configurations: 'all' }, requestedScope: { kind: 'models', access: 'manage', configurations: 'all' } },
+  ]
+  const environments = [
+    { environmentId: 'local:computer', origin: 'local', state: 'approved', unitId: 'computer-local', platform: 'linux', architecture: 'x64', connectionState: 'on-demand' },
+    { environmentId: 'remote-laptop', origin: 'remote', state: 'approved', unitId: 'laptop', platform: 'win32', architecture: 'x64', connectionState: 'offline' },
+    { environmentId: 'remote-server', origin: 'remote', state: 'approved', unitId: 'server', platform: 'linux', architecture: 'arm64', connectionState: 'connected' },
+  ]
+  const { source } = api({ '/units/attachments': () => attachments,
+    '/computer-environments': () => ({ defaultEnvironmentId: 'local:computer', environments }) })
+  const panel = new Element(), view = setupUnitsSettings(source, messageFor, panel)
+  t.after(() => view.dispose())
+  await flush()
+  assert.equal(view.snapshot().attachments.length, 1)
+  assert.ok(panel.find(node => node.textContent === '本机（默认）'))
+  assert.ok(panel.find(node => node.textContent === '远端环境 · win32/x64 · remote-l'))
+  assert.ok(panel.find(node => node.textContent === '远端环境 · linux/arm64 · remote-s'))
+  assert.equal(panel.find(node => node.textContent === '远端环境 · win32/x64 · remote-l').title, 'remote-laptop · laptop')
+  assert.ok(panel.find(node => node.textContent === '离线'))
+  assert.ok(panel.find(node => node.textContent === '已连接'))
+  assert.equal(panel.find(node => node.textContent === 'local:models'), undefined)
+})
+
 test('opening and refreshing local worker management never starts it; explicit start enables attachment controls', async t => {
   dom(t)
   let running = false
@@ -167,7 +194,7 @@ test('opening and refreshing local worker management never starts it; explicit s
 })
 
 test('the client gateway proxies only the owner-side unit routes', () => {
-  for (const [method, path] of [['GET', '/units/attachments'], ['GET', '/units/local-computer/attachments'], ['POST', '/units/attach-codes'], ['POST', '/units/local-computer/attachments'],
+  for (const [method, path] of [['GET', '/computer-environments'], ['GET', '/units/attachments'], ['GET', '/units/local-computer/attachments'], ['POST', '/units/attach-codes'], ['POST', '/units/local-computer/attachments'],
     ['POST', '/units/attachments/abc/revoke'], ['POST', '/units/local-computer/attachments/abc/revoke']]) assert.equal(allowedProxyPath(method, path), true, `${method} ${path}`)
   for (const [method, path] of [['POST', '/units/unit/attach'], ['GET', '/units/unit/poll'], ['POST', '/units/unit/replies'], ['POST', '/units/unit/bytes'], ['POST', '/units/attachments'], ['GET', '/units/attach-codes'],
     ['POST', '/units/attachments/../revoke']]) assert.equal(allowedProxyPath(method, path), false, `${method} ${path}`)

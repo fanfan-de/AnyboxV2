@@ -20,40 +20,55 @@ button { touch-action: manipulation; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 [hidden] { display: none !important; }
 
-.workbench { display: grid; grid-template-columns: 54px minmax(0, 1fr); height: 100vh; height: 100dvh; }
-.product-rail { display: flex; flex-direction: column; align-items: center; gap: 16px; min-height: 0; padding: 14px 5px; background: var(--rail); border-right: 1px solid var(--line); }
-.anybox-wordmark { font-size: 23px; font-weight: 700; }
-.product-rail button { display: grid; place-items: center; position: relative; flex-shrink: 0; width: 36px; height: 36px; padding: 0; background: transparent; border: 0; border-radius: 7px; font-weight: 600; }
-.product-rail button:hover { background: var(--selected); }
-.product-rail button[aria-current="page"], .product-rail button[aria-expanded="true"] { color: var(--panel); background: var(--primary); }
-.product-rail button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
-#application-shortcuts { display: flex; flex: 1; flex-direction: column; align-items: center; gap: 10px; width: 100%; min-height: 0; padding-top: 16px; border-top: 1px solid var(--line); overflow-y: auto; scrollbar-width: none; }
-#application-shortcuts::-webkit-scrollbar { display: none; }
-#application-actions { display: flex; flex-shrink: 0; flex-direction: column; align-items: center; gap: 8px; width: 100%; padding-top: 12px; border-top: 1px solid var(--line); }
-.workbench-content { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-#application-manager { position: fixed; inset: 12px auto auto 64px; width: min(500px, calc(100vw - 76px)); max-height: calc(100dvh - 24px); margin: 0; padding: 20px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-gutter: stable; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--panel); color: var(--text); box-shadow: 0 12px 40px #0000001a; }
-.application-manager-header { position: sticky; top: -20px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -20px -20px 14px; padding: 18px 20px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.workbench { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100vh; height: 100dvh; }
+#show-application-menu { position: fixed; z-index: 100; top: 8px; left: 8px; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--secondary); box-shadow: 0 2px 8px #00000012; cursor: grab; touch-action: none; user-select: none; }
+#show-application-menu[data-dragging="true"] { cursor: grabbing; }
+#show-application-menu:hover, #show-application-menu[aria-expanded="true"] { background: var(--sidebar); color: var(--text); }
+#show-application-menu svg { flex-shrink: 0; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+#application-menu { position: fixed; inset: 46px auto auto 8px; width: min(304px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); margin: 0; padding: 7px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 8px 28px #0000001c; }
+.application-menu-heading { padding: 6px 10px 8px; color: var(--secondary); font-size: 11px; }
+#application-menu button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; text-align: left; font-size: 12px; }
+#application-menu button:hover:not(:disabled), .application-menu-item[aria-current="page"] { background: var(--hover); }
+.application-menu-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.application-menu-state { flex: 0 0 5px; height: 5px; border-radius: 50%; background: var(--muted); }
+.application-menu-state[data-state="running"] { background: var(--status-ready); }
+.application-menu-state[data-state="disabled"] { background: transparent; }
+.application-menu-state[data-state="applying"], .application-menu-state[data-state="blocked"] { background: var(--status-warning); }
+.application-menu-state[data-state="failed"] { background: var(--danger); }
+.application-menu-selection { flex: 0 0 16px; text-align: center; }
+#application-actions, .application-menu-footer { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+#application-actions button { color: var(--secondary); }
+#application-actions #stop-application:hover:not(:disabled) { color: var(--danger); }
+.workbench-content { grid-row: 1; grid-column: -2 / -1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#application-manager { position: fixed; inset: 0; width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); margin: auto; padding: 24px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-gutter: stable; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--panel); color: var(--text); box-shadow: 0 20px 64px #00000026; }
+#application-manager::backdrop { background: #0000002b; }
+.application-manager-header { position: sticky; top: -24px; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -24px -24px 8px; padding: 20px 24px 16px; background: var(--panel); }
 .application-manager-header h2 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: -.3px; }
+.application-manager-tools { display: flex; align-items: center; gap: 12px; }
 .application-manager-header button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--secondary); font-size: 24px; }
 .application-manager-header button:hover { background: var(--hover); }
-#application-list { display: grid; gap: 10px; }
-.application-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
-.application-card:last-child { margin-bottom: 0; }
-.application-card-header { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
-.application-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; background: var(--sidebar); color: var(--text); font-size: 16px; font-weight: 650; }
-.application-card h3 { min-width: 0; margin: 0; font-size: 15px; line-height: 1.4; font-weight: 650; overflow-wrap: anywhere; }
+#application-list { display: grid; }
+.application-card { position: relative; min-width: 0; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.application-card:last-child { margin-bottom: 0; border-bottom: 0; }
+.application-card-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; padding-right: 36px; }
+.application-heading { display: grid; gap: 3px; min-width: 0; }
+.application-card h3 { min-width: 0; margin: 0; font-size: 14px; line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
 .application-card p { margin: 0; font-size: 13px; line-height: 1.6; color: var(--secondary); }
-.application-description { display: -webkit-box; margin: 10px 0 8px !important; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.application-state { display: inline-flex; align-items: center; justify-content: center; gap: 5px; max-width: 140px; padding: 3px 8px; border-radius: 20px; background: var(--sidebar); color: var(--secondary); font-size: 11px; line-height: 1.45; }
+.application-description { margin-bottom: 10px !important; }
+.application-state { display: inline-flex; align-items: center; gap: 5px; color: var(--secondary); font-size: 11px; line-height: 1.45; }
 .application-state::before { content: ""; flex: 0 0 5px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-.application-state[data-state="running"] { color: var(--status-ready); background: var(--status-ready-surface); }
-.application-state[data-state="applying"], .application-state[data-state="blocked"] { color: var(--status-warning); background: var(--status-warning-surface); }
+.application-state[data-state="running"] { color: var(--status-ready); }
+.application-state[data-state="applying"], .application-state[data-state="blocked"] { color: var(--status-warning); }
 .application-state[data-state="failed"] { color: var(--danger); }
-.application-card-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.application-details > summary { position: absolute; top: 17px; right: 0; display: grid; place-items: center; width: 28px; height: 32px; border-radius: 6px; list-style: none; cursor: pointer; color: var(--secondary); font-size: 18px; letter-spacing: 1px; }
+.application-details > summary::-webkit-details-marker { display: none; }
+.application-details > summary:hover, .application-details[open] > summary { background: var(--hover); color: var(--text); }
+.application-details-content { margin-top: 14px; padding: 12px; border-radius: 8px; background: var(--canvas); }
+.application-card-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.application-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .application-card button { min-height: 32px; padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 7px; background: var(--panel); font-size: 12px; line-height: 1.4; }
 .application-card button:hover:not(:disabled) { background: var(--hover); }
-.application-card .application-open { border-color: var(--primary); background: var(--primary); color: var(--panel); }
-.application-card .application-open:hover:not(:disabled) { background: var(--text); }
+.application-card .application-open { background: var(--canvas); }
 .application-card .application-stop { margin-right: auto; padding-left: 0; border-color: transparent; background: transparent; color: var(--secondary); }
 .application-card .application-stop:hover:not(:disabled) { color: var(--danger); background: transparent; }
 .application-capabilities { margin-top: 8px; color: var(--secondary); font-size: 12px; line-height: 1.6; }
@@ -68,10 +83,13 @@ button { touch-action: manipulation; }
 #application-panels { position: relative; flex: 1; min-height: 0; min-width: 0; }
 .application-panel { height: 100%; min-height: 0; min-width: 0; overflow: auto; }
 #workbench-notice { margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--status-warning-surface); color: var(--danger); font-size: 13px; line-height: 1.6; }
-@media (max-width: 760px) { .workbench { grid-template-columns: 44px minmax(0, 1fr); } #application-manager { left: 54px; width: min(500px, calc(100vw - 66px)); } }
-@media (max-width: 460px) { #application-manager { padding: 14px; } .application-manager-header { top: -14px; margin: -14px -14px 12px; padding: 12px 14px; } .application-card-header { grid-template-columns: 32px minmax(0, 1fr); row-gap: 5px; } .application-icon { grid-row: 1 / 3; width: 32px; height: 32px; } .application-state { grid-column: 2; justify-self: start; } }
+@media (max-width: 460px) { #application-manager { width: calc(100vw - 20px); max-height: calc(100dvh - 24px); padding: 16px; } .application-manager-header { top: -16px; margin: -16px -16px 8px; padding: 14px 16px; } .application-card-header { grid-template-columns: minmax(0, 1fr); row-gap: 9px; } .application-open { grid-column: 1; justify-self: start; } }
 
 .package-management { display: grid; gap: 14px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
+.package-install-entry { display: flex; justify-content: flex-end; }
+.package-install-entry .package-install-toggle { display: inline-flex; align-items: center; justify-content: center; width: auto; height: auto; min-height: 32px; padding: 6px 10px; border: 1px solid var(--primary); border-radius: 7px; background: var(--primary); color: var(--panel); font-size: 12px; line-height: 1.4; }
+.package-install-entry .package-install-toggle:hover:not(:disabled) { background: var(--text); }
+.package-source-notice { margin-top: 10px !important; }
 .package-management h3 { margin: 0 0 5px; font-size: 14px; font-weight: 600; }
 .package-management p, .package-management label { font-size: 12px; line-height: 1.6; }
 .package-management p { margin: 0; color: var(--secondary); overflow-wrap: anywhere; }
@@ -124,4 +142,4 @@ button { touch-action: manipulation; }
 .package-history-content .package-operation, .package-history-content .package-activation { padding-top: 7px; border-top: 1px solid var(--line); }
 .package-history-content p { font-size: 11px; }
 @media (max-width: 460px) { .package-source-options { grid-template-columns: minmax(0, 1fr); } .package-pending-banner { align-items: flex-start; flex-direction: column; } }
-@media (pointer: coarse) { .application-card button, .package-management button, .package-management .package-clear, .application-capabilities summary, .package-history summary { min-height: 44px; } }
+@media (pointer: coarse) { #show-application-menu { width: 44px; height: 44px; } #show-application-menu, #application-menu button, .application-card button, .package-management button, .package-management .package-clear, .application-capabilities summary, .package-history summary { min-height: 44px; } #application-menu { top: 58px; } .application-details > summary { width: 36px; height: 44px; top: 12px; } .application-card-header { padding-right: 44px; } }

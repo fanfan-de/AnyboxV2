@@ -12,18 +12,17 @@ export function createSessionMenu(root: HTMLElement, options: {
   const menu = document.createElement('div')
   menu.id = 'agent--session-menu'; menu.className = 'session-menu'; menu.popover = 'manual'
   menu.setAttribute('role', 'menu'); menu.setAttribute('aria-label', '会话操作'); menu.tabIndex = -1
-  const actions: readonly [SessionMenuAction, string, string][] = [
-    ['right', '在右侧打开', '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v16m3-11 3 3-3 3"/>'],
-    ['bottom', '在下方打开', '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 12h18m-12 3 3 3 3-3"/>'],
-    ['archive', '归档', '<rect x="3" y="3" width="18" height="5" rx="1"/><path d="M5 8v11a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8M10 12h4"/>'],
+  const actions: readonly [SessionMenuAction, string][] = [
+    ['right', '在右侧打开'],
+    ['bottom', '在下方打开'],
+    ['archive', '归档'],
   ]
-  const buttons = actions.map(([action, label, path]) => {
+  const buttons = actions.map(([action, label]) => {
     const button = document.createElement('button')
     button.type = 'button'; button.tabIndex = -1; button.dataset.sessionMenuAction = action
     button.title = action === 'archive' ? label : `在活动面板${action === 'right' ? '右侧' : '下方'}打开`
     button.setAttribute('role', 'menuitem')
-    button.innerHTML = `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${path}</svg>`
-    const text = document.createElement('span'); text.textContent = label; button.append(text)
+    button.textContent = label
     menu.append(button)
     return button
   })

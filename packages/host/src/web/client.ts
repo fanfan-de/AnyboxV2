@@ -6,6 +6,7 @@ import { setupPackagePageLifecycle } from './page-lifecycle.js'
 import type { ApplicationInterfaceLease } from './application-lifecycle.js'
 import { createApplicationInterfaceLifecycle } from './application-lifecycle.js'
 import { applicationHash, closeApplicationView, completedRemovedApplicationIds, parseApplicationHash, readApplicationWorkspace, removeApplicationViews, workspaceStorageKey } from './application-workspace.js'
+import { setupFloatingApplicationMenu } from './floating-application-menu.js'
 
 interface ApplicationPanel {
   id: string; route: string; panel: HTMLElement
@@ -14,9 +15,10 @@ interface ApplicationPanel {
   styles: HTMLLinkElement[]; error?: boolean; focus?: HTMLElement; control?: boolean; disposing?: boolean; disposal?: Promise<void>; cleanupFailed?: boolean
 }
 const list = document.getElementById('application-list')!, panels = document.getElementById('application-panels')!
-const shortcuts = document.getElementById('application-shortcuts')!
-const rail = document.querySelector('.product-rail')!
-const manager = document.getElementById('application-manager')!
+const applicationMenu = document.getElementById('application-menu')!
+const menuList = document.getElementById('application-menu-list')!
+const showApplicationMenu = document.getElementById('show-application-menu')! as HTMLButtonElement
+const manager = document.getElementById('application-manager')! as HTMLDialogElement
 const actions = document.getElementById('application-actions')!
 const showApplications = document.getElementById('show-applications')! as HTMLButtonElement
 const closeButton = document.getElementById('close-application')! as HTMLButtonElement
@@ -24,6 +26,7 @@ const notice = document.getElementById('workbench-notice')!, stopButton = docume
 const moduleAttempts = new Map<string, number>()
 const unconfirmedStops = new Map<string, string>()
 const lifetime = new AbortController(), views = new Map<string, ApplicationPanel>(), modules = new Map<string, Promise<ApplicationWebModule>>()
+setupFloatingApplicationMenu(showApplicationMenu, applicationMenu, { signal: lifetime.signal })
 let applications: readonly ProductView[] = [], activeId: string | null = null, closed = false, requestRevision = 0, refreshTask: Promise<boolean> | undefined
 let catalogAvailable = false, workspaceInitialized = false
 let lifecycleFrozen = true, interfaceFrozen = false, pageRegistrationBlocked = true, reloading = false
@@ -54,10 +57,17 @@ const interfaceLifecycle = createApplicationInterfaceLifecycle({
 })
 let listRevision = ''
 const capabilityDetailsOpen = new Map<string, boolean>()
+const applicationDetailsOpen = new Map<string, boolean>()
 let managerInteractionRevision = 0
 let packageManagement: ReturnType<typeof setupPackageManagement> | undefined
-const showManager = () => { if (!closed && !manager.matches(':popover-open')) manager.showPopover() }
-const hideManager = () => { if (manager.matches(':popover-open')) manager.hidePopover() }
+const hideApplicationMenu = () => { if (applicationMenu.matches(':popover-open')) applicationMenu.hidePopover() }
+function syncManager() {
+  showApplications.setAttribute('aria-expanded', String(manager.open))
+  if (manager.open && !closed && !packageManagement) packageManagement = setupPackageManagement(manager, { installationActions: document.getElementById('application-install-actions')!, activation: { prepare: prepareInterfaces }, reload: reloadForActivation })
+  else if (!manager.open && packageManagement) { const previous = packageManagement; packageManagement = undefined; void previous.dispose() }
+}
+const showManager = () => { if (!closed && !manager.open) { hideApplicationMenu(); manager.showModal(); syncManager() } }
+const hideManager = () => { if (manager.open) { manager.close(); syncManager() } }
 const show = (message = '') => { notice.textContent = message; notice.hidden = !message; if (message) showManager() }
 const states: Record<ProductView['state'], string> = { disabled: '尚未打开', applying: '正在处理', running: '运行中', blocked: '依赖未就绪', failed: '启动或关闭失败' }
 const hostUnavailableMessage = '无法连接应用宿主，请确认客户端仍在运行。'
@@ -98,30 +108,38 @@ function button(text: string, action: () => void) {
 function renderList() {
   const revision = JSON.stringify([catalogAvailable, lifecycleFrozen, applications.map(app => {
     const view = views.get(app.definition.id)
-    return [app, !!view?.control, !!view?.disposing, !!view?.loading, !!view?.error, !!view?.cleanupFailed]
+    return [app, !!view?.mounted, !!view?.control, !!view?.disposing, !!view?.loading, !!view?.error, !!view?.cleanupFailed]
   })])
   if (revision === listRevision) { renderNavigation(); return }
   listRevision = revision
   for (const card of list.querySelectorAll<HTMLElement>('.application-card')) {
     const details = card.querySelector<HTMLDetailsElement>('.application-capabilities')
     if (details && card.dataset.appId) capabilityDetailsOpen.set(card.dataset.appId, details.open)
+    const appDetails = card.querySelector<HTMLDetailsElement>('.application-details')
+    if (appDetails && card.dataset.appId) applicationDetailsOpen.set(card.dataset.appId, appDetails.open)
   }
   list.replaceChildren()
-  if (!applications.length) { const empty = document.createElement('p'); empty.className = 'application-empty'; empty.textContent = catalogAvailable ? '还没有应用，从下方安装一个开始使用。' : '暂时无法读取应用目录。'; list.append(empty) }
+  if (!applications.length) { const empty = document.createElement('p'); empty.className = 'application-empty'; empty.textContent = catalogAvailable ? '还没有应用，安装一个应用开始使用。' : '暂时无法读取应用目录。'; list.append(empty) }
   for (const app of applications) {
     const view = views.get(app.definition.id)
     const card = document.createElement('article'); card.className = 'application-card'; card.dataset.appId = app.definition.id
     const header = document.createElement('header'); header.className = 'application-card-header'
-    const icon = document.createElement('span'); icon.className = 'application-icon'; icon.textContent = app.definition.name.slice(0, 1); icon.setAttribute('aria-hidden', 'true')
+    const heading = document.createElement('div'); heading.className = 'application-heading'
     const title = document.createElement('h3'); title.textContent = app.definition.name; title.id = `application-title-${app.definition.id}`
     card.setAttribute('aria-labelledby', title.id)
     const state = document.createElement('span'); state.className = 'application-state'; state.textContent = view?.control ? '正在处理应用操作…' : stateLabel(app)
     state.dataset.state = !catalogAvailable ? 'unknown' : view?.control ? 'applying' : app.state
-    header.append(icon, title, state); card.append(header)
-    if (app.definition.description) { const description = document.createElement('p'); description.className = 'application-description'; description.textContent = app.definition.description; description.title = app.definition.description; card.append(description) }
+    heading.append(title, state); header.append(heading); card.append(header)
+    const details = document.createElement('details'); details.className = 'application-details'; details.open = applicationDetailsOpen.get(app.definition.id) ?? (!!view?.error || app.state === 'failed' || app.state === 'blocked')
+    const summary = document.createElement('summary'); summary.textContent = '···'; summary.title = `${app.definition.name} 的详情与操作`; summary.setAttribute('aria-label', summary.title)
+    const content = document.createElement('div'); content.className = 'application-details-content'
+    details.append(summary, content); details.addEventListener('toggle', () => { applicationDetailsOpen.set(app.definition.id, details.open) })
+    if (app.definition.description) { const description = document.createElement('p'); description.className = 'application-description'; description.textContent = app.definition.description; content.append(description) }
     const controls = document.createElement('div'); controls.className = 'application-card-actions'
+    const recovery = document.createElement('div'); recovery.className = 'application-recovery-actions'
     const open = button(view?.mounted ? '进入应用' : '打开应用', () => { void enterApplication(app.definition.id) }); open.className = 'application-open'; open.setAttribute('aria-label', `打开 ${app.definition.name}`)
     open.disabled = lifecycleFrozen || !catalogAvailable || !app.definition.web || app.state === 'applying' || !!view?.control || !!view?.disposing || !!view?.cleanupFailed
+    header.append(open)
     const unavailable = (app.capabilities ?? []).filter(capability => capability.status !== 'ready')
     const required = unavailable.filter(capability => capability.required), optional = unavailable.filter(capability => !capability.required)
     if (required.length) {
@@ -131,53 +149,60 @@ function renderList() {
     if (optional.length) {
       const details = document.createElement('details'); details.className = 'application-capabilities'; details.open = capabilityDetailsOpen.get(app.definition.id) ?? false
       const summary = document.createElement('summary'); summary.textContent = optional.length === 1 && capabilityNames[optional[0]!.id] ? `${capabilityNames[optional[0]!.id]}暂不可用` : `${optional.length} 项可选功能暂不可用`
-      details.append(summary, ...optional.map(capabilityIssue)); details.addEventListener('toggle', () => { capabilityDetailsOpen.set(app.definition.id, details.open) }); card.append(details)
+      details.append(summary, ...optional.map(capabilityIssue)); details.addEventListener('toggle', () => { capabilityDetailsOpen.set(app.definition.id, details.open) }); content.append(details)
     }
     if (view?.loading) { const loading = document.createElement('p'); loading.className = 'application-loading'; loading.setAttribute('role', 'status'); loading.textContent = '正在加载应用界面…'; card.append(loading) }
     if (view?.error) { const reload = button('重新加载界面', () => {
       if (lifecycleFrozen) return
       view.error = false; show(); hideManager(); void ensureMounted(view, 'select')
-    }); reload.disabled = lifecycleFrozen || !!view.cleanupFailed; controls.append(reload) }
+    }); reload.disabled = lifecycleFrozen || !!view.cleanupFailed; recovery.append(reload) }
     if (app.state === 'failed' || app.state === 'blocked') {
-      const retry = button('重试启动', () => { void openApplication(app.definition.id, true) }); retry.disabled = lifecycleFrozen || !catalogAvailable || !!view?.control || !!view?.disposing || !!view?.cleanupFailed; controls.append(retry)
+      const retry = button('重试启动', () => { void openApplication(app.definition.id, true) }); retry.disabled = lifecycleFrozen || !catalogAvailable || !!view?.control || !!view?.disposing || !!view?.cleanupFailed; recovery.append(retry)
     }
     if (app.desiredEnabled) {
       const stop = button('停止应用', () => { void stopApplication(app.definition.id) }); stop.className = 'application-stop'; stop.setAttribute('aria-label', `停止 ${app.definition.name}`); stop.disabled = lifecycleFrozen || !catalogAvailable || app.state === 'applying' || !!view?.control || !!view?.disposing || !!view?.cleanupFailed; controls.append(stop)
     }
-    controls.append(open); card.append(controls)
+    if (view) {
+      const close = button('关闭界面', () => { void closeApplicationPage(app.definition.id) }); close.setAttribute('aria-label', `关闭 ${app.definition.name} 界面`)
+      close.disabled = lifecycleFrozen || !!view.control || !!view.disposing || !!view.cleanupFailed; controls.append(close)
+    }
+    content.append(controls); card.append(details)
+    if (recovery.children.length) card.append(recovery)
     list.append(card)
   }
   renderNavigation()
 }
 function renderNavigation() {
-  const existing = new Map([...shortcuts.querySelectorAll<HTMLButtonElement>('button')].map(element => [element.dataset.appId, element]))
+  const menuItems = new Map([...menuList.querySelectorAll<HTMLButtonElement>('button')].map(element => [element.dataset.appId, element]))
   for (const [index, app] of applications.entries()) {
     const id = app.definition.id
-    let shortcut = existing.get(id)
-    if (!shortcut) {
-      shortcut = button(app.definition.name.slice(0, 1), () => { void enterApplication(id) })
-      shortcut.className = 'application-shortcut'; shortcut.dataset.appId = id
-      shortcut.id = `app-shortcut-${id}`
+    let item = menuItems.get(id)
+    if (!item) {
+      item = button('', () => { hideApplicationMenu(); void enterApplication(id) }); item.className = 'application-menu-item'; item.dataset.appId = id
+      item.id = `app-menu-${id}`
+      const name = document.createElement('span'); name.className = 'application-menu-name'
+      const state = document.createElement('span'); state.className = 'application-menu-state'
+      const selection = document.createElement('span'); selection.className = 'application-menu-selection'; selection.setAttribute('aria-hidden', 'true')
+      item.append(name, state, selection)
     }
-    shortcut.textContent = app.definition.name.slice(0, 1)
-    shortcut.title = `${app.definition.name} · ${stateLabel(app)}`
-    shortcut.setAttribute('aria-label', app.definition.name)
-    shortcut.disabled = lifecycleFrozen || !catalogAvailable || !app.definition.web || app.state === 'applying'
-    shortcut.dataset.state = catalogAvailable ? app.state : 'unknown'
-    if (views.has(id)) shortcut.setAttribute('aria-controls', `app-panel-${id}`)
-    else shortcut.removeAttribute('aria-controls')
-    if (shortcuts.children[index] !== shortcut) shortcuts.insertBefore(shortcut, shortcuts.children[index] ?? null)
-    existing.delete(id)
+    item.querySelector('.application-menu-name')!.textContent = app.definition.name
+    const state = item.querySelector<HTMLElement>('.application-menu-state')!; state.dataset.state = catalogAvailable ? app.state : 'unknown'; state.setAttribute('aria-label', stateLabel(app))
+    item.title = `${app.definition.name} · ${stateLabel(app)}`; item.setAttribute('aria-label', `打开 ${app.definition.name}`)
+    if (views.has(id)) item.setAttribute('aria-controls', `app-panel-${id}`)
+    else item.removeAttribute('aria-controls')
+    if (menuList.children[index] !== item) menuList.insertBefore(item, menuList.children[index] ?? null)
+    menuItems.delete(id)
   }
-  for (const shortcut of existing.values()) shortcut.remove()
+  for (const item of menuItems.values()) item.remove()
   updateNavigation()
 }
 function updateNavigation() {
-  for (const shortcut of shortcuts.querySelectorAll<HTMLButtonElement>('button')) {
+  for (const shortcut of menuList.querySelectorAll<HTMLButtonElement>('button')) {
     const id = shortcut.dataset.appId!, app = product(id), view = views.get(id)
     shortcut.disabled = lifecycleFrozen || !catalogAvailable || !app?.definition.web || app.state === 'applying' || !!view?.control || !!view?.disposing || !!view?.cleanupFailed
     if (shortcut.dataset.appId === activeId) shortcut.setAttribute('aria-current', 'page')
     else shortcut.removeAttribute('aria-current')
+    const selection = shortcut.querySelector('.application-menu-selection'); if (selection) selection.textContent = id === activeId ? '✓' : ''
   }
 }
 function renderWorkspace() {
@@ -188,6 +213,7 @@ function renderWorkspace() {
   }
   const app = activeId && product(activeId)
   const view = activeId ? views.get(activeId) : undefined
+  showApplicationMenu.title = app ? `Anybox 应用菜单 · ${app.definition.name}` : 'Anybox 应用菜单'
   actions.hidden = !view
   closeButton.hidden = !view; closeButton.disabled = lifecycleFrozen || !!view?.control || !!view?.disposing
   closeButton.title = app ? `关闭 ${app.definition.name} 界面` : '关闭当前应用界面'
@@ -293,6 +319,7 @@ function selectApplication(id: string | null, reason: ApplicationActivation = 's
   }
   if (activeId !== id) show()
   activeId = id; renderWorkspace(); if (changeAddress) address(); else save()
+  hideApplicationMenu()
   if (id) hideManager(); else showManager()
   const tab = id && views.get(id)
   if (tab) {
@@ -318,8 +345,7 @@ async function closeApplicationPageWork(id: string) {
   views.delete(id); tab.panel.remove(); renderList()
   if (wasActive) {
     selectApplication(next.activeId)
-    const focus = next.activeId ? document.getElementById(`app-shortcut-${next.activeId}`) : showApplications
-    focus?.focus(); show()
+    showApplicationMenu.focus(); show()
   } else { renderWorkspace(); save() }
 }
 function openApplication(id: string, retry = false): Promise<void> {
@@ -429,21 +455,20 @@ async function followAddress() {
   }
   selectApplication(null, 'navigate', false)
 }
-rail.addEventListener('keydown', event => {
-  const key = event as KeyboardEvent, values = [...rail.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([hidden])')], index = values.findIndex(element => element === key.target)
+function moveNavigationFocus(container: Element, event: Event) {
+  const key = event as KeyboardEvent, values = [...container.querySelectorAll<HTMLButtonElement>('button:not(:disabled):not([hidden])')], index = values.findIndex(element => element === key.target)
   if (index < 0) return
   const next = key.key === 'ArrowDown' ? (index + 1) % values.length : key.key === 'ArrowUp' ? (index + values.length - 1) % values.length : key.key === 'Home' ? 0 : key.key === 'End' ? values.length - 1 : -1
   if (next >= 0) { key.preventDefault(); values[next].focus() }
-})
-manager.addEventListener('toggle', () => {
-  const open = manager.matches(':popover-open')
-  showApplications.setAttribute('aria-expanded', String(open))
-  if (open && !closed && !packageManagement) packageManagement = setupPackageManagement(manager, { activation: { prepare: prepareInterfaces }, reload: reloadForActivation })
-  else if (!open && packageManagement) { const previous = packageManagement; packageManagement = undefined; void previous.dispose() }
-})
-showApplications.addEventListener('click', () => { managerInteractionRevision++ })
-closeButton.addEventListener('click', () => { if (activeId) void closeApplicationPage(activeId) })
-stopButton.addEventListener('click', () => { if (activeId) void stopApplication(activeId) })
+}
+applicationMenu.addEventListener('keydown', event => moveNavigationFocus(applicationMenu, event))
+applicationMenu.addEventListener('toggle', () => showApplicationMenu.setAttribute('aria-expanded', String(applicationMenu.matches(':popover-open'))))
+manager.addEventListener('toggle', syncManager)
+manager.addEventListener('close', syncManager)
+document.getElementById('close-application-manager')!.addEventListener('click', hideManager)
+showApplications.addEventListener('click', () => { managerInteractionRevision++; showManager() })
+closeButton.addEventListener('click', () => { hideApplicationMenu(); if (activeId) void closeApplicationPage(activeId) })
+stopButton.addEventListener('click', () => { hideApplicationMenu(); if (activeId) void stopApplication(activeId) })
 window.addEventListener('hashchange', () => { void followAddress().catch(() => show('无法打开该应用地址。')) }, { signal: lifetime.signal })
 window.addEventListener('popstate', () => { void followAddress().catch(() => show('无法打开该应用地址。')) }, { signal: lifetime.signal })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void refresh() }, { signal: lifetime.signal })

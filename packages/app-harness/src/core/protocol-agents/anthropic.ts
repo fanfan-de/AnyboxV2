@@ -1,7 +1,6 @@
 import type { NativeObject } from '@anybox/models'
 import type { ProtocolConclusion } from '../run/program.js'
 import { modelFailure } from '../run/model.js'
-import { validateToolBatch } from '../run/domain.js'
 import { completed, nativeArray, nativeObject, nativeString, nonempty, toolResult, toolImageInputs } from './shared.js'
 import type { ExchangeRunner } from './shared.js'
 
@@ -23,8 +22,9 @@ export async function runAnthropic(runner: ExchangeRunner, initial: NativeObject
     }
     if (reason === 'tool_use') {
       if (!calls.length) throw modelFailure('invalid-response')
-      const batch = validateToolBatch(calls), results = await runner.tools(batch)
-      intent = { messages: [{ role: 'user', content: batch.map((call, index) => ({ type: 'tool_result', tool_use_id: call.id, content: toolResult(results[index]!) })) }, ...toolImageInputs('anthropic-messages', results)] }
+      const results = await runner.tools(calls)
+      intent = { messages: [{ role: 'user', content: calls.map((call, index) => ({ type: 'tool_result', tool_use_id: call.id,
+        content: toolResult(results[index]!), ...('rejected' in results[index]! ? { is_error: true } : {}) })) }, ...toolImageInputs('anthropic-messages', results)] }
     } else if (reason === 'pause_turn') {
       if (calls.length) throw modelFailure('invalid-response')
       // The execution already committed the exact paused assistant blocks.

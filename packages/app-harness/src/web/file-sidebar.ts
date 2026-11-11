@@ -68,7 +68,6 @@ const currentSelection = (tab: FileSidebarTab): Extract<FileSelection, { kind: '
 })
 const tabLabel = (tab: FileSidebarTab) => fileLabel(tab.item.selection?.kind === 'project-file' ? currentSelection(tab) : tab.item.selection, tab.item.file)
 const tabPath = (tab: FileSidebarTab) => tab.item.selection?.kind === 'project-file' ? tab.item.selection.path : tab.item.file?.path ?? '文件快照'
-const fileIcon = (path: string) => /\.mdx?$/i.test(path) ? 'markdown' : /\.(?:[cm]?[jt]sx?|json|css|html|ya?ml|toml|sh)$/i.test(path) ? 'file-code' : 'file'
 let viewSequence = 0
 /** One visible sidebar reuses the active thread's controller and joins all of its own reads. */
 export function createFileSidebar(container: HTMLElement, environment: {
@@ -89,7 +88,7 @@ export function createFileSidebar(container: HTMLElement, environment: {
   const pathbarActions = document.createElement('div'); pathbarActions.className = 'file-pathbar-actions'; pathbarActions.append(refreshTree, collapse)
   const filterBox = document.createElement('label'); filterBox.className = 'file-tree-filter'
   const filter = document.createElement('input'); filter.type = 'search'; filter.placeholder = '筛选文件…'; filter.setAttribute('aria-label', '筛选已加载的项目文件'); filter.title = '筛选已加载的目录和文件；展开目录或加载更多可查看更多条目'
-  filterBox.append(icon('search'), filter)
+  filterBox.append(filter)
   const treeList = document.createElement('div'); treeList.className = 'file-tree-list'; treeList.setAttribute('role', 'tree'); treeList.setAttribute('aria-label', '项目文件目录')
   treeSection.append(filterBox, treeList)
   const separator = document.createElement('div'); separator.className = 'file-tree-separator'; separator.tabIndex = 0
@@ -97,7 +96,7 @@ export function createFileSidebar(container: HTMLElement, environment: {
   const content = document.createElement('section'); content.className = 'file-content-section file-preview-pane'
   const empty = document.createElement('div'); empty.className = 'file-preview-empty'
   const emptyTitle = document.createElement('strong'); emptyTitle.textContent = '预览项目文件'
-  const emptyHint = document.createElement('p'); empty.append(icon('files'), emptyTitle, emptyHint)
+  const emptyHint = document.createElement('p'); empty.append(emptyTitle, emptyHint)
   const tabs = document.createElement('div'); tabs.className = 'file-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', '打开的文件')
   const body = document.createElement('div'); body.className = 'file-preview-body'
   const toolbar = document.createElement('div'); toolbar.className = 'file-preview-toolbar'
@@ -222,7 +221,7 @@ export function createFileSidebar(container: HTMLElement, environment: {
           const showChildren = expanded.has(entry.path) || Boolean(query && included.has(entry.path) && directories.has(entry.path))
           if (entry.kind === 'directory') chevron.append(icon(showChildren ? 'chevron-down' : 'chevron-right'))
           const name = document.createElement('span'); name.className = 'file-tree-name'; name.textContent = entry.name
-          button.append(chevron, icon(entry.kind === 'directory' ? showChildren ? 'folder-opened' : 'folder' : fileIcon(entry.path), 'file-tree-icon'), name)
+          button.append(chevron, name)
           if (entry.kind === 'directory') button.setAttribute('aria-expanded', String(showChildren))
           button.setAttribute('aria-selected', String(selectedTreePath === entry.path))
           button.tabIndex = -1; rows.push(button)
@@ -308,9 +307,9 @@ export function createFileSidebar(container: HTMLElement, environment: {
       button.id = `${namespace}-tab-${index}`; button.setAttribute('role', 'tab'); button.setAttribute('aria-controls', body.id)
       button.setAttribute('aria-selected', String(tab.id === state.activeTabId)); button.tabIndex = tab.id === state.activeTabId ? 0 : -1
       const label = document.createElement('span'); label.textContent = tabPath(tab).split('/').at(-1)!
-      button.append(icon(fileIcon(tabPath(tab))), label); button.title = `${tabLabel(tab)}${tab.item.selection?.kind === 'snapshot' ? ' · 快照' : ' · 当前文件'}`
+      button.append(label); button.title = `${tabLabel(tab)}${tab.item.selection?.kind === 'snapshot' ? ' · 快照' : ' · 当前文件'}`
       button.setAttribute('aria-label', button.title)
-      const close = document.createElement('button'); close.type = 'button'; close.className = 'file-tab-close'; close.dataset.closeFileTab = tab.id; close.append(icon('close')); close.setAttribute('aria-label', `关闭文件 ${tabLabel(tab)}`)
+      const close = document.createElement('button'); close.type = 'button'; close.className = 'file-tab-close'; close.dataset.closeFileTab = tab.id; close.append(icon('close')); close.title = `关闭文件 ${tabLabel(tab)}`; close.setAttribute('aria-label', close.title)
       wrapper.append(button, close); return wrapper
     }))
     const index = state.tabs.findIndex(tab => tab.id === state.activeTabId)

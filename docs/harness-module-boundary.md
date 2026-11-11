@@ -47,7 +47,7 @@ packages/
 
 客户端只导入 `@anybox/app-harness/client/registration`；服务端只导入 `@anybox/app-harness/registration`，共享 `definition.ts` 不加载两侧运行时。`entrypoints/anybox-main.ts` 在解析角色后动态导入相应 main，桌面后台也使用独立的 `desktop-client.ts` 与 `desktop-execution.ts`。`npm run web` 默认纯客户端，`web:local` 才使用组合启动器。
 
-前端外壳管理左侧应用入口及其管理浮层、全局路由和界面生命周期；窄条右侧只提供无装饰的挂载容器，全部布局由当前应用内部组件从顶边开始呈现。宿主不在右侧显示标题栏、标签栏、操作栏、通知或加载失败页。关闭界面和停止应用控制位于窄条底部，应用列表、状态及重载入口位于管理浮层。应用拥有自己的导航、内容、操作、模板和样式。Anybox Harness 直接挂载项目与会话工作区，侧栏保留一处设备选择和连接管理；模型与 Prompt 是工作区设置分类，设备 Agent 启停放在连接管理，不另设功能页面顶栏。安全展示 DTO、校验和解码位于 `core/view/` 等无 DOM 入口，浏览器只导入允许的纯函数和 type-only 契约，不引入 execution。HTTP DTO 不包含凭据引用、原生恢复记录、execution、租约和 result/done 句柄。Models 驱动负责原生传输，协议 Loop 决定工具与续轮，RunRuntime 管理操作、取消与退出。
+前端外壳管理可拖动悬浮应用菜单、独立应用管理 dialog、全局路由和界面生命周期；宿主不保留侧栏或顶栏，只提供从窗口顶边开始的无装饰挂载容器，全部布局由当前应用内部组件呈现。关闭界面和停止应用控制位于悬浮菜单及应用管理行详情，应用列表、状态、通知、加载失败及重载入口位于管理 dialog。应用拥有自己的导航、内容、操作、模板和样式。Anybox Harness 直接挂载项目与会话工作区，侧栏保留一处设备选择和连接管理；模型与 Prompt 是工作区设置分类，设备 Agent 启停放在连接管理，不另设功能页面顶栏。安全展示 DTO、校验和解码位于 `core/view/` 等无 DOM 入口，浏览器只导入允许的纯函数和 type-only 契约，不引入 execution。HTTP DTO 不包含凭据引用、原生恢复记录、execution、租约和 result/done 句柄。Models 驱动负责原生传输，协议 Loop 决定工具与续轮，RunRuntime 管理操作、取消与退出。
 
 ## 进程与资源边界
 

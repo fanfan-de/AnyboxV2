@@ -108,7 +108,9 @@ Models独占配置库从v2升级v3；Session沿用run-state账本，v5 引入原
 
 请求记录只保存增量intent和版本；操作意图保存带前驱引用的重建配方。父恢复引用指向链节，不保存从根开始的ID数组；恢复时才在内存中展开对应路径。响应块只持久化一次，checkpoint只保存恢复元数据，不复制continuation。
 
-成功终态在一个事务中提交最终记录、链节、Run状态、完整节点、结果引用和事件。失败、取消或cleanup失败只保存事实与诊断。Runtime 进程异常重启后，有效 response/cleanup/settling 游标可提升 owner 并接续原 worker 操作；无恢复凭证的旧 Run、响应未保存的 model-pending 仍 interrupted，保留事实并排空已有 scope，不重发模型或未知工具。四协议当前绑定 Loop 1.3.0，读取旧 Loop 1.0/1.1/1.2；驱动 2.1.0 和记录 v2 不变。旧节点、事件、schemaVersion 1/2及profile快照只读，不改写旧JSON。
+成功终态在一个事务中提交最终记录、链节、Run状态、完整节点、结果引用和事件。失败、取消或cleanup失败只保存事实与诊断。Runtime 进程异常重启后，有效 response/cleanup/settling 游标可提升 owner 并接续原 worker 操作；无恢复凭证的旧 Run、响应未保存的 model-pending 仍 interrupted，保留事实并排空已有 scope，不重发模型或未知工具。四协议当前绑定 Loop 1.4.0，读取旧 Loop 1.0/1.1/1.2/1.3；驱动和记录 v2 不因本次工具反馈改动升级。旧节点、事件、schemaVersion 1/2及profile快照只读，不改写旧JSON。
+
+Loop 1.4.0 在工具副作用前做纯批次预检：有效、唯一且有界的原生调用 ID 已确定时，未知/未声明工具名和已选择工具的 schema 错误返回同 ID 的结构化错误结果，供模型选择精确声明名或修正参数；同批合法调用也返回 batch-rejected，整批不执行。反馈包括固定 code/reason/message、executed:false、实际 availableTools 和适用参数 schema；Anthropic 还标记 is_error:true。每 Run 累计最多三批拒绝反馈，第四批结束运行；计数保存在既有 protocolCursor 的可选 toolRequestCorrections 中，旧值缺省零并随下一模型响应保存，恢复不重置额度。损坏/重复/过长 ID 或原生 JSON 仍是致命错误，工具执行、存储和清理失败不进入该修正路径；没有别名、隐式副作用重试或新的数据库 schema。
 
 ## 7. Web、安全展示与资源限制
 

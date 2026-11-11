@@ -55,6 +55,7 @@ export function createPendingStore(storage: BrowserStorage): PendingStore {
 }
 
 export function isActive(run: RunView | undefined): boolean { return run?.status === 'running' || run?.status === 'cancelling' }
+export function isUnsuccessful(run: RunView): boolean { return run.status === 'failed' || run.status === 'cancelled' || run.status === 'interrupted' }
 export function isApiError(error: unknown): error is ApiError { return error instanceof Error && 'status' in error && 'code' in error }
 const protocolViewIncompatibilityNotice = '协议展示版本不兼容，请将执行设备与 Anybox Harness 客户端一起升级。'
 
@@ -261,8 +262,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (isActive(previous) || views.get(value.id)?.status === 'provisional') terminalTrace.add(value.id)
       const followedResult = value.status === 'completed' && value.resultNodeId && position.follow?.runId === value.id &&
         position.viewNodeId === position.follow.parentNodeId
+      const unfinishedHere = isUnsuccessful(value) && value.history.kind === 'tree' && value.history.parentNodeId === position.viewNodeId
       // Keep the visible frame until the durable result can replace it without an empty render.
-      if (views.get(value.id)?.status === 'provisional' && !followedResult) views.delete(value.id)
+      if (views.get(value.id)?.status === 'provisional' && !followedResult && !unfinishedHere) views.delete(value.id)
     }
     runs = [...runs.filter(item => item.id !== value.id), value]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
@@ -276,8 +278,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     if (pathNodes.some(node => node.sourceRunId === id) || expanded.has(id)) return 3
     return 4
   }
+  const unfinishedAtPosition = (run: RunView): boolean => isUnsuccessful(run) && run.history.kind === 'tree' && run.history.parentNodeId === position.viewNodeId
   const traceWanted = (): ReadonlySet<string> => new Set(runs.filter(run => isActive(run) || terminalTrace.has(run.id) || expanded.has(run.id) ||
-    pathNodes.some(node => node.sourceRunId === run.id) || (position.viewMode === 'runs' &&
+    unfinishedAtPosition(run) || pathNodes.some(node => node.sourceRunId === run.id) || (position.viewMode === 'runs' &&
       (run.id === position.focusedRunId || traceViewport.includes(run.id) || Boolean(traceSearch.trim())))).map(run => run.id))
   const traceLoading = (): TraceLoading => {
     const states = new Map<string, TraceLoadState>()
@@ -636,7 +639,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       // Cached views outside the visible path can be queried again when needed.
       if (views.size > 64 && position.viewMode !== 'runs' && !traceSearch.trim()) {
         const visible = new Set(pathNodes.map(node => node.sourceRunId))
-        for (const id of views.keys()) if (!visible.has(id) && id !== position.follow?.runId && !expanded.has(id) && !isActive(runs.find(value => value.id === id))) { views.delete(id); break }
+        for (const id of views.keys()) if (!visible.has(id) && id !== position.follow?.runId && !expanded.has(id) &&
+          !runs.some(value => value.id === id && (isActive(value) || unfinishedAtPosition(value)))) { views.delete(id); break }
       }
       emit()
     },
@@ -707,6 +711,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       locationJob = job
       await job
       finishLocation(job)
+      syncTraceReads()
     },
     focusRun(id) {
       locationVersion++
@@ -747,7 +752,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
             const loaded = await read<readonly RunView[]>(`${path}/runs`, version)
             for (const value of loaded) adopt(value)
             // A display read failure must not prevent pending reconciliation or following a successful result.
-            await Promise.allSettled(runs.filter(value => isActive(value) || terminalTrace.has(value.id) || expanded.has(value.id)).map(value => loadTrace(value.id, version)))
+            await Promise.allSettled(runs.filter(value => isActive(value) || terminalTrace.has(value.id) || expanded.has(value.id) || unfinishedAtPosition(value)).map(value => loadTrace(value.id, version)))
             if (locationJob) locationAgain = true
             else await readLocation()
             syncTraceReads()

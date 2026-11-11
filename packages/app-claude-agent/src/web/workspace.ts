@@ -17,7 +17,7 @@ export function createWorkspacePanel(domId: (value: string) => string, options: 
   interactions(count: number): void
 }) {
   const heading = el('h2', { id: domId('workspace-title'), text: '会话详情' }), subtitle = el('p')
-  const closeButton = el('button', { type: 'button', text: '×', 'aria-label': '关闭会话详情' })
+  const closeButton = el('button', { type: 'button', text: '×', 'aria-label': '关闭会话详情', title: '关闭会话详情' })
   const body = el('div', { class: 'ca-workspace-body', id: domId('workspace-body'), role: 'tabpanel' })
   const status = el('p', { class: 'ca-workspace-status', role: 'status' })
   const discard = el('button', { type: 'button', text: '放弃修改并关闭', hidden: true })

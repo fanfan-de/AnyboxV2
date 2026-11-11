@@ -55,7 +55,7 @@ flowchart TD
     DO -.->|长轮询 / 回执| RemoteH["远端 harness server 的单元传输"]
 ```
 
-每个 Run 由恰好一个附着拥有：本机 harness server 经回环以 `local:computer` 提交；远端 harness server 的请求由拨出循环领取，授权字段取自投递该请求的附着，设备拥有者在消费附着码时设定的目录与工具上限在每次接纳事务里再次检查。项目绑定到一个 Computer 附着（[Projects](../sessions/projects.md)），Run 接受事务从项目绑定取 Computer 引用；Authority 侧的 Computer Operations 把它写入 scope，新声明前复核附着仍有效，远端附着的声明保留在逻辑计算机 `unit:<attachmentId>` 上，规格取附着记录中单元声明的平台与架构。组合根按 `ANYBOX_COMPUTER_UNIT` 选择形态：本机形态安装本机客户端并登记 `local:computer`，新项目默认绑定本机、也可显式绑定远端附着；远端形态没有本机 worker，新项目默认绑定 `ANYBOX_COMPUTER_ATTACHMENT`。两种形态都由 [Worker 路由](worker-router.md)提供同名服务。Computer 契约另有不经操作账本的只读查询面（stat、列目录、搜索、读取文本），Projects 与 Project Files 对远端绑定的项目经它读取，快照仍由 harness server 保存。
+每个 Run 由恰好一个附着拥有：本机 harness server 经回环以 `local:computer` 提交；远端 harness server 的请求由拨出循环领取，授权字段取自投递该请求的附着，设备拥有者在消费附着码时设定的目录与工具上限在每次接纳事务里再次检查。项目绑定到一个 Computer 附着（[Projects](../sessions/projects.md)），Run 接受事务从项目绑定取 Computer 引用；Authority 侧的 Computer Operations 把它写入 scope，新声明前复核附着仍有效，远端附着的声明保留在逻辑计算机 `unit:<attachmentId>` 上，规格取附着记录中单元声明的平台与架构。组合根始终安装惰性本机客户端并登记 `local:computer`，与多个远端附着同时存在；新项目默认绑定 harness server 所在设备，也可显式选择远端执行环境。统一由 [Worker 路由](worker-router.md)提供同名服务。环境列表与用户流程见[执行环境管理](environments.md)。Computer 契约另有不经操作账本的只读查询面（stat、列目录、搜索、读取文本），Projects 与 Project Files 对远端绑定的项目经它读取，快照仍由 harness server 保存。
 
 worker 存活时，Runtime 进程 SIGKILL 不取消已接纳命令；新 owner 查询原 receipt/result，工具结果、事件、限额和成功节点按已提交事实推进。Codex session_id 仍绑定原 worker/Run，stdin 和输出领取按 operation ID 去重。worker 自身故障且无法证明执行事实时保留 outcome-unknown，不重放；没有新恢复信封的旧 Run 继续 interrupted。显式卸载 Runtime 组件、撤销依赖及正常关闭应用仍取消并排空所属 Run；idle worker 保持独立设备服务。
 

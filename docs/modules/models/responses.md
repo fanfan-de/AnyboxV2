@@ -12,6 +12,8 @@
 
 连接使用 API 根 `baseUrl`、`auth: 'none' | 'api-key'` 与正整数 `timeoutMs`；API Key 用 Bearer 头。POST 路径为 `/responses`。连接地址禁止 URL 凭据、query 和 fragment；公共设置层还负责完整连接验证。
 
+`timeoutMs` 对模型交换表示无新原生事件的等待上限；每个已接纳的流式事件都续期，持续输出可超过该时长。首个事件及 complete 模式的完整响应仍受初始等待约束。SSE 注释不续期，响应结果到达后仍等待实际清理，见 [Models execution 流程](models.md#原生-execution-流程)。
+
 参数保存为 `{ protocolId: 'responses', formatVersion: 1, value }`。`value` 仅接受：
 
 | 字段 | 约束 |
@@ -38,7 +40,7 @@ readText 要求 completed，按 assistant 消息顺序读取 output_text 并以�
 
 JSON 与 SSE 最终都返回完整原生 response。允许原生 `completed/incomplete`；failed/cancelled/error 为失败。验证 assistant message、文本/拒绝块、唯一 `call_id`、函数名与参数字符串；完成的函数参数必须是 JSON 对象。保留未知 JSON 字段、reasoning/encrypted content、phase、搜索动作与引用，不压平为统一文本。
 
-SSE 转发原生事件给受信投影器，以 `response.completed` / `response.incomplete` 的完整 response 为权威；输出增量仅用于展示与失败诊断。终态缺失、状态不匹配及提前 `[DONE]` 为 `invalid-response`。失败终态可携带已收块形成脱敏诊断。
+SSE 转发原生事件给受信投影器，以 `response.completed` / `response.incomplete` 的完整 response 为权威；输出增量仅用于展示与失败诊断。终态缺失、状态不匹配及提前 `[DONE]` 为 `invalid-response`。失败终态、超时、取消、断连和解析失败都保留已接纳的 output 块及其文本、推理摘要、函数参数等分片，按原生 response 形状形成脱敏 diagnostic；原始失败帧不写入记录。失败诊断供宿主安全投影查看，不能提交候选上下文、恢复执行或执行参数尚未完整校验的工具调用。
 
 ## 恢复、资源与生命周期
 

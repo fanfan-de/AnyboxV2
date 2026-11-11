@@ -39,13 +39,13 @@ test('four panes may move/replace/focus at the limit, and closing collapses nest
 test('recursive minimum sizes, ratio clamping and compact fallback preserve a valid tree', () => {
   let state = splitSession(one(), ref('b'), 'a', 'right', 'columns')
   state = splitSession(state, ref('c'), 'b', 'bottom', 'rows')
-  assert.deepEqual(minimumSize(state.root), { width: 648, height: 528 })
-  assert.equal(fits(state.root, { width: 647, height: 900 }), false)
+  assert.deepEqual(minimumSize(state.root), { width: 641, height: 521 })
+  assert.equal(fits(state.root, { width: 640, height: 900 }), false)
   const size = { width: 1000, height: 700 }
   const [low, high] = ratioBounds(state.root, size)
   assert.equal(resizeSplit(state.root, 'columns', 0, size).ratio, low)
   assert.equal(resizeSplit(state.root, 'columns', 1, size).ratio, high)
-  const clamped = fitRatios({ ...state.root, ratio: 0.95 }, { width: 648, height: 528 })
+  const clamped = fitRatios({ ...state.root, ratio: 0.95 }, { width: 641, height: 521 })
   assert.equal(clamped.ratio, 0.5)
   assert.equal(clamped.second.ratio, 0.5)
   assert.equal(state.root.ratio, 0.5)

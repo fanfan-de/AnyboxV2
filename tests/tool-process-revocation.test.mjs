@@ -67,7 +67,8 @@ test('worker dependency revocation joins the next model call and yielded process
     let settled = false
     const waiting = runs.waitRun(run.id).then(value => { settled = true; return value })
     llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [{ id: 'process', name: 'codex_exec_command', arguments: {
-      cmd: process.platform === 'win32' ? nodeCommand("const fs=require('node:fs');fs.writeFileSync('pid',String(process.pid));fs.writeFileSync('started','ready');setInterval(()=>{},1000)") : "printf '%s' $$ > pid; trap 'printf stopping > stopping; sleep 0.25; printf stopped > stopped; exit' TERM; printf ready > started; while :; do sleep 1; done",
+      // A successful trap must choose its exit code explicitly; bare exit can inherit the interrupted sleep's 143 on Linux.
+      cmd: process.platform === 'win32' ? nodeCommand("const fs=require('node:fs');fs.writeFileSync('pid',String(process.pid));fs.writeFileSync('started','ready');setInterval(()=>{},1000)") : "printf '%s' $$ > pid; trap 'printf stopping > stopping; sleep 0.25; printf stopped > stopped; exit 0' TERM; printf ready > started; while :; do sleep 1; done",
       login: false, yield_time_ms: 20,
     } }] })
     llm.calls[0].done.resolve()

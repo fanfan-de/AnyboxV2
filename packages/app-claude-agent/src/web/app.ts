@@ -55,7 +55,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
   const threadCount = el('span', { class: 'ca-thread-count' })
   const menuButton = el('button', { type: 'button', class: 'ca-menu', text: '会话', 'aria-label': '打开侧栏', 'aria-expanded': 'false' })
   const title = el('strong', { class: 'ca-thread-title', text: '新会话' }), path = el('small', { class: 'ca-thread-path' }), status = el('span', { class: 'ca-run-status', role: 'status' })
-  const noticeText = el('span'), noticeClose = el('button', { type: 'button', class: 'ca-notice-close', text: '×', 'aria-label': '关闭提示' })
+  const noticeText = el('span'), noticeClose = el('button', { type: 'button', class: 'ca-notice-close', text: '×', 'aria-label': '关闭提示', title: '关闭提示' })
   const notice = el('div', { class: 'ca-notice notice', role: 'alert', hidden: true }, noticeText, noticeClose)
   const environment = el('p', { class: 'ca-notice ca-environment notice', role: 'alert', hidden: true })
   const transcript = el('div', { class: 'ca-transcript', 'aria-label': '会话内容', tabindex: '0' })

@@ -471,7 +471,7 @@ Agent 可以在项目内直接写可运行的纯界面 JavaScript、清单和资
 
 每个版本删除成功后提交 removed/remove 操作 completed；只有所有目标都满足才 completeRemoval 原批次。回收失败关闭失败角色后进入空管理客户端供显式恢复，保留已成功和未确认的事实。GET/inspect 不重放删除；activation resume 使用原 ID 重新保护及交接，不重新发起未知卸载。默认保留业务 SQLite、Models 配置、Vault、worker 账本/凭据、项目、图片、Claude 环境及远端实例，不提供 delete-data 开关。
 
-“我的应用”及在线 `anybox-host uninstall <appId> --endpoint <显式回环origin> --request-id <id>` 已接入该流程。所有页面只在原 remove 批次 completed 后按 appId 去重清除对应 workspace tabs，并 replace 已卸载活动路由后 reload；其他应用顺序和路由保持。重启核对旧记录还要求当前全部安装 removed、selected/pending 为空，历史卸载不能误清重新安装应用的位置。回收未完成、独立占用或待恢复均保留页面位置且明确尚未卸载。完整接口和测试见[生效与卸载手册](modules/package-management/activation.md#d15-本机卸载与代码回收)。
+“应用管理”及在线 `anybox-host uninstall <appId> --endpoint <显式回环origin> --request-id <id>` 已接入该流程。所有页面只在原 remove 批次 completed 后按 appId 去重清除对应 workspace tabs，并 replace 已卸载活动路由后 reload；其他应用顺序和路由保持。重启核对旧记录还要求当前全部安装 removed、selected/pending 为空，历史卸载不能误清重新安装应用的位置。回收未完成、独立占用或待恢复均保留页面位置且明确尚未卸载。完整接口和测试见[生效与卸载手册](modules/package-management/activation.md#d15-本机卸载与代码回收)。
 
 ## 7 安装与版本激活流程
 
@@ -545,7 +545,7 @@ API 不接收任意下载 URL、服务端磁盘路径或执行命令。桌面用
 
 首期远端设备安装通过其本机 CLI 或管理入口执行，客户端不提供一键远端推送。D1.3 已提供 `anybox-host install <file> --directory <root> --trust <policy> --request-id <id>` 及 `operations`、`installations`、`cancel`、`recover`；文件路径只在运行 CLI 的设备解析，离线取得同一单写所有权，运行中的管理者占用时拒绝。D1.4 在线 CLI `apply --endpoint <显式回环origin> --request-id <id> [--app <id> ...]` 和 `activation <id> --endpoint <origin> [--action inspect|resume|cancel]` 调用现有管理者，不另开写入者。它只接受 HTTP 127.0.0.1/[::1] 的根 origin，拒绝远端、凭据、路径和重定向；一次请求后只观察原 ID，未知结果不重发 mutation。D1.5 在线 `uninstall <appId> --endpoint <origin> --request-id <id>` 复用相同 prepare/commit/观察流程，恢复沿用 activation 原 ID；默认保留数据，没有离线删除或远端推送。旧默认组合命令与帮助保持兼容。
 
-“我的应用”继续采用宿主管理浮层，增加“已安装”“可安装”“从文件安装”，保留当前应用界面和草稿。应用行分别显示版本、运行状态、待生效及实际阻塞原因；下载失败不覆盖旧版运行状态。未安装应用不占据左侧工作应用入口；安装并激活目录后才出现入口。所有界面关闭时仍保留现有空白挂载区域。
+“应用管理”从宿主悬浮菜单进入，使用独立原生 dialog，保留当前应用挂载和草稿。当前提供已安装版本、待生效与实际阻塞原因，“安装应用”按需展开本地文件夹及归档选择；后续在线目录增加可安装内容，下载失败不覆盖旧版运行状态。未安装应用不占据悬浮菜单应用入口；安装并激活目录后才出现入口。所有界面关闭时仍保留现有空白挂载区域和悬浮菜单。
 
 更新界面显示会重启的本机服务、受影响应用和阻塞工作；用户未保存的内容阻止重载。目录不可用时，已安装应用和本地文件安装继续可用。目录缓存只提供发现信息，不承担安装事实或代码信任。
 

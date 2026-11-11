@@ -61,18 +61,24 @@ test('unaccepted older pending submissions require an explicit model selection b
   f.controller.detach()
 })
 
-test('provisional model text is bounded, never persisted, and cleared by terminal reconciliation', async () => {
+test('provisional model text stays out of submissions and is replaced by terminal diagnostics', async () => {
   const f = fixture(); await f.load(); await f.controller.setModel('a'); await f.controller.refresh()
   f.controller.setDraft('hello'); await f.controller.submit(); await f.controller.refresh()
   f.controller.protocolView({ envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'responses', sessionId: 's', runId: 'r', viewRevision: 1, status: 'provisional', exchanges: [exchange('e', 'x'.repeat(65_536))] })
   assert.equal(f.controller.snapshot().views.get('r').exchanges[0].blocks[0].content[0].text.length, 65_536)
   assert.equal(f.pending.get('s'), undefined)
+  assert.equal(JSON.stringify(f.writes).includes('x'.repeat(65_536)), false)
+  f.runs[0].protocolBinding = { protocolId: 'responses', viewSchemaVersion: 2 }
+  const committed = { envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'responses', sessionId: 's', runId: 'r',
+    viewRevision: 2, status: 'committed', exchanges: [{ ...exchange('e', 'Retained partial answer'),
+      nativeState: { type: 'responses.state', diagnostic: true, partial: true } }] }
+  f.views.set('r', committed)
   f.runs[0].status = 'failed'; f.runs[0].revision++
   await f.controller.refresh()
-  assert.equal(f.controller.snapshot().views.size, 0)
+  assert.deepEqual(f.controller.snapshot().views.get('r'), committed)
   assert.match(f.controller.snapshot().notice, /运行失败/)
   f.controller.protocolView({ envelopeVersion: 1, viewSchemaVersion: 2, protocolId: 'responses', sessionId: 's', runId: 'r', viewRevision: 2, status: 'provisional', exchanges: [] })
-  assert.equal(f.controller.snapshot().views.size, 0)
+  assert.deepEqual(f.controller.snapshot().views.get('r'), committed)
   f.controller.detach()
 })
 

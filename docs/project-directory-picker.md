@@ -4,18 +4,24 @@
 
 ## 归属与权限
 
-点击“添加项目”时固定目标设备。组合启动器确认 `localInstanceId` 匹配且客户端平台支持原生选择器时，直接打开系统目录窗口；用户确认后立即向该固定目标登记路径，取消则结束本次流程。远程设备、本机身份未确认或原生能力检查未确认可用时，打开应用内目录对话框。文件系统操作发生在目标 harness server，浏览器只展示目录 DTO；应用内浏览的默认主目录由执行宿主传入 `node:os.homedir()`，不读取客户端主目录来推断远端路径。`HarnessServerCoreOptions.projectDirectoryHome` 可供嵌入宿主和测试显式配置；未配置的旧嵌入调用继续登记项目，但不提供目录浏览。
+点击“添加项目”时固定所选 harness server 的连接与实例，并显示执行环境选择。默认是该 harness server 所在设备的本机环境，多个远端环境可以同时存在；环境列表读取失败会保留错误供重试，不静默按本机继续。选择环境只影响新项目，本轮路径登记始终使用捕获的连接与环境，既有项目、Session 与 Run 不改绑。
 
-Projects 的内部目录提供方拥有浏览会话、目录句柄、扫描调度、子目录创建和过期回收，不注册额外 Nya 服务或创建数据库。浏览、新建文件夹和取消不登记项目；系统目录窗口确认或应用内“选择当前文件夹”才调用原有 `POST /projects {path}`。原生选择器只返回路径，登记由浏览器启动器使用已固定的目标完成，不再打开应用内对话框二次确认。Projects 再次 realpath、校验目录并按规范路径去重，目录别名继续复用同一项目 ID。
+本机环境提供应用内目录浏览、单层创建，以及身份与平台能力确认后可用的“系统选择文件夹”入口。文件系统操作发生在 harness server 所在设备，应用内主目录由执行宿主传入 `node:os.homedir()`；不读取浏览器或客户端主目录推断服务端路径。`HarnessServerCoreOptions.projectDirectoryHome` 可供嵌入宿主和测试显式配置，未配置时仍可登记项目，但没有目录浏览。
+
+选择远端环境后只显示该环境上的已有目录绝对路径输入，不请求本机目录浏览、创建或系统目录窗口。路径由对应 worker 按自己的操作系统、目录授权与真实文件系统解析；Authority 不按自己的平台解释远端路径。待批准与已撤销环境不可选择，离线环境明确显示状态，登记失败保留选择与输入，不向替代环境重试。
+
+Projects 的内部目录提供方拥有本机浏览会话、目录句柄、扫描调度、子目录创建和过期回收，不注册额外 Nya 服务或创建数据库。浏览、新建文件夹和取消不登记项目；确认选择才调用 `POST /projects {path, computerAttachmentId}`。Projects 按目标环境校验规范路径，并按“规范路径＋环境附着”去重。
 
 权限以 harness server 进程的操作系统账户为准。设备令牌不是 root 权限，不自动提权或更改文件权限。项目目录是工具运行的相对路径基准，不是文件系统沙箱。应用内目录选择可浏览已有目录，并在已经成功加载的当前目录下新建一个子文件夹；不删除、移动或读取文件内容。
 
 ## API v1 与公开 DTO
 
-认证后的 `GET /api/v1/instance` 在实际支持浏览时增加字符串能力 `projects.browse`，支持新建子目录时另声明 `projects.create-directory`，不改变 `apiVersion: 1`。以下接口仍要求 Bearer 和期望 `X-Anybox-Instance-Id`；浏览会话绑定当前认证调用方，不能使用另一令牌的会话。
+认证后的 `GET /api/v1/instance` 声明 `computer-environments` 环境列表能力；在实际支持本机浏览时增加字符串能力 `projects.browse`，支持新建子目录时另声明 `projects.create-directory`，不改变 `apiVersion: 1`。以下接口仍要求 Bearer 和期望 `X-Anybox-Instance-Id`；浏览会话绑定当前认证调用方，不能使用另一令牌的会话。
 
 | 方法与路径 | JSON 输入 | 结果 |
 | --- | --- | --- |
+| `GET /api/v1/apps/agent/computer-environments` | 无 | 默认环境与所有 Computer 环境的来源、授权状态及连接状态；纯读取不启动 worker |
+| `POST /api/v1/projects` | `{path,computerAttachmentId?}` | 显式环境登记，省略绑定始终为本机 |
 | `POST /api/v1/projects/directories/browse` | `{action:"open",path?,query?,showHidden?}` | `{browseId,homePath}`；只预留会话，不打开目录句柄 |
 | 同上 | `{action:"page",browseId,page}` | `DirectoryPage`；首页为 0，后续使用返回的 nextPage |
 | `POST /api/v1/projects/directories/create` | `{browseId,name}` | 201 与 `{path}`；在该会话已加载的规范目录下新建一个子文件夹 |
@@ -43,9 +49,9 @@ Projects Effect 停止准入、停止计时器、取消浏览并等待全部在�
 
 ## 客户端与连接绑定
 
-`project-directory-client.ts` 的启动器管理原生优先的流程、取消和实际退出等待，目录控制器管理应用内浏览状态和请求；`project-directory-view.ts` 管理 DOM、键盘和焦点。两者是客户端实现，不是 Nya 组件。HarnessClient 只负责网络与固定目标，Workspace 沿用现有登记成功后的项目导航刷新。
+`project-directory-client.ts` 管理固定环境的目录控制器、原生选择调用、取消和实际退出等待；`project-directory-view.ts` 管理 DOM、键盘和焦点。两者是客户端实现，不是 Nya 组件。HarnessClient 只负责网络与固定目标，Workspace 沿用现有登记成功后的项目导航刷新。
 
-打开时固定 `{connectionId,instanceId,revision,name}`。选择流程向本机网关发送 `X-Anybox-Expected-Instance-Id` 与 `X-Anybox-Connection-Revision`；网关使用同一次获取的连接租约比较后才允许上游请求。浏览器头不转发给 harness server，Bearer 与执行端实例头仍由网关生成。连接配置变化返回 `connection-changed`，不会向新地址登记原路径。旧客户端不发送这对头的请求继续兼容。
+打开时固定 `{connectionId,instanceId,revision,name}`，选择环境后再固定 `environmentId`。选择流程向本机网关发送 `X-Anybox-Expected-Instance-Id` 与 `X-Anybox-Connection-Revision`；网关使用同一次获取的连接租约比较后才允许上游请求。浏览器头不转发给 harness server，Bearer 与执行端实例头仍由网关生成。连接配置变化返回 `connection-changed`，不会向新地址登记原路径。旧客户端不发送这对头的请求继续兼容。
 
 对话框提供路径编辑、面包屑、上一级、主目录、筛选、隐藏目录开关、分页、重试、取消和“选择当前文件夹”。单击聚焦目录，双击或 Enter 进入；方向键、Home/End 移动焦点，Alt+↑ 返回父目录，路径栏 Enter 跳转，Escape 关闭并恢复触发按钮焦点。路径尚未跳转、导航失败、加载或身份失效时不能确认旧目录。失败保留输入、位置及筛选条件。
 
@@ -53,11 +59,11 @@ Projects Effect 停止准入、停止计时器、取消浏览并等待全部在�
 
 名称输入获得初始焦点，Escape 优先取消未提交的新建表单；创建失败后焦点回到名称，成功进入后聚焦“选择当前文件夹”。创建完成后的目录读取失败只重试读取，不重复创建。
 
-每次切目录或关闭均中止旧请求，同时使用请求代号忽略迟到响应。本地位置仅保存最后成功的规范路径，按 instanceId 隔离，存储失败退回内存；浏览结果和请求状态不跨实例复用。保存位置失效时明确提示并允许回主目录。
+每次切目录或关闭均中止旧请求，同时使用请求代号忽略迟到响应。本地位置仅保存最后成功的规范路径，按 instanceId 与 environmentId 隔离，存储失败退回内存；浏览结果和请求状态不跨实例复用。保存位置失效时明确提示并允许回主目录。
 
-只有组合启动器确认 localInstanceId 匹配且平台支持的实例，才直接使用系统目录窗口，不按 hostname 判断本机。原生能力检查未确认可用时采用应用内流程；窗口已启动后的失败或路径登记失败通过工作区通知显示，不自动打开应用内对话框、不切换连接或向其他设备重试。系统窗口用户取消返回空结果，不登记项目，也不打开应用内对话框。界面停用或关闭时取消启动器并等待其本轮操作退出，忽略迟到结果；应用内浏览继续沿用自己的关闭和会话释放规则。
+只有选中本机环境，且 `localInstanceId` 与所选 harness server 身份匹配、平台能力明确支持时，才提供系统目录窗口；不按 hostname 推断身份。系统窗口从环境对话框明确触发，确认后仍向捕获的同一连接、本机环境登记；用户取消不登记。选择失败不会改变环境或调用另一设备。切换环境和关闭界面先取消旧控制器与原生调用，等待已接纳操作退出并忽略迟到响应。
 
-缺少 `projects.browse` 的 API v1 实例显示升级说明和应用内手动绝对路径输入；缺少 `projects.create-directory` 时隐藏“新建文件夹”，已有目录浏览与登记继续可用。认证失败、连接中断、实例不匹配不会伪装成旧版本。真实目录浏览及新建能力均需要客户端、网关与目标 harness server 升级，不涉及数据迁移。
+缺少环境列表能力的实例显示升级错误，不猜测默认 Computer。缺少 `projects.browse` 的 API v1 实例在本机选择中显示升级说明和应用内手动绝对路径输入；缺少 `projects.create-directory` 时隐藏“新建文件夹”，已有目录浏览与登记继续可用。认证失败、连接中断、实例不匹配不会伪装成旧版本。真实目录浏览及新建能力均需要客户端、网关与目标 harness server 升级，不涉及数据迁移。
 
 ## 验证
 
@@ -81,7 +87,7 @@ Projects Effect 停止准入、停止计时器、取消浏览并等待全部在�
 
 ### 2026-09-29 浏览器验收记录
 
-以下保留当时的验收事实，其中“原生快捷入口返回应用内确认”是此前流程；当前本机流程按上文直接使用系统目录窗口确认登记。
+以下保留当时的验收事实，其中“原生快捷入口返回应用内确认”是此前流程；当前流程按上文先选择执行环境，再明确触发本机系统目录窗口。
 
 最终根 `npm run check` 通过：669 项测试，656 项通过、13 项按已有平台或凭据门控跳过、0 失败；`git diff --check` 及受影响文档的相对链接检查通过。
 

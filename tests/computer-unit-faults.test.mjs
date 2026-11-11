@@ -73,7 +73,7 @@ async function harnessWithUnit(t, { dialoutFetch, expectCleanupFailure = false, 
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
   await root.installComponent(models.component())
   await root.installComponent(createHostAccessComponent('fault harness'))
-  const core = await installHarnessServerCore(root, { agents, localWorkerDirectory: join(directory, 'never-started-local-worker'), computerUnit: { kind: 'local', claimTimeoutMs: 1_500, replyTimeoutMs: replyTimeoutMs ?? 2_500 } })
+  const core = await installHarnessServerCore(root, { agents, localWorkerDirectory: join(directory, 'never-started-local-worker'), computerTransport: { claimTimeoutMs: 1_500, replyTimeoutMs: replyTimeoutMs ?? 2_500 } })
   const httpFiber = root.installComponent(createFixtureApplicationApiComponent(root, core.api.listAgents(), 0, { authenticated: true })); await httpFiber
   const web = root.get(hostHttpServiceKey)
   const { memory, openEntry } = memoryEntries()

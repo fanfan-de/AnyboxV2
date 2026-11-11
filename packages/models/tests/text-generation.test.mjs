@@ -133,7 +133,7 @@ for (const cancelBy of ['cancel', 'signal', 'timeout', 'unregister', 'root']) te
     await f.add({ timeoutMs: cancelBy === 'timeout' ? 10 : 10000 }); protocol.next()
     const controller = new AbortController(), operation = f.models.generateText({ modelId: 'model', input: 'x', signal: controller.signal })
     await tick(); const call = protocol.calls[0], state = observe(operation.result), done = observe(operation.done)
-    call.result.resolve(complete('late output'))
+    if (cancelBy !== 'timeout') call.result.resolve(complete('late output'))
     if (cancelBy === 'cancel') { operation.cancel(); operation.cancel() }
     else if (cancelBy === 'signal') controller.abort()
     else if (cancelBy === 'unregister') closing = f.registrations[0].unregister()
@@ -142,6 +142,7 @@ for (const cancelBy of ['cancel', 'signal', 'timeout', 'unregister', 'root']) te
     await call.aborted.promise; await tick()
     assert.equal(state.settled, false); assert.equal(done.settled, false)
     if (closingState) assert.equal(closingState.settled, false)
+    if (cancelBy === 'timeout') call.result.resolve(complete('late output'))
     call.done.resolve()
     await assert.rejects(operation.result, code(cancelBy === 'timeout' ? 'timeout' : 'cancelled')); await operation.done; await closing
     assert.equal(call.cancellations.length, 1)

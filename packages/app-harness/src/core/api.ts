@@ -31,6 +31,8 @@ export interface ProjectView {
   readonly path: string
   readonly name: string
   readonly available: boolean
+  /** Present on current project responses; older servers and unavailable workspace placeholders may omit it. */
+  readonly computerAttachmentId?: string
 }
 export interface RunView {
   readonly modelId: string | null

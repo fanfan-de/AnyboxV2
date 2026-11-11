@@ -32,7 +32,7 @@ try {
   await root.installComponent(models.component())
   await root.installComponent(createHostAccessComponent('fault harness'))
   const access = root.get(hostAccessServiceKey)
-  core = await installHarnessServerCore(root, { agents, localWorkerDirectory: join(settings.directory, 'never-started-local-worker'), computerUnit: { kind: 'local', claimTimeoutMs: 3_000 } })
+  core = await installHarnessServerCore(root, { agents, localWorkerDirectory: join(settings.directory, 'never-started-local-worker'), computerTransport: { claimTimeoutMs: 3_000 } })
   const httpFiber = root.installComponent(createFixtureApplicationApiComponent(root, core.api.listAgents(), settings.port, { authenticated: true })); await httpFiber
   const web = root.get(hostHttpServiceKey), api = core.api, sessions = root.get('harness.sessions'), records = root.get('harness.session-runs')
   let runId = settings.runId

@@ -148,7 +148,7 @@ test('healthy list updates are observable before a stalled device responds; late
   off(); api.dispose()
 })
 
-test('a local Authority with a remote-default Computer never opens the native directory shortcut', async t => {
+test('an explicitly remote environment never opens the native directory shortcut', async t => {
   const calls = []
   t.mock.method(globalThis, 'fetch', async url => {
     calls.push(url)
@@ -158,7 +158,7 @@ test('a local Authority with a remote-default Computer never opens the native di
   })
   const api = createHarnessClient(connections, 'a')
   try {
-    const target = api.directoryTarget('a')
+    const target = api.directoryTarget('a').forEnvironment({ environmentId: 'remote-unit', origin: 'remote', state: 'approved', unitId: 'worker', platform: 'linux', architecture: 'x64', connectionState: 'connected' })
     assert.equal(await target.nativeAvailable(new AbortController().signal), false)
     await assert.rejects(target.pickNative(new AbortController().signal), { code: 'picker-unavailable' })
     assert.ok(!calls.some(url => url.endsWith('/pick')))
@@ -243,4 +243,58 @@ test('partial device lists preserve a pending project route while healthy projec
   assert.equal(waitForProjectSnapshot(scopedId(b, 'absent'), snapshots.at(-1), false), true)
   assert.equal(waitForProjectSnapshot(scopedId(b, 'absent'), snapshots.at(-1), true), false, 'only a settled aggregate may resolve an absent target')
   unsubscribe(); api.dispose()
+})
+
+
+const computerEnvironments = { defaultEnvironmentId: 'local:computer', environments: [
+  { environmentId: 'local:computer', origin: 'local', state: 'approved', unitId: 'computer-local', platform: 'linux', architecture: 'x64', connectionState: 'on-demand' },
+  { environmentId: 'remote-one', origin: 'remote', state: 'approved', unitId: 'worker-one', platform: 'win32', architecture: 'x64', connectionState: 'offline' },
+  { environmentId: 'remote-two', origin: 'remote', state: 'approved', unitId: 'worker-two', platform: 'linux', architecture: 'arm64', connectionState: 'connected' },
+] }
+
+test('environment discovery and registration retain the captured harness identity and explicit environment', async t => {
+  const calls = [], input = connections.map(value => ({ ...value }))
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options })
+    if (url.endsWith('/computer-environments')) return Response.json(computerEnvironments)
+    if (url.endsWith('/projects')) {
+      const body = JSON.parse(options.body)
+      return Response.json({ id: body.computerAttachmentId, name: 'same', path: body.path, computerAttachmentId: body.computerAttachmentId, available: true })
+    }
+    throw new Error(`unexpected request ${url}`)
+  })
+  const api = createHarnessClient(input, 'a')
+  try {
+    const captured = api.directoryTarget('b'), signal = new AbortController().signal
+    input[1].instanceId = a; input[1].revision = 999
+    const discovered = await captured.environments(signal)
+    assert.deepEqual(discovered, computerEnvironments, 'environment identities are local to the captured harness and must not be resource-scoped')
+    const first = captured.forEnvironment(discovered.environments[1]), second = captured.forEnvironment(discovered.environments[2])
+    const firstResult = await first.register('/same/path', signal)
+    const secondResult = await second.register('/same/path', signal)
+    assert.equal(firstResult.id, scopedId(b, 'remote-one'))
+    assert.equal(secondResult.id, scopedId(b, 'remote-two'))
+    assert.equal(firstResult.computerAttachmentId, 'remote-one')
+    assert.deepEqual(calls.filter(call => call.url.endsWith('/projects')).map(call => JSON.parse(call.options.body)), [
+      { path: '/same/path', computerAttachmentId: 'remote-one' }, { path: '/same/path', computerAttachmentId: 'remote-two' },
+    ])
+    for (const call of calls) {
+      assert.ok(call.url.startsWith('/api/connections/b/v1/'))
+      assert.equal(call.options.headers['X-Anybox-Expected-Instance-Id'], b)
+      assert.equal(call.options.headers['X-Anybox-Connection-Revision'], '1')
+    }
+  } finally { await api.dispose() }
+})
+
+test('a failed environment list remains failed and never registers a project on the default environment', async t => {
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, options })
+    return Response.json({ error: { code: 'connection-unavailable' } }, { status: 503 })
+  })
+  const api = createHarnessClient(connections, 'a')
+  try {
+    await assert.rejects(api.directoryTarget().environments(new AbortController().signal), { code: 'connection-unavailable' })
+    assert.deepEqual(calls.map(call => call.url), ['/api/connections/a/v1/computer-environments'])
+  } finally { await api.dispose() }
 })

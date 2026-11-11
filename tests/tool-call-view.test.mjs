@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { summarizeToolRequest, latestRunPlan, toolSelectionDisplayName } from '../packages/app-harness/dist/web/tool-call-view.js'
+import { summarizeToolRequest, latestRunPlan } from '../packages/app-harness/dist/web/tool-call-view.js'
 
 const request = (name = 'bash', arguments_ = '{"command":"requested-command"}') => ({ id: 'request', name, arguments: arguments_ })
 const bash = (state, extra = {}) => ({ id: 'call', name: 'bash', state, command: 'real-command', ...extra })
@@ -28,8 +28,6 @@ test('library cards summarize observed process exits and actual partial file cha
     result: { status: 'partial', changes: [{ kind: 'updated', path: '/p/a' }], pending: [{ kind: 'update', path: '/p/b' }], diagnostic: { code: 'commit-failed', message: 'Write failed' } } }
   const summary = summarizeToolRequest(request(partial.name), partial)
   assert.equal(summary.preview, '已变更 1 个文件，1 项未完成'); assert.equal(summary.shortReason, 'commit-failed：Write failed')
-  assert.equal(toolSelectionDisplayName('claude-code.Read'), 'Claude Code · Read')
-  assert.equal(toolSelectionDisplayName('codex.update_plan'), 'Codex · update_plan')
 })
 
 test('latest Run plans use only committed full-list observations and a later empty list clears them', () => {

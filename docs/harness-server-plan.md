@@ -2,6 +2,11 @@
 
 状态：2026-10-14。本分支直接使用相邻 NyaCore，已完成原生协议执行迁移以及 H0 资源边界、H1 闭环、持久会话树、Prompt 管理、Bash/Apply Patch 工具循环、通用 Models 和本机 Web 接入；当前已接入 Computer 本机资源及独立 worker、工具等待重启接续，以及可组合单元 U0 的附着登记。下方日期验收记录描述各次交付，当前行为以本节与[组件说明](./harness-server-components.md)为准。
 
+
+## Computer 统一执行环境（当前实现）
+
+Computer 的全局 local/remote 形态已取消。本机 `local:computer` 与多个远端附着同时存在，新项目默认 harness server 所在的本机环境；项目与 Run 的历史绑定保持不变。新增只读 `GET /computer-environments`，列表不启动 worker；Web 设置管理环境状态与附着，新增项目可选环境，本机浏览与远端绝对路径输入分开。旧非空 `ANYBOX_COMPUTER_UNIT` / `ANYBOX_COMPUTER_ATTACHMENT` 明确拒绝，部署需删除并按项目选择。契约和验证入口见[执行环境管理](modules/computers/environments.md)。下方带日期的 U1 验收记录保留当时事实，其中全局形态与 Web 尚未提供环境选择的描述已被本节取代。
+
 ## 当前基线
 
 [通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderConnection 管连接和密钥引用，ModelConfiguration 管执行版本、能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、Anthropic Messages、标准 Chat Completions 和 Gemini Interactions 四种协议可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。

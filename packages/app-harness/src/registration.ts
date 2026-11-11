@@ -12,7 +12,7 @@ import { directoryPickerCapabilityId, directoryPickerServiceKey } from '@anybox/
 import type { DirectoryPickerPort } from '@anybox/directory-picker'
 export { harnessDefinition } from './definition.js'
 export const harnessServerHttp = Object.freeze({ service: harnessServerHttpServiceKey,
-  capabilities: Object.freeze(['projects.path', 'images', 'project-files', 'sse', 'units']),
+  capabilities: Object.freeze(['projects.path', 'images', 'project-files', 'sse', 'units', 'computer-environments']),
   legacyRoutes: ['models', 'prompts', 'tools', 'agents', 'projects', 'sessions', 'runs', 'changes'].map(path => ({ prefix: `/api/v1/${path}`, stripPrefix: '/api/v1' })),
   /** Remote units authenticate with their own credential; device tokens are never accepted here. */
   selfAuthenticated: Object.freeze(['/units/unit']) })

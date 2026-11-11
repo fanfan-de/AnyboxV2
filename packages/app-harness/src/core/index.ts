@@ -32,17 +32,20 @@ import { createWorkspacesComponent } from './workspace/component.js'
 import { createComputerOperationsComponent } from './computer/operations-component.js'
 import { listTools } from './tool/catalog.js'
 import { createUnitAttachmentsComponent } from './unit/component.js'
+import { projectComputerEnvironments } from './computer/environments.js'
+import type { ComputerEnvironments } from './computer/environments.js'
+import { unitTransportServiceKey } from './unit/transport-component.js'
+import type { UnitTransportPort } from './unit/transport-component.js'
 import { createUnitTransportComponent } from './unit/transport-component.js'
 import { unitAttachmentsServiceKey } from './unit/port.js'
 import type { AttachCodeInput, UnitAttachment, UnitAttachmentsPort } from './unit/port.js'
 import { localComputerUnitId, localModelsUnitId } from './unit/domain.js'
 
-/** Which Computer unit this composition serves: its own worker over loopback, or one remote attachment through unit dial-out. */
-export type ComputerUnitSelection = { readonly kind: 'local'; readonly claimTimeoutMs?: number; readonly replyTimeoutMs?: number } | {
-  /** No local worker; projects bind to remote attachments, this one by default. */
-  readonly kind: 'remote'; readonly attachmentId: string
-  /** How long admission waits for a unit to claim a request before reporting it unavailable; transport defaults apply when omitted. */
-  readonly claimTimeoutMs?: number; readonly replyTimeoutMs?: number
+/** Reject the removed selector for JavaScript consumers before any component or storage is installed. */
+export function validateComputerEnvironmentOptions(options: object): void {
+  if ('computerUnit' in options && options.computerUnit !== undefined) {
+    throw new TypeError("computerUnit is no longer supported; remove it and select the Computer environment per project. The default is this harness server's local environment.")
+  }
 }
 
 /** The root must provide Models, local storage and image assets before the harness server core starts. */
@@ -52,8 +55,8 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly localWorkerDirectory?: string
   /** Optional package role adapter; standalone assembly retains its direct worker entry. */
   readonly localWorkerLaunch?: ComputerWorkerOptions['launch']
-  /** Defaults to the local worker. Changing the form requires reassembling the harness server. */
-  readonly computerUnit?: ComputerUnitSelection
+  /** Request windows for attached Computer environments; the local environment always remains available by default. */
+  readonly computerTransport?: { readonly claimTimeoutMs?: number; readonly replyTimeoutMs?: number }
   /** Host-supplied default for its directory picker; omission disables browsing for embedded callers. */
   readonly projectDirectoryHome?: string
   readonly initialProjects?: readonly string[]
@@ -68,6 +71,7 @@ export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly Readonly<{ id: string }>[]
   listTools(): ReturnType<typeof listTools>
+  listComputerEnvironments(): Promise<ComputerEnvironments>
   listUnitAttachments(): Promise<readonly UnitAttachment[]>
   createUnitAttachCode(input: AttachCodeInput): Promise<{ readonly attachment: UnitAttachment; readonly code: string }>
   revokeUnitAttachment(attachmentId: string): Promise<UnitAttachment>
@@ -100,19 +104,18 @@ export function createHarnessServerPromptComponents(options: HarnessServerCoreOp
 
 /** Describes the Agent component closure; callers keep every installation on their root. */
 export function createHarnessServerAgentComponents(context: Context, options: HarnessServerCoreOptions, lifetime: HarnessServerLifetime): readonly Component<any, any>[] {
+  validateComputerEnvironmentOptions(options)
   const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
   const configuredProtocols = context.get<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
   const protocolComponents = context.get(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
-  const computerUnit = options.computerUnit ?? { kind: 'local' }
-  if (computerUnit.kind === 'remote' && (!computerUnit.attachmentId || computerUnit.attachmentId.startsWith('local:'))) throw new TypeError('remote Computer unit requires a remote attachment id')
-  // The router serves `computer.worker` and `computer.instance-provider` in both forms; only the local form has a loopback worker behind it.
-  const localWorkerComponents = computerUnit.kind === 'local' && !context.get(localComputerWorkerServiceKey)
+  const localWorkerComponents = !context.get(localComputerWorkerServiceKey)
     ? [createLocalComputerWorkerComponent({ directory: options.localWorkerDirectory ?? resolve('data/computer-worker'), ...(options.localWorkerLaunch ? { launch: options.localWorkerLaunch } : {}) })] : []
-  const workerComponents = [...localWorkerComponents, createWorkerRouterComponent({ local: computerUnit.kind === 'local', claimTimeoutMs: computerUnit.claimTimeoutMs, replyTimeoutMs: computerUnit.replyTimeoutMs })]
-  // The in-process Models component and, in the local form, this Authority's own worker attach as local units at startup.
-  const attachmentComponents = [createUnitAttachmentsComponent(inputs, { localUnits: [{ unitKind: 'models', unitId: localModelsUnitId },
-    ...(computerUnit.kind === 'local' ? [{ unitKind: 'computer' as const, unitId: localComputerUnitId }] : [])] }), createUnitTransportComponent(inputs)]
+  const workerComponents = [...localWorkerComponents, createWorkerRouterComponent(options.computerTransport)]
+  // The server's local environment always coexists with every attached remote Computer.
+  const attachmentComponents = [createUnitAttachmentsComponent(inputs, { localUnits: [
+    { unitKind: 'models', unitId: localModelsUnitId }, { unitKind: 'computer', unitId: localComputerUnitId },
+  ] }), createUnitTransportComponent(inputs)]
   // Remote-bound projects are checked through the current Computer contract; Projects stays a dependency of worker-root tools, so it resolves it per call.
   const computerQuery = (attachmentId: string, query: Parameters<ComputerWorkerPort['query']>[0]['query']) => {
     const worker = context.get<ComputerWorkerPort>(computerWorkerServiceKey)
@@ -120,8 +123,7 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     return worker.query({ attachmentId, query })
   }
   return [...protocolComponents, ...attachmentComponents, ...workerComponents,
-    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery,
-      ...(computerUnit.kind === 'remote' ? { defaultComputerAttachmentId: computerUnit.attachmentId } : {}) }),
+    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery }),
     createProjectFilesComponent(inputs),
     createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
     createSessionComponent(inputs, agents), createRunRuntimeComponent(inputs),
@@ -185,6 +187,13 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     listTools: () => {
       if (lifetime.isClosing()) throw new Error('harness server is closing')
       return listTools()
+    },
+    listComputerEnvironments: async () => {
+      const units = currentUnits(), transport = context.get<UnitTransportPort>(unitTransportServiceKey)
+      if (!transport) throw new Error('unit transport service is unavailable')
+      const attachments = await units.list()
+      return projectComputerEnvironments(attachments, { platform: process.platform, architecture: process.arch },
+        new Map(attachments.map(attachment => [attachment.attachmentId, transport.connection(attachment.attachmentId)?.connected === true])))
     },
     listUnitAttachments: () => currentUnits().list(),
     createUnitAttachCode: input => currentUnits().createAttachCode(input),
@@ -263,6 +272,7 @@ export interface HarnessServerCoreInstallation {
 
 /** Installs only harness server core components. Closing this handle leaves host-owned dependencies running. */
 export async function installHarnessServerCore(context: Context, options: HarnessServerCoreOptions): Promise<HarnessServerCoreInstallation> {
+  validateComputerEnvironmentOptions(options)
   if (!Context.is(context) || context.root !== context) throw new TypeError('application root Context required')
   const fibers: Fiber[] = [], abort = new AbortController()
   let closing = false, shutdown: Promise<void> | undefined

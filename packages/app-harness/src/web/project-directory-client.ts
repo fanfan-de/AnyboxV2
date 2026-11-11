@@ -1,7 +1,47 @@
 import type { DirectoryPage, ProjectView } from './client-types.js'
 import type { ProjectDirectoryTarget } from './harness-client.js'
+import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
 
-export interface DirectoryPositions { get(instanceId: string): string | undefined; set(instanceId: string, path: string): void }
+export interface DirectoryPositions { get(instanceId: string, environmentId?: string): string | undefined; set(instanceId: string, path: string, environmentId?: string): void }
+export const environmentLabel = (environment: ComputerEnvironment): string => environment.origin === 'local' ? '本机（默认）'
+  : `远端环境 · ${environment.platform ?? '平台待确认'}${environment.architecture ? `/${environment.architecture}` : ''} · ${environment.environmentId.slice(0, 8)}`
+export const environmentStateLabel = (environment: ComputerEnvironment): string => ({ 'on-demand': '按需启动', connected: '已连接', offline: '离线', pending: '等待附着', revoked: '已撤销' })[environment.connectionState]
+
+/** The environment list and selection belong to one captured harness connection. */
+export function createProjectEnvironmentController(target: ProjectDirectoryTarget, env: { changed(): void }) {
+  let environments: readonly ComputerEnvironment[] = [], selectedEnvironmentId: string | undefined, loading = false, error: unknown, closed = false
+  let controller: AbortController | undefined, generation = 0
+  const pending = new Set<Promise<void>>()
+  const notify = () => { if (!closed) env.changed() }
+  const failure = () => Object.assign(new Error('computer-environments-unavailable'), { code: 'computer-environments-unavailable' })
+  return {
+    initialize(): Promise<void> {
+      if (closed) return Promise.resolve()
+      controller?.abort(); const signal = (controller = new AbortController()).signal, token = ++generation
+      loading = true; error = undefined; selectedEnvironmentId = undefined; notify()
+      const task = Promise.resolve().then(() => target.environments(signal)).then((value: ComputerEnvironments) => {
+        if (closed || token !== generation) return
+        if (value.defaultEnvironmentId !== 'local:computer' || !Array.isArray(value.environments) ||
+          !value.environments.some(item => item.environmentId === value.defaultEnvironmentId && item.origin === 'local' && item.state === 'approved')) throw failure()
+        environments = Object.freeze(value.environments.map(item => Object.freeze({ ...item })))
+        selectedEnvironmentId = value.defaultEnvironmentId
+      }).catch(failure => { if (!closed && token === generation) { environments = []; error = failure } })
+        .finally(() => { pending.delete(task); if (!closed && token === generation) { loading = false; notify() } })
+      pending.add(task); return task
+    },
+    select(id: string): boolean {
+      if (closed || loading || error || !environments.some(item => item.environmentId === id && item.state === 'approved')) return false
+      selectedEnvironmentId = id; notify(); return true
+    },
+    target(): ProjectDirectoryTarget | undefined {
+      if (closed || loading || error) return undefined
+      const selected = environments.find(item => item.environmentId === selectedEnvironmentId && item.state === 'approved')
+      return selected ? target.forEnvironment(selected) : undefined
+    },
+    snapshot: () => ({ environments, selectedEnvironmentId, loading, error, closed }),
+    async close() { closed = true; generation++; controller?.abort(); await Promise.allSettled([...pending]) },
+  }
+}
 /** Native confirmation registers on the captured device; other targets use the browser. */
 export function createProjectDirectoryLauncher() {
   let disposed = false, active: { controller: AbortController; done: Promise<void> } | undefined
@@ -13,6 +53,7 @@ export function createProjectDirectoryLauncher() {
       const done = Promise.resolve().then(async () => {
         signal.throwIfAborted()
         let native = false
+        if (target.environment?.origin === 'remote') { env.browse(); return }
         try { native = await target.nativeAvailable(signal) }
         catch { signal.throwIfAborted() }
         signal.throwIfAborted()
@@ -36,13 +77,15 @@ export function createProjectDirectoryLauncher() {
 
 export function createDirectoryPositions(storage?: { getItem(key: string): string | null; setItem(key: string, value: string): void }): DirectoryPositions {
   const memory = new Map<string, string>(), prefix = 'anybox.project-directory.v1.'
+  const key = (id: string, environmentId = 'local:computer') => environmentId === 'local:computer' ? id : `${id}:${encodeURIComponent(environmentId)}`
   return {
-    get(id) {
+    get(instanceId, environmentId) {
+      const id = key(instanceId, environmentId)
       if (memory.has(id)) return memory.get(id)
       try { const value = storage?.getItem(prefix + id); if (value) { memory.set(id, value); return value } } catch { /* Private browsing may deny storage. */ }
       return undefined
     },
-    set(id, path) { memory.set(id, path); try { storage?.setItem(prefix + id, path) } catch { /* Browsing still works in memory. */ } },
+    set(instanceId, path, environmentId) { const id = key(instanceId, environmentId); memory.set(id, path); try { storage?.setItem(prefix + id, path) } catch { /* Browsing still works in memory. */ } },
   }
 }
 export interface DirectorySnapshot {
@@ -74,14 +117,17 @@ function errorCode(error: unknown): string { return error instanceof Error && 'c
 const bindingFailure = (error: unknown) => ['connection-changed', 'instance-mismatch', 'instance-unavailable', 'version-incompatible', 'client-disposed'].includes(errorCode(error))
 
 /** Browser independent state; every response belongs to one dialog and one captured instance. */
-export function createProjectDirectoryController(target: ProjectDirectoryTarget, env: {
+export function createProjectDirectoryController(inputTarget: ProjectDirectoryTarget, env: {
   positions: DirectoryPositions
   changed(): void
   selected(project: ProjectView): void
 }) {
+  const pending = new Set<Promise<unknown>>()
+  const track = <T>(promise: Promise<T>): Promise<T> => { const task = promise.finally(() => pending.delete(task)); pending.add(task); return task }
+  const target: ProjectDirectoryTarget = { ...inputTarget, api: (path, body, signal) => track(inputTarget.api(path, body, signal)), register: (path, signal) => track(inputTarget.register(path, signal)) }
   let mode: DirectorySnapshot['mode'] = 'unknown', loading = false, submitting = false, creating = false
   let creationSupported: boolean | undefined, createFormOpen = false, directoryName = '', createPath: string | undefined, createError: unknown, createNeedsRead = false
-  let pathInput = env.positions.get(target.connection.instanceId) ?? '', query = '', showHidden = false
+  let pathInput = env.positions.get(target.connection.instanceId, target.environment?.environmentId) ?? '', query = '', showHidden = false
   let homePath: string | undefined, page: DirectoryPage | undefined, error: unknown, blocked = false, closed = false
   let read: AbortController | undefined, generation = 0, inputRevision = 0, browseId: string | undefined
   let attemptedPath: string | undefined = pathInput || undefined
@@ -105,7 +151,7 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
     page = value; homePath = value.homePath
     if (inputRevision === input) pathInput = value.path
     attemptedPath = value.path
-    env.positions.set(target.connection.instanceId, value.path)
+    env.positions.set(target.connection.instanceId, value.path, target.environment?.environmentId)
   }
   async function navigate(path?: string): Promise<void> {
     if (closed || blocked || submitting || creating || mode !== 'browse') return
@@ -136,6 +182,7 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
   }
   async function initialize(): Promise<void> {
     if (closed || blocked || submitting || creating) return
+    if (target.environment?.origin === 'remote') { mode = 'manual'; creationSupported = false; loading = false; notify(); return }
     const { controller, token } = startRead()
     loading = true; error = undefined; retry = undefined; notify()
     try {
@@ -157,7 +204,7 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
     try {
       const project = await target.register(path, controller.signal)
       if (!current(token)) return
-      env.positions.set(target.connection.instanceId, project.path)
+      env.positions.set(target.connection.instanceId, project.path, target.environment?.environmentId)
       env.selected(project)
     } catch (failure) {
       if (current(token)) fail(failure, async () => {
@@ -202,6 +249,6 @@ export function createProjectDirectoryController(target: ProjectDirectoryTarget,
     next() { if (page?.nextPage !== null && page?.nextPage !== undefined) return loadPage(page.nextPage); return Promise.resolve() },
     restart() { return navigate(attemptedPath) },
     retry() { return !closed && !blocked && !loading && !submitting && !creating ? retry?.() ?? Promise.resolve() : Promise.resolve() },
-    close() { if (closed) return; closed = true; cancelRead(); release(browseId); browseId = undefined },
+    async close() { if (!closed) { closed = true; cancelRead(); release(browseId); browseId = undefined }; while (pending.size) await Promise.allSettled([...pending]) },
   }
 }

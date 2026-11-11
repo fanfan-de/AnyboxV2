@@ -13,7 +13,7 @@ node packages/host/dist/main.js apply --endpoint http://127.0.0.1:3000 \
   --request-id host-test-apply-0.1.0 --app host-test
 ```
 
-首次使用源码 CLI 前运行 `npm run build`。界面安装也可在“我的应用 → 选择文件夹”中选择 `tests/fixtures/host-test-app`，明确授信本地目录后安装，再应用更改。生效完成后手动打开 **Anybox Test**。
+首次使用源码 CLI 前运行 `npm run build`。界面安装也可从悬浮菜单进入“管理应用 → 安装应用 → 选择文件夹”，选择 `tests/fixtures/host-test-app`，明确授信本地目录后安装，再应用更改。生效完成后手动打开 **Anybox Test**。
 
 安装复制不可变快照，后续修改源码不会改变已安装版本。迭代时提升清单版本，更新界面版本及 `payload/assets.json` 的版本 URL，并使用新的请求 ID；同一版本的不同内容不能覆盖原安装。若原请求结果未知，查询原操作，不重复提交副作用。生效被其他应用的工作或页面草稿阻止时，先正常完成工作或保存草稿，再核对原操作：只有 `recovery-required` 批次使用显式恢复；尚未创建或已取消的批次使用新请求 ID 重新发起，不能跳过宿主保护。完整流程见[本地安装](modules/package-management/installation.md)及[版本生效](modules/package-management/activation.md)。
 

@@ -60,7 +60,7 @@ anybox-host install ./notes --endpoint http://127.0.0.1:3000 \
 
 `--trust-local` 仅用于显式信任本地文件夹；它不让归档、下载或其他上传自动受信。安装器为无签名目录计算文件索引，校验完整资源图并复制到宿主管理的不可变版本目录。源文件夹后续修改不会改变已经安装的代码。命令在本机读取目录，仅把快照传给明确指定的回环管理 origin，不把服务端路径交给 HTTP。在线结果不明时只观察原请求与任务，不重放上传。
 
-安装后在“我的应用”中应用更改并手动打开，也可以运行 `anybox-host apply --endpoint http://127.0.0.1:3000 --request-id notes-apply-1.0.0 --app notes`。若创建应用的 Agent 自身仍有工作或页面有草稿，现有 guard 继续阻止生效，安装保留待生效，不能为了安装自身应用而绕过退出保护。离线安装将 `--endpoint` 换成 `--directory ./data/applications`，并先停止持有该包管理根的宿主。
+安装后在“应用管理”中应用更改并手动打开，也可以运行 `anybox-host apply --endpoint http://127.0.0.1:3000 --request-id notes-apply-1.0.0 --app notes`。若创建应用的 Agent 自身仍有工作或页面有草稿，现有 guard 继续阻止生效，安装保留待生效，不能为了安装自身应用而绕过退出保护。离线安装将 `--endpoint` 换成 `--directory ./data/applications`，并先停止持有该包管理根的宿主。
 
 Agent 迭代时修改工作目录，提升 `manifest.version`，同步资源索引的版本 URL，再使用新 `request-id` 安装并应用更改。同一版本与目标的不同内容不覆盖旧安装；安装不等于把工作目录挂载为实时源码。TypeScript、JSX 和有构建步骤的框架仍需由开发者或 Agent 先生成可运行 JavaScript、界面资源和完整依赖；宿主不替应用执行 npm、编译或安装脚本。未提供 `files.json` 时，本地目录载荷统一为 0644，以保证 CLI 和浏览器导入身份一致；有可执行文件时需显式索引及一致的文件模式。第三方依赖的许可证放在 `licenses/` 中，用户数据库、密钥与个人文件不进入安装目录。
 
@@ -184,9 +184,9 @@ export async function mount(container, context): Promise<MountedApplication> {
 }
 ```
 
-外壳左侧窄条按目录顺序显示全部应用入口。窄条右侧全部由应用内部组件呈现，挂载容器从顶边开始，没有宿主标题栏、顶部应用标签栏或操作栏。应用自行提供所需标题、导航、布局和业务反馈。
+外壳以初始位于左上的悬浮小图标提供 Anybox 菜单，不占用布局行，也不常驻显示当前应用名称；当前名称在图标 title 与菜单中说明。图标可在窗口内自由拖动，位置受 8px 边界约束，单击与拖动分别处理，拖动结束不误开菜单。位置用 `sessionStorage: anybox.apps.launcher-position.v1` 记忆，resize 后重新校准；菜单跟随图标并自动调整展开方向与位置，保持可见。无论打开几个应用，宿主都不显示左侧栏或顶栏；稳定界面由当前 Anybox App 内容占满，挂载区域从 top 0 开始，宿主仅保留悬浮图标。全部宿主功能从图标展开的菜单进入：菜单按目录顺序列出全部可用应用入口，可直接切换多个已挂载界面，管理与安装进入独立 dialog。打开或关闭应用不重置图标的拖动位置。挂载区域由应用内部组件呈现，应用自行提供所需标题、导航、布局和业务反馈。
 
-每个应用最多一个已打开界面，左侧切换已有挂载使用 select。后台页面继续挂载和持有数据订阅，容器 hidden 且 inert。不要直接修改 location/history、调用 location.reload 或在后台抢焦点。setActive(false) 退出 modal 顶层、菜单和拖拽，保留编辑值；尺寸为零时不要写入布局。仅明确 open 激活可执行“打开业务目标”，select/restore/navigate 只恢复界面。canClose 同步返回能否关闭，不启动后台操作，外壳用于关闭、停止与浏览器离开保护。窄条底部“关闭界面”只等待前端 dispose，不停止后台；显式停止成功后再关闭界面。图标按钮的 title 和 aria-label 包含对应动作及应用名称。“我的应用”管理浮层承载宿主列表、状态、通知、加载失败和界面重载，不替换当前应用。
+每个应用最多一个已打开界面，悬浮菜单切换已有挂载使用 select。后台页面继续挂载和持有数据订阅，容器 hidden 且 inert，仍可从悬浮菜单切回已有挂载。不要直接修改 location/history、调用 location.reload 或在后台抢焦点。setActive(false) 退出 modal 顶层、菜单和拖拽，保留编辑值；尺寸为零时不要写入布局。仅明确 open 激活可执行“打开业务目标”，select/restore/navigate 只恢复界面。canClose 同步返回能否关闭，不启动后台操作，外壳用于关闭、停止与浏览器离开保护。悬浮菜单及应用管理行详情收纳“关闭界面”和“停止应用”；关闭只等待前端 dispose，不停止后台，显式停止成功后再关闭界面。控件的文字、title 和 aria-label 说明对应动作及应用名称。“管理应用”打开独立原生 dialog，承载宿主列表、状态、通知、加载失败、界面重载及安装管理，保留当前应用挂载及草稿；长管理内容不放在应用切换 popover 内。安装来源默认收起，点击“安装应用”才展开文件夹与应用包选择入口，选择本身不提交安装。
 
 样式限定应用容器，资源清单包含所有相对 import、模板和样式引用。运行 `npm run build` 验证图；新增入口的工厂文件不可出现在浏览器图中。入口通过同源原生 ESM 导入，不公开本地磁盘路径。
 
@@ -198,6 +198,6 @@ export async function mount(container, context): Promise<MountedApplication> {
 
 参考 `tests/helpers/test-application.mjs` 与 `tests/fixtures/application/`：直接走正式目录，拥有真实 Nya 服务、独立持久行、HTTP 和 Web 页面。运行 `node --test tests/application-host.test.mjs tests/application-workspace.test.mjs`（先 build），能力与生命周期验证另见 `tests/application-capabilities.test.mjs`、`tests/application-optional-capabilities.test.mjs`、`packages/host/tests/providers.test.mjs`、`packages/application-api/tests/lifecycle.test.mjs` 与 `tests/desktop-application-lifecycle.test.mjs`；再运行根 `npm run check`。
 
-浏览器验收用 `node tests/helpers/products-browser-host.mjs`，输出临时地址；`hold-model` / `release-model` 控制模型响应，`fail-ui` / `restore-ui` 注入并恢复临时界面加载失败，`state` 查看执行端状态，`quit` 关闭并清理。验证左侧按目录顺序显示 Anybox Harness 和 Notes，右侧从顶边开始完全由应用呈现，没有宿主标题、操作栏或顶部标签栏；通过左侧打开两者、输入草稿后往返切换，检查当前应用标记、滚动位置、分屏与后台运行。切换已有挂载不应重复启动应用或触发 open 业务目标。验证窄条底部关闭/停止按钮的 title 和 aria-label，Notes 未保存内容阻止“关闭界面”，保存后关闭只销毁前端，左侧入口仍在，重新打开持久数据仍在。打开“我的应用”只显示管理浮层，保留当前应用及草稿；加载、失败、宿主通知和重载入口均在浮层中，全部界面关闭后右侧留空。用“后台导航”验证后台路由不抢全局地址；验证上/下方向键、Home/End 只移动左侧焦点，Enter/Space 才打开或切换应用。刷新和深链接应恢复工作区，不启动已停止应用；原有 anybox.apps.workspace.v1 的 tabs 记录仍可读取。连接编辑/删除只刷新 Anybox Harness。显式停止成功关闭对应界面，忙碌停止失败保留界面。界面加载失败应提供单独重载入口，不改后台目标。
+浏览器验收用 `node tests/helpers/products-browser-host.mjs`，输出临时地址；`hold-model` / `release-model` 控制模型响应，`fail-ui` / `restore-ui` 注入并恢复临时界面加载失败，`state` 查看执行端状态，`quit` 关闭并清理。验证初始左上的悬浮图标不占布局行、不显示常驻应用名称，当前名称可从 title 与菜单读取，挂载区域从 top 0 开始；Anybox 菜单按目录列出 Anybox Harness 和 Notes。拖动图标到窗口各处和边缘，核对 8px 边界、拖动结束不误开菜单、单击仍能打开，以及菜单跟随图标调整展开方向并保持可见；刷新同一页面时核对 sessionStorage 的 anybox.apps.launcher-position.v1 位置记忆，resize 后位置应重新校准。分别验证没有、一个和多个已打开界面时都不显示宿主左侧栏或顶栏，稳定界面由当前 App 内容占满，全部宿主操作从悬浮入口进入；打开或关闭应用应保留拖动位置。输入草稿后通过悬浮菜单直接往返切换多个已挂载界面，检查当前应用标记、滚动位置、分屏与后台运行。切换已有挂载不应重复启动应用或触发 open 业务目标。验证悬浮菜单及管理行详情中关闭/停止控件的文字、title 和 aria-label，Notes 未保存内容阻止“关闭界面”，保存后关闭只销毁前端，悬浮菜单仍可重新进入且持久数据仍在。打开“管理应用”显示独立原生 dialog，保留当前应用及草稿；加载、失败、宿主通知和重载入口均在管理中，点击“安装应用”才展开安装来源。全部界面关闭后挂载区域留空，悬浮菜单仍可使用。用“后台导航”验证后台路由不抢全局地址。刷新和深链接应恢复工作区，不启动已停止应用；原有 anybox.apps.workspace.v1 的 tabs 记录仍可读取。连接编辑/删除只刷新 Anybox Harness。显式停止成功关闭对应界面，忙碌停止失败保留界面。界面加载失败应提供单独重载入口，不改后台目标。
 
 为自有组件补齐 `docs/modules/<module>/<component>.md`，记录服务、依赖、配置、数据及资源所有权、准入、取消/退出、故障兼容与测试；加入模块 README 和总导航。

@@ -13,7 +13,7 @@ export function captureOptions(options: ProtocolOptions): ProtocolOptions {
 export const connectionFields: readonly FormField[] = [
   { key: 'baseUrl', label: 'API base URL', type: 'string', required: true },
   { key: 'auth', label: 'Authentication', type: 'enum', values: ['none', 'api-key'], required: true },
-  { key: 'timeoutMs', label: 'Request timeout (ms)', type: 'number', min: 1, integer: true, required: true },
+  { key: 'timeoutMs', label: 'Response inactivity timeout (ms)', type: 'number', min: 1, integer: true, required: true },
 ];
 export const reasoningEfforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 export function object(value: unknown): Record<string, JsonValue> { if (!record(value)) throw modelsError('invalid-response'); return value as Record<string, JsonValue>; }

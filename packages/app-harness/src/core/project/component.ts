@@ -1,5 +1,5 @@
 import { realpath, stat } from 'node:fs/promises'
-import { basename, isAbsolute } from 'node:path'
+import { isAbsolute, posix, win32 } from 'node:path'
 import type { Component } from '@nya/core'
 import type { OwnedCall, RuntimeInputs } from '../contracts.js'
 import { createDirectoryBrowser } from './directory-browser.js'
@@ -42,7 +42,7 @@ export function isProjectUnavailableError(error: unknown): error is ProjectUnava
 export interface ProjectPort {
   /** Stable metadata in a caller's business transaction; never checks the filesystem. */
   getIn(reader: StorageReader, id: string): Project | undefined
-  /** Host directory UI is safe only when newly opened projects bind to this host's own Computer. */
+  /** Host directory UI selects paths only for this harness server's local execution environment. */
   readonly localDirectorySelectionSupported: boolean
   readonly directoryBrowsingSupported: boolean
   readonly directoryCreationSupported: boolean
@@ -62,10 +62,8 @@ export interface ProjectOptions {
   readonly directoryHome?: string
   /** Internal provider and clocks can be replaced for lifecycle verification. */
   readonly directoryBrowser?: Omit<DirectoryBrowserOptions, 'homePath'>
-  /** Trusted host declarations, idempotently registered on each activation; always bound to the default Computer attachment. */
+  /** Trusted host declarations, idempotently registered on each activation; always bound to the local execution environment. */
   readonly initialProjects?: readonly string[]
-  /** Binding for projects opened without an explicit attachment: the local worker, or the remote form's configured attachment. */
-  readonly defaultComputerAttachmentId?: string
   /**
    * Trusted composition-root entry to the current Computer contract's read-only query surface, resolved per call. Projects is a
    * dependency of the tools on a worker root, so it cannot inject `computer.worker` itself; without this entry remote bindings are unavailable.
@@ -124,7 +122,9 @@ async function availability(project: Project, computerQuery: ComputerQueryEntry)
 export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOptions = {}): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
 }> {
-  const defaultBinding = validateUnitId(options.defaultComputerAttachmentId ?? localComputerAttachment)
+  if ('defaultComputerAttachmentId' in options && options.defaultComputerAttachmentId !== undefined) {
+    throw new TypeError('defaultComputerAttachmentId is no longer supported; select computerAttachmentId when opening each project. The default is the local execution environment.')
+  }
   const computerQuery: ComputerQueryEntry = options.computerQuery ?? (() => Promise.reject(projectUnavailableError()))
   return {
     name: 'harness-projects',
@@ -132,8 +132,7 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
     async apply(ctx, _config, deps) {
       const db = deps[localStorageServiceKey]
       await db.migrate('projects', migrations)
-      const localDirectories = defaultBinding === localComputerAttachment
-      const directories = createDirectoryBrowser({ ...options.directoryBrowser, homePath: localDirectories ? options.directoryHome : undefined })
+      const directories = createDirectoryBrowser({ ...options.directoryBrowser, homePath: options.directoryHome })
       let accepting = true
       const pending = new Set<Promise<unknown>>()
       ctx.effect(() => async () => {
@@ -156,7 +155,7 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
           const row = reader.get('SELECT * FROM harness_projects WHERE id = ?', [id])
           return row ? stored(row) : undefined
         },
-        localDirectorySelectionSupported: localDirectories,
+        localDirectorySelectionSupported: true,
         directoryBrowsingSupported: directories.supported,
         directoryCreationSupported: directories.creationSupported,
         openDirectoryBrowse: (owner, input, signal) => directories.open(owner, input, signal),
@@ -166,18 +165,20 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
         onDirectoryBrowseRetired: listener => directories.onRetired(listener),
         openProject(path, openOptions = {}) {
           return track(async () => {
-            if (typeof path !== 'string' || !isAbsolute(path) || !path.trim()) {
+            if (typeof path !== 'string' || !path.trim() || path.length > 4096 || path.includes('\0')) {
               throw new TypeError('an absolute project directory is required')
             }
-            const binding = openOptions.computerAttachmentId === undefined ? defaultBinding : validateUnitId(openOptions.computerAttachmentId)
+            const binding = openOptions.computerAttachmentId === undefined ? localComputerAttachment : validateUnitId(openOptions.computerAttachmentId)
             let canonical: string
             if (binding === localComputerAttachment) {
+              if (!isAbsolute(path)) throw new TypeError('an absolute project directory is required')
               try {
                 canonical = await realpath(path)
                 if (!(await stat(canonical)).isDirectory()) throw projectUnavailableError()
               } catch { throw projectUnavailableError() }
             } else {
               // The directory lives on the bound unit; its own read-only query surface resolves and checks it under the attachment ceiling.
+              if (!posix.isAbsolute(path) && !win32.isAbsolute(path)) throw new TypeError('an absolute project directory is required')
               let result: ComputerQueryResult
               try { result = await computerQuery(binding, { kind: 'stat', path }) } catch { throw projectUnavailableError() }
               if (result.kind !== 'stat' || !result.directory || result.canonical === null) throw projectUnavailableError()
@@ -188,7 +189,7 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
               if (prior) return prior
               const id = inputs.newId()
               tx.execute('INSERT INTO harness_projects (id, path, computer_attachment_id, name, created_at) VALUES (?, ?, ?, ?, ?)',
-                [id, canonical, binding, basename(canonical) || canonical, inputs.now()])
+                [id, canonical, binding, (posix.isAbsolute(canonical) ? posix.basename(canonical) : win32.basename(canonical)) || canonical, inputs.now()])
               return tx.get('SELECT * FROM harness_projects WHERE id = ?', [id])!
             })
             return Object.freeze({ ...stored(row), available: true })

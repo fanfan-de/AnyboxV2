@@ -10,7 +10,7 @@
 
 回环返回的工具图片仍以 base64 内嵌在 `WorkerOperation.images` 中，Operations 校验摘要后导入本机资源组件；这是回环传输的既有形态，拨出传输改用字节通道（见[worker 拨出](worker-dialout.md)）。
 
-`control` 是设备拥有者对本机 worker 附着的控制面，经回环转发到 worker 的 `/attachments/list`、`/attachments/consume`、`/attachments/revoke`、`/attachments/permissions`：列出附着及连接状态、消费其他 harness server 的附着码并设定目录与工具上限、撤销。这些调用会按需启动 worker，因为单元必须运行才能服务远端；HTTP 层在 `/units/local-computer/attachments` 路由暴露它们。远端形态（U1 第 2 步）没有本机 worker，该服务不存在时路由返回 503。
+`control` 是设备拥有者对本机 worker 附着的控制面，经回环转发到 worker 的 `/attachments/list`、`/attachments/consume`、`/attachments/revoke`、`/attachments/permissions`：列出附着及连接状态、消费其他 harness server 的附着码并设定目录与工具上限、撤销。这些调用会按需启动 worker，因为单元必须运行才能服务远端；HTTP 层在 `/units/local-computer/attachments` 路由暴露它们。统一环境装配始终提供该本机控制服务；读取执行环境列表不调用它，也不因此启动 worker。
 
 Effect 关闭本代准入、取消本地 HTTP 并等待请求实际退出，不调用 worker shutdown，也不把已接受操作标 cancelled。启动锁等待可在观察关闭时取消；本代已生成子进程时，关闭须等待有限的启动移交或失败清理，内部启动确认不受公共 HTTP 观察取消影响。明确 `shutdown()` 请求 worker 停止准入、取消和排空实际工具，等待服务退出；这与 Runtime 换代及客户端观察关闭是不同控制意图。请求断开、超时或确认丢失只表示当前观察失败，不能证明工具未执行。
 

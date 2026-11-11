@@ -61,6 +61,155 @@ async function start(f, session, parentNodeId = null, key = 'first') {
   return f.harness.waitRun(accepted.id)
 }
 
+function nativeToolResults(protocol, request) {
+  if (protocol === 'responses') return request.input.filter(item => item.type === 'function_call_output').map(item => ({ id: item.call_id, value: JSON.parse(item.output) }))
+  if (protocol === 'anthropic-messages') return request.messages.flatMap(message => Array.isArray(message.content)
+    ? message.content.filter(item => item.type === 'tool_result').map(item => ({ id: item.tool_use_id, value: JSON.parse(item.content) })) : [])
+  if (protocol === 'gemini-interactions') return request.input.filter(item => item.type === 'function_result').map(item => ({ id: item.call_id, value: JSON.parse(item.result.map(block => block.text ?? '').join('')) }))
+  return request.messages.filter(message => message.role === 'tool').map(message => ({ id: message.tool_call_id, value: JSON.parse(message.content) }))
+}
+
+function assertRejectedResults(protocol, request, ids) {
+  const results = nativeToolResults(protocol, request).slice(-ids.length)
+  assert.deepEqual(results.map(item => item.id), ids, 'each rejected native call keeps its original result linkage')
+  for (const result of results) {
+    assert.equal(result.value.error.code, 'invalid-tool-request')
+    assert.equal(result.value.error.executed, false)
+    assert.ok(result.value.error.availableTools.includes('codex_update_plan'))
+  }
+  return results
+}
+
+for (const protocol of Object.keys(factories)) for (const invalid of ['unknown name', 'invalid arguments'])
+  test(`${protocol}: ${invalid} receives native feedback and a corrected declared tool executes without aliases`, { timeout: 15_000 }, async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-correction-')))
+    const bad = invalid === 'unknown name' ? call('rejected-call', 'update_plan', { plan: [{ step: 'Inspect the project', status: 'in_progress' }] })
+      : call('rejected-call', 'claude_code_Write', { path: 'corrected.txt', content: 'corrected content' })
+    const good = invalid === 'unknown name' ? call('corrected-call', 'codex_update_plan', bad.arguments)
+      : call('corrected-call', 'claude_code_Write', { file_path: 'corrected.txt', content: 'corrected content' })
+    const state = { secrets: new Map(), requests: [], responses: [response(protocol, [bad]), request => {
+      const [rejected] = assertRejectedResults(protocol, request, ['rejected-call'])
+      assert.equal(rejected.value.error.reason, invalid === 'unknown name' ? 'unknown-tool' : 'invalid-arguments')
+      if (invalid === 'invalid arguments') assert.equal(rejected.value.error.schema.properties.file_path.type, 'string')
+      assert.equal(existsSync(join(directory, 'corrected.txt')), false)
+      assert.match(JSON.stringify(request), /codex_update_plan/)
+      return response(protocol, [good])
+    }, request => {
+      assert.equal(nativeToolResults(protocol, request).at(-1).id, 'corrected-call')
+      return response(protocol, [], 'Corrected successfully')
+    }] }
+    let f = await open(directory, protocol, state)
+    try {
+      const session = await f.harness.createSession(f.project.id, 'assistant')
+      const finished = await start(f, session)
+      assert.equal(finished.status, 'completed', JSON.stringify(finished))
+      assert.equal(finished.output, 'Corrected successfully')
+      const events = await f.harness.getRunEvents(finished.id)
+      assert.deepEqual(events.filter(event => event.kind === 'tool-started').map(event => event.call.id), ['corrected-call'])
+      assert.equal(state.requests.length, 3)
+      if (invalid === 'invalid arguments') assert.equal(readFileSync(join(directory, 'corrected.txt'), 'utf8'), 'corrected content')
+      const records = await f.harness.getRunRecords(finished.id)
+      assert.match(JSON.stringify(records), /invalid-tool-request/)
+      assert.doesNotMatch(JSON.stringify(records), /private-key|Authorization|credentialRef/)
+      await f.close(); f = await open(directory, protocol, state)
+      if (invalid === 'invalid arguments') writeFileSync(join(directory, 'corrected.txt'), 'Changed after the original tool')
+      state.responses.push(request => {
+        const restored = nativeToolResults(protocol, request).find(item => item.id === 'rejected-call')
+        assert.equal(restored.value.error.code, 'invalid-tool-request')
+        assert.equal(restored.value.error.executed, false)
+        assert.match(JSON.stringify(request), /Corrected successfully/)
+        return response(protocol, [], 'Continued after restart')
+      })
+      const continued = await start(f, session, finished.resultNodeId, 'after-restart')
+      assert.equal(continued.status, 'completed', JSON.stringify(continued))
+      assert.deepEqual(await f.harness.getRunRecords(finished.id), records)
+      assert.equal((await f.harness.getRunEvents(continued.id)).some(event => event.kind === 'tool-started'), false)
+      if (invalid === 'invalid arguments') assert.equal(readFileSync(join(directory, 'corrected.txt'), 'utf8'), 'Changed after the original tool')
+    } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+  })
+
+for (const protocol of Object.keys(factories)) test(`${protocol}: the fourth rejected tool batch fails without unbounded model correction`, { timeout: 15_000 }, async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-correction-bound-')))
+  const state = { secrets: new Map(), requests: [], responses: Array.from({ length: 4 }, (_, index) => request => {
+    if (index) assertRejectedResults(protocol, request, [`rejected-${index - 1}`])
+    return response(protocol, [call(`rejected-${index}`, 'update_plan', { plan: [] })])
+  }) }
+  const f = await open(directory, protocol, state)
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant'), finished = await start(f, session)
+    assert.equal(finished.status, 'failed')
+    assert.equal(finished.errorCategory, 'invalid-tool-request')
+    assert.equal(finished.resultNodeId, undefined)
+    assert.equal(state.requests.length, 4)
+    assert.equal((await f.harness.getRunEvents(finished.id)).some(event => event.kind === 'tool-started'), false)
+    assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
+    assert.equal((await f.harness.getRunRecords(finished.id)).filter(record => record.kind === 'response').length, 4)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+for (const protocol of Object.keys(factories)) test(`${protocol}: successful tools do not reset the per-Run tool correction budget`, { timeout: 15_000 }, async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-correction-total-')))
+  const responses = []
+  for (let index = 0; index < 4; index++) {
+    responses.push(response(protocol, [call(`rejected-${index}`, 'update_plan', { plan: [] })]))
+    if (index < 3) responses.push(request => {
+      assertRejectedResults(protocol, request, [`rejected-${index}`])
+      return response(protocol, [call(`corrected-${index}`, 'codex_update_plan', { plan: [{ step: `Corrected step ${index}`, status: 'completed' }] })])
+    })
+  }
+  const state = { secrets: new Map(), requests: [], responses }, f = await open(directory, protocol, state)
+  try {
+    const session = await f.harness.createSession(f.project.id, 'assistant'), finished = await start(f, session)
+    assert.equal(finished.status, 'failed')
+    assert.equal(finished.errorCategory, 'invalid-tool-request')
+    assert.equal(state.requests.length, 7)
+    assert.deepEqual((await f.harness.getRunEvents(finished.id)).filter(event => event.kind === 'tool-started').map(event => event.call.id), ['corrected-0', 'corrected-1', 'corrected-2'])
+    assert.equal(finished.resultNodeId, undefined)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+for (const protocol of Object.keys(factories)) for (const identity of ['duplicate', 'overlong'])
+  test(`${protocol}: ${identity} tool identities remain fatal before correction or side effects`, { timeout: 15_000 }, async () => {
+    const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-identity-')))
+    const calls = identity === 'duplicate' ? [call('same', 'claude_code_Write', { file_path: 'never.txt', content: 'never' }), call('same', 'codex_update_plan', { plan: [] })]
+      : [call('x'.repeat(257), 'claude_code_Write', { file_path: 'never.txt', content: 'never' })]
+    const state = { secrets: new Map(), requests: [], responses: [response(protocol, calls), response(protocol, [])] }
+    const f = await open(directory, protocol, state)
+    try {
+      const session = await f.harness.createSession(f.project.id, 'assistant'), finished = await start(f, session)
+      assert.equal(finished.status, 'failed')
+      assert.equal(finished.resultNodeId, undefined)
+      assert.equal(state.requests.length, 1, 'unreliable native identities cannot be answered as linked correction results')
+      assert.equal((await f.harness.getRunEvents(finished.id)).some(event => event.kind === 'tool-started'), false)
+      assert.equal(existsSync(join(directory, 'never.txt')), false)
+    } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+  })
+
+for (const protocol of Object.keys(factories)) for (const executionFailure of ['unavailable', 'invalid-request'])
+  test(`${protocol}: an admitted ${executionFailure} execution failure is terminal and never becomes tool-request correction`, { timeout: 15_000 }, async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-execution-failure-')))
+  const state = { secrets: new Map(), requests: [], responses: [response(protocol, [call('accepted', 'claude_code_Write', { file_path: 'never.txt', content: 'never' })]), response(protocol, [])] }
+  const f = await open(directory, protocol, state)
+  try {
+    let executions = 0
+    f.root.get('tools.files').execute = () => {
+      executions++
+      writeFileSync(join(directory, 'already-written.txt'), 'The side effect happened before its result was lost')
+      const error = executionFailure === 'invalid-request' ? Object.assign(new Error('executor rejected the admitted request'), { category: 'invalid-request' })
+        : new Error('execution result unavailable')
+      return { result: Promise.reject(error), done: Promise.resolve(), cancel() {} }
+    }
+    const session = await f.harness.createSession(f.project.id, 'assistant'), finished = await start(f, session)
+    assert.equal(finished.status, 'failed')
+    assert.equal(finished.errorCategory, executionFailure === 'invalid-request' ? 'invalid-tool-request' : 'tool-unavailable')
+    assert.equal(state.requests.length, 1)
+    assert.equal(executions, 1)
+    assert.equal(readFileSync(join(directory, 'already-written.txt'), 'utf8'), 'The side effect happened before its result was lost')
+    assert.equal((await f.harness.getRunEvents(finished.id)).filter(event => event.kind === 'tool-started').length, 1)
+    assert.equal(existsSync(join(directory, 'never.txt')), false)
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
 test('Chat initial requests send the built-in Computer environment as system and preserve user prompt roles', async () => {
   const protocol = 'chat-completions', directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-chat-environment-')))
   const state = { secrets: new Map(), requests: [], responses: [response(protocol, [])] }
@@ -151,19 +300,26 @@ for (const protocol of Object.keys(factories)) for (const imageInput of [true, f
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('unselected tool anywhere in a batch rejects before the first file mutation', async () => {
-  const protocol = 'chat-completions', directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-admission-')))
+for (const protocol of Object.keys(factories)) test(`${protocol}: unselected tool feedback rejects the complete batch before the first file mutation`, async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-admission-')))
   const state = { secrets: new Map(), requests: [], responses: [response(protocol, [
     call('first', 'claude_code_Write', { file_path: 'forbidden.txt', content: 'must not exist' }),
     call('second', 'deepseek_harness_write', { file_path: 'also-forbidden.txt', content: 'must not exist' }),
-  ])] }
+  ]), request => {
+    const rejected = assertRejectedResults(protocol, request, ['first', 'second'])
+    assert.equal(rejected[0].value.error.reason, 'batch-rejected')
+    assert.equal(rejected[1].value.error.reason, 'unknown-tool')
+    assert.equal(existsSync(join(directory, 'forbidden.txt')), false)
+    assert.equal(existsSync(join(directory, 'also-forbidden.txt')), false)
+    return response(protocol, [], 'No rejected batch was executed')
+  }] }
   const f = await open(directory, protocol, state)
   try {
     const session = await f.harness.createSession(f.project.id, 'assistant')
     assert.equal(session.toolSelection.tools.length, 10)
     const finished = await start(f, session)
-    assert.equal(finished.status, 'failed')
-    assert.equal(finished.errorCategory, 'invalid-tool-request')
+    assert.equal(finished.status, 'completed', JSON.stringify(finished))
+    assert.equal(state.requests.length, 2)
     assert.equal(existsSync(join(directory, 'forbidden.txt')), false)
     assert.equal((await f.harness.getRunEvents(finished.id)).filter(event => event.kind === 'tool-started').length, 0)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }

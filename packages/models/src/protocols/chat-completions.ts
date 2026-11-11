@@ -1,4 +1,5 @@
-import { modelsError } from '../errors.js';
+import { modelsError, normalizeError } from '../errors.js';
+import { nativeDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
 import { assert } from '../domain.js';
 import type { NativeObject, NativeProtocol } from '../native-types.js';
 import type { JsonValue } from '../types.js';
@@ -104,34 +105,40 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}): Na
       return withImages(chatImages, input, (wire, signal) => request(options, { ...input, signal }, 'chat/completions', wire, async reader => {
         if (!input.request.stream) return validateResponse(await reader.json());
         let message: Record<string, JsonValue> = { role: 'assistant', content: '' }, finish: JsonValue | undefined, usage: JsonValue | undefined, completed = false;
-        const calls = new Map<number, Record<string, JsonValue>>(); let envelope: Record<string, JsonValue> = {};
-        await reader.sse(data => {
-          if (data === '[DONE]') { if (completed || finish === undefined) throw modelsError('invalid-response'); completed = true; return true; }
-          if (completed) throw modelsError('invalid-response');
-          const chunk = native(parseJson(data)); if (chunk.error !== undefined) throw modelsError('provider-failure'); input.onEvent(chunk);
-          const { choices: _choices, usage: rawUsage, ...metadata } = chunk; envelope = { ...envelope, ...metadata };
-          if (rawUsage != null) usage = rawUsage;
-          const choices = array(chunk.choices); if (choices.length > 1) throw modelsError('invalid-response'); if (!choices.length) return;
-          const choice = object(choices[0]); if (choice.index !== 0 || finish !== undefined) throw modelsError('invalid-response');
-          const delta = object(choice.delta);
-          for (const [key, value] of Object.entries(delta)) {
-            if (key === 'tool_calls') continue;
-            if (key === 'content' || key === 'refusal' || key === 'reasoning_content') { if (value != null) message[key] = string(message[key] ?? '') + string(value); }
-            else message[key] = value;
-          }
-          for (const value of delta.tool_calls === undefined ? [] : array(delta.tool_calls)) {
-            const tool = object(value), at = index(tool.index); const previous: Record<string, JsonValue> = calls.get(at) ?? { id: '', type: 'function', function: { name: '', arguments: '' } };
-            if (tool.id !== undefined) previous.id = string(previous.id) + string(tool.id);
-            const fn = tool.function === undefined ? {} : object(tool.function), old = object(previous.function);
-            previous.function = { ...old, ...fn, name: string(old.name) + string(fn.name ?? ''), arguments: string(old.arguments) + string(fn.arguments ?? '') };
-            for (const [key, item] of Object.entries(tool)) if (!['id', 'function', 'index'].includes(key)) previous[key] = item;
-            calls.set(at, previous);
-          }
-          if (choice.finish_reason != null) finish = choice.finish_reason;
-        });
-        if (!completed) throw modelsError('invalid-response');
-        if (calls.size) message = { ...message, tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, value]) => value) };
-        return validateResponse({ ...envelope, choices: [{ index: 0, message, finish_reason: finish }], ...(usage === undefined ? {} : { usage }) });
+        const calls = new Map<number, Record<string, JsonValue>>(); let envelope: Record<string, JsonValue> = {}, received = false;
+        const response = () => native({ ...envelope, choices: [{ index: 0, message: { ...message,
+          ...(calls.size ? { tool_calls: [...calls.entries()].sort(([a], [b]) => a - b).map(([, value]) => value) } : {}) },
+          ...(finish === undefined ? {} : { finish_reason: finish }) }], ...(usage === undefined ? {} : { usage }) });
+        try {
+          await reader.sse(data => {
+            if (data === '[DONE]') { if (completed || finish === undefined) throw modelsError('invalid-response'); completed = true; return true; }
+            if (completed) throw modelsError('invalid-response');
+            const chunk = native(parseJson(data)); if (chunk.error !== undefined) throw modelsError('provider-failure'); input.onEvent(chunk); received = true;
+            const { choices: _choices, usage: rawUsage, ...metadata } = chunk; envelope = { ...envelope, ...metadata };
+            if (rawUsage != null) usage = rawUsage;
+            const choices = array(chunk.choices); if (choices.length > 1) throw modelsError('invalid-response'); if (!choices.length) return;
+            const choice = object(choices[0]); if (choice.index !== 0 || finish !== undefined) throw modelsError('invalid-response');
+            const delta = object(choice.delta);
+            for (const [key, value] of Object.entries(delta)) {
+              if (key === 'tool_calls') continue;
+              if (key === 'content' || key === 'refusal' || key === 'reasoning_content') { if (value != null) message[key] = string(message[key] ?? '') + string(value); }
+              else message[key] = value;
+            }
+            for (const value of delta.tool_calls === undefined ? [] : array(delta.tool_calls)) {
+              const tool = object(value), at = index(tool.index); const previous: Record<string, JsonValue> = calls.get(at) ?? { id: '', type: 'function', function: { name: '', arguments: '' } };
+              if (tool.id !== undefined) previous.id = string(previous.id) + string(tool.id);
+              const fn = tool.function === undefined ? {} : object(tool.function), old = object(previous.function);
+              previous.function = { ...old, ...fn, name: string(old.name) + string(fn.name ?? ''), arguments: string(old.arguments) + string(fn.arguments ?? '') };
+              for (const [key, item] of Object.entries(tool)) if (!['id', 'function', 'index'].includes(key)) previous[key] = item;
+              calls.set(at, previous);
+            }
+            if (choice.finish_reason != null) finish = choice.finish_reason;
+          });
+          if (!completed) throw modelsError('invalid-response');
+          return validateResponse(response());
+        } catch (error) {
+          throw withNativeDiagnostic(normalizeError(error), nativeDiagnostic(error) ?? (received ? response() : undefined));
+        }
       }));
     },
     commit: input => commit(input.state, input.intent, input.response),

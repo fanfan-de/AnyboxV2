@@ -196,6 +196,48 @@ test('failed history remains distinguishable from unloaded history and supports 
   assert.equal(f.calls.filter(call => call.url.startsWith('/runs/failed/events?')).length, eventCalls, 'retry retains already-loaded durable events')
 })
 
+for (const status of ['failed', 'cancelled', 'interrupted']) test(`${status} partial content remains until committed diagnostics replace it and reloads at its original branch`, async t => {
+  const f = fixture(), a = f.make('a')
+  const run = { ...recordedTraceRun('partial'), status: 'running' }
+  f.rows.set(run.id, run)
+  const provisional = { ...recordedTraceView(run.id, 'Received private-api-key'), status: 'provisional', viewRevision: 2 }
+  const committed = { ...recordedTraceView(run.id, 'Received [redacted]'), viewRevision: 3,
+    exchanges: [{ ...recordedTraceView(run.id, 'Received [redacted]').exchanges[0], nativeState: { type: 'chat.state', diagnostic: true, partial: true } }] }
+  const requested = deferred(), finalView = deferred()
+  let final = false
+  f.intercept(url => {
+    if (url === `/runs/${run.id}/view`) {
+      if (final) { requested.resolve(); return finalView.promise }
+      return provisional
+    }
+  })
+  await f.load(a); t.after(() => a.dispose())
+  assert.equal(a.snapshot().views.get(run.id).status, 'provisional')
+  f.finish(run.id, status); final = true
+  const refresh = a.refresh()
+  await requested.promise
+  assert.equal(a.snapshot().runs[0].status, status)
+  assert.equal(a.snapshot().views.get(run.id).exchanges[0].blocks[0].text, 'Received private-api-key', 'already visible output remains during the durable read')
+  a.protocolView({ ...provisional, viewRevision: 99, exchanges: recordedTraceView(run.id, 'Late event must not appear').exchanges })
+  assert.equal(a.snapshot().views.get(run.id).exchanges[0].blocks[0].text, 'Received private-api-key')
+  finalView.resolve(committed)
+  await refresh
+  assert.deepEqual(a.snapshot().views.get(run.id), committed)
+  assert.equal(a.snapshot().runs[0].resultNodeId, undefined)
+  assert.deepEqual(a.snapshot().path, [])
+  assert.equal(f.nodes.size, 0)
+  a.protocolView({ ...provisional, viewRevision: 100 })
+  assert.deepEqual(a.snapshot().views.get(run.id), committed, 'late provisional frames cannot replace committed diagnostics')
+
+  a.detach()
+  const reopened = f.make('a'); t.after(() => reopened.dispose())
+  await f.load(reopened)
+  assert.deepEqual(reopened.snapshot().views.get(run.id), committed, 'a fresh controller reads terminal partial content without opening the trajectory')
+  reopened.setDraft('A fresh attempt'); await reopened.submit()
+  const posted = f.calls.findLast(call => call.body && call.url === '/sessions/a/runs')
+  assert.equal(posted.body.parentNodeId, null, 'partial output never becomes the next request ancestry')
+})
+
 test('detach cancels search reads and its queued history without cancelling any run', async t => {
   const f = fixture(), a = f.make('a'), delayed = deferred()
   seedTraceRuns(f, ['one', 'two', 'three'])

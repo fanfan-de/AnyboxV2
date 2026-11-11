@@ -88,16 +88,22 @@ test('invalid patch text is returned to the model and a corrected patch can succ
   assert.equal(readFileSync(join(f.directory, 'fixed.txt'), 'utf8'), 'fixed\n')
 })
 
-test('a malformed argument envelope prevents every tool in a mixed batch', async t => {
+test('schema-invalid patch arguments return correction feedback and prevent every tool in a mixed batch', async t => {
   const f = await fixture(t), run = await start(f)
   answer(f.llm.calls[0], { status: 'completed', text: '', toolCalls: [
     patch('valid', add('untouched.txt', 'must not exist')),
     { id: 'bad', name: 'apply_patch', arguments: { patch: 42 } },
     bash('also-valid', 'touch bash-marker'),
   ] })
-  assert.equal((await f.harness.waitRun(run.id)).errorCategory, 'invalid-tool-request')
+  await until(() => f.llm.calls.length === 2)
+  const feedback = f.llm.calls[1].input.messages.filter(message => message.role === 'tool')
+  assert.deepEqual(feedback.map(message => message.callId), ['valid', 'bad', 'also-valid'])
+  assert.deepEqual(feedback.map(message => JSON.parse(message.content).error.reason), ['batch-rejected', 'invalid-arguments', 'batch-rejected'])
   assert.equal(existsSync(join(f.directory, 'untouched.txt')), false)
   assert.equal(existsSync(join(f.directory, 'bash-marker')), false)
+  answer(f.llm.calls[1], 'No invalid batch tools were executed.')
+  assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
+  assert.equal((await f.harness.getRunEvents(run.id)).some(event => event.kind === 'tool-started'), false)
 })
 
 for (const cleanupFailure of [false, true]) {

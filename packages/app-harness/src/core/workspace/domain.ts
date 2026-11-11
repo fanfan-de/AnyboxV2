@@ -1,4 +1,4 @@
-import { isAbsolute } from 'node:path'
+import { posix, win32 } from 'node:path'
 
 /** Stage-one workspaces preserve the original shared local project directory. */
 export interface Workspace {
@@ -19,7 +19,7 @@ export interface WorkspaceReservation {
   readonly releasedAt?: string
 }
 
-/** An exact local placement. It is never re-resolved to another instance. */
+/** An exact placement on the bound Computer. It is never re-resolved to another instance. */
 export interface WorkspaceBinding {
   readonly bindingId: string
   readonly reservationId: string
@@ -57,7 +57,8 @@ export function workspaceText(value: unknown): string {
 
 export function workspacePath(value: unknown): string {
   const path = workspaceText(value)
-  if (!isAbsolute(path)) throw workspaceError('workspace-invalid')
+  // This ledger may describe a Computer on another platform; the worker validates its own filesystem.
+  if (!posix.isAbsolute(path) && !win32.isAbsolute(path)) throw workspaceError('workspace-invalid')
   return path
 }
 

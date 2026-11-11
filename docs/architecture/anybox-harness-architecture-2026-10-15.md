@@ -4,7 +4,7 @@
 
 核对日期：2026-10-15，按当日工作区源码绘制（HEAD `fd161c6` 加上尚未提交的 U1 变更）。图中包含可组合部署单元 U0/U1：单元附着账本与拨出传输、Worker 路由、worker 侧附着账本与拨出循环、项目绑定 Computer 附着，以及 Web 的单元附着入口。单页总览，使用 [D2](https://d2lang.com) 与 ELK 布局；源文件可直接编辑，SVG 与 PNG 为导出结果。
 
-本图作为 U1 架构参考保留，尚未反映后续 D0a workspace 拆包、D0a.1 应用独立 HTTP/认证与 Computer worker 独立管理。当前目录与装配以 [应用包设计](../application-packages-design.md)、[独立业务服务](../application-standalone-services.md)、[worker 管理](../computer-worker-management.md) 和组件手册为准；下方源码链接跟随现行目录，图源和导出保留绘制时的结构。
+本图作为 U1 架构参考保留，尚未反映后续 D0a workspace 拆包、D0a.1 应用独立 HTTP/认证、Computer worker 独立管理与统一执行环境。图中的 local/remote 全局形态已取消；当前本机与多个远端并存，新项目默认 harness server 所在的本机环境。当前目录与装配以 [应用包设计](../application-packages-design.md)、[独立业务服务](../application-standalone-services.md)、[worker 管理](../computer-worker-management.md) 和组件手册为准；下方源码链接跟随现行目录，图源和导出保留绘制时的结构。
 
 [可编辑 D2 源文件](anybox-harness-architecture-2026-10-15.d2) · [矢量 SVG](anybox-harness-architecture-2026-10-15.svg) · [PNG](anybox-harness-architecture-2026-10-15.png)
 

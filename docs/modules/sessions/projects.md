@@ -11,9 +11,9 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 - `options.directoryHome` 由宿主通过 `HarnessServerCoreOptions.projectDirectoryHome` 传入，生产默认是执行端系统用户主目录；未配置只禁用浏览，不影响旧接口。
 - `options.initialProjects` 接收受信宿主预登记路径；每次依赖就绪后的激活先幂等登记，再提供服务，因此首次启用 Agent 或从 PENDING 恢复均会处理宿主配置。路径无效会使该次组件启动失败，先前成功登记的项目仍保留，显式重试继续幂等登记。
 - `inputs.now()` 和 `inputs.newId()` 由组合根注入，默认时间与 ID 生成不写死在领域动作里。
-- 注入 [本地存储](../infrastructure/local-sqlite.md) 的 `local-storage` 与 [Worker 路由](../computers/worker-router.md)的 `computer.worker`；提供 `harness.projects: ProjectPort`。
-- `options.defaultComputerAttachmentId` 是未显式指定时新项目的 Computer 附着：本机形态为 `local:computer`，远端形态为 `ANYBOX_COMPUTER_ATTACHMENT`。
-- `localDirectorySelectionSupported` 仅在默认绑定为 `local:computer` 时为真。默认远端绑定禁用宿主的目录浏览、创建和系统目录窗口；Web 使用现有的手工绝对路径登记，再由所绑定 Computer 校验，避免先浏览本机再把同名路径解释到远端。
+- 注入 [本地存储](../infrastructure/local-sqlite.md) 的 `local-storage`；提供 `harness.projects: ProjectPort`。远端查询经组合根传入的 `computerQuery` 按调用解析当前 [Worker 路由](../computers/worker-router.md)，避免与 worker 根工具的 Projects 依赖形成循环。
+- 新项目未显式指定 `computerAttachmentId` 时始终绑定 `local:computer`，即 harness server 所在设备；本机与多个远端执行环境并存，不提供全局默认远端配置。既有项目与 Run 的绑定不变。
+- `localDirectorySelectionSupported` 表示本机环境允许受信目录选择；浏览和创建能力仍由本机目录提供方决定。Web 在选中本机环境时使用这些能力，选中远端时只提交该环境的绝对路径，不把本机浏览结果登记为远端目录。
 - `apply` 等待 `migrate('projects', migrations)` 后注册服务；当前迁移版本为 2。
 
 ## 数据与接口
@@ -34,7 +34,7 @@ harness server API 提供登记、查询与浏览接口；`getIn` 只供受信�
 
 ## 业务流程与持久归属
 
-openProject 首先 realpath 解析目录别名，并确认目标是目录；文件、已删除路径或权限导致不可达的路径被拒绝。随后在事务内查询 `harness_projects.path`，已存在则复用同一 ID，否则插入新 ID、目录名和时间。数据库的 UNIQUE(path) 保证规范路径身份唯一，打开同一目录的不同路径表示不会创建多个项目。
+openProject 首先 realpath 解析目录别名，并确认目标是目录；文件、已删除路径或权限导致不可达的路径被拒绝。随后在事务内按规范路径与 Computer 附着查询，已存在则复用同一 ID，否则插入新 ID、目录名和时间。数据库的 UNIQUE(path, computer_attachment_id) 保证环境内规范路径身份唯一，打开同一目录的不同路径表示不会创建多个项目。
 
 `harness_projects` 表由本组件的 projects 迁移域拥有，v2 增加 `computer_attachment_id` 并把唯一键改为 (path, computer_attachment_id)，旧项目迁入时绑定 `local:computer`。会话表以外键引用项目且存储强制外键，因此 v2 在事务内以 `PRAGMA defer_foreign_keys = ON` 重建同名表：先复制到临时表、删除原表、建新表并按原 ID 回填，提交时延迟检查通过；空表测试不覆盖这一点，[目录测试](../../../tests/project-directories.test.mjs)用带会话引用的 v1 账本验证。SQLite 连接归存储组件。本组件不打开额外连接，不建立每项目数据库或 Nya Context。目录失效只影响 available 和新操作准入，不删除项目记录及其 Session 历史。
 
@@ -54,6 +54,6 @@ openProject 首先 realpath 解析目录别名，并确认目标是目录；文�
 
 ## 验证
 
-`tests/remote-project-directory-selection.test.mjs` 验证真实 HTTP 能力列表不向远端默认绑定声明本机浏览、创建或目录窗口能力，直接请求执行端与客户端 picker 均被拒绝，手工路径仍由远端 Computer 校验。
+`tests/remote-project-directory-selection.test.mjs` 验证统一环境下本机目录能力与显式远端登记可以并存；前端控制器测试保证远端选择不调用本机浏览、创建或系统目录窗口。`tests/project-directories.test.mjs` 覆盖本机默认、多环境同路径、跨平台远端路径与失败不回退。
 
 [目录浏览测试](../../../tests/project-directories.test.mjs) 验证分页、单层创建、名称与重名校验、认证归属、取消和实际退出等待及句柄清理；[多项目测试](../../../tests/multi-project.test.mjs) 验证规范目录身份、项目间 Session 隔离、并发 Run、重启后的历史以及目录不可用时历史可读；[Session 测试](../../../tests/session.test.mjs) 验证创建期间的项目检查会被关闭等待；[本地 SQLite 测试](../../../packages/storage-sqlite/tests/storage.test.mjs) 验证底层独占存储与迁移。统一执行 `npm run check`。

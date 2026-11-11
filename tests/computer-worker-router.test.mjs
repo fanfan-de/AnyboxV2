@@ -11,8 +11,9 @@ import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { createHostAccessComponent, hostAccessServiceKey } from '../packages/host/dist/access.js'
 import { hostHttpServiceKey } from '../packages/host/dist/component.js'
+import { createHarnessServerRuntime } from '../packages/app-harness/dist/server-runtime.js'
 import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
-import { installHarnessServerCore } from '../packages/app-harness/dist/core/index.js'
+import { createHarnessServerAgentComponents, installHarnessServerCore } from '../packages/app-harness/dist/core/index.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import { imageAssetsServiceKey } from '../packages/app-harness/dist/core/image/port.js'
 import { createUnitAttachmentsComponent } from '../packages/app-harness/dist/core/unit/component.js'
@@ -21,7 +22,7 @@ import { fullScope, localComputerUnitId, localModelsUnitId } from '../packages/a
 import { createUnitTransportComponent, unitTransportServiceKey } from '../packages/app-harness/dist/core/unit/transport-component.js'
 import { createWorkerRouterComponent } from '../packages/app-harness/dist/core/computer/worker-router.js'
 import { computerInstanceProviderServiceKey, computerServiceKey } from '../packages/app-harness/dist/core/computer/port.js'
-import { computerWorkerServiceKey, localComputerWorkerControlServiceKey } from '../packages/app-harness/dist/core/computer/worker-port.js'
+import { computerWorkerServiceKey, localComputerWorkerServiceKey, localComputerWorkerControlServiceKey } from '../packages/app-harness/dist/core/computer/worker-port.js'
 import { unitComputerId, computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { openComputerWorker } from '../packages/app-harness/dist/core/computer/worker-server.js'
 import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
@@ -42,14 +43,31 @@ async function until(check, message, limit = 15_000) {
 }
 const spec = { providerId: 'unit', platform: process.platform, architecture: process.arch }
 
-test('startup configuration selects the Computer unit form without reading any unit', () => {
-  assert.deepEqual(parseHarnessServerConfig({}).computerUnit, { kind: 'local' })
-  assert.deepEqual(parseHarnessServerConfig({ ANYBOX_COMPUTER_UNIT: 'local' }).computerUnit, { kind: 'local' })
-  assert.deepEqual(parseHarnessServerConfig({ ANYBOX_COMPUTER_UNIT: 'remote', ANYBOX_COMPUTER_ATTACHMENT: 'att-1' }).computerUnit, { kind: 'remote', attachmentId: 'att-1' })
-  assert.throws(() => parseHarnessServerConfig({ ANYBOX_COMPUTER_UNIT: 'remote' }), /ANYBOX_COMPUTER_ATTACHMENT/)
-  assert.throws(() => parseHarnessServerConfig({ ANYBOX_COMPUTER_UNIT: 'cloud' }), /ANYBOX_COMPUTER_UNIT/)
-  assert.throws(() => parseHarnessServerConfig({ ANYBOX_COMPUTER_UNIT: 'remote', ANYBOX_COMPUTER_ATTACHMENT: 'local:computer' }), /local/)
+test('startup has no global Computer selection and rejects obsolete selectors with migration guidance', () => {
+  assert.equal('computerUnit' in parseHarnessServerConfig({}), false)
+  for (const env of [{ ANYBOX_COMPUTER_UNIT: 'local' }, { ANYBOX_COMPUTER_UNIT: 'remote', ANYBOX_COMPUTER_ATTACHMENT: 'att-1' }, { ANYBOX_COMPUTER_ATTACHMENT: 'att-1' }]) {
+    assert.throws(() => parseHarnessServerConfig(env), /no longer supported; remove it and select the Computer environment per project/)
+  }
 })
+
+test('JavaScript callers cannot silently retain the removed remote Computer selector', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-obsolete-computer-option-')), root = new Context()
+  t.after(async () => { await root.fiber.dispose(); await rm(directory, { recursive: true, force: true }) })
+  const localWorkerDirectory = join(directory, 'never-started-worker'), database = join(directory, 'never-created.sqlite')
+  const options = { agents: [{ id: 'assistant', instructions: 'test' }], localWorkerDirectory, initialProjects: [directory],
+    computerUnit: { kind: 'remote', attachmentId: 'old-remote' } }
+  const expected = /computerUnit is no longer supported; remove it and select the Computer environment per project/
+  assert.throws(() => createHarnessServerAgentComponents(root, options, { isClosing: () => false }), expected)
+  await assert.rejects(installHarnessServerCore(root, options), expected)
+  assert.throws(() => createHarnessServerRuntime(root, parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: database }), options), expected)
+  assert.equal(root.get('models'), undefined, 'the legacy option is rejected before Models installation')
+  assert.equal(root.get('harness.projects'), undefined, 'no project registration can occur')
+  assert.equal(existsSync(localWorkerDirectory), false, 'no local worker is started')
+  assert.equal(existsSync(database), false, 'no business storage is opened')
+})
+
+const unavailableLocalWorker = () => Object.fromEntries(['info', 'claimRun', 'submit', 'get', 'query', 'shutdown'].map(method => [method,
+  async () => { throw Object.assign(new Error('local unavailable'), { code: 'worker-unavailable' }) }]))
 
 test('the worker router installs without a reachable unit and reports unavailability at admission', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-unit-proxy-offline-')), root = new Context()
@@ -58,17 +76,18 @@ test('the worker router installs without a reachable unit and reports unavailabi
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createUnitAttachmentsComponent(inputs, { localUnits: [{ unitKind: 'models', unitId: localModelsUnitId }] }))
   await root.installComponent(createUnitTransportComponent(inputs))
+  root.provide(localComputerWorkerServiceKey, unavailableLocalWorker())
   const started = Date.now()
-  await root.installComponent(createWorkerRouterComponent({ local: false, claimTimeoutMs: 150 }))
+  await root.installComponent(createWorkerRouterComponent({ claimTimeoutMs: 150 }))
   assert.ok(Date.now() - started < 1_000, 'apply does not wait for the unit')
   const worker = root.get(computerWorkerServiceKey), provider = root.get(computerInstanceProviderServiceKey)
-  assert.equal(provider.providerId, 'unit'); assert.deepEqual(provider.providerIds, ['unit'])
-  await assert.rejects(worker.info(), { code: 'worker-attachment-rejected' }, 'the remote form has no local worker to describe')
+  assert.equal(provider.providerId, 'local'); assert.deepEqual(provider.providerIds, ['local', 'unit'])
+  await assert.rejects(worker.info(), { code: 'worker-unavailable' }, 'a failed local environment does not prevent remote routing')
   await assert.rejects(worker.claimRun({ runId: 'r', runOwnerEpoch: 1, attachmentId: 'ghost' }), { code: 'worker-unreachable' })
-  await assert.rejects(worker.claimRun({ runId: 'r', runOwnerEpoch: 1, attachmentId: 'local:computer' }), { code: 'worker-attachment-rejected' }, 'the remote form has no local worker')
+  await assert.rejects(worker.claimRun({ runId: 'r', runOwnerEpoch: 1, attachmentId: 'local:computer' }), { code: 'worker-unavailable' }, 'local calls still reach the local environment')
   await assert.rejects(worker.get({ runId: 'r', runOwnerEpoch: 1, attachmentId: 'ghost', operationId: 'op' }), { code: 'worker-unreachable' })
   await assert.rejects(worker.query({ attachmentId: 'ghost', query: { kind: 'stat', path: '/tmp' } }), { code: 'worker-unreachable' })
-  await assert.rejects(worker.shutdown(), { code: 'worker-remote-control' })
+  await assert.rejects(worker.shutdown(), { code: 'worker-unavailable' }, 'shutdown targets only the unavailable local worker')
   const activation = provider.activate({ resource: { computerId: unitComputerId('ghost'), spec, activationRevision: 1, createdAt: 'now' }, activationId: 'a1' })
   await assert.rejects(activation.result, { code: 'computer-unavailable' }); await activation.done
   const local = provider.activate({ resource: { computerId: 'local', spec: { ...spec, providerId: 'local' }, activationRevision: 1, createdAt: 'now' }, activationId: 'a2' })
@@ -101,7 +120,8 @@ async function remoteHarness(t, directory, proxyOptions) {
   t.after(async () => { await local.closeObserver(); await worker.close() })
   const attached = await local.control.consumeAttachCode({ harnessUrl: web.url, code, ceiling: fullScope('computer') })
   await until(() => transport.connection(attached.attachmentId)?.connected, 'unit polls')
-  const proxyFiber = root.installComponent(createWorkerRouterComponent({ local: false, ...proxyOptions })); await proxyFiber
+  root.provide(localComputerWorkerServiceKey, unavailableLocalWorker())
+  const proxyFiber = root.installComponent(createWorkerRouterComponent({ ...proxyOptions })); await proxyFiber
   return { root, web, units, transport, worker, local, attached, memory, proxyFiber, inputs, images }
 }
 
@@ -136,7 +156,7 @@ test('the router routes by attachment and its Effect abandons only local observa
   await assert.rejects(observing, { code: 'worker-observer-closed' })
   await assert.rejects(worker.get({ ...owner, operationId: 'slow' }), { code: 'worker-observer-closed' })
   await until(async () => existsSync(join(directory, 'slow.txt')), 'the unit keeps executing after the proxy is gone')
-  const again = f.root.installComponent(createWorkerRouterComponent({ local: false })); await again
+  const again = f.root.installComponent(createWorkerRouterComponent()); await again
   const replacement = f.root.get(computerWorkerServiceKey)
   let fact = await replacement.get({ ...owner, operationId: 'slow' })
   while (!terminal(fact.state)) fact = await replacement.get({ ...owner, operationId: 'slow' })
@@ -179,7 +199,7 @@ test('the router routes by attachment and its Effect abandons only local observa
   assert.equal(bytesRoute.status, 401, 'the byte channel requires the unit credential')
 })
 
-test('a harness server in the remote Computer form runs Bash and Apply Patch on an attached worker and fails admission while the unit is offline', { timeout: 180_000 }, async t => {
+test('remote project bindings survive reassembly while the local environment remains the default', { timeout: 180_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-unit-proxy-run-')))
   const projectDirectory = join(directory, 'project'); await mkdir(projectDirectory)
   const root = new Context()
@@ -214,20 +234,24 @@ test('a harness server in the remote Computer form runs Bash and Apply Patch on 
   const { code } = await core.api.createUnitAttachCode({ unitKind: 'computer', scope: fullScope('computer') })
   const attached = await local.control.consumeAttachCode({ harnessUrl: web.url, code, ceiling: fullScope('computer') })
   await until(() => root.get(unitTransportServiceKey).connection(attached.attachmentId)?.connected, 'unit polls the local-form harness server')
-  // Reassemble in the remote form, as a restart with ANYBOX_COMPUTER_UNIT=remote would.
+  const fixedProject = await core.api.openProject(projectDirectory, { computerAttachmentId: attached.attachmentId })
+  // Reassembly preserves saved remote bindings and always retains the local default.
   await core.close()
-  assert.equal(existsSync(localWorkerDirectory), false, 'the local form never started its own worker')
-  core = await installHarnessServerCore(root, { agents, localWorkerDirectory, computerUnit: { kind: 'remote', attachmentId: attached.attachmentId, claimTimeoutMs: 400 } })
-  assert.equal(root.get(localComputerWorkerControlServiceKey), undefined, 'the remote form has no local worker')
-  assert.equal(root.get(computerInstanceProviderServiceKey).providerId, 'unit')
-  await assert.rejects(root.get(unitAttachmentsServiceKey).local('computer'), { code: 'unit-attachment-missing' }, 'the remote form declares no local Computer unit; the earlier local-form row stays in the ledger')
+  assert.equal(existsSync(localWorkerDirectory), false, 'remote project registration never started the local worker')
+  core = await installHarnessServerCore(root, { agents, localWorkerDirectory, computerTransport: { claimTimeoutMs: 400 } })
+  assert.ok(root.get(localComputerWorkerControlServiceKey), 'the local environment remains installed')
+  assert.deepEqual(root.get(computerInstanceProviderServiceKey).providerIds, ['local', 'unit'])
+  assert.equal((await root.get(unitAttachmentsServiceKey).local('computer')).attachment.attachmentId, 'local:computer')
   await until(() => root.get(unitTransportServiceKey).connection(attached.attachmentId)?.connected, 'unit reconnects to the reassembled transport')
   const api = core.api
   const selection = await api.getAgentTools('assistant')
   await api.setAgentTools('assistant', { toolIds: ['anybox.bash', 'anybox.apply_patch'], expectedRevision: selection.revision })
   assert.deepEqual(await root.get(computerWorkerServiceKey).query({ attachmentId: attached.attachmentId, query: { kind: 'stat', path: projectDirectory } }), { kind: 'stat', directory: true, canonical: projectDirectory })
-  const project = await api.openProject(projectDirectory), session = await api.createSession(project.id, 'assistant')
-  assert.equal(project.computerAttachmentId, attached.attachmentId, 'the remote form binds new projects to its configured attachment by default')
+  const localProject = await api.openProject(projectDirectory)
+  assert.equal(localProject.computerAttachmentId, 'local:computer', 'new projects default to this harness server environment')
+  const project = await api.getProject(fixedProject.id), session = await api.createSession(project.id, 'assistant')
+  assert.equal(project.computerAttachmentId, attached.attachmentId, 'existing remote bindings survive reassembly')
+  assert.notEqual(project.id, localProject.id)
   assert.equal((await api.listProjects()).find(item => item.id === project.id).available, true, 'availability is answered by the unit')
 
   script = [{ id: 'call-bash', name: 'bash', arguments: { command: 'printf remote > out.txt; cat out.txt' } }]
@@ -283,10 +307,10 @@ test('a harness server in the remote Computer form runs Bash and Apply Patch on 
   assert.equal(await readFile(join(projectDirectory, 'back.txt'), 'utf8'), 'back')
 })
 
-test('the local form serves local projects over loopback and remote-bound projects through their unit', { timeout: 180_000 }, async t => {
+test('the default local environment coexists with multiple remote environments and routes each project to its worker', { timeout: 180_000 }, async t => {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-worker-router-mixed-')))
-  const localProject = join(directory, 'local-project'), remoteProject = join(directory, 'remote-project'), outside = join(directory, 'outside')
-  await mkdir(localProject); await mkdir(remoteProject); await mkdir(outside)
+  const localProject = join(directory, 'local-project'), remoteProject = join(directory, 'remote-project'), remoteProject2 = join(directory, 'remote-project-2'), outside = join(directory, 'outside')
+  await mkdir(localProject); await mkdir(remoteProject); await mkdir(remoteProject2); await mkdir(outside)
   const root = new Context()
   const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Execute tools with their declared contracts.' }]
   let script = []
@@ -304,7 +328,7 @@ test('the local form serves local projects over loopback and remote-bound projec
   await root.installComponent(models.component())
   await root.installComponent(createHostAccessComponent('mixed harness'))
   const localWorkerDirectory = join(directory, 'local-worker')
-  const core = await installHarnessServerCore(root, { agents, localWorkerDirectory, computerUnit: { kind: 'local', claimTimeoutMs: 2_000 } })
+  const core = await installHarnessServerCore(root, { agents, localWorkerDirectory, computerTransport: { claimTimeoutMs: 2_000 } })
   const httpFiber = root.installComponent(createFixtureApplicationApiComponent(root, core.api.listAgents(), 0, { authenticated: true })); await httpFiber
   const web = root.get(hostHttpServiceKey)
   const { openEntry } = memoryEntries()
@@ -322,6 +346,19 @@ test('the local form serves local projects over loopback and remote-bound projec
   const { code } = await core.api.createUnitAttachCode({ unitKind: 'computer', scope: ceiling })
   const attached = await unitControl.control.consumeAttachCode({ harnessUrl: web.url, code, ceiling })
   await until(() => root.get(unitTransportServiceKey).connection(attached.attachmentId)?.connected, 'unit polls')
+  const unit2 = await openComputerWorker(join(directory, 'unit-worker-2'), { openEntry, dialout: { pollWaitMs: 300, getWaitMs: 200 } })
+  const unitControl2 = connectLocalComputerWorker({ directory: join(directory, 'unit-worker-2') })
+  t.after(async () => { await unitControl2.closeObserver(); await unit2.close().catch(() => {}) })
+  const ceiling2 = { kind: 'computer', projects: [remoteProject2], tools: 'all' }
+  const issued2 = await core.api.createUnitAttachCode({ unitKind: 'computer', scope: ceiling2 })
+  const attached2 = await unitControl2.control.consumeAttachCode({ harnessUrl: web.url, code: issued2.code, ceiling: ceiling2 })
+  await until(() => root.get(unitTransportServiceKey).connection(attached2.attachmentId)?.connected, 'second unit polls')
+  const environments = await core.api.listComputerEnvironments()
+  assert.equal(environments.defaultEnvironmentId, 'local:computer')
+  assert.deepEqual(environments.environments.map(environment => [environment.environmentId, environment.connectionState]), [
+    ['local:computer', 'on-demand'], [attached.attachmentId, 'connected'], [attached2.attachmentId, 'connected'],
+  ])
+  assert.equal(existsSync(localWorkerDirectory), false, 'listing all environments does not probe or start the local worker')
   const api = core.api
   const selection = await api.getAgentTools('assistant')
   await api.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: selection.revision })
@@ -346,8 +383,15 @@ test('the local form serves local projects over loopback and remote-bound projec
   const remoteRun = await api.waitRun((await api.startRun({ sessionId: remoteSession.id, parentNodeId: null, input: 'go', idempotencyKey: 'remote' })).id)
   assert.equal(remoteRun.status, 'completed', JSON.stringify(remoteRun.error ?? null)); assert.equal(remoteRun.units.computer.attachmentId, attached.attachmentId)
   assert.equal(await readFile(join(remoteProject, 'where.txt'), 'utf8'), 'remote')
+  const remote2 = await api.openProject(remoteProject2, { computerAttachmentId: attached2.attachmentId })
+  const remoteSession2 = await api.createSession(remote2.id, 'assistant')
+  script = [{ id: 'call-remote-2', name: 'bash', arguments: { command: 'printf second > where.txt' } }]
+  const remoteRun2 = await api.waitRun((await api.startRun({ sessionId: remoteSession2.id, parentNodeId: null, input: 'go', idempotencyKey: 'remote-2' })).id)
+  assert.equal(remoteRun2.status, 'completed', JSON.stringify(remoteRun2.error ?? null))
+  assert.equal(remoteRun2.units.computer.attachmentId, attached2.attachmentId)
+  assert.equal(await readFile(join(remoteProject2, 'where.txt'), 'utf8'), 'second')
   const computers = await root.get(computerServiceKey).list()
-  assert.deepEqual(computers.map(c => [c.computerId, c.spec.providerId]).sort(), [['local', 'local'], [unitComputerId(attached.attachmentId), 'unit']])
+  assert.deepEqual(computers.map(c => [c.computerId, c.spec.providerId]).sort(), [['local', 'local'], [unitComputerId(attached.attachmentId), 'unit'], [unitComputerId(attached2.attachmentId), 'unit']].sort())
   // Reads of the remote-bound project go through the unit as well.
   const joinedCall = async call => { try { return await call.result } finally { await call.done } }
   assert.deepEqual(await joinedCall(api.searchProjectFiles(remoteSession.id, 'where')), { paths: ['where.txt'], incomplete: false })

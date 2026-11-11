@@ -24,7 +24,7 @@ export function createComposerExtras(options: {
     const files = el('div', { class: 'ca-attachments', 'aria-label': '待发送附件' }), progress = el('section', { class: 'ca-execution-tray', 'aria-label': '执行进度与消息队列', hidden: true });
     const add = el('button', { type: 'button', class: 'ca-attach-button', text: '附件', 'aria-label': '添加图片或文件' });
     const changed = () => { render(); options.changed(); };
-    const render = () => { const key = options.key(), items = key ? drafts.get(key) ?? [] : []; files.replaceChildren(...items.map(item => { const remove = el('button', { type: 'button', text: '×', 'aria-label': `移除 ${item.file.name}` }); remove.disabled=options.busy?.()??false;
+    const render = () => { const key = options.key(), items = key ? drafts.get(key) ?? [] : []; files.replaceChildren(...items.map(item => { const remove = el('button', { type: 'button', text: '×', 'aria-label': `移除 ${item.file.name}`, title: `移除 ${item.file.name}` }); remove.disabled=options.busy?.()??false;
         remove.addEventListener('click', () => {if(options.busy?.())return; drafts.set(key!, items.filter(x => x.id !== item.id)); changed(); }); return el('span', { class: 'ca-attachment-chip' }, el('span', { text: `${item.file.name} · ${item.file.size < 1024 ? item.file.size + ' B' : (item.file.size / 1024).toFixed(0) + ' KB'}` }), remove); })); if (uploading && uploading.key === key)
         files.append(el('small', { role: 'status', text: uploading.text })); };
     const append = (incoming: readonly File[]) => {if(options.busy?.())return; const key = options.key(); if (!key)

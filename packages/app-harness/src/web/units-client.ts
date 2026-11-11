@@ -1,5 +1,7 @@
 import type { Api } from './client-types.js'
 import type { UnitAttachment, UnitScope } from '../core/unit/domain.js'
+import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
+import { environmentLabel, environmentStateLabel } from './project-directory-client.js'
 import { createPageRequests } from './page-lifecycle.js'
 
 /** Owner-side unit attachments of one fixed device: list, issue one-time attach codes, revoke. */
@@ -55,7 +57,7 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
     if (className) node.className = className
     return node
   }
-  const title = el('h3', `${deviceName} · Computer worker`), hint = el('p', '允许远端 Agent 使用本机执行工具。附着码由对方在“单元附着”设置中生成。此入口管理客户端服务所在设备，无须启动本机 harness server。', 'settings-hint')
+  const title = el('h3', `${deviceName} · Computer worker`), hint = el('p', '允许远端 Agent 使用本机执行工具。附着码由对方在“执行环境”设置中生成。此入口管理客户端服务所在设备，无须启动本机 harness server。', 'settings-hint')
   const workerStatus = el('p', '正在读取状态…'), startButton = el('button', '启动 Computer worker'), refreshButton = el('button', '刷新状态')
   workerStatus.setAttribute('role', 'status'); startButton.type = refreshButton.type = 'button'; startButton.disabled = true
   const list = el('div', undefined, 'units-list'), status = el('p', undefined, 'notice'); status.hidden = true
@@ -151,7 +153,7 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
 
 export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => string, panel: HTMLElement): UnitsSettingsView {
   const requests = createPageRequests(source), api = requests.api
-  let attachments: readonly UnitAttachment[] = [], notice = '', code = '', disposed = false, busy = false
+  let attachments: readonly UnitAttachment[] = [], environments: readonly ComputerEnvironment[] = [], notice = '', code = '', disposed = false, busy = false
   let disposal: Promise<void> | undefined
   panel.replaceChildren()
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] => {
@@ -160,8 +162,9 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
     if (className) node.className = className
     return node
   }
-  const heading = el('header', undefined, 'settings-panel-heading'), title = el('h3', '单元附着'); title.id = 'agent--units-title'
-  heading.append(title, el('p', '本设备的 harness server 与可部署单元（本机与远端 Computer）之间的附着。附着码只显示一次，由远端设备在其“管理连接”里消费。'))
+  const heading = el('header', undefined, 'settings-panel-heading'), title = el('h3', '执行环境'); title.id = 'agent--units-title'
+  heading.append(title, el('p', '本机为默认执行环境，也可以添加多个远端环境。新建项目时选择环境，项目会保持该绑定。附着码只显示一次，由远端设备在其“管理连接”里消费。'))
+  const refreshButton = el('button', '刷新执行环境'); refreshButton.type = 'button'; heading.append(refreshButton)
   const list = el('div', undefined, 'units-list'), status = el('p', undefined, 'notice'); status.hidden = true
   const form = el('form', undefined, 'settings-card'), formTitle = el('h3', '生成 Computer 附着码')
   const projectsLabel = el('label', '允许的项目目录（每行一个绝对路径，留空表示不限）'), projectsInput = el('textarea'); projectsInput.rows = 3; projectsLabel.append(projectsInput)
@@ -173,18 +176,22 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
   const setNotice = (message: string) => { notice = message; status.textContent = message; status.hidden = !message }
   const render = () => {
     if (disposed) return
-    list.replaceChildren(...attachments.map(attachment => {
-      const row = el('section', undefined, 'settings-card unit-row'), label = el('p', describeAttachment(attachment))
-      row.dataset.attachmentId = attachment.attachmentId
-      row.append(el('strong', attachment.attachmentId), label)
-      if (attachment.origin === 'remote' && attachment.state !== 'revoked') {
+    list.replaceChildren(...environments.map(environment => {
+      const attachment = attachments.find(value => value.attachmentId === environment.environmentId)
+      const row = el('section', undefined, 'settings-card unit-row')
+      row.dataset.attachmentId = environment.environmentId
+      const label = el('strong', environmentLabel(environment)); label.title = `${environment.environmentId}${environment.unitId ? ` · ${environment.unitId}` : ''}`
+      const details = el('details'); details.append(el('summary', '身份与权限'), el('p', environment.environmentId))
+      if (attachment) details.append(el('p', describeAttachment(attachment)))
+      row.append(label, el('p', environmentStateLabel(environment)), details)
+      if (environment.origin === 'remote' && environment.state !== 'revoked') {
         const revoke = el('button', '撤销附着'); revoke.type = 'button'
-        revoke.addEventListener('click', () => { void view.revoke(attachment.attachmentId).catch(() => {}) })
+        revoke.addEventListener('click', () => { void view.revoke(environment.environmentId).catch(() => {}) })
         row.append(revoke)
       }
       return row
     }))
-    if (!attachments.length) list.append(el('p', '尚无附着记录。'))
+    if (!environments.length) list.append(el('p', notice ? '无法读取执行环境，请重试。' : '尚无执行环境。'))
   }
   const guarded = async <T>(work: () => Promise<T>): Promise<T> => {
     if (busy) throw Object.assign(new Error('busy'), { status: 409, code: 'product-busy' })
@@ -194,7 +201,12 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
   }
   const view: UnitsSettingsView = {
     async refresh() {
-      try { attachments = await api<readonly UnitAttachment[]>('/units/attachments'); setNotice('') }
+      try {
+        const values = await Promise.all([api<readonly UnitAttachment[]>('/units/attachments'), api<ComputerEnvironments>('/computer-environments')])
+        if (disposed) return
+        if (!Array.isArray(values[1]?.environments)) throw Object.assign(new Error('computer-environments-unavailable'), { code: 'computer-environments-unavailable' })
+        attachments = values[0].filter(value => value.unitKind === 'computer'); environments = values[1].environments; setNotice('')
+      }
       catch (error) { if (!disposed) setNotice(messageFor(error)) }
       render()
     },
@@ -217,6 +229,7 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
     event.preventDefault()
     void view.issue({ projects: parseGrantList(projectsInput.value), tools: parseGrantList(toolsInput.value) }).catch(() => {})
   })
+  refreshButton.addEventListener('click', () => { if (!busy) void view.refresh() })
   void view.refresh()
   return view
 }

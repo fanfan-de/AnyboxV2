@@ -19,7 +19,7 @@ export interface Workspace {
   readonly sidebarProjectId: string | null
 }
 export const paneLimit = 4
-export const separatorSize = 8
+export const separatorSize = 1
 export const minimumPane: Size = { width: 320, height: 260 }
 export const emptyWorkspace: Workspace = { version: 1, root: null, activePaneId: null, sidebarProjectId: null }
 

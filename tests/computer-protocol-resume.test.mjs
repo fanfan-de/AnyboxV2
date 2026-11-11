@@ -21,13 +21,13 @@ function answer(id, tool) {
   return { choices: [{ index: 0, finish_reason: tool ? 'tool_calls' : 'stop', message: { role: 'assistant', content: tool ? '' : 'final',
     ...(tool ? { tool_calls: [{ id: 'stable-call', type: 'function', function: { name: 'bash', arguments: JSON.stringify(args) } }] } : {}) } }] }
 }
-async function fixture(protocolId) {
+async function fixture(protocolId, respond = count => answer(protocolId, count === 1)) {
   const root = new Context(), requests = [], base = factories[protocolId]()
   const snapshot = { ...modelSnapshot('default', base.descriptor.version), protocolId,
     parameters: { protocolId, formatVersion: 1, value: protocolId === 'anthropic-messages' ? { max_tokens: 4096 } : {} }, capabilities: { ...modelSnapshot().capabilities, streaming: false } }
   const protocol = { ...base, exchange(input) {
     requests.push(structuredClone(input.request))
-    return { result: Promise.resolve(answer(protocolId, requests.length === 1)), done: Promise.resolve(), cancel() {} }
+    return { result: Promise.resolve(respond(requests.length)), done: Promise.resolve(), cancel() {} }
   } }
   const lease = () => ({ protocolId, protocolVersion: protocol.descriptor.version, generationId: 'driver-generation', signal: new AbortController().signal, release() {} })
   const executions = new Set()
@@ -115,4 +115,61 @@ test('active Run restoration rejects an account epoch change without sending ano
   f.snapshot.historyScopeEpoch = 'a-different-account-epoch'
   await assert.rejects(f.registry.prepareResume({ resume, signal: new AbortController().signal }))
   assert.equal(f.requests.length, 1)
+})
+
+for (const protocolId of Object.keys(factories)) test(`${protocolId}: tool correction budget survives repeated response-boundary takeovers`, async t => {
+  const invalid = () => {
+    const response = answer(protocolId, true)
+    if (protocolId === 'responses') response.output[0].arguments = JSON.stringify({ command: 42 })
+    else if (protocolId === 'anthropic-messages') response.content[0].input = { command: 42 }
+    else if (protocolId === 'gemini-interactions') response.steps[0].arguments = { command: 42 }
+    else response.choices[0].message.tool_calls[0].function.arguments = JSON.stringify({ command: 42 })
+    return response
+  }
+  const f = await fixture(protocolId, invalid); t.after(() => f.root.fiber.dispose())
+  const input = { schemaVersion: 1, raw: 'original correction task', text: 'fixed correction task', template: null }
+  const initialization = { schemaVersion: 1, toolContractVersion: 'known-tools-v1', prompts: [], tools: [bashToolDefinition] }
+  let program = await f.registry.prepare({ runId: 'correction-run', sessionId: 'session', modelId: 'default', initialization, input, signal: new AbortController().signal })
+  const records = new Map(), cursors = [], noTools = async () => { assert.fail('a rejected batch must never reach the tool executor') }
+  const resume = (ownerEpoch = 2) => ({
+    run: { id: 'correction-run', sessionId: 'session', modelId: 'default', status: 'running', protocolBinding: program.binding,
+      modelSnapshot: program.modelSnapshot, nativeInput: input, history: { kind: 'tree', parentNodeId: null } },
+    projectId: 'project', initialization,
+    records: [...records.values()].map(record => ({ ...record, runId: 'correction-run', protocolId })),
+    state: { schemaVersion: 1, runOwnerEpoch: ownerEpoch, revision: ownerEpoch, stage: 'response', protocolCursor: cursors.at(-1), totalToolOutputBytes: 0 },
+  })
+  try {
+    // Each takeover starts immediately after another feedback response was saved,
+    // before its rejected request can increment the in-memory budget again.
+    for (let correction = 1; correction <= 3; correction++) {
+      const host = recorder(records, cursors, noTools), perform = host.perform
+      host.perform = async (descriptor, start) => {
+        const value = await perform(descriptor, start)
+        if (cursors.length === correction + 1) throw new Error('simulated Runtime loss after response commit')
+        return value
+      }
+      await program.execute(host)
+      await program.close(); program.release()
+      assert.equal(f.requests.length, correction + 1)
+      assert.equal(cursors.at(-1).toolRequestCorrections, correction)
+      const request = JSON.stringify(f.requests.at(-1))
+      assert.match(request, /invalid-tool-request/)
+      assert.match(request, /executed/)
+      assert.equal(request.split('fixed correction task').length - 1, 1, 'takeover must not resubmit the original task')
+      program = await f.registry.prepareResume({ resume: resume(correction + 1), signal: new AbortController().signal })
+    }
+    const conclusion = await program.execute(recorder(records, cursors, noTools))
+    assert.equal(conclusion.kind, 'failed')
+    assert.equal(conclusion.category, 'invalid-tool-request')
+    assert.equal(f.requests.length, 4, 'three feedback attempts remain the complete Run budget after takeover')
+    assert.equal(cursors.at(-1).toolRequestCorrections, 3)
+    await program.close(); program.release()
+
+    for (const count of [-1, 4, 1.5, null, '2']) {
+      const saved = resume(5)
+      saved.state.protocolCursor = { ...saved.state.protocolCursor, toolRequestCorrections: count }
+      await assert.rejects(f.registry.prepareResume({ resume: saved, signal: new AbortController().signal }))
+    }
+    assert.equal(f.requests.length, 4)
+  } finally { await program.close(); program.release() }
 })

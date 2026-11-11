@@ -13,7 +13,7 @@ import { RunFailure } from '../run/domain.js'
 import { bashToolDefinition } from '../tool/bash-component.js'
 import { applyPatchToolDefinition } from '../tool/apply-patch-component.js'
 import { validateToolSelection } from '../tool/catalog.js'
-import { createExchangeRunner, initialMessages, serializable, toNativeRecord, toProtocolRecord } from './shared.js'
+import { createExchangeRunner, initialMessages, maxToolRequestCorrections, serializable, toNativeRecord, toProtocolRecord } from './shared.js'
 import type { ExchangeRunner } from './shared.js'
 import type { ProtocolConclusion } from '../run/program.js'
 import { runResponses } from './responses.js'
@@ -152,7 +152,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         if (input.history && (input.history.binding.protocolId !== protocolId ||
           input.history.binding.protocolId !== input.history.modelSnapshot.protocolId ||
           input.history.records.some(record => record.protocolId !== protocolId) ||
-          !['1.0.0', '1.1.0', '1.2.0', '1.3.0'].includes(input.history.binding.loopVersion) ||
+          !['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0'].includes(input.history.binding.loopVersion) ||
           ![1, 2].includes(input.history.binding.recordFormatVersion))) throw modelFailure('unsupported-request')
         if (input.history) {
           const checkpoint = input.history.checkpoint
@@ -204,12 +204,18 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
           if (input.initialization.tools.length && !execution.capabilities.tools) throw modelFailure('unsupported-request')
           const initial = input.resume ? {} : encodeInitial(protocolId, input), owned = execution
           let replay: import('@anybox/models').NativeReply | undefined
+          let toolRequestCorrections = 0
           if (input.resume) {
             const savedCursor = input.resume.state.protocolCursor
             if (!savedCursor || typeof savedCursor !== 'object' || Array.isArray(savedCursor)) throw modelFailure('unsupported-request')
             const cursor = savedCursor as NativeObject
             if (cursor.schemaVersion !== 1 || cursor.protocolId !== protocolId ||
               typeof cursor.exchangeId !== 'string') throw modelFailure('unsupported-request')
+            if (cursor.toolRequestCorrections !== undefined) {
+              if (typeof cursor.toolRequestCorrections !== 'number' || !Number.isSafeInteger(cursor.toolRequestCorrections) ||
+                cursor.toolRequestCorrections < 0 || cursor.toolRequestCorrections > maxToolRequestCorrections) throw modelFailure('unsupported-request')
+              toolRequestCorrections = cursor.toolRequestCorrections
+            }
             const record = input.resume.records.at(-1)
             if (!record || record.kind !== 'response' || record.exchangeId !== cursor.exchangeId || record.protocolId !== protocolId ||
               !record.payload || typeof record.payload !== 'object' || Array.isArray(record.payload)) throw modelFailure('unsupported-request')
@@ -218,7 +224,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
           }
           const acceptedSnapshot = input.resume?.run.modelSnapshot as import('@anybox/models').NativeModelSnapshot | undefined
           const binding: ProtocolBindingSnapshot = { protocolId, generationId: entry.id + ':' + driver.generationId,
-            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.3.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 2 }
+            driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.4.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 2 }
           let closing: Promise<ProgramExitReport> | undefined, executed = false
           const program: PreparedRunProgram = { binding, modelSnapshot: acceptedSnapshot ?? owned.snapshot, initialization: input.initialization, input: input.input,
             signal,
@@ -232,7 +238,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
                     if (prior && !isDeepStrictEqual(prior, ref)) throw modelFailure('invalid-resource')
                     permitted.set(ref.id, ref)
                   }
-                }, input.initialization.tools, replay), initial) }
+                }, input.initialization.tools, replay, toolRequestCorrections), initial) }
               catch (error) {
                 if (host.signal.aborted || program.signal.aborted) throw error
                 const failure = error instanceof RunFailure ? error : normalizeModelFailure(error)

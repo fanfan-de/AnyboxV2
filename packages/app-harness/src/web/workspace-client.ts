@@ -27,6 +27,11 @@ const storage: BrowserStorage = {
   getItem: key => sessionStorage.getItem(key), setItem: (key, value) => sessionStorage.setItem(key, value),
 }
 
+const projectEnvironmentLabel = (project: ProjectView): string => {
+  const attachmentId = project.computerAttachmentId
+  return !attachmentId ? '环境暂不可用' : attachmentId === 'local:computer' ? '本机环境' : `远端环境 · ${attachmentId.slice(0, 8)}`
+}
+
 /** Sidebar selection follows the device while the full project snapshot remains available to panes. */
 export function projectSidebar(projects: readonly ProjectView[], instanceId: string | undefined, preferredId: string | null | undefined, settled: boolean) {
   const visible = projects.filter(project => instanceId === undefined || (project.instanceId ?? splitScopedId(project.id)?.instanceId) === instanceId)
@@ -159,7 +164,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   })
   const fileSidebar = createFileSidebar(get('agent--file-sidebar-content'), {
     api, messageFor,
-    projectLabel: ref => { const project = projects.find(item => item.id === ref.projectId); return project && [project.harnessName, project.name].filter(Boolean).join(' · ') },
+    projectLabel: ref => { const project = projects.find(item => item.id === ref.projectId); return project && [project.harnessName, project.name, projectEnvironmentLabel(project)].filter(Boolean).join(' · ') },
     changed(sessionId, value) {
       if (disposed) return
       try { sidebarState.update(current => ({ ...current, perSession: { ...current.perSession, [sessionId]: value } })) }
@@ -185,7 +190,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   }
   const sidebar = () => projectSidebar(projects, environment.selectedInstanceId, state.sidebarProjectId, initialProjectsSettled)
   const project = () => sidebar().projects.find(item => item.id === state.sidebarProjectId)
-  const projectLabel = (value: ProjectView | undefined) => value ? [value.harnessName, value.name].filter(Boolean).join(' · ') : undefined
+  const projectLabel = (value: ProjectView | undefined) => value ? [value.harnessName, value.name, projectEnvironmentLabel(value)].filter(Boolean).join(' · ') : undefined
   const updateURL = (push = false) => {
     const pane = activePane()
     const hash = pane ? sessionHash(pane) : state.sidebarProjectId ? `#/projects/${encodeURIComponent(state.sidebarProjectId)}` : '#'
@@ -539,10 +544,10 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       group.querySelector<HTMLButtonElement>('.project-create')!.title = `在 ${item.name} 中新建会话`
       group.querySelector('.project-sessions')!.setAttribute('aria-label', `${item.name} 的会话`)
       button.dataset.projectId = item.id
-      button.title = item.path
+      button.title = `${projectEnvironmentLabel(item)}${item.computerAttachmentId ? ` · ${item.computerAttachmentId}` : ''} · ${item.path}`
       button.classList.toggle('unavailable', !item.available)
       button.querySelector('.project-name')!.textContent = item.name
-      button.querySelector('small')!.textContent = item.available ? item.path : '目录不可访问'
+      button.querySelector('small')!.textContent = `${projectEnvironmentLabel(item)}${item.available ? '' : ' · 目录不可访问'}`
       updateProjectExpansion(item.id)
     }
     if (!visible.length) {

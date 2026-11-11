@@ -1,6 +1,6 @@
 import type { ProjectView } from './client-types.js'
 import type { ProjectDirectoryTarget } from './harness-client.js'
-import { createDirectoryPositions, createProjectDirectoryController, createProjectDirectoryLauncher } from './project-directory-client.js'
+import { createDirectoryPositions, createProjectDirectoryController, createProjectDirectoryLauncher, createProjectEnvironmentController, environmentLabel, environmentStateLabel } from './project-directory-client.js'
 
 const messages: Readonly<Record<string, string>> = {
   'directory-permission-denied': '目标 harness server 的运行账户没有访问此目录的权限。请选择可访问的目录，或返回主目录。',
@@ -18,6 +18,8 @@ const messages: Readonly<Record<string, string>> = {
   'directory-name-invalid': '请输入有效的单个文件夹名称，不能包含路径分隔符，也不能使用“.”或“..”。',
   'directory-exists': '当前位置已存在同名文件或文件夹。请换一个名称，或取消新建后重新读取。',
   'directory-create-unsupported': '该 harness server 暂不支持新建文件夹，请升级目标 harness server 后重新打开。',
+  'computer-environments-unavailable': '无法读取执行环境，请重试。未选择其他环境。',
+  'computer-environment-unavailable': '所选执行环境暂不可用，请检查连接或重新选择。',
   'connection-changed': '此连接的配置已改变。为避免提交到错误设备，请刷新页面后重新选择。',
   'instance-mismatch': '此地址的实例身份已改变，已阻止浏览和提交。请关闭窗口并检查连接。',
 }
@@ -30,7 +32,7 @@ export function directoryMessageFor(error: unknown, fallback: (error: unknown) =
 export function setupProjectDirectoryPicker(messageFor: (error: unknown) => string, selected: (project: ProjectView) => void, root: ParentNode) {
   const positions = createDirectoryPositions({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) })
   const launcher = createProjectDirectoryLauncher()
-  let active: { close(): void } | undefined, disposed = false
+  let active: { close(): Promise<void> } | undefined, disposed = false
   function restoreFocus(trigger: HTMLElement): void {
     if (disposed) return
     const restore = trigger.isConnected && trigger.getClientRects().length ? trigger : root.querySelector<HTMLElement>('#agent--toggle-sidebar')
@@ -43,8 +45,11 @@ export function setupProjectDirectoryPicker(messageFor: (error: unknown) => stri
     dialog.setAttribute('aria-labelledby', 'agent--project-directory-title')
     dialog.innerHTML = `<header class="settings-heading"><h2 id="agent--project-directory-title"></h2><button type="button" class="close-settings" data-cancel aria-label="取消选择项目目录">×</button></header>
       <div class="project-directory-body">
+        <label class="project-environment-label">执行环境<select data-environment aria-label="执行环境"></select></label>
+        <p class="settings-hint" data-environment-hint></p><button type="button" class="secondary-button" data-environments-retry hidden>重新读取执行环境</button>
+        <button type="button" class="secondary-button" data-native hidden>使用本机系统目录窗口</button>
         <p class="project-directory-compat" data-compat hidden>此 harness server 版本不支持浏览目录。升级远端 harness server 后即可逐层选择；当前可以填写目标设备上已有文件夹的绝对路径。</p>
-        <div class="project-directory-toolbar"><button type="button" class="secondary-button" data-parent>↑ 上一级</button><button type="button" class="secondary-button" data-home>⌂ 主目录</button><button type="button" class="secondary-button" data-new hidden>＋ 新建文件夹</button></div>
+        <div class="project-directory-toolbar"><button type="button" class="secondary-button" data-parent>上一级</button><button type="button" class="secondary-button" data-home>主目录</button><button type="button" class="secondary-button" data-new hidden>新建文件夹</button></div>
         <nav class="project-directory-breadcrumbs" aria-label="当前目录层级" data-breadcrumbs></nav>
         <form class="project-directory-create" data-create-form hidden><p data-create-parent></p><label for="agent--project-directory-name">新文件夹名称</label><input id="agent--project-directory-name" data-create-name autocomplete="off" spellcheck="false" aria-describedby="agent--project-directory-create-help"><p class="settings-hint" id="agent--project-directory-create-help">在当前浏览目录中创建，创建后会进入新文件夹。</p><p class="project-directory-create-error" data-create-error role="alert" hidden></p><div class="project-directory-create-actions"><button type="button" class="secondary-button" data-create-cancel>取消新建</button><button type="submit" data-create-submit>创建并进入</button></div></form>
         <form class="project-directory-path" data-path-form><label for="agent--project-directory-path">目标设备上的路径</label><div><input id="agent--project-directory-path" data-path autocomplete="off" spellcheck="false" placeholder="由目标设备提供主目录"><button type="submit" class="secondary-button" data-jump>前往</button></div></form>
@@ -62,19 +67,75 @@ export function setupProjectDirectoryPicker(messageFor: (error: unknown) => stri
     const list = get<HTMLUListElement>('[data-list]'), breadcrumbs = get<HTMLElement>('[data-breadcrumbs]')
     const listeners = new AbortController(), options = { signal: listeners.signal }
     let lastPage: unknown, rowFocus = '', closing = false, focusAfterLoad = false
-    const controller = createProjectDirectoryController(target, { positions, changed: render, selected(project) { close(); selected(project) } })
-    function close(): void {
-      if (closing) return
-      closing = true; controller.close(); listeners.abort(); dialog.close(); dialog.remove(); active = undefined
-      restoreFocus(trigger)
+    let currentTarget: ProjectDirectoryTarget | undefined, switching = false, nativeBusy = false, nativeAvailable = false, nativeError: unknown, switchingGeneration = 0
+    let nativeCheck: AbortController | undefined
+    const nativeChecks = new Set<Promise<void>>()
+    const environmentSelect = get<HTMLSelectElement>('[data-environment]')
+    const environments = createProjectEnvironmentController(target, { changed: render })
+    const makeController = (value: ProjectDirectoryTarget) => createProjectDirectoryController(value, { positions, changed: render, selected(project) { void close(); selected(project) } })
+    let controller = makeController(target)
+    let closingPromise: Promise<void> | undefined
+    function close(): Promise<void> {
+      if (closingPromise) return closingPromise
+      closing = true; switchingGeneration++; nativeCheck?.abort(); listeners.abort(); dialog.close(); dialog.remove()
+      const old = active
+      closingPromise = Promise.allSettled([controller.close(), environments.close(), launcher.close(), ...nativeChecks]).then(() => {
+        if (active === old) active = undefined
+        restoreFocus(trigger)
+      })
+      return closingPromise
+    }
+    async function selectEnvironment(id?: string): Promise<void> {
+      if (closing || nativeBusy || controller.snapshot().submitting || controller.snapshot().creating) return
+      if (id !== undefined && !environments.select(id)) return
+      const token = ++switchingGeneration
+      nativeCheck?.abort(); nativeAvailable = false
+      switching = true; currentTarget = undefined; nativeError = undefined; render()
+      await Promise.allSettled([controller.close(), ...nativeChecks])
+      if (closing || token !== switchingGeneration) return
+      currentTarget = environments.target()
+      switching = false; lastPage = undefined
+      if (currentTarget) {
+        controller = makeController(currentTarget); render()
+        if (currentTarget.environment?.origin === 'local') {
+          const captured = currentTarget, observation = new AbortController(); nativeCheck = observation
+          const check = captured.nativeAvailable(observation.signal).then(value => {
+            if (!closing && !observation.signal.aborted && token === switchingGeneration) { nativeAvailable = value; render() }
+          }).catch(() => { /* A failed capability check keeps the optional system picker hidden. */ })
+            .finally(() => nativeChecks.delete(check))
+          nativeChecks.add(check)
+        }
+        await controller.initialize()
+      }
+      else render()
     }
     function rows(): HTMLButtonElement[] { return [...list.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')] }
     function render(): void {
       if (closing) return
-      const state = controller.snapshot(), busy = state.loading || state.submitting || state.creating, browsing = state.mode === 'browse'
-      const error = state.error ? directoryMessageFor(state.error, messageFor) : ''
+      const state = controller.snapshot(), environmentState = environments.snapshot()
+      const unavailable = switching || environmentState.loading || !!environmentState.error || !currentTarget
+      const busy = unavailable || nativeBusy || state.loading || state.submitting || state.creating, browsing = !unavailable && state.mode === 'browse'
+      const failure = environmentState.error ?? nativeError ?? state.error
+      const error = failure ? directoryMessageFor(failure, messageFor) : ''
+      environmentSelect.replaceChildren(...environmentState.environments.map(environment => {
+        const option = document.createElement('option'); option.value = environment.environmentId
+        option.textContent = `${environmentLabel(environment)} · ${environmentStateLabel(environment)}`
+        option.title = `${environment.environmentId}${environment.unitId ? ` · ${environment.unitId}` : ''}`
+        option.disabled = environment.state !== 'approved'; return option
+      }))
+      environmentSelect.value = environmentState.selectedEnvironmentId ?? ''
+      environmentSelect.disabled = environmentState.loading || switching || nativeBusy || state.submitting || state.creating
+      get('[data-environments-retry]').hidden = !environmentState.error
+      get<HTMLButtonElement>('[data-environments-retry]').disabled = environmentState.loading
+      const environment = currentTarget?.environment, remote = environment?.origin === 'remote'
+      get('[data-environment-hint]').textContent = environmentState.loading ? '正在读取执行环境…' : switching ? '正在关闭上一个环境的目录观察…' : environment
+        ? `${environmentLabel(environment)} · ${environmentStateLabel(environment)}${remote ? '。填写该环境上的绝对路径。离线时提交会报告不可用，并保留选择。' : '。本机指当前 harness server 所在设备。'}` : '请先读取并选择执行环境。'
+      get('[data-native]').hidden = unavailable || remote || !environment || !nativeAvailable
+      get<HTMLButtonElement>('[data-native]').disabled = busy || state.blocked
+      get<HTMLLabelElement>('label[for="agent--project-directory-path"]').textContent = remote ? '该环境上的绝对路径' : '本机环境上的路径'
+      path.placeholder = remote ? '例如 /home/me/project 或 C:\\Projects\\example' : '由本机环境提供主目录'
       path.value = state.pathInput; filter.value = state.query; hidden.checked = state.showHidden
-      path.disabled = state.submitting || state.creating || state.blocked; filter.disabled = state.submitting || state.creating || state.blocked
+      path.disabled = unavailable || nativeBusy || state.submitting || state.creating || state.blocked; filter.disabled = state.submitting || state.creating || state.blocked
       hidden.disabled = state.submitting || state.creating || state.blocked
       get('[data-new]').hidden = !browsing || state.creationSupported !== true
       get<HTMLButtonElement>('[data-new]').disabled = !state.canStartCreate || state.createFormOpen
@@ -86,9 +147,9 @@ export function setupProjectDirectoryPicker(messageFor: (error: unknown) => stri
       get<HTMLButtonElement>('[data-create-cancel]').disabled = state.creating
       get('[data-create-error]').hidden = !state.createError
       get('[data-create-error]').textContent = state.createError ? directoryMessageFor(state.createError, messageFor) + (state.createNeedsRead && !state.blocked ? ' 请先重新读取当前位置，检查文件夹后再继续。' : '') : ''
-      get('[data-compat]').hidden = state.mode !== 'manual'
+      get('[data-compat]').hidden = unavailable || remote || state.mode !== 'manual'
       get('#agent--project-directory-help').textContent = state.mode === 'manual'
-        ? '填写目标设备上已有文件夹的绝对路径，点击“选择当前文件夹”后校验并登记。'
+        ? '填写所选执行环境上已有文件夹的绝对路径，点击“选择当前文件夹”后校验并登记。'
         : '双击或按 Enter 进入文件夹，↑↓ 移动焦点，Alt+↑ 返回上一级。选择按钮会登记当前路径。'
       get('[data-filters]').hidden = !browsing
       list.hidden = !browsing; get('[data-pagination]').hidden = !browsing
@@ -98,14 +159,14 @@ export function setupProjectDirectoryPicker(messageFor: (error: unknown) => stri
       get<HTMLButtonElement>('[data-jump]').disabled = state.submitting || state.creating || state.blocked || !state.pathInput
       get<HTMLButtonElement>('[data-home]').disabled = state.submitting || state.creating || state.blocked
       get<HTMLButtonElement>('[data-parent]').disabled = !state.page?.parentPath || state.submitting || state.creating || state.blocked
-      get<HTMLButtonElement>('[data-select]').disabled = !state.canSelect
+      get<HTMLButtonElement>('[data-select]').disabled = busy || !state.canSelect
       get('[data-select]').textContent = state.submitting ? '正在添加…' : '选择当前文件夹'
       for (const button of dialog.querySelectorAll<HTMLButtonElement>('[data-cancel]')) button.disabled = state.submitting
       get('[data-error]').hidden = !error; get('[data-error-message]').textContent = error
-      get<HTMLButtonElement>('[data-retry]').hidden = state.blocked || !state.hasRetry
+      get<HTMLButtonElement>('[data-retry]').hidden = unavailable || state.blocked || !state.hasRetry
       get<HTMLButtonElement>('[data-retry]').disabled = busy
       const dirty = !!state.page && state.pathInput !== state.page.path
-      get('[data-status]').textContent = state.creating ? '正在目标设备创建文件夹…' : state.submitting ? '正在目标设备登记项目…' : state.loading ? '正在读取目标设备目录…'
+      get('[data-status]').textContent = unavailable ? '' : nativeBusy ? '正在等待系统目录窗口…' : state.creating ? '正在目标设备创建文件夹…' : state.submitting ? '正在目标设备登记项目…' : state.loading ? '正在读取目标设备目录…'
         : error ? (state.page ? `保留上次浏览位置：${state.page.path}` : '')
         : state.createNeedsRead && !state.createFormOpen ? '请重新读取当前位置，检查文件夹后再继续新建。'
         : state.mode === 'manual' ? '确认后将在上述目标设备校验并登记该路径。'
@@ -152,6 +213,20 @@ export function setupProjectDirectoryPicker(messageFor: (error: unknown) => stri
       }
       for (const button of breadcrumbs.querySelectorAll<HTMLButtonElement>('button')) button.disabled = state.submitting || state.creating || state.blocked
     }
+    environmentSelect.addEventListener('change', () => { void selectEnvironment(environmentSelect.value) }, options)
+    get('[data-environments-retry]').addEventListener('click', () => { void environments.initialize().then(() => selectEnvironment()) }, options)
+    get('[data-native]').addEventListener('click', () => {
+      if (!currentTarget || nativeBusy || switching || controller.snapshot().submitting) return
+      const captured = currentTarget
+      nativeBusy = true; nativeError = undefined; render()
+      const done = launcher.open(captured, {
+        browse() {},
+        selected(project) { positions.set(captured.connection.instanceId, project.path, captured.environment?.environmentId); void close(); selected(project) },
+        failed(error) { nativeError = error },
+      })
+      if (done) void done.finally(() => { if (!closing) { nativeBusy = false; render() } })
+      else { nativeBusy = false; render() }
+    }, options)
     function cancelCreate(): void {
       controller.cancelCreate()
       const button = get<HTMLButtonElement>('[data-new]')
@@ -200,22 +275,14 @@ export function setupProjectDirectoryPicker(messageFor: (error: unknown) => stri
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? values.length - 1 : event.key === 'ArrowDown' ? Math.min(values.length - 1, index + 1) : Math.max(0, index - 1)
       values[next]?.focus()
     }, options)
-    active = { close }; render(); dialog.showModal(); path.focus(); void controller.initialize()
+    active = { close }; render(); dialog.showModal(); environmentSelect.focus(); void environments.initialize().then(() => selectEnvironment())
   }
   return {
     open(target: ProjectDirectoryTarget, trigger: HTMLElement): void {
       if (disposed || active) return
-      const done = launcher.open(target, {
-        browse: () => openBrowser(target, trigger),
-        selected(project) { positions.set(target.connection.instanceId, project.path); selected(project) },
-        failed(error) {
-          const notice = root.querySelector<HTMLElement>('#agent--workspace-notice')
-          if (notice) { notice.textContent = directoryMessageFor(error, messageFor); notice.hidden = false }
-        },
-      })
-      if (done) void done.then(() => { if (!active) restoreFocus(trigger) })
+      openBrowser(target, trigger)
     },
-    close() { active?.close(); return launcher.close() },
-    dispose() { disposed = true; active?.close(); return launcher.dispose() },
+    close() { return active?.close() ?? launcher.close() },
+    async dispose() { disposed = true; await active?.close(); await launcher.dispose() },
   }
 }

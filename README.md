@@ -2,7 +2,7 @@
 
 本仓库 [AnyboxV2](https://github.com/fanfan-de/AnyboxV2) 是 Anybox 后续开发的维护仓库。旧仓库 [anybox](https://github.com/fanfan-de/anybox) 已停止维护，保留历史代码与资料；新的开发、问题反馈和贡献请在本仓库进行。产品名称仍为 **Anybox**，Agent 产品名称为 **Anybox Harness**。
 
-文档入口：[项目文档](docs/README.md) · [命名与边界](docs/naming.md) · [模块与组件手册](docs/modules/README.md)。组件按内聚职责分目录，每个组件有独立的接口、功能、数据归属、生命周期与测试说明。
+文档入口：[项目文档](docs/README.md) · [命名与边界](docs/naming.md) · [模块与组件手册](docs/modules/README.md) · [变更方向记录](.agents/notes/README.md)。组件按内聚职责分目录，每个组件有独立的接口、功能、数据归属、生命周期与测试说明；每次独立变更的方向、理由和验证入口保存在仓库的 Agent Notes 中。
 
 Anybox 是 NyaCore 应用的宿主应用，负责受信应用的注册、装配、启停、公共资源与界面承载。正式目录目前提供 **Anybox Harness** 与 **Claude Agent** 两个独立应用包。Anybox Harness 是 Agent 产品，其可部署到本地或远端服务器的通用服务端核心称为 **harness server**；Agent 工作区、模型管理和 Prompt 管理属于 Anybox Harness；执行设备连接、凭据与转发由两个应用各自拥有，不设置应用间共享业务层。源码中通用宿主位于 `packages/host/src/`，Anybox Harness 完整应用位于 `packages/app-harness/src/`，默认目录与进程入口位于 `packages/distribution/src/entrypoints/`；详见 [应用宿主](docs/products-v1.md)与[目录边界](docs/harness-module-boundary.md)。[通用 Models 模块](packages/models/README.md) 已接入 Anybox Harness 与本机 Web：用户在统一模型目录选择 Provider、配置 API Key，适用模型自动加入可用列表；每个会话独立选模并查看流式回答。模块提供 `models`、`models.settings`、`models.protocols`、受信 `models.source-data` 和可选目录刷新服务 `models.catalog`，不依赖 Anybox Harness、业务 Session 或前端框架；[Models 模块手册](docs/modules/models/README.md)说明其资源与扩展边界。
 

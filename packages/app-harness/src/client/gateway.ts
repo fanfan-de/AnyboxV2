@@ -16,7 +16,7 @@ export const clientGatewayServiceKey = 'client.gateway'
 export interface HarnessGateway { handle(request: IncomingMessage, response: ServerResponse, url: URL, context: ApplicationHttpContext): Promise<void>; close(): Promise<void> }
 const id = '[^/]+'
 const paths: Record<string, readonly RegExp[]> = {
-  GET: [ /^\/(instance|agents|projects|models|prompts|tools|access\/tokens|changes)$/, /^\/products(?:\/[^/]+)?$/, new RegExp(`^/projects/${id}/sessions$`),
+  GET: [ /^\/(instance|agents|projects|models|prompts|tools|computer-environments|access\/tokens|changes)$/, /^\/products(?:\/[^/]+)?$/, new RegExp(`^/projects/${id}/sessions$`),
     new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/versions)?$`),
     new RegExp(`^/sessions/${id}(/runs(/by-key/${id})?|/nodes(/${id}(/path)?)?|/images/${id}/content|/project-files/(search|preview|snapshots/${id}))?$`),
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
@@ -125,7 +125,7 @@ export function createHarnessGateway(connections: ConnectionsPort, options: { lo
     if (proxy && allowedProxyPath(method, proxy[2])) {
       try {
         // Unit control has no legacy route; the application owns its upstream path.
-        const upstreamPath = proxy[2].startsWith('/units/') ? `/apps/agent${proxy[2]}` : proxy[2]
+        const upstreamPath = (proxy[2].startsWith('/units/') || proxy[2] === '/computer-environments') ? `/apps/agent${proxy[2]}` : proxy[2]
         await forwardConnectionRequest(connections, decodeURIComponent(proxy[1]), upstreamPath, url.search, request, response, controller.signal,
           { allowQueryBinding: method === 'GET' && imageContentPath.test(proxy[2]) })
       } catch (error) { if (error && typeof error === 'object' && 'status' in error) throw error; throw failure(502, 'connection-unavailable') }

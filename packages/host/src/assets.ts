@@ -12,4 +12,5 @@ export const shellAssets: readonly ApplicationAsset[] = [
   { path: '/host/web/page-lifecycle.js', file: fileURLToPath(new URL('./web/page-lifecycle.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/host/web/application-lifecycle.js', file: fileURLToPath(new URL('./web/application-lifecycle.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/host/web/application-workspace.js', file: fileURLToPath(new URL('./web/application-workspace.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
+  { path: '/host/web/floating-application-menu.js', file: fileURLToPath(new URL('./web/floating-application-menu.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
 ]

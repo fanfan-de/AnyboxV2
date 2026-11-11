@@ -1,7 +1,7 @@
 import type { Context } from '@nya/core'
 import { modelsSettingsServiceKey } from '@anybox/models'
 import type { ModelsSettingsService } from '@anybox/models'
-import { createHarnessServerAgentComponents, createHarnessServerPromptComponents } from './core/index.js'
+import { createHarnessServerAgentComponents, createHarnessServerPromptComponents, validateComputerEnvironmentOptions } from './core/index.js'
 import type { HarnessServerCoreOptions } from './core/index.js'
 import type { AgentDefinition } from './core/agent/domain.js'
 import { createImageAssetsComponent } from './core/image/component.js'
@@ -25,6 +25,7 @@ export interface HarnessServerRuntimeIntegration {
   readonly http?: HarnessServerHttpIntegrationSource | (() => HarnessServerHttpIntegration)
 }
 export function createHarnessServerRuntime(root: Context, config: HarnessServerConfig, options: HarnessServerRuntimeOptions = {}, integration: HarnessServerRuntimeIntegration = {}) {
+  validateComputerEnvironmentOptions(options)
   const definitions = options.agents ?? [{ id: 'assistant', instructions: 'You are a helpful assistant.' }]
   return createApplicationRuntime(root, async installation => {
     if (integration.registerStopGuard) installation.effect(() => integration.registerStopGuard!(() => {
@@ -34,7 +35,6 @@ export function createHarnessServerRuntime(root: Context, config: HarnessServerC
     await installHarnessServerModels(root, config, options.models, installation.track)
     const hasDefault = root.get<ModelsSettingsService>(modelsSettingsServiceKey)?.configurations().some(model => model.id === 'default') ?? false
     const serverCoreOptions: HarnessServerCoreOptions = { ...options, localWorkerDirectory: options.localWorkerDirectory ?? `${config.harnessDatabasePath}.computer-worker`, initialProjects: options.projects ?? options.initialProjects,
-      computerUnit: options.computerUnit ?? config.computerUnit,
       agents: options.agents ?? definitions.map(agent => ({ ...agent, ...(hasDefault ? { modelId: 'default' } : {}) })) }
     for (const component of [...createHarnessServerPromptComponents(serverCoreOptions), createImageAssetsComponent({ directory: config.imageAssetsDirectory }),
       ...createHarnessServerAgentComponents(root, serverCoreOptions, installation), createHarnessServerHttpComponent(root, definitions, integration.http)]) installation.install(component)

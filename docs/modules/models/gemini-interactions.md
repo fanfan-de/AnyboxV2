@@ -12,6 +12,8 @@
 
 生成端点为 POST `/interactions`，API Key 使用 `x-goog-api-key`，无认证连接不发送该头。连接表单为 API 根地址、认证方式和正整数超时。
 
+连接 `timeoutMs` 对模型交换表示无新原生事件的等待上限；每个已接纳的生命周期或步骤事件都续期，持续输出可超过该时长。SSE 注释不续期。首个事件及 complete 模式的完整响应仍受初始等待约束，响应结果到达后仍等待实际清理，见 [Models execution 流程](models.md#原生-execution-流程)。
+
 参数使用 `{ protocolId: 'gemini-interactions', formatVersion: 1, value }`，value 只允许 `generation_config`：
 
 | 子字段 | 约束 |
@@ -46,7 +48,7 @@ SSE 识别 interaction.created、interaction.status_update、step.start/delta/st
 
 step 重复、缺少前置 start、已 stop 后再 delta、未知 delta 类型、错误终态和提前 `[DONE]` 都失败。原生事件只交给受信投影器；终态必须通过与 JSON 相同的结构校验才能提交。未知 response 字段会保留，不意味着任意请求字段也获允许。
 
-JSON/SSE 解析失败通过已有 diagnostic 记录保存固定解析阶段、已知事件类型、合法 step index 与已知 step/delta 类型，不保存原始失败帧、正文、签名、认证头或后端错误消息。公共错误仍使用固定分类，浏览器仍只接收既有白名单投影；诊断不是可恢复响应，失败不提交候选上下文。
+JSON/SSE 解析失败通过已有 diagnostic 记录保存固定解析阶段、已知事件类型、合法 step index 与已知 step/delta 类型，不保存原始失败帧或后端错误消息。超时、取消、断连和解析失败还保留此前已接纳的有序 steps，包括文本、thought 摘要/签名及函数参数分片；尚无已接纳步骤时仅保存可用的固定诊断元数据。认证字段与捕获凭据由 execution 脱敏，签名等原生字段只留受信记录。公共错误仍使用固定分类，浏览器仍只接收既有白名单投影；诊断不是可恢复响应，失败不提交候选上下文或执行未完成工具调用。
 
 ## 发现与资源生命周期
 

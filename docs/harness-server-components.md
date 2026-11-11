@@ -30,7 +30,7 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | 单元附着 | `harness.unit-attachments`；注入 local-storage | `unit-attachments` 账本、本机单元的自动附着与本次装配 bootId、单元凭证认证；停止准入并等待账本操作退出 |
 | 单元传输 | `harness.unit-transport`；注入 unit-attachments | 远端单元拨出的内存邮箱：长轮询领取、回执、连接状态；关闭拒绝等待中的请求并释放轮询，不取消单元已接受的工作 |
 | 本机 worker 客户端 | `computer.local-worker`、`computer.local-worker-control`；无 inject | 惰性连接或启动独立 worker，经回环转发附着控制；Effect 只取消并等待本地 HTTP 观察 |
-| Worker 路由 | `computer.worker`、`computer.instance-provider`；注入 unit-transport，本机形态另注入 computer.local-worker | 按授权附着路由到回环 worker 或单元传输，claim 缓存与 `get` 提示，按需确认实例；Effect 只中止本地远端观察 |
+| Worker 路由 | `computer.worker`、`computer.instance-provider`；注入 unit-transport、unit-attachments 与 computer.local-worker，本机和远端并存 | 按授权附着路由到回环 worker 或单元传输，claim 缓存与 `get` 提示，按需确认实例；Effect 只中止本地远端观察 |
 | Computers | `harness.computers`；注入 local-storage/instance-provider | 逻辑资源、按需共享激活、实例代次和 pin；取消并等待提供方实际退出 |
 | Workspaces | `harness.workspaces`；注入 projects/local-storage | pinned-local 映射、scope reservation 与固定 binding；取消并等待准备和查询 |
 | Computer Operations | `harness.computer-operations`；注入 computers/workspaces/local-storage/worker/image-assets/unit-attachments | 声明、receipt、结果、scope 与固定的 Computer 附着引用；远端附着的声明放在 `unit:<attachmentId>` 逻辑计算机上；新声明前复核附着；Effect 取消并等待本代观察 |

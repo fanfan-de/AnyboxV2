@@ -1,6 +1,6 @@
 import { geminiImages, imageContent, withImages } from './images.js';
-import { isModelsError, modelsError } from '../errors.js';
-import { withNativeDiagnostic } from '../diagnostics.js';
+import { modelsError, normalizeError } from '../errors.js';
+import { nativeDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
 import { assert } from '../domain.js';
 import type { DiscoveredModel, JsonValue } from '../types.js';
 import type { NativeObject, NativeProtocol } from '../native-types.js';
@@ -120,9 +120,10 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
     exchange(input) {
       return withImages(geminiImages, input, (wire, signal) => request(options, { ...input, signal }, 'interactions', wire, async reader => {
         let stage = input.request.stream ? 'sse-stream' : 'json-response', lastEvent: NativeObject | undefined;
+        const steps = new Map<number, { step: Record<string, JsonValue>; stopped: boolean; arguments?: string }>();
         try {
           if (!input.request.stream) return validateResponse(await reader.json());
-          const steps = new Map<number, { step: Record<string, JsonValue>; stopped: boolean; arguments?: string }>(); let terminal: NativeObject | undefined;
+          let terminal: NativeObject | undefined;
           await reader.sse(data => {
             stage = 'sse-event'; lastEvent = undefined;
             if (data === '[DONE]') { if (!terminal) throw modelsError('invalid-response'); return; }
@@ -161,8 +162,8 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
           });
           if (!terminal) { stage = 'sse-terminal-missing'; throw modelsError('invalid-response'); } return terminal;
         } catch (error) {
-          if (isModelsError(error) && (error.code === 'invalid-response' || error.code === 'provider-failure')) throw withNativeDiagnostic(error, failureDiagnostic(stage, lastEvent));
-          throw error;
+          const partial = [...steps.entries()].sort(([a], [b]) => a - b).map(([, value]) => ({ ...value.step, ...(value.arguments === undefined ? {} : { arguments: value.arguments }) }));
+          throw withNativeDiagnostic(normalizeError(error), nativeDiagnostic(error) ?? { ...failureDiagnostic(stage, lastEvent), ...(partial.length ? { steps: partial } : {}) });
         }
       }, interactionRequestOptions));
     },

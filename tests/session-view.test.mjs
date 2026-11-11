@@ -953,6 +953,38 @@ for (const status of ['failed', 'cancelled', 'interrupted']) test(`${status} run
   assert.equal(f.state.position.viewNodeId, 'node-first'); assert.equal(f.state.draft, 'Unsent draft')
 })
 
+for (const status of ['failed', 'cancelled', 'interrupted']) for (const parentNodeId of [null, 'node-first'])
+  test(`${status} partial output remains visible at ${parentNodeId ?? 'the root'} without becoming a successful conversation node`, t => {
+    const item = run('partial', 'running', parentNodeId), unrelated = run('unrelated', status, 'another-parent')
+    const f = fixture(t, { runs: [run('first'), item, unrelated], path: parentNodeId ? undefined : [],
+      position: { viewNodeId: parentNodeId, focusedRunId: item.id, follow: { runId: item.id, parentNodeId } } })
+    f.state.views.set(item.id, projection(item.id, 'Received private-api-key', 'provisional'))
+    f.state.views.set(unrelated.id, projection(unrelated.id, 'Different branch partial'))
+    f.panel.render()
+    const turn = f.find('.protocol-turn[data-run-id="partial"]')
+    item.status = status
+    f.state.position.follow = undefined
+    f.panel.render()
+    assert.equal(f.find('.protocol-turn[data-run-id="partial"]'), turn, 'settlement keeps the existing visible frame during the committed read')
+    const diagnostic = projection(item.id, 'Received [redacted]', 'committed', 3)
+    diagnostic.exchanges[0].nativeState = { type: 'chat.state', diagnostic: true, partial: true }
+    f.state.views.set(item.id, diagnostic)
+    f.panel.render()
+    const transcript = f.find('.transcript')
+    assert.equal(transcript.hidden, false)
+    assert.match(transcript.textContent, /Received \[redacted\]/)
+    assert.doesNotMatch(transcript.textContent, /private-api-key|Different branch partial/)
+    assert.match(transcript.textContent, new RegExp(`${status === 'failed' ? '运行失败' : status === 'cancelled' ? '已取消' : '意外中断'} · 已保留未完成内容`))
+    assert.equal(transcript.querySelector('.protocol-turn[data-run-id="unrelated"]'), null)
+    assert.equal(transcript.querySelectorAll('.node-actions').length, parentNodeId ? 1 : 0, 'partial content adds no successful-node continuation actions')
+    assert.equal(item.resultNodeId, undefined)
+    assert.equal(f.state.position.viewNodeId, parentNodeId)
+    assert.equal(f.state.draft, 'Unsent draft')
+    f.panel.dispose(); f.mount()
+    assert.match(f.find('.transcript').textContent, /Received \[redacted\]/)
+    assert.match(f.find('.transcript').textContent, /已保留未完成内容/)
+  })
+
 test('each view retains its own scroll and ignores hidden or zero-size measurements', t => {
   const f = fixture(t, { initialScroll: { dialogue: 120 } })
   const transcript = f.find('.transcript'), history = f.find('.trajectory-scroll')

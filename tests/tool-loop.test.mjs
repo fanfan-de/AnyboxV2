@@ -123,7 +123,7 @@ test('a Bash batch executes serially and returns nonzero exit codes as observati
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
-test('one invalid request rejects the complete batch before any Bash command starts', async () => {
+test('one invalid request returns correction feedback for the complete batch before any Bash command starts', async () => {
   const f = await fixture()
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Invalid batch', idempotencyKey: 'invalid' })
@@ -132,11 +132,18 @@ test('one invalid request rejects the complete batch before any Bash command sta
       { id: 'invalid', name: 'other', arguments: { command: 'pwd' } },
     ] })
     f.llm.calls[0].done.resolve()
-    const terminal = await f.harness.waitRun(run.id)
-    assert.equal(terminal.status, 'failed')
-    assert.equal(terminal.errorCategory, 'invalid-tool-request')
+    await until(() => f.llm.calls.length === 2)
+    const feedback = f.llm.calls[1].input.messages.filter(message => message.role === 'tool')
+    assert.deepEqual(feedback.map(message => message.callId), ['valid', 'invalid'])
+    assert.deepEqual(feedback.map(message => JSON.parse(message.content).error.reason), ['batch-rejected', 'unknown-tool'])
+    assert.ok(feedback.every(message => JSON.parse(message.content).error.executed === false))
     assert.equal(existsSync(join(f.directory, 'should-not-exist')), false)
-    assert.deepEqual((await f.sessions.getRunEvents(run.id)).map(event => event.kind), ['operation-started', 'operation-observed', 'terminal'])
+    f.llm.calls[1].result.resolve('The batch was rejected without running either command.')
+    f.llm.calls[1].done.resolve()
+    const terminal = await f.harness.waitRun(run.id)
+    assert.equal(terminal.status, 'completed')
+    assert.equal(existsSync(join(f.directory, 'should-not-exist')), false)
+    assert.equal((await f.sessions.getRunEvents(run.id)).some(event => event.kind === 'tool-started'), false)
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 

@@ -6,14 +6,14 @@ import { canUseModel, modelAvailability, type ModelsCatalog } from './models-cli
 import type { ImageRef, SessionViewMode } from './client-types.js'
 import { imageURL } from './image-client.js'
 import type { SessionController } from './session-client.js'
-import { isActive } from './session-client.js'
+import { isActive, isUnsuccessful } from './session-client.js'
 import type { Pane } from './workspace-layout.js'
 import { createTrajectoryView } from './trajectory-view.js'
 import { conversationTree } from './conversation-tree.js'
 import { createConversationTreeView } from './conversation-tree-view.js'
 import { getProtocolWebModule, type MountedProtocolTurn } from './protocols/modules.js'
 import { renderMarkdown } from './markdown.js'
-import { protocolToolContext, toolContextReadiness, toolSelectionDisplayName } from './tool-call-view.js'
+import { protocolToolContext, toolContextReadiness } from './tool-call-view.js'
 export { createToolCallCard } from './tool-call-view.js'
 
 export interface SessionScrollPosition {
@@ -41,14 +41,13 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   element.setAttribute('aria-label', `${projectName} · 会话 ${(splitScopedId(pane.sessionId)?.id ?? pane.sessionId).slice(0, 8)}`)
   element.innerHTML = `
     <div class="pane-heading">
-      <svg class="pane-tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H6l-4 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z"/></svg>
       <div class="pane-title"><strong></strong><small></small></div>
       <span class="run-status" role="status"></span>
       <button class="pane-close" type="button" aria-label="关闭会话面板" title="关闭会话面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
     </div>
     <div class="branch-navigation" aria-label="对话与轨迹导航">
       <div class="branch-controls" aria-label="对话分支导航">
-      <button class="branch-tree-toggle" type="button" data-toggle-tree aria-expanded="false" aria-label="打开分支总览" title="打开分支总览"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M6 5v14M6 9h9M6 17h9"/><circle cx="6" cy="4" r="2"/><circle cx="17" cy="9" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>分支</span></button>
+      <button class="branch-tree-toggle" type="button" data-toggle-tree aria-expanded="false" aria-label="打开分支总览" title="打开分支总览">分支</button>
       <button type="button" data-go-root title="返回会话起点" aria-label="返回会话起点"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 11 9-8 9 8M5 9v12h14V9M9 21v-8h6v8"/></svg></button>
       <button type="button" data-go-parent title="查看上一级对话" aria-label="查看上一级对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button>
       <span class="branch-position"></span>
@@ -71,18 +70,14 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
       <div class="empty-branches" aria-label="选择已有对话分支" hidden></div>
     </div>
     <form class="composer">
-      <div class="composer-model-row"><select class="composer-model" aria-label="本会话使用的模型"></select></div>
-      <p class="composer-tools" aria-label="本会话固定工具" hidden></p>
-      <p class="composer-model-hint" role="status" hidden></p>
       <div class="composer-images" aria-label="待发送图片" aria-live="polite" hidden></div>
       <textarea rows="2" placeholder="随心输入" aria-label="消息"></textarea>
       <input class="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
-      <div class="composer-footer"><div class="composer-meta">
-        <span class="composer-agent"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m12 3 2.7 6.3L21 12l-6.3 2.7L12 21l-2.7-6.3L3 12l6.3-2.7L12 3Z"/></svg><span>Agent</span></span>
-        <span class="compose-position"></span>
-      </div><div class="actions">
+      <p class="composer-model-hint" role="status" hidden></p>
+      <div class="composer-footer">
+      <div class="composer-model-row"><select class="composer-model" aria-label="本会话使用的模型"></select></div>
+      <div class="actions">
         <button class="attach-images" type="button" title="添加图片，也可粘贴或拖入 · 最多 8 张，每张 10 MiB">添加图片</button>
-        <span class="composer-hint">↵ 发送</span>
         <button class="cancel-button" type="button" aria-label="取消运行" title="取消运行" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
         <button class="send-button" type="submit" aria-label="发送消息" title="发送消息 · Enter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
       </div></div>
@@ -308,10 +303,6 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
     render() {
       panel.captureScroll()
       const state = controller.snapshot()
-      const selectedTools = state.session?.toolSelection?.tools
-      const toolsSummary = get<HTMLElement>('.composer-tools')
-      toolsSummary.hidden = !selectedTools
-      toolsSummary.textContent = selectedTools ? `工具：${selectedTools.length ? selectedTools.map(tool => toolSelectionDisplayName(tool.toolId)).join('、') : '未启用'} · 创建时固定` : ''
       const tree = conversationTree(state)
       visibleMode = state.position.viewMode === 'runs' ? 'runs' : 'dialogue'
       const records = visibleMode === 'runs'
@@ -384,7 +375,6 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       cancel.hidden = !active(state.run)
       cancel.disabled = state.busy || state.run?.status === 'cancelling'
       cancel.title = cancel.disabled ? '正在取消运行' : '取消运行'
-      get('.composer-agent > span').textContent = (state.session?.agentId ? splitScopedId(state.session.agentId)?.id ?? state.session.agentId : 'Agent')
       if (models) {
         const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
         const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.connectionId, value.available, value.effectiveCapabilities?.tools, value.effectiveCapabilities?.imageInput, value.parameters.protocolId]), catalog.providers.map(value => [value.id, value.name]), selected, state.session?.protocolId])
@@ -416,9 +406,6 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         hint.hidden = !hint.textContent
         if (state.images.length && !imageModelReady()) { hint.textContent = '当前模型不支持图片，请切换支持图片的模型，或移除图片后发送。'; hint.hidden = false }
       }
-      get('.compose-position').textContent = readOnly ? '只读历史' : state.position.viewNodeId ? '继续此分支' : '新分支'
-      get('.compose-position').title = readOnly ? state.session?.archivedAt ? '恢复会话后可继续' : '旧版文本会话仅供查看' : state.position.viewNodeId ? `从节点 ${state.position.viewNodeId} 继续` : '从会话起点发送'
-      get('.composer-hint').hidden = readOnly
       get('.branch-position').textContent = state.position.viewNodeId ? `第 ${state.path.length} 轮` : '会话起点'
       get<HTMLButtonElement>('[data-go-root]').disabled = state.loading || !state.position.viewNodeId
       get<HTMLButtonElement>('[data-go-parent]').disabled = state.loading || !state.position.viewNodeId
@@ -450,7 +437,8 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       resizeInput()
       updateSend()
       const progressRuns = state.runs.filter(run => (active(run) || (run.status === 'completed' && run.resultNodeId &&
-        state.position.follow?.runId === run.id && state.position.follow.parentNodeId === state.position.viewNodeId)) &&
+        state.position.follow?.runId === run.id && state.position.follow.parentNodeId === state.position.viewNodeId) ||
+        (isUnsuccessful(run) && state.views.get(run.id)?.exchanges.some(exchange => exchange.blocks.length))) &&
         run.history.kind === 'tree' && run.history.parentNodeId === state.position.viewNodeId && state.views.has(run.id))
       const hasVisibleMessages = Boolean(state.path.length || progressRuns.length || (state.pending && !state.runs.some(item => item.id === state.pending?.runId)))
       empty.hidden = records || hasVisibleMessages
@@ -530,9 +518,16 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       }
       for (const run of progressRuns) {
         addMessage('user', run.input, false, run.images, run.files)
+        if (isUnsuccessful(run)) {
+          const label = document.createElement('p'); label.className = 'streaming-label'; label.setAttribute('role', 'status')
+          label.textContent = `${run.status === 'failed' ? '运行失败' : run.status === 'cancelled' ? '已取消' : '意外中断'} · 已保留未完成内容`
+          renderNodes.push(label)
+        }
         appendTurn(run.id)
-        const label = document.createElement('p'); label.className = 'streaming-label'; label.textContent = active(run) ? '正在生成 · 临时输出' : '已完成'
-        renderNodes.push(label)
+        if (!isUnsuccessful(run)) {
+          const label = document.createElement('p'); label.className = 'streaming-label'; label.textContent = active(run) ? '正在生成 · 临时输出' : '已完成'
+          renderNodes.push(label)
+        }
       }
       if (state.pending && !state.runs.some(item => item.id === state.pending?.runId)) addMessage('user', state.pending.input, true, state.pending.images, state.pending.files)
       // Move only changed siblings; protocol components retain their DOM and local state.

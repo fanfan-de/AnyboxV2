@@ -23,7 +23,7 @@
 
 `PrepareRunInput` 包含 runId、sessionId、modelId、signal、initialization、input，以及可选 history 和 fileContents。新 initialization 使用 `schemaVersion: 2`、`tool-library-v1`、Prompt 快照、实际工具定义与 Session 不可变 toolSelection；声明必须属于已选择的稳定 ID/版本，且完整定义精确匹配。旧 schemaVersion 1/known-tools-v1 仅接纳原 Bash/Apply Patch 定义，原 JSON 不改写；均不允许重名。新 input v3 保存 raw、text、template、有序 images 和 files 引用；旧 v1 无附件，v2 按 files=[] 读取。fileContents 是受管读取的本轮文件正文，编码前核对其引用与 input.files 一致，仅忽略会变化的 expiresAt。
 
-`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（四种协议均为 1.3.0）、execution 实际记录格式（四种协议均为 2）和新 Run 的 `viewSchemaVersion: 2`。驱动、Loop 与记录格式用于恢复兼容判断；展示版本不是原生恢复的新门槛。旧 binding 的展示版本保留原值，旧原生记录在查询时重新投影为展示 v2，不改写历史 JSON。
+`ProtocolBindingSnapshot` 保存 protocolId、由绑定代和驱动代组成的 generationId、实际 driverVersion、Loop 版本（四种协议均为 1.4.0）、execution 实际记录格式（四种协议均为 2）和新 Run 的 `viewSchemaVersion: 2`。驱动、Loop 与记录格式用于恢复兼容判断；展示版本不是原生恢复的新门槛。旧 binding 的展示版本保留原值，旧原生记录在查询时重新投影为展示 v2，不改写历史 JSON。
 
 ## 准备与执行
 
@@ -34,6 +34,12 @@ prepare 先验证历史的协议、Loop 版本、记录格式和工具契约；c
 活跃 Run 恢复使用独立版本化 protocolCursor，由对应 Loop 解释。prepareResume 不重新套模板、不读取当前 Prompt；重建 execution 的完整本 Run 记录后，首次 runner.call 仅回放最后耐久响应。已观察工具按原顺序形成下一增量请求，原请求与工具结果固定后才发出下一模型调用。没有保存响应的 model-pending 不经此接口重发；任意模型阶段接续属于后续独立 exchange owner。
 
 首次执行按协议编码固定 Prompt、当前输入与工具声明；有父历史时只编码新增输入，工具和原生上下文由恢复状态提供。program 的 `execute(host)` 最多调用一次，通过 `createExchangeRunner` 运行协议 Loop。共享管道只负责准备交换、把请求和结果交给 host.perform、串行工具及安全展示，不决定停止语义。
+
+工具调用先经过纯名称/参数批次预检。原生调用 ID 必须合法、唯一且在长度上限内；在此基础上，未知或未选择的调用名、已选择工具的参数 schema 错误会作为可修正反馈交回模型，继续由各协议编码下一轮工具结果，而不立即终止 Run。反馈保持每个原始 ID；整批中已经合法的同伴调用也返回 `batch-rejected`，整批不产生工具资源、工具操作声明或业务副作用。调用名精确匹配本 Session 固定声明，不增设别名、模糊匹配或静默改名。
+
+反馈 JSON 为 `{error:{code:'invalid-tool-request',reason,message,executed:false,availableTools,schema?}}`。reason 是 `unknown-tool`、`invalid-arguments` 或同批同伴的 `batch-rejected`；message 使用固定说明，availableTools 是实际声明的精确调用名，已选择工具的参数错误附相应 schema。Responses/Chat/Gemini 按原生工具结果结构传回 JSON，Anthropic 同时设置 `is_error:true`。缺失、重复、过长或损坏 ID、损坏原生响应/参数 JSON 仍为致命错误；存储、工具执行、超时、取消及清理故障不转换为预检反馈，也不自动重试副作用。
+
+每个 Run 最多返回三批预检拒绝反馈，第四批拒绝以 `invalid-tool-request` 结束；成功批次不重置累计数。计数位于既有不透明 protocolCursor 的可选 `toolRequestCorrections` 字段，旧游标缺省为零，并随下一次模型响应原子保存。恢复最后耐久响应时从已保存额度开始；在下一请求登记前崩溃会确定性地产生同一拒绝，不重复消耗额度，进入 model-pending 后仍不重发未知模型请求。该续轮语义写为 Loop 1.4.0，兼容读取 1.0.0 至 1.4.0，不新增数据库 schema、服务或组件。
 
 共享交换管道在 prepare 后立即发布白名单输入投影，响应增量及最终替换保留同一 exchange 的 inputs。持久记录投影按 exchange 合并 request/response，只有请求的失败也可展示。`projectNativeRequest` 只读取各协议明确的文本位置；确实包含初始化内容的首请求以接受时 Prompt 快照的 kind 区分 system/context，继承的 Prompt 不附加到后代的增量请求。工具返还、assistant 续轮、图片编码及未知内容块不成为用户文本；本轮 task-template 已执行一次，投影直接读取实际编码文本。没有快照的旧样本按明确原生 role 保守显示。
 
@@ -53,14 +59,16 @@ program 的 `close()` 缓存关闭 Promise，等待 execution 退出，返回原
 
 [原生协议测试](../../../tests/native-protocol-agents.test.mjs) 对四协议验证历史恢复、重启、独立分支、无流式时的即时输入及实时/持久输入一致，拒绝错误 checkpoint；[原生投影测试](../../../tests/native-projection.test.mjs) 验证各原生类型、阶段、停止状态、引用、Prompt 分类、增量与继承边界、request-only 失败、旧原生记录 v1/v2、秘密排除及有界展示不修改恢复记录；[展示解码测试](../../../tests/protocol-view-client.test.mjs) 验证展示 v2 的协议白名单及明确拒绝旧/未知展示版本；[harness server 核心测试](../../../tests/harness-server-core.test.mjs) 验证依赖撤销和实际退出等待。Models 的[运行期测试](../../../packages/models/tests/runtime.test.mjs) 与[生命周期测试](../../../packages/models/tests/lifecycle-review.test.mjs) 验证驱动代、凭据初始化和注销等待。
 
+[工具库原生测试](../../../tests/native-tool-library.test.mjs)、[工具循环](../../../tests/tool-loop.test.mjs) 与 [Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 验证未知名称/错误参数反馈、同批合法调用不执行、修正后续轮与拒绝额度；[协议恢复测试](../../../tests/computer-protocol-resume.test.mjs) 验证修正额度跨响应游标恢复且不重放未知副作用。
+
 旧文本统一执行路径和 `dialogue-v1` 不通过这里迁入执行。不支持跨协议、任意记录格式或任意参数转换。统一执行 `npm run check`。
 
 ## 图片资源与版本兼容
 
 各协议把模板文本与图片资源 URI 编码为同一个用户 content 数组（Gemini 使用 user_input）；每个 exchange 携带其增量 intent 中图片的匹配 resourceRefs，工具续轮不重复声明无关祖先资源。注册表始终提供 execution 私有读取端口，初始许可仅包含本轮与所选成功父路径资源；工具图片必须先随 Session 工具观察同事务保留，再由 program 接纳引用。作用域固定为当前 Session。Models 在受管 start 后读取字节并生成实际请求。Session 不解释协议 URI，Runtime 不解释图片块。
 
-四种协议均接受 Loop 1.0.0/1.1.0/1.2.0/1.3.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。
+四种协议均接受 Loop 1.0.0/1.1.0/1.2.0/1.3.0/1.4.0 与记录 v1/v2，checkpoint 与历史 binding/snapshot 必须自洽；驱动版本兼容由 Models 明确检查。旧链可包含 v1/v2 的不同 Run，本 Run 内仍固定一种记录格式。
 
 ## 项目文件资料
 
-PrepareRunInput.fileContents 是 Run 从 Session 读取的本轮文件内容。注册表将相对路径、实际行范围和正文按 project-file-context v1 JSON 附加在本轮用户文本之后、图片之前。文件正文不参与 task-template，不成为系统提示词；NativeRunInput v3 只保存引用，原生请求记录保存实际资料文本。父链恢复直接复用原生记录，不读取源文件、不重复附加祖先文件。四种协议复用现有文本编码和 Models 图片 resourceRefs；新初始化为 v2，活跃游标绑定 Loop 1.3.0，驱动 2.1.0 与原生记录 v2 不变。
+PrepareRunInput.fileContents 是 Run 从 Session 读取的本轮文件内容。注册表将相对路径、实际行范围和正文按 project-file-context v1 JSON 附加在本轮用户文本之后、图片之前。文件正文不参与 task-template，不成为系统提示词；NativeRunInput v3 只保存引用，原生请求记录保存实际资料文本。父链恢复直接复用原生记录，不读取源文件、不重复附加祖先文件。四种协议复用现有文本编码和 Models 图片 resourceRefs；新初始化为 v2，活跃游标绑定当前 Loop 1.4.0，驱动和原生记录格式不因本次工具反馈改动升级。

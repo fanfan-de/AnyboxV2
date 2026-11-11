@@ -491,6 +491,7 @@ test('selected versions are effective only after matching actual roles are ready
 test('source buttons open their own folder or archive chooser without uploading content', async t => {
   const f = fixture(t, async () => Response.json(state()))
   await f.view.refresh()
+  f.find(node => node.className === 'package-install-toggle').dispatchEvent(new Event('click'))
   const folder = f.find(node => node.tagName === 'input' && 'webkitdirectory' in node.attributes)
   const archive = f.find(node => node.tagName === 'input' && node.accept === '.anybox-app')
   const opened = []
@@ -501,6 +502,63 @@ test('source buttons open their own folder or archive chooser without uploading 
   }
   assert.deepEqual(opened, ['folder', 'archive'])
   assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 0)
+})
+
+test('installation begins with one collapsed entry while package changes and recovery stay visible', async t => {
+  const f = fixture(t, async () => Response.json({ ...pendingState(), operations: [job('recovery-required')], trustedPublisherCount: 0 }))
+  await f.view.refresh()
+  const entry = f.find(node => node.className === 'package-install-toggle'), panel = f.find(node => node.className === 'package-install-panel')
+  assert.equal(entry.textContent, '安装应用'); assert.equal(entry.attributes['aria-expanded'], 'false')
+  assert.equal(entry.attributes['aria-controls'], panel.id); assert.equal(panel.hidden, true)
+  assert.equal(f.find(node => node.className === 'package-pending-banner').hidden, false)
+  assert.equal(f.find(node => node.className === 'package-activity').hidden, false)
+  assert.ok(f.find(node => node.className === 'package-facts').find(node => node.className === 'package-installed-app'))
+  assert.equal(f.find(node => node.className === 'package-notice').hidden, true, 'publisher setup is contextual to the installation form')
+  assert.match(panel.find(node => node.className === 'package-source-notice').textContent, /尚未配置信任/)
+  entry.dispatchEvent(new Event('click'))
+  assert.equal(panel.hidden, false); assert.equal(entry.attributes['aria-expanded'], 'true'); assert.equal(entry.textContent, '收起安装')
+  await f.view.refresh()
+  assert.equal(panel.hidden, false, 'status observation does not collapse an installation the user opened')
+})
+
+test('an external installation action slot opens the form and is cleared synchronously on disposal', async t => {
+  const actions = new Element('div'), existing = new Element('button'); existing.textContent = 'other host action'; actions.append(existing)
+  const f = fixture(t, async () => Response.json(state()), { installationActions: actions })
+  await f.view.refresh()
+  const entry = actions.find(node => node.className === 'package-install-toggle'), panel = f.find(node => node.className === 'package-install-panel')
+  assert.ok(entry); assert.equal(f.find(node => node.className === 'package-install-entry'), undefined); assert.equal(panel.hidden, true)
+  entry.dispatchEvent(new Event('click')); assert.equal(panel.hidden, false); assert.equal(entry.attributes['aria-expanded'], 'true')
+  const closing = f.view.dispose()
+  assert.deepEqual(actions.children, [existing]); assert.equal(f.container.children.length, 0)
+  await closing
+})
+
+test('folding installation clears browser files and local trust without cancelling host operations', async t => {
+  const f = fixture(t, async () => Response.json(state([job('verifying')])))
+  await f.view.refresh()
+  const entry = f.find(node => node.className === 'package-install-toggle'), panel = f.find(node => node.className === 'package-install-panel')
+  const folder = f.find(node => node.tagName === 'input' && 'webkitdirectory' in node.attributes)
+  f.view.selectDirectory(localDirectory()); f.view.trustDirectory(true); folder.value = 'selected local files'
+  assert.equal(panel.hidden, false); assert.equal(f.view.snapshot().trustedDirectory, true)
+  entry.dispatchEvent(new Event('click'))
+  assert.equal(panel.hidden, true); assert.equal(f.view.snapshot().selectedFilename, null); assert.equal(f.view.snapshot().trustedDirectory, false); assert.equal(folder.value, '')
+  assert.equal(f.find(node => node.className === 'package-activity').hidden, false)
+  assert.ok(f.find(node => node.tagName === 'button' && node.textContent === '取消安装'))
+  assert.equal(f.calls.filter(call => call.init.method === 'POST').length, 0)
+  entry.dispatchEvent(new Event('click')); f.view.selectDirectory(localDirectory())
+  assert.equal(f.view.snapshot().trustedDirectory, false, 'reopening never restores trust for executable content')
+})
+
+test('installation cannot be folded while accepted browser work still holds the selected source', async t => {
+  const uploading = deferred()
+  const f = fixture(t, async (_url, init) => init.method === 'POST' ? Response.json(job('accepted')) : init.method === 'PUT' ? uploading.promise : Response.json(state()), { hash: async () => 'b'.repeat(64) })
+  await f.view.refresh(); f.view.select(payload())
+  const installing = f.view.install(); await flush()
+  const entry = f.find(node => node.className === 'package-install-toggle'), panel = f.find(node => node.className === 'package-install-panel')
+  assert.equal(entry.disabled, true); entry.dispatchEvent(new Event('click'))
+  assert.equal(panel.hidden, false); assert.equal(f.view.snapshot().selectedFilename, 'sample.anybox-app')
+  uploading.resolve(Response.json(job('installed', { identity }))); await installing
+  assert.equal(entry.disabled, false); assert.equal(f.calls.filter(call => call.url.endsWith('/cancel')).length, 0)
 })
 
 test('clearing a selected folder revokes its local trust without accepting an installation', async t => {

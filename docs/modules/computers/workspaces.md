@@ -8,7 +8,7 @@
 
 源码：[组件](../../../packages/app-harness/src/core/workspace/component.ts)、[端口](../../../packages/app-harness/src/core/workspace/port.ts)、[领域值与校验](../../../packages/app-harness/src/core/workspace/domain.ts)。调用者为 [Computer Operations](computer-operations.md)；项目身份仍归 [Projects](../sessions/projects.md)。
 
-`options` 可提供 `now()`、`newId()` 和受信的 `localProviderId`。默认提供方为 `local`；替代提供方仍须在本机解析目录，不能通过改名获得远端准备能力。远端 Computer 单元的实例（providerId `unit`，见[Worker 路由](worker-router.md)）同样按 pinned-local 准备：binding 路径仍是项目的绝对路径，只对所绑定单元有意义，harness server 不在本机检查该路径对单元是否存在；项目目录本身仍须在 harness server 可用，按项目绑定到单元属 U1 第 4 步。组件没有新增环境变量、浏览器设置、独立数据库连接或目录。
+`options` 可提供 `now()`、`newId()` 和受信的 `localProviderId`。默认提供方为 `local`；替代提供方仍须在本机解析目录，不能通过改名获得远端准备能力。远端 Computer 单元的实例（providerId `unit`，见[Worker 路由](worker-router.md)）同样按 pinned-local 准备：binding 路径仍是项目的绝对路径，只对所绑定单元有意义，harness server 不在本机检查该路径对单元是否存在；项目可用性由 Projects 按绑定向本机或远端环境查询，远端路径不要求存在于 harness server。组件没有新增环境变量、浏览器设置、独立数据库连接或目录。
 
 ## 接口与本机映射
 
@@ -17,14 +17,14 @@
 | `get(workspaceId)` / `getForProject(projectId)` | 查询已经保存的工作区，不激活实例、不检查目录 |
 | `getBinding(reservationId)` | 读取固定 binding，保留已释放 scope 的历史事实 |
 | `reserveIn(tx,{reservationId,scopeId,projectId})` | 同步读取 Projects 的稳定身份，惰性建立 pinned-local 映射及 reservation；不准备文件 |
-| `prepare({reservationId,instance},signal?)` | 在事务外检查固定本机的原项目目录，返回本组件代内的准备凭证与确切实例信息 |
+| `prepare({reservationId,instance},signal?)` | 在事务外按项目绑定检查原项目目录，返回本组件代内的准备凭证与确切实例信息 |
 | `bindIn(tx,{reservationId,prepared})` | 原子提交准备凭证对应的 binding；同一事实幂等，冲突或伪造凭证拒绝 |
 | `requireBindingIn(reader,ref)` | 同步复核 scope 尚未释放、实例 ID/代次与 workspace epoch，不重新解析项目路径 |
 | `releaseIn(tx,reservationId,scopeId)` | 所属 scope 幂等释放 reservation；调用者须已等待实际 scope 退出 |
 
-旧项目无需重写或导入；首次计算工具接纳时按原 projectId 创建稳定 workspaceId。当前 mode 只有 pinned-local，revision 固定为 0，workspaceEpoch 初始为 1。workspace 身份是独立 ID，绝对路径只用于固定本机映射和 binding。
+旧项目无需重写或导入；首次计算工具接纳时按原 projectId 创建稳定 workspaceId。当前 mode 只有 pinned-local，revision 固定为 0，workspaceEpoch 初始为 1。workspace 身份是独立 ID，绝对路径只用于绑定环境内的映射和 binding；账本可保存 POSIX 或 Windows 绝对路径，实际文件系统校验由目标环境负责。
 
-prepare 通过 Projects.requireAvailable 确认原目录，接受 ready 的本机实例，将 computerId、computerInstanceId、instanceGeneration、workspaceEpoch、revision、path 和 preparedAt 固定在 binding。已绑定 scope 不允许通过再次 prepare 偷换实例或路径。同一项目的不同 Run 可共享原目录，保持原有并发语义；尚未实现 portable-managed 的排他写租约。
+prepare 通过 Projects.requireAvailable 确认原目录，接受 ready 的本机或远端实例，将 computerId、computerInstanceId、instanceGeneration、workspaceEpoch、revision、path 和 preparedAt 固定在 binding。已绑定 scope 不允许通过再次 prepare 偷换实例或路径。同一项目的不同 Run 可共享原目录，保持原有并发语义；尚未实现 portable-managed 的排他写租约。
 
 ## 持久化与事务归属
 

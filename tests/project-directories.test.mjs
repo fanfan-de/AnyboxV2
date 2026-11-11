@@ -27,6 +27,10 @@ async function fixture(t, options = {}) {
   return { root, directory, projects: root.get('harness.projects') }
 }
 
+test('removed project-wide Computer defaults are rejected instead of silently registering local projects', () => {
+  assert.throws(() => createProjectComponent({ newId: randomUUID, now: () => 'now' }, { defaultComputerAttachmentId: 'remote' }), /defaultComputerAttachmentId is no longer supported/)
+})
+
 test('the projects v2 migration rebuilds a populated table that sessions reference and keeps every project bound to the local worker', async t => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-projects-migration-'))
   const root = new Context()
@@ -53,20 +57,45 @@ test('the projects v2 migration rebuilds a populated table that sessions referen
   assert.equal(opened.computerAttachmentId, 'local:computer')
 })
 
-test('remote-default projects reject host directory selection while manual paths resolve on the bound Computer', async t => {
+test('local is always the default while explicitly bound remote environments coexist with local directory selection', async t => {
   const queries = []
-  const f = await fixture(t, { defaultComputerAttachmentId: 'remote-computer', computerQuery: async (attachmentId, query) => {
+  const f = await fixture(t, { computerQuery: async (attachmentId, query) => {
     queries.push({ attachmentId, query }); return { kind: 'stat', directory: true, canonical: query.path }
   } })
-  assert.equal(f.projects.directoryBrowsingSupported, false)
-  assert.equal(f.projects.directoryCreationSupported, false)
-  await assert.rejects(joined(f.projects.openDirectoryBrowse('owner', { path: f.directory })), { code: 'directory-browse-unsupported' })
-  await assert.rejects(joined(f.projects.createDirectory('owner', 'unknown', 'must-not-create')), { code: 'directory-browse-expired' })
-  await assert.rejects(fs.stat(join(f.directory, 'must-not-create')), { code: 'ENOENT' })
-  assert.deepEqual(queries, [])
-  const project = await f.projects.openProject('/remote/project')
-  assert.equal(project.computerAttachmentId, 'remote-computer')
-  assert.deepEqual(queries, [{ attachmentId: 'remote-computer', query: { kind: 'stat', path: '/remote/project' } }])
+  assert.equal(f.projects.localDirectorySelectionSupported, true)
+  assert.equal(f.projects.directoryBrowsingSupported, true)
+  assert.equal(f.projects.directoryCreationSupported, true)
+  const browse = await joined(f.projects.openDirectoryBrowse('owner', { path: f.directory }))
+  const page = await joined(f.projects.readDirectoryPage('owner', browse.browseId, 0))
+  assert.equal(page.path, await fs.realpath(f.directory))
+  await f.projects.closeDirectoryBrowse('owner', browse.browseId)
+  assert.deepEqual(queries, [], 'browsing the local environment never queries a remote Computer')
+  const local = await f.projects.openProject(f.directory)
+  const remote = await f.projects.openProject(f.directory, { computerAttachmentId: 'remote-computer' })
+  const other = await f.projects.openProject(f.directory, { computerAttachmentId: 'other-computer' })
+  assert.equal(local.computerAttachmentId, 'local:computer')
+  assert.equal(remote.computerAttachmentId, 'remote-computer')
+  assert.equal(other.computerAttachmentId, 'other-computer')
+  assert.equal(new Set([local.id, remote.id, other.id]).size, 3)
+  assert.equal((await f.projects.openProject(f.directory)).id, local.id, 'remote registration cannot change the default')
+  assert.deepEqual(queries, ['remote-computer', 'other-computer'].map(attachmentId => ({ attachmentId, query: { kind: 'stat', path: f.directory } })))
+})
+
+test('remote project paths are interpreted on their own environment and unavailable environments never fall back to local', async t => {
+  const queries = []
+  const f = await fixture(t, { computerQuery: async (attachmentId, query) => {
+    queries.push({ attachmentId, query })
+    if (attachmentId === 'offline') throw new Error('offline')
+    return { kind: 'stat', directory: true, canonical: query.path }
+  } })
+  const remote = await f.projects.openProject('C:\\work\\demo', { computerAttachmentId: 'windows-computer' })
+  assert.equal(remote.path, 'C:\\work\\demo')
+  assert.equal(remote.name, 'demo')
+  await assert.rejects(f.projects.openProject('relative', { computerAttachmentId: 'windows-computer' }), /absolute/)
+  await assert.rejects(f.projects.openProject(f.directory, { computerAttachmentId: 'offline' }), { code: 'project-unavailable' })
+  const projects = await f.projects.listProjects()
+  assert.deepEqual(projects.map(p => [p.id, p.computerAttachmentId]), [[remote.id, 'windows-computer']])
+  assert.equal(queries.some(item => item.query.path === 'relative'), false)
 })
 
 test('directory browsing reserves no handle, never registers a project, and canonical aliases retain project identity', async t => {

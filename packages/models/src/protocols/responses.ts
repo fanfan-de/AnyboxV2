@@ -1,7 +1,7 @@
 import { responsesImages, imageContent, withImages } from './images.js';
-import { modelsError } from '../errors.js';
+import { modelsError, normalizeError } from '../errors.js';
 import { assert } from '../domain.js';
-import { terminalDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
+import { nativeDiagnostic, terminalDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
 import type { JsonValue } from '../types.js';
 import type { NativeObject, NativeProtocol } from '../native-types.js';
 import { array, captureOptions, connectionFields, conversation, effectiveCapabilities, effortOption, index, mergeTools, native, nonempty, numberOption, object, optionKeys, parseJson, protocolComponent, reasoningEfforts, requireLocalTools, restoreRecords, string, validateProvider, validateServerTools, type ProtocolOptions } from './shared.js';
@@ -9,6 +9,8 @@ import { check, discover, request } from './transport.js';
 export type ResponsesIntent = NativeObject;
 export type ResponsesResponse = NativeObject;
 export type ResponsesEvent = NativeObject;
+const summaryEvents = ['response.reasoning_summary_part.added', 'response.reasoning_summary_part.done', 'response.reasoning_summary_text.delta', 'response.reasoning_summary_text.done'];
+const textEvents = ['response.output_text.delta', 'response.output_text.done', 'response.refusal.delta', 'response.refusal.done'];
 function validateIntent(intent: NativeObject, images = true): void {
   for (const value of array(intent.input)) { const item = object(value);
     if (item.type === 'function_call_output') { nonempty(item.call_id); string(item.output); }
@@ -106,34 +108,64 @@ export function createResponsesProtocol(options: ProtocolOptions = {}): NativePr
         if (!input.request.stream) return validateResponse(await reader.json());
         let terminal: NativeObject | undefined;
         const received = new Map<number, Record<string, JsonValue>>();
-        await reader.sse(data => {
-          if (data === '[DONE]') { if (!terminal) throw modelsError('invalid-response'); return; }
-          if (terminal) throw modelsError('invalid-response');
-          const event = native(parseJson(data)), type = string(event.type);
-          if (type === 'error' || type === 'response.failed' || type === 'response.cancelled') {
-            const raw = event.response === undefined ? event : object(event.response);
-            throw withNativeDiagnostic(modelsError('provider-failure'), terminalDiagnostic({ ...raw, ...(type === 'error' ? {} : { status: type.slice(9) }) }, { field: 'output', values: [...received.entries()].sort(([a], [b]) => a - b).map(([, value]) => value) }));
-          }
-          if (type === 'response.completed' || type === 'response.incomplete') {
-            const response = object(event.response); if (response.status !== type.slice(9)) throw modelsError('invalid-response'); terminal = validateResponse(response); input.onEvent(event); return true;
-          }
-          if (event.output_index !== undefined) index(event.output_index);
-          // Partial blocks are diagnostic data only; the terminal response remains authoritative.
-          if (type === 'response.output_item.added' || type === 'response.output_item.done') received.set(index(event.output_index), structuredClone(object(event.item)));
-          else if (event.output_index !== undefined) {
-            const item = received.get(index(event.output_index));
-            if (item && (type === 'response.content_part.added' || type === 'response.content_part.done')) {
-              const content = item.content === undefined ? [] : array(item.content), at = index(event.content_index);
-              if (at <= content.length) { content[at] = structuredClone(object(event.part)); item.content = content; }
-            } else if (item && type === 'response.function_call_arguments.delta') item.arguments = string(item.arguments ?? '') + string(event.delta);
-            else if (item && event.content_index !== undefined && ['response.output_text.delta', 'response.refusal.delta'].includes(type)) {
-              const content = item.content === undefined ? [] : array(item.content), block = content[index(event.content_index)];
-              if (block) { const part = object(block), field = type === 'response.refusal.delta' ? 'refusal' : 'text'; part[field] = string(part[field] ?? '') + string(event.delta); }
+        const partialOutput = () => [...received.entries()].sort(([a], [b]) => a - b).map(([, value]) => value);
+        try {
+          await reader.sse(data => {
+            if (data === '[DONE]') { if (!terminal) throw modelsError('invalid-response'); return; }
+            if (terminal) throw modelsError('invalid-response');
+            const event = native(parseJson(data)), type = string(event.type);
+            if (type === 'error' || type === 'response.failed' || type === 'response.cancelled') {
+              const raw = event.response === undefined ? event : object(event.response);
+              throw withNativeDiagnostic(modelsError('provider-failure'), terminalDiagnostic({ ...raw, ...(type === 'error' ? {} : { status: type.slice(9) }) }, { field: 'output', values: partialOutput() }));
             }
-          }
-          input.onEvent(event);
-        });
-        if (!terminal) throw modelsError('invalid-response'); return terminal;
+            if (type === 'response.completed' || type === 'response.incomplete') {
+              const response = object(event.response); if (response.status !== type.slice(9)) throw modelsError('invalid-response'); terminal = validateResponse(response); input.onEvent(event); return true;
+            }
+            if (event.output_index !== undefined) index(event.output_index);
+            // Partial blocks are diagnostic data only; the terminal response remains authoritative.
+            if (type === 'response.output_item.added' || type === 'response.output_item.done') received.set(index(event.output_index), structuredClone(object(event.item)));
+            else if (event.output_index !== undefined) {
+              const at = index(event.output_index);
+              let item = received.get(at);
+              // Some compatible streams begin directly with deltas. Keep their admitted
+              // content in a diagnostic even when no complete item has arrived yet.
+              if (!item) {
+                const identity: Record<string, JsonValue> = typeof event.item_id === 'string' ? { id: event.item_id } : {};
+                if (summaryEvents.includes(type)) item = { ...identity, type: 'reasoning', summary: [] };
+                else if (type === 'response.function_call_arguments.delta' || type === 'response.function_call_arguments.done') item = { ...identity, type: 'function_call', arguments: '' };
+                else if (textEvents.includes(type) || type === 'response.content_part.added' || type === 'response.content_part.done') item = { ...identity, type: 'message', role: 'assistant', content: [] };
+                if (item) received.set(at, item);
+              }
+              if (item && (type === 'response.content_part.added' || type === 'response.content_part.done')) {
+                const content = item.content === undefined ? [] : array(item.content), at = index(event.content_index);
+                if (at <= content.length) { content[at] = structuredClone(object(event.part)); item.content = content; }
+              } else if (item && type === 'response.function_call_arguments.delta') item.arguments = string(item.arguments ?? '') + string(event.delta);
+              else if (item && type === 'response.function_call_arguments.done') item.arguments = string(event.arguments);
+              else if (item && summaryEvents.includes(type)) {
+                const summary = item.summary === undefined ? [] : array(item.summary), at = index(event.summary_index);
+                if (at <= summary.length) {
+                  const previous = summary[at] === undefined ? { type: 'summary_text', text: '' } : object(summary[at]);
+                  summary[at] = type.includes('_part.') ? structuredClone(object(event.part)) : { ...previous,
+                    text: type.endsWith('.delta') ? string(previous.text ?? '') + string(event.delta) : string(event.text) };
+                  item.summary = summary;
+                }
+              } else if (item && event.content_index !== undefined && textEvents.includes(type)) {
+                const content = item.content === undefined ? [] : array(item.content), at = index(event.content_index), refusal = type.startsWith('response.refusal.'), field = refusal ? 'refusal' : 'text';
+                if (at <= content.length) {
+                  const part = content[at] === undefined ? { type: refusal ? 'refusal' : 'output_text', [field]: '' } : object(content[at]);
+                  part[field] = type.endsWith('.delta') ? string(part[field] ?? '') + string(event.delta) : string(event[field]); content[at] = part; item.content = content;
+                }
+              } else if (item && type === 'response.output_text.annotation.added') {
+                const content = item.content === undefined ? [] : array(item.content), block = content[index(event.content_index)];
+                if (block) { const part = object(block); part.annotations = [...(part.annotations === undefined ? [] : array(part.annotations)), structuredClone(object(event.annotation))]; }
+              }
+            }
+            input.onEvent(event);
+          });
+          if (!terminal) throw modelsError('invalid-response'); return terminal;
+        } catch (error) {
+          throw withNativeDiagnostic(normalizeError(error), nativeDiagnostic(error) ?? (received.size ? terminalDiagnostic({}, { field: 'output', values: partialOutput() }) : undefined));
+        }
       }));
     },
     commit: input => commit(input.state, input.intent, input.response),

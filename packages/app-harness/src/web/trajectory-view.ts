@@ -38,7 +38,7 @@ const origin = (run: RunView): string => run.history.kind === 'legacy-unknown' ?
 export function createTrajectoryView(container: HTMLElement, actions: TrajectoryActions): MountedTrajectory {
   container.innerHTML = `<div class="trajectory-toolbar" role="toolbar" aria-label="轨迹显示选项">
     <div class="trajectory-controls"><button type="button" data-duration aria-pressed="false">时长</button><button type="button" data-turns aria-pressed="false">轮次</button><button type="button" data-calls aria-pressed="false">调用</button></div>
-    <label class="trajectory-search"><img src="/apps/agent/icons/search.svg" alt="" aria-hidden="true"><input type="search" aria-label="搜索轨迹内容" placeholder="搜索轨迹" autocomplete="off"></label>
+    <label class="trajectory-search"><input type="search" aria-label="搜索轨迹内容" placeholder="搜索轨迹" autocomplete="off"></label>
   </div><div class="trajectory-timeline" aria-label="轨迹时间轴"><div class="trajectory-lane-labels"><span>输入</span><span>模型</span><span>工具</span></div><div class="trajectory-lanes"></div></div>
   <p class="trajectory-progress" role="status"></p><div class="trajectory-body"><div class="trajectory-scroll" tabindex="0" aria-label="轨迹列表"><div class="trajectory-ledger" role="grid" aria-label="本会话全部运行轨迹"></div></div><aside class="trajectory-inspector" aria-label="轨迹明细" hidden></aside></div>`
   const get = <T extends HTMLElement>(selector: string): T => container.querySelector<T>(selector)!

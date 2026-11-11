@@ -85,7 +85,7 @@ if (!selected) {
     panel.append(heading, hint)
   }
   required('agent--tools-settings').textContent = '请先在管理连接中启动所选设备上的 Agent，再配置工具。'
-  required('agent--units-settings').textContent = '请先在管理连接中启动所选设备上的 Agent，再管理单元附着。'
+  required('agent--units-settings').textContent = '请先在管理连接中启动所选设备上的 Agent，再管理执行环境。'
 }
 function revealSettings(section: SettingsSection): void {
   selectSettingsSection(section)

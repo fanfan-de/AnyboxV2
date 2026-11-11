@@ -35,6 +35,7 @@ import { isUnitError, validateUnitKind, validateUnitScope } from '../core/unit/d
 import { isTransportError, validateUnitRegistration } from '../core/unit/transport-domain.js'
 import type { UnitRegistration, UnitReply, UnitRequest } from '../core/unit/transport-domain.js'
 import type { JsonValue } from '@anybox/models'
+import type { ComputerEnvironments } from '../core/computer/environments.js'
 
 export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> {
@@ -89,6 +90,7 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   getPromptVersions(id: string): readonly PromptVersion[]
   getAgentPrompts(id: string): readonly PromptSnapshot[]
   bindPrompt(id: string, versionId: string): Promise<PromptBinding>
+  listComputerEnvironments?(): Promise<ComputerEnvironments>
   listUnitAttachments(): Promise<readonly UnitAttachment[]>
   createUnitAttachCode(input: AttachCodeInput): Promise<{ readonly attachment: UnitAttachment; readonly code: string }>
   revokeUnitAttachment(attachmentId: string): Promise<UnitAttachment>
@@ -570,6 +572,11 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         try { await stream.done } finally { unsubscribe(); changeStreams.delete(stream) }
         return
       }
+      if (method === 'GET' && path === '/api/v1/computer-environments') {
+        if (url.search) throw failure(400, 'invalid-input')
+        if (!commands.listComputerEnvironments) throw failure(503, 'service-unavailable')
+        json(response, 200, await commands.listComputerEnvironments()); return
+      }
       if (method === 'GET' && path === '/api/v1/units/attachments') {
         json(response, 200, await commands.listUnitAttachments())
         return
@@ -977,7 +984,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
     handle,
     capabilities: () => {
       const current = options.currentCommands?.() ?? commands
-      return [...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
+      return [...(current.listComputerEnvironments ? ['computer-environments'] : []), ...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
         ...(current.directoryCreationSupported?.() ? ['projects.create-directory'] : []),
         ...(current.localDirectorySelectionSupported?.() === true ? ['projects.local-directories'] : [])]
     },

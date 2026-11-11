@@ -1,4 +1,5 @@
 import { modelsError, normalizeError, type ModelsErrorCode } from '../errors.js';
+import { nativeDiagnostic, withNativeDiagnostic } from '../diagnostics.js';
 import { abortLink, deferred, joinOperation, throwAborted } from '../lifecycle.js';
 import type { DiscoveredModel, ProtocolConnection, ProtocolOperation } from '../types.js';
 import { array, object, parseJson, string, type ProtocolOptions } from './shared.js';
@@ -132,7 +133,7 @@ export function request<T>(options: ProtocolOptions, connection: ProtocolConnect
       if (controller.signal.aborted) throw modelsError('cancelled');
       resolveResult(outcome);
     } catch (error) {
-      rejectResult(controller.signal.aborted ? modelsError('cancelled') : normalizeError(error));
+      rejectResult(controller.signal.aborted ? withNativeDiagnostic(modelsError('cancelled'), nativeDiagnostic(error)) : normalizeError(error));
     } finally {
       await cancelReader();
       try { reader?.releaseLock(); } catch { cleanupFailed = true; }

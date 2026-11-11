@@ -14,13 +14,11 @@ import type { UnitTransportPort } from '../unit/transport-component.js'
 import { isTransportError } from '../unit/transport-domain.js'
 
 export interface WorkerRouterOptions {
-  /** Local form: this harness server's own worker serves `local:computer`; remote form has no local worker at all. */
-  readonly local: boolean
   readonly claimTimeoutMs?: number
   readonly replyTimeoutMs?: number
 }
 interface UnitInfo { readonly workerId: string; readonly bootId: string; readonly platform: string; readonly architecture: string }
-type RouterDependencies = { [unitTransportServiceKey]: UnitTransportPort; [unitAttachmentsServiceKey]: UnitAttachmentsPort; [localComputerWorkerServiceKey]?: ComputerWorkerPort }
+type RouterDependencies = { [unitTransportServiceKey]: UnitTransportPort; [unitAttachmentsServiceKey]: UnitAttachmentsPort; [localComputerWorkerServiceKey]: ComputerWorkerPort }
 const terminal = (state: string) => ['succeeded', 'failed', 'cancelled', 'outcome-unknown'].includes(state)
 const localAttachment = localAttachmentId('computer')
 
@@ -29,9 +27,9 @@ const localAttachment = localAttachmentId('computer')
  * by the authorization's attachment: `local:computer` goes over loopback to this harness server's own worker, every other
  * attachment through the unit transport. The router owns no ledger; its Effect only abandons local observations.
  */
-export function createWorkerRouterComponent(options: WorkerRouterOptions): Component.Object<void, RouterDependencies> {
-  return { name: 'computer-worker-router', inject: [unitTransportServiceKey, unitAttachmentsServiceKey, ...(options.local ? [localComputerWorkerServiceKey] : [])], apply(ctx, _config, deps) {
-    const transport = deps[unitTransportServiceKey], attachments = deps[unitAttachmentsServiceKey], local = options.local ? deps[localComputerWorkerServiceKey] : undefined
+export function createWorkerRouterComponent(options: WorkerRouterOptions = {}): Component.Object<void, RouterDependencies> {
+  return { name: 'computer-worker-router', inject: [unitTransportServiceKey, unitAttachmentsServiceKey, localComputerWorkerServiceKey], apply(ctx, _config, deps) {
+    const transport = deps[unitTransportServiceKey], attachments = deps[unitAttachmentsServiceKey], local = deps[localComputerWorkerServiceKey]
     const lifetime = new AbortController()
     let closing = false
     /** claims already installed at a unit boot: `${attachmentId}\0${runId}\0${epoch}` -> bootId */
@@ -74,7 +72,6 @@ export function createWorkerRouterComponent(options: WorkerRouterOptions): Compo
       if (typeof input?.attachmentId !== 'string' || !input.attachmentId) throw workerError('worker-attachment-rejected')
       return input.attachmentId
     }
-    const requireLocal = (): ComputerWorkerPort => { if (!local) throw workerError('worker-attachment-rejected'); return local }
     const info = (attachmentId: string, signal?: AbortSignal) => request<UnitInfo>(attachmentId, 'info', {}, signal)
     const remember = (operation: WorkerOperation | null | undefined) => {
       if (!operation) return
@@ -82,10 +79,10 @@ export function createWorkerRouterComponent(options: WorkerRouterOptions): Compo
       else known.set(operation.operationId, { state: operation.state, receipt: operation.receipt })
     }
     const worker: ComputerWorkerPort = {
-      info: () => local ? local.info() : Promise.reject(workerError('worker-attachment-rejected')),
+      info: () => local.info(),
       async claimRun(input) {
         const attachmentId = attachmentOf(input)
-        if (attachmentId === localAttachment) return requireLocal().claimRun(input)
+        if (attachmentId === localAttachment) return local.claimRun(input)
         const key = `${attachmentId}\0${input.runId}\0${input.runOwnerEpoch}`, boot = transport.connection(attachmentId)?.bootId
         if (boot !== undefined && claimed.get(key) === boot) return
         await request(attachmentId, 'claim', { runId: input.runId, runOwnerEpoch: input.runOwnerEpoch }, undefined, undefined, runKey(input))
@@ -94,14 +91,14 @@ export function createWorkerRouterComponent(options: WorkerRouterOptions): Compo
       },
       async submit(input) {
         const attachmentId = attachmentOf(input)
-        if (attachmentId === localAttachment) return requireLocal().submit(input)
+        if (attachmentId === localAttachment) return local.submit(input)
         const { attachmentId: _delivering, ...payload } = input
         const operation = await request<WorkerOperation>(attachmentId, 'submit', payload as unknown as JsonValue, undefined, `${attachmentId}\0${input.operationId}`, runKey(input))
         remember(operation); return operation
       },
       async get(input) {
         const attachmentId = attachmentOf(input)
-        if (attachmentId === localAttachment) return requireLocal().get(input)
+        if (attachmentId === localAttachment) return local.get(input)
         const hint = known.get(input.operationId)
         const operation = await request<WorkerOperation | null>(attachmentId, 'get', { runId: input.runId, runOwnerEpoch: input.runOwnerEpoch, operationId: input.operationId, ...(hint ? { known: hint } : {}) }, undefined, undefined, runKey(input))
         remember(operation); return operation ?? undefined
@@ -110,7 +107,7 @@ export function createWorkerRouterComponent(options: WorkerRouterOptions): Compo
         const attachmentId = attachmentOf(input)
         const querySignal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal
         if (querySignal.aborted) throw workerError('worker-observer-closed')
-        if (attachmentId === localAttachment) return requireLocal().query(input, querySignal)
+        if (attachmentId === localAttachment) return local.query(input, querySignal)
         const attachment = await attachments.get(attachmentId)
         if (!attachment) throw workerError('worker-unreachable')
         if (attachment.state !== 'approved' || attachment.unitKind !== 'computer') throw workerError('worker-attachment-rejected')
@@ -118,15 +115,14 @@ export function createWorkerRouterComponent(options: WorkerRouterOptions): Compo
         return request<Awaited<ReturnType<ComputerWorkerPort['query']>>>(attachmentId, 'query', { query: input.query } as unknown as JsonValue, querySignal)
       },
       // A harness server stops only the worker it owns, never a unit attached from elsewhere.
-      shutdown: () => local ? local.shutdown() : Promise.reject(workerError('worker-remote-control')),
+      shutdown: () => local.shutdown(),
     }
-    const provider: ComputerInstanceProvider = { providerId: options.local ? localComputerProviderId : unitComputerProviderId,
-      providerIds: options.local ? [localComputerProviderId, unitComputerProviderId] : [unitComputerProviderId], activate({ resource, previousInstance }) {
+    const provider: ComputerInstanceProvider = { providerId: localComputerProviderId,
+      providerIds: [localComputerProviderId, unitComputerProviderId], activate({ resource, previousInstance }) {
       const controller = new AbortController()
       const result = (async () => {
         let current: UnitInfo
         if (resource.spec.providerId === localComputerProviderId) {
-          if (!local) throw computerError('computer-unavailable')
           try { current = await local.info() } catch { throw computerError(controller.signal.aborted ? 'computer-cancelled' : 'computer-unavailable') }
         } else {
           const attachmentId = unitAttachmentOfComputer(resource.computerId)

@@ -19,6 +19,8 @@
 
 不补原生参数默认值，不允许模型、消息、认证、`n` 或任意扩展字段透传。工具与图片需配置明确声明 supported；流式默认开启，配置 streaming 为 unknown/supported 时发送 `stream: true`，显式 unsupported 时发送 false。已有 unknown 配置无须迁移。服务端 webSearch 不支持。连接/参数被 execution 固定后，后续设置改动仅影响新 execution。
 
+`timeoutMs` 对模型交换表示无新原生事件的等待上限；每个 Chat 流式 chunk 都续期，持续推理、文本或工具参数输出不会仅因总时长超过该值而中断。首个事件及 complete 模式的完整响应仍受初始等待约束。观察者存在与否不改变计时，响应结果到达后仍等待实际清理，见 [Models execution 流程](models.md#原生-execution-流程)。
+
 连接、配置参数和原生 Run 记录统一使用 `chat-completions`，驱动与包内注册表不按提供方名称或 URL 增加语义。旧 DeepSeek 当前配置由停机时的一次性配置迁移改为标准协议，保留连接与配置 ID、凭据引用、epoch 和不可变历史；运行期不提供旧驱动、别名或隐式 disabled thinking。旧协议历史可查看但不能恢复执行，需要新建标准协议会话。
 
 ## 输入与请求
@@ -38,6 +40,8 @@ refusal 或 content_filter 返回 refused-response，length 等需续轮结果�
 非流式直接校验原生对象：必须只有一个 choice，message 为 assistant，允许 `stop/tool_calls/length/content_filter`。message 的 content 可空或字符串，refusal 保留；tool calls 必须为函数、ID 唯一、名字和 arguments 非空/字符串，正常 stop/tool_calls 下 arguments 必须可解析成对象。`tool_calls` 终态必须确实带调用，已停用的 `message.function_call` 被拒绝。
 
 流式按 choice 0 重组 content、refusal、`reasoning_content`、工具 ID/函数名/arguments 分片，按工具 index 排序；上游返回的推理分片按顺序拼接到原生 assistant message。保留 envelope 与未知消息字段，允许终态后单独的 usage chunk；必须收到 finish reason 及 `[DONE]`。多 choice、重复终结、不完整 SSE 或缺少 `[DONE]` 都失败。返回的是完整原生 Chat 对象，不把长度截断或过滤结果自动变成 Run 成功。
+
+超时、取消、断连、损坏分片或缺少终态时，已经接纳的 message 内容仍以 `choices[0].message` 原生形状保存在 diagnostic，包括 `content`、`reasoning_content`、refusal 与工具 ID/名称/arguments 分片；已有 finish reason 和 usage 也保留。原始失败帧不进入诊断，认证字段与捕获凭据由 execution 脱敏。失败记录只供查看，不能提交上下文或执行其中尚未完整校验的工具调用。
 
 新记录采用 v2，request 顶层 resourceRefs 只包含本轮图片，payload 仍为原生 intent。reader 明确兼容 2.0.0/2.1.0/2.2.0 驱动和 v1/v2 混合父链，v1 仅文本且不改写。只有旧文本历史的有效图片能力 false→true 可加法续接；streaming 仅改变传输方式，恢复允许双向改变，包括从旧非流式成功父链继续流式执行或逐次选择 complete。其他执行语义继续严格验证。
 

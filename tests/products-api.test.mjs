@@ -59,7 +59,7 @@ test('instance metadata advertises product management and registered Harness cap
   try {
     const response = await fetch(web.url + '/api/v1/instance')
     assert.equal(response.status, 200)
-    assert.deepEqual((await response.json()).capabilities, ['products.v2', 'projects.path', 'images', 'project-files', 'sse', 'units'])
+    assert.deepEqual((await response.json()).capabilities, ['products.v2', 'projects.path', 'images', 'project-files', 'sse', 'units', 'computer-environments'])
   } finally { await web.close() }
 })
 

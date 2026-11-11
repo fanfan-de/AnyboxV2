@@ -56,7 +56,7 @@ export const harnessAssets: readonly ApplicationAsset[] = [
   { path: '/applications/harness/web/harness-app.js', file: fileURLToPath(new URL('./web/harness-app.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/apps/agent/template.html', file: fileURLToPath(new URL('../web/template.html', import.meta.url)), type: 'text/html; charset=utf-8' },
   { path: '/apps/agent/style.css', file: fileURLToPath(new URL('../web/style.css', import.meta.url)), type: 'text/css; charset=utf-8' },
-  ...['chevron-down', 'chevron-right', 'refresh', 'search', 'files', 'file', 'file-code', 'markdown', 'folder', 'folder-opened', 'close'].map(name => ({
+  ...['chevron-down', 'chevron-right', 'refresh', 'files', 'close'].map(name => ({
     path: `/apps/agent/icons/${name}.svg`, file: fileURLToPath(new URL(`../web/icons/${name}.svg`, import.meta.url)), type: 'image/svg+xml',
   })),
 ]

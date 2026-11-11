@@ -120,3 +120,31 @@ test('Actual fetch cancellation disconnects open native SSE and waits for reader
   const operation = execution.prepareExchange({ messages: [{ role: 'user', content: 'wait' }] }).start(event => firstEvent.resolve(event));
   assert.equal((await firstEvent.promise).choices[0].delta.content, 'started'); operation.cancel(); await assert.rejects(operation.result, { code: 'cancelled' }); await operation.done; await disconnected.promise; await execution.close();
 });
+
+test('Actual SSE output remains live beyond the configured inactivity window', { timeout: 10_000 }, async t => {
+  const parts = Array.from({ length: 8 }, (_, index) => `part-${index} `);
+  const f = await fixture(t, async ({ response }) => {
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    for (const content of parts) {
+      if (response.destroyed) return;
+      response.write(`data: ${JSON.stringify(chatChunk({ content }))}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 80));
+    }
+    if (!response.destroyed) {
+      response.write(`data: ${JSON.stringify(chatChunk({}, 'stop'))}\n\n`);
+      response.end('data: [DONE]\n\n');
+    }
+  });
+  const connection = await provider(f.settings, 'chat-completions', `${f.baseUrl}/v1`, 'streaming-key');
+  await f.settings.updateConnection(connection.id, { timeoutMs: 250 }, connection.revision);
+  const configuration = await model(f.settings, connection, 'Streaming');
+  const execution = await f.open({ modelId: configuration.id });
+  // No display callback: network progress alone must keep the request alive.
+  const operation = execution.prepareExchange({ messages: [{ role: 'user', content: 'keep streaming' }] }).start();
+  const reply = await operation.result;
+  assert.equal(reply.response.choices[0].message.content, parts.join(''));
+  await operation.done;
+  const report = await execution.close();
+  assert.ok(report.restoreState);
+  assert.equal(report.records.some(record => record.kind === 'diagnostic'), false);
+});

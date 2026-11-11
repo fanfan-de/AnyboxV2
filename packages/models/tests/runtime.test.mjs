@@ -91,6 +91,99 @@ test('timeout requests cancellation and still waits for transport cleanup', { ti
   } finally { await f.close() }
 })
 
+for (const observer of ['absent', 'throwing', 'rejecting']) test(`native progress resets inactivity timeout with ${observer} observer`, async t => {
+  const f = await fixture()
+  try {
+    await f.add({ timeoutMs: 30_000 })
+    const execution = await f.open({ modelId: 'model' }), protocol = f.protocols[0]
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    protocol.next()
+    const onEvent = observer === 'absent' ? undefined : observer === 'throwing'
+      ? () => { throw new Error('display observer failed') }
+      : async () => { throw new Error('async display observer failed') }
+    const call = exchange(execution, input('keep generating'), onEvent)
+    await tick()
+    const active = protocol.calls[0]
+    // More than two minutes of generation remains live while native data arrives.
+    for (let at = 0; at < 5; at++) {
+      t.mock.timers.tick(29_000)
+      assert.equal(active.input.signal.aborted, false)
+      active.input.onEvent({ type: 'delta', text: String(at) })
+      await tick()
+    }
+    active.succeed(complete('finished'))
+    assert.equal((await call.result).text, 'finished')
+    await call.done
+
+    // A new exchange gets its own full wait; only inactivity triggers cancellation.
+    protocol.next()
+    const next = exchange(execution, input('now stall'))
+    await tick()
+    const stalled = protocol.calls[1]
+    t.mock.timers.tick(29_999)
+    assert.equal(stalled.input.signal.aborted, false)
+    t.mock.timers.tick(1)
+    assert.equal(stalled.input.signal.aborted, true)
+    stalled.input.onEvent({ type: 'delta', text: 'too late' })
+    const result = tracked(next.result)
+    await tick()
+    assert.equal(result.settled, false, 'timeout must still await actual exit')
+    stalled.succeed(complete('late output'))
+    await assert.rejects(next.result, code('timeout'))
+    await next.done
+    assert.equal((await execution.close()).restoreState, undefined)
+  } finally { await f.close() }
+})
+
+test('inactivity starts again after the last native event and ignores late events after abort', async t => {
+  const f = await fixture()
+  try {
+    await f.add({ timeoutMs: 30_000 })
+    const execution = await f.open({ modelId: 'model' })
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    f.protocols[0].next()
+    const events = [], call = exchange(execution, input('partial response'), event => events.push(event))
+    await tick()
+    const active = f.protocols[0].calls[0]
+    t.mock.timers.tick(25_000)
+    active.input.onEvent({ text: 'received' })
+    t.mock.timers.tick(29_999)
+    assert.equal(active.input.signal.aborted, false)
+    t.mock.timers.tick(1)
+    assert.equal(active.input.signal.aborted, true)
+    active.input.onEvent({ text: 'late' })
+    active.succeed()
+    await assert.rejects(call.result, code('timeout'))
+    await call.done
+    assert.deepEqual(events, [{ text: 'received' }])
+    await execution.close()
+  } finally { await f.close() }
+})
+
+test('a received response stops inactivity timing while actual transport cleanup remains owned', async t => {
+  const f = await fixture()
+  try {
+    await f.add({ timeoutMs: 30_000 })
+    const execution = await f.open({ modelId: 'model' })
+    t.mock.timers.enable({ apis: ['setTimeout'] })
+    f.protocols[0].next()
+    const call = exchange(execution, input('respond before cleanup'))
+    await tick()
+    const active = f.protocols[0].calls[0]
+    active.result.resolve(complete('already received'))
+    const result = tracked(call.result), done = tracked(call.done)
+    await tick()
+    t.mock.timers.tick(120_000)
+    assert.equal(active.input.signal.aborted, false)
+    assert.equal(result.settled, false)
+    assert.equal(done.settled, false)
+    active.done.resolve()
+    assert.equal((await call.result).text, 'already received')
+    await call.done
+    assert.ok((await execution.close()).restoreState)
+  } finally { await f.close() }
+})
+
 test('cleanup failure preserves immutable diagnostics and is visible to every resource owner', async () => {
   const f = await fixture(); try {
     await f.add(); const execution = await f.open({ modelId: 'model' }); f.protocols[0].next(); const call = exchange(execution, input('fail')); await tick()

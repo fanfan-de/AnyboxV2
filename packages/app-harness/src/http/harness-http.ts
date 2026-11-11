@@ -26,6 +26,7 @@ import { unitAttachmentsServiceKey } from '../core/unit/port.js'
 import type { UnitAttachmentsPort } from '../core/unit/port.js'
 import { unitTransportServiceKey } from '../core/unit/transport-component.js'
 import type { UnitTransportPort } from '../core/unit/transport-component.js'
+import { projectComputerEnvironments } from '../core/computer/environments.js'
 import { localComputerWorkerControlServiceKey } from '../core/computer/worker-port.js'
 import type { LocalComputerWorkerControl } from '../core/computer/worker-port.js'
 
@@ -52,6 +53,11 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
     listAgents: () => agentIds,
     listTools,
     instanceId,
+    async listComputerEnvironments() {
+      const attachments = await deps[unitAttachmentsServiceKey].list()
+      return projectComputerEnvironments(attachments, { platform: process.platform, architecture: process.arch },
+        new Map(attachments.map(attachment => [attachment.attachmentId, deps[unitTransportServiceKey].connection(attachment.attachmentId)?.connected === true])))
+    },
     listUnitAttachments: () => deps[unitAttachmentsServiceKey].list(),
     createUnitAttachCode: input => deps[unitAttachmentsServiceKey].createAttachCode(input),
     revokeUnitAttachment: id => deps[unitAttachmentsServiceKey].revoke(id),

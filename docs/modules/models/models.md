@@ -68,6 +68,8 @@ Anybox Harness 的模型设置只读展示配置的工具、流式、图片、�
 
 `NativeResponseMode` 为 `stream | complete`。省略 `responseMode` 保持上述默认；显式 stream 要求有效流式能力，否则返回 `capability-unsupported`；complete 总是使用非流式完整响应，无须流式能力。驱动 descriptor 的可选 `responseModes` 声明显式模式，四种内置驱动均支持两种；旧扩展省略字段时默认调用仍可用，显式模式被拒绝。非法值以 `invalid-config` 拒绝，所有检查发生在请求准备成功前，不创建记录或发网，也不占用 execution 的待交换位置。回调存在与否不改变传输模式；同一 execution 可逐轮切换，选择不进入配置、参数、快照、意图或恢复记录，也不修改有效能力。驱动 `prepare()` 接收可选 mode，Chat 仅在流式时发送 `stream_options`。
 
+模型交换的连接 `timeoutMs` 表示无新原生协议事件的等待上限，每次 `start()` 独立计时。首个事件到达前的资源读取与网络等待使用初始额度；每个已收到的原生事件都会重新计时，持续输出可超过该时长。计时在调用宿主观察者之前更新，未提供观察者或观察者已因异常脱离都不影响续期。SSE 注释和驱动忽略的心跳（如 Anthropic ping）不续期。complete 模式没有增量事件，完整响应需在初始等待内到达。驱动 result 结算后停止响应计时，但公共 result 仍等待实际 done、清理与上下文提交；超时只发出取消，不能冒充资源退出。连接发现/检查继续使用独立的总时限。
+
 每次请求记录只保存本轮增量 intent，v2 的 request 顶层附本轮 resourceRefs，响应保存原生结果。NativeImageResourceRef 只含 id、sha256、byteLength、mimeType；NativeResourceResolver 是每个 execution 的受信端口，不持久化 reader、图片 bytes 或路径。Models 私有重建父链资源目录，驱动只可读取当前请求使用的引用。宿主按所选成功父路径提供展开的恢复记录；Models 验证协议、格式、配置 ID、连接、模型定义版本、远端 ID、epoch、参数和执行语义能力，再由协议 codec 重建内存上下文。streaming 仅改变传输方式，不改变增量 intent、完整原生结果或记录 codec，恢复允许双向改变；旧非流式成功父链可继续为流式 execution，并逐轮选择 mode。名称与对象键顺序不影响恢复，跨账户、跨协议及任意参数转换不受支持。四种协议 writer 均为 2.2.0/v2，reader 明确支持 2.0.0/2.1.0/2.2.0 与 v1/v2 混合链；execution.recordFormatVersion 向宿主暴露当前 writer。仅旧文本历史允许 imageInput false→true，工具、搜索和推理能力仍严格匹配；旧 JSON 不重写。
 
 ## 单次纯文本生成
@@ -88,7 +90,9 @@ Responses 只接受 completed，Chat 只接受 stop，Anthropic 接受 end_turn/
 
 `unregister()` 同步撤销该代准入和租约，关闭该代 execution，并等待该代的整次生成、凭据初始化、发现和检查退出。旧代不会删除替代代或取消其他协议。该保障只覆盖 Models 拥有的资源，宿主仍需等待 Run 工具与结算。
 
-取消不是退出，超时后仍等待资源 reader 与 transport 清理。各协议的资源读取、摘要/长度验证和 wire 物化都在 start 之后，done 包含两类资源退出。图片缺失/损坏分别报告固定 resource-unavailable/invalid-resource，32 MiB 序列化请求上限报告 request-too-large；不能忽略图片继续发网。驱动 `done` 失败时记录 `cleanup-failure` 并终止损坏的待决结果；迟到输出不能改写冻结退出报告。任何交换失败都使该 execution 的完整记录链不可恢复，即使随后重试成功。失败诊断保留可用原生终态与已收内容，但清除认证字段和捕获凭据值；诊断不能生成成功节点。事件观察者抛错或异步拒绝只使该观察者脱离，不改变执行结果。
+取消不是退出，超时后仍等待资源 reader 与 transport 清理。各协议的资源读取、摘要/长度验证和 wire 物化都在 start 之后，done 包含两类资源退出。图片缺失/损坏分别报告固定 resource-unavailable/invalid-resource，32 MiB 序列化请求上限报告 request-too-large；不能忽略图片继续发网。驱动 `done` 失败时记录 `cleanup-failure` 并终止损坏的待决结果；迟到输出不能改写冻结退出报告。任何交换失败都使该 execution 的完整记录链不可恢复，即使随后重试成功。
+
+四种内置驱动在流式超时、取消、断连或解析失败时，将已接纳的文本、推理/thinking 与工具参数分片按协议原生形状保存为 diagnostic；未通过解析的原始失败帧不写入记录。Models 在 execution 退出前清除诊断中的认证字段与捕获凭据值，再由受信宿主持久化。Anybox Harness 失败结算、后续 HTTP 轨迹读取与重启后均可通过既有白名单投影查看已经收到的内容；诊断不会变成成功节点、可恢复上下文或可执行工具调用。没有已接纳内容时不虚构成功响应。事件观察者抛错或异步拒绝只使该观察者脱离，不改变执行结果。
 
 ## 限制与扩展
 
@@ -98,7 +102,11 @@ Responses 只接受 completed，Chat 只接受 stop，Anthropic 接受 end_turn/
 
 ## 测试与关联文档
 
-[runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 验证独立执行、实际退出、恢复身份和 epoch；[lifecycle-review.test.mjs](../../../packages/models/tests/lifecycle-review.test.mjs) 验证注销、清理失败与迟到结果；[unified-models.test.mjs](../../../packages/models/tests/unified-models.test.mjs) 和 [source-definitions.test.mjs](../../../packages/models/tests/source-definitions.test.mjs) 验证补齐与来源并发；[connection-deletion.test.mjs](../../../packages/models/tests/connection-deletion.test.mjs) 验证删除及恢复日志；[boundary.test.mjs](../../../packages/models/tests/boundary.test.mjs) 验证输入边界。
+[runtime.test.mjs](../../../packages/models/tests/runtime.test.mjs) 验证独立执行、无新事件超时、持续事件续期、观察者隔离、实际退出、恢复身份和 epoch；[lifecycle-review.test.mjs](../../../packages/models/tests/lifecycle-review.test.mjs) 验证注销、清理失败与迟到结果；[unified-models.test.mjs](../../../packages/models/tests/unified-models.test.mjs) 和 [source-definitions.test.mjs](../../../packages/models/tests/source-definitions.test.mjs) 验证补齐与来源并发；[connection-deletion.test.mjs](../../../packages/models/tests/connection-deletion.test.mjs) 验证删除及恢复日志；[boundary.test.mjs](../../../packages/models/tests/boundary.test.mjs) 验证输入边界。
+
+[native-protocol-agents.test.mjs](../../../tests/native-protocol-agents.test.mjs) 覆盖四协议流式超时与缺失终态后的部分内容持久化、HTTP 轨迹读取和重启读取，并验证不创建成功节点、不执行工具分片、不把失败内容带入新根分支。
+
+[stream-failure-diagnostics.test.mjs](../../../packages/models/tests/stream-failure-diagnostics.test.mjs) 验证四协议超时、取消、断流和解析失败时保存已接纳的文本、推理与工具分片，保持固定错误、凭据脱敏及不可恢复边界。
 
 [streaming-defaults.test.mjs](../../../packages/models/tests/streaming-defaults.test.mjs) 覆盖目录省略 streaming、自动基础配置、原生请求默认流式及结果返回前的连续文本增量，并验证显式关闭；runtime 测试同时验证驱动禁用、既有 unknown 配置与双向 streaming 切换的原生恢复。
 

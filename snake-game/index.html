@@ -178,7 +178,7 @@
 <div class="wrap">
 
   <div class="topbar">
-    <div class="title">🐍 贪吃蛇</div>
+    <div class="title">贪吃蛇</div>
     <div class="scores">
       <div class="chip">分数<b id="score">0</b></div>
       <div class="chip">最高<b id="best">0</b></div>
@@ -203,10 +203,10 @@
   <div class="hint">空格 = 暂停 / 继续　·　R = 重新开始</div>
 
   <div class="dpad" id="dpad">
-    <button class="up"    data-dir="up">▲</button>
-    <button class="left"  data-dir="left">◀</button>
-    <button class="down"  data-dir="down">▼</button>
-    <button class="right" data-dir="right">▶</button>
+    <button class="up"    data-dir="up" aria-label="向上" title="向上">▲</button>
+    <button class="left"  data-dir="left" aria-label="向左" title="向左">◀</button>
+    <button class="down"  data-dir="down" aria-label="向下" title="向下">▼</button>
+    <button class="right" data-dir="right" aria-label="向右" title="向右">▶</button>
   </div>
 
 </div>
@@ -327,7 +327,7 @@
   function endGame() {
     gameOver = true;
     running = false;
-    showOverlay("游戏结束 💀",
+    showOverlay("游戏结束",
       `本局得分 <b style="color:var(--accent)">${score}</b>　最高分 ${best}<br>再来一局？`,
       "重新开始");
     cancelAnimationFrame(rafId);
@@ -536,7 +536,7 @@
     if (!running) return;
     paused = !paused;
     if (paused) {
-      showOverlay("已暂停 ⏸", "按 <span class='key'>空格</span> 继续游戏", "继续");
+      showOverlay("已暂停", "按 <span class='key'>空格</span> 继续游戏", "继续");
     } else {
       hideOverlay();
       last = 0;
@@ -551,7 +551,7 @@
   // ---------- 启动 ----------
   initGame();
   resize();
-  showOverlay("准备开始 🐍",
+  showOverlay("准备开始",
     `用 <span class="key">↑</span><span class="key">↓</span><span class="key">←</span><span class="key">→</span>
      或 <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> 控制方向<br>
      吃到食物变长，撞墙或撞到自己就结束`,

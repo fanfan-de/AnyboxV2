@@ -17,7 +17,7 @@ export function createAccountPanel(domId: (value: string) => string, options: {
   target(): AccountTarget | undefined
   request<T>(path: string, signal: AbortSignal): Promise<T>
 }) {
-  const closeButton = el('button', { type: 'button', text: '×', 'aria-label': '关闭账号与额度' })
+  const closeButton = el('button', { type: 'button', text: '×', 'aria-label': '关闭账号与额度', title: '关闭账号与额度' })
   const refresh = el('button', { type: 'button', class: 'ca-account-refresh', text: '刷新额度' })
   const subtitle = el('p', { class: 'ca-account-subtitle' })
   const status = el('p', { class: 'ca-account-status', role: 'status' })

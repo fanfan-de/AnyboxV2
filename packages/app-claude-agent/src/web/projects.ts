@@ -66,7 +66,7 @@ export function createProjectPanel(domId: (local: string) => string, handlers: P
     el('div', { class: 'ca-browser-foot' }, el('label', { class: 'ca-browser-hidden' }, hiddenToggle, el('span', { text: '显示隐藏目录' })), chooseButton))
   const recentList = el('ul', { class: 'ca-recent-list', 'aria-label': '最近项目' })
   const recentHint = el('p', { class: 'ca-recent-hint', hidden: true })
-  const closeButton = el('button', { type: 'button', class: 'ca-project-close', text: '×', 'aria-label': '关闭新建会话' })
+  const closeButton = el('button', { type: 'button', class: 'ca-project-close', text: '×', 'aria-label': '关闭新建会话', title: '关闭新建会话' })
   const dialog = el('dialog', { class: 'ca-project-dialog', id: domId('project-dialog'), 'aria-modal': 'true', 'aria-labelledby': domId('project-dialog-title'), 'aria-describedby': domId('project-dialog-description') },
     el('header', { class: 'ca-project-dialog-head' }, el('h2', { id: domId('project-dialog-title'), text: '新建会话' }), closeButton),
     el('div', { class: 'ca-project-dialog-body' },

@@ -241,17 +241,17 @@ harness server 是组合者，新增的东西集中在边缘：
 
 ## 6. Nya 装配
 
-每个进程仍只有一个根。harness server 的组合根按配置为每个单元选择"本地组件"或"远端代理组件"之一，两者提供相同服务名；核心组件通过 `inject` 声明的依赖不变。
+每个进程仍只有一个根。Computer 始终由统一 Worker 路由提供相同服务名，允许本机与多个远端执行环境并存；默认环境是 harness server 所在设备，按项目固定选择。Models 的独立远端装配仍属于后续阶段。核心组件通过 `inject` 声明依赖。
 
 | 单元 | 本地形态 | 远端形态 |
 | --- | --- | --- |
 | Models | 现有 `@anybox/models` 组件装配在 harness server 根 | 远端代理组件提供 `models`、`models.settings`、`models.protocols` 视图；Models 单元进程的根装配完整 Models 包与 5.2 节的服务端 |
-| Computer | 现有本机 worker 客户端与实例提供方 | 远端代理组件提供 `computer.worker` 与 `computer.instance-provider`；Computer 单元进程的根装配现有 worker 执行器与四工具 |
+| Computer | 惰性本机 worker 客户端，默认环境 `local:computer` | 与本机并存的远端附着；统一路由提供 `computer.worker` 与 `computer.instance-provider`，worker 独立根装配执行器与工具 |
 
 - 代理组件的 `apply` 只建立连接与登记观察后返回，不等待远端就绪阻塞启动；远端不可用表现为操作准入失败，不是组件 FAILED。
 - 代理的 Effect 取消并等待本地观察退出；远端已接受的操作继续到各自退出，由账本协调。这与现有"客户端 Effect 只关闭观察"的规则一致。
-- 组合根不复制依赖图，也不在运行期切换同一服务名的实现。切换单元形态需要重新装配 harness server。
-- 部署形态由 `packages/distribution/src/entrypoints/` 的配置选择，使用环境变量声明每个单元的形态与附着引用；Computer 单元为 `ANYBOX_COMPUTER_UNIT=local|remote` 与 `ANYBOX_COMPUTER_ATTACHMENT`，见[部署说明](harness-server-deployment.md)；不引入 dotenv。
+- 组合根不复制依赖图，也不在运行期切换同一服务名的实现。Computer 增加或选择远端环境不需重新装配 harness server。
+- Computer 不再提供 `ANYBOX_COMPUTER_UNIT` / `ANYBOX_COMPUTER_ATTACHMENT` 全局二选一；旧非空配置明确拒绝。新项目缺省本机，显式选择任意 approved 远端附着；已接受 Run 沿用原绑定。环境列表只读取附着与连接状态，不启动本机 worker。见[执行环境管理](modules/computers/environments.md)与[部署说明](harness-server-deployment.md)；不引入 dotenv。
 - 单元进程使用自己的入口与根，不复用 harness server 的业务库。worker 的数据目录保存 computer-worker 账本与 `endpoint.json`，本机自动拉起的 worker 继续使用 `${harnessDatabasePath}.computer-worker`。同一目录同一时间只能由一个 worker 进程持有。同一台机器服务多个 harness server 时不启动第二个 worker，而是让同一个 worker 持有多个附着。
 
 ## 7. 信任与安全

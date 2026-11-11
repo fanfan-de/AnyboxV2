@@ -11,7 +11,7 @@ import { fullScope, localComputerUnitId, localModelsUnitId, parseUnitAuthorizati
 import { createUnitTransportComponent, unitTransportServiceKey } from '../packages/app-harness/dist/core/unit/transport-component.js'
 import { transportLimits, unitConnected, validateUnitRegistration, validateUnitReplies } from '../packages/app-harness/dist/core/unit/transport-domain.js'
 import { createWorkerRouterComponent } from '../packages/app-harness/dist/core/computer/worker-router.js'
-import { computerWorkerServiceKey } from '../packages/app-harness/dist/core/computer/worker-port.js'
+import { computerWorkerServiceKey, localComputerWorkerServiceKey } from '../packages/app-harness/dist/core/computer/worker-port.js'
 import { createApplicationCatalog } from '../packages/host/dist/applications/registration.js'
 import { harnessDefinition, harnessServerHttp } from '../packages/app-harness/dist/registration.js'
 
@@ -26,6 +26,7 @@ async function fixture(t) {
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createUnitAttachmentsComponent(inputs, { localUnits }))
   await root.installComponent(createUnitTransportComponent(inputs))
+  root.provide(localComputerWorkerServiceKey, {})
   const units = root.get(unitAttachmentsServiceKey), transport = root.get(unitTransportServiceKey)
   const { code } = await units.createAttachCode({ unitKind: 'computer', scope: fullScope('computer') })
   const { attachment, credential } = await units.attach({ code, unitKind: 'computer', unitId: 'laptop', contractVersion: 'computer-worker-1', ceiling: fullScope('computer') })
@@ -134,7 +135,7 @@ test('unit credentials authenticate only approved attachments and requests trave
 
 test('a claimed submit keeps later owner and observation failures uncertain after a boot change', async t => {
   const f = await fixture(t)
-  await f.root.installComponent(createWorkerRouterComponent({ local: false, claimTimeoutMs: 20, replyTimeoutMs: 100 }))
+  await f.root.installComponent(createWorkerRouterComponent({ claimTimeoutMs: 20, replyTimeoutMs: 100 }))
   const worker = f.root.get(computerWorkerServiceKey), attachmentId = f.attachment.attachmentId
   await f.transport.poll(attachmentId, registration)
   const submitted = worker.submit({ attachmentId, runId: 'run', runOwnerEpoch: 1, operationId: 'op', kind: 'tool', declarationDigest: 'digest' })
@@ -151,7 +152,7 @@ test('a claimed submit keeps later owner and observation failures uncertain afte
 
 test('a pre-aborted remote query never enters the transport mailbox', async t => {
   const f = await fixture(t)
-  await f.root.installComponent(createWorkerRouterComponent({ local: false }))
+  await f.root.installComponent(createWorkerRouterComponent())
   const attachmentId = f.attachment.attachmentId, controller = new AbortController()
   await f.transport.poll(attachmentId, registration)
   controller.abort()

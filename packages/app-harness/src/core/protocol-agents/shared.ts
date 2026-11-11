@@ -1,7 +1,7 @@
 import { nativeImageResourceUri, type JsonValue, type NativeExecution, type NativeObject, type NativeRecordDraft, type NativeReply, type NativeImageResourceRef } from '@anybox/models'
 import type { NativeInitialization, ProtocolConclusion, ProtocolRecord, RunHost } from '../run/program.js'
 import { modelFailure } from '../run/model.js'
-import { validateToolBatch } from '../run/domain.js'
+import { RunFailure, validateToolBatch } from '../run/domain.js'
 import type { ToolObservation, ValidatedToolRequest } from '../run/domain.js'
 import type { ProtocolViewExchange, ProtocolViewSnapshot } from '../view/types.js'
 import { boundProtocolView, projectNativeRequest, projectNativeExchange, reduceNativeExchange } from './projection.js'
@@ -41,15 +41,29 @@ export function toNativeRecord(protocolId: string, record: ProtocolRecord): Nati
 }
 export function serializable(value: unknown): JsonValue { return JSON.parse(JSON.stringify(value)) as JsonValue }
 
+export interface NativeToolCall {
+  readonly id: string
+  readonly name: string
+  readonly arguments: NativeObject
+}
+export interface RejectedToolObservation {
+  readonly name: string
+  readonly rejected: true
+  readonly result: NativeObject
+}
+export type ProtocolToolObservation = ToolObservation | RejectedToolObservation
+export const maxToolRequestCorrections = 3
+
 export interface ExchangeRunner {
   call(intent: NativeObject): Promise<NativeReply>
-  tools(calls: readonly ValidatedToolRequest[]): Promise<readonly ToolObservation[]>
+  tools(calls: readonly NativeToolCall[]): Promise<readonly ProtocolToolObservation[]>
 }
 
 /** Common resource plumbing contains no protocol flow decisions. */
 export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string },
   initialResources: readonly NativeImageResourceRef[] = [], prompts?: readonly PromptSnapshot[],
-  acceptResources?: (refs: readonly NativeImageResourceRef[]) => void, allowedTools?: readonly ToolDefinition[], replay?: NativeReply): ExchangeRunner {
+  acceptResources?: (refs: readonly NativeImageResourceRef[]) => void, allowedTools?: readonly ToolDefinition[], replay?: NativeReply,
+  toolRequestCorrections = 0): ExchangeRunner {
   let initial = replay === undefined, replayReply = replay, latestExchangeId: string | undefined
   let nextResources: readonly NativeImageResourceRef[] = []
   let exchanges: readonly ProtocolViewExchange[] = []
@@ -85,7 +99,7 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
       publish(prepared.exchangeId)
       const reply = await host.perform({ id: prepared.exchangeId, kind: 'model', intent: serializable(prepared.request),
         records: [toProtocolRecord(prepared.record)], observe: reply => ({ records: reply.records.map(toProtocolRecord),
-          protocolCursor: { schemaVersion: 1, protocolId: execution.snapshot.protocolId, exchangeId: reply.exchangeId } }) },
+          protocolCursor: { schemaVersion: 1, protocolId: execution.snapshot.protocolId, exchangeId: reply.exchangeId, toolRequestCorrections } }) },
       () => prepared.start(event => {
         const previous = exchanges.find(item => item.id === prepared.exchangeId) ?? { id: prepared.exchangeId, blocks: [] }
         update(reduceNativeExchange(execution.snapshot.protocolId, previous, event))
@@ -97,8 +111,43 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
       return reply
     },
     async tools(calls) {
+      host.signal.throwIfAborted()
       if (!execution.capabilities.tools) throw modelFailure('unsupported-request')
-      const validated = validateToolBatch(calls, allowedTools)
+      // Feedback must remain unambiguously paired with the original native calls.
+      const ids = new Set<string>()
+      if (!calls.length || calls.some(call => {
+        if (typeof call.id !== 'string' || !call.id.trim() || call.id.length > 256 || call.id.includes('\0') || ids.has(call.id) ||
+          typeof call.name !== 'string' || !call.name.trim() || call.name.length > 256 || call.name.includes('\0')) return true
+        ids.add(call.id)
+        return false
+      })) throw new RunFailure('invalid-tool-request')
+      let validated: readonly ValidatedToolRequest[]
+      try { validated = validateToolBatch(calls, allowedTools) }
+      catch (error) {
+        if (!(error instanceof RunFailure) || error.category !== 'invalid-tool-request') throw error
+        host.signal.throwIfAborted()
+        if (toolRequestCorrections >= maxToolRequestCorrections) throw error
+        toolRequestCorrections++
+        const availableTools = (allowedTools ?? []).map(tool => tool.name)
+        // Reject the whole batch before invoking Runtime or acquiring any tool resource.
+        return calls.map(call => {
+          const selected = allowedTools?.find(tool => tool.name === call.name)
+          let reason: 'unknown-tool' | 'invalid-arguments' | 'batch-rejected' = 'unknown-tool'
+          if (selected) {
+            try { validateToolBatch([call], allowedTools); reason = 'batch-rejected' }
+            catch (error) {
+              if (!(error instanceof RunFailure) || error.category !== 'invalid-tool-request') throw error
+              reason = 'invalid-arguments'
+            }
+          }
+          const message = reason === 'unknown-tool' ? 'Unknown or unselected tool. Use an exact name from availableTools.'
+            : reason === 'invalid-arguments' ? 'Tool arguments do not match the declared schema. Correct the arguments and submit a new call.'
+              : 'No calls in this batch were executed because another call was invalid. Submit a corrected batch.'
+          return { name: call.name, rejected: true as const, result: { error: { code: 'invalid-tool-request', reason, message,
+            executed: false, availableTools, ...(reason === 'invalid-arguments' && selected ? { schema: serializable(selected.parameters) } : {}) } } }
+        })
+      }
+      host.signal.throwIfAborted()
       const results = await host.executeTools(validated, 'serial', latestExchangeId)
       const images = results.flatMap(result => 'images' in result ? result.images ?? [] : [])
       validateImageBatch(images)
@@ -120,11 +169,11 @@ export function completed(reply: NativeReply, output: string): ProtocolConclusio
 export function initialMessages(initialization: NativeInitialization): readonly NativeObject[] {
   return initialization.prompts.map(prompt => ({ role: prompt.role, content: prompt.content }))
 }
-export function toolResult(value: ToolObservation): string { return JSON.stringify(value.result) }
+export function toolResult(value: ProtocolToolObservation): string { return JSON.stringify(value.result) }
 
 /** Image tool observations use the already-supported native user-image shapes.
  * The tool result carries correlation; raw bytes are resolved privately at operation start. */
-export function toolImageInputs(protocolId: string, results: readonly ToolObservation[]): readonly NativeObject[] {
+export function toolImageInputs(protocolId: string, results: readonly ProtocolToolObservation[]): readonly NativeObject[] {
   return results.flatMap(result => ('images' in result ? result.images ?? [] : []).map((image): NativeObject => {
     const text = `Image returned by tool ${result.name}: ${image.assetId}`
     const uri = nativeImageResourceUri(image.assetId)

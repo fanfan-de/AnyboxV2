@@ -23,7 +23,9 @@
 1. 调用 runner.call(intent)。response.status=incomplete 归为 incomplete-response，非 completed 的其他状态归为 provider-failure。
 2. 顺序遍历 output。item 带 status 时必须 completed；function_call 读取 call_id/name 并解析 JSON arguments。message 的 content 只接受 output_text；refusal 归为 refused-response。reasoning 和 web_search_call 允许保留，其语义不转成文本执行状态；其他 item/block 被拒绝。
 3. 没有函数调用时拼接当前回复的 output_text，返回完成，并要求当前 NativeReply 有 response 记录。
-4. 有函数调用时先验证整个批次，再串行执行本地工具。下一轮发送新增 `{ type: 'function_call_output', call_id, output }`，output 是工具结果 JSON 字符串；图片结果在这些文本回填之后附加 user/input_image 消息。完整历史由同一 execution 衔接，循环不复制历史数组。
+4. 有函数调用时先纯预检整个批次，合法批次串行执行本地工具，可修正的名称/schema 拒绝返回整批错误反馈。下一轮发送新增 `{ type: 'function_call_output', call_id, output }`，output 是实际工具结果或预检错误的 JSON 字符串；真实图片结果在这些文本回填之后附加 user/input_image 消息。完整历史由同一 execution 衔接，循环不复制历史数组。
+
+Loop 1.4.0 的预检反馈保持原始 call_id；同批合法同伴也返回 batch-rejected，整批未执行。精确声明名/schema 指引、每 Run 三批反馈额度及恢复计数由[共享预检规则](protocol-agent-registry.md#准备与执行)统一约束；没有工具别名，损坏原生 arguments JSON/ID 与实际执行故障不走修正路径。
 
 Responses 服务端 web_search 与会话选择的本地工具 分开：前者的声明、能力和结果属于原生驱动，不调用本地工具服务。搜索默认关闭，需在模型配置显式声明能力和原生参数。
 
@@ -41,12 +43,12 @@ Effect 清理先等待 registration.unregister()，停止本绑定代的新 prog
 
 ## 兼容限制与验证
 
-Session 固定 responses 协议；恢复接受 Loop 1.0.0/1.1.0/1.2.0/1.3.0、记录格式 1/2、匹配 checkpoint，并由 Models 验证连接、历史作用域和参数兼容。不能把 Chat 或旧 dialogue-v1 历史转换为 Responses；显式声明图片能力的配置支持用户图片输入，未知多模态输出明确拒绝。
+Session 固定 responses 协议；恢复接受 Loop 1.0.0/1.1.0/1.2.0/1.3.0/1.4.0、记录格式 1/2、匹配 checkpoint，并由 Models 验证连接、历史作用域和参数兼容。不能把 Chat 或旧 dialogue-v1 历史转换为 Responses；显式声明图片能力的配置支持用户图片输入，未知多模态输出明确拒绝。
 
 [原生协议测试](../../../tests/native-protocol-agents.test.mjs) 验证工具续轮、加密续接跨 Run/重启保存、分支隔离、搜索引用、拒绝和截断；[Models 协议测试](../../../packages/models/tests/protocols.test.mjs) 与[原生边界测试](../../../packages/models/tests/native-boundaries.test.mjs) 验证驱动传输和原生边界；[投影测试](../../../tests/native-projection.test.mjs) 验证安全且有界的显示。统一执行 `npm run check`。
 
 ## 工具库初始化与图片
 
-当前绑定使用 Loop 1.3.0。活跃 Run 恢复游标由本协议 Loop 解释；恢复首轮回放最后耐久响应，工具结果从原 operation 领取，不重新调用原模型请求。NativeInitialization v2 / tool-library-v1 从 Session 不可变工具快照生成声明，来源前缀不限制模型协议；旧 v1 / known-tools-v1 与旧 Loop 初始化原样兼容。调用批次仅允许实际声明的工具，并在启动任何工具前完成来源参数校验。
+当前绑定使用 Loop 1.4.0。活跃 Run 恢复游标由本协议 Loop 解释；恢复首轮回放最后耐久响应，工具结果从原 operation 领取，不重新调用原模型请求；toolRequestCorrections 保留本 Run 已用预检反馈额度，旧游标缺省为零。NativeInitialization v2 / tool-library-v1 从 Session 不可变工具快照生成声明，来源前缀不限制模型协议；旧 v1 / known-tools-v1 与旧 Loop 初始化原样兼容。调用批次仅允许实际声明的工具，并在启动任何工具前完成来源参数校验。
 
-图片工具的不可变字节引用先与实际观察同事务保留，program 私有 resolver 在提交后接纳；下一次增量 exchange 为对应用户图片块传入匹配 resourceRefs。驱动 2.1.0、原生记录 v2 和既有图片 codec 不升级，历史没有 base64。文本模型收到结构化不支持结果。正常模型结束也由 Runtime 关闭 Run 进程 scope、保存最终退出的通用清理观察后再结算；本 Loop 不管理进程句柄或决定清理顺序。验证见 native-tool-library.test.mjs。
+图片工具的不可变字节引用先与实际观察同事务保留，program 私有 resolver 在提交后接纳；下一次增量 exchange 为对应用户图片块传入匹配 resourceRefs。驱动、原生记录 v2 和既有图片 codec 不因本次工具反馈改动升级，历史没有 base64。文本模型收到结构化不支持结果。正常模型结束也由 Runtime 关闭 Run 进程 scope、保存最终退出的通用清理观察后再结算；本 Loop 不管理进程句柄或决定清理顺序。验证见 [native-tool-library.test.mjs](../../../tests/native-tool-library.test.mjs)。

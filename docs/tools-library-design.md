@@ -23,11 +23,13 @@ API 提供 `listTools()`、`getAgentTools(agentId)`、`setAgentTools(agentId, {t
 
 创建 Session 的事务复制 `ToolSelectionSnapshot {schemaVersion:1, tools:[{toolId,version,definition}]}`，数据库禁止之后修改。Agent 配置更新只影响新 Session；已有会话、所有分支、历史编辑/重新生成和在途 Run 保持原选择。首次接受 Run 固定 `NativeInitialization` v2 / `tool-library-v1`，包含 Prompt、实际声明与会话快照。无有效工具能力的模型使用空声明，快照仍保留。
 
-Session 的 `run-state` v9 增加 Agent 工具设置和 Session 不可变选择。旧会话迁入明确的 Anybox 两工具选择；旧 `NativeInitialization` v1 / `known-tools-v1`、定义、原生记录和历史 JSON 保持原样。当前 run-state v10 增加独立 Run 恢复状态；Loop 1.3.0 兼容 1.0.0/1.1.0/1.2.0，Models 驱动仍为 2.1.0、原生记录仍为 v2。身份、账户 epoch、模型及执行语义的恢复约束继续生效。
+Session 的 `run-state` v9 增加 Agent 工具设置和 Session 不可变选择。旧会话迁入明确的 Anybox 两工具选择；旧 `NativeInitialization` v1 / `known-tools-v1`、定义、原生记录和历史 JSON 保持原样。run-state v10 增加独立 Run 恢复状态；当前 Loop 1.4.0 兼容 1.0.0/1.1.0/1.2.0/1.3.0，Models 驱动和原生记录 v2 不因工具预检反馈改动升级。身份、账户 epoch、模型及执行语义的恢复约束继续生效。
 
 ## 执行和资源所有权
 
 工具按资源拆为四个独立 worker 根的 Nya 组件：既有 Bash、共享 Apply Patch、Run 管道进程和文件工具。选择、参数验证与来源适配保持纯函数；不新增项目、任务或工具 Context。RunRuntime 通过 Computer Operations 保存声明并观察结果，worker 执行器使用本代四工具依赖，只运行初始化实际声明的工具；完整批次在任何副作用前验证。
+
+模型给出合法、唯一且有界的原生调用 ID 后，名称未声明或参数 schema 错误属于可修正的纯预检拒绝。协议管道为每个原始调用返回结构化 invalid-tool-request；同批合法调用收到 batch-rejected，整批都没有执行。反馈列出实际声明的精确 availableTools，并为适用参数错误附 schema；不补工具、不设别名、不执行合法同伴。每个 Run 最多三批拒绝反馈，第四批终止；既有 protocolCursor 的 toolRequestCorrections 保存额度并跨恢复继承。损坏原生 JSON 或无法安全关联的调用 ID 仍立即失败，实际工具、存储、取消或清理错误不转换为这类反馈。补丁内容语法错误仍按实际工具结果返回，和纯 schema 预检拒绝分开。
 
 每次调用仍遵循持久意图、停止检查、同步启动登记、等待 result/done、持久观察的顺序。文件 Write/Edit 共用 Apply Patch 的跨项目串行队列、文件预检和真实部分提交事实。计划/todo 工具替换完整列表形成持久工具观察，不启动后台任务。
 
@@ -37,6 +39,6 @@ Codex exec 可以返回仍运行的管道会话，write_stdin 只能访问同 Ru
 
 ## 验证和升级
 
-[目录测试](../tests/tool-catalog.test.mjs)、[进程测试](../tests/process-tools.test.mjs)、[文件测试](../tests/file-tools.test.mjs) 和[四协议集成](../tests/native-tool-library.test.mjs) 覆盖跨来源选择、依赖、版本快照、stdin/增量输出、跨 Run 拒绝、正常结束及取消清理、工具图片提交、文本模型和恢复。既有工具循环及旧格式样本继续验证兼容，完整检查运行 `npm run check`。
+[目录测试](../tests/tool-catalog.test.mjs)、[进程测试](../tests/process-tools.test.mjs)、[文件测试](../tests/file-tools.test.mjs) 和[四协议集成](../tests/native-tool-library.test.mjs) 覆盖跨来源选择、依赖、版本快照、stdin/增量输出、跨 Run 拒绝、正常结束及取消清理、工具图片提交、文本模型和恢复。四协议集成、[工具循环](../tests/tool-loop.test.mjs) 和 [Apply Patch 循环](../tests/apply-patch-loop.test.mjs) 同时验证可修正预检反馈、整批不执行及后续合法调用；[协议恢复测试](../tests/computer-protocol-resume.test.mjs) 覆盖三批修正额度跨响应游标继承。既有工具循环及旧格式样本继续验证兼容，完整检查运行 `npm run check`。
 
 升级前关闭应用并等待实际退出，备份业务数据库及图片目录；v9 迁移沿用现有业务连接。回退代码需恢复升级前数据库备份。普通测试使用临时库、内存凭据及模拟协议，不访问用户实际业务数据，远端模型与系统凭据仍由既有门控验收。

@@ -89,10 +89,24 @@ export function createExecution(input: ExecutionResources): NativeExecution {
           started = true; prepared = false; records.push(record);
           const result = deferred<NativeReply>(), done = deferred<void>();
           const controller = new AbortController(), unlink = abortLink(input.controller.signal, controller);
-          let observer = onEvent, timedOut = false;
-          const timer = setTimeout(() => { timedOut = true; controller.abort(); }, input.provider.timeoutMs);
+          let observer = onEvent, timedOut = false, awaitingResponse = true;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const stopTimeout = () => {
+            awaitingResponse = false;
+            if (timer !== undefined) clearTimeout(timer);
+            timer = undefined;
+          };
+          const resetTimeout = () => {
+            if (!awaitingResponse || controller.signal.aborted) return;
+            if (timer !== undefined) clearTimeout(timer);
+            timer = setTimeout(() => { timedOut = true; controller.abort(); }, input.provider.timeoutMs);
+          };
+          resetTimeout();
           const event = (value: NativeObject) => {
-            if (!observer || controller.signal.aborted) return;
+            if (!awaitingResponse || controller.signal.aborted) return;
+            // Liveness belongs to the request, even without a display observer.
+            resetTimeout();
+            if (!observer) return;
             try { const returned: unknown = observer(immutable(value)); if (returned && typeof (returned as PromiseLike<unknown>).then === 'function') void Promise.resolve(returned).catch(() => { observer = undefined; }); }
             catch { observer = undefined; }
           };
@@ -108,13 +122,13 @@ export function createExecution(input: ExecutionResources): NativeExecution {
               const restricted: NativeResourceResolver | undefined = reader ? { read(ref, options) { const known = allowed.get(ref.id); assert(known && equalJson(known, ref)); return reader.read(known, options); } } : undefined;
               const operation = input.protocol.exchange({ provider: input.provider, credential, signal: controller.signal, request: requestBody, onEvent: event, resources: restricted, resourceRefs: requestRefs });
               // Capture a diagnostic candidate even if transport cleanup subsequently fails.
-              void operation.result.then(value => { candidate = immutable(value); }, error => { diagnostic = nativeDiagnostic(error); }).catch(() => {});
+              void operation.result.then(value => { stopTimeout(); candidate = immutable(value); }, error => { stopTimeout(); diagnostic = nativeDiagnostic(error); }).catch(() => {});
               candidate = immutable(await joinOperation(operation, controller.signal));
               assert(json(candidate));
               next = immutable(input.protocol.commit({ state: context, intent: captured, request: requestBody, response: candidate }));
               assert(json(next));
             } catch (error) { diagnostic ??= nativeDiagnostic(error); failure = normalizeError(error); }
-            clearTimeout(timer); unlink(); observer = undefined;
+            stopTimeout(); unlink(); observer = undefined;
             if (failure?.code !== 'cleanup-failure' && controller.signal.aborted) failure = modelsError(timedOut ? 'timeout' : 'cancelled');
             let responseRecord: NativeRecordDraft | undefined;
             if (failure) restorable = false;
@@ -130,7 +144,7 @@ export function createExecution(input: ExecutionResources): NativeExecution {
             if (failure) result.reject(failure);
             else result.resolve(immutable({ exchangeId, response: candidate!, records: [record, responseRecord!] }));
           }).catch(() => {
-            clearTimeout(timer); unlink(); observer = undefined; active = undefined; cleanupFailed = true;
+            stopTimeout(); unlink(); observer = undefined; active = undefined; cleanupFailed = true;
             const error = modelsError('cleanup-failure'); done.reject(error); result.reject(error); void close();
           });
           return handle;

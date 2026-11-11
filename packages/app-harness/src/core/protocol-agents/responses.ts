@@ -1,7 +1,6 @@
 import type { NativeObject } from '@anybox/models'
 import type { ProtocolConclusion } from '../run/program.js'
 import { modelFailure } from '../run/model.js'
-import { validateToolBatch } from '../run/domain.js'
 import { completed, jsonArguments, nativeArray, nativeObject, nativeString, nonempty, toolResult, toolImageInputs } from './shared.js'
 import type { ExchangeRunner } from './shared.js'
 
@@ -27,7 +26,7 @@ export async function runResponses(runner: ExchangeRunner, initial: NativeObject
       } else if (item.type !== 'reasoning' && item.type !== 'web_search_call') throw modelFailure('unsupported-request')
     }
     if (!calls.length) return completed(reply, text.join(''))
-    const batch = validateToolBatch(calls), results = await runner.tools(batch)
-    intent = { input: [...batch.map((call, index) => ({ type: 'function_call_output', call_id: call.id, output: toolResult(results[index]!) })), ...toolImageInputs('responses', results)] }
+    const results = await runner.tools(calls)
+    intent = { input: [...calls.map((call, index) => ({ type: 'function_call_output', call_id: call.id, output: toolResult(results[index]!) })), ...toolImageInputs('responses', results)] }
   }
 }

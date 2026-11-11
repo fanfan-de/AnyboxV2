@@ -1,7 +1,7 @@
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import sharp from 'sharp'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,6 +12,8 @@ import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqli
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { projectProtocolRecords } from '../packages/app-harness/dist/core/protocol-agents/projection.js'
 import { decodeProtocolView } from '../packages/app-harness/dist/core/view/decode.js'
+import { runViewEvent } from '../packages/app-harness/dist/core/run/notifications.js'
+import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 
 const factories = { responses: createResponsesProtocol, 'anthropic-messages': createAnthropicMessagesProtocol,
   'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol }
@@ -37,7 +39,7 @@ function toolResponse(protocolId) {
   return { choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: 'Thinking',
     tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'bash', arguments: JSON.stringify(args) } }] } }] }
 }
-async function host(directory, protocolId, state, { search = false, images = false, legacy = false } = {}) {
+async function host(directory, protocolId, state, { search = false, images = false, legacy = false, streaming = false, timeoutMs = 5000, http = false } = {}) {
   const root = new Context()
   await root.installComponent(createModelsStoreComponent({ path: join(directory, 'models.sqlite') }))
   await root.installComponent(createModelsVaultComponent({ namespace: 'native-app-test', openEntry(_namespace, id) {
@@ -49,17 +51,17 @@ async function host(directory, protocolId, state, { search = false, images = fal
     assert.ok(state.responses.length, 'unexpected provider request')
     const response = state.responses.shift()
     await state.beforeResponse?.()
-    return json(response)
+    return response instanceof Response ? response : json(response)
   } })
   root.get('models.protocols').register(legacy ? { ...protocol, descriptor: { ...protocol.descriptor, version: '2.0.0' }, recordFormatVersion: 1,
     effectiveCapabilities: (...args) => ({ ...protocol.effectiveCapabilities(...args), imageInput: false }) } : protocol)
   const settings = root.get('models.settings')
   if (!settings.connections().length) {
-    const capabilities = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: 'unsupported' },
+    const capabilities = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: streaming ? 'supported' : 'unsupported' },
       imageInput: { support: images ? 'supported' : 'unsupported' }, webSearch: { support: search ? 'supported' : 'unknown' } }
     const provider = await settings.createProvider({ name: 'Native provider', connectionHints: { protocolIds: [protocolId] } })
     const connection = await settings.createConnection({ id: 'connection', providerDefinitionId: provider.id, name: 'Native connection', enabled: true,
-      protocolId, baseUrl: 'https://native.invalid/v1', auth: 'api-key', apiKey: 'private-api-key', timeoutMs: 5000 })
+      protocolId, baseUrl: 'https://native.invalid/v1', auth: 'api-key', apiKey: 'private-api-key', timeoutMs })
     const definition = await settings.createModel({ name: 'Native model', providerId: provider.id, remoteModelId: 'native-model', capabilities,
       controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [protocolId] } })
     const value = protocolId === 'anthropic-messages' ? { max_tokens: 4096 } : {}
@@ -78,7 +80,8 @@ async function host(directory, protocolId, state, { search = false, images = fal
     }
   }
   const project = await harness.openProject(directory)
-  return { root, harness, project, settings, close: () => harness.close() }
+  if (http) await root.installComponent(createFixtureApplicationApiComponent(root, harness.listAgents()))
+  return { root, harness, project, settings, ...(http ? { web: root.get('host.http') } : {}), close: () => harness.close() }
 }
 async function run(f, sessionId, parentNodeId, input, key = input) {
   const accepted = await f.harness.startRun({ sessionId, parentNodeId, input, idempotencyKey: key })
@@ -86,6 +89,110 @@ async function run(f, sessionId, parentNodeId, input, key = input) {
   assert.equal(settled.status, 'completed', JSON.stringify(settled))
   return settled
 }
+
+function partialStream(protocolId, marker, command) {
+  const args = JSON.stringify({ command })
+  const events = protocolId === 'responses' ? [
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'partial-message', role: 'assistant', content: [] } },
+    { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { type: 'output_text', text: '' } },
+    { type: 'response.output_text.delta', output_index: 0, item_id: 'partial-message', content_index: 0, delta: marker },
+    { type: 'response.output_item.added', output_index: 1, item: { type: 'function_call', id: 'partial-tool', call_id: 'unexecuted-call', name: 'bash', arguments: '' } },
+    { type: 'response.function_call_arguments.delta', output_index: 1, item_id: 'partial-tool', delta: args },
+  ] : protocolId === 'anthropic-messages' ? [
+    { type: 'message_start', message: { type: 'message', id: 'partial-message', role: 'assistant', content: [], stop_reason: null } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: marker } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'unexecuted-call', name: 'bash', input: {} } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: args } },
+  ] : protocolId === 'gemini-interactions' ? [
+    { event_type: 'step.start', index: 0, step: { type: 'model_output', content: [] } },
+    { event_type: 'step.delta', index: 0, delta: { type: 'text', text: marker } },
+    { event_type: 'step.stop', index: 0 },
+    { event_type: 'step.start', index: 1, step: { type: 'function_call', id: 'unexecuted-call', name: 'bash', arguments: {} } },
+    { event_type: 'step.delta', index: 1, delta: { type: 'arguments_delta', arguments: args } },
+  ] : [
+    { choices: [{ index: 0, delta: { role: 'assistant', content: marker }, finish_reason: null }] },
+    { choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'unexecuted-call', type: 'function', function: { name: 'bash', arguments: args } }] }, finish_reason: null }] },
+  ]
+  let controller, ended = false
+  return {
+    response: new Response(new ReadableStream({
+      start(value) {
+        controller = value
+        controller.enqueue(new TextEncoder().encode(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')))
+      },
+      cancel() { ended = true },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+    finish() { if (!ended) { ended = true; controller.close() } },
+  }
+}
+
+async function readRunHTTP(f, path) {
+  const response = await fetch(`${f.web.url}/api/v1${path}`)
+  assert.equal(response.status, 200)
+  return response.json()
+}
+
+for (const protocolId of Object.keys(factories)) for (const failure of ['idle timeout', 'stream EOF'])
+  test(`${protocolId}: streamed partial content survives ${failure} through HTTP reads and restart without executing tools`, { timeout: 10_000 }, async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'anybox-native-stream-failure-'))
+    const marker = 'RECEIVED-PARTIAL-ANSWER', sideEffect = join(directory, 'unexecuted-tool.txt')
+    const stream = partialStream(protocolId, marker, 'printf forbidden > unexecuted-tool.txt')
+    const state = { secrets: new Map(), requests: [], responses: [stream.response] }
+    let f = await host(directory, protocolId, state, { streaming: true, timeoutMs: failure === 'idle timeout' ? 200 : 5000, http: true })
+    try {
+      const session = await f.harness.createSession(f.project.id, 'assistant', 'default')
+      let received
+      const liveContent = new Promise(resolve => { received = resolve })
+      f.root.on(runViewEvent, progress => {
+        if (JSON.stringify(progress.frame.payload).includes(marker) && JSON.stringify(progress.frame.payload).includes('unexecuted-call')) received()
+      })
+      const accepted = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'Request a streamed answer', idempotencyKey: 'partial' })
+      await liveContent
+      const live = decodeProtocolView(f.harness.getView(accepted.id))
+      assert.equal(live.status, 'provisional')
+      assert.match(JSON.stringify(live), /RECEIVED-PARTIAL-ANSWER/)
+      if (failure === 'stream EOF') stream.finish()
+      const settled = await f.harness.waitRun(accepted.id)
+      assert.equal(settled.status, 'failed')
+      assert.equal(settled.errorCategory, failure === 'idle timeout' ? 'timeout' : 'invalid-response')
+      assert.equal(settled.output, undefined)
+      assert.equal(settled.resultNodeId, undefined)
+      assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
+      assert.equal((await f.harness.getRunEvents(accepted.id)).some(event => event.kind === 'tool-started'), false)
+      assert.equal(existsSync(sideEffect), false)
+      const records = await f.harness.getRunRecords(accepted.id)
+      assert.ok(records.some(record => record.kind === 'diagnostic' && JSON.stringify(record.payload).includes(marker)))
+      assert.equal(records.some(record => record.kind === 'response'), false)
+      assert.doesNotMatch(JSON.stringify(records), /private-api-key|Authorization|credentialRef/)
+
+      const assertStoredView = async current => {
+        const stored = await readRunHTTP(current, `/runs/${accepted.id}`)
+        assert.equal(stored.status, 'failed')
+        assert.equal(stored.resultNodeId, undefined)
+        const view = decodeProtocolView(await readRunHTTP(current, `/runs/${accepted.id}/view`))
+        assert.equal(view.status, 'committed')
+        assert.match(JSON.stringify(view), /RECEIVED-PARTIAL-ANSWER/)
+        assert.ok(view.exchanges.some(exchange => exchange.nativeState?.diagnostic && exchange.nativeState?.partial))
+        assert.doesNotMatch(JSON.stringify(view), /private-api-key|Authorization|credentialRef/)
+        return view
+      }
+      const storedView = await assertStoredView(f)
+      await f.close()
+      f = await host(directory, protocolId, state, { http: true })
+      assert.deepEqual(await f.harness.getRunRecords(accepted.id), records)
+      assert.deepEqual(await assertStoredView(f), storedView)
+      assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
+
+      const configuration = f.settings.configurations().find(value => value.id === 'default')
+      await f.settings.updateConfiguration(configuration.id, { capabilities: { ...configuration.capabilities, streaming: { support: 'unsupported' } } }, configuration.revision)
+      state.responses.push(answer(protocolId, 'FRESH-ANSWER'))
+      await run(f, session.id, null, 'Fresh root request', 'fresh')
+      assert.doesNotMatch(JSON.stringify(state.requests.at(-1)), /RECEIVED-PARTIAL-ANSWER|unexecuted-call/)
+      assert.equal(existsSync(sideEffect), false)
+    } finally { stream.finish(); await f.close(); rmSync(directory, { recursive: true, force: true }) }
+  })
 
 for (const protocolId of Object.keys(factories)) test(`${protocolId}: live request inputs match committed deltas and keep inherited prompts out of new requests`, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-native-input-view-'))

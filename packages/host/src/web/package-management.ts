@@ -20,8 +20,11 @@ interface Options {
   readonly pollMs?: number
   readonly activation?: { prepare(): Promise<ApplicationInterfaceLease> }
   readonly reload?: (removedAppIds?: readonly string[]) => void
+  /** Optional host header slot for the single installation entry. */
+  readonly installationActions?: HTMLElement
 }
 type LocalApplicationSource = { readonly sourceFormat: 'archive'; readonly file: File; readonly name: string; readonly size: number } | ({ readonly sourceFormat: 'directory' } & BrowserApplicationDirectory)
+let installationPanelSequence = 0
 const phaseNames: Readonly<Record<string, string>> = {
   accepted: '等待上传', receiving: '正在接收应用包', verifying: '正在验证应用包', prepared: '已验证，准备安装', committing: '正在保存安装',
   installed: '安装已完成', 'awaiting-activation': '安装已完成', completed: '安装已完成', failed: '安装失败', cancelled: '已取消', 'recovery-required': '需要核对恢复',
@@ -109,7 +112,9 @@ async function archiveDigest(file: File): Promise<string> {
 export function setupPackageManagement(container: HTMLElement, options: Options = {}) {
   const fetcher = options.fetch ?? fetch, hash = options.hash ?? archiveDigest, nextRequestId = options.requestId ?? (() => crypto.randomUUID())
   const root = document.createElement('section'); root.className = 'package-management'; root.setAttribute('aria-label', '本地应用包安装')
-  const installPanel = document.createElement('div'); installPanel.className = 'package-install-panel'
+  const installPanel = document.createElement('div'); installPanel.className = 'package-install-panel'; installPanel.id = `package-install-panel-${++installationPanelSequence}`
+  const installEntry = document.createElement('div'); installEntry.className = 'package-install-entry'
+  const installToggle = makeButton('安装应用', () => { toggleInstallation() }); installToggle.className = 'package-install-toggle'; installToggle.setAttribute('aria-controls', installPanel.id); installEntry.append(installToggle)
   const heading = document.createElement('h3'); heading.textContent = '安装应用'
   const help = document.createElement('p'); help.textContent = '选择一种安装来源。安装后应用更改，即可在工作区打开应用。'
   const sectionHeading = document.createElement('div'); sectionHeading.className = 'package-section-heading'; sectionHeading.append(heading, help)
@@ -137,7 +142,8 @@ export function setupPackageManagement(container: HTMLElement, options: Options 
   const installButton = makeButton('安装应用包', () => { void install() }), applyButton = makeButton('应用更改', () => { void applyChanges() }), refreshButton = makeButton('核对安装状态', () => { void refresh() })
   installButton.className = 'primary'; refreshButton.className = 'package-refresh'; applyButton.className = 'primary'
   controls.append(installButton)
-  installPanel.append(sectionHeading, sources, selection, controls)
+  const sourceNotice = document.createElement('p'); sourceNotice.className = 'package-source-notice'
+  installPanel.append(sectionHeading, sources, selection, controls, sourceNotice)
   const notice = document.createElement('p'); notice.className = 'package-notice'; notice.setAttribute('role', 'status'); notice.setAttribute('aria-live', 'polite')
   const pendingBanner = document.createElement('div'); pendingBanner.className = 'package-pending-banner'
   const pendingCopy = document.createElement('p'); pendingBanner.append(pendingCopy, applyButton)
@@ -148,8 +154,9 @@ export function setupPackageManagement(container: HTMLElement, options: Options 
   const history = document.createElement('details'); history.className = 'package-history'
   const historySummary = document.createElement('summary'); historySummary.textContent = '操作记录与运行详情'
   const historyContent = document.createElement('div'); historyContent.className = 'package-history-content'; history.append(historySummary, historyContent)
+  ;(options.installationActions ?? root).append(installEntry)
   root.append(installPanel, notice, pendingBanner, factsList, activity, refreshButton, history); container.append(root)
-  let closed = false, selected: LocalApplicationSource | null = null, trustedDirectory = false, busy = false, available: boolean | undefined, trustedPublisherCount: number | undefined, message = '', revision = 0
+  let closed = false, installationExpanded = false, selected: LocalApplicationSource | null = null, trustedDirectory = false, busy = false, available: boolean | undefined, trustedPublisherCount: number | undefined, message = '', revision = 0
   let registryRevision: number | undefined, lifecycleAvailable = false, actual: readonly ActualCatalog[] = [], activations: readonly Activation[] = [], preparingActivation = false
   let activationAttempt: { requestId: string; lease: ApplicationInterfaceLease; id?: string; commitSent: boolean; driving: boolean; recovery?: boolean; recoveryRequested?: boolean; aborted?: boolean } | undefined, activationRead: Promise<void> | undefined
   let installations: readonly InstallationFacts[] = [], operations: readonly Operation[] = [], read: Promise<void> | undefined, disposal: Promise<void> | undefined
@@ -159,6 +166,9 @@ export function setupPackageManagement(container: HTMLElement, options: Options 
   function render() {
     if (closed) return
     const changing = preparingActivation || !!activationAttempt
+    installPanel.hidden = !installationExpanded
+    installToggle.textContent = installationExpanded ? '收起安装' : '安装应用'
+    installToggle.setAttribute('aria-expanded', String(installationExpanded)); installToggle.disabled = changing || busy
     input.disabled = changing || busy || available !== true || trustedPublisherCount === 0
     directoryInput.disabled = changing || busy || available !== true
     archiveButton.disabled = input.disabled; directoryButton.disabled = directoryInput.disabled
@@ -171,7 +181,9 @@ export function setupPackageManagement(container: HTMLElement, options: Options 
     directoryLabel.className = `package-source-option${selected?.sourceFormat === 'directory' ? ' selected' : ''}`
     label.className = `package-source-option${selected?.sourceFormat === 'archive' ? ' selected' : ''}`
     chosen.textContent = selected ? `${selected.name}${selected.sourceFormat === 'directory' ? ` · ${selected.files.length} 个文件` : ''} · ${(selected.size / (1024 * 1024)).toFixed(1)} MiB` : '尚未选择文件夹或应用包'
-    notice.textContent = message || (available === false ? '当前宿主未启用应用安装。' : available === undefined ? '正在读取安装状态…' : trustedPublisherCount === 0 && selected?.sourceFormat !== 'directory' ? '尚未配置信任的发布者。你可以选择并明确信任本地应用文件夹。' : '')
+    sourceNotice.textContent = trustedPublisherCount === 0 && selected?.sourceFormat !== 'directory' ? '尚未配置信任的发布者。你可以选择并明确信任本地应用文件夹。' : ''
+    sourceNotice.hidden = !sourceNotice.textContent
+    notice.textContent = message || (available === false ? '当前宿主未启用应用安装。' : available === undefined ? '正在读取安装状态…' : '')
     notice.hidden = !notice.textContent
     const pendingCount = installations.filter(facts => facts.pending).length
     pendingBanner.hidden = !pendingCount && !changing
@@ -251,14 +263,22 @@ export function setupPackageManagement(container: HTMLElement, options: Options 
     uncertain.delete(value.requestId)
     return latest
   }
+  function toggleInstallation() {
+    if (closed || busy || preparingActivation || activationAttempt) return
+    installationExpanded = !installationExpanded
+    if (!installationExpanded) { selected = null; trustedDirectory = false; input.value = ''; directoryInput.value = '' }
+    render()
+  }
   function select(file: File | null) {
     if (closed || busy) return
+    if (file) installationExpanded = true
     selected = null; trustedDirectory = false; input.value = ''; directoryInput.value = ''; message = ''
     if (file) { const issue = validateLocalApplicationArchive(file); if (issue) message = issue; else selected = { sourceFormat: 'archive', file, name: file.name, size: file.size } }
     render()
   }
   function selectDirectory(files: readonly File[]) {
     if (closed || busy) return
+    if (files.length) installationExpanded = true
     selected = null; trustedDirectory = false; input.value = ''; directoryInput.value = ''; message = ''
     if (files.length) { try { selected = { sourceFormat: 'directory', ...browserApplicationDirectory(files) } } catch (error) { message = failureMessage(error) } }
     render()
@@ -446,10 +466,10 @@ export function setupPackageManagement(container: HTMLElement, options: Options 
   function dispose(): Promise<void> {
     if (disposal) return disposal
     closed = true; observations.abort(); if (!activationAttempt && timer !== undefined) clearInterval(timer)
-    selected = null; trustedDirectory = false; input.value = ''; directoryInput.value = ''; root.remove()
+    selected = null; trustedDirectory = false; input.value = ''; directoryInput.value = ''; installEntry.remove(); root.remove()
     disposal = Promise.allSettled([...work]).then(() => undefined); return disposal
   }
   render(); void refresh()
   return { select, selectDirectory, trustDirectory, install, applyChanges, removeApplication, recoverActivation, refresh: async (fresh = false) => { await refresh(fresh); await pollActivation() }, cancel: (id: string) => control(id, 'cancel'), recover: (id: string) => control(id, 'recover'), discard: (id: string) => control(id, 'discard'), dispose,
-    snapshot: () => ({ closed, busy, available, selectedFilename: selected?.name ?? null, selectedSourceFormat: selected?.sourceFormat ?? null, trustedDirectory, message, installations, operations, registryRevision, lifecycleAvailable, actual, activations, activationPending: preparingActivation || !!activationAttempt, uncertainRequestIds: [...uncertain] }) }
+    snapshot: () => ({ closed, busy, available, installationExpanded, selectedFilename: selected?.name ?? null, selectedSourceFormat: selected?.sourceFormat ?? null, trustedDirectory, message, installations, operations, registryRevision, lifecycleAvailable, actual, activations, activationPending: preparingActivation || !!activationAttempt, uncertainRequestIds: [...uncertain] }) }
 }
