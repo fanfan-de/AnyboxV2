@@ -1,3 +1,5 @@
+import { sourceI18n } from './i18n.js'
+import type { ClaudeI18n } from './i18n.js'
 import type { Root, RootContent, Definition } from 'mdast'
 import { parseMarkdown } from './vendor/markdown-parser.js'
 
@@ -11,12 +13,14 @@ export function safeMarkdownUrl(value: string): string | undefined {
 }
 
 /** Application-owned, bounded Markdown renderer. HTML is text and images are opt-in links. */
-export function renderMarkdown(input: string): HTMLElement {
+export function renderMarkdown(input: string, i18n: ClaudeI18n = sourceI18n): HTMLElement {
+  const { t } = i18n
   const source = input.slice(0, displayLimit), container = document.createElement('div')
   container.className = 'ca-text-block ca-markdown'
   const plain = (): HTMLElement => {
     container.className += ' ca-markdown-plain'
-    container.textContent = source + (input.length > displayLimit ? '\n…（显示内容已截断）' : '')
+    container.textContent = source
+    if (input.length > displayLimit) container.append(i18n.element('span', { text: () => t('markdown.truncated') }))
     return container
   }
   let tree: Root
@@ -58,14 +62,14 @@ export function renderMarkdown(input: string): HTMLElement {
       case 'inlineCode': { const code = document.createElement('code'); code.textContent = node.value; return [code] }
       case 'code': {
         const block = document.createElement('div'), bar = document.createElement('div'), language = document.createElement('span'), copy = document.createElement('button')
-        block.className = 'ca-code-block'; bar.className = 'ca-code-toolbar'; language.textContent = node.lang || '代码'
-        copy.className = 'ca-code-copy'; copy.type = 'button'; copy.textContent = '复制'; copy.setAttribute('aria-label', '复制代码')
+        block.className = 'ca-code-block'; bar.className = 'ca-code-toolbar'; i18n.bind(language, 'text', () => node.lang || t('markdown.code'))
+        copy.className = 'ca-code-copy'; copy.type = 'button'; i18n.bind(copy, 'text', () => t('markdown.copy')); i18n.bind(copy, 'aria-label', () => t('markdown.copyLabel'))
         copy.addEventListener('click', () => {
           if (copy.disabled) return
           copy.disabled = true
           void (async () => {
-            try { await navigator.clipboard.writeText(node.value); copy.textContent = '已复制' }
-            catch { copy.textContent = '复制失败'; copy.title = '请选中代码后复制。' }
+            try { await navigator.clipboard.writeText(node.value); i18n.bind(copy, 'text', () => t('markdown.copied')) }
+            catch { i18n.bind(copy, 'text', () => t('markdown.copyFailed')); i18n.bind(copy, 'title', () => t('markdown.copyHelp')) }
             finally { copy.disabled = false }
           })()
         })
@@ -83,7 +87,7 @@ export function renderMarkdown(input: string): HTMLElement {
         const item = document.createElement('li')
         if (typeof node.checked === 'boolean') {
           const checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.checked = node.checked; checkbox.disabled = true
-          checkbox.setAttribute('aria-label', node.checked ? '已完成' : '未完成'); item.className = 'ca-markdown-task'; item.append(checkbox)
+          i18n.bind(checkbox, 'aria-label', () => node.checked ? t('status.completed') : t('markdown.unchecked')); item.className = 'ca-markdown-task'; item.append(checkbox)
         }
         item.append(...children()); return [item]
       }
@@ -94,13 +98,13 @@ export function renderMarkdown(input: string): HTMLElement {
       }
       case 'image': case 'imageReference': {
         const target = node.type === 'image' ? node : definitions.get(node.identifier), link = target && linkFor(target.url, target.title)
-        const label = `[图片：${node.alt || '查看图片'}]`
-        if (!link) return literal(label)
-        link.textContent = label; link.className = 'ca-image-link'; return [link]
+        const label = () => t('markdown.image', { alt: node.alt || t('markdown.viewImage') })
+        if (!link) return [i18n.element('span', { text: label })]
+        i18n.bind(link, 'text', label); link.className = 'ca-image-link'; return [link]
       }
       case 'table': {
         const scroll = document.createElement('div'), table = document.createElement('table'), head = document.createElement('thead'), body = document.createElement('tbody')
-        scroll.className = 'ca-table-scroll'; scroll.tabIndex = 0; scroll.setAttribute('aria-label', '表格，可横向滚动')
+        scroll.className = 'ca-table-scroll'; scroll.tabIndex = 0; i18n.bind(scroll, 'aria-label', () => t('markdown.table'))
         node.children.forEach((row, index) => {
           const tr = document.createElement('tr')
           row.children.forEach((cell, column) => {

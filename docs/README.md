@@ -39,6 +39,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | 文档 | 内容 |
 | --- | --- |
 | [命名与边界](naming.md) | 产品、服务端与客户端命名，源码标识及持久兼容约定 |
+| [多语言治理与接入方案](i18n-governance-design.md) | 已接入宿主与 Claude Agent 的中英文 Web 主流程：应用自有资源、只读语言建议、原位切换及剩余范围；复用评估后保留局部实现，没有共享包或 Nya 组件 |
 | [应用模块化分发与按需安装](application-packages-design.md) | 最小核心、基础能力与应用业务；完整生命周期能力对照、包依赖与契约、本地安装/生效/卸载的实施顺序和验收 |
 | [应用业务服务独立运行（D0a.1）](application-standalone-services.md) | 单应用独立服务及 Anybox 集成共用业务装配；应用 HTTP/认证归属、兼容数据与命令、隔离安装和实际退出验收 |
 | [Anybox Harness 架构快照（2026-10-15，D2）](./architecture/anybox-harness-architecture-2026-10-15.md) | U0/U1 的进程、资源与拨出传输总览，含可编辑 D2、SVG 和 PNG；尚未反映 D0a/D0a.1 拆包及独立业务服务，当前装配以组件手册为准 |

@@ -4,7 +4,7 @@
 
 `packages/host/src/client-http.ts` 的 `createClientShellComponent(root,catalog,port?,{transportSecret,packageManagement}?)` 创建 `app-client-http`，提供 `app.client-http: ClientShell`（url 与 close），注入 app.products 和 app.activity。它调用与执行端相同的 startApplicationHttpServer，使用 `/api/client/v1`。通用 `createClientHost` 可选接收 `transportSecret`，供桌面主进程到客户端监听器的私有桥接使用；全部静态资源、产品控制与业务请求都在分派前校验 `X-Anybox-Desktop-Transport`，缺失或不匹配返回 `forbidden-transport`。此凭证不进入页面或持久化；普通 Web 不传该选项，仍使用原 Host/Origin 校验。
 
-组件独占客户端回环监听器与请求。外壳资源仅含 HTML、CSS、HTTP 与应用工作区路由模块；应用资源合并自目录。注册冲突在启动监听前拒绝。连接身份、凭据、代理和 Anybox Harness 路由都由应用适配器处理；Shell 只按注册服务键从根取得本次端口。
+组件独占客户端回环监听器与请求。外壳资源包含自身 HTML、CSS、HTTP、应用工作区路由，以及呈现偏好和本地翻译模块；应用资源合并自目录。注册冲突在启动监听前拒绝。连接身份、凭据、代理和 Anybox Harness 路由都由应用适配器处理；Shell 只按注册服务键从根取得本次端口。
 
 D1.2 的空宿主入口已在 D1.4 经 `packages/host/src/main.ts`、`desktop/main.ts` 和固定 `desktop/managed-role-entry.ts` 接入正式角色监督器。每个角色仍只有原有服务根；父进程只管理窗口、稳定协议桥、角色进程及通用退出保护，不持有业务库、应用配对、目录窗口或 Vault。已删除旧的单客户端最小桌面启动路径；现有 distribution 完整桌面保持兼容，迁入由 D3 推进。独立产物和只读验证命令见[产物手册](../package-management/archives.md)，实际角色交接见[生效手册](../package-management/activation.md)。
 
@@ -17,6 +17,14 @@ Host/Origin/CSP、租约、断连与 Effect 退出见[通用监听器](web-front
 宿主菜单和应用管理采用纯文字名称及动作，不为相同文案叠加装饰图标或首字母图块；悬浮菜单入口保留纯图标及 `title`、`aria-label`。应用选中、运行状态和真正的展开指示保留独立标记。自有应用沿用同一表达原则，详见[界面规则](../../web-client-design.md#页面流程)。
 
 全部宿主功能从悬浮图标展开的菜单进入；菜单按注册目录提供全部可用应用入口，可直接切换多个已挂载界面，应用管理与安装从同一入口进入独立 dialog。切换已有挂载使用 select，不重复执行 open；隐藏的 panel 保持挂载并设 inert，保留草稿、滚动和数据。工作区 views/tabs 记录已打开界面，不控制任何宿主侧栏的显示；打开或关闭应用不重置悬浮图标的拖动位置。应用挂载容器继续由应用自己的界面组件呈现。
+
+Anybox 菜单中的“语言”提供跟随系统、简体中文、English，对应 `system | zh-CN | en`。浏览器辅助器 [`web/locale.ts`](../../../packages/host/src/web/locale.ts) 持有所选偏好、不可变的 `{ preferredLocale, revision }` 快照与来源订阅；当前 origin 的 `localStorage: anybox.preferences.locale.v1` 保存所选值。`system` 按浏览器语言顺序匹配受支持语言，未知语言默认简体中文，不声明提供繁体翻译。同页直接通知，同源其他页面通过 storage 事件接收且不反写；languagechange 只更新跟随系统的偏好。存储不可用时保留页面内选择，系统探测或外部订阅失败不关闭语言选择，保留最后语言或首次默认值。页面退出注销来源监听。
+
+[`web/i18n.ts`](../../../packages/host/src/web/i18n.ts) 只持有外壳字典和本地 i18next 实例；文本及 title、aria 等属性经 DOM setter 更新，语言修订参与列表缓存。切换语言不重新导入或挂载应用，不调用应用生命周期和后台控制，不改当前工作区。宿主将 [`ApplicationLocaleContext`](../../../packages/application-api/src/web.ts) 作为可选 `context.locale` 传入 mount，仅有 `current()` 与 `subscribe()`，不暴露设置写入或翻译器；各应用决定自己的实际语言和资源。单个订阅者异常不妨碍其他订阅者，偏好来源失败也不阻止已有静态词条呈现。
+
+当前中英文覆盖悬浮菜单、应用管理外壳、产品状态/能力说明及宿主通知；应用名称、应用提供的介绍及业务原文按所属方原样展示。安装、版本生效和卸载面板仍保留原有中文；Anybox Harness 和其他未接入应用不会因切换宿主语言被强制翻译。Electron renderer 使用该 Web 偏好，原生主进程菜单、退出/启动弹窗及桌面偏好桥另属后续工作。此实现没有新增 Nya 组件、后台语言状态或应用权限沙箱；开发契约与兼容规则见[应用接入](../../application-development.md#界面语言与应用归属)。
+
+语言行为测试入口为 [`packages/host/tests/locale.test.mjs`](../../../packages/host/tests/locale.test.mjs) 与 [`tests/application-shell.test.mjs`](../../../tests/application-shell.test.mjs)，分别验证偏好解析、来源失败/清理，以及真实 Shell 模块的文案更新、同源通知和语言切换不触发应用生命周期或 mutation。它们不等同于原生桌面或完整产品的双语浏览器验收。
 
 Anybox Harness 的文件阅读区、文件标签、全宽路径顶栏与目录树均在该应用挂载容器内部实现，由当前活动会话固定项目与设备。工作区两侧及阅读区与目录树之间仅显示 1px 单线，透明命中区向两侧各扩展 4px，保留拖拽与键盘调宽；停靠状态不叠加面板边框，抽屉保留边框与阴影。路径顶栏始终说明会话所属设备与项目，有文件时呈现完整相对路径面包屑，并集中提供目录刷新与折叠入口。左阅读区与右目录树的内部调宽、按会话保存的目录请求宽度、窄布局适配、已加载快照筛选及文件文本标签均属于 Anybox Harness 浏览器资源；Shell 不拥有文件状态、目录请求或预览生命周期。Codicons SVG 本地副本由 Anybox Harness 显式注册到精确静态资源图，来源与许可见[图标说明](../../../packages/app-harness/web/icons/README.md)；具体布局、恢复与浏览器验收入口见[三栏工作区](../../harness-three-column-workspace.md)。
 

@@ -97,7 +97,7 @@
 .ca-search-wrap { margin: 0 14px 18px; }
 .ca-thread-search { width: 100%; min-height: 34px; border-color: transparent; background: #e7e5e1; font-size: 12px; }
 .ca-thread-search:focus { background: #faf9f7; }
-.ca-list-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 20px 8px; color: var(--secondary); font-size: 11px; }
+.ca-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 20px 8px; color: var(--secondary); font-size: 11px; }
 .ca-thread-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 .ca-threads { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 16px; scrollbar-width: thin; }
 .ca-thread-list, .ca-group-threads { display: flex; flex-direction: column; list-style: none; margin: 0; padding: 0; gap: 2px; }

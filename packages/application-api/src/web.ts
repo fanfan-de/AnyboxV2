@@ -4,12 +4,18 @@ export interface ApplicationRoute {
   navigate(path: string, replace?: boolean): void
   subscribe(listener: () => void): () => void
 }
+/** Optional presentation preference only; applications own their actual language and resources. */
+export interface ApplicationLocaleContext {
+  current(): Readonly<{ preferredLocale: string; revision: number }>
+  subscribe(listener: () => void): () => void
+}
 export interface ApplicationWebContext {
   readonly appId: string
   /** Supplied only when this application declares an HTTP entry. */
   readonly apiBase?: string
   readonly route: ApplicationRoute
   readonly signal: AbortSignal
+  readonly locale?: ApplicationLocaleContext
   domId(local: string): string
 }
 export interface MountedApplication {

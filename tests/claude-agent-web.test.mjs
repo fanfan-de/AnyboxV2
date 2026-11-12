@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, displayItems, formatUsage, groupThreads, threadIndicator, relativeTime, filterDevices, composerBlock, composerBlockLabels } from '../packages/app-claude-agent/dist/web/state.js'
+import { parseRoute, formatRoute, selectDevice, deviceLabel, messageFor, displayItems, formatUsage, groupThreads, threadIndicator, relativeTime, filterDevices, composerBlock, composerBlockLabel } from '../packages/app-claude-agent/dist/web/state.js'
+import { sourceI18n } from '../packages/app-claude-agent/dist/web/i18n.js'
 import { createApplicationCatalog } from '../packages/host/dist/applications/registration.js'
 import { shellAssets } from '../packages/host/dist/assets.js'
 import { claudeAgentClientApplication } from '../packages/app-claude-agent/dist/client/registration.js'
@@ -34,7 +35,7 @@ test('the composer names the single reason it cannot send, in resolution order',
   assert.equal(composerBlock({ ...base, hasDevice: false, productRunning: false, hasTarget: false }), 'no-device')
   assert.equal(composerBlock({ ...base, productRunning: false, hasTarget: false }), 'not-running'); assert.equal(composerBlock({ ...base, hasTarget: false, runActive: true }), 'no-target')
   assert.equal(composerBlock({ ...base, runActive: true, submitting: true }), 'running'); assert.equal(composerBlock({ ...base, submitting: true }), 'submitting')
-  for (const key of Object.keys(composerBlockLabels)) assert.doesNotMatch(composerBlockLabels[key], /Claude Code/)
+  for (const key of ['no-device', 'not-running', 'no-target', 'running', 'submitting']) assert.doesNotMatch(composerBlockLabel(key, sourceI18n), /Claude Code/)
 })
 test('error copy prefers the product\'s own message and never mentions Claude Code', () => {
   const error = Object.assign(new Error('未找到 `claude` 命令。'), { status: 503, code: 'claude-binary-missing' })
@@ -52,7 +53,7 @@ test('the transcript shows history, then the running prompt and live projection,
   const items = displayItems(history, live, 'next prompt')
   assert.deepEqual(items.map(item => [item.id, item.role, item.streaming]), [['h1', 'user', false], ['live:r:prompt', 'user', false], ['live:m', 'assistant', true]])
   assert.equal(items[1].blocks[0].text, 'next prompt')
-  assert.equal(formatUsage({ subtype: 'success', isError: false, durationMs: 1500, durationApiMs: 1000, numTurns: 2, totalCostUsd: 0.0042, stopReason: null, usage: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 0 } }), '2 轮 · 1.5 秒 · 110 输入 / 5 输出 tokens · 约 $0.0042')
+  assert.equal(formatUsage({ subtype: 'success', isError: false, durationMs: 1500, durationApiMs: 1000, numTurns: 2, totalCostUsd: 0.0042, stopReason: null, usage: { inputTokens: 10, outputTokens: 5, cacheReadInputTokens: 100, cacheCreationInputTokens: 0 } }), '2 轮 · 1.5 秒 · 110 输入 / 5 输出 tokens · 约 US$0.0042')
 })
 test('the client registration publishes an exact asset map beside Anybox Harness without overlapping paths', () => {
   const catalog = createApplicationCatalog([harnessClientApplication(), claudeAgentClientApplication()], shellAssets)
@@ -78,8 +79,8 @@ test('threads group by project directory with the newest group and thread first,
 })
 test('relative times are coarse, explicit about now and fall back to a date', () => {
   const now = Date.parse('2026-10-16T12:00:00.000Z')
-  assert.equal(relativeTime('2026-10-16T11:59:40.000Z', now), '刚刚'); assert.equal(relativeTime('2026-10-16T11:45:00.000Z', now), '15 分钟前')
-  assert.equal(relativeTime('2026-10-16T09:00:00.000Z', now), '3 小时前'); assert.equal(relativeTime('2026-10-15T11:00:00.000Z', now), '昨天')
-  assert.equal(relativeTime('2026-10-10T12:00:00.000Z', now), '6 天前'); assert.match(relativeTime('2026-08-01T12:00:00.000Z', now), /^2026-08-0[12]$/)
+  assert.equal(relativeTime('2026-10-16T11:59:40.000Z', now), '刚刚'); assert.equal(relativeTime('2026-10-16T11:45:00.000Z', now), '15分钟前')
+  assert.equal(relativeTime('2026-10-16T09:00:00.000Z', now), '3小时前'); assert.equal(relativeTime('2026-10-15T11:00:00.000Z', now), '昨天')
+  assert.equal(relativeTime('2026-10-10T12:00:00.000Z', now), '6天前'); assert.match(relativeTime('2026-08-01T12:00:00.000Z', now), /^2026\/08\/0[12]$/)
   assert.equal(relativeTime('garbage', now), ''); assert.equal(relativeTime('2026-10-16T13:00:00.000Z', now), '刚刚', 'clock skew never produces negative times')
 })

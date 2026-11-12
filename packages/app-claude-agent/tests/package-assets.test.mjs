@@ -11,6 +11,7 @@ test('the independent Claude Agent package keeps application identity and owns a
   assert.equal(new Set(claudeAgentAssets.map(asset => asset.path)).size, claudeAgentAssets.length)
   await Promise.all(claudeAgentAssets.map(asset => access(asset.file)))
   assert.ok(claudeAgentAssets.some(asset => asset.path === '/apps/claude-agent/style.css'))
+  for (const resource of ['i18n.js', 'i18n-resources.js', 'vendor/i18next.js', 'vendor/i18next.LICENSE.txt']) assert.ok(claudeAgentAssets.some(asset => asset.path === `/applications/claude-agent/web/${resource}`), resource)
 })
 
 test('source packaging retains the existing external Claude environment configuration', () => {

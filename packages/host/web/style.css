@@ -27,6 +27,8 @@ button { touch-action: manipulation; }
 #show-application-menu svg { flex-shrink: 0; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 #application-menu { position: fixed; inset: 46px auto auto 8px; width: min(304px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); margin: 0; padding: 7px; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 8px 28px #0000001c; }
 .application-menu-heading { padding: 6px 10px 8px; color: var(--secondary); font-size: 11px; }
+.application-language-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 6px; padding: 9px 10px 3px; border-top: 1px solid var(--line); font-size: 12px; }
+.application-language-control select { min-width: 0; max-width: 170px; padding: 5px 7px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--panel); color: var(--text); font: inherit; }
 #application-menu button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 7px 10px; border: 0; border-radius: 6px; background: transparent; text-align: left; font-size: 12px; }
 #application-menu button:hover:not(:disabled), .application-menu-item[aria-current="page"] { background: var(--hover); }
 .application-menu-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }

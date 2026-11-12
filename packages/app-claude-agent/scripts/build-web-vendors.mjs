@@ -54,3 +54,10 @@ licenses.sort((first, second) => first.name < second.name ? -1 : first.name > se
 await mkdir(dirname(output), { recursive: true })
 for (const file of bundled.outputFiles) await writeFile(file.path, file.contents)
 await writeFile(join(dirname(output), 'markdown-parser.LICENSE.txt'), `Third-party licenses for markdown-parser.js\n\n${licenses.map(license => license.text).join('\n\n========================================\n\n')}\n`)
+
+// The app owns its translation engine and ships it in the same immutable resource graph.
+await build({ absWorkingDir: root, stdin: { contents: "export { createInstance } from 'i18next'", resolveDir: root, loader: 'js' },
+  outfile: join(dirname(output), 'i18next.js'), bundle: true, platform: 'browser', format: 'esm', target: 'es2022', charset: 'utf8', minify: true, legalComments: 'eof' })
+const i18nextManifestUrl = import.meta.resolve('i18next/package.json')
+const i18nextManifest = JSON.parse(await readFile(new URL(i18nextManifestUrl), 'utf8'))
+await writeFile(join(dirname(output), 'i18next.LICENSE.txt'), `i18next@${i18nextManifest.version}\nDeclared license: ${i18nextManifest.license}\n\n${await readFile(new URL('./LICENSE', i18nextManifestUrl), 'utf8')}`)

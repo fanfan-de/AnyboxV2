@@ -7,6 +7,10 @@ import type { ApplicationInterfaceLease } from './application-lifecycle.js'
 import { createApplicationInterfaceLifecycle } from './application-lifecycle.js'
 import { applicationHash, closeApplicationView, completedRemovedApplicationIds, parseApplicationHash, readApplicationWorkspace, removeApplicationViews, workspaceStorageKey } from './application-workspace.js'
 import { setupFloatingApplicationMenu } from './floating-application-menu.js'
+import { createHostLocale, localePreferenceStorageKey } from './locale.js'
+import type { HostLocalePreference } from './locale.js'
+import { createHostI18n } from './i18n.js'
+import type { HostPlainMessageKey } from './i18n.js'
 
 interface ApplicationPanel {
   id: string; route: string; panel: HTMLElement
@@ -24,8 +28,24 @@ const showApplications = document.getElementById('show-applications')! as HTMLBu
 const closeButton = document.getElementById('close-application')! as HTMLButtonElement
 const notice = document.getElementById('workbench-notice')!, stopButton = document.getElementById('stop-application')! as HTMLButtonElement
 const moduleAttempts = new Map<string, number>()
-const unconfirmedStops = new Map<string, string>()
+const unconfirmedStops = new Map<string, HostPlainMessageKey>()
 const lifetime = new AbortController(), views = new Map<string, ApplicationPanel>(), modules = new Map<string, Promise<ApplicationWebModule>>()
+let localeStorage: Storage | undefined
+try { localeStorage = localStorage } catch { /* A page-local explicit choice is still available. */ }
+const language = createHostLocale({ storage: localeStorage,
+  languages: () => typeof navigator === 'undefined' ? ['zh-CN'] : navigator.languages?.length ? navigator.languages : [navigator.language],
+  onStorage(listener) {
+    const receive = (event: StorageEvent) => {
+      if (localeStorage && event.storageArea && event.storageArea !== localeStorage) return
+      if (event.key === localePreferenceStorageKey || event.key === null) listener(event.newValue)
+    }
+    window.addEventListener('storage', receive); return () => window.removeEventListener('storage', receive)
+  },
+  onLanguageChange(listener) { window.addEventListener('languagechange', listener); return () => window.removeEventListener('languagechange', listener) },
+})
+const t = createHostI18n(() => language.context.current().preferredLocale === 'en' ? 'en' : 'zh-CN')
+const languageSelect = document.getElementById('application-language') as HTMLSelectElement | null
+let noticeKey: HostPlainMessageKey | '' = ''
 setupFloatingApplicationMenu(showApplicationMenu, applicationMenu, { signal: lifetime.signal })
 let applications: readonly ProductView[] = [], activeId: string | null = null, closed = false, requestRevision = 0, refreshTask: Promise<boolean> | undefined
 let catalogAvailable = false, workspaceInitialized = false
@@ -40,7 +60,7 @@ function reloadForActivation(removedAppIds: readonly string[] = []) {
   activeId = remaining.activeId
   if (removedAppIds.length) address(true)
   save()
-  void pageLifecycle.dispose({ interfacesExited: true }).then(() => location.reload(), () => show('页面退出尚未确认，请重启宿主后刷新页面。'))
+  void pageLifecycle.dispose({ interfacesExited: true }).then(() => location.reload(), () => show('pageExitUnknown'))
 }
 async function prepareInterfaces(): Promise<ApplicationInterfaceLease> {
   if (sharedInterfaceLease) return sharedInterfaceLease
@@ -68,17 +88,18 @@ function syncManager() {
 }
 const showManager = () => { if (!closed && !manager.open) { hideApplicationMenu(); manager.showModal(); syncManager() } }
 const hideManager = () => { if (manager.open) { manager.close(); syncManager() } }
-const show = (message = '') => { notice.textContent = message; notice.hidden = !message; if (message) showManager() }
-const states: Record<ProductView['state'], string> = { disabled: '尚未打开', applying: '正在处理', running: '运行中', blocked: '依赖未就绪', failed: '启动或关闭失败' }
-const hostUnavailableMessage = '无法连接应用宿主，请确认客户端仍在运行。'
-const stateLabel = (app: ProductView) => catalogAvailable ? app.definition.runtime === false && app.state === 'running' ? '可打开' : states[app.state] : '暂时无法确认状态'
-const capabilityLabels: Record<ApplicationCapabilityStatus['status'], string> = {
-  ready: '已就绪', missing: '未提供', unsupported: '当前平台不支持', incompatible: '版本不兼容', conflict: '与正在使用的提供方冲突', failed: '初始化或清理失败',
+const renderNotice = () => { notice.textContent = noticeKey ? t(noticeKey) : ''; notice.hidden = !noticeKey }
+const show = (message: HostPlainMessageKey | '' = '') => { noticeKey = message; renderNotice(); if (message) showManager() }
+const states: Record<ProductView['state'], HostPlainMessageKey> = { disabled: 'disabled', applying: 'applying', running: 'running', blocked: 'blocked', failed: 'failed' }
+const hostUnavailableMessage = 'hostUnavailable'
+const stateLabel = (app: ProductView) => t(catalogAvailable ? app.definition.runtime === false && app.state === 'running' ? 'available' : states[app.state] : 'unknown')
+const capabilityLabels: Record<ApplicationCapabilityStatus['status'], HostPlainMessageKey> = {
+  ready: 'ready', missing: 'missing', unsupported: 'unsupported', incompatible: 'incompatible', conflict: 'conflict', failed: 'capabilityFailed',
 }
-const capabilityNames: Readonly<Record<string, string>> = { 'system.directory-picker': '系统目录选择', 'storage.sqlite': '本地存储' }
+const capabilityNames: Readonly<Record<string, HostPlainMessageKey>> = { 'system.directory-picker': 'directoryPicker', 'storage.sqlite': 'storage' }
 function capabilityIssue(capability: ApplicationCapabilityStatus) {
   const issue = document.createElement('p'); issue.className = 'application-capability'
-  const name = document.createElement('span'); name.textContent = `${capabilityNames[capability.id] ?? capability.id}：${capabilityLabels[capability.status]}`
+  const name = document.createElement('span'); name.textContent = t('capability', { name: capabilityNames[capability.id] ? t(capabilityNames[capability.id]!) : capability.id, status: t(capabilityLabels[capability.status]) })
   const detail = document.createElement('small'); detail.textContent = `${capability.id}${capability.version ? ` · ${capability.version}` : ''}`
   issue.append(name, detail); return issue
 }
@@ -105,13 +126,17 @@ function loadModule(app: ProductView): Promise<ApplicationWebModule> {
 function button(text: string, action: () => void) {
   const element = document.createElement('button'); element.type = 'button'; element.textContent = text; element.addEventListener('click', action); return element
 }
-function renderList() {
-  const revision = JSON.stringify([catalogAvailable, lifecycleFrozen, applications.map(app => {
+function renderList(preserveFocus = false) {
+  const revision = JSON.stringify([language.context.current().revision, catalogAvailable, lifecycleFrozen, applications.map(app => {
     const view = views.get(app.definition.id)
     return [app, !!view?.mounted, !!view?.control, !!view?.disposing, !!view?.loading, !!view?.error, !!view?.cleanupFailed]
   })])
   if (revision === listRevision) { renderNavigation(); return }
   listRevision = revision
+  // Locale changes keep the existing keyboard target within the shell's own controls.
+  const focusedCard = preserveFocus ? [...list.querySelectorAll<HTMLElement>('.application-card')].find(card => card.contains(document.activeElement)) : undefined
+  const focusedKind = document.activeElement?.tagName.toLowerCase() === 'summary' ? 'summary' : 'button'
+  const focusedIndex = focusedCard ? [...focusedCard.querySelectorAll<HTMLElement>(focusedKind)].indexOf(document.activeElement as HTMLElement) : -1
   for (const card of list.querySelectorAll<HTMLElement>('.application-card')) {
     const details = card.querySelector<HTMLDetailsElement>('.application-capabilities')
     if (details && card.dataset.appId) capabilityDetailsOpen.set(card.dataset.appId, details.open)
@@ -119,7 +144,7 @@ function renderList() {
     if (appDetails && card.dataset.appId) applicationDetailsOpen.set(card.dataset.appId, appDetails.open)
   }
   list.replaceChildren()
-  if (!applications.length) { const empty = document.createElement('p'); empty.className = 'application-empty'; empty.textContent = catalogAvailable ? '还没有应用，安装一个应用开始使用。' : '暂时无法读取应用目录。'; list.append(empty) }
+  if (!applications.length) { const empty = document.createElement('p'); empty.className = 'application-empty'; empty.textContent = t(catalogAvailable ? 'empty' : 'catalogUnavailable'); list.append(empty) }
   for (const app of applications) {
     const view = views.get(app.definition.id)
     const card = document.createElement('article'); card.className = 'application-card'; card.dataset.appId = app.definition.id
@@ -127,43 +152,43 @@ function renderList() {
     const heading = document.createElement('div'); heading.className = 'application-heading'
     const title = document.createElement('h3'); title.textContent = app.definition.name; title.id = `application-title-${app.definition.id}`
     card.setAttribute('aria-labelledby', title.id)
-    const state = document.createElement('span'); state.className = 'application-state'; state.textContent = view?.control ? '正在处理应用操作…' : stateLabel(app)
+    const state = document.createElement('span'); state.className = 'application-state'; state.textContent = view?.control ? t('controlling') : stateLabel(app)
     state.dataset.state = !catalogAvailable ? 'unknown' : view?.control ? 'applying' : app.state
     heading.append(title, state); header.append(heading); card.append(header)
     const details = document.createElement('details'); details.className = 'application-details'; details.open = applicationDetailsOpen.get(app.definition.id) ?? (!!view?.error || app.state === 'failed' || app.state === 'blocked')
-    const summary = document.createElement('summary'); summary.textContent = '···'; summary.title = `${app.definition.name} 的详情与操作`; summary.setAttribute('aria-label', summary.title)
+    const summary = document.createElement('summary'); summary.textContent = '···'; summary.title = t('detailsNamed', { name: app.definition.name }); summary.setAttribute('aria-label', summary.title)
     const content = document.createElement('div'); content.className = 'application-details-content'
     details.append(summary, content); details.addEventListener('toggle', () => { applicationDetailsOpen.set(app.definition.id, details.open) })
     if (app.definition.description) { const description = document.createElement('p'); description.className = 'application-description'; description.textContent = app.definition.description; content.append(description) }
     const controls = document.createElement('div'); controls.className = 'application-card-actions'
     const recovery = document.createElement('div'); recovery.className = 'application-recovery-actions'
-    const open = button(view?.mounted ? '进入应用' : '打开应用', () => { void enterApplication(app.definition.id) }); open.className = 'application-open'; open.setAttribute('aria-label', `打开 ${app.definition.name}`)
+    const open = button(t(view?.mounted ? 'enter' : 'open'), () => { void enterApplication(app.definition.id) }); open.className = 'application-open'; open.setAttribute('aria-label', t('openNamed', { name: app.definition.name }))
     open.disabled = lifecycleFrozen || !catalogAvailable || !app.definition.web || app.state === 'applying' || !!view?.control || !!view?.disposing || !!view?.cleanupFailed
     header.append(open)
     const unavailable = (app.capabilities ?? []).filter(capability => capability.status !== 'ready')
     const required = unavailable.filter(capability => capability.required), optional = unavailable.filter(capability => !capability.required)
     if (required.length) {
       const issues = document.createElement('div'); issues.className = 'application-required-capabilities'; issues.setAttribute('role', 'note')
-      const label = document.createElement('p'); label.textContent = '应用所需功能尚未就绪'; issues.append(label, ...required.map(capabilityIssue)); card.append(issues)
+      const label = document.createElement('p'); label.textContent = t('required'); issues.append(label, ...required.map(capabilityIssue)); card.append(issues)
     }
     if (optional.length) {
       const details = document.createElement('details'); details.className = 'application-capabilities'; details.open = capabilityDetailsOpen.get(app.definition.id) ?? false
-      const summary = document.createElement('summary'); summary.textContent = optional.length === 1 && capabilityNames[optional[0]!.id] ? `${capabilityNames[optional[0]!.id]}暂不可用` : `${optional.length} 项可选功能暂不可用`
+      const summary = document.createElement('summary'); summary.textContent = optional.length === 1 && capabilityNames[optional[0]!.id] ? t('optionalNamed', { name: t(capabilityNames[optional[0]!.id]!) }) : t('optional', { count: optional.length })
       details.append(summary, ...optional.map(capabilityIssue)); details.addEventListener('toggle', () => { capabilityDetailsOpen.set(app.definition.id, details.open) }); content.append(details)
     }
-    if (view?.loading) { const loading = document.createElement('p'); loading.className = 'application-loading'; loading.setAttribute('role', 'status'); loading.textContent = '正在加载应用界面…'; card.append(loading) }
-    if (view?.error) { const reload = button('重新加载界面', () => {
+    if (view?.loading) { const loading = document.createElement('p'); loading.className = 'application-loading'; loading.setAttribute('role', 'status'); loading.textContent = t('loading'); card.append(loading) }
+    if (view?.error) { const reload = button(t('reload'), () => {
       if (lifecycleFrozen) return
       view.error = false; show(); hideManager(); void ensureMounted(view, 'select')
     }); reload.disabled = lifecycleFrozen || !!view.cleanupFailed; recovery.append(reload) }
     if (app.state === 'failed' || app.state === 'blocked') {
-      const retry = button('重试启动', () => { void openApplication(app.definition.id, true) }); retry.disabled = lifecycleFrozen || !catalogAvailable || !!view?.control || !!view?.disposing || !!view?.cleanupFailed; recovery.append(retry)
+      const retry = button(t('retry'), () => { void openApplication(app.definition.id, true) }); retry.disabled = lifecycleFrozen || !catalogAvailable || !!view?.control || !!view?.disposing || !!view?.cleanupFailed; recovery.append(retry)
     }
     if (app.desiredEnabled) {
-      const stop = button('停止应用', () => { void stopApplication(app.definition.id) }); stop.className = 'application-stop'; stop.setAttribute('aria-label', `停止 ${app.definition.name}`); stop.disabled = lifecycleFrozen || !catalogAvailable || app.state === 'applying' || !!view?.control || !!view?.disposing || !!view?.cleanupFailed; controls.append(stop)
+      const stop = button(t('stop'), () => { void stopApplication(app.definition.id) }); stop.className = 'application-stop'; stop.setAttribute('aria-label', t('stopNamed', { name: app.definition.name })); stop.disabled = lifecycleFrozen || !catalogAvailable || app.state === 'applying' || !!view?.control || !!view?.disposing || !!view?.cleanupFailed; controls.append(stop)
     }
     if (view) {
-      const close = button('关闭界面', () => { void closeApplicationPage(app.definition.id) }); close.setAttribute('aria-label', `关闭 ${app.definition.name} 界面`)
+      const close = button(t('close'), () => { void closeApplicationPage(app.definition.id) }); close.setAttribute('aria-label', t('closeNamed', { name: app.definition.name }))
       close.disabled = lifecycleFrozen || !!view.control || !!view.disposing || !!view.cleanupFailed; controls.append(close)
     }
     content.append(controls); card.append(details)
@@ -171,6 +196,10 @@ function renderList() {
     list.append(card)
   }
   renderNavigation()
+  if (focusedCard && focusedIndex >= 0) {
+    const replacement = [...list.querySelectorAll<HTMLElement>('.application-card')].find(card => card.dataset.appId === focusedCard.dataset.appId)
+    replacement?.querySelectorAll<HTMLElement>(focusedKind)[focusedIndex]?.focus({ preventScroll: true })
+  }
 }
 function renderNavigation() {
   const menuItems = new Map([...menuList.querySelectorAll<HTMLButtonElement>('button')].map(element => [element.dataset.appId, element]))
@@ -187,7 +216,7 @@ function renderNavigation() {
     }
     item.querySelector('.application-menu-name')!.textContent = app.definition.name
     const state = item.querySelector<HTMLElement>('.application-menu-state')!; state.dataset.state = catalogAvailable ? app.state : 'unknown'; state.setAttribute('aria-label', stateLabel(app))
-    item.title = `${app.definition.name} · ${stateLabel(app)}`; item.setAttribute('aria-label', `打开 ${app.definition.name}`)
+    item.title = `${app.definition.name} · ${stateLabel(app)}`; item.setAttribute('aria-label', t('openNamed', { name: app.definition.name }))
     if (views.has(id)) item.setAttribute('aria-controls', `app-panel-${id}`)
     else item.removeAttribute('aria-controls')
     if (menuList.children[index] !== item) menuList.insertBefore(item, menuList.children[index] ?? null)
@@ -213,14 +242,14 @@ function renderWorkspace() {
   }
   const app = activeId && product(activeId)
   const view = activeId ? views.get(activeId) : undefined
-  showApplicationMenu.title = app ? `Anybox 应用菜单 · ${app.definition.name}` : 'Anybox 应用菜单'
+  showApplicationMenu.title = app ? t('menuCurrent', { name: app.definition.name }) : t('menu')
   actions.hidden = !view
   closeButton.hidden = !view; closeButton.disabled = lifecycleFrozen || !!view?.control || !!view?.disposing
-  closeButton.title = app ? `关闭 ${app.definition.name} 界面` : '关闭当前应用界面'
+  closeButton.title = app ? t('closeNamed', { name: app.definition.name }) : t('closeCurrentTitle')
   closeButton.setAttribute('aria-label', closeButton.title)
   stopButton.hidden = !app || !app.desiredEnabled
   stopButton.disabled = lifecycleFrozen || !catalogAvailable || !!view?.control || !!view?.disposing || !!view?.cleanupFailed
-  stopButton.title = app ? `停止 ${app.definition.name}` : '停止应用'
+  stopButton.title = app ? t('stopNamed', { name: app.definition.name }) : t('stop')
   stopButton.setAttribute('aria-label', stopButton.title)
   updateNavigation()
 }
@@ -276,7 +305,7 @@ async function ensureMounted(tab: ApplicationPanel, reason: ApplicationActivatio
     await Promise.all(styleLoads)
     if (closed || revision !== tab.revision) return
     tab.panel.replaceChildren()
-    const context: ApplicationWebContext = { appId: tab.id, ...(app.definition.http ? { apiBase: `/api/client/v1/apps/${encodeURIComponent(tab.id)}` } : {}), signal: tab.controller.signal,
+    const context: ApplicationWebContext = { appId: tab.id, ...(app.definition.http ? { apiBase: `/api/client/v1/apps/${encodeURIComponent(tab.id)}` } : {}), signal: tab.controller.signal, locale: language.context,
       domId: local => `${tab.id}--${local}`, route: {
         read: () => tab.route,
         navigate(path, replace = false) {
@@ -297,8 +326,8 @@ async function ensureMounted(tab: ApplicationPanel, reason: ApplicationActivatio
     tab.error = true
     // This handler is part of tab.loading, so its cleanup must not await itself.
     try { await disposeMounted(tab, false) }
-    catch { if (activeId === tab.id) show('应用界面清理失败，请重新启动 Anybox 后恢复。'); return }
-    if (activeId === tab.id) show('应用界面暂时无法加载，请重新加载界面。')
+    catch { if (activeId === tab.id) show('cleanupFailed'); return }
+    if (activeId === tab.id) show('interfaceFailed')
   }).finally(() => { if (tab.loading === task) tab.loading = undefined; if (!closed) renderList() })
   tab.loading = task; renderList(); return task
 }
@@ -315,7 +344,7 @@ function selectApplication(id: string | null, reason: ApplicationActivation = 's
   const previous = activeId && views.get(activeId)
   if (previous && previous.id !== id) {
     if (previous.panel.contains(document.activeElement)) previous.focus = document.activeElement as HTMLElement
-    void Promise.resolve(previous.mounted?.setActive(false, 'select')).catch(() => show('应用界面暂时无法切换。'))
+    void Promise.resolve(previous.mounted?.setActive(false, 'select')).catch(() => show('switchFailed'))
   }
   if (activeId !== id) show()
   activeId = id; renderWorkspace(); if (changeAddress) address(); else save()
@@ -324,9 +353,9 @@ function selectApplication(id: string | null, reason: ApplicationActivation = 's
   const tab = id && views.get(id)
   if (tab) {
     const app = product(tab.id)
-    if (!app) show('此应用暂不可用。')
+    if (!app) show('unavailable')
     else if (app.state !== 'running' || !app.definition.web) showManager()
-    void ensureMounted(tab, reason).catch(() => show('应用界面暂时无法切换。'))
+    void ensureMounted(tab, reason).catch(() => show('switchFailed'))
     if (reason === 'select') (tab.focus?.isConnected ? tab.focus : tab.panel).focus({ preventScroll: true })
   }
 }
@@ -335,10 +364,10 @@ function closeApplicationPage(id: string): Promise<void> {
 }
 async function closeApplicationPageWork(id: string) {
   const tab = views.get(id); if (!tab || tab.control) return
-  if (tab.cleanupFailed) { show('应用界面清理失败，请重新启动 Anybox 后恢复。'); return }
-  if (!canClosePanel(tab)) { show('请先完成或保存当前应用中的编辑。'); return }
+  if (tab.cleanupFailed) { show('cleanupFailed'); return }
+  if (!canClosePanel(tab)) { show('saveFirst'); return }
   tab.control = true; renderList(); renderWorkspace()
-  try { await disposeMounted(tab) } catch { show('应用界面清理失败，请重新启动 Anybox 后恢复。'); tab.control = false; renderList(); renderWorkspace(); return }
+  try { await disposeMounted(tab) } catch { show('cleanupFailed'); tab.control = false; renderList(); renderWorkspace(); return }
   // A different application may have become active while disposal was pending.
   const wasActive = activeId === id
   const next = closeApplicationView(snapshot(), id)
@@ -361,8 +390,8 @@ async function openApplicationWork(id: string, retry = false) {
     applications = applications.map(app => app.definition.id === id ? value : app)
     renderList(); renderWorkspace()
     if (value.state === 'running') { await ensureMounted(tab, 'open'); if (activeId === id && tab.mounted && managerRevision === managerInteractionRevision) hideManager() }
-    else { clearUnmountedPanel(tab); show(value.error?.phase === 'cleanup' ? '应用清理失败，需要重启宿主。' : value.state === 'blocked' ? '应用正在等待依赖。' : '应用启动失败，可重试启动。') }
-  } catch { show('应用操作未完成，正在核对当前状态。') }
+    else { clearUnmountedPanel(tab); show(value.error?.phase === 'cleanup' ? 'applicationCleanupFailed' : value.state === 'blocked' ? 'awaitingDependencies' : 'startupFailed') }
+  } catch { show('reconciling') }
   finally { tab.control = false; renderList(); renderWorkspace(); requestRevision++; void refresh(true); save() }
 }
 async function enterApplication(id: string) {
@@ -378,23 +407,23 @@ function stopApplication(id: string): Promise<void> {
 async function stopApplicationWork(id: string) {
   if (!catalogAvailable) { show(hostUnavailableMessage); return }
   const tab = views.get(id)
-  if (tab?.cleanupFailed) { show('应用界面清理失败，请重新启动 Anybox 后恢复。'); return }
-  if (tab?.control || tab && !canClosePanel(tab)) { show('请先完成或保存当前应用中的编辑。'); return }
+  if (tab?.cleanupFailed) { show('cleanupFailed'); return }
+  if (tab?.control || tab && !canClosePanel(tab)) { show('saveFirst'); return }
   if (tab) tab.control = true
   renderList(); renderWorkspace()
   requestRevision++; show()
   try {
     const app = await requestJSON<ProductView>(`/api/client/v1/products/${encodeURIComponent(id)}/stop`, {})
     applications = applications.map(value => value.definition.id === id ? app : value)
-    if (app.state !== 'disabled') { show(app.error?.phase === 'cleanup' ? '应用清理失败，需要重启宿主。' : '应用停止失败，请检查状态后重试。'); return }
+    if (app.state !== 'disabled') { show(app.error?.phase === 'cleanup' ? 'applicationCleanupFailed' : 'stopFailed'); return }
     if (tab) { tab.control = false; await closeApplicationPageWork(id) }
     renderList(); renderWorkspace()
   } catch (error) {
     const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
-    if (code === 'product-busy') show('应用仍有任务或写入进行中，请稍后停止。')
+    if (code === 'product-busy') show('busy')
     else {
-      unconfirmedStops.set(id, code === 'product-storage-failed' ? '无法保存停止状态，应用尚未停止，请稍后重试。' : '应用尚未停止，请重试；若持续失败，请检查宿主日志。')
-      show('停止结果尚未确认，正在核对当前状态。')
+      unconfirmedStops.set(id, code === 'product-storage-failed' ? 'stopStorageFailed' : 'stopRetry')
+      show('stopUnknown')
     }
   }
   finally { if (tab) tab.control = false; renderList(); renderWorkspace(); requestRevision++; await refresh(true) }
@@ -406,15 +435,15 @@ function refresh(fresh = false): Promise<boolean> {
   const task = requestJSON<readonly ProductView[]>('/api/client/v1/products', undefined, lifetime.signal).then(async values => {
     if (closed || revision !== requestRevision) return false
     applications = values; catalogAvailable = true
-    if (notice.textContent === hostUnavailableMessage) show()
+    if (noticeKey === hostUnavailableMessage) show()
     renderList(); renderWorkspace()
     for (const [id, message] of unconfirmedStops) {
       if (views.get(id)?.control) continue
       const app = product(id)
-      if (app?.state === 'applying') { show('正在等待应用停止完成。'); continue }
+      if (app?.state === 'applying') { show('awaitingStop'); continue }
       unconfirmedStops.delete(id)
       if (app?.state === 'disabled') { await closeApplicationPage(id); if (!views.has(id)) show() }
-      else show(app?.error?.phase === 'cleanup' ? '应用清理失败，需要重启宿主。' : message)
+      else show(app?.error?.phase === 'cleanup' ? 'applicationCleanupFailed' : message)
       if (closed || revision !== requestRevision) return false
     }
     for (const tab of views.values()) {
@@ -436,7 +465,7 @@ function refresh(fresh = false): Promise<boolean> {
     }
     return false
   }).catch(() => {
-    if (!closed && revision === requestRevision) show('应用界面清理失败，请重新启动 Anybox 后恢复。')
+    if (!closed && revision === requestRevision) show('cleanupFailed')
     return false
   }).finally(() => { if (refreshTask === task) refreshTask = undefined })
   refreshTask = task; return task
@@ -461,6 +490,33 @@ function moveNavigationFocus(container: Element, event: Event) {
   const next = key.key === 'ArrowDown' ? (index + 1) % values.length : key.key === 'ArrowUp' ? (index + values.length - 1) % values.length : key.key === 'Home' ? 0 : key.key === 'End' ? values.length - 1 : -1
   if (next >= 0) { key.preventDefault(); values[next].focus() }
 }
+function renderShellCopy() {
+  document.documentElement?.setAttribute('lang', language.context.current().preferredLocale)
+  const texts: readonly [string, HostPlainMessageKey][] = [
+    ['application-menu-heading', 'applications'], ['show-applications', 'manage'], ['application-manager-title', 'manager'],
+    ['close-application', 'closeCurrent'], ['stop-application', 'stopCurrent'], ['application-language-label', 'language'],
+  ]
+  for (const [id, key] of texts) { const node = document.getElementById(id); if (node) node.textContent = t(key) }
+  const attributes: readonly [string, string, HostPlainMessageKey][] = [
+    ['show-application-menu', 'aria-label', 'menu'], ['show-application-menu', 'aria-description', 'menuHelp'],
+    ['application-menu', 'aria-label', 'menu'], ['application-menu-list', 'aria-label', 'switchApplication'],
+    ['application-actions', 'aria-label', 'currentActions'], ['show-applications', 'aria-label', 'manage'],
+    ['close-application-manager', 'aria-label', 'closeManager'], ['close-application-manager', 'title', 'closeManager'],
+    ['application-list', 'aria-label', 'installed'],
+  ]
+  for (const [id, name, key] of attributes) document.getElementById(id)?.setAttribute(name, t(key))
+  if (languageSelect) {
+    languageSelect.value = language.preference()
+    const systemOption = languageSelect.querySelector('option')
+    if (systemOption) systemOption.textContent = t('system')
+  }
+}
+languageSelect?.addEventListener('change', () => { language.setPreference(languageSelect.value as HostLocalePreference) }, { signal: lifetime.signal })
+language.context.subscribe(() => {
+  if (closed) return
+  renderShellCopy(); renderNotice(); renderList(true); renderWorkspace()
+})
+renderShellCopy()
 applicationMenu.addEventListener('keydown', event => moveNavigationFocus(applicationMenu, event))
 applicationMenu.addEventListener('toggle', () => showApplicationMenu.setAttribute('aria-expanded', String(applicationMenu.matches(':popover-open'))))
 manager.addEventListener('toggle', syncManager)
@@ -469,8 +525,8 @@ document.getElementById('close-application-manager')!.addEventListener('click', 
 showApplications.addEventListener('click', () => { managerInteractionRevision++; showManager() })
 closeButton.addEventListener('click', () => { hideApplicationMenu(); if (activeId) void closeApplicationPage(activeId) })
 stopButton.addEventListener('click', () => { hideApplicationMenu(); if (activeId) void stopApplication(activeId) })
-window.addEventListener('hashchange', () => { void followAddress().catch(() => show('无法打开该应用地址。')) }, { signal: lifetime.signal })
-window.addEventListener('popstate', () => { void followAddress().catch(() => show('无法打开该应用地址。')) }, { signal: lifetime.signal })
+window.addEventListener('hashchange', () => { void followAddress().catch(() => show('addressFailed')) }, { signal: lifetime.signal })
+window.addEventListener('popstate', () => { void followAddress().catch(() => show('addressFailed')) }, { signal: lifetime.signal })
 document.addEventListener('visibilitychange', () => { if (!document.hidden) void refresh() }, { signal: lifetime.signal })
 const timer = setInterval(() => { if (!document.hidden) void refresh() }, 3000)
 window.addEventListener('beforeunload', event => {
@@ -478,7 +534,7 @@ window.addEventListener('beforeunload', event => {
 }, { signal: lifetime.signal })
 window.addEventListener('pagehide', event => {
   if (event.persisted) return
-  closed = true; clearInterval(timer); save(); lifetime.abort()
+  closed = true; clearInterval(timer); save(); language.dispose(); lifetime.abort()
   const packageView = packageManagement; packageManagement = undefined; void packageView?.dispose()
   void Promise.allSettled([...views.values()].map(tab => disposeMounted(tab))).then(results =>
     pageLifecycle.dispose(results.every(result => result.status === 'fulfilled') ? { interfacesExited: true } : undefined)).catch(() => {})
@@ -509,4 +565,4 @@ async function initialize() {
   for (const tab of views.values()) void ensureMounted(tab, 'restore')
   renderWorkspace()
 }
-void initialize().catch(() => show('应用工作区暂时无法恢复。'))
+void initialize().catch(() => show('restoreFailed'))

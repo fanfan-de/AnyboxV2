@@ -20,6 +20,18 @@ Claude Agent（稳定 ID `claude-agent`）原生消费 `@anthropic-ai/claude-age
 
 `core/view.ts` 的版本化 DTO、`core/domain.ts` 的校验与提示词标题、`core/events.ts` 的实时视图 fold、`core/projects.ts` 的最近项目合并、`core/directories.ts` 的目录浏览，以及 `web/` 的浏览器控制器与项目面板都是所属组件使用的纯函数或视图，不是独立组件。
 
+## 界面语言试点
+
+语言入口位于宿主的 Anybox 菜单；应用通过可选 [`ApplicationWebContext.locale`](../../../packages/application-api/src/web.ts) 读取 `{ preferredLocale, revision }` 并订阅变化，端口不写宿主设置。宿主提供 `system | zh-CN | en` 选择及当前 origin 的 `localStorage: anybox.preferences.locale.v1` 持久化；应用只接收解析后的语言建议，自行选择实际语言。没有来源、来源读取/订阅失败或不支持建议值时，Claude 仍使用自己的简体中文默认值或最后已接受语言，不依赖宿主翻译器、后台语言服务或另一应用。
+
+[`web/i18n.ts`](../../../packages/app-claude-agent/src/web/i18n.ts) 在每次 mount 创建独立 i18next runtime，词条由 [`web/i18n-resources.ts`](../../../packages/app-claude-agent/src/web/i18n-resources.ts) 静态提供。运行实例只更新显式登记的文本/属性绑定与本地格式化；应用 dispose 注销来源、清理绑定，不通过重新挂载或业务调用切换语言。容器标注自己的实际 `lang`，原文内容保留；词条与运行依赖进入应用自己的资源闭包，不要求宿主共享 i18next 或引入新的 Nya 根/组件。
+
+当前迁移会话列表与主界面、草稿及发送提示、基础模型/effort 选择、项目选择与应用内目录浏览、权限模式选择与实时审批操作、消息和工具结果外围标签、队列/附件提示，以及日期和基础用量/美元费用格式。用户提示词、项目与会话自定义名称、模型回答、审批说明和 SDK/工具原文不自动翻译；Prompt、工具声明、原生记录和历史不随界面语言改变。语言状态按本次呈现实例持有，两个浏览器不会通过执行端的全局 locale 相互覆盖。
+
+完整连接管理、账号与额度、工作区详情、技能/工具能力和会话授权管理尚未迁移，相关面板明确标为 `lang="zh-CN"`。宿主包管理面板、Anybox Harness、Electron 原生菜单和弹窗也不属于本次应用试点，不能据此声称全产品中英文已完成。词条归属与只读偏好是受信代码的职责契约，不构成同源应用间的权限隔离；完整边界见[应用接入说明](../../application-development.md#界面语言与应用归属)。
+
+[`packages/app-claude-agent/tests/i18n.test.mjs`](../../../packages/app-claude-agent/tests/i18n.test.mjs) 使用内存语言来源与最小 DOM，覆盖实例独立、词条/参数完整性、复数、来源失败、原文和币种保留，以及主界面与隐藏挂载在草稿、审批、在途 Run 观察中的原位更新及 dispose 清理。该测试不运行浏览器排版引擎。真实浏览器可使用 [`tests/helpers/claude-agent-browser-host.mjs`](../../../tests/helpers/claude-agent-browser-host.mjs) 的内存样本复验；它使用真实构建资源，但不启动真实 Claude 或访问业务数据，不能替代系统凭据、原生桌面或其他平台验收。
+
 ## 当前持久格式
 
 | 边界 | 当前写入 | 读取与兼容 |

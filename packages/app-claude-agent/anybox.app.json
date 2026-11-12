@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "lifecycleVersion": 1,
   "appId": "claude-agent",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "publisher": "anybox",
   "displayName": "Claude Agent",
   "applicationApi": "^0.1.0",

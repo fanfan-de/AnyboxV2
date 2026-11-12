@@ -188,6 +188,25 @@ export async function mount(container, context): Promise<MountedApplication> {
 
 每个应用最多一个已打开界面，悬浮菜单切换已有挂载使用 select。后台页面继续挂载和持有数据订阅，容器 hidden 且 inert，仍可从悬浮菜单切回已有挂载。不要直接修改 location/history、调用 location.reload 或在后台抢焦点。setActive(false) 退出 modal 顶层、菜单和拖拽，保留编辑值；尺寸为零时不要写入布局。仅明确 open 激活可执行“打开业务目标”，select/restore/navigate 只恢复界面。canClose 同步返回能否关闭，不启动后台操作，外壳用于关闭、停止与浏览器离开保护。悬浮菜单及应用管理行详情收纳“关闭界面”和“停止应用”；关闭只等待前端 dispose，不停止后台，显式停止成功后再关闭界面。控件的文字、title 和 aria-label 说明对应动作及应用名称。“管理应用”打开独立原生 dialog，承载宿主列表、状态、通知、加载失败、界面重载及安装管理，保留当前应用挂载及草稿；长管理内容不放在应用切换 popover 内。安装来源默认收起，点击“安装应用”才展开文件夹与应用包选择入口，选择本身不提交安装。
 
+### 界面语言与应用归属
+
+[`ApplicationWebContext`](../packages/application-api/src/web.ts) 可选提供只读的 `locale` 端口：
+
+```ts
+interface ApplicationLocaleContext {
+  current(): Readonly<{ preferredLocale: string; revision: number }>
+  subscribe(listener: () => void): () => void
+}
+```
+
+`preferredLocale` 是宿主当前的呈现语言建议，`revision` 用于观察该偏好的更新；端口不包含设置写入、词条或翻译器。宿主在 Anybox 菜单提供 `system`、`zh-CN`、`en` 选择，将所选值保存到当前 origin 的 `localStorage: anybox.preferences.locale.v1`，同页通知并通过 storage 事件同步同源页面；`system` 根据浏览器语言解析实际建议。读取、写入或语言来源订阅失败不阻止界面使用：显式选择可在当前页面继续生效，系统探测失败保留最后已接受语言，首次无法探测则回退简体中文。实现见 [`web/locale.ts`](../packages/host/src/web/locale.ts) 和[宿主浏览器入口](../packages/host/src/web/client.ts)。
+
+应用自行决定支持语言、实际语言、字典、格式化与缺失词条回退。旧宿主或独立嵌入入口缺少 `context.locale` 时仍应能挂载；来源读取或订阅失败时继续使用自己的默认或最后已接受语言，不能因偏好不可用退出应用。订阅在应用自己的 `dispose()` 中注销。语言更新只刷新自有文本和安全属性，保留草稿、焦点、选区、滚动和在途业务；不借助 `setActive/canClose/dispose`、重挂载、页面 reload 或业务控制完成切换。宿主只改外壳；应用为自己的实际语言设置容器 `lang`，保留原文的子区域可单独标注语言。
+
+当前宿主与 Claude Agent 使用各自的静态字典和独立 i18next 实例；[Claude 浏览器适配](../packages/app-claude-agent/src/web/i18n.ts) 是应用自行消费语言建议的示例。宿主不注册业务词条、不扫描应用 DOM，不要求应用使用特定翻译库或 Nya 组件。界面语言不改 Prompt、模型工具声明、用户内容、原生协议或持久历史，也不向 execution/worker 引入全局 locale。现行应用仍是同源 ESM 与同根受信代码，`readonly`、服务名和词条归属约定不构成恶意应用权限隔离。
+
+本轮是 Web 试点：Anybox 菜单、外壳管理文案与 Claude 主流程已接入；包安装面板、Anybox Harness、Claude 的部分管理面板及 Electron 原生菜单/弹窗仍有未迁移内容，不代表整个产品已双语。Claude 的准确覆盖见[应用模块说明](modules/claude-agent/README.md#界面语言试点)。行为入口为 [`packages/host/tests/locale.test.mjs`](../packages/host/tests/locale.test.mjs) 和 [`tests/application-shell.test.mjs`](../tests/application-shell.test.mjs)；浏览器验收仍需针对真实构建产物执行，下述夹具不替代跨平台验收。
+
 样式限定应用容器，资源清单包含所有相对 import、模板和样式引用。运行 `npm run build` 验证图；新增入口的工厂文件不可出现在浏览器图中。入口通过同源原生 ESM 导入，不公开本地磁盘路径。
 
 浏览器 JavaScript 地址与编译目录层级一致：宿主为 `/host/web/`，应用为 `/applications/<id>/web/`，允许的纯业务资料为 `/applications/<id>/core/`。这样模块的相对 import 与本地源码解析一致。模板和样式可以登记在 `/apps/<id>/`，清单只公开应用实际使用的资源。

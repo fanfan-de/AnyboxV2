@@ -1,3 +1,4 @@
+import { createClaudeI18n } from './i18n.js'
 import { requireApplicationHttp } from '@anybox/application-api/web'
 import type { ApplicationActivation, ApplicationWebContext, MountedApplication } from '@anybox/application-api/web'
 import type { ProductView } from '@anybox/application-api/contracts'
@@ -14,12 +15,12 @@ import { createDeviceClient, readDevices, readLocal } from './client.js'
 import type { DeviceClient, DeviceTarget } from './client.js'
 import { createProjectPanel } from './projects.js'
 import { openConnectionManager } from './connections.js'
-import { composerBlock, composerBlockLabels, deviceLabel, displayItems, filterDevices, formatRoute, formatUsage, groupThreads, messageFor, parseRoute, runStatusLabels, selectDevice } from './state.js'
+import { composerBlock, composerBlockLabel, deviceLabel, displayItems, filterDevices, formatRoute, formatUsage, groupThreads, messageFor, parseRoute, runStatusLabel, selectDevice } from './state.js'
 import type { DeviceProbe } from './state.js'
-import { el, renderApproval, renderThreadGroups, syncTranscript } from './view.js'
+import { renderApproval, renderThreadGroups, syncTranscript } from './view.js'
 
 const selectedKey = 'anybox.claude-agent.selected', collapsedKey = 'anybox.claude-agent.collapsed'
-const efforts = [['low', '低'], ['medium', '中'], ['high', '高'], ['xhigh', '很高'], ['max', '最高']] as const
+const efforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const app = '/apps/claude-agent'
 // Other threads' Runs are not subscribed; the list is re-read on this cadence only while one of them is active.
 const threadPollMs = 10_000, probeTimeoutMs = 6_000, placeholderDelayMs = 200
@@ -33,60 +34,61 @@ const delayed = (apply: () => void) => { const timer = setTimeout(apply, placeho
 /** One device, one thread at a time. The browser is a view over the execution device; it never owns runs or transcripts. */
 export async function mount(container: HTMLElement, input: ApplicationWebContext): Promise<MountedApplication> {
   const context = requireApplicationHttp(input)
+  const i18n = createClaudeI18n(input.locale), { t, element: el } = i18n
   const lifetime = new AbortController(), abort = () => lifetime.abort()
   context.signal.addEventListener('abort', abort, { once: true }); if (context.signal.aborted) abort()
-  const deviceSelect = el('select', { id: context.domId('device'), 'aria-label': '执行设备' })
-  const deviceField = el('label', { class: 'ca-device', for: deviceSelect.id, hidden: true }, el('span', { text: '执行设备' }), deviceSelect)
+  const deviceSelect = el('select', { id: context.domId('device'), 'aria-label': () => t('app.device') })
+  const deviceField = el('label', { class: 'ca-device', for: deviceSelect.id, hidden: true }, el('span', { text: () => t('app.device') }), deviceSelect)
   const deviceName = el('span', { class: 'ca-device-name' }), deviceState = el('span', { class: 'ca-device-state' })
   const deviceLine = el('p', { class: 'ca-device-line', hidden: true }, deviceName, deviceState)
   const deviceStatus = el('p', { class: 'ca-device-status', role: 'status' })
-  const startButton = el('button', { type: 'button', class: 'ca-start', text: '启动 Claude Agent', hidden: true })
-  const manageConnections = el('button', { type: 'button', class: 'ca-manage-connections', text: '管理连接' })
-  const accountButton = el('button', { type: 'button', class: 'ca-account-button', text: '账号与额度', 'aria-haspopup': 'dialog' })
+  const startButton = el('button', { type: 'button', class: 'ca-start', text: () => t('app.start'), hidden: true })
+  const manageConnections = el('button', { type: 'button', class: 'ca-manage-connections', text: () => t('app.connections') })
+  const accountButton = el('button', { type: 'button', class: 'ca-account-button', text: () => t('app.account'), 'aria-haspopup': 'dialog' })
   const panel = createProjectPanel(context.domId, {
     request: (path, signal) => { if (!client) return Promise.reject(Object.assign(new Error('product-unavailable'), { status: 503, code: 'product-unavailable' })); return track(client.request(path, undefined, signal)) },
     select: directory => startProject(directory),
     create: (directory, threadTitle) => { void createThread(directory, threadTitle) },
     pickNative: signal => client ? track(client.pickDirectory(signal)) : Promise.reject(Object.assign(new Error('picker-unavailable'), { status: 503, code: 'picker-unavailable' })),
-    report: error => { if (!disposed && !lifetime.signal.aborted) show(messageFor(error)) },
-  })
+    report: error => { if (!disposed && !lifetime.signal.aborted) show(() => messageFor(error, i18n)) },
+  }, i18n)
   const threadList = el('ul', { class: 'ca-thread-list' })
-  const search = el('input', { type: 'search', class: 'ca-thread-search', placeholder: '搜索会话或项目', 'aria-label': '搜索会话', autocomplete: 'off' })
+  const search = el('input', { type: 'search', class: 'ca-thread-search', placeholder: () => t('app.searchPlaceholder'), 'aria-label': () => t('app.searchLabel'), autocomplete: 'off' })
   const threadCount = el('span', { class: 'ca-thread-count' })
-  const menuButton = el('button', { type: 'button', class: 'ca-menu', text: '会话', 'aria-label': '打开侧栏', 'aria-expanded': 'false' })
-  const title = el('strong', { class: 'ca-thread-title', text: '新会话' }), path = el('small', { class: 'ca-thread-path' }), status = el('span', { class: 'ca-run-status', role: 'status' })
-  const noticeText = el('span'), noticeClose = el('button', { type: 'button', class: 'ca-notice-close', text: '×', 'aria-label': '关闭提示', title: '关闭提示' })
+  const menuButton = el('button', { type: 'button', class: 'ca-menu', text: () => t('app.conversations'), 'aria-label': () => t('app.openSidebar'), 'aria-expanded': 'false' })
+  const title = el('strong', { class: 'ca-thread-title', text: () => t('app.newConversation') }), path = el('small', { class: 'ca-thread-path' }), status = el('span', { class: 'ca-run-status', role: 'status' })
+  const noticeText = el('span'), noticeClose = el('button', { type: 'button', class: 'ca-notice-close', text: '×', 'aria-label': () => t('app.dismissNotice'), title: () => t('app.dismissNotice') })
   const notice = el('div', { class: 'ca-notice notice', role: 'alert', hidden: true }, noticeText, noticeClose)
   const environment = el('p', { class: 'ca-notice ca-environment notice', role: 'alert', hidden: true })
-  const transcript = el('div', { class: 'ca-transcript', 'aria-label': '会话内容', tabindex: '0' })
-  const older=el('button',{type:'button',class:'ca-load-earlier',text:'加载更早消息',hidden:true})
-  const latest = el('button', { type: 'button', class: 'ca-latest', text: '回到最新', hidden: true })
+  const transcript = el('div', { class: 'ca-transcript', 'aria-label': () => t('app.transcript'), tabindex: '0' })
+  const older=el('button',{type:'button',class:'ca-load-earlier',text:() => t('app.older'),hidden:true})
+  const latest = el('button', { type: 'button', class: 'ca-latest', text: () => t('app.latest'), hidden: true })
   const transcriptHint = el('p', { class: 'ca-transcript-hint', role: 'status', hidden: true })
   const runError = el('p', { class: 'ca-run-error', role: 'alert' })
   const emptyState = el('div', { class: 'ca-empty-state', hidden: true })
-  const approvalsPanel = el('section', { class: 'ca-approvals', hidden: true, 'aria-label': '待处理请求' })
-  const prompt = el('textarea', { name: 'prompt', rows: '2', placeholder: '描述任务，或提出一个问题…', 'aria-label': '提示词', id: context.domId('prompt') })
-  const model = el('input', { name: 'model', placeholder: '输入模型名称或别名', 'aria-label': '模型', autocomplete: 'off' })
-  const modelSummary = el('summary', { class: 'ca-model-summary', text: 'Claude 默认模型', 'aria-label': '选择模型' })
-  const modelList = el('div', { class: 'ca-model-list', role: 'group', 'aria-label': '当前可用模型' })
+  const approvalsPanel = el('section', { class: 'ca-approvals', hidden: true, 'aria-label': () => t('app.pendingRequests') })
+  const prompt = el('textarea', { name: 'prompt', rows: '2', placeholder: () => t('app.promptPlaceholder'), 'aria-label': () => t('app.prompt'), id: context.domId('prompt') })
+  const model = el('input', { name: 'model', placeholder: () => t('app.modelPlaceholder'), 'aria-label': () => t('app.model'), autocomplete: 'off' })
+  const modelSummary = el('summary', { class: 'ca-model-summary', text: () => t('app.defaultModel'), 'aria-label': () => t('app.chooseModel') })
+  const modelList = el('div', { class: 'ca-model-list', role: 'group', 'aria-label': () => t('app.availableModels') })
   const modelStatus = el('p', { class: 'ca-model-status', role: 'status' })
-  const modelRefresh = el('button', { type: 'button', class: 'ca-model-refresh', text: '刷新', 'aria-label': '刷新可用模型' })
-  const modelCustom = el('details', { class: 'ca-model-custom' }, el('summary', { text: '使用自定义模型' }),
-    el('label', {}, el('span', { text: '模型名称或别名' }), model), el('p', { text: '用于自定义端点或模型别名；由当前 Claude 环境验证。' }))
+  const modelRefresh = el('button', { type: 'button', class: 'ca-model-refresh', text: () => t('common.refresh'), 'aria-label': () => t('app.refreshModels') })
+  const modelCustom = el('details', { class: 'ca-model-custom' }, el('summary', { text: () => t('app.customModel') }),
+    el('label', {}, el('span', { text: () => t('app.modelAlias') }), model), el('p', { text: () => t('app.modelHelp') }))
   const modelPicker = el('details', { class: 'ca-model-picker' }, modelSummary,
-    el('div', { class: 'ca-model-popover' }, el('header', { class: 'ca-model-heading' }, el('strong', { text: '选择模型' }), modelRefresh), modelList, modelStatus, modelCustom))
-  const effort = el('select', { name: 'effort', 'aria-label': '思考强度', title: '思考强度' }, el('option', { value: '', text: '默认强度' }), ...efforts.map(([value, label]) => el('option', { value, text: `${label}强度` })))
-  const send = el('button', { type: 'submit', class: 'primary-button', text: '发送' })
-  const cancel = el('button', { type: 'button', class: 'ca-cancel', text: '停止', 'aria-label': '停止当前任务', hidden: true })
+    el('div', { class: 'ca-model-popover' }, el('header', { class: 'ca-model-heading' }, el('strong', { text: () => t('app.chooseModel') }), modelRefresh), modelList, modelStatus, modelCustom))
+  const effort = el('select', { name: 'effort', 'aria-label': () => t('app.effort'), title: () => t('app.effort') }, el('option', { value: '', text: () => t('app.defaultEffort') }), ...efforts.map(value => el('option', { value, text: () => t(`effort.${value}`) })))
+  const send = el('button', { type: 'submit', class: 'primary-button', text: () => t('app.send') })
+  const cancel = el('button', { type: 'button', class: 'ca-cancel', text: () => t('app.stop'), 'aria-label': () => t('app.stopTask'), hidden: true })
   const composerHint = el('p', { class: 'ca-composer-hint', id: context.domId('composer-hint') })
   prompt.setAttribute('aria-describedby', composerHint.id)
-  const composerProject = el('button', { type: 'button', class: 'ca-composer-project', text: '选择项目', title: '选择新会话的项目' })
-  const capabilitiesButton = el('button', { type: 'button', class: 'ca-capabilities-button', text: '技能与工具', 'aria-haspopup': 'dialog' })
-  const skillButton = el('button', { type: 'button', class: 'ca-skill-button', text: '＋', 'aria-label': '添加技能', title: '添加技能', 'aria-haspopup': 'dialog' })
+  const composerProject = el('button', { type: 'button', class: 'ca-composer-project', text: () => t('app.chooseProject'), title: () => t('app.newProjectHelp') })
+  const capabilitiesButton = el('button', { type: 'button', class: 'ca-capabilities-button', text: () => t('app.capabilities'), 'aria-haspopup': 'dialog' })
+  const skillButton = el('button', { type: 'button', class: 'ca-skill-button', text: '＋', 'aria-label': () => t('app.addSkill'), title: () => t('app.addSkill'), 'aria-haspopup': 'dialog' })
   const taskButton = el('button', { type: 'button', class: 'ca-task-button', hidden: true, 'aria-haspopup': 'dialog' })
-  const workspaceButton = el('button', { type: 'button', class: 'ca-workspace-button', text: '会话详情', 'aria-haspopup': 'dialog', title: '上下文、预算、历史、MCP 与文件' })
-  const mcpInteractionButton = el('button', { type: 'button', class: 'ca-mcp-interaction-button', text: 'MCP 需要确认', hidden: true })
-  const archivedButton = el('button', { type: 'button', class: 'ca-archive-filter', text: '已归档', 'aria-pressed': 'false' })
+  const workspaceButton = el('button', { type: 'button', class: 'ca-workspace-button', text: () => t('app.details'), 'aria-haspopup': 'dialog', title: () => t('app.detailsHelp') })
+  const mcpInteractionButton = el('button', { type: 'button', class: 'ca-mcp-interaction-button', text: () => t('app.mcpConfirm'), hidden: true })
+  const archivedButton = el('button', { type: 'button', class: 'ca-archive-filter', text: () => t('app.archived'), 'aria-pressed': 'false' })
   let showArchived = false
   const permissionPicker = createPermissionPicker(async mode => {
     const device = client, runId = activeStatus(current) ? current?.id : undefined, key = composerKey
@@ -98,7 +100,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
       if (thread) thread = { ...thread, permissionMode: mode }
     }
     if (composerKey === key) { selectedPermission = mode; saveComposer(); render() }
-  }, () => sessionPermissions.open(permissionPicker.summary))
+  }, () => sessionPermissions.open(permissionPicker.summary), i18n)
   const capabilities = createCapabilitiesPanel(context.domId, {
     target: () => !client || !productRunning || !target() ? undefined : ({ key: `${client.connection.instanceId}:${thread?.id ?? target()}`, path: thread ? `${app}/threads/${encodeURIComponent(thread.id)}/capabilities` : `${app}/capabilities?cwd=${encodeURIComponent(target()!)}`, runId: activeStatus(current) ? current?.id : undefined, live }),
     request: (path, body, signal) => client ? track(client.request(path, body, signal)) : Promise.reject(new Error('product-unavailable')),
@@ -115,34 +117,36 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     request: (path, body, signal) => client ? track(client.request(path, body, signal)) : Promise.reject(new Error('product-unavailable')),
     changed: value => { if(value.deleted){threads=threads.filter(t=>t.id!==value.id);if(thread?.id===value.id){stopSubscription();thread=undefined;current=undefined;live=undefined;history=[];navigate({hostId:client?.connection.instanceId});render()}renderThreads();return} threads = [value, ...threads.filter(item => item.id !== value.id)]; if (thread?.id === value.id) { thread = value; renderThreads(); render() } else { showArchived = !!value.archived; void openThread(value.id) } },
     report: message => { if (!disposed) show(message) },
-    interactions: count => { mcpInteractionButton.hidden = count === 0; mcpInteractionButton.textContent = `MCP 需要确认 · ${count}` },
+    interactions: count => { mcpInteractionButton.hidden = count === 0; i18n.bind(mcpInteractionButton, 'text', () => t('app.mcpConfirm') + ` · ${count}`) },
   })
-  const extras=createComposerExtras({key:()=>composerKey,busy:()=>submitting,changed:()=>{draft=undefined;render()},report:message=>show(message),cancel:async id=>{if(!client||!current)return;try{await track(client.request(`${app}/runs/${encodeURIComponent(current.id)}/messages/${encodeURIComponent(id)}/cancel`,{}))}catch(error){show(messageFor(error));throw error}}})
+  const extras=createComposerExtras({i18n,key:()=>composerKey,busy:()=>submitting,changed:()=>{draft=undefined;render()},report:message=>show(message),cancel:async id=>{if(!client||!current)return;try{await track(client.request(`${app}/runs/${encodeURIComponent(current.id)}/messages/${encodeURIComponent(id)}/cancel`,{}))}catch(error){show(() => messageFor(error, i18n));throw error}}})
   const composer = el('form', { class: 'ca-composer' }, extras.progress,extras.input,extras.files,prompt, el('div', { class: 'ca-composer-row' }, extras.add,skillButton, composerProject, permissionPicker.element, modelPicker, effort, el('span', { class: 'ca-composer-spacer' }), send, cancel))
   transcript.addEventListener('claude-preview-file',event=>{const path=(event as CustomEvent<{path:string}>).detail?.path;if(typeof path==='string')workspace.openFile(path)})
   extras.bind(composer)
-  const usageSummary = el('summary', { text: '用量与费用' }), usageDetail = el('p')
+  const usageSummary = el('summary', { text: () => t('app.usage') }), usageDetail = el('p')
   const usage = el('details', { class: 'ca-usage', hidden: true }, usageSummary, usageDetail)
-  const draftsButton = el('button', { type: 'button', class: 'ca-drafts-button', text: '未发送草稿', hidden: true, 'aria-haspopup': 'dialog' })
+  const draftsButton = el('button', { type: 'button', class: 'ca-drafts-button', text: () => t('app.drafts'), hidden: true, 'aria-haspopup': 'dialog' })
   const draftsList = el('div', { class: 'ca-drafts-list' })
-  const draftsClose = el('button', { type: 'button', text: '关闭', 'aria-label': '关闭草稿列表' })
+  const draftsClose = el('button', { type: 'button', text: () => t('common.close'), 'aria-label': () => t('app.closeDrafts') })
   const account = createAccountPanel(context.domId, {
     target: () => !client || !productRunning ? undefined : ({ key: `${client.connection.instanceId}:${thread?.id ?? target() ?? 'home'}:${activeStatus(current) ? current?.id : ''}`, path: `${app}/account${thread ? `?threadId=${encodeURIComponent(thread.id)}` : target() ? `?cwd=${encodeURIComponent(target()!)}` : ''}`, label: `${client.connection.name} · 当前 Claude 账号` }),
     request: (path, signal) => { if (!client) return Promise.reject(new Error('product-unavailable')); return track(client.request(path, undefined, signal)) },
   })
   const draftsDialog = el('dialog', { class: 'ca-drafts-dialog', 'aria-labelledby': context.domId('drafts-title') },
-    el('header', {}, el('h2', { id: context.domId('drafts-title'), text: '未发送草稿' }), draftsClose),
-    el('p', { text: '草稿暂存在当前页面。可返回会话继续编辑；不再需要时，在这里丢弃。' }), draftsList)
+    el('header', {}, el('h2', { id: context.domId('drafts-title'), text: () => t('app.drafts') }), draftsClose),
+    el('p', { text: () => t('app.draftHelp') }), draftsList)
   const backdrop = el('div', { class: 'ca-backdrop', hidden: true })
   const root = el('section', { class: 'claude-agent-app' },
     el('aside', { class: 'ca-sidebar' },
-      el('header', { class: 'ca-sidebar-head' }, el('h1', { text: 'Claude Agent' }), el('span', { class: 'ca-sidebar-caption', text: '你的项目协作空间' })),
-      panel.element, el('div', { class: 'ca-search-wrap' }, search), el('div', { class: 'ca-list-heading' }, el('span', { text: '项目与会话' }), threadCount, archivedButton), el('nav', { class: 'ca-threads', 'aria-label': '线程' }, threadList),
+      el('header', { class: 'ca-sidebar-head' }, el('h1', { text: 'Claude Agent' }), el('span', { class: 'ca-sidebar-caption', text: () => t('app.tagline') })),
+      panel.element, el('div', { class: 'ca-search-wrap' }, search), el('div', { class: 'ca-list-heading' }, el('span', { text: () => t('app.projectsAndThreads') }), threadCount, archivedButton), el('nav', { class: 'ca-threads', 'aria-label': () => t('app.threads') }, threadList),
       el('footer', { class: 'ca-sidebar-foot' }, draftsButton, deviceField, deviceLine, deviceStatus, startButton, accountButton, manageConnections, el('span', { class: 'ca-powered', text: 'Powered by Claude' }))),
     backdrop,
     el('main', { class: 'ca-main' }, el('header', { class: 'ca-thread-head' }, menuButton, el('div', { class: 'ca-thread-heading' }, path, title), status, taskButton, mcpInteractionButton, capabilitiesButton, workspaceButton), environment, notice,
       el('div', { class: 'ca-content-area' }, older,transcript, transcriptHint, runError, emptyState, latest), approvalsPanel,
       el('div', { class: 'ca-compose-dock' }, composer, el('div', { class: 'ca-composer-meta' }, composerHint, usage))), draftsDialog, capabilities.element, sessionPermissions.element, workspace.element, account.element)
+  for (const legacy of [capabilities.element, sessionPermissions.element, workspace.element, account.element]) legacy.lang = 'zh-CN'
+  i18n.bind(root, 'lang', () => i18n.locale)
   container.replaceChildren(root)
 
   let devices: readonly DeviceTarget[] = [], hidden = { unreachable: 0, unsupported: 0 }, localInstanceId: string | null = null, localPicker = false, localUnavailable = false, client: DeviceClient | undefined
@@ -157,7 +161,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
   let deviceLifetime = new AbortController(), deviceDiscovery = new AbortController(), discoveryVersion = 0, visible = true, disposal: Promise<void> | undefined
   const tasks = new Set<Promise<unknown>>()
   let connectionManager: ReturnType<typeof openConnectionManager> | undefined
-  let followLatest = true, composerKey: string | undefined, composerLabel = '新会话'
+  let followLatest = true, composerKey: string | undefined, composerLabel = t('app.newConversation')
   let selectedPermission: PermissionModeView = 'default'
   type ComposerDraft = { label: string; prompt: string; model: string; effort: string; permissionMode: PermissionModeView; retry: typeof draft }
   const drafts = new Map<string, ComposerDraft>()
@@ -166,10 +170,10 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     if (prompt.value.trim()) drafts.set(composerKey, { label: composerLabel, prompt: prompt.value, model: model.value, effort: effort.value, permissionMode: selectedPermission, retry: draft })
     else drafts.delete(composerKey)
     draftsButton.hidden = drafts.size === 0&&!extras.hasDrafts()
-    draftsButton.textContent = `未发送草稿 · ${drafts.size}${extras.hasDrafts()?' · 含附件':''}`
+    i18n.bind(draftsButton, 'text', () => t('app.draftCount', { count: drafts.size }) + (extras.hasDrafts() ? t('app.withAttachments') : ''))
   }
   const resizePrompt = () => { if (prompt.style) { prompt.style.height = 'auto'; prompt.style.height = `${Math.min(220, Math.max(64, prompt.scrollHeight))}px` } }
-  const updateModelSummary = () => { const selected = model.value.trim(), isDefault = !selected || selected === 'default'; modelSummary.textContent = isDefault ? 'Claude 默认模型' : models.find(entry => entry.value === selected)?.displayName || selected; modelSummary.title = isDefault ? models.find(entry => entry.value === 'default')?.description || '使用 Claude 环境的默认模型' : selected }
+  const updateModelSummary = () => { const selected = model.value.trim(), isDefault = !selected || selected === 'default'; i18n.bind(modelSummary, 'text', () => isDefault ? t('app.defaultModel') : models.find(entry => entry.value === selected)?.displayName || selected); i18n.bind(modelSummary, 'title', () => isDefault ? models.find(entry => entry.value === 'default')?.description || t('app.defaultModelHelp') : selected) }
   const switchComposer = (key: string, label: string, mode = thread?.permissionMode ?? 'default') => {
     if (key === composerKey) { composerLabel = label; return }
     saveComposer(); composerKey = key; composerLabel = label
@@ -181,7 +185,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
   }
   const renderDrafts = () => {
     draftsList.replaceChildren(...[...drafts].map(([key, saved]) => {
-      const discard = el('button', { type: 'button', class: 'ca-draft-discard', text: '丢弃草稿', 'aria-label': `丢弃 ${saved.label} 的草稿` })
+      const discard = el('button', { type: 'button', class: 'ca-draft-discard', text: () => t('app.discardDraft'), 'aria-label': () => t('app.discardDraftLabel', { name: saved.label }) })
       discard.addEventListener('click', () => {
         drafts.delete(key)
         if (composerKey === key) { prompt.value = ''; draft = undefined; resizePrompt() }
@@ -190,8 +194,8 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
       })
       return el('section', { class: 'ca-draft-entry' }, el('div', {}, el('strong', { text: saved.label }), el('p', { text: saved.prompt.slice(0, 140) })), discard)
     }))
-    if(extras.hasDrafts()){const discardFiles=el('button',{type:'button',text:'丢弃所有未发送附件'});discardFiles.addEventListener('click',()=>{extras.discardAll();renderDrafts();render()});draftsList.append(el('section',{class:'ca-draft-entry'},el('p',{text:'有未发送的附件保存在当前页面。可返回原会话继续发送，或丢弃这些附件。'}),discardFiles))}
-    if (drafts.size === 0&&!extras.hasDrafts()) draftsList.append(el('p', { text: '没有未发送草稿。' }))
+    if(extras.hasDrafts()){const discardFiles=el('button',{type:'button',text:() => t('app.discardAttachments')});discardFiles.addEventListener('click',()=>{extras.discardAll();renderDrafts();render()});draftsList.append(el('section',{class:'ca-draft-entry'},el('p',{text:() => t('app.attachmentDraftHelp')}),discardFiles))}
+    if (drafts.size === 0&&!extras.hasDrafts()) draftsList.append(el('p', { text: () => t('app.noDrafts') }))
   }
   const targetKey = (device: DeviceClient, kind: 'thread' | 'project', id: string) => JSON.stringify([device.connection.instanceId, kind, id])
   const track = <T>(work: Promise<T>): Promise<T> => {
@@ -201,18 +205,18 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
   const currentDevice = (device: DeviceClient | undefined) => !!device && !disposed && !lifetime.signal.aborted && client === device
   const sameConnection = (left: DeviceTarget, right: DeviceTarget) => left.id === right.id && left.instanceId === right.instanceId && left.revision === right.revision && ('endpoint' in left ? left.endpoint : undefined) === ('endpoint' in right ? right.endpoint : undefined)
   type AvailableModel = AvailableModelsView['models'][number]
-  let models: readonly AvailableModel[] = [], modelLoad: 'idle' | 'loading' | 'ready' | 'failed' = 'idle', modelFailure = ''
+  let models: readonly AvailableModel[] = [], modelLoad: 'idle' | 'loading' | 'ready' | 'failed' = 'idle', modelFailure: unknown
   let modelReads = new AbortController(), modelReadVersion = 0
   const collapsed = storedSet(collapsedKey)
-  const show = (message: string) => { noticeText.textContent = message; notice.hidden = false }
-  const clearNotice = () => { noticeText.textContent = ''; notice.hidden = true }
+  const show = (message: string | (() => string)) => { i18n.bind(noticeText, 'text', typeof message === 'function' ? message : () => message); notice.hidden = false }
+  const clearNotice = () => { i18n.bind(noticeText, 'text', () => ''); notice.hidden = true }
   const remember = (id: string) => { try { sessionStorage.setItem(selectedKey, id) } catch { /* optional */ } }
   const remembered = () => { try { return sessionStorage.getItem(selectedKey) } catch { return null } }
   const saveCollapsed = () => { try { sessionStorage.setItem(collapsedKey, JSON.stringify([...collapsed])) } catch { /* optional */ } }
   const route = () => parseRoute(context.route.read())
   const navigate = (next: { hostId?: string; threadId?: string }, replace = false) => { const value = formatRoute(next); if (context.route.read() !== value) context.route.navigate(value, replace) }
   /** A failed request shows a transient error; the next successful one clears it. Environment and Run errors have their own places. */
-  const guard = <T>(work: () => Promise<T>, relevant = () => !disposed): Promise<T | undefined> => track(work().then(value => { if (relevant()) clearNotice(); return value }, error => { if (relevant() && !lifetime.signal.aborted) show(messageFor(error)); return undefined }))
+  const guard = <T>(work: () => Promise<T>, relevant = () => !disposed): Promise<T | undefined> => track(work().then(value => { if (relevant()) clearNotice(); return value }, error => { if (relevant() && !lifetime.signal.aborted) show(() => messageFor(error, i18n)); return undefined }))
   const target = () => thread?.projectPath ?? project
   const setDrawer = (open: boolean) => { root.dataset.drawer = open ? 'open' : ''; backdrop.hidden = !open; menuButton.setAttribute('aria-expanded', String(open)) }
   const closeDrawer = () => { if (root.dataset.drawer === 'open') setDrawer(false) }
@@ -221,13 +225,13 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     emptyState.hidden = !!thread || !client || loadingThread !== undefined
     transcript.hidden = !emptyState.hidden
     if (emptyState.hidden) return
-    const choose = el('button', { type: 'button', class: 'ca-empty-choose', text: project ? '更换项目' : '选择项目' })
+    const choose = el('button', { type: 'button', class: 'ca-empty-choose', text: () => project ? t('app.changeProject') : t('app.chooseProject') })
     choose.addEventListener('click', () => panel.open())
     emptyState.replaceChildren(el('span', { class: 'ca-empty-eyebrow', text: project ? lastSegment(project) : 'CLAUDE AGENT' }),
-      el('h2', { text: '今天想一起完成什么？' }), el('p', { text: project ? '描述你的目标，Claude 会在这个项目中与你协作。' : '选择一个项目，开始阅读代码、解决问题或实现想法。' }), choose)
+      el('h2', { text: () => t('app.welcome') }), el('p', { text: () => project ? t('app.projectWelcome') : t('app.chooseWelcome') }), choose)
     if (project) {
-      const suggestions = el('div', { class: 'ca-suggestions', 'aria-label': '任务建议' })
-      for (const [label, text] of [['了解这个项目', '请先阅读这个项目，介绍它的结构、主要功能和开发方式。'], ['审查代码质量', '请审查这个项目的代码，找出值得优先修复的问题，先给我建议。'], ['实现一个想法', '我想在这个项目中实现一个功能：']]) {
+      const suggestions = el('div', { class: 'ca-suggestions', 'aria-label': () => t('app.suggestions') })
+      for (const [label, text] of [[() => t('app.suggestExplore'), '请先阅读这个项目，介绍它的结构、主要功能和开发方式。'], [() => t('app.suggestReview'), '请审查这个项目的代码，找出值得优先修复的问题，先给我建议。'], [() => t('app.suggestBuild'), '我想在这个项目中实现一个功能：']] as const) {
         const button = el('button', { type: 'button', text: label })
         button.addEventListener('click', () => { prompt.value = text; resizePrompt(); saveComposer(); render(); prompt.focus() })
         suggestions.append(button)
@@ -239,11 +243,11 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     if (disposed) return
     extras.update(activeStatus(current)?live:undefined,inputHistory);workspace.update(); workspaceButton.disabled = !client || !productRunning || !target()
     draftsButton.hidden = drafts.size === 0&&!extras.hasDrafts()
-    draftsButton.textContent = `未发送草稿 · ${drafts.size}${extras.hasDrafts()?' · 含附件':''}`
-    title.textContent = thread ? thread.title : '新会话'
+    i18n.bind(draftsButton, 'text', () => t('app.draftCount', { count: drafts.size }) + (extras.hasDrafts() ? t('app.withAttachments') : ''))
+    i18n.bind(title, 'text', () => thread ? thread.title : t('app.newConversation'))
     path.textContent = target() ? lastSegment(target()!) : 'Claude Agent'
     path.title = target() ?? ''
-    status.textContent = pending.length ? `等待你处理 · ${pending.length}` : current ? runStatusLabels[current.status] ?? current.status : target() ? '准备就绪' : ''
+    i18n.bind(status, 'text', () => pending.length ? t('app.waiting', { count: pending.length }) : current ? runStatusLabel(current.status, i18n) : target() ? t('app.ready') : '')
     status.dataset.status = pending.length ? 'approval' : current?.status ?? ''
     const active = activeStatus(current)
     permissionPicker.update(active ? live?.init?.permissionMode ?? current?.permissionMode ?? selectedPermission : selectedPermission, active, !!client && productRunning && !!target() && !submitting, !!thread)
@@ -253,9 +257,9 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     account.update()
     const agentTasks = live?.tasks ?? [], runningTasks = agentTasks.filter(task => ['running', 'pending', 'paused'].includes(task.status ?? ''))
     taskButton.hidden = agentTasks.length === 0
-    taskButton.textContent = runningTasks.length ? `${runningTasks.length} 个任务进行中` : `任务 · ${agentTasks.length}`
+    i18n.bind(taskButton, 'text', () => runningTasks.length ? t('app.activeTasks', { count: runningTasks.length }) : t('app.tasks', { count: agentTasks.length }))
     capabilities.update()
-    syncTranscript(transcript, displayItems(history, active ? live : undefined, active ? current?.prompt : undefined,active?current?.attachments:undefined))
+    syncTranscript(transcript, displayItems(history, active ? live : undefined, active ? current?.prompt : undefined,active?current?.attachments:undefined), i18n)
     if (followLatest) transcript.scrollTop = transcript.scrollHeight
     latest.hidden = followLatest || !thread
     runError.textContent = thread && current?.error && !active ? current.error.message : ''
@@ -265,74 +269,74 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     const approvalKey = pending.map(approval => approval.id).join('\n')
     if (approvalsPanel.dataset.approvals !== approvalKey) {
       approvalsPanel.dataset.approvals = approvalKey
-      approvalsPanel.replaceChildren(...pending.map(approval => renderApproval(approval, { decide: (view, decision, answers) => void decide(view, decision, answers) }, context.domId)))
+      approvalsPanel.replaceChildren(...pending.map(approval => renderApproval(approval, { decide: (view, decision, answers) => void decide(view, decision, answers) }, context.domId, i18n)))
       const focus = approvalsPanel.querySelector<HTMLElement>('[data-default-to-no="true"] button:last-of-type')
       if (focus && document.activeElement === document.body) focus.focus()
     }
     cancel.hidden = !active
     const block = composerBlock({ hasDevice: !!client, productRunning, hasTarget: !!target(), runActive: active, submitting })
     send.disabled = (block !== null && block !== 'running') || submitting || (!prompt.value.trim()&&!extras.count()) || thread?.archived === true || current?.status==='cancelling'
-    send.hidden = false;send.textContent=active?'追加到队列':'发送';extras.add.disabled=submitting||!client||!productRunning||!target()
+    send.hidden = false;i18n.bind(send, 'text', () => active?t('app.queue'):t('app.send'));extras.add.disabled=submitting||!client||!productRunning||!target()
     cancel.disabled = current?.status === 'cancelling'
-    cancel.textContent = current?.status === 'cancelling' ? '正在停止…' : '停止'
+    i18n.bind(cancel, 'text', () => current?.status === 'cancelling' ? t('app.stopping') : t('app.stop'))
     prompt.disabled = block === 'no-device' || block === 'not-running' || block === 'no-target'
-    composerHint.textContent = block === 'running' ? 'Enter 追加到队列 · 本轮结束后依次处理 · 停止会移除待发送消息' : block ? composerBlockLabels[block] : 'Enter 发送 · Shift + Enter 换行'
-    composerProject.textContent = target() ? lastSegment(target()!) : '选择项目'
-    composerProject.title = target() ?? '选择新会话的项目'
+    i18n.bind(composerHint, 'text', () => thread?.archived ? t('app.archivedHelp') : (block === 'running' ? t('app.queueHelp') : block ? composerBlockLabel(block, i18n) : t('app.sendHelp')) + (!active && thread?.options?.maxBudgetUsd ? t('app.budget', { cost: i18n.money(thread.options.maxBudgetUsd) }) : ''))
+    i18n.bind(composerProject, 'text', () => target() ? lastSegment(target()!) : t('app.chooseProject'))
+    i18n.bind(composerProject, 'title', () => target() ?? t('app.newProjectHelp'))
     composerProject.disabled = !client || !productRunning
     composerProject.hidden = !!thread
     const finished = current && !active && current.result ? current : [...runs].reverse().find(run => run.result)
     usage.hidden = !finished?.result
-    usageDetail.textContent = finished?.result ? `${finished.resolvedModel ? `实际模型：${finished.resolvedModel}\n` : ''}${formatUsage(finished.result)}` : ''
-    usageSummary.textContent = finished?.result ? `累计约 $${finished.result.totalCostUsd.toFixed(2)} · 用量` : '用量与费用'
-    if (thread?.archived) composerHint.textContent = '此会话已归档，可在“会话详情”恢复后继续。'
-    else if (!active && thread?.options?.maxBudgetUsd) composerHint.textContent += ` · 任务上限 $${thread.options.maxBudgetUsd}`
+    i18n.bind(usageDetail, 'text', () => finished?.result ? `${finished.resolvedModel ? t('app.actualModel', { model: finished.resolvedModel }) : ''}${formatUsage(finished.result, i18n)}` : '')
+    i18n.bind(usageSummary, 'text', () => finished?.result ? t('app.costSummary', { cost: i18n.money(finished.result.totalCostUsd, 2) }) : t('app.usage'))
     for (const node of threadList.querySelectorAll<HTMLButtonElement>('button[data-thread-id]')) node.setAttribute('aria-current', node.dataset.threadId === thread?.id ? 'true' : 'false')
+    i18n.retain(root)
   }
   const renderThreads = () => {
     const query = search.value.trim().toLocaleLowerCase()
     const filtered = threads.filter(item => !!item.archived === showArchived && (!query || `${item.title} ${item.projectPath} ${item.tag ?? ''}`.toLocaleLowerCase().includes(query)))
-    archivedButton.setAttribute('aria-pressed', String(showArchived)); archivedButton.textContent = showArchived ? '返回会话' : '已归档'
+    archivedButton.setAttribute('aria-pressed', String(showArchived)); i18n.bind(archivedButton, 'text', () => showArchived ? t('app.returnThreads') : t('app.archived'))
     threadCount.textContent = String(filtered.length)
     threadList.replaceChildren(...renderThreadGroups(groupThreads(filtered), { currentThreadId: thread?.id, selectedPath: project, collapsed: query ? new Set() : collapsed, now: Date.now() }, {
       open: id => { void openThread(id) },
       create: directory => startProject(directory),
       toggle: directory => { if (collapsed.has(directory)) collapsed.delete(directory); else collapsed.add(directory); saveCollapsed(); renderThreads() },
-    }))
-    if (!filtered.length) threadList.append(el('li', { class: 'ca-empty', text: query ? '没有匹配的会话或项目' : client && productRunning ? '还没有会话，点击“新建会话”开始。' : '' }))
+    }, i18n))
+    if (!filtered.length) threadList.append(el('li', { class: 'ca-empty', text: () => query ? t('app.noMatches') : client && productRunning ? t('app.noThreads') : '' }))
     for (const node of threadList.querySelectorAll<HTMLButtonElement>('button[data-thread-id]')) {
       const hasDraft = client && drafts.has(targetKey(client, 'thread', node.dataset.threadId!))
-      if (hasDraft) { node.dataset.draft = 'true'; node.append(el('span', { class: 'ca-draft-label', text: '草稿' })) }
+      if (hasDraft) { node.dataset.draft = 'true'; node.append(el('span', { class: 'ca-draft-label', text: () => t('app.draft') })) }
     }
     scheduleThreadPoll()
+    i18n.retain(root)
   }
   const renderDevices = () => {
     const single = devices.length <= 1, device = devices.find(entry => entry.id === client?.connection.id) ?? devices[0]
     deviceField.hidden = single; deviceLine.hidden = !single
-    deviceSelect.replaceChildren(...devices.map(entry => el('option', { value: entry.id, text: deviceLabel(entry, localInstanceId) })))
+    deviceSelect.replaceChildren(...devices.map(entry => el('option', { value: entry.id, text: () => deviceLabel(entry, localInstanceId, i18n) })))
     deviceSelect.disabled = !devices.length
     if (client) deviceSelect.value = client.connection.id
-    deviceSelect.title = `执行设备：${deviceSelect.selectedOptions[0]?.textContent ?? '未选择'}`
-    const stateText = !device ? '' : productRunning ? '运行中' : productState === 'failed' || productState === 'blocked' ? '启动失败' : productState ? '尚未启动' : ''
-    deviceName.textContent = device ? (device.instanceId === localInstanceId ? '本机' : device.name) : '没有可用的执行设备'
-    deviceLine.title = device ? `执行设备：${deviceLabel(device, localInstanceId)}` : ''
-    deviceState.textContent = stateText ? `· ${stateText}` : ''
+    i18n.bind(deviceSelect, 'title', () => { const selected = devices.find(entry => entry.id === deviceSelect.value); return t('app.deviceTitle', { name: selected ? deviceLabel(selected, localInstanceId, i18n) : t('app.noneSelected') }) })
+    const stateText = () => !device ? '' : productRunning ? t('app.running') : productState === 'failed' || productState === 'blocked' ? t('app.startFailed') : productState ? t('app.notStarted') : ''
+    i18n.bind(deviceName, 'text', () => device ? (device.instanceId === localInstanceId ? t('app.local') : device.name) : t('app.noDevices'))
+    i18n.bind(deviceLine, 'title', () => device ? t('app.deviceTitle', { name: deviceLabel(device, localInstanceId, i18n) }) : '')
+    i18n.bind(deviceState, 'text', () => stateText() ? `· ${stateText()}` : '')
     deviceLine.dataset.state = productRunning ? 'running' : ''
-    const parts = [hidden.unreachable ? `${hidden.unreachable} 台无法连接` : '', hidden.unsupported ? `${hidden.unsupported} 台未安装 Claude Agent` : ''].filter(Boolean).join('，')
-    deviceStatus.textContent = !devices.length
-      ? (localUnavailable ? '本机执行端尚未就绪。请重试，或在“管理远端连接”中选择其他设备。' : parts ? `已配置的设备都不可用：${parts}。请在“管理连接”中检查。` : '尚未配置执行设备。请在“管理连接”中添加已安装 Claude 的设备。')
-      : [single ? '' : stateText && !productRunning ? `所选设备上的 Claude Agent ${stateText}。` : '', parts ? `另有 ${parts}，未显示。` : ''].filter(Boolean).join(' ')
+    const parts = () => [hidden.unreachable ? t('app.unreachable', { count: hidden.unreachable }) : '', hidden.unsupported ? t('app.unsupported', { count: hidden.unsupported }) : ''].filter(Boolean).join(i18n.locale === 'en' ? ', ' : '，')
+    i18n.bind(deviceStatus, 'text', () => !devices.length
+      ? (localUnavailable ? t('app.localUnavailable') : parts() ? t('app.devicesUnavailable', { details: parts() }) : t('app.noConfiguredDevices'))
+      : [single ? '' : stateText() && !productRunning ? t('app.selectedDeviceState', { state: stateText() }) : '', parts() ? t('app.hiddenDevices', { details: parts() }) : ''].filter(Boolean).join(' '))
     startButton.hidden = device ? productRunning : !localUnavailable
-    startButton.textContent = !device && localUnavailable ? '重试本机执行端' : '启动 Claude Agent'
+    i18n.bind(startButton, 'text', () => !device && localUnavailable ? t('app.retryLocal') : t('app.start'))
   }
   const stopModelRead = () => { modelReads.abort(); modelReads = new AbortController(); modelReadVersion++; if (modelLoad === 'loading') modelLoad = 'idle' }
-  const resetModels = () => { stopModelRead(); models = []; modelLoad = 'idle'; modelFailure = ''; renderModels() }
+  const resetModels = () => { stopModelRead(); models = []; modelLoad = 'idle'; modelFailure = undefined; renderModels() }
   const chooseModel = (value: string) => {
     model.value = value; saveComposer(); renderModels(); modelPicker.open = false; modelCustom.open = false; stopModelRead(); modelSummary.focus()
   }
   const renderModels = () => {
     const selected = model.value.trim(), advertisedDefault = models.find(entry => entry.value === 'default')
-    const option = (value: string, label: string, description: string) => {
+    const option = (value: string, label: string | (() => string), description: string | (() => string)) => {
       const checked = value === selected || value === '' && selected === 'default'
       const button = el('button', { type: 'button', class: 'ca-model-option', 'data-model-value': value, 'aria-pressed': String(checked) },
         el('span', { class: 'ca-model-option-copy' }, el('strong', { text: label }), el('span', { class: 'ca-model-description', text: description })),
@@ -340,12 +344,12 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
       button.addEventListener('click', () => chooseModel(value))
       return button
     }
-    modelList.replaceChildren(option('', 'Claude 默认模型', advertisedDefault?.description || '使用当前 Claude 环境设置'), ...models.filter(entry => entry.value !== 'default').map(entry => option(entry.value, entry.displayName, entry.description)))
+    modelList.replaceChildren(option('', () => t('app.defaultModel'), () => advertisedDefault?.description || t('app.environmentSettings')), ...models.filter(entry => entry.value !== 'default').map(entry => option(entry.value, entry.displayName, entry.description)))
     modelList.setAttribute('aria-busy', String(modelLoad === 'loading'))
-    modelStatus.textContent = !client || !productRunning ? '启动执行设备上的 Claude Agent 后可读取模型。' : modelLoad === 'loading' ? '正在读取当前环境的可用模型…' : modelLoad === 'failed' ? `无法读取可用模型。${modelFailure}` : modelLoad === 'ready' && models.length === 0 ? '当前环境未返回可选模型，可使用默认模型或自定义名称。' : ''
+    i18n.bind(modelStatus, 'text', () => !client || !productRunning ? t('app.modelsNotStarted') : modelLoad === 'loading' ? t('app.modelsLoading') : modelLoad === 'failed' ? t('app.modelsFailed', { details: messageFor(modelFailure, i18n) }) : modelLoad === 'ready' && models.length === 0 ? t('app.modelsEmpty') : '')
     modelStatus.hidden = !modelStatus.textContent
     modelRefresh.disabled = !client || !productRunning || modelLoad === 'loading'
-    modelRefresh.textContent = modelLoad === 'failed' ? '重试' : '刷新'
+    i18n.bind(modelRefresh, 'text', () => modelLoad === 'failed' ? t('common.retry') : t('common.refresh'))
     updateModelSummary()
   }
   const stopThreadPoll = () => { if (threadTimer !== undefined) { clearTimeout(threadTimer); threadTimer = undefined } }
@@ -415,7 +419,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     if (!activeStatus(current)) await refreshThread()
     else { if (thread) updateListEntry(thread.id, { lastRun: { id: change.runId, status: change.status } }); if (current) void refreshView(current.id); render() }
   }
-  older.addEventListener('click',()=>{if(!client||!thread||previousOffset===null)return;const device=client,id=thread.id,offset=previousOffset;older.disabled=true;void track(device.request<ThreadMessagesView>(`${app}/threads/${encodeURIComponent(id)}/messages?offset=${offset}`,undefined,threadReads.signal)).then(page=>{if(!currentDevice(device)||thread?.id!==id)return;history=[...page.messages.filter(m=>!history.some(existing=>existing.id===m.id)),...history];previousOffset=page.previousOffset??null;older.hidden=previousOffset===null;followLatest=false;render()}).catch(error=>show(messageFor(error))).finally(()=>{older.disabled=false})})
+  older.addEventListener('click',()=>{if(!client||!thread||previousOffset===null)return;const device=client,id=thread.id,offset=previousOffset;older.disabled=true;void track(device.request<ThreadMessagesView>(`${app}/threads/${encodeURIComponent(id)}/messages?offset=${offset}`,undefined,threadReads.signal)).then(page=>{if(!currentDevice(device)||thread?.id!==id)return;history=[...page.messages.filter(m=>!history.some(existing=>existing.id===m.id)),...history];previousOffset=page.previousOffset??null;older.hidden=previousOffset===null;followLatest=false;render()}).catch(error=>show(() => messageFor(error, i18n))).finally(()=>{older.disabled=false})})
   const refreshThread = async () => {
     if (!client || !thread) return
     const id = thread.id, device = client, signal = threadReads.signal, version = ++threadReadVersion
@@ -443,14 +447,14 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     if (!device || !currentDevice(device)) return
     followLatest = true
     thread = threads.find(item => item.id === id)
-    switchComposer(targetKey(device, 'thread', thread?.id ?? ''), thread?.title ?? '新会话')
+    switchComposer(targetKey(device, 'thread', thread?.id ?? ''), thread?.title ?? t('app.newConversation'))
     resetModels()
     if (thread) { project = undefined; panel.setPath(thread.projectPath); closeDrawer() }
     inputHistory=[];older.hidden=true;previousOffset=null;history = []; runs = []; current = undefined; live = undefined; pending = []; clearNotice()
     navigate({ hostId: device.connection.instanceId, threadId: thread?.id }, replace)
     if (!thread) { loadingThread = undefined; transcriptHint.hidden = true; stopSubscription(); renderThreads(); render(); return }
     loadingThread = thread.id
-    const cancelHint = delayed(() => { if (currentDevice(device) && loadingThread === id) { transcriptHint.textContent = '正在读取转录…'; transcriptHint.hidden = false } })
+    const cancelHint = delayed(() => { if (currentDevice(device) && loadingThread === id) { i18n.bind(transcriptHint, 'text', () => t('app.transcriptLoading')); transcriptHint.hidden = false } })
     renderThreads(); render()
     subscribe(thread.id)
     const signal = threadReads.signal
@@ -488,7 +492,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
   const loadThreads = async (device = client, signal?: AbortSignal) => {
     if (!device) return
     const relevant = () => currentDevice(device) && !signal?.aborted
-    const cancelPlaceholder = threads.length ? () => {} : delayed(() => { if (relevant()) threadList.replaceChildren(el('li', { class: 'ca-empty', text: '正在读取线程…' })) })
+    const cancelPlaceholder = threads.length ? () => {} : delayed(() => { if (relevant()) threadList.replaceChildren(el('li', { class: 'ca-empty', text: () => t('app.threadsLoading') })) })
     const list = await guard(() => device.request<readonly ThreadView[]>(`${app}/threads`, undefined, signal), relevant)
     cancelPlaceholder()
     if (!relevant()) return
@@ -500,14 +504,14 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     const device = client, directory = target(), signal = modelReads.signal, version = modelReadVersion
     if (!device || !productRunning || !visible || !modelPicker.open) { renderModels(); return }
     const relevant = () => currentDevice(device) && !signal.aborted && version === modelReadVersion && directory === target() && visible && modelPicker.open
-    models = []; modelLoad = 'loading'; modelFailure = ''; renderModels()
+    models = []; modelLoad = 'loading'; modelFailure = undefined; renderModels()
     try {
       const view = await device.request<AvailableModelsView>(`${app}/models${directory ? `?cwd=${encodeURIComponent(directory)}` : ''}`, undefined, signal)
       if (!relevant()) return
       models = view.models; modelLoad = 'ready'
     } catch (error) {
       if (!relevant()) return
-      modelLoad = 'failed'; modelFailure = messageFor(error)
+      modelLoad = 'failed'; modelFailure = error
     }
     if (relevant()) renderModels()
   })())
@@ -525,7 +529,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     const relevant = () => currentDevice(device) && !signal?.aborted
     let state = await guard(() => device.request<ProductView>('/products/claude-agent', undefined, signal), relevant)
     if (!relevant()) return false
-    if (!state) { renderDevices(); deviceStatus.textContent = '无法读取所选设备的状态。'; return false }
+    if (!state) { renderDevices(); i18n.bind(deviceStatus, 'text', () => t('app.deviceStatusFailed')); return false }
     if (activate && state.state !== 'running') state = await guard(() => device.request<ProductView>(state!.state === 'failed' || state!.state === 'blocked' ? '/products/claude-agent/retry' : '/products/claude-agent/open', {}, signal), relevant) ?? state
     if (!relevant()) return false
     productRunning = state.state === 'running'; productState = state.state
@@ -576,13 +580,13 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     const [directory, local] = await Promise.all([guard(() => readDevices(context.apiBase, signal), relevant), readLocal(context.apiBase, signal).catch(() => undefined)])
     if (!directory || !relevant()) return
     const targets: readonly DeviceTarget[] = local?.device ? [local.device, ...directory.connections.filter(item => item.instanceId !== local.device!.instanceId)] : directory.connections
-    if (!client) deviceStatus.textContent = targets.length ? '正在检查执行设备…' : ''
+    if (!client) i18n.bind(deviceStatus, 'text', () => targets.length ? t('app.devicesChecking') : '')
     const partition = filterDevices(targets, await probeDevices(targets, signal))
     if (!relevant()) return
     localInstanceId = local?.device ? local.instanceId : directory.localInstanceId
     localPicker = local?.picker === true && local.instanceId === localInstanceId
     localUnavailable = local?.managed === true && !local.device
-    manageConnections.textContent = local?.managed ? '管理远端连接' : '管理连接'
+    i18n.bind(manageConnections, 'text', () => local?.managed ? t('app.remoteConnections') : t('app.connections'))
     // A failed probe is not a removed connection. Keep observing the current instance until its saved identity changes.
     const unchanged = client && targets.find(entry => sameConnection(entry, client!.connection))
     const retained = unchanged && !partition.unsupported.some(entry => entry.id === unchanged.id) ? unchanged : undefined
@@ -619,7 +623,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
       if(!draft||draft.prompt!==content)draft={prompt:content,key:crypto.randomUUID()};const requestKey=draft.key
       submitting=true;render()
       try{const prepared=await extras.prepare((path,body)=>track(device.request(path,body)),key);await device.request(`${app}/runs/${encodeURIComponent(run.id)}/messages`,{prompt:content,attachmentIds:prepared.ids,idempotencyKey:requestKey});prepared.clear();if(composerKey===key&&prompt.value.trim()===content){prompt.value='';draft=undefined;saveComposer();renderThreads()} }
-      catch(error){if(currentDevice(device))show(`${messageFor(error)}。未确认时请先核对队列，消息不会自动重发。`)}finally{submitting=false;render()}return
+      catch(error){if(currentDevice(device))show(() => t('app.queueUnconfirmed', { details: messageFor(error, i18n) }))}finally{submitting=false;render()}return
     }
     if (!draft || draft.prompt !== text) draft = { prompt: text, key: crypto.randomUUID() }
     const retry = draft
@@ -659,7 +663,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
       }
       updateListEntry(submittedThread.id, { lastRun: { id: run.id, status: run.status } })
       void reloadThread(submittedThread.id)
-    } catch (error) { if (currentDevice(device) && composerKey === submittedKey) show(messageFor(error)) }
+    } catch (error) { if (currentDevice(device) && composerKey === submittedKey) show(() => messageFor(error, i18n)) }
     finally { submitting = false; render() }
   })())
   composer.addEventListener('submit', event => { event.preventDefault(); void submit() })
@@ -695,6 +699,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
   manageConnections.addEventListener('click', () => {
     if (connectionManager) void track(connectionManager.close())
     connectionManager = openConnectionManager(root, context.apiBase, context.domId, () => disposed || !visible ? Promise.resolve() : loadDevices(false))
+    root.querySelector('.ca-connections-dialog')?.setAttribute('lang', 'zh-CN')
   })
   accountButton.addEventListener('click', () => account.open(accountButton))
   deviceSelect.addEventListener('change', () => {
@@ -706,7 +711,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     if (requested.hostId && requested.hostId !== client?.connection.instanceId) { const device = devices.find(item => item.instanceId === requested.hostId); if (device) { deviceDiscovery.abort(); void selectClient(device, false) }; return }
     if (client && requested.threadId !== thread?.id && threads.length) void openThread(requested.threadId, true)
   })
-  await loadDevices(false)
+  try { await loadDevices(false) } catch (error) { i18n.dispose(); throw error }
   return {
     async setActive(active: boolean, reason: ApplicationActivation) {
       if (disposed) return
@@ -718,7 +723,7 @@ export async function mount(container: HTMLElement, input: ApplicationWebContext
     canClose: () => { saveComposer(); return !submitting && !prompt.value.trim() && drafts.size === 0 && !extras.hasDrafts() && workspace.canClose() },
     dispose() {
       if (disposal) return disposal
-      disposed = true; account.dispose(); workspace.dispose(); extras.dispose(); capabilities.dispose(); sessionPermissions.dispose(); permissionPicker.close(); if (connectionManager) void track(connectionManager.close()); unsubscribeRoute(); stopSubscription(); stopThreadPoll(); panel.dispose(); deviceDiscovery.abort(); deviceLifetime.abort(); stopModelRead(); lifetime.abort(); context.signal.removeEventListener('abort', abort); container.replaceChildren()
+      disposed = true; i18n.dispose(); account.dispose(); workspace.dispose(); extras.dispose(); capabilities.dispose(); sessionPermissions.dispose(); permissionPicker.close(); if (connectionManager) void track(connectionManager.close()); unsubscribeRoute(); stopSubscription(); stopThreadPoll(); panel.dispose(); deviceDiscovery.abort(); deviceLifetime.abort(); stopModelRead(); lifetime.abort(); context.signal.removeEventListener('abort', abort); container.replaceChildren()
       disposal = Promise.allSettled([...tasks]).then(() => {})
       return disposal
     },

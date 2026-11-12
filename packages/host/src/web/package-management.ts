@@ -111,7 +111,7 @@ async function archiveDigest(file: File): Promise<string> {
 /** Disposal stops observations, clears local file references immediately and joins accepted browser work. */
 export function setupPackageManagement(container: HTMLElement, options: Options = {}) {
   const fetcher = options.fetch ?? fetch, hash = options.hash ?? archiveDigest, nextRequestId = options.requestId ?? (() => crypto.randomUUID())
-  const root = document.createElement('section'); root.className = 'package-management'; root.setAttribute('aria-label', '本地应用包安装')
+  const root = document.createElement('section'); root.className = 'package-management'; root.setAttribute('lang', 'zh-CN'); root.setAttribute('aria-label', '本地应用包安装')
   const installPanel = document.createElement('div'); installPanel.className = 'package-install-panel'; installPanel.id = `package-install-panel-${++installationPanelSequence}`
   const installEntry = document.createElement('div'); installEntry.className = 'package-install-entry'
   const installToggle = makeButton('安装应用', () => { toggleInstallation() }); installToggle.className = 'package-install-toggle'; installToggle.setAttribute('aria-controls', installPanel.id); installEntry.append(installToggle)

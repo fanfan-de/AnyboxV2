@@ -1,3 +1,5 @@
+import { sourceI18n } from './i18n.js'
+import type { ClaudeI18n } from './i18n.js'
 import type { HistoryMessageView, LiveItemView, RunLiveView, RunResultView, TranscriptBlockView } from '../core/view.js'
 
 /** Application-local route: which execution device and thread the browser is looking at. */
@@ -17,8 +19,8 @@ export function formatRoute(route: ClaudeAgentRoute): string {
   return `host/${encodeURIComponent(route.hostId)}${route.threadId ? `/thread/${encodeURIComponent(route.threadId)}` : ''}`
 }
 export interface DeviceSummary { readonly id: string; readonly name: string; readonly instanceId: string }
-export function deviceLabel(device: DeviceSummary, localInstanceId: string | null): string {
-  return device.instanceId === localInstanceId ? `本机 · ${device.name}` : device.name
+export function deviceLabel(device: DeviceSummary, localInstanceId: string | null, i18n: ClaudeI18n = sourceI18n): string {
+  return device.instanceId === localInstanceId ? i18n.t('device.local', { name: device.name }) : device.name
 }
 /** Picks the device from the route, then this machine, then the remembered choice, then the first qualified device. */
 export function selectDevice<Device extends DeviceSummary>(devices: readonly Device[], route: ClaudeAgentRoute, remembered: string | null, localInstanceId: string | null = null): Device | undefined {
@@ -51,58 +53,57 @@ export function composerBlock(input: ComposerInput): ComposerBlock {
   if (input.submitting) return 'submitting'
   return null
 }
-export const composerBlockLabels: Readonly<Record<Exclude<ComposerBlock, null>, string>> = Object.freeze({
-  'no-device': '先添加并选择一台安装了 Claude 的执行设备', 'not-running': '所选设备上的 Claude Agent 尚未启动，请先启动',
-  'no-target': '选择项目后即可开始', running: '正在执行，请等待完成或停止任务', submitting: '正在发送…' })
 export interface ApiError extends Error { readonly status: number; readonly code: string }
 export function isApiError(error: unknown): error is ApiError {
   return error instanceof Error && 'status' in error && 'code' in error
 }
-const copy: Record<string, string> = {
-  'claude-binary-missing': '执行设备上没有可用的 `claude` 命令。请在那台设备上安装 Claude 并运行 `claude auth login`，或用 ANYBOX_CLAUDE_AGENT_BINARY 指定可执行文件。',
-  'claude-binary-shim': '执行设备上的 `claude` 只是启动脚本，无法直接运行；请用 ANYBOX_CLAUDE_AGENT_BINARY 指定真正的可执行文件。',
-  'run-active': '这个线程已有正在执行的任务，请等待完成或先取消。',
-  'idempotency-conflict': '相同的提交编号对应了不同内容，请重新发送。',
-  'thread-not-found': '线程不存在，请刷新列表。',
-  'run-not-found': '任务不存在，请刷新。',
-  'view-unavailable': '这次任务的实时记录已不在内存中；历史请从线程转录查看。',
-  'approval-resolved': '这个请求已经被回答或不再等待。',
-  'permissions-active': '请等待当前任务结束后再撤销会话授权。',
-  'permissions-changing': '会话授权正在保存或恢复，请稍后重试。',
-  'permissions-invalid': '会话授权数据无效，已阻止复用。',
-  'permissions-limit': '会话授权已达上限，请先撤销不再需要的规则。',
-  'permission-not-found': '此授权不存在或不属于当前会话，请刷新列表。',
-  'project-path-invalid': '项目目录必须是执行设备上的绝对路径。',
-  'project-path-missing': '执行设备上没有这个目录，请检查路径。',
-  'models-unavailable': '当前 Claude 环境未能返回可选模型，请重试。',
-  'models-timeout': '读取模型列表超时，请检查执行设备后重试。',
-  'models-too-large': '当前环境返回的模型列表过大，无法显示。',
-  'history-unavailable': '暂时无法读取会话转录，请稍后重试。',
-  'history-too-large': '会话转录过大，无法在这里完整显示。',
-  'invalid-input': '输入无效，请检查后重试。',
-  'request-too-large': '提示词过长，请缩短后重试。',
-  'service-unavailable': '服务暂时不可用，请稍后重试。',
-  'product-unavailable': '所选设备上的 Claude Agent 尚未启动。',
-  'product-busy': 'Claude Agent 仍有正在执行的任务。',
-  'product-startup-failed': '所选设备上的 Claude Agent 未能启动，请在那台设备上检查状态。',
-  'product-not-found': '所选设备上没有 Claude Agent 应用，请先把那台设备升级到包含它的版本。',
-  'authentication-failed': '访问令牌无效或已撤销，请在“管理连接”中更新凭据。',
-  'credential-unavailable': '系统凭据库不可用；连接配置仍保留。',
-  'instance-mismatch': '此地址对应的实例已改变，已阻止请求。请为新实例添加连接。',
-  'connection-changed': '此连接已被修改，请刷新页面。',
-  'connection-unavailable': '无法连接执行设备。已有任务可能仍在继续。',
-  'local-execution-unavailable': '本机执行端尚未就绪，请稍后重试。已有任务可能仍在继续。',
-  'not-found': '未找到请求的资源。',
-  'too-many-streams': '订阅数量已达上限，请关闭其他页面后重试。',
-  'picker-busy': '系统目录窗口已打开，请先完成当前选择。',
-  'picker-unsupported': '当前系统不支持系统目录窗口，请用应用内浏览。',
-  'picker-unavailable': '无法打开系统目录窗口；它只对本机设备可用。',
-}
-/** Server messages are the product's own safe strings; they take precedence over generic copy. */
-export function messageFor(error: unknown): string {
-  if (!isApiError(error)) return error instanceof Error && error.name === 'AbortError' ? '请求已取消。' : '无法连接执行设备，请检查连接状态后重试。'
+const errorKeys = {
+  'claude-binary-missing': 'error.claude-binary-missing',
+  'claude-binary-shim': 'error.claude-binary-shim',
+  'run-active': 'error.run-active',
+  'idempotency-conflict': 'error.idempotency-conflict',
+  'thread-not-found': 'error.thread-not-found',
+  'run-not-found': 'error.run-not-found',
+  'view-unavailable': 'error.view-unavailable',
+  'approval-resolved': 'error.approval-resolved',
+  'permissions-active': 'error.permissions-active',
+  'permissions-changing': 'error.permissions-changing',
+  'permissions-invalid': 'error.permissions-invalid',
+  'permissions-limit': 'error.permissions-limit',
+  'permission-not-found': 'error.permission-not-found',
+  'project-path-invalid': 'error.project-path-invalid',
+  'project-path-missing': 'error.project-path-missing',
+  'models-unavailable': 'error.models-unavailable',
+  'models-timeout': 'error.models-timeout',
+  'models-too-large': 'error.models-too-large',
+  'history-unavailable': 'error.history-unavailable',
+  'history-too-large': 'error.history-too-large',
+  'invalid-input': 'error.invalid-input',
+  'request-too-large': 'error.request-too-large',
+  'service-unavailable': 'error.service-unavailable',
+  'product-unavailable': 'error.product-unavailable',
+  'product-busy': 'error.product-busy',
+  'product-startup-failed': 'error.product-startup-failed',
+  'product-not-found': 'error.product-not-found',
+  'authentication-failed': 'error.authentication-failed',
+  'credential-unavailable': 'error.credential-unavailable',
+  'instance-mismatch': 'error.instance-mismatch',
+  'connection-changed': 'error.connection-changed',
+  'connection-unavailable': 'error.connection-unavailable',
+  'local-execution-unavailable': 'error.local-execution-unavailable',
+  'not-found': 'error.not-found',
+  'too-many-streams': 'error.too-many-streams',
+  'picker-busy': 'error.picker-busy',
+  'picker-unsupported': 'error.picker-unsupported',
+  'picker-unavailable': 'error.picker-unavailable',
+} as const
+/** Original product/SDK diagnostic messages remain verbatim; only the app-owned code mapping is translated. */
+export function messageFor(error: unknown, i18n: ClaudeI18n = sourceI18n): string {
+  if (!isApiError(error)) return error instanceof Error && error.name === 'AbortError' ? i18n.t('error.cancelled') : i18n.t('error.connection')
   const own = error.message && error.message !== error.code ? error.message : ''
-  return own || copy[error.code] || `请求未能完成（${error.code}）。`
+  if (own) return own
+  const key = Object.hasOwn(errorKeys, error.code) ? errorKeys[error.code as keyof typeof errorKeys] : undefined
+  return key ? i18n.t(key) : i18n.t('error.unknown', { code: error.code })
 }
 export interface DisplayItem { readonly id: string; readonly role: 'user' | 'assistant'; readonly blocks: readonly TranscriptBlockView[]; readonly streaming: boolean }
 const liveItem = (item: LiveItemView): DisplayItem => ({ id: `live:${item.id}`, role: item.role, blocks: item.blocks.map(entry => entry.block), streaming: item.blocks.some(entry => entry.state === 'streaming') })
@@ -113,12 +114,9 @@ export function displayItems(history: readonly HistoryMessageView[], live: RunLi
   if (prompt || attachments.length) items.push({ id: `live:${live.runId}:prompt`, role: 'user', blocks: [...(prompt?[{ kind: 'text' as const, text: prompt, truncated: false }]:[]),...attachments.map(a=>({kind:'attachment' as const,name:a.name,mime:a.mime}))], streaming: false })
   return [...items, ...live.items.map(liveItem)]
 }
-const money = (value: number) => `$${value.toFixed(value < 0.01 && value > 0 ? 4 : 2)}`
-export function formatUsage(result: RunResultView): string {
-  const tokens = `${result.usage.inputTokens + result.usage.cacheReadInputTokens + result.usage.cacheCreationInputTokens} 输入 / ${result.usage.outputTokens} 输出`
-  return `${result.numTurns} 轮 · ${(result.durationMs / 1000).toFixed(1)} 秒 · ${tokens} tokens · 约 ${money(result.totalCostUsd)}${result.isError ? ' · 出错' : ''}`
+export function formatUsage(result: RunResultView, i18n: ClaudeI18n = sourceI18n): string {
+  return i18n.t('usage.summary', { turns: i18n.number(result.numTurns), seconds: i18n.number(result.durationMs / 1000, { minimumFractionDigits: 1, maximumFractionDigits: 1 }), input: i18n.number(result.usage.inputTokens + result.usage.cacheReadInputTokens + result.usage.cacheCreationInputTokens), output: i18n.number(result.usage.outputTokens), cost: i18n.money(result.totalCostUsd), error: result.isError ? i18n.t('usage.error') : '' })
 }
-export const runStatusLabels: Readonly<Record<string, string>> = Object.freeze({ running: '正在执行', cancelling: '正在取消', completed: '已完成', failed: '失败', cancelled: '已取消', interrupted: '已中断' })
 export interface ThreadLike { readonly id: string; readonly projectPath: string; readonly title: string; readonly updatedAt: string; readonly lastRun: { readonly status: string } | null; readonly pendingApprovals: number }
 export interface ThreadGroup<Thread extends ThreadLike> { readonly path: string; readonly name: string; readonly updatedAt: string; readonly threads: readonly Thread[] }
 const lastSegment = (path: string) => path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path
@@ -138,20 +136,17 @@ export function threadIndicator(thread: Pick<ThreadLike, 'lastRun' | 'pendingApp
   if (status === 'running' || status === 'cancelling') return thread.pendingApprovals > 0 ? 'approval' : 'running'
   return status === 'failed' || status === 'interrupted' ? 'failed' : null
 }
-export const threadIndicatorLabels: Readonly<Record<Exclude<ThreadIndicator, null>, string>> = Object.freeze({ approval: '等待审批', running: '正在执行', failed: '失败或中断' })
-/** Coarse relative time in Chinese; `now` is explicit so rendering stays pure. Invalid input returns an empty string. */
-export function relativeTime(iso: string, now: number): string {
+/** Coarse relative time in the presentation locale; explicit now makes rendering deterministic. */
+export function relativeTime(iso: string, now: number, i18n: ClaudeI18n = sourceI18n): string {
   const time = Date.parse(iso)
   if (Number.isNaN(time)) return ''
   const seconds = Math.max(0, Math.round((now - time) / 1000))
-  if (seconds < 60) return '刚刚'
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes} 分钟前`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours} 小时前`
-  const days = Math.round(hours / 24)
-  if (days === 1) return '昨天'
-  if (days < 30) return `${days} 天前`
-  const date = new Date(time)
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+  if (seconds < 60) return i18n.t('time.justNow')
+  const minutes = Math.round(seconds / 60), hours = Math.round(minutes / 60), days = Math.round(hours / 24)
+  return minutes < 60 ? i18n.relative(-minutes, 'minute') : hours < 24 ? i18n.relative(-hours, 'hour') : days < 30 ? i18n.relative(-days, 'day') : i18n.date(time)
 }
+
+const statusKeys = { running: 'status.running', cancelling: 'status.cancelling', completed: 'status.completed', failed: 'status.failed', cancelled: 'status.cancelled', interrupted: 'status.interrupted' } as const
+export function runStatusLabel(status: string, i18n: ClaudeI18n): string { return Object.hasOwn(statusKeys, status) ? i18n.t(statusKeys[status as keyof typeof statusKeys]) : status }
+export function indicatorLabel(indicator: Exclude<ThreadIndicator, null>, i18n: ClaudeI18n): string { return i18n.t(({ approval: 'status.approval', running: 'status.running', failed: 'status.failedIndicator' } as const)[indicator]) }
+export function composerBlockLabel(block: Exclude<ComposerBlock, null>, i18n: ClaudeI18n): string { return i18n.t(({ 'no-device': 'block.noDevice', 'not-running': 'block.notRunning', 'no-target': 'block.noTarget', running: 'block.running', submitting: 'block.submitting' } as const)[block]) }

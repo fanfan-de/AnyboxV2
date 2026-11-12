@@ -15,12 +15,13 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><rect x="14" y="14" width="6" height="6" rx="1"/></svg>
     </button>
     <aside id="application-menu" popover="auto" aria-label="Anybox 应用菜单">
-      <div class="application-menu-heading">应用</div>
+      <div id="application-menu-heading" class="application-menu-heading">应用</div>
       <div id="application-menu-list" aria-label="切换应用"></div>
       <div id="application-actions" role="group" aria-label="当前应用操作" hidden>
         <button id="close-application" type="button" title="关闭当前应用界面" aria-label="关闭当前应用界面" hidden>关闭当前界面</button>
         <button id="stop-application" type="button" title="停止当前应用" aria-label="停止当前应用" hidden>停止当前应用</button>
       </div>
+      <div class="application-language-control"><label id="application-language-label" for="application-language">语言</label><select id="application-language" aria-labelledby="application-language-label"><option value="system">跟随系统</option><option value="zh-CN" lang="zh-CN">简体中文</option><option value="en" lang="en">English</option></select></div>
       <div class="application-menu-footer"><button id="show-applications" type="button" aria-label="管理应用" aria-haspopup="dialog" aria-controls="application-manager">管理应用</button></div>
     </aside>
     <dialog id="application-manager" aria-labelledby="application-manager-title">

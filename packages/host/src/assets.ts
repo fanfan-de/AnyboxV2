@@ -6,6 +6,8 @@ export const shellAssets: readonly ApplicationAsset[] = [
   { path: '/style.css', file: fileURLToPath(new URL('../web/style.css', import.meta.url)), type: 'text/css; charset=utf-8' },
   { path: '/host/web/http-client.js', file: fileURLToPath(import.meta.resolve('@anybox/application-api/web')), type: 'text/javascript; charset=utf-8' },
   { path: '/host/web/client.js', file: fileURLToPath(new URL('./web/client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
+  ...['locale', 'i18n', 'vendor/i18next'].map(name => ({ path: `/host/web/${name}.js`, file: fileURLToPath(new URL(`./web/${name}.js`, import.meta.url)), type: 'text/javascript; charset=utf-8' })),
+  { path: '/host/web/vendor/i18next.LICENSE.txt', file: fileURLToPath(new URL('./web/vendor/i18next.LICENSE.txt', import.meta.url)), type: 'text/plain; charset=utf-8' },
   { path: '/host/web/package-management.js', file: fileURLToPath(new URL('./web/package-management.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/host/web/package-directory.js', file: fileURLToPath(new URL('./web/package-directory.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/host/package-management/directory-format.js', file: fileURLToPath(new URL('./package-management/directory-format.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },

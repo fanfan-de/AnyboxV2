@@ -31,7 +31,7 @@ function shellDocument() {
   }
   const element = tagName => {
     let ownText = ''
-    const node = { tagName: tagName.toLowerCase(), id: '', className: '', dataset: {}, attributes: {}, children: [], parentElement: undefined,
+    const node = { tagName: tagName.toLowerCase(), id: '', className: '', value: '', dataset: {}, attributes: {}, children: [], parentElement: undefined,
       hidden: false, disabled: false, inert: false, listeners: new Map(), style: {},
       addEventListener: listen, removeEventListener: unlisten, dispatch,
       click() {
@@ -71,7 +71,8 @@ function shellDocument() {
     return node
   }
   document.addEventListener = listen; document.removeEventListener = unlisten; document.dispatch = dispatch; document.createElement = element
-  document.body = element('body'); document.head = element('head')
+  document.body = element('body'); document.head = element('head'); document.documentElement = element('html')
+  document.documentElement.append(document.head, document.body)
   document.getElementById = id => document.body.querySelector('#' + id)
   document.querySelector = selector => document.body.querySelector(selector)
   const add = (parent, tag, id) => { const node = element(tag); node.id = id; parent.append(node); return node }
@@ -79,7 +80,11 @@ function shellDocument() {
   const showMenu = add(workbench, 'button', 'show-application-menu'); showMenu.setAttribute('popovertarget', 'application-menu')
   showMenu.setAttribute('aria-label', 'Anybox 应用菜单'); showMenu.title = 'Anybox 应用菜单'
   const menu = add(document.body, 'aside', 'application-menu')
+  add(menu, 'div', 'application-menu-heading')
   add(menu, 'div', 'application-menu-list'); add(menu, 'button', 'show-applications')
+  add(menu, 'label', 'application-language-label')
+  const language = add(menu, 'select', 'application-language'); language.value = 'system'
+  for (const value of ['system', 'zh-CN', 'en']) { const option = add(language, 'option', `application-language-${value}`); option.value = value }
   const actions = add(menu, 'div', 'application-actions'); actions.hidden = true
   add(actions, 'button', 'close-application').hidden = true; add(actions, 'button', 'stop-application').hidden = true
   const manager = add(document.body, 'dialog', 'application-manager'); manager.open = false
@@ -93,10 +98,11 @@ function shellDocument() {
 }
 
 async function fixture(t, request, options = {}) {
-  const document = shellDocument(), listeners = new Map(), calls = [], storage = new Map()
+  const document = shellDocument(), listeners = new Map(), calls = [], storage = new Map(), preferences = new Map()
   options.configureDocument?.(document)
   const previous = new Map()
   storage.set('anybox.apps.workspace.v1', JSON.stringify(options.workspace ?? { tabs: [{ id: 'agent', route: 'saved' }], activeId: 'agent' }))
+  if (options.localePreference !== undefined) preferences.set('anybox.preferences.locale.v1', options.localePreference)
   const location = { hash: '#/apps/agent/saved', origin: 'file:///', reloads: 0, reload() { this.reloads++ } }
   const window = {
     innerWidth: 1280, innerHeight: 720,
@@ -107,6 +113,8 @@ async function fixture(t, request, options = {}) {
   for (const [key, value] of Object.entries({ document, window, location,
     history: { pushState(_state, _title, hash) { location.hash = hash }, replaceState(_state, _title, hash) { location.hash = hash } },
     sessionStorage: { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) },
+    localStorage: { getItem: key => preferences.get(key) ?? null, setItem: (key, value) => preferences.set(key, value) },
+    navigator: { languages: options.languages ?? ['zh-CN'], language: options.languages?.[0] ?? 'zh-CN' },
     setInterval: () => 1, clearInterval() {},
     fetch: async (url, options = {}) => { calls.push({ url, options }); return request(url, options) },
   })) {
@@ -127,7 +135,7 @@ async function fixture(t, request, options = {}) {
   const state = () => find('application-list').querySelector('.application-state')?.textContent
   const cardButton = label => find('application-list').querySelectorAll('button').find(button => button.textContent === label || button.getAttribute('aria-label') === label)
   await waitFor(() => find('app-panel-agent')?.textContent === 'Mounted application')
-  return { document, window, location, calls, storage, find, state, cardButton, waitFor, notice: () => find('workbench-notice'),
+  return { document, window, location, calls, storage, preferences, find, state, cardButton, waitFor, notice: () => find('workbench-notice'),
     refresh() { document.dispatch('visibilitychange') }, async settle() { for (let count = 0; count < 4; count++) await tick() } }
 }
 
@@ -622,4 +630,60 @@ test('restart drops stale removed views from completed uninstall facts while pre
   await f.settle(); assert.equal(f.find('app-panel-second-app'), null)
   assert.deepEqual(JSON.parse(f.storage.get('anybox.apps.workspace.v1')), { tabs: [workspaceTwoApplications.tabs[0]], activeId: 'agent' })
   assert.ok(f.calls.every(call => call.options.method !== 'POST'))
+})
+
+test('changing host language updates its own labels and mounted app suggestions without lifecycle calls or mutations', async t => {
+  const f = await fixture(t, async () => Response.json([product('running'), secondProduct()]), { workspace: workspaceTwoApplications })
+  await f.waitFor(() => f.find('app-panel-second-app')?.textContent === 'Mounted application')
+  const active = f.find('app-panel-agent'), hidden = f.find('app-panel-second-app')
+  active.dataset.blockClose = 'true'; hidden.dataset.blockClose = 'true'
+  const panels = [active, hidden]
+  const original = panels.map(panel => ({ context: panel.testContext, mounts: panel.dataset.mounts, activations: panel.dataset.activations, closeChecks: panel.dataset.closeChecks }))
+  const updates = [[], []]
+  for (const [index, panel] of panels.entries()) {
+    const context = panel.testContext.locale
+    assert.equal(Object.isFrozen(context), true)
+    assert.deepEqual(Object.keys(context).sort(), ['current', 'subscribe'])
+    assert.equal(context.current().preferredLocale, 'zh-CN')
+    context.subscribe(() => updates[index].push(context.current().preferredLocale))
+  }
+  active.testContext.locale.subscribe(() => { throw Error('controlled app listener failure') })
+  const select = f.find('application-language'); select.focus(); select.value = 'en'; select.dispatch('change')
+  await f.waitFor(() => f.state() === 'Running')
+  assert.equal(f.find('show-applications').textContent, 'Manage apps')
+  assert.equal(f.document.documentElement.getAttribute('lang'), 'en')
+  assert.equal(f.preferences.get('anybox.preferences.locale.v1'), 'en')
+  assert.equal(f.document.activeElement, select, 'language selection does not move keyboard focus')
+  assert.deepEqual(updates, [['en'], ['en']], 'hidden mounted apps receive the same suggestion')
+  for (const [index, panel] of panels.entries()) {
+    assert.equal(f.find(panel.id), panel)
+    assert.equal(panel.testContext, original[index].context)
+    assert.equal(panel.testContext.signal.aborted, false)
+    assert.equal(panel.dataset.mounts, original[index].mounts)
+    assert.equal(panel.dataset.activations, original[index].activations)
+    assert.equal(panel.dataset.closeChecks, original[index].closeChecks)
+    assert.equal(panel.dataset.disposed, undefined)
+    assert.equal(panel.textContent, 'Mounted application', 'the host does not translate or rebuild app content')
+  }
+  assert.deepEqual(JSON.parse(f.storage.get('anybox.apps.workspace.v1')), workspaceTwoApplications)
+  assert.equal(f.location.reloads, 0)
+  assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 0)
+  active.dataset.blockClose = 'false'; hidden.dataset.blockClose = 'false'
+})
+
+test('a saved host preference applies before mount and another window can change it without a lifecycle restart', async t => {
+  const f = await fixture(t, async () => Response.json([product('running')]), { localePreference: 'en', languages: ['zh-CN'] })
+  assert.equal(f.state(), 'Running')
+  const panel = f.find('app-panel-agent'), context = panel.testContext.locale
+  assert.equal(context.current().preferredLocale, 'en')
+  const activations = panel.dataset.activations
+  f.preferences.set('anybox.preferences.locale.v1', 'zh-CN')
+  f.window.dispatch('storage', { key: 'anybox.preferences.locale.v1', newValue: 'zh-CN', storageArea: globalThis.localStorage })
+  await f.waitFor(() => f.state() === '运行中')
+  assert.equal(f.find('application-language').value, 'zh-CN')
+  assert.equal(context.current().preferredLocale, 'zh-CN')
+  assert.equal(panel.dataset.activations, activations)
+  assert.equal(panel.dataset.disposed, undefined)
+  assert.equal(f.location.reloads, 0)
+  assert.equal(f.calls.filter(call => call.options.method === 'POST').length, 0)
 })
