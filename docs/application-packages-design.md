@@ -34,7 +34,7 @@ Anybox 是应用的安装和承载平台。只安装宿主时，用户可以查�
 - 可选提供方只在已启用消费者确有需要时初始化。空宿主不初始化设备连接、连接 Vault、应用目录窗口、Models、应用业务表或 worker 数据目录。
 - 首期只接纳官方受信签名包。可选库不是独立用户应用、插件市场或新常驻服务；包名、能力声明和 Nya 服务名均不构成代码权限隔离。
 
-以上是完整发行目标。D0a 已完成源码包边界，根构建按工作区依赖顺序构建各包；D0a.1 先完成业务服务脱离宿主，独立入口不要求安装 host、distribution 或另一应用。当前默认发行仍包含两个静态受信应用；D1.3 已有独立本地文件安装入口，但不会自动把安装版本并入当前运行目录。
+以上是完整发行目标。D0a 已完成源码包边界，根构建按工作区依赖顺序构建各包；D0a.1 先完成业务服务脱离宿主，独立入口不要求安装 host、distribution 或另一应用。默认客户端组合现包含 Harness、Claude Agent 和 [Personal Agent 本机验证版](modules/personal-agent/README.md)，执行端仍组合前两个应用。Personal Agent 只声明 client 角色，模型配置和 Key 归应用独立所有，未打开时不加载 Models 运行模块。D1.3 已有独立本地文件安装入口，版本正式加载仍须经过 D1.4 生效协调。
 
 ## 2 现有基础与需要补齐的边界
 
@@ -85,7 +85,7 @@ Anybox 是应用的安装和承载平台。只安装宿主时，用户可以查�
 
 | 层次 | 含义 | 示例 |
 | --- | --- | --- |
-| 应用与源码包 | 用户业务产品与独立开发边界 | `app-harness`（稳定 ID `agent`）、`app-claude-agent`（ID `claude-agent`） |
+| 应用与源码包 | 用户业务产品与独立开发边界 | `app-harness`（稳定 ID `agent`）、`app-claude-agent`（ID `claude-agent`）、`app-personal-agent`（ID `personal-agent`） |
 | 共享库与提供方 | 被明确选择的公共实现；本身不进入用户应用列表 | SQL 提供方、目录选择、系统凭据适配 |
 | 运行角色 | 进程与生命周期所有权边界 | 桌面界面、客户端服务、执行端服务、Computer worker |
 | 部署单元 | Harness 已有的资源组合与附着边界 | harness server、Models、Computer |
@@ -250,12 +250,13 @@ SQL 与目录两个基础包从现有实现提取，不是新的用户应用、�
 | 包 | 允许的主要依赖 | 约束 |
 | --- | --- | --- |
 | `host` | `application-api`、`storage-sqlite`（自身控制数据）、Nya 与必要桌面运行依赖 | 不依赖具体应用、设备连接、目录能力、Models、业务 Vault 或它们的传递依赖 |
-| `distribution` | `host`、两个应用、当前默认组合实际需要的共享提供方与平台依赖 | 保留静态完整发行与旧命令；其他包不反向导入它，不把它算入最小 host 闭包 |
+| `distribution` | `host`、所选应用、当前默认组合实际需要的共享提供方与平台依赖 | 保留静态完整发行与旧命令；其他包不反向导入它，不把它算入最小 host 闭包 |
 | `application-api` | 必要基础类型；Nya 仅在 `/nya` 适配入口使用 | 核心和浏览器入口不导入 SQL、Node、Electron、Vault、连接或具体应用实现 |
 | `storage-sqlite` | Nya、平台内置 SQLite | 自带 SQL 端口与迁移工厂，不接收集中领域迁移列表，不导入宿主/应用 |
 | `directory-picker` | 明确的平台适配与按需 Nya 适配 | 不依赖任一业务应用；桌面桥只暴露明确的系统窗口操作 |
 | `app-harness` | 最小接入 API、Models、自己的连接实现及按需 SQL/目录/凭据基础库及自己的依赖 | 所有业务与 worker 归应用；不依赖另一应用或 host 实现 |
 | `app-claude-agent` | 最小接入 API、SDK、自己的连接实现及按需 SQL/目录/凭据基础库 | 不要求安装 Harness；Claude 认证保持外部用户环境 |
+| `app-personal-agent` | 最小接入 API、Models、SQL 与 Nya | 首版本机 client 角色；独立业务表、Models JSON 与 Vault；不依赖其他应用或 host 实现 |
 | `models`、`api-key-manager` | 保持既有独立依赖与公开契约 | Models 自有 Vault、系统凭据要求及旧凭据兼容边界不变 |
 
 资源实现可以由独立包复用，按受信组合安装到现有进程根。原 `harness/server.ts` 的宿主组合已归 `distribution/src/composition/harness-server.ts`；worker 直接依赖自己的 SQL 提供方工厂，不经万能宿主 API 获取连接。应用导入共享库的公共端口，不导入宿主实现或另一应用；应用业务 UI 不跨应用抽取为公共面板。

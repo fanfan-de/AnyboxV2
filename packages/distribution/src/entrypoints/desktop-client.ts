@@ -15,6 +15,7 @@ export async function startDesktopClient(options: DesktopWorkerStart, rpc: Deskt
   const paths = desktopPaths(options.userData)
   await mkdir(paths.data, { recursive: true })
   const host = await createClientHost({ path: paths.client, packageDirectory: paths.applications, port: 0, namespace: `${options.namespace}.client`, transportSecret: options.transportSecret,
+    personalAgent: { modelsPath: paths.personalAgentModels, namespace: `${options.namespace}.personal-agent.models` },
     packageTrustPolicy: process.env.ANYBOX_APPLICATION_TRUST ? await readApplicationTrustPolicy(process.env.ANYBOX_APPLICATION_TRUST) : undefined,
     computer: { directory: `${paths.harness}.computer-worker` },
     localPairing: { getLocal: signal => rpc.call('local.get', undefined, signal),

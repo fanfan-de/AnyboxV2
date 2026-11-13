@@ -8,7 +8,7 @@ import { dirname, join, resolve, relative, sep } from 'node:path'
 const sharedPackages = Object.freeze(['@nya/core', '@anybox/application-api', '@anybox/storage-sqlite'])
 // The builder consumes the same explicitly declared dependency as the host contract validator.
 const { satisfies } = createRequire(new URL('../packages/host/package.json', import.meta.url))('semver')
-const localPackages = new Set(['@anybox/host', '@anybox/application-api', '@anybox/storage-sqlite', '@anybox/directory-picker', '@anybox/models', '@anybox/api-key-manager', '@anybox/app-harness', '@anybox/app-claude-agent', '@nya/core'])
+const localPackages = new Set(['@anybox/host', '@anybox/application-api', '@anybox/storage-sqlite', '@anybox/directory-picker', '@anybox/models', '@anybox/api-key-manager', '@anybox/app-harness', '@anybox/app-claude-agent', '@anybox/app-personal-agent', '@nya/core'])
 const excludedClaudeBinary = name => name.startsWith('@anthropic-ai/claude-agent-sdk-')
 const safeRelative = value => typeof value === 'string' && value.length > 0 && !value.includes('\\') && !value.startsWith('/') && !value.split('/').some(part => !part || part === '.' || part === '..')
 const jsonBytes = value => Buffer.from(JSON.stringify(value, null, 2) + '\n')
@@ -177,8 +177,8 @@ async function walkFiles(directory, prefix = '') {
 }
 export async function stageApplicationPackage(root, directory, appName, { target = currentArtifactTarget() } = {}) {
   root = resolve(root); const output = await emptyDirectory(directory, root)
-  if (!['app-harness', 'app-claude-agent'].includes(appName)) throw new Error('Choose app-harness or app-claude-agent')
-  if (target.os === 'darwin' && target.arch === 'arm64') {
+  if (!['app-harness', 'app-claude-agent', 'app-personal-agent'].includes(appName)) throw new Error('Choose app-harness, app-claude-agent or app-personal-agent')
+  if (appName !== 'app-personal-agent' && target.os === 'darwin' && target.arch === 'arm64') {
     const native = join(root, 'packages/directory-picker/dist/native/mac-dialog.node')
     const ready = await lstat(native).then(info => info.isFile(), error => { if (error.code === 'ENOENT') return false; throw error })
     if (!ready) throw new Error('Complete macOS arm64 application artifacts require the prebuilt directory adapter; run node scripts/build-desktop-native.mjs after the JavaScript build')
@@ -191,8 +191,11 @@ export async function stageApplicationPackage(root, directory, appName, { target
   // Attribution paths are archive-level fixed metadata, not executable resources.
   await cp(join(payload, 'licenses'), join(output, 'licenses'), { recursive: true })
   const packagePrefix = `payload/node_modules/${packageMetadata.name}`
-  const assetsModule = appName === 'app-harness' ? '@anybox/app-harness/assets' : '@anybox/app-claude-agent/client/assets'
-  const assetExport = appName === 'app-harness' ? 'harnessAssets' : 'claudeAgentAssets'
+  const [assetsModule, assetExport] = {
+    'app-harness': ['@anybox/app-harness/assets', 'harnessAssets'],
+    'app-claude-agent': ['@anybox/app-claude-agent/client/assets', 'claudeAgentAssets'],
+    'app-personal-agent': ['@anybox/app-personal-agent/assets', 'personalAgentAssets'],
+  }[appName]
   const assets = (await import(assetsModule))[assetExport].map(asset => {
     const file = relative(source, asset.file).split(sep).join('/')
     if (!safeRelative(file)) throw new Error('Application asset is outside its own built product')

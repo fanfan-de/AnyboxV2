@@ -49,11 +49,12 @@ export async function verifyWebAssets(catalog) {
 }
 export async function verifyDefaultWebAssets(directory, copiedDirectory) {
   const root = pathToFileURL(resolve(directory) + '/')
-  const [{ harnessClientApplication }, { claudeAgentClientApplication }, { shellAssets }, { createApplicationCatalog }] = await Promise.all([
+  const [{ harnessClientApplication }, { claudeAgentClientApplication }, { personalAgentApplication }, { shellAssets }, { createApplicationCatalog }] = await Promise.all([
     import(new URL('packages/app-harness/dist/client/registration.js', root)), import(new URL('packages/app-claude-agent/dist/client/registration.js', root)),
+    import(new URL('packages/app-personal-agent/dist/registration.js', root)),
     import(new URL('packages/host/dist/assets.js', root)), import(new URL('packages/host/dist/applications/registration.js', root)),
   ])
-  const catalog = createApplicationCatalog([harnessClientApplication(), claudeAgentClientApplication()], shellAssets)
+  const catalog = createApplicationCatalog([harnessClientApplication(), claudeAgentClientApplication(), personalAgentApplication()], shellAssets)
   await verifyWebAssets(copiedDirectory ? { ...catalog, assets: new Map([...catalog.assets].map(([path, asset]) => [path, { ...asset, file: join(copiedDirectory, relative(resolve(directory), asset.file)) }])) } : catalog)
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

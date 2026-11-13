@@ -8,6 +8,8 @@ D0a 源码拆包后先推进 [D0a.1 应用业务服务独立运行](application-
 
 D1.2 已增加[空宿主与完整签名应用包](modules/package-management/archives.md)：可以在仓库外使用已准备的 Node/Electron 运行时启动空宿主、离线验证应用闭包。默认完整组合及独立服务入口继续保留；包安装和正式角色版本切换尚未接入，不能将准备工厂通过等同于应用运行或业务就绪。
 
+2026-11-13 新增 [Personal Agent 最小验证版](modules/personal-agent/README.md)：默认客户端目录包含三个应用，执行端目录仍为 Harness 和 Claude Agent。Personal Agent 首版只声明 client 角色，打开时在该根按需加载独立 Models 配置、Vault 和文本执行组件，不使用执行设备连接、不创建额外根或子进程。`npm run personal-agent` 提供只含该应用的本机验证入口；远端实例绑定及迁移尚未实现。
+
 ## 1. 发行原则
 
 Windows、macOS、Linux 保持统一 Anybox 产品与宿主入口。用户首次只下载安装 Anybox 宿主，Anybox Harness、Claude Agent 等具体应用按需通过在线目录下载或从本地应用包安装；宿主不再要求捆绑全部应用及其专属依赖。应用包与安装流程见[设计文档](application-packages-design.md)。

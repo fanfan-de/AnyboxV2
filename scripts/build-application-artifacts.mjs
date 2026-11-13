@@ -30,7 +30,7 @@ if (switches.has('--help') || switches.has('-h')) {
   if (!hostOnly && !switches.has('--skip-build') && process.platform === 'darwin' && process.arch === 'arm64') await buildDesktopNative(root)
   const target = currentArtifactTarget(), host = await stageMinimalHost(root, join(output, 'host'), { target }), applications = []
   let publicKey
-  if (!hostOnly) for (const name of ['app-harness', 'app-claude-agent']) {
+  if (!hostOnly) for (const name of ['app-harness', 'app-claude-agent', 'app-personal-agent']) {
     const directory = `${name}-${target.os}-${target.arch}`
     const result = await buildApplicationDirectory(root, join(output, directory), name, { privateKey, keyId: values.get('--key-id'), target })
     let archive
@@ -46,12 +46,13 @@ if (switches.has('--help') || switches.has('-h')) {
       bytes: result.bytes.length, sha256: result.sha256, packages: result.packages.length, ...(archive ? { archive } : {}) })
   }
   if (!hostOnly) await writeFile(join(output, 'publisher-policy.example.json'), JSON.stringify({ schemaVersion: 1,
-    publishers: publicKey ? [{ publisher: 'anybox', keyId: values.get('--key-id'), publicKey, appIds: ['agent', 'claude-agent'] }] : [],
+    publishers: publicKey ? [{ publisher: 'anybox', keyId: values.get('--key-id'), publicKey, appIds: ['agent', 'claude-agent', 'personal-agent'] }] : [],
     applications: {
       agent: { assetPrefixes: ['/applications/harness/', '/apps/agent/'], webLegacyRoutes: ['#/harness/', '#/products/agent', '#/projects/'], routePrefixes: [
         '/api/client/v1/connections', '/api/client/v1/local', '/api/connections',
         ...['models', 'prompts', 'tools', 'agents', 'projects', 'sessions', 'runs', 'changes'].map(name => `/api/v1/${name}`)] },
       'claude-agent': { assetPrefixes: ['/applications/claude-agent/', '/apps/claude-agent/'], routePrefixes: [] },
+      'personal-agent': { routePrefixes: [] },
     },
   }, null, 2) + '\n')
   await writeFile(join(output, 'artifacts.json'), JSON.stringify({ schemaVersion: 1, target,

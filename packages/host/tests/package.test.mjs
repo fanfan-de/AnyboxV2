@@ -89,7 +89,7 @@ test('host runs from only its declared published dependency closure with no appl
   t.after(() => rm(directory, { recursive: true, force: true }))
   const copied = await copyRuntimeClosure('@anybox/host', resolve(dirname(fileURLToPath(import.meta.url)), '..'), directory)
   assert.deepEqual([...copied].sort(), ['@anybox/application-api', '@anybox/host', '@anybox/storage-sqlite', '@nya/core', '@standard-schema/spec', 'acorn', 'semver'].sort())
-  for (const dependency of ['@anybox/app-harness', '@anybox/app-claude-agent', '@anybox/execution-connections', '@anybox/directory-picker', '@anybox/models', '@anybox/api-key-manager', '@napi-rs/keyring']) assert.equal(await exists(join(directory, 'node_modules', dependency)), false)
+  for (const dependency of ['@anybox/app-harness', '@anybox/app-claude-agent', '@anybox/app-personal-agent', '@anybox/execution-connections', '@anybox/directory-picker', '@anybox/models', '@anybox/api-key-manager', '@napi-rs/keyring']) assert.equal(await exists(join(directory, 'node_modules', dependency)), false)
   const code = `
     import assert from 'node:assert/strict';
     import { createClientHost } from '@anybox/host';

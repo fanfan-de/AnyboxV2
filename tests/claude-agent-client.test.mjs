@@ -88,7 +88,7 @@ test('Claude Agent owns its connections and reaches a remote execution device wh
     const response = await fetch(client.url + path, { method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : { Origin: client.url, 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
     const data = await response.json(); assert.equal(response.status, expected, `${path}: ${JSON.stringify(data)}`); return data
   }
-  assert.deepEqual((await request('/api/client/v1/products')).map(product => product.definition.id), ['agent', 'claude-agent'])
+  assert.deepEqual((await request('/api/client/v1/products')).map(product => product.definition.id), ['agent', 'claude-agent', 'personal-agent'])
   assert.equal(client.products.get('claude-agent').state, 'disabled')
   await request(base + '/connections', undefined, 503)
   const token = await execution.root.get('host.access').issue('client')

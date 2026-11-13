@@ -15,6 +15,7 @@ Anybox Harness 的[原生 Computer 支持](../native-platform-support.md)由既�
 | [products/](./products/README.md) | 固定应用目录、按需装配与活动准入 | 2 |
 | [package-management/](./package-management/README.md) | 独占安装注册库、耐久操作、版本快照、跨进程使用凭证、本地文件安装、正式加载、生效、卸载回收与恢复，以及归档/产物辅助工具 | 3 |
 | [claude-agent/](./claude-agent/README.md) | Claude Agent：线程索引、SDK 适配器、Run 准入与审批、HTTP/SSE、本机角色通道、独立服务访问和监听、客户端远端连接与网关 | 9 |
+| [personal-agent/](./personal-agent/README.md) | Personal Agent：同级 Agent、独立对话和任务、文本 Run、独立委派、成果及应用自有模型设置 | 2 |
 | [models/](./models/README.md) | 可复用模型配置、凭据、原生驱动及可选公开目录 | 11 |
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 7 |
 | [computers/](./computers/README.md) | 按需本机资源、独立 worker、固定工作区、耐久工具操作协调、单元拨出与按附着路由 | 9 |
@@ -35,6 +36,8 @@ Anybox Harness 的[原生 Computer 支持](../native-platform-support.md)由既�
 | --- | --- | --- | --- |
 | 产品 | [产品控制](./products/products.md) | `app-products` | `app.products` |
 | 产品 | [活动准入](./products/activity.md) | `app-activity` | `app.activity` |
+| Personal Agent | [工作区与执行](./personal-agent/workspace.md) | `personal-agent-workspace` | `personal-agent.workspace`、`personal-agent.admission` |
+| Personal Agent | [HTTP 与界面](./personal-agent/http.md) | `personal-agent-http` | `personal-agent.http` |
 | 包管理 | [安装事实与操作账本](./package-management/registry.md) | `host-package-registry` | `host.package-registry`；注入独立 `host.package-registry-storage` |
 | 包管理 | [正式角色加载、生效与卸载](./package-management/activation.md) | `host-package-activation` | `host.package-activation`；注入注册库、Products 与 Activity |
 | 包管理 | [本地文件安装](./package-management/installation.md) | `host-package-installer` | `host.package-installer`；注入 `host.package-registry` |

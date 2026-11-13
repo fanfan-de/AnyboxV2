@@ -8,6 +8,8 @@ D0a.1 先实现[应用业务服务独立运行](application-standalone-services.
 
 Anybox 是宿主产品，Anybox Harness 与 Claude Agent 分别是独立应用包；SQL 与目录窗口为基础包，执行设备连接、凭据、配对和转发由各应用独立实现。`host` 仅依赖 `application-api`、自身控制记录使用的 SQL 提供方和 Nya，不依赖应用、连接、目录、Models 或业务 Vault。`distribution` 在核心之外保留当前静态默认组合、桌面/CLI 角色入口与兼容启动器；默认客户端只额外登记目录能力的惰性提供方，按兼容消费者启停，最后消费者实际退出后才释放；连接组件随所属应用启停。业务名称、稳定 ID 和数据归属见[命名规范](naming.md)。
 
+[Personal Agent](modules/personal-agent/README.md) 是新增的独立应用。它的首版仅在 client 根打开后加载文本业务和 Models，不导入 Harness 业务、不使用设备连接；模型 JSON 和 Vault 独立于 Harness，业务通过同根 SQL 的 `personal-agent` 迁移域保存。默认客户端目录增加该入口，执行端组合保持原有两个应用。未打开时连 Models 运行模块也不导入，原客户端角色启动防护继续有效。
+
 ## 实际目录
 
 ```text
@@ -31,6 +33,9 @@ packages/
   app-claude-agent/
     src/                          注册、配置、索引、SDK、Run、HTTP、客户端与界面
     web/                          专属样式
+  app-personal-agent/
+    src/                          纯注册、工作区、文本执行、模型设置、HTTP 与界面
+    web/                          专属样式；仅声明 client 角色
   storage-sqlite/src/             显式 SQL 端口、迁移账本与排他 SQLite 提供方
   directory-picker/src/           目录窗口、Electron 取消适配与原生源码
   distribution/src/

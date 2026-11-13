@@ -50,7 +50,8 @@ export async function stageApplication(root, directory, { desktop = false, build
   const scripts = { anybox: 'node packages/distribution/dist/entrypoints/anybox-main.js',
     'harness:server': 'node packages/distribution/dist/entrypoints/anybox-main.js harness-server', 'harness:server:init': 'node packages/distribution/dist/entrypoints/anybox-main.js harness-server init',
     harness: 'npm run harness:server', 'harness:init': 'npm run harness:server:init', client: 'node packages/distribution/dist/entrypoints/anybox-main.js client',
-    'computer:worker': 'node packages/distribution/dist/entrypoints/anybox-main.js computer-worker', web: 'npm run client', 'web:local': 'node packages/distribution/dist/entrypoints/serve.js' }
+    'computer:worker': 'node packages/distribution/dist/entrypoints/anybox-main.js computer-worker', web: 'npm run client', 'web:local': 'node packages/distribution/dist/entrypoints/serve.js',
+    'personal-agent': 'node packages/distribution/dist/entrypoints/personal-agent-main.js' }
   await writeFile(join(output, 'package.json'), JSON.stringify({ name: desktop ? 'anybox-desktop' : 'anybox-app', productName: desktop ? 'Anybox' : undefined,
     version: manifest.version, private: true, type: 'module', engines: manifest.engines, scripts, dependencies,
     ...(desktop ? { main: 'packages/distribution/dist/entrypoints/desktop-main.js', devDependencies: { electron: manifest.devDependencies.electron } } : {}) }, null, 2) + '\n')

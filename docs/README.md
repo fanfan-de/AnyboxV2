@@ -2,7 +2,7 @@
 
 Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产品；harness server 是 Anybox Harness 可部署到本地或远端服务器的通用服务端核心。Claude Agent 是第二个正式应用，直接驱动执行设备上用户自己的 Claude 环境，见 [Claude Agent 设计](claude-agent-design.md)。完整命名及兼容标识见 [命名与边界](naming.md)。项目文档保留组件手册、跨组件设计、部署指南与待实施方案。开发时从 [模块与组件手册](./modules/README.md) 进入：每个实际 Nya 组件有独立 Markdown 文档，协作完成同一职责的组件归入同一模块目录。
 
-通用宿主、应用和默认组合入口分别位于 `packages/host/src/`、`packages/app-harness/`/`packages/app-claude-agent/` 与 `packages/distribution/src/entrypoints/`；当前目录和依赖约定见 [Anybox 宿主与 Anybox Harness 应用边界](./harness-module-boundary.md)。宿主只管理应用的下载、安装、使版本生效、打开运行、关闭、卸载及界面承载；应用自己负责业务初始化、取消、清理与数据迁移。完整目标状态图和当前运行状态的区别见[宿主目标生命周期](products-v1.md#目标生命周期)，源码对照与实施顺序见[应用包设计](application-packages-design.md)。
+通用宿主、应用和默认组合入口分别位于 `packages/host/src/`、`packages/app-harness/`/`packages/app-claude-agent/`/`packages/app-personal-agent/` 与 `packages/distribution/src/entrypoints/`；当前目录和依赖约定见 [Anybox 宿主与 Anybox Harness 应用边界](./harness-module-boundary.md)。宿主只管理应用的下载、安装、使版本生效、打开运行、关闭、卸载及界面承载；应用自己负责业务初始化、取消、清理与数据迁移。完整目标状态图和当前运行状态的区别见[宿主目标生命周期](products-v1.md#目标生命周期)，源码对照与实施顺序见[应用包设计](application-packages-design.md)。
 
 - [Anybox 产品设计草案](./anybox-product-design.md)：产品定位、跨领域应用、用户创作流程、首期范围与待决定事项；区分已明确方向、建议方案和当前实现。
 - [通用应用宿主与目标生命周期](products-v1.md)：包与运行两层状态图、宿主只管生命周期的职责边界、应用通用接入和界面承载；标明当前启停状态与目标的区别。
@@ -23,6 +23,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | --- | --- | --- |
 | 应用生命周期 | [products](./modules/products/README.md) | 当前目录与启停组件如何对应实际资源，以及完整生命周期目标与实现缺口 |
 | Claude Agent | [claude-agent](./modules/claude-agent/README.md) | 如何用用户自己的 Claude 环境执行、审批、取消并等待进程退出 |
+| Personal Agent | [personal-agent](./modules/personal-agent/README.md) | 本机最小验证版：同级 Agent 配置、独立对话/任务、真实模型推进、委派和文本成果 |
 | Models | [models](./modules/models/README.md) | 定义、连接、配置、凭据、目录与原生协议如何协作 |
 | 执行 | [execution](./modules/execution/README.md) | Run 如何准入、选择协议 Loop、执行操作并等待资源退出 |
 | Computer 资源 | [computers](./modules/computers/README.md) | 本机按需实例、固定工作区、工具声明接纳和实际 scope 退出 |
