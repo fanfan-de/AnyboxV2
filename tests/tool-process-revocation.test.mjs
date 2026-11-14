@@ -1,3 +1,4 @@
+import { createComputerToolEnvironmentBinding } from '../packages/app-harness/dist/core/tool-environments/computer.js'
 import { installComputerServices, createControlledComputerWorker } from './helpers/computer-services.mjs'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -54,7 +55,7 @@ test('worker dependency revocation joins the next model call and yielded process
     await root.installComponent(createSessionComponent(inputs, agents))
     await root.installComponent(createPromptComponent(inputs))
     await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
-    await root.installComponent(createRunRuntimeComponent(inputs))
+    await root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
     await installTestProtocolAgents(root)
     await root.installComponent(createRunComponent(inputs, agents))
 
@@ -105,15 +106,17 @@ test('worker dependency revocation joins the next model call and yielded process
 
     const cleanup = await root.get(localStorageServiceKey).read(reader => reader.all(
       "SELECT intent_json, observation_json FROM harness_run_operations WHERE run_id = ? AND kind = 'operation'", [run.id]))
-    const final = cleanup.find(row => JSON.parse(row.intent_json).kind === 'tool-process-cleanup')
+    const final = cleanup.find(row => JSON.parse(row.intent_json).kind === 'tool-environment-cleanup')
     assert.ok(final, 'a yielded process requires a durable final cleanup operation')
     const result = JSON.parse(final.observation_json)
     assert.equal(result.kind, 'value')
-    assert.equal(result.result.cleanup, 'completed')
-    assert.equal(result.result.processes[0].session_id, observed.result.session_id)
-    assert.equal(result.result.processes[0].terminated, true)
-    assert.equal(result.result.processes[0].exit_code, process.platform === 'win32' ? 1 : 0)
-    assert.equal(result.result.processes[0].signal, null)
+    assert.equal(result.result.environments[0].environmentId, 'computer')
+    const receipt = result.result.environments[0].result
+    assert.equal(receipt.cleanup, 'completed')
+    assert.equal(receipt.processes[0].session_id, observed.result.session_id)
+    assert.equal(receipt.processes[0].terminated, true)
+    assert.equal(receipt.processes[0].exit_code, process.platform === 'win32' ? 1 : 0)
+    assert.equal(receipt.processes[0].signal, null)
   } finally {
     for (const call of llm.calls) call.done.resolve()
     try { if (stopping) await stopping; await root.fiber.dispose() }

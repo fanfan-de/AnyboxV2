@@ -6,6 +6,6 @@
 
 环境提供方负责资源、授权与副作用的真实执行语义。工具 API 不创建进程、不保存业务历史、不推断恢复或自动重试。测试运行 `npm test --workspace @anybox/tool-api`。
 
-`ToolEnvironment` 通过 `environmentId/version/tools` 声明能力，并以 `openScope({scopeId, ownerEpoch, signal})` 提供执行 scope。调用使用稳定 `operationId` 与工具身份，结果和实际退出分别通过 `result/done` 返回；`cancel` 和 `close` 必须覆盖所有已接受工作及保留资源。环境接口不接收 Agent、Session 或 Project 对象。
+`ToolEnvironmentDescriptor` 仅以 `environmentId/version/tools` 及可选恢复声明描述能力，不提供执行入口，也不取得资源。`ToolEnvironment` 扩展该纯描述，以 `openScope({scopeId, ownerEpoch, signal})` 提供执行 scope；只有实际绑定了执行依赖的提供方才应实现这个接口，不能用缺少依赖的占位对象代替。调用使用稳定 `operationId` 与工具身份，结果和实际退出分别通过 `result/done` 返回；`cancel` 和 `close` 必须覆盖所有已接受工作及保留资源。环境接口不接收 Agent、Session 或 Project 对象。
 
 恢复默认禁止重新调用未知操作。只有实现了原操作查询的环境才声明 `recovery: 'observe-existing'`，并在 `resuming: true` 时查回原结果；缺失或未知不能当成首次调用重放。调用方负责固定环境与工具快照，并在配置不兼容时明确拒绝继续。Anybox 的受信装配示例见[环境提供工具](../../docs/tool-environments.md)。

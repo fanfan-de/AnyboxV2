@@ -1,3 +1,4 @@
+import { createComputerToolEnvironmentBinding } from '../packages/app-harness/dist/core/tool-environments/computer.js'
 import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../packages/app-harness/dist/core/project-files/component.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
@@ -365,7 +366,7 @@ test('removing the Models component waits for the run consumer and its call', as
   const prompts = root.installComponent(createPromptComponent(inputs))
   const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const api = root.installComponent(llm.component())
-  const loop = root.installComponent(createRunRuntimeComponent(inputs))
+  const loop = root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
   await installTestProtocolAgents(root)
   const owner = root.installComponent(createRunComponent(inputs, agents))
   try {
@@ -463,7 +464,7 @@ test('RunRuntime owns in-flight calls while Session and Run state survive its re
   const prompts = root.installComponent(createPromptComponent(inputs))
   const agentPrompts = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const api = root.installComponent(llm.component())
-  const loop = root.installComponent(createRunRuntimeComponent(inputs))
+  const loop = root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
   await installTestProtocolAgents(root)
   const runs = root.installComponent(createRunComponent(inputs, agents))
   try {
@@ -488,7 +489,7 @@ test('RunRuntime owns in-flight calls while Session and Run state survive its re
     await stopping
     assert.equal(root.get(runRuntimeServiceKey), undefined)
     assert.deepEqual(llm.events, [])
-    const replacement = root.installComponent(createRunRuntimeComponent(inputs))
+    const replacement = root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
     await replacement
     await runs
     const next = await root.get(runServiceKey).startRun({ sessionId: session.id, parentNodeId: null, input: 'Next', idempotencyKey: 'two' })

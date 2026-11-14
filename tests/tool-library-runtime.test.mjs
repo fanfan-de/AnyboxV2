@@ -44,7 +44,7 @@ function gone(pid) {
 }
 async function cleanupFact(f, run) {
   const rows = await f.root.get('local-storage').read(reader => reader.all('SELECT intent_json, observation_json FROM harness_run_operations WHERE run_id = ?', [run.id]))
-  const cleanup = rows.find(row => JSON.parse(row.intent_json).kind === 'tool-process-cleanup')
+  const cleanup = rows.find(row => JSON.parse(row.intent_json).kind === 'tool-environment-cleanup')
   assert.ok(cleanup, 'Run must persist a cleanup operation')
   return JSON.parse(cleanup.observation_json)
 }
@@ -60,8 +60,9 @@ test('normal completion closes yielded processes and commits their final exits b
     assert.equal(gone(pid), true)
     const cleanup = await cleanupFact(f, run)
     assert.equal(cleanup.kind, 'value')
-    assert.equal(cleanup.result.cleanup, 'completed')
-    assert.equal(cleanup.result.processes[0].terminated, true)
+    assert.equal(cleanup.result.environments[0].environmentId, 'computer')
+    assert.equal(cleanup.result.environments[0].result.cleanup, 'completed')
+    assert.equal(cleanup.result.environments[0].result.processes[0].terminated, true)
     assert.ok(finished.resultNodeId)
   } finally { await f.close() }
 })
@@ -81,7 +82,7 @@ for (const action of ['cancel', 'close']) test(`${action} waits for accepted mod
     const finished = await waiting; await stopping
     assert.equal(finished.status, 'cancelled')
     assert.equal(gone(pid), true)
-    if (action === 'cancel') assert.equal((await cleanupFact(f, run)).result.cleanup, 'completed')
+    if (action === 'cancel') assert.equal((await cleanupFact(f, run)).result.environments[0].result.cleanup, 'completed')
     else closed = true
     assert.equal(finished.resultNodeId, undefined)
   } finally { if (!closed) await f.close(); else rmSync(f.directory, { recursive: true, force: true }) }
@@ -103,7 +104,7 @@ test('process cleanup failure preserves its facts and prevents successful settle
     assert.equal(finished.resultNodeId, undefined)
     const cleanup = await cleanupFact(f, run)
     assert.equal(cleanup.kind, 'cleanup-failed')
-    assert.deepEqual(cleanup.result, result)
+    assert.deepEqual(cleanup.result, { environments: [{ environmentId: 'computer', result }] })
   } finally { await f.close(true) }
 })
 
@@ -168,6 +169,6 @@ test('output captured at final process close can exceed 128 KiB without failing 
     assert.equal(finished.output, 'Process complete.')
     assert.ok(finished.resultNodeId)
     assert.ok((await f.root.get('harness.session-runs').loadRunResume(run.id)).state.totalToolOutputBytes > 131_072)
-    assert.equal((await cleanupFact(f, run)).result.processes[0].truncated, true)
+    assert.equal((await cleanupFact(f, run)).result.environments[0].result.processes[0].truncated, true)
   } finally { await f.close() }
 })

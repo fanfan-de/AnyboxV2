@@ -37,7 +37,7 @@ Session 的 `run-state` v9 增加 Agent 工具设置和 Session 不可变选择�
 
 每次调用仍遵循持久意图、停止检查、同步启动登记、等待 result/done、持久观察的顺序。文件 Write/Edit 共用 Apply Patch 的跨项目串行队列、文件预检和真实部分提交事实。旧会话兼容的计划/todo 调用仍只替换完整列表形成持久观察，不启动后台任务。
 
-Codex exec 可以返回仍运行的管道会话，write_stdin 只能访问同 Run 的单调会话 ID；实际进程句柄留在内存。每次调用 done 只等待该操作退出，scope 独立持有进程。正常模型结束、取消和应用关闭都终止并等待全部组、流和操作；Runtime 以 `intent.kind=tool-process-cleanup` 的通用 operation 保存最终退出、剩余输出和清理状态，之后才结算。正常清理不把 Run 改为用户取消，清理失败不发布成功节点。worker 存活时，Runtime 进程异常重启从原 ProcessRef 与 operation receipt 接续，stdin/输出领取去重；worker 自身故障不能凭 PID 恢复 OS 管道，未知命令不重放。idle worker 不随应用正常关闭退出。详见 [Computer 资源设计](computer-resource-design.md)。
+Codex exec 可以返回仍运行的管道会话，write_stdin 只能访问同 Run 的单调会话 ID；实际进程句柄留在内存。每次调用 done 只等待该操作退出，scope 独立持有进程。正常模型结束、取消和应用关闭都终止并等待全部组、流和操作；Runtime 以 `intent.kind=tool-environment-cleanup` 的通用 operation 按环境聚合最终退出、剩余输出和清理状态，之后才结算，不探测环境持有哪类资源。已有 `tool-process-cleanup` 操作和原始 Computer 回执仅由历史适配继续观察与复用。正常清理不把 Run 改为用户取消，清理失败不发布成功节点。worker 存活时，Runtime 进程异常重启从原 ProcessRef 与 operation receipt 接续，stdin/输出领取去重；worker 自身故障不能凭 PID 恢复 OS 管道，未知命令不重放。idle worker 不随应用正常关闭退出。详见 [Computer 资源设计](computer-resource-design.md)。
 
 图片工具通过既有 Image Assets 导入不可变原字节；Session 在工具观察同一业务事务保留引用。只有提交后 program 私有 resolver 才接纳该引用，四种 Loop 将普通文本工具结果回填后追加原生用户图片块；下一次增量交换传匹配 resourceRefs。完整原生请求继续受 32 MiB 限制，base64 只在受管操作中物化，不进历史。文本模型得到结构化不支持结果，其他工具仍可使用。
 

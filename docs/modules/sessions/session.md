@@ -7,7 +7,7 @@ Session 是会话、新会话初始化默认值、不可变对话节点、Run �
 ## 实现与装配
 
 - 源码：[组件](../../../packages/app-harness/src/core/session/component.ts)、[完整端口](../../../packages/app-harness/src/core/session/port.ts)、[领域值与路径校验](../../../packages/app-harness/src/core/session/domain.ts)、[SQLite 记录实现](../../../packages/app-harness/src/core/session/sqlite-records.ts)、[Run 事件读写](../../../packages/app-harness/src/core/run/execution.ts)。
-- 工厂：`createSessionComponent(inputs, agents, environments?)`；组件名：`harness-sessions`；配置类型：`void`。正式组合根传入与 Run 共用的受信环境注册表。
+- 工厂：`createSessionComponent(inputs, agents, environments?)`；组件名：`harness-sessions`；配置类型：`void`。正式组合根传入与 Run 共用的纯环境目录；目录不含 `openScope`，Session 不持有本代执行提供方。
 - `inputs` 注入 now/newId；`agents` 是组合根启动时校验的只读定义，用于创建校验与默认模型。
 - 注入 `local-storage`、`harness.projects`、`harness.image-assets`、`harness.project-files` 和 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。
 
@@ -47,13 +47,13 @@ harness server API 及 HTTP 保存非空覆盖时检查 Models 配置存在且�
 
 ## Agent 工具与会话固定
 
-正式装配从 `AgentDefinition.environmentIds` 选择[工具环境](../../tool-environments.md)，缺省使用 Computer，显式空数组不提供工具。创建事务保存不可变的 `toolEnvironments` 与工具完整定义；环境配置变更只影响新会话。已有 Computer 工具偏好仅缩小该环境实际提供的工具，其他环境的工具不受 Computer 来源目录限制。`run-state` v12 增加不可变 `tool_environments_json`，旧行保留 null 并继续使用原 Computer 兼容路径。
+正式装配从 `AgentDefinition.environmentIds` 选择[工具环境](../../tool-environments.md)，缺省使用 Computer，显式空数组不提供工具。创建事务保存不可变的 `toolEnvironments` 与工具完整定义；环境配置变更只影响新会话。已有 Computer 工具偏好经显式适配转为该环境的筛选，成对工具依赖由 Computer 目录项校验；通用目录只校验身份、版本、完整定义和唯一绑定，不按 `computer` 字符串套用业务规则。其他环境的工具不受 Computer 来源目录限制。`run-state` v12 增加不可变 `tool_environments_json`，旧行保留 null 并继续使用原 Computer 兼容路径。
 
 Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude Code、DeepSeek Harness 来源组合；来源标签只描述出处，不选择模型协议或执行器。保存先验证已知工具及明确依赖，再通过独立 revision 提交，冲突返回 `agent-tools-conflict`。默认配置仅在尚无保存记录时使用；保存 `[]` 与默认配置有不同语义。
 
 创建 Session 的同一业务库事务读取 Agent 的最新选择，并保存 `ToolSelectionSnapshot { schemaVersion: 1, tools: [{ toolId, version, definition }] }`。后续修改 Agent、模型或来源展示不会改变已有会话工具；Session 没有改工具入口，数据库禁止更新 tool_selection_json。工具运行资源归对应执行组件，配置和快照不保存运行句柄。
 
-新环境会话的首次 Run 使用原生 initialization v3，同时保存环境与工具快照；接受事务复核二者等于 Session 事实并再次验证当前环境契约。其后所有根、分支和重新生成复用同一 initialization。无工具能力模型继续纯文本调用。没有环境快照的旧会话保留 initialization v1/v2 与原有工具选择，历史记录 JSON 原样保留。非 Computer 工具只保存通用操作意图与观察，不建立 Computer 声明或 scope。
+新环境会话的首次 Run 使用原生 initialization v3，同时保存环境与工具快照；接受事务复核二者等于 Session 事实并再次验证当前环境契约。其后所有根、分支和重新生成复用同一 initialization。无工具能力模型继续纯文本调用。没有环境快照的旧会话保留 initialization v1/v2 与原有工具选择，历史记录 JSON 原样保留。退役工具仅能由目录项显式 `historyTools` 接纳已有完整快照，不进入新选择。非 Computer 工具只保存通用操作意图与观察，不建立 Computer 声明或 scope。
 
 ## 受信执行记录端口
 

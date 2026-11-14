@@ -46,7 +46,7 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets/project-files/computer-operations/unit-attachments | 新会话默认值、Agent 工具配置及会话不可变选择、归档状态、Run、节点、原生记录与事务；计算工具意图/观察同事务参与，接受事务复核单元附着引用；等已接受写入与通知 |
 | 协议应用注册 | `harness.protocol-agents`；注入 models/models.protocols/image-assets | 固定驱动与 Loop 组合、准备中的资源、Run 租约；撤销后等 program 释放 |
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
-| RunRuntime | `harness.run-runtime`；注入 session-runs/computer-operations | program、工具观察、owner、取消/等待者和临时视图；worker scope 与 program 退出后结算 |
+| RunRuntime | `harness.run-runtime`；必需 session-runs，其余由本代 binding.inject 声明，Computer 绑定加入 computer-operations | program、工具观察、owner、取消/等待者和临时视图；所有环境 scope 与 program 退出后结算 |
 | Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime/computer-operations/unit-attachments | 准入、幂等、单元附着引用（本机或组合固定的远端 Computer 附着）和交接前资源；恢复接管前校验附着引用；停止准入并等交接与在途 Run |
 | Anybox 托管访问管理 | `host.access` | 既有业务库中的实例身份与令牌摘要；撤销观察连接 |
 | Harness 独立访问管理 | `harness.access`；注入 local-storage | 应用自己的认证实现，兼容 host-access v2 迁移、原身份/令牌表；等待写入与撤销观察退出 |
@@ -107,7 +107,7 @@ Runtime 不包含“模型→工具→模型”的协议阶段机。`RunHost.per
 
 计算工具接纳时，Session 在同一业务事务复核固定声明，调用 Computer Operations.acceptIn 保存声明及逻辑 computer/workspace 需求；观察事务同时提交 observed 标记。Operations 依赖 Computers、Workspaces、存储、worker 代理及图片资源；Computers 不反查 Operations，Projects 不反向依赖 Workspaces。四工具由独立 worker 执行器持有，Operations 首次按需准备 binding 并同事务建立实例 pin，后续工具复用固定路径与代次。纯模型和计划调用不激活 computer。
 
-工具整批校验名称、ID 与参数，再逐个通过同一屏障执行。Apply Patch 的补丁业务校验由工具处理；可修正结果回到协议 Loop。取消不会撤销已发生的工具事实；当前文件发布与临时资源清理仍需等待。Runtime 保存真实观察，包括清理失败前返回的部分提交，随后关闭 Run 进程 scope，并通过 intent.kind=tool-process-cleanup 的通用 operation 持久化最终退出、剩余输出与清理结果；正常结束也执行这一步，之后关闭 program。资源清理失败、模型拒绝/截断或持久化失败不能创建成功节点。
+工具整批校验名称、ID 与参数，再逐个通过同一屏障执行。Apply Patch 的补丁业务校验由工具处理；可修正结果回到协议 Loop。取消不会撤销已发生的工具事实；当前文件发布与临时资源清理仍需等待。Runtime 保存真实观察，包括清理失败前返回的部分提交，随后关闭所有环境 scope，通过 `intent.kind=tool-environment-cleanup` 的通用 operation 持久化按环境聚合的最终退出、剩余输出与清理结果；正常结束也执行这一步，之后关闭 program。已有 `computer-scope-close` 操作及 `tool-process-cleanup` 原始回执只由历史适配复用，不改写已提交事实。资源清理失败、模型拒绝/截断或持久化失败不能创建成功节点。
 
 Computer scope 持有实例 pin 与工作区 reservation 至所有调用和长进程实际退出；worker 保存关闭凭证后同事务释放，未知执行或清理失败保留引用。Runtime 进程 SIGKILL/异常重启后，Run 原子提升 owner 并先授权 worker，再从独立游标接续 response、cleanup 或 settling。无新凭证的旧 Run 和未保存模型响应的 model-pending 仍 interrupted，不重发副作用；此前已接纳的长进程仍取消并排空。显式 Nya 组件撤销仍取消所属 Run，独立 idle worker 不随应用关闭退出。
 

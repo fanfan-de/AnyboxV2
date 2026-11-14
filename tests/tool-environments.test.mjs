@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createToolEnvironmentRegistry } from '../packages/app-harness/dist/core/tool-environments/registry.js'
-import { createComputerToolEnvironment, legacyToolEnvironmentSnapshot } from '../packages/app-harness/dist/core/tool-environments/computer.js'
+import { createToolEnvironmentCatalog, createToolEnvironmentRegistry } from '../packages/app-harness/dist/core/tool-environments/registry.js'
+import { computerToolEnvironmentCatalogEntry, computerToolEnvironmentDescriptor, createComputerToolEnvironment } from '../packages/app-harness/dist/core/tool-environments/computer.js'
+import { legacyToolEnvironmentSnapshot } from '../packages/app-harness/dist/core/tool-environments/history.js'
 import { parseToolEnvironmentSnapshot } from '../packages/app-harness/dist/core/tool-environments/domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 
@@ -25,15 +26,75 @@ test('environment snapshots fix exact provider definitions and reject collisions
   assert.throws(() => createToolEnvironmentRegistry([provider({ version: '2.0.0' })]).validate(snapshot), /unavailable/)
   assert.throws(() => createToolEnvironmentRegistry([original, provider({ environmentId: 'other' })]).snapshot(['fixture', 'other']), /tools/)
   assert.throws(() => registry.snapshot(['missing']), /unavailable/)
-  const computer = createComputerToolEnvironment()
-  const limited = createToolEnvironmentRegistry([{ ...computer, tools: computer.tools.filter(tool => tool.toolId === 'anybox.bash') }])
-  assert.throws(() => limited.snapshot(['computer'], ['anybox.apply_patch']), /not supplied/)
-  const incomplete = createToolEnvironmentRegistry([{ ...computer, tools: computer.tools.filter(tool => tool.toolId === 'codex.exec_command') }])
-  assert.throws(() => incomplete.snapshot(['computer']), /dependency/)
+  assert.throws(() => registry.snapshot(['fixture'], { fixture: ['unknown.tool'] }), TypeError)
   const history = structuredClone(snapshot)
   history.environments[0].tools[0].definition.description = 'old definition'
   assert.equal(parseToolEnvironmentSnapshot(history).environments[0].tools[0].definition.description, 'old definition')
   assert.throws(() => registry.validate(history), /unavailable/)
+})
+
+test('catalog descriptors have no execution entry and only exact complete bindings can create an executor', async () => {
+  let opened = 0
+  const environment = provider({ openScope() { opened++; return { execute: () => completed({ result: 'bound' }), hasResources: () => false,
+    cancel: async () => {}, close: () => completed(null) } } })
+  const declaration = { environmentId: environment.environmentId, version: environment.version, tools: environment.tools }
+  const catalog = createToolEnvironmentCatalog([{ descriptor: declaration }])
+  const snapshot = catalog.snapshot(['fixture'])
+  assert.deepEqual(catalog.validate(snapshot), snapshot)
+  assert.equal(typeof catalog.openRun, 'undefined')
+  assert.equal('openScope' in catalog.environments[0], false)
+  assert.equal(opened, 0)
+  assert.throws(() => catalog.bind([]), TypeError)
+  assert.throws(() => catalog.bind([declaration]), /executable tool environment/)
+  assert.throws(() => catalog.bind([environment, environment]), TypeError)
+  assert.throws(() => catalog.bind([provider({ environmentId: 'other' })]), TypeError)
+  assert.throws(() => catalog.bind([provider({ version: '2.0.0' })]), TypeError)
+  assert.throws(() => catalog.bind([provider({ tools: [] })]), TypeError)
+  assert.throws(() => catalog.bind([provider({ recovery: 'observe-existing' })]), TypeError)
+  const changed = { ...descriptor, definition: { ...descriptor.definition, description: 'Different execution declaration' } }
+  assert.throws(() => catalog.bind([provider({ tools: [changed] })]), TypeError)
+  const executor = catalog.bind([environment])
+  assert.equal(opened, 0, 'binding must not open a scope or execute work')
+  const run = executor.openRun(snapshot, context()), call = run.execute(request, 'bound-operation')
+  assert.equal(opened, 1)
+  assert.equal((await call.result).result, 'bound'); await call.done
+  const close = run.close(); await close.result; await close.done
+})
+
+test('an ordinary environment named computer has generic selection, history and cleanup semantics', async () => {
+  const registry = createToolEnvironmentRegistry([provider({ environmentId: 'computer' })])
+  const snapshot = registry.snapshot(['computer'], { computer: [descriptor.toolId] })
+  assert.deepEqual(snapshot.environments[0].tools, [descriptor])
+  assert.throws(() => registry.snapshot(['computer'], { computer: ['anybox.bash'] }), TypeError)
+  const retired = getToolById('codex.update_plan')
+  const historicTool = { toolId: retired.toolId, version: retired.version, definition: retired.definition }
+  const history = { schemaVersion: 1, environments: [{ environmentId: 'computer', version: '1.0.0', tools: [historicTool] }] }
+  assert.deepEqual(parseToolEnvironmentSnapshot(history), history)
+  assert.throws(() => registry.validate(history), TypeError, 'a familiar environment ID must not grant retired-tool compatibility')
+  const explicit = createToolEnvironmentCatalog([{ descriptor: { environmentId: 'computer', version: '1.0.0', tools: [descriptor] }, historyTools: [historicTool] }])
+  assert.deepEqual(explicit.validate(history), history)
+  assert.throws(() => explicit.snapshot(['computer'], { computer: [historicTool.toolId] }), TypeError, 'history-only tools cannot enter new selections')
+  const run = registry.openRun(snapshot, context()), call = run.execute(request, 'ordinary-computer-operation')
+  assert.equal((await call.result).result, 'hello'); await call.done
+  assert.equal('hasProcesses' in run, false)
+  const close = run.close()
+  assert.deepEqual(await close.result, { environments: [{ environmentId: 'computer', result: { closed: true } }] })
+  await close.done
+})
+
+test('Computer selection dependencies and retired tools come only from its explicit catalog entry', () => {
+  const catalog = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry])
+  assert.equal('openScope' in computerToolEnvironmentDescriptor, false)
+  assert.throws(() => createComputerToolEnvironment(), /execution dependencies are required/)
+  assert.throws(() => catalog.snapshot(['computer'], { computer: ['codex.exec_command'] }), /dependency/)
+  assert.throws(() => catalog.snapshot(['computer'], { computer: ['codex.update_plan'] }), TypeError)
+  const pair = catalog.snapshot(['computer'], { computer: ['codex.exec_command', 'codex.write_stdin'] })
+  assert.deepEqual(catalog.validate(pair), pair)
+  const retired = getToolById('codex.update_plan')
+  const history = legacyToolEnvironmentSnapshot({ schemaVersion: 2, toolSelection: { schemaVersion: 1,
+    tools: [{ toolId: retired.toolId, version: retired.version, definition: retired.definition }] } })
+  assert.deepEqual(catalog.validate(history), history)
+  assert.throws(() => createToolEnvironmentCatalog([{ descriptor: computerToolEnvironmentDescriptor }]).validate(history), TypeError)
 })
 
 test('registration strictly validates executable descriptors while old schema history stays readable', () => {
@@ -95,13 +156,13 @@ test('custom environments execute without Computer and keep results separate fro
   const close = run.close(); await close.result; await close.done
 })
 
-test('cancellation waits for accepted operation exit even when the provider cancellation returns early', async () => {
+test('cancellation waits for accepted operation exit even when an ordinary computer provider cancellation returns early', async () => {
   const exit = gate(), events = []
-  const registry = createToolEnvironmentRegistry([provider({ openScope: () => ({
+  const registry = createToolEnvironmentRegistry([provider({ environmentId: 'computer', openScope: () => ({
     execute: () => ({ result: Promise.resolve({ result: 'value' }), done: exit.promise, cancel: () => events.push('call-cancel') }),
     hasResources: () => true, cancel: async () => { events.push('scope-cancel') }, close: () => completed({ closed: true }),
   }) })])
-  const run = registry.openRun(registry.snapshot(['fixture']), context()), call = run.execute(request, 'operation')
+  const run = registry.openRun(registry.snapshot(['computer']), context()), call = run.execute(request, 'operation')
   await call.result
   let cancelled = false
   const cancellation = run.cancel().then(() => { cancelled = true })
@@ -131,13 +192,14 @@ test('recovery refuses providers without original-operation lookup and never inv
 })
 
 test('close preserves partial Computer cleanup facts while actual exit remains a separate failure', async () => {
-  const computer = createComputerToolEnvironment(), descriptor = computer.tools.find(tool => tool.toolId === 'anybox.bash')
-  const exit = gate(), registry = createToolEnvironmentRegistry([{ ...computer, tools: [descriptor], openScope: () => ({
+  const descriptor = computerToolEnvironmentDescriptor.tools.find(tool => tool.toolId === 'anybox.bash')
+  const exit = gate(), catalog = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry])
+  const registry = catalog.bind([{ ...computerToolEnvironmentDescriptor, recovery: 'observe-existing', openScope: () => ({
     execute: () => completed({ result: null }), hasResources: () => true, cancel: async () => {},
     close: () => ({ result: Promise.resolve({ processes: [{ sessionId: 1, exit: 'unknown' }] }), done: exit.promise.then(() => { throw new Error('actual exit unknown') }), cancel() {} }),
   }) }])
-  const run = registry.openRun(registry.snapshot(['computer'], ['anybox.bash']), context()), call = run.close()
-  assert.deepEqual(await call.result, { processes: [{ sessionId: 1, exit: 'unknown' }] })
+  const run = registry.openRun(catalog.snapshot(['computer'], { computer: [descriptor.toolId] }), context()), call = run.close()
+  assert.deepEqual(await call.result, { environments: [{ environmentId: 'computer', result: { processes: [{ sessionId: 1, exit: 'unknown' }] } }] })
   exit.resolve(); await assert.rejects(call.done, error => error.category === 'cleanup-failure')
 })
 
@@ -176,9 +238,9 @@ test('an immediately failed close exit retains available facts and cannot hang o
 })
 
 test('Computer cleanup setup failure cannot certify the old scope exited', async () => {
-  const metadata = createComputerToolEnvironment(), registry = createToolEnvironmentRegistry([metadata])
+  const catalog = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry])
   const adapter = createComputerToolEnvironment({ records: { getRun: async () => undefined }, operations: { hasRunResources: async () => true } })
-  const close = registry.openRun(registry.snapshot(['computer'], ['anybox.bash']), context(), [adapter]).close()
+  const close = catalog.bind([adapter]).openRun(catalog.snapshot(['computer'], { computer: ['anybox.bash'] }), context()).close()
   await assert.rejects(close.result)
   await assert.rejects(close.done, error => error.category === 'cleanup-failure')
 })
@@ -193,18 +255,19 @@ test('Computer adapter fixes original unit placement and retains exact legacy pl
     opened.push(input); computerResources = true
     return { execute(id) { executed.push(id); return completed({ name: 'bash', result: { stdout: 'hello' } }) }, hasProcesses: () => true, cancel: async () => {}, close: () => completed({ processes: [] }) }
   } }
-  const metadata = createComputerToolEnvironment(), registry = createToolEnvironmentRegistry([metadata]), adapter = createComputerToolEnvironment({ records, operations })
-  const run = registry.openRun(registry.snapshot(['computer'], ['anybox.bash']), context(), [adapter])
+  const catalog = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry]), adapter = createComputerToolEnvironment({ records, operations })
+  const run = catalog.bind([adapter]).openRun(catalog.snapshot(['computer'], { computer: ['anybox.bash'] }), context())
   const call = run.execute(original, 'original-operation', true)
   assert.deepEqual(await call.result, { name: 'bash', result: { stdout: 'hello' } }); await call.done
   assert.equal(opened[0].unit, fixed); assert.equal(opened[0].imageInput, true); assert.equal(opened[0].runOwnerEpoch, 2)
-  assert.deepEqual(executed, ['original-operation']); assert.equal(run.hasProcesses(), true)
-  const close = run.close(); assert.deepEqual(await close.result, { processes: [] }); await close.done
+  assert.deepEqual(executed, ['original-operation'])
+  assert.equal('hasProcesses' in run, false)
+  const close = run.close(); assert.deepEqual(await close.result, { environments: [{ environmentId: 'computer', result: { processes: [] } }] }); await close.done
 
   const retired = getToolById('codex.update_plan'), plan = { id: 'plan', name: retired.definition.name, arguments: { plan: [{ step: 'read', status: 'completed' }] } }
   const history = legacyToolEnvironmentSnapshot({ schemaVersion: 2, toolSelection: { schemaVersion: 1, tools: [{ toolId: retired.toolId, version: retired.version, definition: retired.definition }] } })
   const planAdapter = createComputerToolEnvironment({ records: { getRunOperation: async () => ({ start: { tool: plan } }) }, operations: { hasRunResources: async () => false, openRun() { assert.fail('legacy plan must not activate Computer') } } })
-  const historical = registry.openRun(history, context(), [planAdapter]), planned = historical.execute(plan, 'old-plan', true)
+  const historical = catalog.bind([planAdapter]).openRun(history, context()), planned = historical.execute(plan, 'old-plan', true)
   assert.deepEqual((await planned.result).result, { status: 'updated', plan: [{ step: 'read', status: 'completed' }] }); await planned.done
   const closed = historical.close(); await closed.result; await closed.done
 })

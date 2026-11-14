@@ -1,3 +1,4 @@
+import { createComputerToolEnvironmentBinding } from '../packages/app-harness/dist/core/tool-environments/computer.js'
 import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../packages/app-harness/dist/core/project-files/component.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
@@ -50,7 +51,7 @@ async function fixture(execution = false, imagePort) {
       await root.installComponent(createApplyPatchComponent())
       await root.installComponent(createFileToolsComponent())
       await root.installComponent(createProcessToolsComponent())
-      await root.installComponent(createRunRuntimeComponent(inputs))
+      await root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
       await installTestProtocolAgents(root)
       await root.installComponent(createRunComponent(inputs, agents))
     }

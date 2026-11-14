@@ -1,13 +1,48 @@
 import { isDeepStrictEqual } from 'node:util'
-import type { JsonValue, ToolCall, ToolEnvironment, ToolEnvironmentRequest, ToolEnvironmentResult, ToolEnvironmentScope } from '@anybox/tool-api'
+import type { JsonValue, ToolCall, ToolDescriptor, ToolEnvironment, ToolEnvironmentDescriptor, ToolEnvironmentRequest, ToolEnvironmentResult, ToolEnvironmentScope } from '@anybox/tool-api'
+import { computerToolContracts } from '@anybox/computer-tools/contracts'
+import { computerOperationsServiceKey } from '../computer/operations-port.js'
 import type { ComputerOperationsPort, ComputerRunScope } from '../computer/operations-port.js'
+import { sessionRunServiceKey } from '../session/port.js'
 import type { SessionRunPort } from '../session/port.js'
-import { getToolById, legacyToolSelection, listTools } from '../tool/catalog.js'
-import type { ToolSelectionSnapshot } from '../tool/catalog.js'
+import { getToolById, listTools } from '../tool/catalog.js'
 import { updateToolPlan } from '../tool/plan-domain.js'
 import { needsComputer } from '../computer/operations-domain.js'
-import { computerToolEnvironmentVersion, parseToolEnvironmentSnapshot } from './domain.js'
-import type { ToolEnvironmentSnapshot } from './domain.js'
+import { createToolEnvironmentCatalog } from './registry.js'
+import type { ToolEnvironmentCatalog, ToolEnvironmentCatalogEntry, ToolEnvironmentRuntimeBinding } from './port.js'
+
+export const computerToolEnvironmentVersion = '1.0.0'
+const describeTool = ({ toolId, version, definition }: ToolDescriptor): ToolDescriptor => Object.freeze({ toolId, version, definition })
+
+/** Pure metadata; it cannot open a scope or acquire an execution dependency. */
+export const computerToolEnvironmentDescriptor: ToolEnvironmentDescriptor = Object.freeze({
+  environmentId: 'computer', version: computerToolEnvironmentVersion, recovery: 'observe-existing',
+  tools: Object.freeze(listTools().map(describeTool)),
+})
+
+/** Computer selection and exact retired declarations are explicit catalog policy. */
+export const computerToolEnvironmentCatalogEntry: ToolEnvironmentCatalogEntry = Object.freeze({
+  descriptor: computerToolEnvironmentDescriptor,
+  historyTools: Object.freeze(computerToolContracts.filter(tool => !tool.selectable).map(describeTool)),
+  validateSelection(tools: readonly ToolDescriptor[]) {
+    if (tools.some(tool => getToolById(tool.toolId)?.dependencies.some(id => !tools.some(candidate => candidate.toolId === id)))) {
+      throw new TypeError('missing tool dependency')
+    }
+  },
+})
+
+/** Contributes real Nya dependencies to the existing Runtime, without a separate registry component. */
+export function createComputerToolEnvironmentBinding(
+  catalog: ToolEnvironmentCatalog = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry]),
+  providers: readonly ToolEnvironment[] = [],
+): ToolEnvironmentRuntimeBinding {
+  const additional = [...providers]
+  return {
+    inject: [computerOperationsServiceKey],
+    bind: deps => catalog.bind([createComputerToolEnvironment({ records: deps[sessionRunServiceKey] as SessionRunPort,
+      operations: deps[computerOperationsServiceKey] as ComputerOperationsPort }), ...additional]),
+  }
+}
 
 const unavailable = () => Object.assign(new Error('tool environment unavailable'), { name: 'ToolEnvironmentError', category: 'unavailable' })
 const cancelled = () => Object.assign(new Error('tool environment cancelled'), { name: 'ToolEnvironmentError', category: 'cancelled' })
@@ -25,22 +60,15 @@ function deferred<T>(start: (cancelled: () => boolean) => Promise<ToolCall<T>>, 
   } }
 }
 
-/** Old initialization formats keep their exact declarations, including retired plan tools. */
-export function legacyToolEnvironmentSnapshot(initialization: { readonly schemaVersion: number; readonly toolSelection?: ToolSelectionSnapshot }): ToolEnvironmentSnapshot {
-  const selection = initialization.schemaVersion >= 2 && initialization.toolSelection ? initialization.toolSelection : legacyToolSelection
-  return parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: [{ environmentId: 'computer', version: computerToolEnvironmentVersion, tools: selection.tools }] })
-}
-
-/** Metadata can be used before Session exists. Execution is bound to the current Nya dependency generation. */
-export function createComputerToolEnvironment(dependencies?: { readonly records: SessionRunPort; readonly operations: ComputerOperationsPort }): ToolEnvironment {
+/** Execution is constructed only after both dependencies are bound to the current Nya generation. */
+export function createComputerToolEnvironment(dependencies: { readonly records: SessionRunPort; readonly operations: ComputerOperationsPort }): ToolEnvironment {
+  if (!dependencies?.records || !dependencies.operations) throw new TypeError('Computer tool environment execution dependencies are required')
   return {
-    environmentId: 'computer', version: computerToolEnvironmentVersion, recovery: 'observe-existing',
-    tools: Object.freeze(listTools().map(({ toolId, version, definition }) => Object.freeze({ toolId, version, definition }))),
+    ...computerToolEnvironmentDescriptor,
     openScope(context): ToolEnvironmentScope {
       let scope: ComputerRunScope | undefined, preparing: Promise<ComputerRunScope> | undefined
       let cancellation: Promise<void> | undefined, closing: ToolCall<JsonValue> | undefined, stopped = false
       const getScope = () => preparing ??= (async () => {
-        if (!dependencies) throw unavailable()
         const run = await dependencies.records.getRun(context.scopeId)
         if (!run) throw unavailable()
         scope = dependencies.operations.openRun({ runId: context.scopeId, runOwnerEpoch: context.ownerEpoch,
@@ -49,13 +77,12 @@ export function createComputerToolEnvironment(dependencies?: { readonly records:
         return scope
       })()
       const readRequest = async (request: ToolEnvironmentRequest) => {
-        if (!dependencies) throw unavailable()
         const tool = getToolById(request.toolId)
         const operation = await dependencies.records.getRunOperation(context.scopeId, request.operationId)
         if (!tool || tool.version !== request.version || !operation?.start.tool || operation.start.tool.name !== tool.definition.name || !isDeepStrictEqual(operation.start.tool.arguments, request.arguments)) throw unavailable()
         return operation.start.tool
       }
-      const service: ToolEnvironmentScope & { hasProcesses(): boolean } = {
+      const service: ToolEnvironmentScope = {
         execute(request) {
           if (stopped) throw cancelled()
           return deferred<ToolEnvironmentResult>(async isCancelled => {
@@ -71,10 +98,8 @@ export function createComputerToolEnvironment(dependencies?: { readonly records:
           })
         },
         hasResources: () => scope !== undefined || preparing !== undefined,
-        hasProcesses: () => scope?.hasProcesses() ?? false,
         cancel() {
           if (!cancellation) cancellation = (async () => {
-            if (!dependencies) throw unavailable()
             // Cancellation must also reconcile a scope retained by an earlier Runtime.
             if (!preparing && !await dependencies.operations.hasRunResources(context.scopeId)) return
             await (await getScope()).cancel()
@@ -85,7 +110,6 @@ export function createComputerToolEnvironment(dependencies?: { readonly records:
           if (closing) return closing
           stopped = true
           closing = deferred<JsonValue>(async () => {
-            if (!dependencies) throw unavailable()
             if (!preparing && !await dependencies.operations.hasRunResources(context.scopeId)) return { result: Promise.resolve({ processes: [] }), done: Promise.resolve(), cancel() {} }
             await cancellation
             return (await getScope()).close()

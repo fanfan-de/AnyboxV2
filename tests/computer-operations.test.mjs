@@ -1,3 +1,4 @@
+import { createComputerToolEnvironmentBinding } from '../packages/app-harness/dist/core/tool-environments/computer.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -259,7 +260,7 @@ test('Run intent and ComputerOperation admission share the Session transaction; 
   f.root.provide('tools.apply-patch', {})
   f.root.provide('tools.processes', {})
   f.root.provide('tools.files', {})
-  await f.root.installComponent(createRunRuntimeComponent(inputs))
+  await f.root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
   const runtime = f.root.get('harness.run-runtime')
   async function run(id, requests = []) {
     const input = { sessionId: session.id, parentNodeId: null, idempotencyKey: id, input: id }

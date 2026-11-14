@@ -258,7 +258,7 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
           const controller = new AbortController(); observers.add(controller)
           const calls = new Map<string,OwnedCall<ToolObservation>>()
           let binding: WorkspaceBinding | undefined, preparing: Promise<WorkspaceBinding> | undefined, stopped = false
-          let closeCall: OwnedCall<JsonValue> | undefined, cancellation: Promise<unknown> | undefined, processes = false, cleanupFailed = false
+          let closeCall: OwnedCall<JsonValue> | undefined, cancellation: Promise<unknown> | undefined, cleanupFailed = false
           const check = () => { assertOpen(); controller.signal.throwIfAborted(); if (stopped) throw operationError('computer-operation-unavailable') }
           const control = (kind: 'cancel'|'close-scope'): WorkerSubmission => {
             const operationId = `${input.runId}:computer-${kind}`
@@ -293,7 +293,6 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
                 const operation = await db.read(reader => { owner(reader,input.runId,epoch); return read(reader,id) })
                 if (!operation || operation.declaration.runId !== input.runId) throw operationError('computer-operation-missing')
                 if (operation.runOwnerEpoch !== epoch) throw operationError('computer-operation-owner')
-                processes ||= ['codex_exec_command','codex_write_stdin','claude_code_Bash','deepseek_harness_bash'].includes(operation.declaration.request.name)
                 if (terminal(operation.state)) {
                   const row = await db.read(reader => reader.get('SELECT error_json FROM harness_computer_operations WHERE operation_id=?',[id]))
                   const error = typeof row?.error_json === 'string' ? JSON.parse(row.error_json) as WorkerOperation['error'] : undefined
@@ -371,7 +370,6 @@ export function createComputerOperationsComponent(inputs: RuntimeInputs, options
               const call: OwnedCall<ToolObservation> = {result,done,cancel() { cancelled = true; void cancel().catch(() => {}) }}
               calls.set(id,call); void result.catch(() => {}); void done.catch(() => {}); return call
             },
-            hasProcesses: () => processes,
             async cancel() { await cancel() },
             close() {
               if (closeCall) return closeCall; stopped = true

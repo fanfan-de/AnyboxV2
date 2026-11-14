@@ -8,7 +8,7 @@ Computer 工具库是受信静态内置目录：Codex、Claude Code、DeepSeek H
 
 ## 独立包与环境接入
 
-[`@anybox/tool-api`](../../../packages/tool-api/README.md) 定义中立的 `ToolDefinition`、`ToolDescriptor`、`ToolCall` 与 `ToolEnvironment`，不依赖模型、Harness、Nya 或传输。受信组合根把环境提供方注入 Harness，Agent 的 `environmentIds` 选择其环境；省略时使用 `computer`。环境提供工具身份、定义和执行 scope，模型协议 Loop 只编码已固定的定义。
+[`@anybox/tool-api`](../../../packages/tool-api/README.md) 定义中立的 `ToolDefinition`、`ToolDescriptor`、`ToolCall`、纯 `ToolEnvironmentDescriptor` 与带执行入口的 `ToolEnvironment`，不依赖模型、Harness、Nya 或传输。受信组合根把描述注入纯目录，Agent 的 `environmentIds` 选择其环境；省略时使用 `computer`。Session 只消费目录，运行时将当前依赖代的执行提供方精确绑定到目录；绑定不打开 scope，缺失、重复或声明不匹配均拒绝。模型协议 Loop 只编码已固定的定义。
 
 [`@anybox/computer-tools`](../../../packages/computer-tools/README.md) 是独立计算机工具能力包。`/contracts` 保存来源定义和纯校验，`/adapters` 将来源调用转换成中立请求，两者均不导入 Node 或执行组件。`/bash`、`/processes`、`/apply-patch`、`/files` 提供实际 Nya 组件。工具包不读取 Agent、Session、Projects 或 Computer 业务；Harness 的 Computer 环境适配继续持有工作区绑定、权限和耐久操作。
 
@@ -29,9 +29,9 @@ Computer 工具库是受信静态内置目录：Codex、Claude Code、DeepSeek H
 
 ## 工具选择和历史
 
-Session 在业务库保存该执行设备按 Agent 的 Computer 工具 ID 列表与修订号；创建 Session 时原子取得所选环境的身份、版本和完整工具定义快照，之后不可修改。Computer 环境继续应用既有工具选择，其余环境提供自己的工具集。环境或 Agent 配置更新只影响新 Session，旧会话、分支、在途 Run 和编辑/重新生成沿用原快照；执行前核对当前环境与确切定义，失配明确拒绝，不静默替换。默认选择 Codex 四项及 Claude Read/Write/Edit/Glob/Grep，共九项；Codex exec/write 必须成对选择，服务器拒绝缺失依赖，不静默补入工具。用户也可明确选择空集。
+Session 在业务库保存该执行设备按 Agent 的 Computer 工具 ID 列表与修订号；创建 Session 时原子取得所选环境的身份、版本和完整工具定义快照，之后不可修改。Computer 选择适配显式筛选该环境，Computer 目录项校验工具依赖；通用目录和执行注册表不根据 `computer` ID 推断策略，其余环境提供自己的工具集。环境或 Agent 配置更新只影响新 Session，旧会话、分支、在途 Run 和编辑/重新生成沿用原快照；执行前核对当前环境与确切定义，失配明确拒绝，不静默替换。默认选择 Codex 四项及 Claude Read/Write/Edit/Glob/Grep，共九项；Codex exec/write 必须成对选择，服务器拒绝缺失依赖，不静默补入工具。用户也可明确选择空集。
 
-计划与待办工具 `codex.update_plan`、`claude-code.TodoWrite`、`deepseek-harness.todo_write` 已退出公开目录和新选择。新会话从旧 Agent 设置中排除这些 ID；旧 Session 快照、声明及历史保持原样，校验和完整列表观察仅保留旧会话继续执行与恢复所需的兼容路径。
+计划与待办工具 `codex.update_plan`、`claude-code.TodoWrite`、`deepseek-harness.todo_write` 已退出公开目录和新选择。新会话从旧 Agent 设置中排除这些 ID；旧 Session 快照、声明及历史保持原样，Computer 目录项的显式 `historyTools` 和历史读取适配只保留旧会话继续执行与恢复所需的校验及完整列表观察，不允许新选择使用。
 
 带环境快照的新会话首次接受 Run 固定 NativeInitialization v3 / tool-environments-v1、Prompt、环境快照与实际工具声明；既有 v2 / tool-library-v1 初始化继续兼容。无工具能力模型声明为空，仍保留会话选择。旧初始化 v1 / known-tools-v1 和旧原生记录保持原样，既有 bash/apply_patch 定义可继续执行或与新工具混选。静态目录声明必须与选择中的身份、版本和完整参数定义一致。
 
@@ -43,7 +43,7 @@ Session 在业务库保存该执行设备按 Agent 的 Computer 工具 ID 列表
 
 Session 同事务接纳计算声明及恢复批次，[Computer Operations](../computers/computer-operations.md) 按需准备本机实例与 pinned-local 工作区，提交独立 [worker 执行器](../computers/worker-executor.md)。Bash、补丁、进程和文件工具使用必填的固定 workspacePath，嵌套 Write/Edit 同样传递此路径；原模型工具契约不增加路径参数。worker 不再为工具装配 Projects 兼容端口。独立消费者只需固定工作目录、提供所需图片能力并装配资源组件。Runtime 进程异常退出后，worker 保留工具与真实结果；worker 自身故障的未知副作用不重放。
 
-`ToolCall`（兼容类型名 `OwnedCall`）分离 result、cancel 和 done：结果可早于资源退出；取消只发出请求；done 必须等待实际退出及清理。Codex 命令提前返回后的进程由不透明调用方 scope 继续持有；Harness 将该 scope 绑定到所属 Run，正常模型结束也关闭 scope，并经通用 tool-process-cleanup operation 保存最终退出事实后才结算。清理失败不创建成功节点，取消不回滚已发生文件修改。
+`ToolCall`（兼容类型名 `OwnedCall`）分离 result、cancel 和 done：结果可早于资源退出；取消只发出请求；done 必须等待实际退出及清理。Codex 命令提前返回后的进程由不透明调用方 scope 继续持有；Harness 将该 scope 绑定到所属 Run，正常模型结束也关闭 scope。新关闭操作统一为 tool-environment-cleanup，结果按环境聚合，不通过 `hasProcesses` 探测资源；已有 Computer 清理身份和原始进程回执仅在历史读取适配中复用。所有实际退出事实保存后才结算，清理失败不创建成功节点，取消不回滚已发生文件修改。
 
 工具事实继续使用 tool-started、tool-observed、tool-failed 及 toolCalls，旧 bash-* / bashCalls 仅在读取边界归一化。旧会话的兼容计划工具返回完整列表形成持久观察，不建立独立后台任务。普通文件和补丁诊断可交回模型修正；存储、资源清理和依赖撤销仍阻止继续执行。
 

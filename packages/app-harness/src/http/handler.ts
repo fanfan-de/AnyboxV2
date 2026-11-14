@@ -8,6 +8,7 @@ import type { SessionPort } from '../core/session/port.js'
 import { validateFileSelections, validateSnapshotIds, validateFileTreePath, validId } from '../core/project-files/domain.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { OwnedCall } from '../core/contracts.js'
+import { computerCleanupReceipt } from '../core/tool-environments/history.js'
 import type { ImageRef } from '../core/image/port.js'
 import { imageLimits } from '../core/image/limits.js'
 import type { Run } from '../core/run/domain.js'
@@ -279,6 +280,7 @@ function runEventView(event: RunEvent): object {
 }
 
 function processExitProjection(value: import('@anybox/models').JsonValue | undefined): { readonly processes?: readonly ProcessExitView[] } {
+  value = computerCleanupReceipt(value)
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const result = value as Readonly<Record<string, import('@anybox/models').JsonValue>>
   if (!Array.isArray(result.processes)) return {}

@@ -32,12 +32,16 @@ export interface ToolEnvironmentScope {
   hasResources(): boolean
 }
 
-/** Trusted capability provider. Opening a scope does not execute a tool or replay earlier work. */
-export interface ToolEnvironment {
+/** Pure capability declaration; describing an environment never acquires execution resources. */
+export interface ToolEnvironmentDescriptor {
   readonly environmentId: string
   readonly version: string
   readonly tools: readonly ToolDescriptor[]
   /** Only providers with explicit original-operation lookup may receive resuming requests. */
   readonly recovery?: 'observe-existing'
+}
+
+/** Trusted executable provider. Opening a scope does not execute a tool or replay earlier work. */
+export interface ToolEnvironment extends ToolEnvironmentDescriptor {
   openScope(context: ToolEnvironmentScopeContext): ToolEnvironmentScope
 }

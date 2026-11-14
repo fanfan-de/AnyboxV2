@@ -326,7 +326,7 @@ for (const protocol of Object.keys(factories)) for (const imageInput of [true, f
     const imageRequests = records.filter(record => record.kind === 'request' && record.resourceRefs?.length)
     assert.equal(imageRequests.length, imageInput ? 1 : 0)
     const cleanup = await f.root.get('local-storage').read(reader => reader.all("SELECT observation_json FROM harness_run_operations WHERE run_id = ? AND kind = 'operation'", [first.id]))
-    assert.ok(cleanup.some(row => JSON.parse(row.observation_json ?? '{}').result?.processes), 'process final exits must be durably observed')
+    assert.ok(cleanup.some(row => JSON.parse(row.observation_json ?? '{}').result?.environments?.some(environment => environment.environmentId === 'computer' && environment.result.processes)), 'process final exits must be durably observed')
     const history = await f.root.get('harness.session-runs').loadNativeHistory(session.id, first.resultNodeId)
     const environment = history.initialization.prompts.find(prompt => prompt.documentId === 'builtin:computer-environment')
     assert.ok(environment, 'generic command Sessions fix their target shell environment')

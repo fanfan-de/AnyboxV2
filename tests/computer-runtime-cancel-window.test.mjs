@@ -1,3 +1,4 @@
+import { createComputerToolEnvironmentBinding } from '../packages/app-harness/dist/core/tool-environments/computer.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -38,7 +39,7 @@ for (const batchId of [undefined, 'durable-batch']) {
     await installComputerServices(root, inputs, { worker })
     await root.installComponent(createProjectFilesComponent(inputs))
     await root.installComponent(createSessionComponent(inputs, [{ id: 'assistant' }]))
-    await root.installComponent(createRunRuntimeComponent(inputs))
+    await root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
     const sessions = root.get('harness.sessions'), records = root.get('harness.session-runs'), runtime = root.get('harness.run-runtime')
     await sessions.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: 0 })
     const session = await sessions.createSession(project.id, 'assistant'), snapshot = modelSnapshot()

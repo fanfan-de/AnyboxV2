@@ -82,7 +82,7 @@ SDK 类型、错误、认证句柄和连接留在适配器内。环境要求显�
 
 ## 3. Nya 组件依赖与生命周期
 
-下表表达完整目标依赖。实际 Operations 已增加 worker 代理和图片服务，Workspaces 仍只注入 Projects/存储，本机准备使用目录可用性检查；Runtime 仅依赖 Session/Operations，实际协议服务经 PreparedRunProgram 固定。worker 根已安装独立执行器和四工具，产物提供方、模型 exchange owner 尚未安装。真实依赖与 Effect 以 [组件手册](modules/computers/README.md)为准。
+下表表达完整目标依赖。实际 Operations 已增加 worker 代理和图片服务，Workspaces 仍只注入 Projects/存储，本机准备使用目录可用性检查；Runtime 必需 Session，其余执行依赖通过本代 `binding.inject` 声明，Computer 绑定加入 Operations，实际协议服务经 PreparedRunProgram 固定。worker 根已安装独立执行器和四工具，产物提供方、模型 exchange owner 尚未安装。真实依赖与 Effect 以 [组件手册](modules/computers/README.md)为准。
 
 | 目标组件 / 服务 | inject 的服务边界 | 资源所有权、准入与 Effect |
 | --- | --- | --- |
@@ -90,7 +90,7 @@ SDK 类型、错误、认证句柄和连接留在适配器内。环境要求显�
 | harness-workspaces / harness.workspaces | harness.projects、local-storage、产物和工作区准备提供方端口 | 拥有工作区版本、写租约、准备及 checkpoint；停止新操作，取消并等待本代文件、上传和数据库工作，不丢弃已发布事实 |
 | harness-computer-operations / harness.computer-operations | local-storage、harness.computers、harness.workspaces | 拥有接纳账本、待派发记录、派发/查询/结果回收与取消协调；Effect 关闭本地泵和观察并等待退出，不把远端任务自动改为 cancelled |
 | 既有 harness-sessions / harness.sessions、harness.session-runs | 现有项目/存储/图片/文件服务，新增 harness.computer-operations；第四阶段增加模型 exchange 事务端口 | 拥有 Run、原生记录、工具观察、恢复游标和 owner；关闭准入并等待已接受状态提交，仍是所有 Session/Run 查询边界 |
-| 既有 harness-run-runtime / harness.run-runtime | harness.session-runs、harness.computer-operations、对应协议服务；第四阶段使用模型 exchange 端口 | 只拥有本代 program、租约、展示和观察；换代阻止本代推进，取消本地观察并等待退出；前期还须清理其本地模型 execution |
+| 既有 harness-run-runtime / harness.run-runtime | harness.session-runs、本代 binding.inject（Computer 绑定加入 harness.computer-operations）；第四阶段使用模型 exchange 端口 | 只拥有本代 program、租约、展示和观察；换代阻止本代推进，取消本地观察并等待退出；前期还须清理其本地模型 execution |
 | harness-model-exchanges / harness.model-exchanges（第四阶段） | Models 公共原生服务、local-storage、既有图片资源服务 | 独占模型 execution、驱动租约、请求、原始响应及实际退出；Runtime 换代不卸载它；其自身关闭取消并等待实际模型操作退出 |
 | computer-worker-executor / computer.worker（worker 根） | worker 独占账本、固定项目绑定、实际工具和图片端口 | 拥有执行接纳、进程 scope、输出与结果回传；停止领取，取消并等待本机资源，保存真实退出和清理事实后关闭 |
 
@@ -300,7 +300,7 @@ worker 持久保存数字 session_id 到 ProcessRef 的映射，ProcessRef 固�
 
 输出使用不可变 chunk 与 offset/cursor。每次调用返回的字节范围及结果固定保存，重复同 operation 返回同一次观察，不破坏性 drain 下一段输出，也不重复计入额度。stdin 接纳账本与实际管道写入之间仍有故障窗口；执行监督无法证明原写入时保存未知事实，不重写输入。
 
-区分三个退出屏障：本地观察连接退出、工具调用资源退出、Run 进程 scope 退出。Codex 提前返回 session_id 后，scope 继续固定实例与写租约。正常 Run 完成提交幂等 closeScope，等待真实进程组清理并保存 tool-process-cleanup 观察之后才结算。
+区分三个退出屏障：本地观察连接退出、工具调用资源退出、Run 进程 scope 退出。Codex 提前返回 session_id 后，scope 继续固定实例与写租约。正常 Run 完成提交幂等 closeScope，等待真实进程组清理；Runtime 统一关闭各环境 scope，以 tool-environment-cleanup 保存聚合观察之后才结算。旧 tool-process-cleanup 操作及原始 Computer 回执只在历史适配中继续复用，不因此重写旧事实或省略本次真实退出检查。
 
 ### 5.6 模型 exchange 的演进
 

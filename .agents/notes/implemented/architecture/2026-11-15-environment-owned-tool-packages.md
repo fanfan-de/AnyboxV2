@@ -35,6 +35,7 @@ Status: implemented
 
 ## 关联
 
+- [后续：收口工具环境的描述、绑定与 Computer 兼容边界](2026-11-15-tool-environment-boundaries.md)将纯描述与执行绑定分离，替代原注册表中的 Computer 特判与运行期覆盖；原工具拆包及耐久事务方向继续保留。
 - [工具模块](../../../../docs/modules/tools/README.md)
 - [工具库](../../../../docs/tools-library-design.md)
 - [环境提供工具与接入示例](../../../../docs/tool-environments.md)

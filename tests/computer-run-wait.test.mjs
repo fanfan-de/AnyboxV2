@@ -1,3 +1,4 @@
+import { createComputerToolEnvironmentBinding } from '../packages/app-harness/dist/core/tool-environments/computer.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
@@ -88,7 +89,7 @@ test('worker authorization and orphan draining do not block another Run wait; ab
     ctx.provide('harness.agent-prompts', {})
     ctx.provide('harness.protocol-agents', { prepareResume() { assert.fail('cleanup recovery must not reopen model execution') } })
   } })
-  await root.installComponent(createRunRuntimeComponent(inputs))
+  await root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
   await root.installComponent(createRunComponent(inputs, agents))
   const runs = root.get('harness.runs')
   await enumeration.promise

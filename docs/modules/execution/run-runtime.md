@@ -7,9 +7,9 @@ RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制�
 ## 实现与装配
 
 - 源码：[组件](../../../packages/app-harness/src/core/run/runtime-component.ts)、[RunHost / PreparedRunProgram](../../../packages/app-harness/src/core/run/program.ts)、[OwnedCall](../../../packages/app-harness/src/core/contracts.ts)、[工具校验和限制](../../../packages/app-harness/src/core/run/domain.ts)。
-- 工厂：`createRunRuntimeComponent(inputs, environments?)`；组件名：`harness-run-runtime`；配置类型：`void`；`inputs` 提供 `now()` 和 `newId()`，可选受信环境注册表由组合根与 Session、Run 共用。
+- 工厂：`createRunRuntimeComponent(inputs, binding?)`；组件名：`harness-run-runtime`；配置类型：`void`；`inputs` 提供 `now()` 和 `newId()`。受信 `binding` 声明执行提供方所需的 `inject` 并通过 `bind(deps)` 取得本轮执行注册表；组合根将同一纯环境目录提供给 Session 和 Run，Session 不持有执行闭包。
 - 提供 `harness.run-runtime: RunRuntimePort`。
-- 注入 [Session](../sessions/session.md) 的 `harness.session-runs` 与 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`。四种工具服务只由独立 worker 执行器持有，Runtime 不持有 OS 进程。
+- 始终注入 [Session](../sessions/session.md) 的 `harness.session-runs`；其他依赖由 `binding.inject` 声明。正式 Computer 绑定加入 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`，纯自定义环境可以在未安装 Computer Operations 时执行和结算。四种 Computer 工具服务只由独立 worker 执行器持有，Runtime 不持有 OS 进程。
 
 ## 服务与程序契约
 
@@ -34,7 +34,7 @@ RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制�
 
 协议共享管道在调用 Runtime 之前对整批做纯预检：合法 ID 关联的未知工具名或 schema 错误返回结构化 `invalid-tool-request` 反馈供模型修正，合法同伴返回 `batch-rejected`，整批均未执行。每个 Run 累计最多三批拒绝反馈，第四批终止；额度通过已有 protocolCursor 随模型响应保存并在恢复时继承。Runtime 仍在接受工具前重新验证完整批次，不能把执行、存储或清理异常当作可修正预检结果。损坏或无法唯一关联的 ID、损坏原生 JSON 仍终止运行。补丁文本语法错误属于已经执行的工具结果，沿既有往返路径允许模型修正，不计入纯预检拒绝额度。完整边界见[协议 Agent 注册表](protocol-agent-registry.md#准备与执行)。
 
-Runtime 先保存完整恢复批次与 operation ID，再按 Session 固定的[环境快照](../../tool-environments.md)路由。环境提供通用工具描述和执行句柄；Runtime 不导入具体 Bash、Process 或 Patch 错误类型。Computer 工具的 Session 意图、声明及资源需求仍在同一业务事务同步接纳到 Computer Operations；其他环境仅登记自己的 Session 操作，不生成 Computer 声明。环境注册表为纯内部提供方，不另建 Nya 组件。
+Runtime 先保存完整恢复批次与 operation ID，再按 Session 固定的[环境快照](../../tool-environments.md)路由。纯环境目录校验精确声明，`bind` 生成本代执行注册表；缺失、重复、版本或定义不符的提供方不能执行。Runtime 不导入具体 Bash、Process 或 Patch 错误类型，也不从环境 ID 推断工具目录规则或进程语义。Computer 工具的 Session 意图、声明及资源需求仍在同一业务事务同步接纳到 Computer Operations；其他环境仅登记自己的 Session 操作，不生成 Computer 声明。目录、注册表与历史适配是内部提供方，不另建 Nya 组件。
 
 Computer 适配在本轮依赖快照内创建，惰性打开原观察 scope；Operations 按需准备确切实例和工作区 binding，再提交独立 worker。Computer 工具使用固定 workspacePath，长进程存活期间 scope 保留实例 pin 和工作区 reservation。模型和旧会话兼容计划工具不激活 computer。worker 保存接纳凭证、原结果与实际退出，确认丢失重查同 ID/摘要，不重复派发副作用。
 
@@ -46,7 +46,9 @@ Computer 适配在本轮依赖快照内创建，惰性打开原观察 scope；Op
 
 ## 结算、取消与关闭
 
-启动后先读取 Session 保存的 Run 和项目归属，验证原生上下文模式、绑定代与完整模型快照和 program 一致。执行结束时中止新操作，取消仍在途句柄，等待每个 `done` 和所有受管 Promise。若 computer scope 已打开进程，先保存 `intent.kind=tool-process-cleanup` 的通用 operation，调用 computer scope.close() 终止并等待全部进程组、原子释放实例与工作区引用，持久化真实退出、剩余输出与清理结果；仅有文件/Bash 调用时也关闭 scope 并等待引用释放。之后 `program.close()`，等待取消状态写入，再请求 Session 原子结算。正常模型完成同样关闭进程，但不设置用户取消原因；存储失败也必须继续清理。最终 `program.release()` 在清理和持久结算之后释放绑定租约。
+启动后先读取 Session 保存的 Run 和项目归属，验证原生上下文模式、绑定代与完整模型快照和 program 一致。执行结束时中止新操作，取消仍在途句柄，等待每个 `done` 和所有受管 Promise。已打开环境统一使用 `<runId>:tool-environment-scope-close`、`intent.kind=tool-environment-cleanup` 保存关闭操作，结果恒为 `{ environments: [{ environmentId, result }] }`；不探测环境是否持有进程。各环境自行关闭全部保留资源，Computer 适配终止并等待进程组、释放实例与工作区引用并报告剩余输出。之后 `program.close()`，等待取消状态写入，再请求 Session 原子结算。正常模型完成同样关闭 scope，但不设置用户取消原因；存储失败也必须继续清理。最终 `program.release()` 在清理和持久结算之后释放绑定租约。
+
+历史读取适配集中处理旧 `computer-scope-close` ID、`tool-process-cleanup` / `computer-scope-cleanup` 意图及未包裹的 Computer 回执。恢复复用已存在操作与不可变观察，不新建替代身份，也不将新格式回写到旧观察；仍须等待本次实际退出。即使历史回执已经成功，恢复中新发生的 `done` 失败也必须保留为清理失败。
 
 清理错误优先成为 `cleanup-failed`；状态写入失败成为 `state-write-failure`；依赖撤销成为 `dependency-unavailable`；普通用户取消或 owner 关闭成为 cancelled。清理失败与状态故障不能被普通取消掩盖，也不能生成成功节点。结算提案先保存到独立恢复状态；提交确认丢失时复用原终态、节点与事件，不重新创建节点。未知执行不会自动重放。
 

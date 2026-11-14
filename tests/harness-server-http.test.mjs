@@ -657,6 +657,27 @@ test('harness server HTTP Apply Patch events bound Unicode previews and preserve
   } finally { await web.close() }
 })
 
+test('HTTP projects Computer cleanup from old and uniform reports without interpreting another environment', async () => {
+  const receipt = { processes: [{ session_id: 7, exit_code: null, signal: 'SIGTERM', output: 'tail output',
+    terminated: true, timed_out: false, truncated: false, privateScope: 'never expose' }], privateWorker: 'never expose' }
+  const reports = [receipt,
+    { environments: [{ environmentId: 'notes', result: { processes: receipt.processes } }, { environmentId: 'computer', result: receipt }] },
+    { environments: [{ environmentId: 'notes', result: { processes: receipt.processes } }] }]
+  const source = reports.map((result, index) => ({ kind: 'operation-observed', operationId: `cleanup-${index}`,
+    result, seq: index + 1, at: '2026-11-15T00:00:00.000Z' }))
+  const web = await startHarnessServerHttp({ getRunEvents: async () => source })
+  try {
+    const { response, data: events } = await request(web, 'GET', '/runs/run/events')
+    assert.equal(response.status, 200)
+    const expected = [{ sessionId: 7, exitCode: null, signal: 'SIGTERM', output: 'tail output',
+      truncated: false, terminated: true, timedOut: false }]
+    assert.deepEqual(events[0].processes, expected)
+    assert.deepEqual(events[1].processes, expected)
+    assert.equal('processes' in events[2], false)
+    assert.doesNotMatch(JSON.stringify(events), /privateScope|privateWorker|never expose|environments/)
+  } finally { await web.close() }
+})
+
 test('harness server HTTP exposes a rejected patch followed by a corrected patch as separate process cards', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-patch-'))
   const f = await fixture(directory)

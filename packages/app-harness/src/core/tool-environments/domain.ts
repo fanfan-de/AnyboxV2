@@ -11,8 +11,6 @@ export interface ToolEnvironmentSnapshot {
   readonly environments: readonly ToolEnvironmentSelection[]
 }
 
-export const computerToolEnvironmentVersion = '1.0.0'
-
 const identity = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 256 && !value.includes('\0')
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const keys = (value: Record<string, unknown>, allowed: readonly string[]) => Object.keys(value).every(key => allowed.includes(key))

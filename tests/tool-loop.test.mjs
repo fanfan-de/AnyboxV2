@@ -1,3 +1,4 @@
+import { createComputerToolEnvironmentBinding } from '../packages/app-harness/dist/core/tool-environments/computer.js'
 import { installComputerServices, createControlledComputerWorker } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../packages/app-harness/dist/core/project-files/component.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
@@ -464,7 +465,7 @@ test('revoking the worker waits for its Bash done and prevents another model ste
     await root.installComponent(createSessionComponent(inputs, agents))
     await root.installComponent(createPromptComponent(inputs))
     await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
-    await root.installComponent(createRunRuntimeComponent(inputs))
+    await root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
     await installTestProtocolAgents(root)
     await root.installComponent(createRunComponent(inputs, agents))
     const project = await root.get(projectServiceKey).openProject(directory)

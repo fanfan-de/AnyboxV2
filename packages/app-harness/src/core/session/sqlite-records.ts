@@ -26,7 +26,8 @@ import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent
 import type { RunEventData } from '../run/execution.js'
 import type { SessionPort, SessionRunPort } from './port.js'
 import { environmentForTool, parseToolEnvironmentSnapshot } from '../tool-environments/domain.js'
-import type { ToolEnvironmentRegistry } from '../tool-environments/port.js'
+import type { ToolEnvironmentCatalog } from '../tool-environments/port.js'
+import { computerCleanupReceipt } from '../tool-environments/history.js'
 
 type SavedSessionDefaults = Pick<SessionDefaults, 'agentId' | 'modelId' | 'revision'>
 type SessionRecords = Omit<SessionPort, 'createSession' | 'getSessionDefaults' | 'setSessionDefaults' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
@@ -284,7 +285,8 @@ function cleanupOutputBytes(intent: JsonValue, result?: JsonValue): number {
   if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
     !['tool-process-cleanup', 'computer-scope-cleanup', 'tool-environment-cleanup'].includes(String((intent as Record<string, JsonValue>).kind)) ||
     !result || typeof result !== 'object' || Array.isArray(result)) return 0
-  const processes = (result as Record<string, JsonValue>).processes
+  const receipt = computerCleanupReceipt(result)
+  const processes = receipt && typeof receipt === 'object' && !Array.isArray(receipt) ? (receipt as Readonly<Record<string, JsonValue>>).processes : undefined
   return Array.isArray(processes) ? processes.reduce((total, process) => {
     if (!process || typeof process !== 'object' || Array.isArray(process)) return total
     const output = (process as Record<string, JsonValue>).output
@@ -617,7 +619,7 @@ export async function openSqliteSessionRecords(
   files: ProjectFilesPort,
   computers: ComputerOperationsPort,
   attachments: UnitAttachmentsPort,
-  environments?: ToolEnvironmentRegistry,
+  environments?: ToolEnvironmentCatalog,
 ): Promise<SessionRecords> {
   await db.migrate('run-state', migrations)
   // Only a committed protocol response authorizes tool-stage takeover. A pending model request cannot be replayed.
@@ -672,7 +674,7 @@ export async function openSqliteSessionRecords(
         const modelId = resolveSessionModel(requestedModelId, readSessionDefaults(tx, agentId).modelId, fallbackModelId)
         if (environmentIds !== undefined && !environments) throw new TypeError('tool environment registry is unavailable')
         const computerToolIds = readAgentTools(tx, agentId).toolIds
-        const toolEnvironments = environments?.snapshot(environmentIds ?? ['computer'], computerToolIds)
+        const toolEnvironments = environments?.snapshot(environmentIds ?? ['computer'], { computer: computerToolIds })
         const toolSelection: ToolSelectionSnapshot = toolEnvironments
           ? Object.freeze({ schemaVersion: 1, tools: Object.freeze(toolEnvironments.environments.flatMap(environment => environment.tools)) })
           : createToolSelection(computerToolIds)

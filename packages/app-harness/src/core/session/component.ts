@@ -21,10 +21,10 @@ import { computerOperationsServiceKey } from '../computer/operations-port.js'
 import type { ComputerOperationsPort } from '../computer/operations-port.js'
 import { unitAttachmentsServiceKey } from '../unit/port.js'
 import type { UnitAttachmentsPort } from '../unit/port.js'
-import type { ToolEnvironmentRegistry } from '../tool-environments/port.js'
+import type { ToolEnvironmentCatalog } from '../tool-environments/port.js'
 
 /** One owner for every Session's conversation and execution records; execution resources stay in RunRuntime. */
-export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], environments?: ToolEnvironmentRegistry): Component.Object<void, {
+export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], environments?: ToolEnvironmentCatalog): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
   [projectServiceKey]: ProjectPort
   [imageAssetsServiceKey]: ImageAssetsPort

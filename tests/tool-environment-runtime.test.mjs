@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
+import { createRunRuntimeComponent } from '../packages/app-harness/dist/core/run/runtime-component.js'
+import { createToolEnvironmentRegistry } from '../packages/app-harness/dist/core/tool-environments/registry.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { controlledModels, deferred, modelSnapshot } from './helpers/controlled-models.mjs'
 import { completedOutcome, nativeRegistration, sessionInitialization } from './helpers/native-records.mjs'
@@ -104,6 +106,124 @@ async function until(check) {
   }
   assert.fail('tool environment did not reach the expected lifecycle boundary')
 }
+
+/** The execution boundary needs only Session records and a bound environment, never Computer services. */
+async function isolatedRuntime(provider, { runId = 'standalone-environment', legacyCleanup, settlement } = {}) {
+  const root = new Context(), registry = createToolEnvironmentRegistry([provider]), operations = new Map()
+  const snapshot = registry.snapshot([provider.environmentId]), model = modelSnapshot()
+  const initialization = { schemaVersion: 3, prompts: [], toolContractVersion: 'tool-environments-v1', toolEnvironments: snapshot,
+    toolSelection: { schemaVersion: 1, tools: snapshot.environments.flatMap(environment => environment.tools) },
+    tools: snapshot.environments.flatMap(environment => environment.tools.map(tool => tool.definition)) }
+  const binding = { protocolId: 'chat-completions', generationId: 'isolated-generation' }
+  let run = { id: runId, sessionId: 'isolated-session', status: 'running', contextVersion: 'native-local-v1',
+    protocolBinding: binding, modelSnapshot: model }
+  let state = { schemaVersion: 1, runOwnerEpoch: settlement ? 2 : 1, revision: 1, stage: settlement ? 'settling' : 'response',
+    totalToolOutputBytes: 0, ...(settlement ? { settlement } : {}) }
+  const starts = [], observations = []
+  if (legacyCleanup) operations.set(legacyCleanup.start.id, structuredClone(legacyCleanup))
+  const records = {
+    async getRun() { return run },
+    async loadRunContext() { return { projectId: 'isolated-project' } },
+    async getRunOperation(_runId, id) { return operations.get(id) },
+    async startOperation(_runId, start) {
+      starts.push(structuredClone(start))
+      const prior = operations.get(start.id)
+      if (prior) assert.deepEqual(start, prior.start, 'an accepted operation identity and intent are immutable')
+      else operations.set(start.id, { start: structuredClone(start) })
+      return true
+    },
+    async observeOperation(_runId, id, observation) {
+      const prior = operations.get(id)
+      assert.ok(prior)
+      if (prior.observation) assert.deepEqual(observation, prior.observation, 'an acknowledged receipt is immutable')
+      else prior.observation = structuredClone(observation)
+      observations.push({ id, observation: structuredClone(observation) })
+    },
+    async saveRunResume(_runId, _ownerEpoch, patch) { state = { ...state, ...patch } },
+    async loadRunResume() { return { state } },
+    async requestCancellation() { run = { ...run, status: 'cancelling' } },
+    async settleRun(_runId, outcome) {
+      run = { ...run, status: outcome.kind === 'completed' ? 'completed' : 'failed', output: outcome.output,
+        ...(outcome.kind === 'completed' ? { resultNodeId: 'isolated-result' } : { errorCategory: outcome.category }) }
+      return run
+    },
+  }
+  await root.installComponent({ name: 'isolated-session-records', apply(ctx) { ctx.provide('harness.session-runs', records) } })
+  await root.installComponent(createRunRuntimeComponent({ now: () => 'now', newId: () => 'isolated-operation' },
+    { inject: [], bind: () => registry }))
+  const runtime = root.get('harness.run-runtime')
+  return { root, runtime, runId, operations, starts, observations, initialization, binding, model,
+    resume: settlement ? { run, projectId: 'isolated-project', initialization, records: [], state } : undefined,
+    program: {
+      initialization, binding, modelSnapshot: model, signal: new AbortController().signal,
+      async execute() { assert.fail('a settling recovery must not execute the program') },
+      async close() { return { records: [], checkpoint: null, cleanup: 'completed' } }, release() {},
+    },
+    async close(failed = false) { if (failed) await assert.rejects(root.fiber.dispose()); else await root.fiber.dispose() },
+  }
+}
+
+test('Runtime executes and settles an inserted environment without installing Computer Operations', { timeout: 5000 }, async () => {
+  const events = [], f = await isolatedRuntime(environment(events))
+  try {
+    assert.equal(f.root.get('harness.computer-operations'), undefined)
+    const program = { ...f.program, async execute(host) {
+      const observations = await host.executeTools([{ id: 'independent-call', name: 'sample_echo', arguments: { value: 'independent result' } }], 'serial', 'independent')
+      return { kind: 'completed', output: observations[0].result, resultRecordIds: ['isolated-response'] }
+    } }
+    await f.runtime.start({ runId: f.runId, program })
+    const finished = await f.runtime.wait(f.runId)
+    assert.equal(finished.status, 'completed')
+    assert.equal(finished.output, 'independent result')
+    assert.equal(finished.resultNodeId, 'isolated-result')
+    assert.equal(events.filter(event => event.kind === 'execute').length, 1)
+    assert.equal(events.filter(event => event.kind === 'close').length, 1)
+    assert.equal(f.root.get('harness.computer-operations'), undefined)
+    const cleanup = f.operations.get(`${f.runId}:tool-environment-scope-close`)
+    assert.equal(cleanup.start.intent.kind, 'tool-environment-cleanup')
+    assert.deepEqual(cleanup.observation.result, { environments: [{ environmentId: 'sample', result: { closed: true } }] })
+  } finally { await f.close() }
+})
+
+for (const acknowledged of [false, true]) test(`Runtime reuses a historical Computer cleanup ${acknowledged ? 'receipt' : 'intent'} without changing its identity or raw result`, { timeout: 5000 }, async () => {
+  const id = `historical-computer-close-${acknowledged}`, receipt = { processes: [{ sessionId: 7, exitCode: 0 }] }
+  const start = { id: `${id}:computer-scope-close`, kind: 'operation', cleanup: true, intent: { kind: 'tool-process-cleanup' } }
+  const events = [], f = await isolatedRuntime({ ...environment(events, { close: () => immediate(receipt) }), environmentId: 'computer' },
+    { runId: id, legacyCleanup: { start, ...(acknowledged ? { observation: { kind: 'value', result: receipt } } : {}) },
+      settlement: { kind: 'completed', output: 'saved completion', resultRecordIds: ['saved-response'], records: [], checkpoint: null } })
+  try {
+    await f.runtime.start({ runId: id, program: f.program, resume: f.resume })
+    const finished = await f.runtime.wait(id)
+    assert.equal(finished.status, 'completed')
+    assert.equal(finished.output, 'saved completion')
+    assert.equal(events.filter(event => event.kind === 'execute').length, 0)
+    assert.equal(events.filter(event => event.kind === 'close').length, 1)
+    assert.deepEqual(f.starts, [start])
+    assert.equal(f.operations.has(`${id}:tool-environment-scope-close`), false)
+    assert.deepEqual(f.operations.get(start.id).observation, { kind: 'value', result: receipt })
+    assert.equal(f.observations.length, acknowledged ? 0 : 1)
+  } finally { await f.close() }
+})
+
+test('an acknowledged historical Computer receipt cannot hide a newly failed actual exit', { timeout: 5000 }, async () => {
+  const id = 'historical-computer-new-exit-failure', receipt = { processes: [{ sessionId: 7, exitCode: 0 }] }
+  const start = { id: `${id}:computer-scope-close`, kind: 'operation', cleanup: true, intent: { kind: 'computer-scope-cleanup' } }
+  const events = [], f = await isolatedRuntime({ ...environment(events, { close() {
+    const done = Promise.reject(new Error('actual exit remains unknown')); void done.catch(() => {})
+    return { result: Promise.resolve({ processes: [{ sessionId: 7, exit: 'unknown' }] }), done, cancel() {} }
+  } }), environmentId: 'computer' }, { runId: id, legacyCleanup: { start, observation: { kind: 'value', result: receipt } },
+    settlement: { kind: 'completed', output: 'saved success', resultRecordIds: ['saved-response'], records: [], checkpoint: null } })
+  try {
+    await f.runtime.start({ runId: id, program: f.program, resume: f.resume })
+    const finished = await f.runtime.wait(id)
+    assert.equal(finished.status, 'failed')
+    assert.equal(finished.errorCategory, 'tool-cleanup-failure')
+    assert.equal(finished.resultNodeId, undefined)
+    assert.deepEqual(f.operations.get(start.id).observation, { kind: 'value', result: receipt })
+    assert.equal(f.observations.length, 0)
+    assert.equal(f.operations.has(`${id}:tool-environment-scope-close`), false)
+  } finally { await f.close(true) }
+})
 
 test('an inserted non-Computer environment determines tools and runs through the native Agent loop', { timeout: 15000 }, async () => {
   const events = [], f = await fixture(environment(events))

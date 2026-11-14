@@ -48,7 +48,7 @@ Models 不导入应用源码、Session、数据库业务表或工具实现。Ses
 
 Runtime 在首次异步读取前同步登记 program 所有权。同步拒绝表示未接管，Run 清理；接管后 Runtime 清理。请求准备后若持久意图失败，start 从未调用。观察提交失败立即停止后续操作。取消后仍提交已发生的工具结果和 Apply Patch 部分提交。
 
-Models 只有在底层成功退出后才提交候选上下文；done 拒绝是失败退出，不无限等待悬空 result，迟到结果不能改变冻结报告。Runtime 还要关闭每 Run 进程 scope，经通用 tool-process-cleanup operation 保存最终退出观察，再等待 program.close 和所有工具退出；结果成功但 done/close 失败不能产生成功节点。cleanup 失败保留已知事实与固定错误，不能暴露原始提供方错误或凭据。
+Models 只有在底层成功退出后才提交候选上下文；done 拒绝是失败退出，不无限等待悬空 result，迟到结果不能改变冻结报告。Runtime 还要关闭每 Run 的环境 scope，经通用 tool-environment-cleanup operation 保存按环境聚合的最终退出观察，再等待 program.close 和所有工具退出；旧 tool-process-cleanup 身份与原始 Computer 回执仅在历史适配中复用。结果成功但 done/close 失败不能产生成功节点。cleanup 失败保留已知事实与固定错误，不能暴露原始提供方错误或凭据。
 
 ## 4. 协议支持矩阵
 

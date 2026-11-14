@@ -10,7 +10,6 @@ import type { RunUnitBinding } from '../unit/domain.js'
 export const computerOperationsServiceKey = 'harness.computer-operations'
 export interface ComputerRunScope {
   execute(operationId: string): OwnedCall<ToolObservation>
-  hasProcesses(): boolean
   cancel(): Promise<void>
   close(): OwnedCall<JsonValue>
 }

@@ -115,6 +115,8 @@ Session run-state 写 v9，新 NativeInitialization v2 / tool-library-v1 复制�
 
 新增根上的进程和文件执行器，分别持有按 Run 的管道命令、stdin/输出及文件读取、搜索和图片导入；来源写入复用 Apply Patch 队列。正常模型结束也终止并等待剩余进程，经通用 tool-process-cleanup 操作保存实际退出后再结算。工具图片与观察同事务保留，再以用户图片块及 resourceRefs 进入下一次增量请求；文本模型返回不支持诊断。
 
+上述为本阶段实施事实；当前工具环境的纯目录、本代执行绑定及统一 tool-environment-cleanup 新写入契约见[环境提供工具](tool-environments.md)，旧清理身份和原始回执仅保留历史兼容。
+
 验收入口：tool-catalog、process-tools、file-tools、native-tool-library 及现有 Run/原生协议行为测试，统一执行 npm run check。检查不使用实际业务库、真实模型 API 或系统 Vault；未修改 NyaCore。具体契约和升级边界见[工具库设计](./tools-library-design.md)。
 
 ## 可组合单元 U0：附着登记（2026-10-14）

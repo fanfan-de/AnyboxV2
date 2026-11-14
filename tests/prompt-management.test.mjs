@@ -1,3 +1,4 @@
+import { createComputerToolEnvironmentBinding } from '../packages/app-harness/dist/core/tool-environments/computer.js'
 import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../packages/app-harness/dist/core/project-files/component.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
@@ -345,7 +346,7 @@ test('removing the prompt component cancels and joins dependent runs', async () 
   const promptFiber = root.installComponent(createPromptComponent(inputs))
   const agentPromptFiber = root.installComponent(createAgentPromptComponent(inputs, agents, () => true))
   const llmFiber = root.installComponent(llm.component())
-  const loopFiber = root.installComponent(createRunRuntimeComponent(inputs))
+  const loopFiber = root.installComponent(createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding()))
   await installTestProtocolAgents(root)
   const runsFiber = root.installComponent(createRunComponent(inputs, agents))
   try {

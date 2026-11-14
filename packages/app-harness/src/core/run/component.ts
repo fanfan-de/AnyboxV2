@@ -27,7 +27,7 @@ import { unitAttachmentsServiceKey } from '../unit/port.js'
 import type { UnitAttachmentsPort, RunUnitBindings } from '../unit/port.js'
 import { localAttachmentId } from '../unit/domain.js'
 import { isUnitError } from '../unit/domain.js'
-import type { ToolEnvironmentRegistry } from '../tool-environments/port.js'
+import type { ToolEnvironmentCatalog } from '../tool-environments/port.js'
 
 export const runServiceKey = 'harness.runs'
 export const runAdmissionServiceKey = 'harness.run-admission'
@@ -46,7 +46,7 @@ export interface RunPort {
 }
 
 /** Admission owns a prepared program until the Runtime synchronously accepts it. */
-export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentRegistry): Component.Object<void, {
+export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentCatalog): Component.Object<void, {
   [sessionServiceKey]: SessionPort
   [sessionRunServiceKey]: SessionRunPort
   [agentPromptServiceKey]: AgentPromptPort

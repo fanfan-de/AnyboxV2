@@ -41,8 +41,8 @@ import { unitAttachmentsServiceKey } from './unit/port.js'
 import type { AttachCodeInput, UnitAttachment, UnitAttachmentsPort } from './unit/port.js'
 import { localComputerUnitId, localModelsUnitId } from './unit/domain.js'
 import type { ToolEnvironment } from '@anybox/tool-api'
-import { createToolEnvironmentRegistry } from './tool-environments/registry.js'
-import { createComputerToolEnvironment } from './tool-environments/computer.js'
+import { createToolEnvironmentCatalog } from './tool-environments/registry.js'
+import { computerToolEnvironmentCatalogEntry, createComputerToolEnvironmentBinding } from './tool-environments/computer.js'
 
 /** Reject the removed selector for JavaScript consumers before any component or storage is installed. */
 export function validateComputerEnvironmentOptions(options: object): void {
@@ -114,7 +114,8 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   validateComputerEnvironmentOptions(options)
   const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
   const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
-  const toolEnvironments = createToolEnvironmentRegistry([createComputerToolEnvironment(), ...(options.toolEnvironments ?? [])])
+  const toolEnvironments = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry,
+    ...(options.toolEnvironments ?? []).map(descriptor => ({ descriptor }))])
   const configuredProtocols = lookup<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
   const protocolComponents = lookup(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
@@ -135,7 +136,8 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery }),
     createProjectFilesComponent(inputs),
     createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
-    createSessionComponent(inputs, agents, toolEnvironments), createRunRuntimeComponent(inputs, toolEnvironments),
+    createSessionComponent(inputs, agents, toolEnvironments),
+    createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding(toolEnvironments, options.toolEnvironments)),
     createRunComponent(inputs, agents, lifetime.isClosing, lifetime.signal, toolEnvironments)]
 }
 

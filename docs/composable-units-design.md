@@ -154,7 +154,7 @@ sequenceDiagram
 | result | 业务结果，可早于退出 | OwnedOperation.result |
 | done | 工作与清理实际退出；拒绝表示清理失败 | OwnedOperation.done |
 | control | `{ controlId, targetOperationId, kind: cancel \| close-scope }`，独立幂等、单调 | Computer `cancel` / `close-scope` 提交 |
-| report | 关闭 execution 或 scope 后的结构化报告，冻结后不再改变 | NativeExitReport、tool-process-cleanup 观察 |
+| report | 关闭 execution 或 scope 后的结构化报告，冻结后不再改变 | NativeExitReport、tool-environment-cleanup 聚合观察；旧 tool-process-cleanup 回执仅历史兼容 |
 
 harness server 的 RunRuntime 不感知单元在本地还是远端：它调用代理组件，代理组件把这八步映射到传输。声明先在 harness server 业务库落盘，再发给单元；单元回执丢失时按同 ID 查回；断网只改变连通性状态，不把 running 改成 failed。
 

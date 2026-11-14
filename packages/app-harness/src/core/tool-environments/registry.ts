@@ -1,11 +1,10 @@
 import { isDeepStrictEqual } from 'node:util'
 import { validateToolArguments, validateToolDescriptors } from '@anybox/tool-api'
-import type { JsonValue, ToolCall, ToolEnvironment, ToolEnvironmentResult, ToolEnvironmentScope } from '@anybox/tool-api'
-import { createToolSelection, getToolById } from '../tool/catalog.js'
+import type { JsonValue, ToolCall, ToolDescriptor, ToolEnvironment, ToolEnvironmentDescriptor, ToolEnvironmentResult, ToolEnvironmentScope } from '@anybox/tool-api'
 import type { ToolObservation, ValidatedToolRequest } from '../run/domain.js'
 import { environmentForTool, parseToolEnvironmentSnapshot } from './domain.js'
 import type { ToolEnvironmentSnapshot } from './domain.js'
-import type { ToolEnvironmentRegistry, ToolEnvironmentRun, ToolEnvironmentRunContext } from './port.js'
+import type { ToolEnvironmentCatalog, ToolEnvironmentCatalogEntry, ToolEnvironmentRegistry, ToolEnvironmentRun, ToolEnvironmentRunContext } from './port.js'
 
 function failure(category: 'invalid-request' | 'cancelled' | 'cleanup-failure' | 'unavailable' | 'outcome-unknown'): Error {
   return Object.assign(new Error(`tool environment ${category}`), { name: 'ToolEnvironmentError', category })
@@ -71,7 +70,6 @@ function openRun(environments: ReadonlyMap<string, ToolEnvironment>, snapshot: T
       return call
     },
     hasResources: () => scopes.size > 0,
-    hasProcesses: () => [...scopes.values()].some(scope => 'hasProcesses' in scope && typeof scope.hasProcesses === 'function' && scope.hasProcesses()),
     cancel() {
       accepting = false
       if (!cancelling) cancelling = (async () => {
@@ -103,8 +101,6 @@ function openRun(environments: ReadonlyMap<string, ToolEnvironment>, snapshot: T
       const exits = Promise.allSettled([...closures.map(({ call }) => call.done), ...[...active].map(call => call.done)])
       const report = (failedExit = false): JsonValue => {
         const values = closures.flatMap(({ environmentId }) => available.has(environmentId) ? [{ environmentId, result: available.get(environmentId)! }] : [])
-        // Preserve the existing Computer cleanup receipt and its historical representation.
-        if (values.length === 1 && values[0]!.environmentId === 'computer') return values[0]!.result
         if (!values.length && (resultFailures || initializationFailure || failedExit)) throw failure('cleanup-failure')
         return { environments: values }
       }
@@ -127,56 +123,82 @@ function openRun(environments: ReadonlyMap<string, ToolEnvironment>, snapshot: T
   return service
 }
 
-/** Trusted providers are fixed for this application generation; Sessions retain exact definitions. */
-export function createToolEnvironmentRegistry(providers: readonly ToolEnvironment[]): ToolEnvironmentRegistry {
-  const environments = new Map<string, ToolEnvironment>()
-  for (const provider of providers) {
-    if (!provider || typeof provider.openScope !== 'function' || provider.recovery !== undefined && provider.recovery !== 'observe-existing') throw new TypeError('invalid tool environment')
-    // New registrations enforce the executable schema subset. The history parser
-    // deliberately remains structural so unsupported older definitions stay readable.
-    validateToolDescriptors(provider.tools)
-    const snapshot = parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: [{ environmentId: provider.environmentId, version: provider.version, tools: provider.tools }] })
-    if (environments.has(provider.environmentId)) throw new TypeError('duplicate tool environment')
-    const selection = snapshot.environments[0]!
-    const openScope = provider.openScope.bind(provider)
-    environments.set(provider.environmentId, Object.freeze({ environmentId: provider.environmentId, version: provider.version, tools: selection.tools,
-      ...(provider.recovery ? { recovery: provider.recovery } : {}), openScope }))
+interface CatalogRegistration {
+  readonly descriptor: ToolEnvironmentDescriptor
+  readonly historyTools: readonly ToolDescriptor[]
+  readonly validateSelection?: (tools: readonly ToolDescriptor[]) => void
+}
+
+/** Pure declarations and selection policies; constructing a catalog never opens execution scopes. */
+export function createToolEnvironmentCatalog(entries: readonly ToolEnvironmentCatalogEntry[]): ToolEnvironmentCatalog {
+  if (!Array.isArray(entries)) throw new TypeError('invalid tool environment catalog')
+  const registrations = new Map<string, CatalogRegistration>()
+  for (const entry of entries) {
+    const declaration = entry?.descriptor
+    if (!declaration || declaration.recovery !== undefined && declaration.recovery !== 'observe-existing' || entry.validateSelection !== undefined && typeof entry.validateSelection !== 'function') throw new TypeError('invalid tool environment')
+    // Current declarations must be executable. Historical declarations remain
+    // structural, so retired schemas stay readable without becoming selectable.
+    validateToolDescriptors(declaration.tools)
+    const selection = parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: [{ environmentId: declaration.environmentId, version: declaration.version, tools: declaration.tools }] }).environments[0]!
+    if (registrations.has(selection.environmentId)) throw new TypeError('duplicate tool environment')
+    const historyTools = entry.historyTools === undefined ? Object.freeze([]) : parseToolEnvironmentSnapshot({ schemaVersion: 1,
+      environments: [{ environmentId: selection.environmentId, version: selection.version, tools: entry.historyTools }] }).environments[0]!.tools
+    const descriptor: ToolEnvironmentDescriptor = Object.freeze({ ...selection, ...(declaration.recovery ? { recovery: declaration.recovery } : {}) })
+    registrations.set(selection.environmentId, { descriptor, historyTools,
+      ...(entry.validateSelection ? { validateSelection: entry.validateSelection } : {}) })
   }
-  const registry: ToolEnvironmentRegistry = {
-    environments: Object.freeze([...environments.values()]),
-    snapshot(ids, computerToolIds) {
+  const catalog: ToolEnvironmentCatalog = {
+    environments: Object.freeze([...registrations.values()].map(({ descriptor }) => descriptor)),
+    snapshot(ids, toolIdsByEnvironment) {
       if (!Array.isArray(ids) || new Set(ids).size !== ids.length) throw new TypeError('invalid tool environment selection')
       return parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: ids.map(environmentId => {
-        const provider = environments.get(environmentId)
-        if (!provider) throw new TypeError('unavailable tool environment')
-        const tools = environmentId === 'computer' && computerToolIds !== undefined ? createToolSelection(computerToolIds).tools : provider.tools
-        if (tools.some(tool => !provider.tools.some(current => isDeepStrictEqual(current, tool)))) throw new TypeError('tool not supplied by environment')
-        if (environmentId === 'computer' && tools.some(tool => getToolById(tool.toolId)?.dependencies.some(id => !tools.some(candidate => candidate.toolId === id)))) throw new TypeError('missing tool dependency')
-        return { environmentId, version: provider.version, tools }
+        const registration = registrations.get(environmentId)
+        if (!registration) throw new TypeError('unavailable tool environment')
+        const { descriptor } = registration
+        const selectedIds = toolIdsByEnvironment && Object.hasOwn(toolIdsByEnvironment, environmentId) ? toolIdsByEnvironment[environmentId] : undefined
+        let tools = descriptor.tools
+        if (selectedIds !== undefined) {
+          if (!Array.isArray(selectedIds) || selectedIds.some(id => typeof id !== 'string') || new Set(selectedIds).size !== selectedIds.length) throw new TypeError('invalid tool selection')
+          const selected = new Set(selectedIds)
+          if (selectedIds.some(id => !descriptor.tools.some(tool => tool.toolId === id))) throw new TypeError('tool not supplied by environment')
+          tools = descriptor.tools.filter(tool => selected.has(tool.toolId))
+        }
+        registration.validateSelection?.(tools)
+        return { environmentId, version: descriptor.version, tools }
       }) })
     },
     validate(value) {
       const snapshot = parseToolEnvironmentSnapshot(value)
       for (const selection of snapshot.environments) {
-        const provider = environments.get(selection.environmentId)
-        if (!provider || provider.version !== selection.version || selection.tools.some(tool => {
-          if (provider.tools.some(current => isDeepStrictEqual(current, tool))) return false
-          const legacy = selection.environmentId === 'computer' ? getToolById(tool.toolId) : undefined
-          return !legacy || legacy.selectable || !isDeepStrictEqual({ toolId: legacy.toolId, version: legacy.version, definition: legacy.definition }, tool)
-        })) throw new TypeError('tool environment snapshot unavailable')
-        if (selection.environmentId === 'computer' && selection.tools.some(tool => getToolById(tool.toolId)?.dependencies.some(id => !selection.tools.some(candidate => candidate.toolId === id)))) throw new TypeError('missing tool dependency')
+        const registration = registrations.get(selection.environmentId)
+        if (!registration || registration.descriptor.version !== selection.version || selection.tools.some(tool =>
+          ![...registration.descriptor.tools, ...registration.historyTools].some(current => isDeepStrictEqual(current, tool)))) throw new TypeError('tool environment snapshot unavailable')
+        registration.validateSelection?.(selection.tools)
       }
       return snapshot
     },
-    openRun(snapshot, context, overrides = []) {
-      const selected = new Map(environments)
-      for (const provider of overrides) {
-        const registered = environments.get(provider.environmentId)
-        if (!registered || provider.version !== registered.version || !isDeepStrictEqual(provider.tools, registered.tools)) throw new TypeError('tool environment override conflict')
-        selected.set(provider.environmentId, provider)
+    bind(providers) {
+      if (!Array.isArray(providers)) throw new TypeError('invalid tool environment providers')
+      const bound = new Map<string, ToolEnvironment>()
+      for (const provider of providers) {
+        if (!provider || typeof provider.openScope !== 'function') throw new TypeError('invalid executable tool environment')
+        const registration = registrations.get(provider.environmentId)
+        const descriptor = registration?.descriptor
+        if (!descriptor || bound.has(provider.environmentId) || provider.version !== descriptor.version || provider.recovery !== descriptor.recovery || !isDeepStrictEqual(provider.tools, descriptor.tools)) throw new TypeError('tool environment binding conflict')
+        bound.set(provider.environmentId, Object.freeze({ ...descriptor, openScope: provider.openScope.bind(provider) }))
       }
-      return openRun(selected, registry.validate(snapshot), context)
+      if (bound.size !== registrations.size) throw new TypeError('missing executable tool environment')
+      return Object.freeze({ openRun(snapshot: ToolEnvironmentSnapshot, context: ToolEnvironmentRunContext) {
+        return openRun(bound, catalog.validate(snapshot), context)
+      } })
     },
   }
-  return Object.freeze(registry)
+  return Object.freeze(catalog)
+}
+
+/** Convenience for callers whose pure declarations and executable providers are already available together. */
+export function createToolEnvironmentRegistry(providers: readonly ToolEnvironment[]): ToolEnvironmentCatalog & ToolEnvironmentRegistry {
+  if (!Array.isArray(providers)) throw new TypeError('invalid tool environment providers')
+  const catalog = createToolEnvironmentCatalog(providers.map(descriptor => ({ descriptor })))
+  return Object.freeze({ ...catalog, ...catalog.bind(providers) })
 }
