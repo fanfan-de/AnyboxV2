@@ -86,6 +86,8 @@ export interface ModelConfiguration extends Versioned, ModelConfigurationInput {
 export interface RunnableModelSummary extends ModelConfiguration {
   readonly providerDefinitionId: string;
   readonly source: SourceRef;
+  /** Definition metadata pinned by modelDefinitionVersionId; absent when that history is unavailable. */
+  readonly limits?: ModelInput['limits'];
   readonly available: boolean;
   readonly unavailableReason?: 'disabled' | 'provider-disabled' | 'protocol-unavailable' | 'credential-missing' | 'invalid-configuration';
   readonly effectiveCapabilities?: EffectiveCapabilities;

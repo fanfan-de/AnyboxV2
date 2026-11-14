@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, realpathSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
@@ -91,7 +91,7 @@ test('process cleanup failure preserves its facts and prevents successful settle
   const f = await fixture()
   try {
     const result = { processes: [{ session_id: 1, exit_code: null, signal: 'SIGTERM', output: 'partial', terminated: true, timed_out: false, truncated: false }], cleanup: 'failed' }
-    f.root.get('tools.processes').openRun = () => ({
+    f.root.get('tools.processes').openScope = () => ({
       execute: () => ({ result: Promise.resolve({ output: 'started', session_id: 1, exit_code: null }), done: Promise.resolve(), cancel() {} }),
       close: () => ({ result: Promise.resolve(result), done: Promise.reject(new Error('controlled cleanup failure')), cancel() {} }),
     })
@@ -124,7 +124,36 @@ test('failed final observation closes process resources and fails settlement', {
   } finally { await f.close() }
 })
 
-test('output captured at final process close participates in the Run output limit', { timeout: 10000 }, async () => {
+test('file read results exceeding 128 KiB reach the model and complete the Run', { timeout: 10000 }, async () => {
+  const f = await fixture()
+  try {
+    const line = '架构文档'.repeat(10)
+    writeFileSync(join(f.directory, 'architecture.txt'), `${line}\n`.repeat(500))
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Read architecture', idempotencyKey: 'large-reads' })
+    f.llm.calls[0].result.resolve({ toolCalls: [1, 2, 3].map(number => ({
+      id: `read-${number}`, name: 'claude_code_Read', arguments: { file_path: 'architecture.txt' },
+    })) })
+    f.llm.calls[0].done.resolve()
+    await until(() => f.llm.calls.length === 2)
+    const feedback = f.llm.calls[1].input.messages.filter(message => message.role === 'tool')
+    assert.deepEqual(feedback.map(message => message.callId), ['read-1', 'read-2', 'read-3'])
+    for (const message of feedback) {
+      const result = JSON.parse(message.content)
+      assert.equal(result.truncated, false)
+      assert.equal(result.totalLines, 500)
+      assert.ok(result.text.endsWith(`500: ${line}`))
+    }
+    const records = f.root.get('harness.session-runs')
+    assert.ok((await records.loadRunResume(run.id)).state.totalToolOutputBytes > 131_072)
+    f.llm.calls[1].result.resolve('Architecture reviewed.'); f.llm.calls[1].done.resolve()
+    const finished = await f.harness.waitRun(run.id)
+    assert.equal(finished.status, 'completed')
+    assert.equal(finished.output, 'Architecture reviewed.')
+    assert.ok(finished.resultNodeId)
+  } finally { await f.close() }
+})
+
+test('output captured at final process close can exceed 128 KiB without failing the Run', { timeout: 10000 }, async () => {
   const f = await fixture()
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'output', idempotencyKey: 'one' })
@@ -133,11 +162,12 @@ test('output captured at final process close participates in the Run output limi
     } }] })
     f.llm.calls[0].done.resolve()
     await until(() => f.llm.calls.length === 2 && existsSync(join(f.directory, 'output.ready')))
-    f.llm.calls[1].result.resolve('must not publish'); f.llm.calls[1].done.resolve()
+    f.llm.calls[1].result.resolve('Process complete.'); f.llm.calls[1].done.resolve()
     const finished = await f.harness.waitRun(run.id)
-    assert.equal(finished.status, 'failed')
-    assert.equal(finished.errorCategory, 'limit-exceeded')
-    assert.equal(finished.resultNodeId, undefined)
+    assert.equal(finished.status, 'completed')
+    assert.equal(finished.output, 'Process complete.')
+    assert.ok(finished.resultNodeId)
+    assert.ok((await f.root.get('harness.session-runs').loadRunResume(run.id)).state.totalToolOutputBytes > 131_072)
     assert.equal((await cleanupFact(f, run)).result.processes[0].truncated, true)
   } finally { await f.close() }
 })

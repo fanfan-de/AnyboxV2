@@ -29,6 +29,8 @@ import { randomUUID } from 'node:crypto'
 import { tryAcquirePackageUsageExitLock } from './package-management/usage-locks.js'
 
 export interface ClientHostOptions {
+  /** The enclosing composition owns final root disposal when supplied. */
+  readonly root?: Context
   readonly applications: readonly ApplicationRegistration[]
   readonly path: string
   readonly port?: number
@@ -63,7 +65,8 @@ export async function createClientHost(options: ClientHostOptions) {
   const installerComponent = registryPath === undefined ? undefined : createPackageInstallerComponent({ directory: dirname(registryPath),
     verification,
     preparation: { trustedAliases: options.packageTrustPolicy?.trustedAliases, commonAssets: shellAssets } })
-  const root = new Context()
+  const root = options.root ?? new Context()
+  if (root.root !== root) throw new TypeError('application root Context required')
   let catalog = createApplicationCatalog(options.packageManagementOnly ? [] : options.applications, shellAssets)
   let runtime: ReturnType<typeof createApplicationRuntimes> | undefined
   let loaded: LoadedInstalledApplicationCatalog | undefined
@@ -97,8 +100,7 @@ export async function createClientHost(options: ClientHostOptions) {
   const close = () => closing ??= (async () => {
     const errors: unknown[] = []
     try { await prepareClose() } catch (error) { errors.push(error) }
-    const results = await Promise.allSettled([root.fiber.dispose(), drainingRequests])
-    try { await loaded?.close() } catch (error) { errors.push(error) }
+    const results = await Promise.allSettled([options.root ? undefined : root.fiber.dispose(), drainingRequests])
     errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))
     if (errors.length) throw new AggregateError(errors, 'Client shutdown failed')
   })()
@@ -123,6 +125,8 @@ export async function createClientHost(options: ClientHostOptions) {
           options.packageOnCredential?.(credential)
           loaded = await loadInstalledApplicationCatalog({ directory: dirname(registryPath), credential, registry, verification,
             trustedAliases: options.packageTrustPolicy?.trustedAliases, roleConfig: options.packageRoleConfig, commonAssets: shellAssets, startRole: options.packageStartRole, channel: options.packageChannel })
+          const installedCatalog = loaded
+          root.effect(() => () => installedCatalog.close(), 'release installed client usage after its components exit')
           const replaced = new Set(loaded.applications.map(application => application.definition.id))
           catalog = createApplicationCatalog([...options.applications.filter(application => !replaced.has(application.definition.id)), ...loaded.applications], shellAssets)
         }

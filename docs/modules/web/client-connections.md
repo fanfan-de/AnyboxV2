@@ -18,7 +18,7 @@ Anybox Harness 的系统目录窗口同时要求所选执行环境为本机、�
 
 桌面组合及显式 `web:local` 组合可注入 `DesktopLocalPairingOptions`：只读 `getLocal(signal)` 返回受信本机地址及 instanceId，服务未启动时返回 undefined；可选 `start(signal)` 只在显式 `retryLocal` 中调用，用于启用本机服务；`issue(signal)` 通过私有宿主控制发行 managed token，`reconcile(retainedToken,signal)` 回收同一所有者的孤立凭据。组件每代异步观察一次本机服务，不调用 start、不阻塞初始化；不存在服务时保存 `enabled: true, state: disabled` 且不访问执行端或发行凭据。enabled 表达组合入口提供的本机配对能力，state 表达配对状态。存在服务时按既有流程配对。并发显式启动复用同一操作；在自动观察期间收到显式启动时等待观察退出，再执行一次启动，不丢弃请求。关闭停止准入、取消并等待已经受理的私有调用，已取消请求不调用 start。`localStatus()` 仅返回白名单状态、本机身份、连接 ID/版本及固定错误码。独立 `client`/`web` 入口不注入此选项，不能调用重试。
 
-`web:local` 通过继承的私有父子 IPC 转送本机描述、发行及 reconcile，请求始终到达该启动器实际创建的执行端；不新增公开 HTTP 配对端口。Harness 的 managed owner 是 `anybox.web.local`，Claude Agent 使用独立 owner，彼此不撤销凭据。该入口不提供 `start` 回调，启动器在显式运行组合命令时已经启动执行端；打开客户端应用只建立连接，不自动打开后台 Agent。完整 token 只经过私有 IPC 与所属应用 Vault，不进入环境变量、日志或浏览器。启动期收到关闭请求也必须记住，待工厂结束后完成实际清理，父启动器等待全部子进程退出。
+`web:local` 在同一进程及根内通过私有回调获取本机描述、发行及 reconcile，请求始终到达该组合实际创建的执行端，不新增公开 HTTP 配对端口。Harness 的 managed owner 仍是 `anybox.web.local`，Claude Agent 使用独立 owner，彼此不撤销凭据。该入口不提供 `start` 回调；打开客户端应用只建立连接，不自动打开后台 Agent。完整 token 只在私有调用和所属应用 Vault 内流转，不进入环境变量、日志或浏览器。启动期收到关闭请求会被记住，工厂结束后由唯一根清理并等待退出。
 
 Harness 连接管理在 disabled 状态显示“启动本机服务”，点击才 POST `/local/retry`；未保存表单阻止该操作。状态轮询、打开/恢复客户端应用和选择远端设备不会调用 start。桌面私有 `local.start` 由主进程负责实例去重与生命周期；配对请求取消只结束观察，已经显式启用的服务保持桌面托管，直至正常退出。详细进程边界见[桌面运行边界](../../desktop-runtime.md)。
 

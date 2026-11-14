@@ -4,20 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
-import { processToolsServiceKey, createProcessToolsComponent } from '../packages/app-harness/dist/core/tool/process-component.js'
+import { processToolsServiceKey, createProcessToolsComponent } from '@anybox/computer-tools/processes'
 import { nodeCommand } from './helpers/native-shell.mjs'
 
-async function fixture(options = {}, projectLookup) {
+async function fixture(options = {}) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-process-tools-')))
   const root = new Context()
-  await root.installComponent({ name: 'process-test-projects', apply(ctx) {
-    ctx.provide(projectServiceKey, { async requireAvailable(id) {
-      if (projectLookup) await projectLookup()
-      if (id !== 'project') throw new Error('unknown project')
-      return { id, path: directory, name: 'test', createdAt: 'now', available: true }
-    } })
-  } })
   await root.installComponent(createProcessToolsComponent({ terminationGraceMs: 40, ...options }))
   return { directory, root, processes: root.get(processToolsServiceKey), async close() {
     try { await root.fiber.dispose() } finally { rmSync(directory, { recursive: true, force: true }) }
@@ -29,33 +21,30 @@ async function untilFile(path) {
   assert.ok(existsSync(path))
 }
 
-test('concurrent project lookups cannot exceed the per-Run process limit', async () => {
-  let release
-  const gate = new Promise(resolve => { release = resolve })
-  const f = await fixture({ maxProcessesPerRun: 1 }, () => gate)
+test('concurrent accepted calls cannot exceed the per-scope process limit', async () => {
+  const f = await fixture({ maxProcessesPerScope: 1 })
   try {
-    const scope = f.processes.openRun({ runId: 'limited', projectId: 'project' })
-    const calls = Array.from({ length: 2 }, () => scope.execute('codex_exec_command', { cmd: nodeCommand('setInterval(()=>{},1000)'), yield_time_ms: 0 }))
+    const scope = f.processes.openScope({ scopeId: 'limited', workspacePath: f.directory })
+    const calls = Array.from({ length: 2 }, () => scope.execute( { command: nodeCommand('setInterval(()=>{},1000)'), yieldTimeMs: 0 }))
     const outcomes = Promise.allSettled(calls.map(result))
-    release()
     const settled = await outcomes
     assert.equal(settled.filter(value => value.status === 'fulfilled').length, 1)
     assert.equal(settled.find(value => value.status === 'rejected').reason.category, 'unavailable')
     const cleanup = await result(scope.close())
     assert.equal(cleanup.processes.length, 1)
     assert.equal(cleanup.cleanup, 'completed')
-  } finally { release(); await f.close() }
+  } finally { await f.close() }
 })
 
 test('pipe execution yields a scoped session and later observations only consume new output', async () => {
   const f = await fixture()
   try {
-    const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    const first = await result(scope.execute('codex_exec_command', { cmd: nodeCommand("process.stdout.write('first');setTimeout(()=>process.stdout.write('second'),100)"), login: false, yield_time_ms: 20 }))
+    const scope = f.processes.openScope({ scopeId: 'r', workspacePath: f.directory })
+    const first = await result(scope.execute( { command: nodeCommand("process.stdout.write('first');setTimeout(()=>process.stdout.write('second'),100)"), login: false, yieldTimeMs: 20 }))
     assert.equal(typeof first.session_id, 'number')
     let output = first.output, next = first
     for (let attempt = 0; next.session_id && attempt < 30; attempt++) {
-      next = await result(scope.execute('codex_write_stdin', { session_id: first.session_id, yield_time_ms: 100 }))
+      next = await result(scope.write( { sessionId: first.session_id, yieldTimeMs: 100 }))
       output += next.output
     }
     assert.equal(output, 'firstsecond')
@@ -70,12 +59,12 @@ test('pipe execution yields a scoped session and later observations only consume
 test('stdin remains open for Codex and process session IDs cannot cross Run scopes', async () => {
   const f = await fixture()
   try {
-    const a = f.processes.openRun({ runId: 'a', projectId: 'project' }), b = f.processes.openRun({ runId: 'b', projectId: 'project' })
-    const first = await result(a.execute('codex_exec_command', { cmd: nodeCommand("process.stdout.write('ready');process.stdin.once('data',b=>{process.stdout.write('got:'+b.toString().trim());process.exit(0)})"), login: false, yield_time_ms: 20 }))
-    const foreign = await result(b.execute('codex_write_stdin', { session_id: first.session_id, chars: 'intrusion\n', yield_time_ms: 0 }))
+    const a = f.processes.openScope({ scopeId: 'a', workspacePath: f.directory }), b = f.processes.openScope({ scopeId: 'b', workspacePath: f.directory })
+    const first = await result(a.execute( { command: nodeCommand("process.stdout.write('ready');process.stdin.once('data',b=>{process.stdout.write('got:'+b.toString().trim());process.exit(0)})"), login: false, yieldTimeMs: 20 }))
+    const foreign = await result(b.write( { sessionId: first.session_id, chars: 'intrusion\n', yieldTimeMs: 0 }))
     assert.equal(foreign.error, 'session-unavailable')
-    let actual = await result(a.execute('codex_write_stdin', { session_id: first.session_id, chars: 'answer\n', yield_time_ms: 200 })), output = first.output + actual.output
-    for (let attempt = 0; actual.session_id && attempt < 30; attempt++) { actual = await result(a.execute('codex_write_stdin', { session_id: first.session_id, yield_time_ms: 100 })); output += actual.output }
+    let actual = await result(a.write( { sessionId: first.session_id, chars: 'answer\n', yieldTimeMs: 200 })), output = first.output + actual.output
+    for (let attempt = 0; actual.session_id && attempt < 30; attempt++) { actual = await result(a.write( { sessionId: first.session_id, yieldTimeMs: 100 })); output += actual.output }
     assert.equal(output, 'readygot:answer')
     await result(a.close()); await result(b.close())
   } finally { await f.close() }
@@ -86,8 +75,8 @@ test('normal scope cleanup cancels live groups and waits for actual exit', async
   // a 20 ms trap against the fixture's normal 40 ms forced-kill timer under suite load.
   const f = await fixture({ terminationGraceMs: 5_000 })
   try {
-    const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    await result(scope.execute('codex_exec_command', { cmd: process.platform === 'win32' ? nodeCommand("require('node:fs').writeFileSync('pid',String(process.pid));require('node:fs').writeFileSync('started','ready');setInterval(()=>{},1000)") : "trap 'printf cleaning > cleaning; while [ ! -e release-cleanup ]; do sleep 0.01; done; printf cleaned > cleaned; exit' TERM; printf ready > started; while :; do sleep 1; done", login: false, yield_time_ms: 0 }))
+    const scope = f.processes.openScope({ scopeId: 'r', workspacePath: f.directory })
+    await result(scope.execute( { command: process.platform === 'win32' ? nodeCommand("require('node:fs').writeFileSync('pid',String(process.pid));require('node:fs').writeFileSync('started','ready');setInterval(()=>{},1000)") : "trap 'printf cleaning > cleaning; while [ ! -e release-cleanup ]; do sleep 0.01; done; printf cleaned > cleaned; exit' TERM; printf ready > started; while :; do sleep 1; done", login: false, yieldTimeMs: 0 }))
     await untilFile(join(f.directory, 'started'))
     const closing = scope.close()
     let exited = false
@@ -106,14 +95,14 @@ test('normal scope cleanup cancels live groups and waits for actual exit', async
       const pid = Number(readFileSync(join(f.directory, 'pid'), 'utf8'))
       assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH')
     } else assert.ok(existsSync(join(f.directory, 'cleaned')))
-    assert.throws(() => scope.execute('codex_exec_command', { cmd: 'touch forbidden' }))
+    assert.throws(() => scope.execute( { command: 'touch forbidden' }))
   } finally { await f.close() }
 })
 
 test('foreground helpers honor cwd, nonzero exit, output bounds and timeout', async () => {
   const f = await fixture({ maxBufferedOutputBytes: 8, timeoutMs: 50 })
   try {
-    const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
+    const scope = f.processes.openScope({ scopeId: 'r', workspacePath: f.directory })
     const cwd = await result(scope.foreground({ command: 'printf correct > cwd-marker', workdir: f.directory, timeoutMs: 2000 }))
     assert.equal(cwd.exit_code, 0)
     assert.ok(existsSync(join(f.directory, 'cwd-marker')))
@@ -134,8 +123,8 @@ test('foreground helpers honor cwd, nonzero exit, output bounds and timeout', as
 test('cleanup escalates after an initialized process ignores TERM and waits for KILL exit', async () => {
   const f = await fixture()
   try {
-    const scope = f.processes.openRun({ runId: 'ignores-term', projectId: 'project' })
-    await result(scope.execute('codex_exec_command', { cmd: "trap '' TERM; printf ready > ignores-term; while :; do sleep 1; done", shell: 'bash', login: false, yield_time_ms: 0 }))
+    const scope = f.processes.openScope({ scopeId: 'ignores-term', workspacePath: f.directory })
+    await result(scope.execute( { command: "trap '' TERM; printf ready > ignores-term; while :; do sleep 1; done", shell: 'bash', login: false, yieldTimeMs: 0 }))
     await untilFile(join(f.directory, 'ignores-term'))
     const cleanup = await result(scope.close())
     assert.equal(cleanup.cleanup, 'completed')
@@ -145,45 +134,37 @@ test('cleanup escalates after an initialized process ignores TERM and waits for 
   } finally { await f.close() }
 })
 
-test('closing while a project lookup is pending never spawns the cancelled command', async () => {
-  let release, started
-  const lookup = new Promise(yes => { release = yes }), entered = new Promise(yes => { started = yes })
-  const f = await fixture({}, () => { started(); return lookup })
+test('closing before a queued process starts prevents the cancelled command from spawning', async () => {
+  const f = await fixture()
   try {
-    const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    const call = scope.execute('codex_exec_command', { cmd: 'touch forbidden', yield_time_ms: 0 })
-    await entered
+    const scope = f.processes.openScope({ scopeId: 'queued', workspacePath: f.directory })
+    const call = scope.execute({ command: 'touch forbidden', yieldTimeMs: 0 })
     const closing = scope.close()
-    let exited = false
-    void closing.done.then(() => { exited = true })
-    await new Promise(yes => setTimeout(yes, 10))
-    assert.equal(exited, false)
-    release()
     await assert.rejects(call.result, error => error.category === 'cancelled')
     await call.done
     await result(closing)
     assert.equal(existsSync(join(f.directory, 'forbidden')), false)
-  } finally { release(); await f.close() }
+  } finally { await f.close() }
 })
 
 test('component disposal joins accepted process scopes without requiring the caller to close them', async () => {
   const f = await fixture()
   try {
-    const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
-    await result(scope.execute('codex_exec_command', { cmd: "trap '' TERM; printf ready > started; while :; do sleep 1; done", shell: 'bash', login: false, yield_time_ms: 0 }))
+    const scope = f.processes.openScope({ scopeId: 'r', workspacePath: f.directory })
+    await result(scope.execute( { command: "trap '' TERM; printf ready > started; while :; do sleep 1; done", shell: 'bash', login: false, yieldTimeMs: 0 }))
     await untilFile(join(f.directory, 'started'))
     await f.root.fiber.dispose()
     const cleanup = await result(scope.close())
     if (process.platform === 'win32') assert.equal(cleanup.processes[0].exit_code, 1)
     else assert.equal(cleanup.processes[0].signal, 'SIGKILL')
-    assert.throws(() => f.processes.openRun({ runId: 'new', projectId: 'project' }))
+    assert.throws(() => f.processes.openScope({ scopeId: 'new', workspacePath: f.directory }))
   } finally { await f.close() }
 })
 
 test('a shell cannot leave a redirected child running as an independent background job', async () => {
   const f = await fixture()
   try {
-    const scope = f.processes.openRun({ runId: 'r', projectId: 'project' })
+    const scope = f.processes.openScope({ scopeId: 'r', workspacePath: f.directory })
     const observed = await result(scope.foreground({ command: 'sleep 10 >/dev/null 2>&1 & printf "%s" "$!"' }))
     assert.equal(observed.exit_code, 0)
     const childId = Number(observed.output)

@@ -111,7 +111,7 @@ const notes: ApplicationRegistration = {
     installation.install(createNotesComponent())
     // 此应用工厂按 hasPicker 条件声明 inject；缺失时不注入目录服务。
     installation.install(createNotesHttpComponent({ hasPicker }))
-  }),
+  }, undefined, context?.serviceBindings),
 }
 ```
 
@@ -153,6 +153,8 @@ const pickerProvider: ApplicationCapabilityProvider = {
 ## 运行时装配和退出（当前实现）
 
 优先使用 `createApplicationRuntime`。宿主每次干净打开或重试均调用新的应用工厂，传入本代冻结的能力选择；上代资源实际退出前不创建替代代次。每次运行时装配仅通过 installation.install/track/effect 记录归属。track 必须在得到 Fiber 后同步调用，不能等其启动成功再登记。异步初始化在每次外部回调后检查 signal；清理需取消并等待实际退出，不只等待返回值。
+
+单机共根组合可在 `ApplicationRuntimeContext.serviceBindings` 中提供冻结的服务名绑定。注册适配应将它传给 `createApplicationRuntime` 的第四个参数；`installation.install` 自动带上同一绑定，组件仍使用原始 inject/deps 名称。需要直接安装并 track Fiber 时，将 `installation.serviceBindings` 作为 Nya 安装选项 bindings 传入。持有根的控制面使用绑定后的确切服务名读取当前代，不创建应用 Context，也不缓存旧服务。独立部署未提供绑定时沿用原服务名。
 
 Anybox 集成中的应用直接领域入口也可能接受工作时，注册适配在安装期用 Effect 注册 `app.activity.registerGuard(id, acquire)`。acquire 是同步无 await 的停止保护：忙碌返回 undefined，空闲冻结业务准入并返回幂等解冻函数。该 disposer 归本代安装。HTTP 操作由宿主监听器按 ID 自动登记，应用自有长期操作可显式 enter/release；业务装配通过可选集成端口使用这些保护，不能要求独立入口安装活动管理。应用自身仍须关闭准入并取消、排空实际工作。
 

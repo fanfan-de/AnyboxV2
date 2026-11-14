@@ -1,7 +1,7 @@
 import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../packages/app-harness/dist/core/project-files/component.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
-import { registerNativeRun, completeNativeRun, completedOutcome } from './helpers/native-records.mjs'
+import { registerNativeRun, completeNativeRun, completedOutcome, sessionInitialization } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../packages/app-harness/dist/core/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../packages/app-harness/dist/core/session/port.js'
 import assert from 'node:assert/strict'
@@ -62,7 +62,7 @@ async function fixture(t, { expectedCleanupFailure = false } = {}) {
 }
 async function accepted(f, id, parentNodeId = null, initialization) {
   return (await registerNativeRun(f.records, id, { sessionId: f.session.id, parentNodeId, input: id, idempotencyKey: id }, now(), [],
-    modelSnapshot(), initialization)).run
+    modelSnapshot(), initialization ?? sessionInitialization(f.session))).run
 }
 
 test('same-parent Runs enter together, finish out of order, and inherit only their own ancestor path', async t => {

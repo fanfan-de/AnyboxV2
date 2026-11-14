@@ -16,7 +16,11 @@
 
 ## 轮询循环
 
-每条循环以 `Unit <attachmentId>:<credential>` 和附着时固定的 `x-anybox-instance-id` 发 `GET …/poll`，查询串声明 workerId、bootId、平台、架构与等待时间。领取到的每个请求独立执行并各自 `POST …/replies` 回传，长 `get` 不阻塞后续 `submit`。请求种类只有 `info`、`claim`、`submit`、`get`、`query`；授权字段 `attachmentId` 一律由投递该请求的附着决定，载荷里的值被覆盖；`shutdown` 等其他种类回复 `worker-request-unsupported`。`get` 带 `known: { state, receipt }` 时在本地每 50 毫秒复查，直到状态或 receipt 变化、进入终态或超过 `getWaitMs` 才回复，减少跨网络往返。
+每条循环以 `Unit <attachmentId>:<credential>` 和附着时固定的 `x-anybox-instance-id` 发 `GET …/poll`，查询串声明 workerId、bootId、平台、架构与等待时间。可选通用 `capabilities` JSON 通过 `x-anybox-unit-capabilities` 请求头携带，上限 8 KiB，避免为新能力增加旧 host 不识别的查询参数。当前 worker 将执行器 `info.toolManifest` 放在 `capabilities.computerTools`，每次轮询都重新携带本 boot 的报告，供 harness server 的只读环境投影使用；旧 worker 缺字段时报告未知。附着可以在现有能力 JSON 保存初始 `computerTools` 提示，但环境列表只认可最新轮询观察；附着时保存的平台信息或旧 `tools: 'all'` 不替代这一清单。
+
+领取到的每个请求独立执行并各自 `POST …/replies` 回传，长 `get` 不阻塞后续 `submit`。请求种类只有 `info`、`claim`、`submit`、`get`、`query`；授权字段 `attachmentId` 一律由投递该请求的附着决定，载荷里的值被覆盖；`shutdown` 等其他种类回复 `worker-request-unsupported`。`get` 带 `known: { state, receipt }` 时在本地每 50 毫秒复查，直到状态或 receipt 变化、进入终态或超过 `getWaitMs` 才回复，减少跨网络往返。
+
+工具清单只报告实现的稳定工具 ID、版本、定义摘要、执行器及公共约束，不代表 `scope/ceiling` 授权或 Shell/依赖就绪；不影响领取执行、原模型声明或 Session 历史。报告随现有轮询发送，没有独立清单连接、计时器或持久表。
 
 轮询收到 401 或 `unit-attachment-state` 时视为 harness server 已撤销：循环停止，经附着账本转为本地 revoked 并删除凭证，不再通知远端。收到 `instance-mismatch` 时保留记录、30 秒后重试并把状态标为 `instance-mismatch`。其他失败按 1 秒起、最长 15 秒的退避重连，状态为 `offline`。
 

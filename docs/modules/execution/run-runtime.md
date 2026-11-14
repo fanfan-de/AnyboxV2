@@ -7,7 +7,7 @@ RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制�
 ## 实现与装配
 
 - 源码：[组件](../../../packages/app-harness/src/core/run/runtime-component.ts)、[RunHost / PreparedRunProgram](../../../packages/app-harness/src/core/run/program.ts)、[OwnedCall](../../../packages/app-harness/src/core/contracts.ts)、[工具校验和限制](../../../packages/app-harness/src/core/run/domain.ts)。
-- 工厂：`createRunRuntimeComponent(inputs)`；组件名：`harness-run-runtime`；配置类型：`void`；`inputs` 提供 `now()` 和 `newId()`。
+- 工厂：`createRunRuntimeComponent(inputs, environments?)`；组件名：`harness-run-runtime`；配置类型：`void`；`inputs` 提供 `now()` 和 `newId()`，可选受信环境注册表由组合根与 Session、Run 共用。
 - 提供 `harness.run-runtime: RunRuntimePort`。
 - 注入 [Session](../sessions/session.md) 的 `harness.session-runs` 与 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`。四种工具服务只由独立 worker 执行器持有，Runtime 不持有 OS 进程。
 
@@ -30,13 +30,17 @@ RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制�
 
 状态写入失败立即关闭新操作准入并中止内部 signal。取消后仍提交已经发生的真实 observation，包括 Apply Patch 部分变更。若 `done` 提前失败，即使 `result` 永不返回也能识别清理失败；如果已有工具结果，还会尽量保留它。
 
-工具从受信静态目录按 program 固定声明进行分派，涵盖三个来源的命令、文件读写、搜索、图片和计划契约，以及保留的 Bash/Apply Patch。整个批次的名称、ID 与来源参数 schema 必须先验证通过，随后按模型给出的顺序串行执行。调用 ID 必须非空、唯一且不超过 256 字符；未声明的工具在任何副作用前拒绝。旧 Bash/Apply Patch 参数仍必须恰有对应的一个字段。没有动态工具注册中心，也不把模型给出的近似工具名当作别名执行。
+工具从受信静态目录按 program 固定声明进行分派，涵盖三个来源的命令、文件读写、搜索和图片契约，以及保留的 Bash/Apply Patch；计划/待办契约仅兼容已有 Session 的冻结声明，不进入新选择。整个批次的名称、ID 与来源参数 schema 必须先验证通过，随后按模型给出的顺序串行执行。调用 ID 必须非空、唯一且不超过 256 字符；未声明的工具在任何副作用前拒绝。旧 Bash/Apply Patch 参数仍必须恰有对应的一个字段。没有动态工具注册中心，也不把模型给出的近似工具名当作别名执行。
 
 协议共享管道在调用 Runtime 之前对整批做纯预检：合法 ID 关联的未知工具名或 schema 错误返回结构化 `invalid-tool-request` 反馈供模型修正，合法同伴返回 `batch-rejected`，整批均未执行。每个 Run 累计最多三批拒绝反馈，第四批终止；额度通过已有 protocolCursor 随模型响应保存并在恢复时继承。Runtime 仍在接受工具前重新验证完整批次，不能把执行、存储或清理异常当作可修正预检结果。损坏或无法唯一关联的 ID、损坏原生 JSON 仍终止运行。补丁文本语法错误属于已经执行的工具结果，沿既有往返路径允许模型修正，不计入纯预检拒绝额度。完整边界见[协议 Agent 注册表](protocol-agent-registry.md#准备与执行)。
 
-Runtime 先保存完整恢复批次与 operation ID；单工具的 Session 意图、待派发声明及资源需求在同一业务事务同步接纳到 Computer Operations。Runtime 同步打开本代观察 scope；Operations 按需准备确切实例和工作区 binding，再提交独立 worker。所有工具使用固定 workspacePath，长进程存活期间 scope 保留实例 pin 和工作区 reservation。模型和计划工具不激活 computer。worker 保存接纳凭证、原结果与实际退出，确认丢失重查同 ID/摘要，不重复派发副作用。
+Runtime 先保存完整恢复批次与 operation ID，再按 Session 固定的[环境快照](../../tool-environments.md)路由。环境提供通用工具描述和执行句柄；Runtime 不导入具体 Bash、Process 或 Patch 错误类型。Computer 工具的 Session 意图、声明及资源需求仍在同一业务事务同步接纳到 Computer Operations；其他环境仅登记自己的 Session 操作，不生成 Computer 声明。环境注册表为纯内部提供方，不另建 Nya 组件。
 
-最终文本最多 65,536 UTF-8 字节；累计工具输出最多 131,072 字节，旧 Bash 计 stdout/stderr，其他工具计结果 JSON；图片原字节不进入工具文本结果。除纯预检拒绝反馈的三批额度外，当前不设置固定模型轮次或工具次数上限。`publish` 每个活跃 Run 只保存一份不超过 1,048,576 UTF-8 字节的克隆快照，广播 `harness.run-view`；展示监听和不可序列化帧不能破坏执行，结束时删除快照。
+Computer 适配在本轮依赖快照内创建，惰性打开原观察 scope；Operations 按需准备确切实例和工作区 binding，再提交独立 worker。Computer 工具使用固定 workspacePath，长进程存活期间 scope 保留实例 pin 和工作区 reservation。模型和旧会话兼容计划工具不激活 computer。worker 保存接纳凭证、原结果与实际退出，确认丢失重查同 ID/摘要，不重复派发副作用。
+
+取消先启动环境 scope 的取消，再同时等待在途调用退出，防止等待依赖环境取消才能释放的调用。所有已打开环境都必须完成 close 的实际退出；部分结果与退出错误分别保存。新初始化 v3 固定环境与精确工具定义；已有观察直接复用，有意图而无观察的调用仅向声明支持原操作查询的环境传递 `resuming: true`。未声明或未知结果均不重新执行。恢复中出现的新清理失败优先于之前保存的成功提案。
+
+最终文本最多 65,536 UTF-8 字节；累计工具输出不设 Run 级上限，不因累计字节数终止任务。Session 继续持久统计 `totalToolOutputBytes`：旧 Bash 计 stdout/stderr，其他工具计结果 JSON，进程关闭时收集的尾部输出也计入；图片原字节不进入工具文本结果。各工具自身的单次输出和缓冲限制保持有效。除纯预检拒绝反馈的三批额度外，当前不设置固定模型轮次或工具次数上限。`publish` 每个活跃 Run 只保存一份不超过 1,048,576 UTF-8 字节的克隆快照，广播 `harness.run-view`；展示监听和不可序列化帧不能破坏执行，结束时删除快照。
 
 协议 program 发布展示 v2 的有界完整快照，Runtime 不解释其原生内容类型、停止状态或诊断。模型工具请求保留其来源 exchange；本地工具事实仍只写入 `tool-started`、`tool-observed`、`tool-failed` 事件。前端按 Run、来源模型 exchange、请求 ID、名称和事件位置关联事实，不发布额外 `tools-N` 临时 exchange，也不以请求快照推断工具完成。取消和清理失败时，已经保存的真实工具结果及部分补丁事实继续可查询。
 
@@ -50,7 +54,7 @@ Effect 先停止接收，再取消并等待所有活跃 Run，清空临时视图
 
 ## 进程重启接续
 
-Run 接管 `run-state` v10 的独立 resume 状态，提升 runOwnerEpoch，并先在已使用 worker 安装栅栏，再准备程序。Runtime 的 response 阶段复用完整工具批次、operation ID 和已观察结果；Session 原子消费观察及累计额度。cleanup 阶段重查原 close-scope，settling 阶段重用已保存提案。协议 Loop 解释 opaque protocolCursor，先回放已保存原生响应，再固定下一增量请求；不恢复旧 Run phase 写入路径。
+Run 接管 `run-state` v10 的独立 resume 状态，提升 runOwnerEpoch，并先在已使用 worker 安装栅栏，再准备程序。Runtime 的 response 阶段复用完整工具批次、operation ID 和已观察结果；Session 原子消费观察及累计输出统计，恢复时不会因已有统计值超过旧 128 KiB 门槛而终止。cleanup 阶段重查原 close-scope，settling 阶段重用已保存提案。协议 Loop 解释 opaque protocolCursor，先回放已保存原生响应，再固定下一增量请求；不恢复旧 Run phase 写入路径。
 
 protocolCursor 的可选 `toolRequestCorrections` 保存当前 Run 已使用的纯预检拒绝额度，缺省为零；它属于协议续轮账本，不是 worker 工具执行次数。重放最后耐久响应时复用已保存的额度，下一模型请求登记前的同一拒绝可确定性重建；不会在进程恢复或成功工具批次后重新获得三次额度。
 
@@ -58,6 +62,6 @@ protocolCursor 的可选 `toolRequestCorrections` 保存当前 Run 已使用的�
 
 ## 验证
 
-[harness server 核心测试](../../../tests/harness-server-core.test.mjs) 覆盖早期取消、结果/退出分离、清理异常、Runtime 组件替换；[工具循环](../../../tests/tool-loop.test.mjs) 覆盖串行批次、纯预检反馈、输出限额、退出等待；[Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 覆盖错误参数修正、部分变更与取消；[会话树](../../../tests/conversation-tree.test.mjs) 覆盖结算原子性；[真实故障注入](../../../tests/computer-worker-resume.test.mjs)覆盖独立 worker 与 Runtime 进程 SIGKILL、确认丢失、取消断网和清理接续；[协议恢复测试](../../../tests/computer-protocol-resume.test.mjs) 验证工具预检修正额度跨恢复继承。统一执行 `npm run check`。
+[harness server 核心测试](../../../tests/harness-server-core.test.mjs) 覆盖早期取消、结果/退出分离、清理异常、Runtime 组件替换；[工具循环](../../../tests/tool-loop.test.mjs) 覆盖串行批次、纯预检反馈、超过旧累计输出门槛后的后续工具与模型调用、最终文本限额、退出等待；[工具库运行期测试](../../../tests/tool-library-runtime.test.mjs) 覆盖文件读取累计超过旧门槛仍能完成，以及进程尾部输出不再导致超限失败；[Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 覆盖错误参数修正、部分变更与取消；[会话树](../../../tests/conversation-tree.test.mjs) 覆盖结算原子性；[真实故障注入](../../../tests/computer-worker-resume.test.mjs)覆盖独立 worker 与 Runtime 进程 SIGKILL、确认丢失、取消断网和清理接续；[协议恢复测试](../../../tests/computer-protocol-resume.test.mjs) 验证工具预检修正额度跨恢复继承。统一执行 `npm run check`。
 
 图片读取和 data URL 编码属于模型 operation 的内部工作，与网络请求共享取消和实际退出屏障。文件工具使用图片组件导入原字节；Runtime 将图片引用与工具观察交给 Session 同事务保留，只在提交后交 program 私有许可表接纳，不接触原图字节；图片读取/校验失败阻止发出模型请求，清理失败不创建成功节点。

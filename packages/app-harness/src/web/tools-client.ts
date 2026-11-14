@@ -102,9 +102,9 @@ export function createToolsSettingsClient(source: Api, messageFor: (error: unkno
 
 export function setupToolsSettings(source: Api, messageFor: (error: unknown) => string, container: HTMLElement, agentSelect: HTMLSelectElement) {
   const client = createToolsSettingsClient(source, messageFor), lifetime = new AbortController()
-  container.innerHTML = `<header class="settings-panel-heading"><h3 id="agent--tools-title">Agent 工具</h3><p>自由选择单个工具，可跨来源组合。保存后仅影响新会话。</p></header>
+  container.innerHTML = `<header class="settings-panel-heading"><h3 id="agent--tools-title">Computer 工具</h3><p>选择 Computer 环境提供的工具，可跨来源组合。保存后仅影响新会话。</p></header>
     <div class="tools-filters"><label>搜索工具<input type="search" data-tools-search placeholder="名称或功能"></label>
-    <label>分类<select data-tools-category><option value="">全部分类</option><option value="command">命令</option><option value="files">文件</option><option value="search">搜索</option><option value="image">图片</option><option value="plan">计划</option></select></label>
+    <label>分类<select data-tools-category><option value="">全部分类</option><option value="command">命令</option><option value="files">文件</option><option value="search">搜索</option><option value="image">图片</option></select></label>
     <label>来源<select data-tools-source><option value="">全部来源</option></select></label></div>
     <p data-tools-summary role="status"></p><div class="tools-list" aria-label="可选工具"></div>
     <div class="settings-actions"><button type="button" data-tools-save disabled>保存工具</button><button type="button" class="secondary-button" data-tools-reload disabled>重新加载</button></div>

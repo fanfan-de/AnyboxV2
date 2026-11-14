@@ -76,7 +76,7 @@ harness server 在应用根安装 `tools.apply-patch`，向模型提供 `apply_p
 
 ## 本机 Web 界面
 
-先运行 `npm run harness:server:init` 生成一次性显示的设备访问令牌，再运行 `npm run web`。先打开 Anybox Harness，在其连接管理中添加 `http://127.0.0.1:3001` 并填入令牌。执行端与客户端是两个进程，也可分别使用 `npm run harness:server` / `npm run client`。云端与其他设备使用 HTTPS 配对。详见[独立部署、发行与恢复](docs/harness-server-deployment.md)。打开终端打印的 `http://127.0.0.1:<port>` 地址。新安装点击 Anybox Harness 后打开所选 Agent；已有业务库保留 Agent 打开目标。在 Anybox Harness 内进入“模型管理”：
+单机运行使用 `npm run web:local`：客户端和本机业务后端在同一个 Node.js 进程、同一个 Nya 根中运行，两个监听地址和各自数据文件保留，打开应用后自动配对。独立部署时，先运行 `npm run harness:server:init` 生成一次性显示的设备访问令牌，再运行 `npm run web`。先打开 Anybox Harness，在其连接管理中添加 `http://127.0.0.1:3001` 并填入令牌。独立部署的执行端与客户端使用不同进程，分别使用 `npm run harness:server` / `npm run client`。云端与其他设备使用 HTTPS 配对。详见[独立部署、发行与恢复](docs/harness-server-deployment.md)。打开终端打印的 `http://127.0.0.1:<port>` 地址。新安装点击 Anybox Harness 后打开所选 Agent；已有业务库保留 Agent 打开目标。在 Anybox Harness 内进入“模型管理”：
 
 1. 在公共目录中选择提供方和连接方案，点击“填写新提供方”；也可选择模板或手动填写。调整账号名称、代理地址、认证和 API Key 后保存。
 2. 保存连接和 Key 后，适用目录模型自动准备基础配置。高级设置可编辑生成参数、新建参数预设或自定义模型；能力只读展示，人工修正需编辑执行设备的 JSON 配置。

@@ -1,4 +1,4 @@
-import type { ProtocolCitation, ProtocolViewBlock, ProtocolViewInput, ProtocolViewSnapshot, ProtocolNativeState, ProtocolSummaryPart, ProtocolSource, ResponsesMessagePart, GeminiTextPart } from './types.js'
+import type { ProtocolCitation, ProtocolViewBlock, ProtocolViewInput, ProtocolViewSnapshot, ProtocolNativeState, ProtocolSummaryPart, ProtocolSource, ResponsesMessagePart, GeminiTextPart, ProtocolTokenUsage } from './types.js'
 
 const object = (value: unknown): value is Record<string, unknown> => Boolean(value && typeof value === 'object' && !Array.isArray(value))
 const identity = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512
@@ -55,6 +55,16 @@ function decodeState(value: unknown, protocolId: string): ProtocolNativeState | 
     case 'gemini.state': { const selected = fields(['status', 'stage', 'eventType', 'errorCode']); return selected && { type: 'gemini.state', ...flags, ...selected } }
     default: return undefined
   }
+}
+function decodeUsage(value: unknown): ProtocolTokenUsage | undefined {
+  if (!object(value)) return undefined
+  const result: { inputTokens?: number; outputTokens?: number } = {}
+  for (const key of ['inputTokens', 'outputTokens'] as const) {
+    if (value[key] === undefined) continue
+    if (!Number.isSafeInteger(value[key]) || Number(value[key]) < 0) return undefined
+    result[key] = Number(value[key])
+  }
+  return result.inputTokens === undefined && result.outputTokens === undefined ? undefined : result
 }
 
 /** Decode only v2 display fields. Native response objects never enter renderers. */
@@ -151,7 +161,9 @@ export function decodeProtocolView(value: unknown): ProtocolViewSnapshot | undef
     }
     const state = exchange.nativeState === undefined ? undefined : decodeState(exchange.nativeState, value.protocolId)
     if (exchange.nativeState !== undefined && !state) return undefined
-    exchanges.push({ id: exchange.id, ...(exchange.inputs !== undefined ? { inputs } : {}), blocks, ...(state ? { nativeState: state } : {}) })
+    const usage = exchange.usage === undefined ? undefined : decodeUsage(exchange.usage)
+    if (exchange.usage !== undefined && !usage) return undefined
+    exchanges.push({ id: exchange.id, ...(exchange.inputs !== undefined ? { inputs } : {}), blocks, ...(state ? { nativeState: state } : {}), ...(usage ? { usage } : {}) })
   }
   return { envelopeVersion: 1, viewSchemaVersion: 2, protocolId: value.protocolId, sessionId: value.sessionId, runId: value.runId,
     viewRevision: Number(value.viewRevision), status: value.status, exchanges }

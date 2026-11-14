@@ -1,34 +1,59 @@
 import { isAbsolute, resolve } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { Component } from '@nya/core'
-import type { JsonValue } from '@anybox/models'
-import type { OwnedCall } from '../contracts.js'
-import { projectServiceKey } from '../project/component.js'
-import type { ProjectPort } from '../project/component.js'
-import { validateLibraryArguments } from './catalog.js'
-import { spawnManagedProcess, type ManagedProcess } from '../platform/process-runtime.js'
-import { prepareShellCommand } from '../platform/shell.js'
+import type { JsonValue } from '@anybox/tool-api'
+import type { OwnedCall } from '@anybox/tool-api'
+import { spawnManagedProcess, type ManagedProcess } from '@anybox/computer-tools/platform/process-runtime'
+import { prepareShellCommand, type ShellRuntimeOptions } from './platform/shell.js'
 
+export interface ProcessExecuteInput {
+  readonly command: string
+  readonly workdir?: string
+  readonly shell?: string
+  readonly login?: boolean
+  readonly yieldTimeMs?: number
+  readonly maxOutputTokens?: number
+}
+export interface ProcessWriteInput {
+  readonly sessionId: number
+  readonly chars?: string
+  readonly yieldTimeMs?: number
+  readonly maxOutputTokens?: number
+}
+function boundedInteger(value: unknown, minimum: number, maximum: number): boolean { return typeof value === 'number' && Number.isSafeInteger(value) && value >= minimum && value <= maximum }
+function validateOutputOptions(value: { readonly yieldTimeMs?: number; readonly maxOutputTokens?: number }): void {
+  if (value.yieldTimeMs !== undefined && !boundedInteger(value.yieldTimeMs, 0, 30_000) || value.maxOutputTokens !== undefined && !boundedInteger(value.maxOutputTokens, 1, 32_768)) throw new ProcessFailure('invalid-request')
+}
+function validateExecuteInput(value: ProcessExecuteInput): void {
+  if (!value || typeof value.command !== 'string' || !value.command.trim() || value.command.includes('\0') || [value.workdir, value.shell].some(value => value !== undefined && (typeof value !== 'string' || !value.trim() || value.includes('\0'))) || value.login !== undefined && typeof value.login !== 'boolean') throw new ProcessFailure('invalid-request')
+  validateOutputOptions(value)
+}
+function validateWriteInput(value: ProcessWriteInput): void {
+  if (!value || !boundedInteger(value.sessionId, 1, Number.MAX_SAFE_INTEGER) || value.chars !== undefined && (typeof value.chars !== 'string' || value.chars.includes('\0'))) throw new ProcessFailure('invalid-request')
+  validateOutputOptions(value)
+}
 export const processToolsServiceKey = 'tools.processes'
-export interface ProcessRunScope {
-  execute(name: 'codex_exec_command' | 'codex_write_stdin', args: Readonly<Record<string, JsonValue>>): OwnedCall<JsonValue>
+export interface ProcessScope {
+  execute(input: ProcessExecuteInput): OwnedCall<JsonValue>
+  write(input: ProcessWriteInput): OwnedCall<JsonValue>
   foreground(input: { readonly command: string; readonly timeoutMs?: number; readonly maxOutputTokens?: number; readonly workdir?: string }): OwnedCall<JsonValue>
   /** Stop admission, terminate process groups and join all operation/process resources. */
   close(): OwnedCall<JsonValue>
 }
 export interface ProcessToolsPort {
   /** Acquires ownership synchronously; a trusted workspacePath fixes the base for every process in this scope. */
-  openRun(input: { readonly runId: string; readonly projectId: string; readonly workspacePath?: string }): ProcessRunScope
+  openScope(input: { readonly scopeId: string; readonly workspacePath: string }): ProcessScope
 }
 export interface ProcessOptions {
+  readonly shell?: ShellRuntimeOptions
   readonly timeoutMs?: number
   readonly maxBufferedOutputBytes?: number
   readonly terminationGraceMs?: number
-  readonly maxProcessesPerRun?: number
+  readonly maxProcessesPerScope?: number
 }
 export type ProcessFailureCategory = 'invalid-request' | 'unavailable' | 'cancelled' | 'cleanup-failure'
 export class ProcessFailure extends Error {
-  constructor(readonly category: ProcessFailureCategory) { super(`process ${category}`); this.name = 'ProcessFailure' }
+  constructor(readonly category: ProcessFailureCategory, cause?: unknown) { super(`process ${category}`, cause === undefined ? undefined : { cause }); this.name = 'ProcessFailure' }
 }
 interface ProcessEntry {
   readonly id: number
@@ -45,6 +70,7 @@ interface ProcessEntry {
   terminated: boolean
   timedOut: boolean
   cleanupFailed: boolean
+  cleanupFailure?: unknown
   writing: Promise<void>
   terminate(): void
 }
@@ -83,14 +109,14 @@ function drain(entry: ProcessEntry, tokens: number, started: number): JsonValue 
     ...(entry.timedOut ? { timed_out: true } : {}), ...(entry.spawnFailed ? { error: 'process-unavailable' } : {}) }
 }
 
-/** Owns pipe process groups per Run. Operation done and process done are separate barriers. */
-export function createProcessToolsComponent(options: ProcessOptions = {}): Component.Object<void, { [projectServiceKey]: ProjectPort }> {
+/** Owns pipe process groups per caller scope. Operation done and process done are separate barriers. */
+export function createProcessToolsComponent(options: ProcessOptions = {}): Component.Object<void> {
   const timeoutMs = positive(options.timeoutMs, 120_000)
   const maxBufferedOutputBytes = positive(options.maxBufferedOutputBytes, 131_072)
   const terminationGraceMs = positive(options.terminationGraceMs, 5_000)
-  const maxProcessesPerRun = positive(options.maxProcessesPerRun, 32)
-  return { name: 'process-tools', inject: [projectServiceKey], apply(ctx, _config, deps) {
-    const scopes = new Map<string, ProcessRunScope>()
+  const maxProcessesPerScope = positive(options.maxProcessesPerScope, 32)
+  return { name: 'process-tools', apply(ctx) {
+    const scopes = new Map<string, ProcessScope>()
     const failures = new Set<unknown>()
     let accepting = true, nextSessionId = 1
     ctx.effect(() => async () => {
@@ -99,12 +125,12 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
       await Promise.allSettled(pending.map(call => call.result))
       for (const outcome of await Promise.allSettled(pending.map(call => call.done))) if (outcome.status === 'rejected') failures.add(outcome.reason)
       if (failures.size) throw new AggregateError([...failures], 'process tool cleanup failed')
-    }, 'cancel and join Run process scopes')
+    }, 'cancel and join process scopes')
     const service: ProcessToolsPort = {
-      openRun({ runId, projectId, workspacePath }) {
+      openScope({ scopeId, workspacePath }) {
         if (!accepting) throw new ProcessFailure('unavailable')
-        if (typeof runId !== 'string' || !runId.trim() || typeof projectId !== 'string' || !projectId.trim() || scopes.has(runId) ||
-          workspacePath !== undefined && (typeof workspacePath !== 'string' || !isAbsolute(workspacePath) || workspacePath.includes('\0'))) throw new ProcessFailure('invalid-request')
+        if (typeof scopeId !== 'string' || !scopeId.trim() || scopes.has(scopeId) ||
+          typeof workspacePath !== 'string' || !isAbsolute(workspacePath) || workspacePath.includes('\0')) throw new ProcessFailure('invalid-request')
         const processes = new Map<number, ProcessEntry>()
         const calls = new Set<OwnedCall<JsonValue>>()
         let open = true, closing: OwnedCall<JsonValue> | undefined
@@ -115,7 +141,7 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
           const result = Promise.resolve().then(() => work(controller.signal, entry => { processEntry = entry; if (controller.signal.aborted) entry.terminate() }))
           const done = result.then(() => {}, () => {}).then(async () => {
             if (controller.signal.aborted && processEntry) await processEntry.done
-            if (processEntry?.cleanupFailed) throw new ProcessFailure('cleanup-failure')
+            if (processEntry?.cleanupFailed) throw new ProcessFailure('cleanup-failure', processEntry.cleanupFailure)
           })
           const call: OwnedCall<JsonValue> = { result, done: done.finally(() => { calls.delete(call) }), cancel() { controller.abort(); processEntry?.terminate() } }
           calls.add(call); void call.result.catch(() => {}); void call.done.catch(error => { failures.add(error) })
@@ -123,16 +149,14 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
         }
         const start = async (input: { command: string; workdir?: string; shell?: string; login?: boolean; timeout?: number; foreground?: boolean }, signal: AbortSignal): Promise<ProcessEntry> => {
           if (signal.aborted || !open || !accepting) throw new ProcessFailure('cancelled')
-          if ([...processes.values()].filter(entry => !entry.exited).length >= maxProcessesPerRun) throw new ProcessFailure('unavailable')
-          let projectPath: string
-          try { projectPath = workspacePath ?? (await deps[projectServiceKey].requireAvailable(projectId)).path }
-          catch { throw new ProcessFailure('unavailable') }
+          if ([...processes.values()].filter(entry => !entry.exited).length >= maxProcessesPerScope) throw new ProcessFailure('unavailable')
+          const basePath = workspacePath
           if (signal.aborted || !open || !accepting) throw new ProcessFailure('cancelled')
-          // Other starts can complete while this call resolves the project.
-          if ([...processes.values()].filter(entry => !entry.exited).length >= maxProcessesPerRun) throw new ProcessFailure('unavailable')
-          const cwd = input.workdir ? isAbsolute(input.workdir) ? input.workdir : resolve(projectPath, input.workdir) : projectPath
+          // Admission is rechecked immediately before acquiring a process.
+          if ([...processes.values()].filter(entry => !entry.exited).length >= maxProcessesPerScope) throw new ProcessFailure('unavailable')
+          const cwd = input.workdir ? isAbsolute(input.workdir) ? input.workdir : resolve(basePath, input.workdir) : basePath
           let child: ManagedProcess
-          try { child = spawnManagedProcess({ ...prepareShellCommand({ ...input, bash: input.foreground }), cwd, terminationGraceMs }) }
+          try { child = spawnManagedProcess({ ...prepareShellCommand({ ...input, bash: input.foreground }, options.shell), cwd, terminationGraceMs }) }
           catch { throw new ProcessFailure('unavailable') }
           let finish!: () => void, timer: NodeJS.Timeout | undefined
           const entry: ProcessEntry = {
@@ -161,7 +185,7 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
           }, () => { entry.spawnFailed = true })
           // The platform owner joins the whole process tree and both output pipes.
           // A shell exit alone is never a completed process session.
-          void Promise.all([observedExit, child.done.catch(() => { entry.cleanupFailed = true })]).then(() => {
+          void Promise.all([observedExit, child.done.catch(error => { entry.cleanupFailed = true; entry.cleanupFailure = error instanceof Error ? error.cause ?? error : error })]).then(() => {
             collect(stdout.end()); collect(stderr.end())
             if (child.outputTruncated) { entry.truncated = true; entry.pendingTruncated = true }
             if (timer) clearTimeout(timer)
@@ -172,22 +196,24 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
           if (input.foreground) child.stdin.end()
           return entry
         }
-        const scope: ProcessRunScope = {
-          execute(name, raw) {
-            const args = validateLibraryArguments(name, raw)
-            if (name === 'codex_exec_command') return owned(async (signal, own) => {
-              const began = Date.now()
-              const entry = await start({ command: args.cmd as string, workdir: args.workdir as string | undefined, shell: args.shell as string | undefined, login: args.login as boolean | undefined }, signal)
-              own(entry)
-              await wait(entry, Number(args.yield_time_ms ?? 10_000), signal, false)
-              return drain(entry, Number(args.max_output_tokens ?? 4_096), began)
-            })
-            if (name !== 'codex_write_stdin') throw new ProcessFailure('invalid-request')
+        const scope: ProcessScope = {
+          execute(args) {
+            validateExecuteInput(args)
             return owned(async (signal, own) => {
-              const began = Date.now(), entry = processes.get(args.session_id as number)
+              const began = Date.now()
+              const entry = await start({ command: args.command, workdir: args.workdir, shell: args.shell, login: args.login }, signal)
+              own(entry)
+              await wait(entry, args.yieldTimeMs ?? 10_000, signal, false)
+              return drain(entry, args.maxOutputTokens ?? 4_096, began)
+            })
+          },
+          write(args) {
+            validateWriteInput(args)
+            return owned(async (signal, own) => {
+              const began = Date.now(), entry = processes.get(args.sessionId)
               if (!entry) return { error: 'session-unavailable', output: '', exit_code: null, truncated: false }
               own(entry)
-              const chars = String(args.chars ?? '')
+              const chars = args.chars ?? ''
               const writing = entry.writing.then(async () => {
                 if (signal.aborted) throw new ProcessFailure('cancelled')
                 if (chars && !entry.exited) await new Promise<void>((yes, no) => childWrite(entry, chars, error => error ? no(error) : yes()))
@@ -196,10 +222,10 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
               try { await writing }
               catch (error) {
                 if (signal.aborted) throw new ProcessFailure('cancelled')
-                return { ...drain(entry, Number(args.max_output_tokens ?? 4_096), began) as Record<string, JsonValue>, error: 'stdin-unavailable' }
+                return { ...drain(entry, args.maxOutputTokens ?? 4_096, began) as Record<string, JsonValue>, error: 'stdin-unavailable' }
               }
-              await wait(entry, Number(args.yield_time_ms ?? 1_000), signal, true)
-              return drain(entry, Number(args.max_output_tokens ?? 4_096), began)
+              await wait(entry, args.yieldTimeMs ?? 1_000, signal, true)
+              return drain(entry, args.maxOutputTokens ?? 4_096, began)
             })
           },
           foreground(input) {
@@ -228,14 +254,14 @@ export function createProcessToolsComponent(options: ProcessOptions = {}): Compo
               return { processes: summaries, cleanup: [...processes.values()].some(entry => entry.cleanupFailed) ? 'failed' : 'completed' }
             })
             const done = result.then(value => {
-              if ((value as Record<string, JsonValue>).cleanup === 'failed') throw new ProcessFailure('cleanup-failure')
-            }).finally(() => { scopes.delete(runId); processes.clear() })
+              if ((value as Record<string, JsonValue>).cleanup === 'failed') throw new ProcessFailure('cleanup-failure', [...processes.values()].find(entry => entry.cleanupFailed)?.cleanupFailure)
+            }).finally(() => { scopes.delete(scopeId); processes.clear() })
             closing = { result, done, cancel() { for (const entry of processes.values()) entry.terminate() } }
             void result.catch(() => {}); void done.catch(error => { failures.add(error) })
             return closing
           },
         }
-        scopes.set(runId, scope)
+        scopes.set(scopeId, scope)
         return scope
       },
     }

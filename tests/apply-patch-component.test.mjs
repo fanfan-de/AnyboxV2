@@ -4,8 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
-import { applyPatchServiceKey, createApplyPatchComponent, isApplyPatchFailure } from '../packages/app-harness/dist/core/tool/apply-patch-component.js'
+import { applyPatchServiceKey, createApplyPatchComponent, isApplyPatchFailure } from '@anybox/computer-tools/apply-patch'
 
 function deferred() {
   let resolve
@@ -25,32 +24,20 @@ function update(path, before = 'old', after = 'new') {
   return `*** Update File: ${path}\n@@\n-${before}\n+${after}`
 }
 
-async function fixture(filesystem = {}, onLookup) {
+async function fixture(filesystem = {}) {
   const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'anybox-patch-')))
   const project = join(directory, 'project')
   const other = join(directory, 'other')
   await fs.mkdir(project)
   await fs.mkdir(other)
   const root = new Context()
-  await root.installComponent({
-    name: 'patch-test-projects',
-    apply(ctx) {
-      ctx.provide(projectServiceKey, {
-        async requireAvailable(id) {
-          if (onLookup) await onLookup(id)
-          if (id !== 'project-1' && id !== 'project-2') throw new Error('private missing project')
-          return { id, path: id === 'project-1' ? project : other, name: 'test', available: true, createdAt: 'now' }
-        },
-      })
-    },
-  })
   await root.installComponent(createApplyPatchComponent({ filesystem }))
   const service = root.get(applyPatchServiceKey)
   return {
     directory, project, other, root, service,
-    call(text, projectId = 'project-1') { return service.execute({ projectId, patch: text }) },
+    call(text, projectId = 'project-1') { return service.execute({ workspacePath: projectId === 'project-1' ? project : projectId === 'project-2' ? other : join(directory, 'missing'), patch: text }) },
     async apply(text, projectId = 'project-1') {
-      const call = service.execute({ projectId, patch: text })
+      const call = service.execute({ workspacePath: projectId === 'project-1' ? project : projectId === 'project-2' ? other : join(directory, 'missing'), patch: text })
       const result = await call.result
       await call.done
       return result
@@ -301,14 +288,13 @@ test('Move reports the created destination when deleting its source fails', asyn
 test('one component queue serializes calls across projects and queued cancellation makes no changes', async () => {
   const entered = deferred()
   const release = deferred()
-  const lookups = []
   let first = true
   const f = await fixture({
     async writeFile(path, bytes, options) {
       if (first) { first = false; entered.resolve(); await release.promise }
       await fs.writeFile(path, bytes, options)
     },
-  }, id => { lookups.push(id) })
+  })
   try {
     const a = f.call(patch('*** Add File: first\n+first'))
     await entered.promise
@@ -316,7 +302,7 @@ test('one component queue serializes calls across projects and queued cancellati
     b.cancel('user-requested')
     const c = f.call(patch('*** Add File: third\n+third'), 'project-2')
     await Promise.resolve()
-    assert.deepEqual(lookups, ['project-1'])
+    await assert.rejects(fs.stat(join(f.other, 'third')), error => error.code === 'ENOENT')
     release.resolve()
     assert.equal((await a.result).status, 'applied')
     const cancelled = await b.result
@@ -324,7 +310,6 @@ test('one component queue serializes calls across projects and queued cancellati
     assert.deepEqual(cancelled.pending, [{ kind: 'add', path: 'second' }])
     assert.equal((await c.result).status, 'applied')
     await Promise.all([a.done, b.done, c.done])
-    assert.deepEqual(lookups, ['project-1', 'project-2'])
     await assert.rejects(fs.stat(join(f.other, 'second')), error => error.code === 'ENOENT')
     assert.equal(await fs.readFile(join(f.other, 'third'), 'utf8'), 'third\n')
   } finally { release.resolve(); await f.close() }
@@ -459,9 +444,7 @@ test('invalid requests and unavailable or unexpected executor failures use fixed
     assert.throws(() => f.call(null), error => isApplyPatchFailure(error) && error.category === 'invalid-request')
     assert.equal((await f.apply('  ')).status, 'rejected')
     assert.equal((await f.apply('nul\0')).status, 'rejected')
-    const missing = f.call(patch('*** Add File: file\n+text'), 'missing')
-    await assert.rejects(missing.result, error => isApplyPatchFailure(error) && error.category === 'unavailable' && !error.message.includes('private'))
-    await missing.done
+    assert.throws(() => f.service.execute({ workspacePath: 'relative', patch: 'text' }), error => isApplyPatchFailure(error) && error.category === 'invalid-request')
     const unexpected = f.call(patch('*** Add File: file\n+text'))
     await assert.rejects(unexpected.result, error => isApplyPatchFailure(error) && error.category === 'unavailable' && !error.message.includes('private'))
     await unexpected.done
@@ -469,10 +452,10 @@ test('invalid requests and unavailable or unexpected executor failures use fixed
   } finally { await f.close() }
 })
 
-test('component disposal waits for an accepted project lookup and prevents later file creation', async () => {
+test('component disposal waits for accepted filesystem preflight and prevents later file creation', async () => {
   const entered = deferred()
   const release = deferred()
-  const f = await fixture({}, async () => { entered.resolve(); await release.promise })
+  const f = await fixture({ async lstat(path) { entered.resolve(); await release.promise; return fs.lstat(path) } })
   try {
     const call = f.call(patch('*** Add File: file\n+text'))
     await entered.promise
@@ -497,9 +480,9 @@ test('literal mutations and patches share one queue and observe the latest commi
     await fs.writeFile(path, bytes, options)
   } })
   try {
-    const write = f.service.mutateText({ projectId: 'project-1', path: 'file', mutation: { kind: 'write', content: 'old\n' } })
+    const write = f.service.mutateText({ workspacePath: f.project, path: 'file', mutation: { kind: 'write', content: 'old\n' } })
     await entered.promise
-    const edit = f.service.mutateText({ projectId: 'project-1', path: 'file', mutation: { kind: 'edit', oldString: 'old', newString: 'new' } })
+    const edit = f.service.mutateText({ workspacePath: f.project, path: 'file', mutation: { kind: 'edit', oldString: 'old', newString: 'new' } })
     const patchCall = f.call(patch(update('file', 'new', 'final')))
     release.resolve()
     assert.equal((await write.result).status, 'applied')
@@ -520,7 +503,7 @@ test('literal mutations reject concurrent external writes using the existing com
   source = join(f.project, 'file')
   try {
     await fs.writeFile(source, 'old')
-    const call = f.service.mutateText({ projectId: 'project-1', path: 'file', mutation: { kind: 'write', content: 'new' } })
+    const call = f.service.mutateText({ workspacePath: f.project, path: 'file', mutation: { kind: 'write', content: 'new' } })
     assert.equal((await call.result).diagnostic.code, 'file-changed')
     await call.done
     assert.equal(await fs.readFile(source, 'utf8'), 'external')

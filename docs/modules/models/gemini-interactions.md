@@ -20,7 +20,7 @@
 | --- | --- |
 | `max_output_tokens` | 1–2,147,483,647 的整数 |
 | `thinking_level` | `minimal/low/medium/high`，需显式支持推理并列在配置 efforts 中 |
-| `thinking_summaries` | `auto/none`，需声明支持推理 |
+| `thinking_summaries` | `auto/none`，需声明支持推理；新基础配置和新建表单在已声明支持时默认显式保存 `auto` |
 
 省略选项保留服务端默认。未实现参数（包含任意覆盖模型、input、store、stream、认证的字段）被拒绝。本地函数工具与图片依赖显式 supported 声明；流式默认开启，配置 streaming 为 unknown/supported 时发送 `stream: true`，显式 unsupported 时发送 false。已有 unknown 配置无须迁移。服务端搜索不开放。
 

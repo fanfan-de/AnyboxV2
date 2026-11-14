@@ -11,16 +11,20 @@
 | 方法 | 行为 |
 | --- | --- |
 | `authenticate(authorization)` | 解析 `Unit <attachmentId>:<credential>`，经附着账本以常量时间比较凭证摘要；只有 `approved` 附着通过，其余返回 `unit-credential-invalid` 或 `unit-attachment-state` |
-| `poll(attachmentId, registration, signal?)` | 单元声明 `unitId`、`bootId`、平台、架构与等待时间；有排队请求立即领取，否则等待到有请求、等待期满、调用方断开或组件关闭。调用方断开时不领取任何请求 |
+| `poll(attachmentId, registration, signal?)` | 单元声明 `unitId`、`bootId`、平台、架构、可选的通用 `capabilities` JSON 与等待时间；有排队请求立即领取，否则等待到有请求、等待期满、调用方断开或组件关闭。调用方断开时不领取任何请求 |
 | `reply(attachmentId, replies)` | 校验回执并结算对应在途请求；未知 `requestId` 忽略。错误回执按原 `code`、`name`、`category` 重建为带 `remote: true` 的 Error |
 | `request(attachmentId, { kind, payload }, options?)` | 代理侧发起一次请求：单元在失联窗口内没有轮询过时立即返回 `unit-unavailable`，否则进入该附着的邮箱并唤醒等待中的轮询；领取窗口内无人领取返回 `unit-unavailable`，领取后回执超时返回 `unit-reply-timeout`，`signal` 中止返回 `unit-request-aborted` |
-| `connection(attachmentId)` | 最近一次轮询登记的单元身份、平台与时间，以及派生的 `connected`；没有轮询过返回 `undefined` |
+| `connection(attachmentId)` | 最近一次轮询登记的单元身份、平台、能力观察与时间，以及派生的 `connected`；没有轮询过返回 `undefined` |
 
 单元每次轮询都声明 workerId、bootId、平台与架构；`connection()` 用于连接状态及本代 claim 缓存，实例激活仍通过 `info` 请求向实际 worker 确认身份。单元换了 `bootId` 再来轮询时，上一代领取而未回复的请求立即按 `unit-claimed-unavailable` 失败，该错误保留“已领取、执行结果未知”的事实，不能按无人领取处理；由调用方按原 ID 向活着的单元查回或幂等重传。
 
+`capabilities` 是与本次 `unitId/bootId` 一起记录的可选通用 JSON 观察；HTTP 使用 `x-anybox-unit-capabilities` 请求头携带，头值为能力对象的 JSON 序列化（如 `JSON.stringify({ computerTools: manifest })`），上限 8 KiB，不增加轮询查询参数。传输单独保存最新轮询的能力报告，只有其身份与公开 `connection()` 相符时才附带返回；缺字段、身份错配或过时轮询不能沿用另一 boot 的能力。
+
+Computer 拨出当前使用 `capabilities.computerTools` 公布工具清单，Computer 环境投影负责解释工具契约，传输组件不认识具体工具、不加载 schema 或代码，也不据报告扩大授权。读取 `connection()` 和环境列表只读取既有内存，不向单元发起额外查询；尚未收到清单的旧单元保持未知。
+
 ## 数据与资源归属
 
-组件只持有内存中的邮箱：每个附着一份排队请求、在途请求和等待中的轮询。没有迁移域，没有持久事实——声明的耐久事实归 Session 与 Computer Operations 账本，接纳与执行事实归单元自己的账本，两边以 `operationId` 协调。连接状态是派生视图，不是事实。`unit-unavailable` 只说明本次未领取；此前已领取的提交仍可能执行，代理需要保留该 Run 的不确定性。
+组件只持有内存中的邮箱：每个附着一份排队请求、在途请求、等待中的轮询及最近一次身份/能力观察。没有迁移域，没有持久事实——声明的耐久事实归 Session 与 Computer Operations 账本，接纳与执行事实归单元自己的账本，两边以 `operationId` 协调。连接状态与能力报告是观察视图，不证明当前可执行或已授权。`unit-unavailable` 只说明本次未领取；此前已领取的提交仍可能执行，代理需要保留该 Run 的不确定性。
 
 ## 执行、取消与清理
 

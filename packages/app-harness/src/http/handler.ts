@@ -32,7 +32,7 @@ import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
   PromptSnapshot, PromptVersion } from '../core/prompt/domain.js'
 import type { AttachCodeInput, AttachRequest, UnitAttachment, UnitKind, UnitScope } from '../core/unit/port.js'
 import { isUnitError, validateUnitKind, validateUnitScope } from '../core/unit/domain.js'
-import { isTransportError, validateUnitRegistration } from '../core/unit/transport-domain.js'
+import { isTransportError, parseUnitCapabilitiesHeader, unitCapabilitiesHeader, validateUnitRegistration } from '../core/unit/transport-domain.js'
 import type { UnitRegistration, UnitReply, UnitRequest } from '../core/unit/transport-domain.js'
 import type { JsonValue } from '@anybox/models'
 import type { ComputerEnvironments } from '../core/computer/environments.js'
@@ -197,6 +197,7 @@ function sessionView(session: Session): SessionView {
   return {
     id: session.id, title: session.title, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
     modelId: session.modelId, archivedAt: session.archivedAt, toolSelection: session.toolSelection,
+    ...(session.toolEnvironments ? { toolEnvironments: session.toolEnvironments } : {}),
     protocolId: session.protocolId, historyMode: session.historyMode,
   }
 }
@@ -242,8 +243,8 @@ function outputSummary(value: string): { readonly text: string; readonly truncat
 }
 
 function toolCallView(call: ValidatedToolRequest): object {
-  if (call.name === 'bash') return { id: call.id, name: call.name, command: call.arguments.command }
-  if (call.name !== 'apply_patch') return { id: call.id, name: call.name, arguments: call.arguments }
+  if (call.name === 'bash' && typeof call.arguments.command === 'string') return { id: call.id, name: call.name, command: call.arguments.command }
+  if (call.name !== 'apply_patch' || typeof call.arguments.patch !== 'string') return { id: call.id, name: call.name, arguments: call.arguments }
   const patch = outputSummary(call.arguments.patch)
   return { id: call.id, name: call.name, patch: patch.text, patchTruncated: patch.truncated }
 }
@@ -259,13 +260,15 @@ function runEventView(event: RunEvent): object {
     case 'tool-started': return { ...base, ...toolCallView(event.call), requestId: event.call.id }
     case 'tool-observed': {
       if (event.name === 'apply_patch') return { ...base, name: event.name, requestId: event.requestId, result: event.result }
-      if (event.name !== 'bash') return { ...base, name: event.name, requestId: event.requestId, result: event.result,
+      const result = event.result && typeof event.result === 'object' && !Array.isArray(event.result)
+        ? event.result as Readonly<Record<string, JsonValue>> : undefined
+      if (event.name !== 'bash' || typeof result?.stdout !== 'string' || typeof result.stderr !== 'string') return { ...base, name: event.name, requestId: event.requestId, result: event.result,
         ...('images' in event && event.images?.length ? { images: event.images } : {}) }
-      const stdout = outputSummary(event.result.stdout)
-      const stderr = outputSummary(event.result.stderr)
-      return { ...base, name: event.name, requestId: event.requestId, exitCode: event.result.exitCode,
-        signal: event.result.signal, stdout: stdout.text, stderr: stderr.text,
-        truncated: event.result.truncated || stdout.truncated || stderr.truncated }
+      const stdout = outputSummary(result.stdout)
+      const stderr = outputSummary(result.stderr)
+      return { ...base, name: event.name, requestId: event.requestId, exitCode: result.exitCode,
+        signal: result.signal, stdout: stdout.text, stderr: stderr.text,
+        truncated: result.truncated || stdout.truncated || stderr.truncated }
     }
     case 'tool-failed': return { ...base, name: event.name, requestId: event.requestId, category: event.category,
       ...(event.result === undefined ? {} : { result: event.result }), ...(event.images?.length ? { images: event.images } : {}) }
@@ -451,7 +454,12 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         if (method === 'GET' && path === '/api/v1/units/unit/poll') {
           const params = Object.fromEntries(url.searchParams)
           let registration: UnitRegistration
-          try { registration = validateUnitRegistration({ ...params, ...(params.waitMs === undefined ? {} : { waitMs: Number(params.waitMs) }) }) } catch { throw failure(400, 'invalid-input') }
+          try {
+            if ('capabilities' in params) throw failure(400, 'invalid-input')
+            const capabilities = parseUnitCapabilitiesHeader(request.headers[unitCapabilitiesHeader])
+            registration = validateUnitRegistration({ ...params, ...(params.waitMs === undefined ? {} : { waitMs: Number(params.waitMs) }),
+              ...(capabilities === undefined ? {} : { capabilities }) })
+          } catch { throw failure(400, 'invalid-input') }
           const requests = await imageRequest(request, response, signal => commands.pollUnit(attachment.attachmentId, registration, signal), unitRequests)
           json(response, 200, { requests }); return
         }

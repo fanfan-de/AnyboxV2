@@ -3,34 +3,33 @@ import type { BigIntStats } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { basename, extname, isAbsolute, parse, relative, resolve, sep } from 'node:path'
 import type { Component } from '@nya/core'
-import type { JsonValue } from '@anybox/models'
+import type { JsonValue } from '@anybox/tool-api'
 import { rgPath } from '@vscode/ripgrep'
 import picomatch from 'picomatch'
-import type { OwnedCall } from '../contracts.js'
-import { projectServiceKey } from '../project/component.js'
-import type { ProjectPort } from '../project/component.js'
-import { imageAssetsServiceKey, isImageAssetError } from '../image/port.js'
-import type { ImageAssetsPort, ImageRef } from '../image/port.js'
-import { excludedPath } from '../project-files/domain.js'
+import type { OwnedCall } from '@anybox/tool-api'
+import { toolImagesServiceKey, isToolImageError } from './images.js'
+import type { ToolImagesPort, ToolImageRef } from './images.js'
+import type { FileToolRequest } from './adapters.js'
+import { excludedPath } from './search-policy.js'
 import { applyPatchServiceKey } from './apply-patch-component.js'
 import type { ApplyPatchPort } from './apply-patch-component.js'
 import { validatePatchText } from './apply-patch-domain.js'
 import { patchDiagnostic } from './apply-patch-types.js'
-import { spawnManagedProcess } from '../platform/process-runtime.js'
-import { toolEnvironment } from '../platform/shell.js'
+import { spawnManagedProcess } from '@anybox/computer-tools/platform/process-runtime'
+import { toolEnvironment } from './platform/shell.js'
 
 export const fileToolsServiceKey = 'tools.files'
 
 export interface FileToolResult {
   readonly result: JsonValue
-  readonly images?: readonly ImageRef[]
+  readonly images?: readonly ToolImageRef[]
 }
 export interface FileToolsPort {
   execute(input: {
-    readonly runId: string; readonly sessionId: string; readonly projectId: string
+    readonly scopeId: string
     /** Trusted binding path, also passed unchanged to nested text mutations. */
-    readonly workspacePath?: string
-    readonly name: string; readonly args: Readonly<Record<string, JsonValue>>
+    readonly workspacePath: string
+    readonly request: FileToolRequest
     readonly signal?: AbortSignal; readonly imageInput: boolean
   }): OwnedCall<FileToolResult>
 }
@@ -40,9 +39,7 @@ export interface FileToolsOptions {
   readonly searchTimeoutMs?: number
 }
 
-const supportedNames = new Set(['claude_code_Read', 'claude_code_Write', 'claude_code_Edit',
-  'claude_code_Glob', 'claude_code_Grep', 'deepseek_harness_read', 'deepseek_harness_read_image',
-  'deepseek_harness_write', 'deepseek_harness_edit', 'deepseek_harness_glob', 'deepseek_harness_grep', 'codex_view_image'])
+const supportedOperations = new Set(['read', 'image', 'write', 'edit', 'glob', 'grep'])
 const exclusionGlobs = ['**/.git/**', '**/.hg/**', '**/.svn/**', '**/node_modules/**', '**/.pnpm-store/**',
   '**/.venv/**', '**/venv/**', '**/.yarn/cache/**', '**/.yarn/unplugged/**']
 
@@ -127,9 +124,9 @@ async function readBytes(path: string, maxBytes: number, signal: AbortSignal): P
 }
 
 /** Search roots use ordinary filesystem access; traversal itself never follows links. */
-async function searchTarget(projectPath: string, path: JsonValue | undefined): Promise<string> {
+async function searchTarget(basePath: string, path: JsonValue | undefined): Promise<string> {
   if (path !== undefined && (typeof path !== 'string' || path.includes('\0'))) throw toolError('invalid-input', 'path must be a string without NUL.')
-  const target = resolve(projectPath, typeof path === 'string' ? path : '.')
+  const target = resolve(basePath, typeof path === 'string' ? path : '.')
   await rejectLinkAncestors(target)
   const info = await fs.lstat(target)
   if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) throw toolError('unsupported-file', 'Search requires a regular file or directory, without a symbolic-link target.')
@@ -169,13 +166,13 @@ async function runRg(arguments_: readonly string[], cwd: string, signal: AbortSi
 }
 
 export function createFileToolsComponent(options: FileToolsOptions = {}): Component.Object<void, {
-  [projectServiceKey]: ProjectPort; [applyPatchServiceKey]: ApplyPatchPort; [imageAssetsServiceKey]: ImageAssetsPort
+  [applyPatchServiceKey]: ApplyPatchPort; [toolImagesServiceKey]: ToolImagesPort
 }> {
   const maxSourceBytes = positive(options.maxSourceBytes, 10 * 1024 * 1024, 'maxSourceBytes')
   const maxResultBytes = positive(options.maxResultBytes, 65536, 'maxResultBytes')
   const searchTimeoutMs = positive(options.searchTimeoutMs, 30000, 'searchTimeoutMs')
   return {
-    name: 'file-tools', inject: [projectServiceKey, applyPatchServiceKey, imageAssetsServiceKey],
+    name: 'file-tools', inject: [applyPatchServiceKey, toolImagesServiceKey],
     apply(ctx, _config, deps) {
       const active = new Set<OwnedCall<FileToolResult>>(), cleanupFailures = new Set<unknown>()
       let accepting = true
@@ -190,8 +187,8 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
       const service: FileToolsPort = {
         execute(input) {
           if (!accepting) throw toolError('unavailable', 'File tools are unavailable.')
-          if (!input || !supportedNames.has(input.name) || !input.projectId || !input.sessionId || !input.runId || !input.args ||
-            input.workspacePath !== undefined && (typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0'))) {
+          if (!input || !input.request || !supportedOperations.has(input.request.operation) || !input.scopeId || !input.request.args ||
+            typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0')) {
             throw toolError('invalid-input', 'The file tool request is invalid.')
           }
           const workspacePath = input.workspacePath
@@ -221,31 +218,30 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
           input.signal?.addEventListener('abort', abort, { once: true })
           if (input.signal?.aborted) abort()
           const operation = (async (): Promise<FileToolResult> => {
-            const signal = controller.signal, args = input.args
+            const signal = controller.signal, args = input.request.args
             try {
               signal.throwIfAborted()
-              const projectPath = workspacePath ?? (await deps[projectServiceKey].requireAvailable(input.projectId)).path
+              const basePath = workspacePath
               signal.throwIfAborted()
-              const claude = input.name.startsWith('claude_code_')
-              const name = input.name.replace(/^(claude_code_|deepseek_harness_|codex_)/, '').toLowerCase()
+              const { operation: name, absolutePaths, detectImages, allowComplexGlob } = input.request
               if (name === 'write' || name === 'edit') {
                 const path = stringArg(args, 'file_path')
                 const mutation = name === 'write' ? { kind: 'write' as const, content: typeof args.content === 'string' ? args.content : stringArg(args, 'content') }
                   : { kind: 'edit' as const, oldString: stringArg(args, 'old_string'),
                     newString: typeof args.new_string === 'string' ? args.new_string : stringArg(args, 'new_string'), replaceAll: args.replace_all === true }
-                const observed = await ownedValue(deps[applyPatchServiceKey].mutateText({ projectId: input.projectId, workspacePath: projectPath, path, mutation }))
+                const observed = await ownedValue(deps[applyPatchServiceKey].mutateText({ workspacePath: basePath, path, mutation }))
                 return { result: observed as unknown as JsonValue }
               }
-              if (name === 'read' || name === 'read_image' || name === 'view_image') {
-                const path = resolve(projectPath, stringArg(args, name === 'view_image' ? 'path' : 'file_path'))
+              if (name === 'read' || name === 'image') {
+                const path = resolve(basePath, stringArg(args, 'file_path'))
                 if (name === 'read' && (['.pdf', '.ipynb'].includes(extname(path).toLowerCase()) || args.pages !== undefined)) {
                   throw toolError('unsupported-format', 'PDF and notebook reads are unsupported by this tool implementation; read a text export instead.')
                 }
                 if (name !== 'read' && !input.imageInput) throw toolError('image-input-unavailable', 'The selected model does not declare image input.')
                 const bytes = await readBytes(path, maxSourceBytes, signal)
-                if (name !== 'read' || (claude && imageSignature(bytes))) {
+                if (name !== 'read' || (detectImages && imageSignature(bytes))) {
                   if (!input.imageInput) throw toolError('image-input-unavailable', 'The selected model does not declare image input.')
-                  const ref = await ownedValue(deps[imageAssetsServiceKey].importImage({ scopeId: input.sessionId, bytes: (async function* () { yield bytes })() }, signal))
+                  const ref = await ownedValue(deps[toolImagesServiceKey].importImage({ scopeId: input.scopeId, bytes: (async function* () { yield bytes })() }, signal))
                   return { result: { path, image: { assetId: ref.assetId, sha256: ref.sha256, mediaType: ref.mediaType,
                     byteLength: ref.byteLength, width: ref.width, height: ref.height } }, images: [ref] }
                 }
@@ -259,14 +255,14 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
                 return { result: { path, text: rendered.text, offset, totalLines: lines.length, truncated,
                   nextOffset: truncated ? offset + (rendered.truncated ? Math.max(1, rendered.text.split('\n').length - 1) : selected.length) : null } }
               }
-              const target = await searchTarget(projectPath, args.path)
+              const target = await searchTarget(basePath, args.path)
               const common = ['--hidden', '--no-ignore', ...exclusionGlobs.flatMap(glob => ['--glob', `!${glob}`])]
               if (name === 'glob') {
                 const pattern = stringArg(args, 'pattern')
                 let matches: (path: string) => boolean
                 try { matches = picomatch(pattern, { dot: true, bash: true, matchBase: !pattern.includes('/'), strictBrackets: true }) }
                 catch { throw toolError('invalid-pattern', 'The glob pattern is invalid.') }
-                const output = await runRg(['--files', '--null', ...common, '--', target], projectPath, signal, searchTimeoutMs)
+                const output = await runRg(['--files', '--null', ...common, '--', target], basePath, signal, searchTimeoutMs)
                 const candidates: { path: string; mtimeMs: number }[] = []
                 for (const path of output.split('\0').filter(Boolean)) {
                   signal.throwIfAborted()
@@ -274,7 +270,7 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
                   if (excludedPath(relativePath) || !matches(relativePath)) continue
                   try {
                     const info = await fs.lstat(path)
-                    if (info.isFile() && !info.isSymbolicLink() && info.nlink === 1) candidates.push({ path: claude ? path : relative(projectPath, path).split(sep).join('/'), mtimeMs: info.mtimeMs })
+                    if (info.isFile() && !info.isSymbolicLink() && info.nlink === 1) candidates.push({ path: absolutePaths ? path : relative(basePath, path).split(sep).join('/'), mtimeMs: info.mtimeMs })
                   } catch { /* A concurrently removed search entry is omitted. */ }
                 }
                 candidates.sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path))
@@ -288,20 +284,20 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
               }
               if (name !== 'grep') throw toolError('invalid-input', 'The file tool is unsupported.')
               const pattern = stringArg(args, 'pattern'), flags = [...common]
-              const filter = claude ? args.glob : args.include
+              const filter = args.glob
               if (filter !== undefined) {
-                if (typeof filter !== 'string' || !filter || (!claude && (filter.startsWith('!') || filter.includes(',')))) throw toolError('invalid-input', 'The file filter must be a single positive glob pattern.')
+                if (typeof filter !== 'string' || !filter || (!allowComplexGlob && (filter.startsWith('!') || filter.includes(',')))) throw toolError('invalid-input', 'The file filter must be a single positive glob pattern.')
                 flags.push('--glob', filter)
               }
               if (args['-i'] === true) flags.push('--ignore-case')
               if (args.multiline === true) flags.push('--multiline', '--multiline-dotall')
-              const mode = claude ? (args.output_mode ?? 'files_with_matches') : 'content'
+              const mode = args.output_mode ?? 'content'
               if (mode === 'content') {
                 const context = numberArg(args, 'context', numberArg(args, '-C', 0))
                 flags.push('-B', String(numberArg(args, '-B', context)), '-A', String(numberArg(args, '-A', context)))
               }
               if (typeof args.type === 'string') flags.push('--type', args.type)
-              const output = await runRg(['--json', ...flags, '-e', pattern, '--', target], projectPath, signal, searchTimeoutMs)
+              const output = await runRg(['--json', ...flags, '-e', pattern, '--', target], basePath, signal, searchTimeoutMs)
               const files = new Map<string, number>(), rows: JsonValue[] = [], checked = new Map<string, boolean>()
               for (const line of output.split('\n')) {
                 if (!line) continue
@@ -310,7 +306,7 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
                 if (event.type !== 'match' && event.type !== 'context') continue
                 const data = event.data!, path = data.path?.text
                 if (!path || !data.lines?.text) continue
-                const rel = relative(projectPath, path).split(sep).join('/')
+                const rel = relative(basePath, path).split(sep).join('/')
                 if (excludedPath(rel)) continue
                 if (!checked.has(path)) {
                   try {
@@ -320,10 +316,10 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
                   } catch { checked.set(path, false) }
                 }
                 if (!checked.get(path)) continue
-                const display = claude ? path : rel
+                const display = absolutePaths ? path : rel
                 if (event.type === 'match') files.set(display, (files.get(display) ?? 0) + (args.multiline === true ? data.submatches?.length ?? 1 : 1))
                 if (mode === 'content') {
-                  const parts = claude && args['-o'] === true && event.type === 'match'
+                  const parts = args.only_matching === true && event.type === 'match'
                     ? (data.submatches ?? []).map(match => ({ content: match.match?.text ?? '',
                       line: (data.line_number ?? 1) + (Buffer.from(data.lines!.text!).subarray(0, match.start).toString('utf8').match(/\n/g)?.length ?? 0) }))
                     : [{ content: data.lines.text.replace(/\r?\n$/, ''), line: data.line_number ?? 1 }]
@@ -333,7 +329,7 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
               }
               const all: JsonValue[] = mode === 'files_with_matches' ? [...files.keys()] : mode === 'count'
                 ? [...files].map(([path, count]) => ({ path, count })) : rows
-              const offset = numberArg(args, 'offset', 0), limit = numberArg(args, 'head_limit', claude ? 100 : 250)
+              const offset = numberArg(args, 'offset', 0), limit = numberArg(args, 'head_limit', 250)
               const selected = limit === 0 ? all.slice(offset) : all.slice(offset, offset + limit)
               const bounded: JsonValue[] = []; let size = 0
               for (const row of selected) { const added = Buffer.byteLength(JSON.stringify(row)); if (size + added > maxResultBytes) break; bounded.push(row); size += added }
@@ -345,7 +341,7 @@ export function createFileToolsComponent(options: FileToolsOptions = {}): Compon
               if (error instanceof Error && error.name === 'FileToolError' && 'code' in error) return { result: { status: 'error', code: String(error.code), message: error.message } }
               const diagnostic = patchDiagnostic(error)
               if (diagnostic) return { result: { status: 'error', code: diagnostic.code, message: diagnostic.message } }
-              if (isImageAssetError(error)) return { result: { status: 'error', code: error.code, message: 'The image could not be imported.' } }
+              if (isToolImageError(error)) return { result: { status: 'error', code: error.code, message: 'The image could not be imported.' } }
               if (error instanceof Error && 'code' in error && ['ENOENT', 'EACCES', 'EPERM', 'EISDIR', 'ELOOP', 'ENOTDIR'].includes(String(error.code))) {
                 return { result: { status: 'error', code: String(error.code), message: 'The requested file or directory is missing or inaccessible.' } }
               }

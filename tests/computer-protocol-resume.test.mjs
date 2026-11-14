@@ -5,7 +5,7 @@ import { createResponsesProtocol, createAnthropicMessagesProtocol, createChatCom
 import { createExecution, validateRestore } from '../packages/models/dist/execution.js'
 import { createProtocolAgentsComponent, createProtocolAgentBindingComponent } from '../packages/app-harness/dist/core/protocol-agents/registry.js'
 import { modelSnapshot } from './helpers/controlled-models.mjs'
-import { bashToolDefinition } from '../packages/app-harness/dist/core/tool/bash-component.js'
+import { bashToolDefinition } from '@anybox/computer-tools/bash'
 
 const factories = { responses: createResponsesProtocol, 'anthropic-messages': createAnthropicMessagesProtocol,
   'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol }

@@ -1,4 +1,5 @@
 import type { RunView } from './client-types.js'
+import { isApplyPatchTrace } from './client-types.js'
 import type { SessionSnapshot } from './session-client.js'
 import { isActive } from './session-client.js'
 import { splitScopedId } from './harness-client.js'
@@ -242,7 +243,7 @@ export function createTrajectoryView(container: HTMLElement, actions: Trajectory
             input.className = 'trajectory-tool-input'; input.textContent = `${row.label} ${short(row.input)}`
             arrow.className = 'trajectory-tool-arrow'; arrow.textContent = '→'
             output.className = 'trajectory-tool-output'
-            const result = row.tool?.name === 'apply_patch' ? row.tool.result : undefined
+            const result = isApplyPatchTrace(row.tool) ? row.tool.result : undefined
             output.textContent = result ? [
               `${result.changes.length} 个文件已变更`, result.pending.length ? `${result.pending.length} 项未完成` : '',
               result.changes.map(change => change.path).join('、'), result.diagnostic?.code ?? '',

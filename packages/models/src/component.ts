@@ -123,8 +123,15 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       reasoning: declared.reasoning.support === 'supported' ? value.reasoning : { support: declared.reasoning.support },
     });
   };
+  const definitionLimits = (model: ModelConfiguration): ModelInput['limits'] | undefined => {
+    const current = store.model(model.modelDefinitionId);
+    const definition = current?.versionId === model.modelDefinitionVersionId ? current :
+      store.modelHistory(model.modelDefinitionId).find(value => value.versionId === model.modelDefinitionVersionId);
+    return definition?.limits;
+  };
   const summary = (model: ModelConfiguration): RunnableModelSummary => {
     const provider = getConnection(model.connectionId);
+    const limits = definitionLimits(model);
     let unavailableReason: RunnableModelSummary['unavailableReason'];
     let effectiveCapabilities: EffectiveCapabilities | undefined;
     if (!model.enabled) unavailableReason = 'disabled';
@@ -138,7 +145,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
         effectiveCapabilities = effective(generation, model, nativeParameters(model, provider.protocolId));
       } catch { unavailableReason ??= 'invalid-configuration'; }
     }
-    return immutable({ ...model, providerDefinitionId: provider.providerDefinitionId, source: store.model(model.modelDefinitionId)!.source, available: !unavailableReason, ...(unavailableReason ? { unavailableReason } : {}), ...(effectiveCapabilities ? { effectiveCapabilities } : {}) });
+    return immutable({ ...model, providerDefinitionId: provider.providerDefinitionId, source: store.model(model.modelDefinitionId)!.source, ...(limits ? { limits } : {}), available: !unavailableReason, ...(unavailableReason ? { unavailableReason } : {}), ...(effectiveCapabilities ? { effectiveCapabilities } : {}) });
   };
   const readCredential = async (provider: ProviderConnectionRecord, signal: AbortSignal) => {
     throwAborted(signal);
@@ -214,7 +221,8 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
           generation.protocol.validateProvider(connectionInput(provider));
           const parameters = nativeParameters(model, provider.protocolId), capabilities = effective(generation, model, parameters), requirements = captured.requirements;
           if (requirements.tools && !capabilities.tools || requirements.streaming && !capabilities.streaming || requirements.reasoning && capabilities.reasoning.support !== 'supported' || requirements.imageInput && !capabilities.imageInput) throw modelsError('capability-unsupported');
-          const snapshot = immutable({ schemaVersion: 3 as const, modelDefinitionId: model.modelDefinitionId, providerDefinitionId: provider.providerDefinitionId, modelDefinitionVersionId: model.modelDefinitionVersionId, modelId: model.id, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.id, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, registrationGenerationId: generation.id, historyScopeEpoch: provider.historyScopeEpoch, parameters, capabilities });
+          const limits = definitionLimits(model);
+          const snapshot = immutable({ schemaVersion: 3 as const, modelDefinitionId: model.modelDefinitionId, providerDefinitionId: provider.providerDefinitionId, modelDefinitionVersionId: model.modelDefinitionVersionId, modelId: model.id, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.id, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, registrationGenerationId: generation.id, historyScopeEpoch: provider.historyScopeEpoch, parameters, capabilities, ...(limits ? { limits } : {}) });
           if (captured.restore) validateRestore(captured.restore, snapshot, generation.protocol);
           const credential = await readCredential(provider, owned.controller.signal);
           throwAborted(owned.controller.signal);
@@ -277,7 +285,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
     return undefined;
   };
   const initialParameters = (model: Model, protocol: NativeProtocol): NativeParameters => {
-    const value = protocol.initialParameters?.(model.limits.output) ?? {};
+    const value = protocol.initialParameters?.(model.limits.output, model.capabilities) ?? {};
     const parameters: NativeParameters = immutable({ protocolId: protocol.descriptor.id, formatVersion: 1, value });
     validateParameters(parameters); return parameters;
   };

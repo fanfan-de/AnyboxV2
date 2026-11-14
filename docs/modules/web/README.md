@@ -27,4 +27,4 @@ Anybox Harness 的模型设置由 `web/models-client.ts` 管理。模型能力�
 
 已确认本机身份且平台支持时，“添加项目”直接打开系统目录窗口，确认后向固定目标登记；远程设备或原生能力未确认可用时，[应用内项目目录选择](../../project-directory-picker.md)由客户端视图、网关、harness server API 与既有 Projects 协作。声明 `projects.create-directory` 的目标支持在当前浏览目录下新建文件夹，创建后进入该目录，再选择登记；不新增组件。
 
-执行入口 `packages/distribution/src/entrypoints/harness-server-main.ts` 和客户端入口 `packages/distribution/src/entrypoints/client-main.ts` 负责默认 Anybox Harness 组合；通用装配在 `packages/host/src/execution.ts` 与 `packages/host/src/client.ts`。执行进程不安装浏览器静态服务和目录窗口，客户端不安装 Models、Session 或 Run。`packages/distribution/src/entrypoints/serve.ts` 只启动并管理两个独立进程，关闭策略见部署说明。
+执行入口 `packages/distribution/src/entrypoints/harness-server-main.ts` 和客户端入口 `packages/distribution/src/entrypoints/client-main.ts` 负责默认 Anybox Harness 组合；通用装配在 `packages/host/src/execution.ts` 与 `packages/host/src/client.ts`。独立执行入口不安装浏览器静态服务和目录窗口；纯客户端入口不加载 Harness 的 Models、Session 或 Run。`packages/distribution/src/entrypoints/serve.ts` 通过 `composition/local-web.ts` 在同一进程、同一 Nya 根组合两侧，使用显式服务绑定保留资源身份；Computer worker 独立。关闭策略见部署说明。

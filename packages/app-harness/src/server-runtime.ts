@@ -21,6 +21,7 @@ export interface HarnessServerRuntimeOptions extends Omit<HarnessServerCoreOptio
 }
 /** Optional Anybox integration; business assembly does not require host services. */
 export interface HarnessServerRuntimeIntegration {
+  readonly serviceBindings?: Readonly<Record<string, string>>
   readonly registerStopGuard?: (guard: () => (() => void) | undefined) => (() => void)
   readonly http?: HarnessServerHttpIntegrationSource | (() => HarnessServerHttpIntegration)
 }
@@ -32,11 +33,11 @@ export function createHarnessServerRuntime(root: Context, config: HarnessServerC
       const admission = root.get<RunAdmissionPort>(runAdmissionServiceKey)
       return admission ? admission.pauseIfIdle() : () => {}
     }), 'unregister harness server stop protection')
-    await installHarnessServerModels(root, config, options.models, installation.track)
-    const hasDefault = root.get<ModelsSettingsService>(modelsSettingsServiceKey)?.configurations().some(model => model.id === 'default') ?? false
-    const serverCoreOptions: HarnessServerCoreOptions = { ...options, localWorkerDirectory: options.localWorkerDirectory ?? `${config.harnessDatabasePath}.computer-worker`, initialProjects: options.projects ?? options.initialProjects,
+    await installHarnessServerModels(root, config, options.models, installation.track, installation.serviceBindings)
+    const hasDefault = root.get<ModelsSettingsService>(integration.serviceBindings?.[modelsSettingsServiceKey] ?? modelsSettingsServiceKey)?.configurations().some(model => model.id === 'default') ?? false
+    const serverCoreOptions: HarnessServerCoreOptions = { ...options, serviceBindings: integration.serviceBindings, localWorkerDirectory: options.localWorkerDirectory ?? `${config.harnessDatabasePath}.computer-worker`, initialProjects: options.projects ?? options.initialProjects,
       agents: options.agents ?? definitions.map(agent => ({ ...agent, ...(hasDefault ? { modelId: 'default' } : {}) })) }
     for (const component of [...createHarnessServerPromptComponents(serverCoreOptions), createImageAssetsComponent({ directory: config.imageAssetsDirectory }),
       ...createHarnessServerAgentComponents(root, serverCoreOptions, installation), createHarnessServerHttpComponent(root, definitions, integration.http)]) installation.install(component)
-  }, () => root.get<RunAdmissionPort>(runAdmissionServiceKey)?.closeAdmission())
+  }, () => root.get<RunAdmissionPort>(runAdmissionServiceKey)?.closeAdmission(), integration.serviceBindings)
 }

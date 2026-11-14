@@ -44,6 +44,10 @@ Anybox Harness 对话与轨迹明细共同挂载四协议各自的展示 v2 内�
 
 原生对话与轨迹明细只展示受 48KiB 预算约束的 v2 投影及截断提示，缺少投影时显示读取或不可用状态，不以保存的聚合回复降级；完整聚合文本只参与轨迹摘要与搜索，旧 dialogue-v1 的只读文本展示继续保留。
 
+Composer 模型选择旁的上下文用量环支持悬停、键盘聚焦和点击查看详情。以当前分支所属运行的最新模型请求输入 + 输出 tokens 估算占用，达到 75% / 90% 分别用琥珀色 / 红色提示；详情展示用量、固定模型定义的上下文上限和剩余比例。运行中跟随本面板提交或关注的运行；同父并发且未明确关注时不任选其中之一。历史其他分支、累计计费用量、草稿和未来工具输入不加入统计；切换模型、最新请求缺失统计或缺失上限时明确展示未知，不填零或猜测窗口。旧执行快照仅可借用相同定义版本的公开限制。`context-usage.ts` 为内部纯派生与 DOM 控制，不新增服务、请求、计时器或持久状态；弹层使用原生 top layer 避免分屏裁切，隐藏应用、切换轨迹及 dispose 关闭弹层并清理监听。
+
+`ProtocolViewExchange.usage` 为展示 v2 的可选白名单数字，仅接纳安全非负整数，缺省仍兼容旧视图。四协议由自己的原生字段投影，Anthropic 输入包含缓存读取与创建，其他协议缓存属于已有输入子集不重复相加；实时流保留当前 exchange 的累积统计，终态从耐久原生记录重新派生，不跨请求求和。测试入口为 `tests/context-usage-projection.test.mjs`、`tests/context-usage.test.mjs` 与 `tests/session-view.test.mjs`。
+
 客户端、执行设备和 Web 静态资源同步升级到展示 v2，旧或未知展示格式明确显示不兼容；旧原生记录 v1/v2 和旧绑定版本仍在服务端重新投影，不增加数据库迁移。旧 dialogue-v1 继续只读。
 
 协议展示的行为入口为 `tests/tool-call-view.test.mjs`、`tests/protocol-web-modules.test.mjs`、`tests/session-view.test.mjs` 与 `packages/app-harness/tests/trajectory.test.mjs`。运行 `node tests/helpers/native-view-browser-host.mjs` 可启动隔离浏览器验收宿主，使用内存样本复验四协议内容、1→2→3 工具增长和终态更新、长输出/失败/部分补丁、默认紧凑与详细模式以及约 320px/四分屏布局；不访问真实模型、凭据或工作区数据库。

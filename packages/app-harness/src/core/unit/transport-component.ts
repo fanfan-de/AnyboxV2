@@ -32,7 +32,7 @@ interface Pending {
   cleanup?: () => void
 }
 interface Poll { wake(): void }
-interface Mailbox { connection?: UnitConnection; queued: Pending[]; inflight: Map<string, Pending>; polls: Set<Poll> }
+interface Mailbox { connection?: UnitConnection; report?: UnitRegistration; queued: Pending[]; inflight: Map<string, Pending>; polls: Set<Poll> }
 
 /** Owns only in-memory mailboxes and waiting polls. Units keep their own ledgers; nothing here is a durable fact. */
 export function createUnitTransportComponent(inputs: RuntimeInputs): Component.Object<void, { [unitAttachmentsServiceKey]: UnitAttachmentsPort }> {
@@ -69,7 +69,9 @@ export function createUnitTransportComponent(inputs: RuntimeInputs): Component.O
         const input = validateUnitRegistration(registration), box = mailbox(attachmentId)
         // A new boot cannot answer requests the previous boot claimed; let callers retry against the live unit.
         if (box.connection && box.connection.bootId !== input.bootId) failInflight(box, transportError('unit-claimed-unavailable'))
-        const { waitMs, ...identity } = input
+        // Reports follow the latest poll admission, never an older long poll's eventual completion.
+        box.report = input
+        const { waitMs, capabilities: _capabilities, ...identity } = input
         const take = (): readonly UnitRequest[] => {
           const batch = box.queued.splice(0, transportLimits.maxRequestsPerPoll)
           for (const pending of batch) {
@@ -123,8 +125,10 @@ export function createUnitTransportComponent(inputs: RuntimeInputs): Component.O
         })
       },
       connection(attachmentId) {
-        const connection = mailboxes.get(attachmentId)?.connection
-        return connection && Object.freeze({ ...connection, connected: unitConnected(connection, inputs.now()) })
+        const box = mailboxes.get(attachmentId), connection = box?.connection, report = box?.report
+        const matches = connection && report && connection.unitId === report.unitId && connection.bootId === report.bootId &&
+          connection.platform === report.platform && connection.architecture === report.architecture
+        return connection && Object.freeze({ ...connection, ...(matches && report.capabilities !== undefined ? { capabilities: report.capabilities } : {}), connected: unitConnected(connection, inputs.now()) })
       },
     }
     ctx.provide(unitTransportServiceKey, service)

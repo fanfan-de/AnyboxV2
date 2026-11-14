@@ -116,12 +116,13 @@ function fieldValue(defaults: NativeObject, key: string): JsonValue | undefined 
 }
 
 /** Only a new configuration receives descriptor defaults; saved omissions stay omitted. */
-export function initialNativeParameters(fields: readonly FormField[], candidate?: Pick<DirectoryModel, 'limits'>): NativeObject {
+export function initialNativeParameters(fields: readonly FormField[], candidate?: { readonly limits?: DirectoryModel['limits']; readonly capabilities?: DeclaredCapabilities }): NativeObject {
   const values: Record<string, string> = {}
   for (const field of fields) {
     if (field.defaultValue === undefined) continue
+    if (field.key === 'generation_config.thinking_summaries' && candidate?.capabilities?.reasoning.support !== 'supported') continue
     let value = field.defaultValue
-    if (['max_output_tokens', 'max_completion_tokens', 'max_tokens', 'generation_config.max_output_tokens'].includes(field.key) && typeof value === 'number' && candidate?.limits.output !== undefined) value = Math.min(value, candidate.limits.output)
+    if (['max_output_tokens', 'max_completion_tokens', 'max_tokens', 'generation_config.max_output_tokens'].includes(field.key) && typeof value === 'number' && candidate?.limits?.output !== undefined) value = Math.min(value, candidate.limits.output)
     values[field.key] = field.type === 'enum' || field.type === 'boolean' ? JSON.stringify(value) : String(value)
   }
   // Required fields with no prefill are left for the user to enter in the form.
@@ -302,7 +303,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     input('remote-id').readOnly = Boolean(value || configurationDefinitionId)
     input('model-enabled').checked = value?.enabled ?? true
     modelCapabilities = value?.capabilities ?? variantCapabilities ?? { ...unknownCapabilities(), ...candidate?.suggestedCapabilities }
-    renderParameters(value?.parameters.value ?? variantDefaults ?? initialNativeParameters(currentProtocol()?.modelFields ?? []))
+    renderParameters(value?.parameters.value ?? variantDefaults ?? initialNativeParameters(currentProtocol()?.modelFields ?? [], { capabilities: modelCapabilities }))
     modelBaseFields = readModelFields(); modelBaseRevision = value?.revision
     const draft = restore ? modelDrafts.get(modelDraftKey) : undefined
     if (draft) { configurationDefinitionId = draft.definitionId; variantDefaults = draft.defaults; variantCapabilities = value ? undefined : draft.capabilities; if (!value) modelCapabilities = draft.capabilities ?? modelCapabilities; modelBaseFields = draft.baseFields; modelBaseRevision = draft.baseRevision; writeFields(draft.fields); input('remote-id').readOnly = Boolean(value || configurationDefinitionId) }
@@ -574,7 +575,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     if (found) { prepareDirectoryConnection(found, value, false); directory?.select(found.id) }
     else { protocolSelect.value = value.values.protocolId; input('base-url').value = value.values.baseUrl; select('auth').value = value.values.auth; input('timeout').value = String(value.values.timeoutMs); renderState() }
   })
-  protocolSelect.addEventListener('change', () => { captureModel(); select('template').value = ''; renderParameters(initialNativeParameters(currentProtocol()?.modelFields ?? [])); renderState() })
+  protocolSelect.addEventListener('change', () => { captureModel(); select('template').value = ''; renderParameters(initialNativeParameters(currentProtocol()?.modelFields ?? [], { capabilities: modelCapabilities })); renderState() })
   select('auth').addEventListener('change', () => { secretRevision++; key.value = ''; renderState() })
   get('[data-add-provider]').addEventListener('click', beginAdd)
   get('[data-custom-provider]').addEventListener('click', () => { captureConnection(); show(); loadProvider(); customConnection = true; directory?.select(''); renderState(); input('provider-name').focus() })

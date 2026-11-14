@@ -18,18 +18,20 @@ import type { PromptSnapshot } from '../prompt/domain.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow, StorageTransaction } from '@anybox/storage-sqlite/port'
 import { assemblePath, treeError, createSession, deriveSessionTitle, resolveSessionModel, sessionDefaultsConflict, agentToolsConflict } from './domain.js'
 import type { Session, SessionDefaults, AgentToolsSelection, ConversationNode } from './domain.js'
-import { createToolSelection, defaultToolIds, legacyToolSelection } from '../tool/catalog.js'
+import { createToolSelection, defaultToolIds, getToolById, legacyToolSelection } from '../tool/catalog.js'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 import { requestCancellation, settleRun, validateRunInput } from '../run/domain.js'
 import type { Run, RunInput } from '../run/domain.js'
 import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent } from '../run/execution.js'
 import type { RunEventData } from '../run/execution.js'
 import type { SessionPort, SessionRunPort } from './port.js'
+import { environmentForTool, parseToolEnvironmentSnapshot } from '../tool-environments/domain.js'
+import type { ToolEnvironmentRegistry } from '../tool-environments/port.js'
 
 type SavedSessionDefaults = Pick<SessionDefaults, 'agentId' | 'modelId' | 'revision'>
 type SessionRecords = Omit<SessionPort, 'createSession' | 'getSessionDefaults' | 'setSessionDefaults' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> & Omit<SessionRunPort, 'describeImages' | 'readFileSnapshots'> & {
-  createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string, fallbackModelId?: string | null): Promise<Session>
+  createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string, fallbackModelId?: string | null, environmentIds?: readonly string[]): Promise<Session>
   getSessionDefaults(agentId: string): Promise<SavedSessionDefaults>
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SavedSessionDefaults>
 }
@@ -234,6 +236,13 @@ const migrations: readonly StorageMigration[] = [{
 }, {
   version: 11,
   up(tx) { tx.execute('ALTER TABLE harness_runs ADD COLUMN unit_bindings_json TEXT') },
+}, {
+  version: 12,
+  up(tx) {
+    tx.execute('ALTER TABLE harness_sessions ADD COLUMN tool_environments_json TEXT')
+    tx.execute(`CREATE TRIGGER harness_sessions_environments_immutable BEFORE UPDATE OF tool_environments_json ON harness_sessions
+      BEGIN SELECT RAISE(ABORT, 'Session tool environments are immutable'); END`)
+  },
 }]
 
 const initialResumeState: RunResumeState = Object.freeze({ schemaVersion: 1, runOwnerEpoch: 1, revision: 0,
@@ -273,7 +282,7 @@ function runResume(reader: StorageReader, id: string): RunResumeRecord | undefin
 }
 function cleanupOutputBytes(intent: JsonValue, result?: JsonValue): number {
   if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
-    !['tool-process-cleanup', 'computer-scope-cleanup'].includes(String((intent as Record<string, JsonValue>).kind)) ||
+    !['tool-process-cleanup', 'computer-scope-cleanup', 'tool-environment-cleanup'].includes(String((intent as Record<string, JsonValue>).kind)) ||
     !result || typeof result !== 'object' || Array.isArray(result)) return 0
   const processes = (result as Record<string, JsonValue>).processes
   return Array.isArray(processes) ? processes.reduce((total, process) => {
@@ -289,7 +298,9 @@ function readAgentTools(reader: StorageReader, agentId: string): AgentToolsSelec
   const toolIds: unknown = JSON.parse(required(row, 'tool_ids_json'))
   if (!Array.isArray(toolIds) || toolIds.some(id => typeof id !== 'string' || !id) || new Set(toolIds).size !== toolIds.length ||
     typeof row.revision !== 'number' || !Number.isSafeInteger(row.revision) || row.revision < 1) throw new Error('invalid stored Agent tool settings')
-  return Object.freeze({ agentId, toolIds: Object.freeze(toolIds as string[]), revision: row.revision })
+  // Settings describe future Sessions; immutable existing Session snapshots are never rewritten.
+  const selectableIds = (toolIds as string[]).filter(id => getToolById(id)?.selectable !== false)
+  return Object.freeze({ agentId, toolIds: Object.freeze(selectableIds), revision: row.revision })
 }
 
 function readSessionDefaults(reader: StorageReader, agentId: string): SavedSessionDefaults {
@@ -446,6 +457,7 @@ function sessionFromRow(row: StorageRow, reader: StorageReader): Session {
     archivedAt: optional(row, 'archived_at') ?? null,
     agentId: required(row, 'agent_id'), modelId: optional(row, 'model_id') ?? null, createdAt: required(row, 'created_at'),
     toolSelection: row.tool_selection_json === null ? legacyToolSelection : Object.freeze(JSON.parse(required(row, 'tool_selection_json')) as ToolSelectionSnapshot),
+    ...(optional(row, 'tool_environments_json') ? { toolEnvironments: parseToolEnvironmentSnapshot(JSON.parse(required(row, 'tool_environments_json'))) } : {}),
     historyMode, protocolId: optional(row, 'protocol_id') ?? null,
   })
 }
@@ -574,6 +586,13 @@ function getRun(reader: StorageReader, id: string): Run | undefined {
   return row ? runFromRow(row) : undefined
 }
 
+function runUsesComputer(reader: StorageReader, id: string): boolean {
+  const row = reader.get('SELECT payload_json FROM harness_native_initializations WHERE id = (SELECT initialization_id FROM harness_runs WHERE id = ?)', [id])
+  if (!row) return true
+  const initialization = JSON.parse(required(row, 'payload_json')) as NativeInitialization
+  return initialization.schemaVersion !== 3 || initialization.toolEnvironments.environments.some(environment => environment.environmentId === 'computer')
+}
+
 function accepted(reader: StorageReader, input: RunInput): Run | undefined {
   const session = reader.get('SELECT id FROM harness_sessions WHERE id = ?', [input.sessionId])
   if (!session) throw new Error(`unknown session ${input.sessionId}`)
@@ -598,6 +617,7 @@ export async function openSqliteSessionRecords(
   files: ProjectFilesPort,
   computers: ComputerOperationsPort,
   attachments: UnitAttachmentsPort,
+  environments?: ToolEnvironmentRegistry,
 ): Promise<SessionRecords> {
   await db.migrate('run-state', migrations)
   // Only a committed protocol response authorizes tool-stage takeover. A pending model request cannot be replayed.
@@ -611,7 +631,7 @@ export async function openSqliteSessionRecords(
       const event = { kind: 'interrupted' as const, previousPhase: prior.phase }
       const next = advanceExecution(prior, event)
       // The model exchange cannot resume, but any independent computer scope still requires cancellation and exit.
-      computers.requestCancelIn(tx, id)
+      if (runUsesComputer(tx, id)) computers.requestCancelIn(tx, id)
       tx.execute("UPDATE harness_runs SET status = 'interrupted', updated_at = ?, execution_json = ?, revision = revision + 1 WHERE id = ?",
         [at, JSON.stringify(next), id])
       tx.execute('INSERT INTO harness_run_events (run_id, seq, at, payload_json) VALUES (?, ?, ?, ?)',
@@ -644,16 +664,21 @@ export async function openSqliteSessionRecords(
         return Object.freeze({ agentId, modelId, revision })
       })
     },
-    createSession(id, projectId, agentId, now, requestedModelId, fallbackModelId = null) {
+    createSession(id, projectId, agentId, now, requestedModelId, fallbackModelId = null, environmentIds) {
       return db.transaction(tx => {
         if (!tx.get('SELECT id FROM harness_projects WHERE id = ?', [projectId])) {
           throw new Error(`unknown project ${projectId}`)
         }
         const modelId = resolveSessionModel(requestedModelId, readSessionDefaults(tx, agentId).modelId, fallbackModelId)
-        const toolSelection = createToolSelection(readAgentTools(tx, agentId).toolIds)
-        const session = createSession(id, projectId, agentId, now, modelId, toolSelection)
-        tx.execute("INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json) VALUES (?, ?, ?, ?, ?, 'native-local-v1', ?)",
-          [id, projectId, agentId, now, modelId, serialize(toolSelection)])
+        if (environmentIds !== undefined && !environments) throw new TypeError('tool environment registry is unavailable')
+        const computerToolIds = readAgentTools(tx, agentId).toolIds
+        const toolEnvironments = environments?.snapshot(environmentIds ?? ['computer'], computerToolIds)
+        const toolSelection: ToolSelectionSnapshot = toolEnvironments
+          ? Object.freeze({ schemaVersion: 1, tools: Object.freeze(toolEnvironments.environments.flatMap(environment => environment.tools)) })
+          : createToolSelection(computerToolIds)
+        const session = createSession(id, projectId, agentId, now, modelId, toolSelection, toolEnvironments)
+        tx.execute("INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json, tool_environments_json) VALUES (?, ?, ?, ?, ?, 'native-local-v1', ?, ?)",
+          [id, projectId, agentId, now, modelId, serialize(toolSelection), toolEnvironments ? serialize(toolEnvironments) : null])
         return session
       })
     },
@@ -748,7 +773,13 @@ export async function openSqliteSessionRecords(
         if (session.archivedAt !== null) throw treeError('session-archived')
         if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
         if (!native || model.schemaVersion !== 3) throw treeError('invalid-history')
-        if (native.initialization.schemaVersion === 2 && !isDeepStrictEqual(native.initialization.toolSelection, session.toolSelection)) throw treeError('history-incompatible')
+        if (session.toolEnvironments && native.initialization.schemaVersion !== 3) throw treeError('history-incompatible')
+        if (native.initialization.schemaVersion !== 1 && !isDeepStrictEqual(native.initialization.toolSelection, session.toolSelection)) throw treeError('history-incompatible')
+        if (native.initialization.schemaVersion === 3 && !isDeepStrictEqual(native.initialization.toolEnvironments, session.toolEnvironments)) throw treeError('history-incompatible')
+        if (native.initialization.schemaVersion === 3) {
+          if (!environments) throw treeError('history-incompatible')
+          try { environments.validate(native.initialization.toolEnvironments) } catch { throw treeError('history-incompatible') }
+        }
         const binding = checkedBinding(native.binding)
         if (binding.protocolId !== model.protocolId || (session.protocolId && session.protocolId !== binding.protocolId)) throw treeError('protocol-mismatch')
         nodePath(tx, input.sessionId, input.parentNodeId)
@@ -815,7 +846,7 @@ export async function openSqliteSessionRecords(
         if (!resume || !['running', 'cancelling'].includes(resume.run.status) || resume.state.protocolCursor === undefined || resume.state.stage === 'model-pending') throw resumeError('run-not-resumable')
         if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch !== resume.state.runOwnerEpoch) throw resumeError('stale-run-owner')
         const epoch = expectedEpoch + 1
-        computers.claimRunIn(tx, id, epoch)
+        if (runUsesComputer(tx, id)) computers.claimRunIn(tx, id, epoch)
         updateResume(tx, id, resume.state, { runOwnerEpoch: epoch })
         tx.execute('UPDATE harness_runs SET updated_at = ? WHERE id = ?', [at, id])
         return runResume(tx, id)!
@@ -852,7 +883,7 @@ export async function openSqliteSessionRecords(
       if (!row) return undefined
       return Object.freeze({ start: { id, kind: required(row, 'kind') as 'model' | 'operation' | 'tool', intent: JSON.parse(required(row, 'intent_json')) as JsonValue,
         ...(optional(row, 'tool_json') ? { tool: JSON.parse(required(row, 'tool_json')) } : {}),
-        ...(required(row, 'kind') === 'operation' && ['tool-process-cleanup', 'computer-scope-cleanup'].includes(JSON.parse(required(row, 'intent_json'))?.kind) ? { cleanup: true as const } : {}) },
+        ...(required(row, 'kind') === 'operation' && ['tool-process-cleanup', 'computer-scope-cleanup', 'tool-environment-cleanup'].includes(JSON.parse(required(row, 'intent_json'))?.kind) ? { cleanup: true as const } : {}) },
         ...(optional(row, 'observation_json') ? { observation: JSON.parse(required(row, 'observation_json')) } : {}) })
     }) },
     async startOperation(runId, operation, at, ownerEpoch) {
@@ -871,16 +902,16 @@ export async function openSqliteSessionRecords(
           insertRecords(tx, run, operation.records)
           return run
         }
-        if (operation.tool && needsComputer(operation.tool)) {
+        if (operation.tool) {
           const initializationRow = tx.get('SELECT payload_json FROM harness_native_initializations WHERE id = (SELECT initialization_id FROM harness_runs WHERE id = ?)', [runId])
           if (!initializationRow) throw treeError('invalid-history')
           const initialization = JSON.parse(required(initializationRow, 'payload_json')) as NativeInitialization
           validateToolBatch([operation.tool], initialization.tools)
-          const selection = initialization.schemaVersion === 2 ? initialization.toolSelection : legacyToolSelection
+          const selection = initialization.schemaVersion !== 1 ? initialization.toolSelection : legacyToolSelection
           const tool = selection.tools.find(tool => tool.definition.name === operation.tool!.name)
           if (!tool) throw treeError('invalid-history')
           const session = tx.get('SELECT project_id FROM harness_sessions WHERE id = ?', [run.sessionId])!
-          computers.acceptIn(tx, { operationId: operation.id, runId, sessionId: run.sessionId,
+          if (needsComputer(operation.tool) && (initialization.schemaVersion !== 3 || environmentForTool(initialization.toolEnvironments, operation.tool.name)?.environmentId === 'computer')) computers.acceptIn(tx, { operationId: operation.id, runId, sessionId: run.sessionId,
             projectId: required(session, 'project_id'), request: operation.tool, tool, runOwnerEpoch: resume?.runOwnerEpoch ?? 1,
             ...(run.units ? { unit: run.units.computer } : {}) })
         }
@@ -912,7 +943,7 @@ export async function openSqliteSessionRecords(
         insertRecords(tx, run, observation.records)
         tx.execute('UPDATE harness_run_operations SET status = ?, observation_json = ? WHERE run_id = ? AND id = ?',
           [observation.kind, serialize(observation), runId, operationId])
-        computers.observeIn(tx, operationId, JSON.parse(serialize(observation)) as JsonValue)
+        if (runUsesComputer(tx, runId)) computers.observeIn(tx, operationId, JSON.parse(serialize(observation)) as JsonValue)
         if (observation.checkpoint !== undefined) tx.execute('UPDATE harness_runs SET protocol_checkpoint_json = ? WHERE id = ?', [serialize(observation.checkpoint), runId])
         if (resume) {
           const bytes = (observation.tool ? toolOutputBytes(observation.tool) : 0) + cleanupOutputBytes(JSON.parse(required(operation, 'intent_json')) as JsonValue, observation.result)
@@ -981,7 +1012,7 @@ export async function openSqliteSessionRecords(
         if (!run) return undefined
         const next = requestCancellation(run, now)
         if (next !== run) {
-          computers.requestCancelIn(tx, id)
+          if (runUsesComputer(tx, id)) computers.requestCancelIn(tx, id)
           tx.execute('UPDATE harness_runs SET status = ?, updated_at = ?, revision = revision + 1 WHERE id = ?',
             [next.status, next.updatedAt, id])
           changed = true

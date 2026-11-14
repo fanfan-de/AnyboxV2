@@ -1,0 +1,90 @@
+# Anybox 源码快照，基于 46db144。
+# 在仓库根目录运行：
+# d2 --layout elk --elk-nodeNodeBetweenLayers 30 --elk-edgeNodeBetweenLayers 16 \
+#   --elk-padding '[top=48,left=30,bottom=25,right=30]' --pad 30 \
+#   docs/architecture/anybox-architecture-2026-11-10.d2 docs/architecture/anybox-architecture-2026-11-10.svg
+# 依据：docs/runtime-roles-and-distribution.md、docs/application-packages-design.md、
+# docs/modules/package-management/activation.md、docs/harness-server-components.md。
+
+direction: down
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 0
+  }
+}
+
+classes: {
+  entry: {
+    style: {fill: "#f6f8fc"; stroke: "#7183a1"; border-radius: 10; font-size: 19}
+  }
+  role: {
+    label.near: top-left
+    style: {fill: "#f6f8fc"; stroke: "#8193b1"; border-radius: 14; font-size: 20; bold: true}
+  }
+  host: {
+    style: {fill: "#e9effa"; stroke: "#4a6ca1"; border-radius: 8; font-size: 17}
+  }
+  harness: {
+    style: {fill: "#e2f3ed"; stroke: "#408374"; border-radius: 8; font-size: 17}
+  }
+  claude: {
+    style: {fill: "#f9ece4"; stroke: "#a66b4d"; border-radius: 8; font-size: 17}
+  }
+  resource: {
+    style: {fill: "#f8f6fd"; stroke: "#807198"; border-radius: 10; font-size: 17}
+  }
+  assembly: {
+    style: {stroke: "#647795"; stroke-dash: 4; font-size: 15}
+  }
+  call: {
+    style: {stroke: "#3d566f"; stroke-width: 2; font-size: 15}
+  }
+}
+
+title: |md
+  # Anybox 当前架构
+  运行角色、应用边界与发行入口 · 2026-11-10 · 46db144
+| {near: top-center}
+
+distribution: "默认发行 · @anybox/distribution\n静态注册 Anybox Harness 与 Claude Agent" {class: entry}
+ui: "桌面窗口 / 浏览器\nAnybox 外壳与应用 Web 界面" {class: entry}
+minimal: "最小宿主 · @anybox/host\nCLI / Electron 监督器 · 稳定 origin\n按已验证、已生效的安装快照加载" {class: entry}
+
+client: "客户端服务进程 · 一个 Nya 根" {
+  class: role
+  shell: "Anybox 宿主\n页面承载、Products 启停与 Activity 退出协调" {class: host}
+  packages: "本地包管理 · D1.1–D1.5\n验证、安装、生效交接、卸载及代码回收\n独占 registry.sqlite · 卸载保留业务数据" {class: host}
+  harness: "Anybox Harness 客户端 · agent\n设备连接、凭据、HTTP/SSE 网关\n独立本机 Computer 管理入口" {class: harness}
+  claude: "Claude Agent 客户端 · claude-agent\n自有连接与凭据\n本机和远端路由、流式观察" {class: claude}
+
+  shell -> harness: {class: call}
+  shell -> claude: {class: call}
+}
+
+execution: "执行端 · 单 Nya 根/进程" {
+  class: role
+  harness: "harness server · 本机或远端\nSession / Run / RunRuntime / 原生协议 Loop\n进程内 Models（四种原生协议）\n业务 SQLite · Models JSON · 系统 Vault" {class: harness}
+  claude: "Claude Agent 执行端 · 本机或远端\nStore / Runs / HTTP / SDK 适配\n持有应用 SQLite、引用 Claude 原生会话" {class: claude}
+}
+
+worker: "独立 Computer worker · 本机或远端\n一个 Nya 根 · 独占执行账本与工具进程\nBash / Apply Patch / Processes / Files" {class: harness}
+providers: "模型提供方 API\n由 Models 驱动直接调用" {class: resource}
+claude_process: "Claude 执行子进程\n用户的 Claude 环境、原生会话与工具" {class: resource}
+
+distribution -> client.shell: "静态应用目录" {class: assembly}
+ui -> client.shell: "HTTP / SSE" {class: call}
+minimal -> client.packages: "本地目录 / .anybox-app" {class: assembly}
+client.packages -> execution: "协调受管本机角色交接" {class: assembly}
+
+client.harness -> execution.harness: "应用认证 HTTP / SSE" {class: call}
+client.claude -> execution.claude: "受管本机 · 同包私有通道\n默认静态组合 / 远端 · 应用 HTTP / SSE" {class: call}
+execution.harness -> worker: "本机回环 / 远端 worker 拨出" {class: call}
+execution.harness -> providers: "原生协议" {class: call}
+execution.claude -> claude_process: "Claude Agent SDK" {class: call}
+
+notes: |md
+  实线为主要调用，虚线为装配或版本交接。两个应用可共享同一执行进程，也各有独立服务入口。
+
+  应用按需打开，业务数据和凭据由所属应用管理。项目 D2 在线下载和 D3 默认发行迁入仍待实施。
+| {near: bottom-center; style.font-size: 16}

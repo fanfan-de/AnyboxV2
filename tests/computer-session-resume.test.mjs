@@ -12,6 +12,7 @@ import { createSessionComponent } from '../packages/app-harness/dist/core/sessio
 import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { ids, modelSnapshot } from './helpers/controlled-models.mjs'
 import { registerNativeRun } from './helpers/native-records.mjs'
+import { getToolById } from '@anybox/computer-tools/contracts'
 
 async function fixture(t) {
   const root = new Context(), directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-session-resume-')))
@@ -24,13 +25,21 @@ async function fixture(t) {
   await installComputerServices(root, inputs)
   let fiber = root.installComponent(createSessionComponent(inputs, agents)); await fiber
   const project = await root.get('harness.projects').openProject(directory)
-  const session = await root.get('harness.sessions').createSession(project.id, 'assistant')
+  // Recovery exercises an actual historical contract, rather than admitting a retired
+  // tool into a new Session whose frozen declarations never included it.
+  const plan = getToolById('codex.update_plan')
+  const toolSelection = { schemaVersion: 1, tools: [{ toolId: plan.toolId, version: plan.version, definition: plan.definition }] }
+  await root.get('local-storage').transaction(tx => tx.execute(`INSERT INTO harness_sessions
+    (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ['historical-session', project.id, 'assistant', 'now', 'default', 'native-local-v1', JSON.stringify(toolSelection)]))
+  const session = await root.get('harness.sessions').getSession('historical-session')
   t.after(async () => { try { await root.fiber.dispose() } finally { rmSync(directory, { recursive: true, force: true }) } })
   const restart = async () => { await fiber.dispose(); fiber = root.installComponent(createSessionComponent(inputs, agents)); await fiber; return root.get('harness.session-runs') }
   return { root, session, records: root.get('harness.session-runs'), db: root.get('local-storage'), restart }
 }
 async function acceptedResponse(f, id = 'run') {
-  await registerNativeRun(f.records, id, { sessionId: f.session.id, parentNodeId: null, input: id, idempotencyKey: id }, 'now')
+  await registerNativeRun(f.records, id, { sessionId: f.session.id, parentNodeId: null, input: id, idempotencyKey: id }, 'now', [], modelSnapshot(),
+    { schemaVersion: 2, prompts: [], tools: f.session.toolSelection.tools.map(tool => tool.definition), toolContractVersion: 'tool-library-v1', toolSelection: f.session.toolSelection })
   const request = { id: `${id}:request`, exchangeId: `${id}:exchange`, kind: 'request', formatVersion: 1, payload: { messages: [{ role: 'user', content: id }] } }
   const response = { id: `${id}:response`, exchangeId: `${id}:exchange`, kind: 'response', formatVersion: 1,
     payload: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'saved response' } }] } }

@@ -57,3 +57,5 @@ D1.4 的“应用更改”与安装分开：包管理回调逐请求取得当前
 工作区继续使用 anybox.apps.workspace.v1 和原有 tabs 字段兼容已保存位置。局部路由、恢复与 mount 契约见[宿主设计](../../products-v1.md)。验证 tests/desktop-host-boundaries.test.mjs、application-shell.test.mjs、application-host.test.mjs、application-workspace.test.mjs、products-host.test.mjs；npm run check。
 
 D1.5 在已安装应用列表提供本机卸载，默认保留数据。卸载显式提交 kind remove 和 appIds，同样经过全角色保护、全部页面 canClose/真实 dispose，再按原 ID 观察角色切换及文件回收。reclaiming 或 recovery-required 均显示尚未卸载；独立使用者占用、忙碌和回收失败提供明确原因与原批次恢复入口。只有 completed remove 才从所有页面工作区清除目标 appId 的 tabs，并 replace 活动路由后 reload，其他应用的位置和路由保持。重启核对还要求当前全部安装 removed、selected/pending 为空，历史卸载不会误清重装后的标签。Shell 不调用应用业务或删除数据。行为见 package-management-{http,web}、package-page-lifecycle-web、application-shell 和 application-workspace 测试。
+
+单机 Web 的外层组合可向客户端宿主和执行宿主传入同一根。此时两侧 `prepareClose()` 仍分别停止本侧准入，最终根销毁归外层组合负责；根销毁与两侧 HTTP 排空共同等待。已安装客户端包的 usage 在根级 Effect 中、应用组件真实退出后释放，启动失败也不能提前释放代码使用证明。独立宿主未传 root 时仍自行创建和关闭根。

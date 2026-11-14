@@ -41,7 +41,7 @@ test('client has its own root without Models or Harness services and cleans up f
   } finally { await b?.close(); await a?.close(); await rm(dir, { recursive: true, force: true }) }
 })
 
-test('combined launcher still starts the client when local Harness startup fails and joins its child on stop', { timeout: 10000 }, async () => {
+test('local entry still starts the client when Harness configuration fails and closes its single root on stop', { timeout: 10000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'anybox-launcher-')); let child
   try {
     child = spawn(process.execPath, ['packages/distribution/dist/entrypoints/serve.js'], { cwd, env: { ...process.env, ANYBOX_LLM_API: 'invalid-for-test', ANYBOX_WEB_PORT: '0', ANYBOX_CLIENT_DATABASE: join(dir, 'client.sqlite') }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })

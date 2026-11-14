@@ -14,6 +14,7 @@ import { createConversationTreeView } from './conversation-tree-view.js'
 import { getProtocolWebModule, type MountedProtocolTurn } from './protocols/modules.js'
 import { renderMarkdown } from './markdown.js'
 import { protocolToolContext, toolContextReadiness } from './tool-call-view.js'
+import { contextUsage, createContextUsageView } from './context-usage.js'
 export { createToolCallCard } from './tool-call-view.js'
 
 export interface SessionScrollPosition {
@@ -28,6 +29,7 @@ export interface SessionPanel {
   captureScroll(): SessionScrollPosition
   restoreScroll(position: SessionScrollPosition): void
   resizeInput(): void
+  closeContextUsage(): void
   dispose(): SessionScrollPosition
 }
 
@@ -105,6 +107,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   let renderNodes: Node[] = []
   const active = isActive
   const listeners = new AbortController(), options = { signal: listeners.signal }
+  const usageView = createContextUsageView(element, `agent--context-usage-${pane.id}`, listeners.signal)
   const measurable = (container: HTMLElement): boolean => !element.hidden && element.isConnected &&
     element.clientWidth > 0 && element.clientHeight > 0 && !container.hidden && container.clientWidth > 0 && container.clientHeight > 0
   const selectMode = (mode: SessionViewMode): void => { panel.captureScroll(); controller.setViewMode(mode) }
@@ -199,6 +202,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   element.addEventListener('focusin', focus, options)
   get('.pane-close').addEventListener('click', event => { event.stopPropagation(); close() }, options)
   const resizeInput = (): void => {
+    usageView.position()
     if (element.hidden || compose.hidden || !element.isConnected) return
     if (!element.isConnected || element.clientWidth === 0) return
     messageInput.style.height = 'auto'
@@ -275,6 +279,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   const panel: SessionPanel = {
     element,
     resizeInput,
+    closeContextUsage: usageView.close,
     captureScroll() {
       if (dialogueScrollReady && measurable(transcript)) {
         savedScroll.dialogue = transcript.scrollTop
@@ -303,6 +308,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
     render() {
       panel.captureScroll()
       const state = controller.snapshot()
+      usageView.render(contextUsage(state, models?.snapshot().models))
       const tree = conversationTree(state)
       visibleMode = state.position.viewMode === 'runs' ? 'runs' : 'dialogue'
       const records = visibleMode === 'runs'
@@ -310,6 +316,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       runHistory.inert = !records
       compose.hidden = records
       compose.inert = records
+      if (records) usageView.close()
       get('.branch-controls').hidden = records
       get('.branch-controls').inert = records
       get('.run-history-scope').hidden = !records

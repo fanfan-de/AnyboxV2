@@ -51,13 +51,15 @@ function launch(directory, vault) {
       ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite'), ANYBOX_MODELS_CATALOG_DATABASE: join(directory, 'catalog.sqlite'),
       ANYBOX_IMAGE_ASSETS_DIRECTORY: join(directory, 'images'), ANYBOX_PROJECTS: '[]', ANYBOX_WEB_PORT: '0', ANYBOX_HARNESS_PORT: '0' },
   })
+  const listeners = []
+  child.on('message', message => { if (message?.type === 'test-listener-owner') listeners.push(message) })
   let output = '', readyResolve
   const ready = new Promise(resolve => { readyResolve = resolve })
   const collect = bytes => { output += bytes; const url = /Anybox Client: (http:\/\/127\.0\.0\.1:\d+)/.exec(output)?.[1]; if (url) readyResolve(url) }
   child.stdout.on('data', collect); child.stderr.on('data', collect)
   const exited = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })) })
   let stopping
-  return { child, exited, output: () => output,
+  return { child, exited, listeners, output: () => output,
     ready: bounded(Promise.race([ready, exited.then(() => { throw new Error(output || 'Launcher exited before ready') })]), 'Launcher startup'),
     stop() {
       if (child.exitCode !== null) return exited
@@ -98,6 +100,8 @@ test('web:local automatically pairs both applications and retains their independ
   const saved = new Map()
   for (let pass = 0; pass < 2; pass++) {
     process = launch(directory, vault); const url = await process.ready
+    assert.equal(process.listeners.length, 2, 'both listeners belong to the local entry')
+    assert.ok(process.listeners.every(listener => listener.pid === process.child.pid))
     for (const app of ['agent', 'claude-agent']) {
       await open(url, app)
       const status = await readyLocal(url, app), listing = await request(url, base(app) + '/connections')
@@ -165,7 +169,7 @@ test('web:local retains a stop request received before the client host finishes 
   let stopped = false
   const stopping = process.stop().then(result => { stopped = true; return result })
   await tick(); await tick()
-  assert.equal(stopped, false, 'the parent waits for its starting client rather than exiting early')
+  assert.equal(stopped, false, 'the single process waits for client startup before closing its root')
   vault.startupRelease.resolve()
   assert.equal((await stopping).code, 0, process.output())
 })

@@ -23,10 +23,10 @@ export interface HarnessServerModelsOptions extends ProtocolOptions {
 }
 
 /** Finite, trusted startup assembly. Nya owns all installed resource lifetimes. */
-export async function installHarnessServerModels(root: Context, config: HarnessServerConfig, options: HarnessServerModelsOptions = {}, installed?: (fiber: Fiber) => void): Promise<{ readonly defaultModelId?: string }> {
+export async function installHarnessServerModels(root: Context, config: HarnessServerConfig, options: HarnessServerModelsOptions = {}, installed?: (fiber: Fiber) => void, serviceBindings: Readonly<Record<string, string>> = {}): Promise<{ readonly defaultModelId?: string }> {
   const install = async (components: readonly Parameters<Context['installComponent']>[0][]) => {
     for (const component of components) {
-      const fiber = root.installComponent(component)
+      const fiber = root.installComponent(component, undefined, { bindings: serviceBindings })
       installed?.(fiber)
       await fiber
       if (fiber.state !== FiberState.ACTIVE) throw new Error('Models startup failed')
@@ -38,7 +38,7 @@ export async function installHarnessServerModels(root: Context, config: HarnessS
     createModelsVaultComponent({ namespace: config.credentialNamespace, openEntry: options.openEntry }),
     createModelsComponent(),
   ])
-  const settings = root.get<ModelsSettingsService>(modelsSettingsServiceKey)!
+  const settings = root.get<ModelsSettingsService>(serviceBindings[modelsSettingsServiceKey] ?? modelsSettingsServiceKey)!
   const connections = settings.connections()
   const importedConnectionId = 'anybox-imported-default'
   // Only our interrupted bootstrap can be completed from the legacy environment.

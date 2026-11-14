@@ -1,0 +1,79 @@
+{
+  "name": "@anybox/computer-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts/index.d.ts",
+      "import": "./dist/contracts/index.js"
+    },
+    "./adapters": {
+      "types": "./dist/adapters.d.ts",
+      "import": "./dist/adapters.js"
+    },
+    "./bash": {
+      "types": "./dist/bash-component.d.ts",
+      "import": "./dist/bash-component.js"
+    },
+    "./processes": {
+      "types": "./dist/process-component.d.ts",
+      "import": "./dist/process-component.js"
+    },
+    "./files": {
+      "types": "./dist/files-component.d.ts",
+      "import": "./dist/files-component.js"
+    },
+    "./apply-patch": {
+      "types": "./dist/apply-patch-component.d.ts",
+      "import": "./dist/apply-patch-component.js"
+    },
+    "./apply-patch-domain": {
+      "types": "./dist/apply-patch-domain.d.ts",
+      "import": "./dist/apply-patch-domain.js"
+    },
+    "./apply-patch-types": {
+      "types": "./dist/apply-patch-types.d.ts",
+      "import": "./dist/apply-patch-types.js"
+    },
+    "./images": {
+      "types": "./dist/images.d.ts",
+      "import": "./dist/images.js"
+    },
+    "./platform/process-runtime": {
+      "types": "./dist/platform/process-runtime.d.ts",
+      "import": "./dist/platform/process-runtime.js"
+    },
+    "./platform/shell": {
+      "types": "./dist/platform/shell.d.ts",
+      "import": "./dist/platform/shell.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-process-native.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@nya/core": "^0.1.0-rc.1"
+  },
+  "dependencies": {
+    "@anybox/tool-api": "0.1.0",
+    "@vscode/ripgrep": "1.18.0",
+    "picomatch": "4.0.7"
+  },
+  "devDependencies": {
+    "@types/picomatch": "4.0.3"
+  }
+}

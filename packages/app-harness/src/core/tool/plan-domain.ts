@@ -1,6 +1,6 @@
 import type { JsonValue } from '@anybox/models'
 
-/** Full-list planning contracts produce durable observations, not background tasks. */
+/** Compatibility for planning contracts already fixed in immutable Session snapshots. */
 export function updateToolPlan(name: string, args: Readonly<Record<string, JsonValue>>): JsonValue {
   const items = name === 'codex_update_plan' ? args.plan : args.todos
   if (!Array.isArray(items) || items.length > 256) throw new TypeError('invalid plan')

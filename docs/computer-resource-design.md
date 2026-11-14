@@ -6,7 +6,7 @@
 
 ## 1. 目标、现状与部署边界
 
-Computer 是智能体按需使用的执行资源。Agent 身份、Session、Run 与历史归稳定的 harness server；具体机器、工作目录和进程归执行提供方及 computer worker。创建 Session、模型请求及计划状态操作不要求分配 computer，Shell 和文件工具才声明计算资源需求。
+Computer 是智能体按需使用的执行资源。Agent 身份、Session、Run 与历史归稳定的 harness server；具体机器、工作目录和进程归执行提供方及 computer worker。创建 Session、模型请求及旧会话兼容的计划状态操作不要求分配 computer，Shell 和文件工具才声明计算资源需求。
 
 目标分为三个可分别验收的能力：
 
@@ -14,7 +14,7 @@ Computer 是智能体按需使用的执行资源。Agent 身份、Session、Run 
 2. Runtime 重启接续：已接受操作不依赖 Runtime 存活；新 Runtime 读取恢复记录，观察同一次执行，不重新发出命令。
 3. 跨机器执行：同一 Authority 下保持项目、Session 和 Run 身份，通过更换工作区的执行绑定，让后续操作在其他机器执行。
 
-当前安装 Computers、Workspaces 和 Computer Operations，Session 在工具意图同一业务事务内接纳资源声明、固定工具批次及独立恢复游标。Operations 按需激活本机 worker、准备 pinned-local、固定实例/路径后派发。RunRuntime 不再注入四工具服务；[独立 worker](modules/computers/worker-executor.md)持有工具、进程 scope 及耐久 receipt/result。创建 Session、纯模型 Run 和计划工具不激活 computer。
+当前安装 Computers、Workspaces 和 Computer Operations，Session 在工具意图同一业务事务内接纳资源声明、固定工具批次及独立恢复游标。Operations 按需激活本机 worker、准备 pinned-local、固定实例/路径后派发。RunRuntime 不再注入四工具服务；[独立 worker](modules/computers/worker-executor.md)持有工具、进程 scope 及耐久 receipt/result。创建 Session、纯模型 Run 和旧会话兼容的计划工具不激活 computer。
 
 模型响应已保存后的工具等待、消费、清理及结算在 Runtime 进程异常重启后，由新 Runtime 提升 owner 并先授权 worker，接续原操作；没有恢复信封/游标的旧活动 Run、未保存模型响应的 Run 仍在[Session 启动恢复](../packages/app-harness/src/core/session/sqlite-records.ts)结算 interrupted。worker 自身故障无法证明执行的 starting/running 操作 outcome-unknown，不重放。显式 Nya 组件卸载/依赖撤销仍按现有 Run 控制取消并排空；目标中的纯观察换代尚未实现。多设备连接仍是不同完整 harness server，没有工作区同步或跨机器调度。
 

@@ -50,8 +50,8 @@ export async function verifyStagedApplication(root, output) {
   const release = JSON.parse(await readFile(join(output, 'release.json'), 'utf8'))
   const lockBytes = await readFile(join(output, 'package-lock.json'))
   if (hash(lockBytes) !== release.lockSha256) throw new Error('Release lock integrity mismatch')
-  const harness = JSON.parse(await readFile(join(output, 'packages/app-harness/package.json'), 'utf8'))
-  const search = verifySearchDependencyLock(harness, JSON.parse(lockBytes.toString('utf8')))
+  const computerTools = JSON.parse(await readFile(join(output, 'packages/computer-tools/package.json'), 'utf8'))
+  const search = verifySearchDependencyLock(computerTools, JSON.parse(lockBytes.toString('utf8')))
   for (const name of Object.keys(release.artifacts)) {
     const copied = manifest.dependencies[name]
     if (typeof copied !== 'string' || !/^file:vendor\/[^/]+\.tgz$/.test(copied)) throw new Error(`Non-portable local dependency: ${name}`)

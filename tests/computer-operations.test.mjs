@@ -240,13 +240,19 @@ test('component reconstruction preserves uncertain execution facts and never rep
   } finally { await second.fiber.dispose() }
 })
 
-test('Run intent and ComputerOperation admission share the Session transaction; model and plan Runs leave computer idle', async t => {
+test('Run intent and ComputerOperation admission share the Session transaction; model and historical plan Runs leave computer idle', async t => {
   const f = await fixture(t)
   await f.root.installComponent(createProjectFilesComponent(inputs))
   await f.root.installComponent(createSessionComponent(inputs, [{ id: 'assistant' }]))
   const sessions = f.root.get('harness.sessions'), records = f.root.get('harness.session-runs')
-  await sessions.setAgentTools('assistant', { toolIds: ['anybox.bash', 'codex.update_plan'], expectedRevision: 0 })
-  const session = await sessions.createSession(f.project.id, 'assistant'), snapshot = modelSnapshot()
+  const historicalSelection = { schemaVersion: 1, tools: ['anybox.bash', 'codex.update_plan'].map(toolId => {
+    const tool = getToolById(toolId)
+    return { toolId, version: tool.version, definition: tool.definition }
+  }) }
+  await f.db.transaction(tx => tx.execute(`INSERT INTO harness_sessions
+    (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ['historical-session', f.project.id, 'assistant', 'now', null, 'native-local-v1', JSON.stringify(historicalSelection)]))
+  const session = await sessions.getSession('historical-session'), snapshot = modelSnapshot()
   const selection = session.toolSelection
   const initialization = { schemaVersion: 2, prompts: [], tools: selection.tools.map(tool => tool.definition), toolContractVersion: 'tool-library-v1', toolSelection: selection }
   f.root.provide('tools.bash', { execute(input) { f.events.executions.push(input); return immediate(observation.result) } })

@@ -6,7 +6,9 @@
 
 组件没有 inject。受信装配固定 `directory`，生产默认目录为业务库路径附加 `.computer-worker`，一个目录只归一个 worker，受信本机管理端共享同一 endpoint；可选 executable、startupTimeoutMs、requestTimeoutMs 用于指定启动设备的 Node 和连接期限。创建组件或查询 Session 不启动 worker。第一次实例激活/计算调用才检查独占目录的 endpoint，查回存活 worker，或 detached 启动独立进程；之后每次调用先检查已连接 worker 的 PID 仍存活，worker 异常退出后下一次本地调用即重新查回或启动，而不是先失败一次。客户端只在有本地调用时才会这样做，不监督空闲 worker：仅为远端 harness server 服务的设备上，异常退出的 worker 直到下一次本地调用（例如执行端激活本机计算资源）才会重启，生产部署应由 systemd 等外部监督。worker 的 stdio 和进程组不依附 Runtime，Runtime 进程 PID 的 SIGKILL 不终止它。detached 不脱离 systemd cgroup，生产接续需预先启动独立 worker unit，见[部署说明](../../harness-server-deployment.md)。
 
-`connectLocalComputerWorker(options)` 是内部客户端工厂，返回同一端口、`control`、`status(signal?)`、`start()` 及 `closeObserver()`。`info` 返回稳定 workerId、本次 bootId、平台和架构；`claimRun` 设置单调 owner epoch；`submit` 持久接纳工具、取消或 scope 关闭声明；`get` 查询同一次执行事实；`query` 是不经账本的只读查询（stat、列目录、搜索、读取文本）。每个授权都带 `attachmentId`，本机 harness server 固定使用 `local:computer`；请求固定原 endpoint，不跨机器重试。声明 ID、摘要和 placement 由 Authority 固定，授权 owner 与附着都不进入不可变摘要。
+`connectLocalComputerWorker(options)` 是内部客户端工厂，返回同一端口、`control`、`status(signal?)`、`start()`、同步 `observedInfo()` 及 `closeObserver()`。`info` 返回稳定 workerId、本次 bootId、平台、架构及可选 `toolManifest`；`observedInfo()` 返回最近的有界 `ObservedWorkerInfo` 内存观察或 undefined；`claimRun` 设置单调 owner epoch；`submit` 持久接纳工具、取消或 scope 关闭声明；`get` 查询同一次执行事实；`query` 是不经账本的只读查询（stat、列目录、搜索、读取文本）。每个授权都带 `attachmentId`，本机 harness server 固定使用 `local:computer`；请求固定原 endpoint，不跨机器重试。声明 ID、摘要和 placement 由 Authority 固定，授权 owner 与附着都不进入不可变摘要。
+
+客户端保留已经成功接收且端点身份吻合的 `info` 内存观察，供 Computer 环境列表同步读取工具支持报告；工具报告仅作为有界、深冻结的不透明 JSON 保存，客户端不加载执行端目录或工具实现，受信契约核对由 harness server 的环境投影完成。该读取不触发 HTTP、endpoint 检查、worker 目录访问或按需启动；从未收到报告或旧 worker 没有清单时保持未知。报告固定所属 `workerId/bootId`，仅说明该 boot 支持的工具契约，不证明当前进程仍存活、依赖已就绪或操作已获授权，也不承担准入判断。没有新增持久缓存或后台探测。
 
 回环返回的工具图片仍以 base64 内嵌在 `WorkerOperation.images` 中，Operations 校验摘要后导入本机资源组件；这是回环传输的既有形态，拨出传输改用字节通道（见[worker 拨出](worker-dialout.md)）。
 
@@ -16,7 +18,7 @@ Effect 关闭本代准入、取消本地 HTTP 并等待请求实际退出，不�
 
 独占 worker 目录保存私有 endpoint 元数据、workerId、执行账本与输出/图片数据。endpoint 使用回环地址和每次启动生成的本机令牌，文件按私有权限写入；令牌不进入 Session、模型历史或浏览器 API。worker 不持有模型 Key，也不直连 Authority 业务库。该实现仅为本机受信连接，远端认证/TLS、托管工作区和弹性实例留待后续阶段。
 
-worker 启动与状态读取使用本包 `core/platform/process-runtime.ts` 判断原生 helper 是否可用，Windows 不再固定拒绝。Node 默认使用当前 Node，worker 入口始终相对本包定位；Electron 必须提供独立 Node，可选 `ANYBOX_RUNTIME_DIRECTORY` 或 `ANYBOX_DEVELOPMENT_NODE_EXECUTABLE`，也可使用受信 executable/既有 launch 回调。Windows 未发布子进程用自身 PID 终止并等待，Unix 保留进程组清理；已发布 idle worker 仍独立存活。私有目录通过 Windows DACL 或 Unix 0700 保护。相关适配不注册额外 Nya 服务，详见[原生平台支持](../../native-platform-support.md)。
+worker 启动与状态读取使用独立 `@anybox/computer-tools/platform/process-runtime` 判断原生 helper 是否可用，Windows 不再固定拒绝。Node 默认使用当前 Node，worker 入口始终相对本应用定位；Electron 必须提供独立 Node，可选 `ANYBOX_RUNTIME_DIRECTORY` 或 `ANYBOX_DEVELOPMENT_NODE_EXECUTABLE`，也可使用受信 executable/既有 launch 回调。Windows 未发布子进程用自身 PID 终止并等待，Unix 保留进程组清理；已发布 idle worker 仍独立存活。私有目录通过 Windows DACL 或 Unix 0700 保护。相关适配不注册额外 Nya 服务，详见[原生平台支持](../../native-platform-support.md)。
 
 验证：[真实 Runtime 强杀与故障注入](../../../tests/computer-worker-resume.test.mjs)、[Worker 行为](../../../tests/computer-worker.test.mjs)、[启动并发与清理](../../../tests/computer-worker-startup.test.mjs)。完整入口为 `npm run check`。
 

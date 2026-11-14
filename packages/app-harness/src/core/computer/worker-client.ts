@@ -6,13 +6,30 @@ import { DatabaseSync } from 'node:sqlite'
 import type { Component } from '@nya/core'
 import type { JsonValue } from '@anybox/models'
 import { localComputerWorkerServiceKey, localComputerWorkerControlServiceKey, workerError } from './worker-port.js'
-import type { ComputerWorkerOptions, ComputerWorkerPort, LocalComputerWorkerControl, LocalComputerWorkerStatus, WorkerOperation } from './worker-port.js'
+import type { ComputerWorkerOptions, ComputerWorkerPort, LocalComputerWorkerControl, LocalComputerWorkerStatus, ObservedWorkerInfo, WorkerInfo, WorkerOperation } from './worker-port.js'
 import type { WorkerEndpoint } from './worker-server.js'
 import { ensurePrivateDirectory } from '../platform/private-directory.js'
-import { processRuntimeAvailable } from '../platform/process-runtime.js'
+import { processRuntimeAvailable } from '@anybox/computer-tools/platform/process-runtime'
 import { resolveBackgroundRuntime } from '../platform/runtime-path.js'
 
 const wait = (ms: number) => new Promise<void>(yes => setTimeout(yes, ms))
+/** Passive clients copy bounded JSON without importing execution tools or interpreting their contracts. */
+function copyToolReport(value: unknown): JsonValue | undefined {
+  try {
+    const json = JSON.stringify(value)
+    if (json === undefined || Buffer.byteLength(json, 'utf8') > 16_384) return undefined
+    let remaining = 2_048
+    const freeze = (item: JsonValue, depth: number): JsonValue => {
+      if (--remaining < 0 || depth > 16) throw new Error('invalid worker report')
+      if (item && typeof item === 'object') {
+        for (const child of Object.values(item)) freeze(child, depth + 1)
+        Object.freeze(item)
+      }
+      return item
+    }
+    return freeze(JSON.parse(json) as JsonValue, 0)
+  } catch { return undefined }
+}
 function live(pid: number): boolean {
   try { process.kill(pid, 0); return true } catch (error) { return error instanceof Error && 'code' in error && error.code === 'EPERM' }
 }
@@ -28,11 +45,14 @@ async function endpoint(path: string): Promise<WorkerEndpoint | undefined> {
 export function connectLocalComputerWorker(options: ComputerWorkerOptions): ComputerWorkerPort & { readonly control: LocalComputerWorkerControl; status(signal?: AbortSignal): Promise<LocalComputerWorkerStatus>; start(): Promise<void>; closeObserver(): Promise<void> } {
   const directory = resolve(options.directory)
   let accepting = true
+  let observedInfo: ObservedWorkerInfo | undefined
+  let infoSequence = 0, observedSequence = 0
   let connecting: Promise<WorkerEndpoint> | undefined
   const observing = new Set<AbortController>()
   const pending = new Set<Promise<unknown>>()
   const tracked = <T>(promise: Promise<T>) => { pending.add(promise); void promise.finally(() => pending.delete(promise)).catch(() => {}); return promise }
   const send = async <T>(target: WorkerEndpoint, path: string, input: unknown, signal?: AbortSignal, startupUntil?: number): Promise<T> => {
+    const sequence = path === '/info' ? ++infoSequence : 0
     if (!accepting && startupUntil === undefined) throw workerError('worker-observer-closed')
     const abort = new AbortController()
     const forward = () => abort.abort(signal?.reason ?? 'worker-observer-closed')
@@ -47,6 +67,17 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
       const response = await fetch(new URL(path, target.url), { method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${target.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), signal: abort.signal })
       const output = await response.json() as { value?: T; error?: string }
       if (!response.ok || output.error) throw workerError(output.error ?? 'worker-request-failed')
+      // Reporting never changes request success or admission. Older or malformed reports remain unknown.
+      if (sequence && accepting && sequence >= observedSequence && !(current && live(current.pid) && current.bootId !== target.bootId)) {
+        observedSequence = sequence
+        observedInfo = undefined
+        const info = output.value as WorkerInfo | undefined
+        if (info && info.workerId === target.workerId && info.bootId === target.bootId && typeof info.platform === 'string' && typeof info.architecture === 'string') {
+          const toolManifest = copyToolReport(info.toolManifest)
+          observedInfo = Object.freeze({ workerId: info.workerId, bootId: info.bootId, platform: info.platform, architecture: info.architecture,
+            ...(toolManifest === undefined ? {} : { toolManifest }) })
+        }
+      }
       return output.value as T
     } finally { clearTimeout(timeout); signal?.removeEventListener('abort', forward); observing.delete(abort) }
   }
@@ -179,6 +210,7 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
   }
   return {
     control,
+    observedInfo: () => accepting ? observedInfo : undefined,
     start: () => tracked(ensure(true).then(() => {})),
     status: signal => tracked((async () => {
       if (!accepting) throw workerError('worker-observer-closed')
@@ -214,7 +246,7 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
       }
       throw workerError('worker-shutdown-timeout')
     },
-    async closeObserver() { accepting = false; for (const abort of observing) abort.abort('worker-observer-closed'); await Promise.allSettled([...pending]) },
+    async closeObserver() { accepting = false; observedInfo = undefined; for (const abort of observing) abort.abort('worker-observer-closed'); await Promise.allSettled([...pending]) },
   }
 }
 export function createLocalComputerWorkerComponent(options: ComputerWorkerOptions): Component.Object {

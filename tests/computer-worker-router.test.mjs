@@ -27,6 +27,7 @@ import { unitComputerId, computerDeclarationDigest } from '../packages/app-harne
 import { openComputerWorker } from '../packages/app-harness/dist/core/computer/worker-server.js'
 import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
+import { createComputerToolManifest, parseComputerToolManifest } from '../packages/app-harness/dist/core/computer/tool-support.js'
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
@@ -132,6 +133,10 @@ test('the router routes by attachment and its Effect abandons only local observa
   const worker = f.root.get(computerWorkerServiceKey)
   const activation = f.root.get(computerInstanceProviderServiceKey).activate({ resource: { computerId: unitComputerId(f.attached.attachmentId), spec, activationRevision: 1, createdAt: 'now' }, activationId: 'a' })
   assert.deepEqual(await activation.result, { providerRef: `${f.worker.endpoint.workerId}:${f.worker.endpoint.bootId}`, platform: process.platform, architecture: process.arch }); await activation.done
+  const remoteInfo = await f.local.info()
+  assert.equal(remoteInfo.workerId, f.worker.endpoint.workerId)
+  assert.equal(remoteInfo.bootId, f.worker.endpoint.bootId)
+  assert.deepEqual(parseComputerToolManifest(remoteInfo.toolManifest), createComputerToolManifest())
   // The read-only query surface answers from the unit under its ceiling and never touches the operation ledger.
   const listed = await worker.query({ attachmentId: f.attached.attachmentId, query: { kind: 'list', root: directory, path: '' } })
   assert.equal(listed.kind, 'list'); assert.ok(listed.entries.some(entry => entry.name === 'unit-worker' && entry.kind === 'directory'))
@@ -358,6 +363,14 @@ test('the default local environment coexists with multiple remote environments a
   assert.deepEqual(environments.environments.map(environment => [environment.environmentId, environment.connectionState]), [
     ['local:computer', 'on-demand'], [attached.attachmentId, 'connected'], [attached2.attachmentId, 'connected'],
   ])
+  assert.deepEqual(environments.environments[0].toolSupport, { state: 'unknown' })
+  for (const [attachment, expectedWorker] of [[attached, unit], [attached2, unit2]]) {
+    const report = environments.environments.find(environment => environment.environmentId === attachment.attachmentId).toolSupport
+    assert.equal(report.state, 'reported')
+    assert.equal(report.workerId, expectedWorker.endpoint.workerId)
+    assert.equal(report.bootId, expectedWorker.endpoint.bootId)
+    assert.deepEqual(parseComputerToolManifest(report.manifest), createComputerToolManifest())
+  }
   assert.equal(existsSync(localWorkerDirectory), false, 'listing all environments does not probe or start the local worker')
   const api = core.api
   const selection = await api.getAgentTools('assistant')
@@ -379,6 +392,12 @@ test('the default local environment coexists with multiple remote environments a
   assert.equal(localRun.status, 'completed', JSON.stringify(localRun.error ?? null)); assert.equal(localRun.units.computer.attachmentId, 'local:computer')
   assert.equal(await readFile(join(localProject, 'where.txt'), 'utf8'), 'local')
   assert.equal(existsSync(join(localWorkerDirectory, 'worker.sqlite')), true, 'the local Run ran on this harness server\'s own worker')
+  const observedLocal = root.get(localComputerWorkerServiceKey).observedInfo()
+  const localSupport = (await api.listComputerEnvironments()).environments[0].toolSupport
+  assert.equal(localSupport.state, 'reported')
+  assert.equal(localSupport.workerId, observedLocal.workerId)
+  assert.equal(localSupport.bootId, observedLocal.bootId)
+  assert.deepEqual(parseComputerToolManifest(localSupport.manifest), createComputerToolManifest())
   script = [{ id: 'call-remote', name: 'bash', arguments: { command: 'printf remote > where.txt' } }]
   const remoteRun = await api.waitRun((await api.startRun({ sessionId: remoteSession.id, parentNodeId: null, input: 'go', idempotencyKey: 'remote' })).id)
   assert.equal(remoteRun.status, 'completed', JSON.stringify(remoteRun.error ?? null)); assert.equal(remoteRun.units.computer.attachmentId, attached.attachmentId)

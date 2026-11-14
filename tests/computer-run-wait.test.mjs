@@ -14,7 +14,7 @@ import { createWorkspacesComponent } from '../packages/app-harness/dist/core/wor
 import { createComputerOperationsComponent } from '../packages/app-harness/dist/core/computer/operations-component.js'
 import { createRunRuntimeComponent } from '../packages/app-harness/dist/core/run/runtime-component.js'
 import { createRunComponent } from '../packages/app-harness/dist/core/run/component.js'
-import { bashToolDefinition } from '../packages/app-harness/dist/core/tool/bash-component.js'
+import { bashToolDefinition } from '@anybox/computer-tools/bash'
 import { createLocalComputerProviderComponent } from './helpers/fixed-computer-provider.mjs'
 import { createControlledComputerWorker } from './helpers/computer-services.mjs'
 import { deferred, ids } from './helpers/controlled-models.mjs'

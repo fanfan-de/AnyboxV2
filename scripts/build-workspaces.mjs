@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { rm } from 'node:fs/promises'
 const root = fileURLToPath(new URL('..', import.meta.url))
-const packages = ['api-key-manager', 'application-api', 'storage-sqlite', 'directory-picker', 'models', 'app-harness', 'app-claude-agent', 'app-personal-agent', 'host', 'distribution']
+const packages = ['api-key-manager', 'application-api', 'storage-sqlite', 'directory-picker', 'models', 'tool-api', 'computer-tools', 'app-harness', 'app-claude-agent', 'app-personal-agent', 'host', 'distribution']
 const typecheck = process.argv.includes('--typecheck')
 const run = (command, args) => new Promise((resolve, reject) => {
   const child = spawn(command, args, { cwd: root, stdio: 'inherit', shell: process.platform === 'win32' && command === 'npm' })

@@ -12,6 +12,8 @@ export interface UnitRegistration {
   readonly platform: string
   readonly architecture: string
   readonly waitMs: number
+  /** Bounded opaque metadata; transport does not interpret or grant capabilities. */
+  readonly capabilities?: JsonValue
 }
 export interface UnitConnection extends Omit<UnitRegistration, 'waitMs'> {
   readonly attachmentId: string
@@ -35,7 +37,34 @@ export const transportLimits = Object.freeze({
   /** A unit that neither polls nor has polled within this window counts as disconnected. */
   staleAfterMs: 45_000,
   maxRepliesPerPost: 256, maxRequestsPerPoll: 64,
+  maxCapabilityBytes: 8_192,
 })
+export const unitCapabilitiesHeader = 'x-anybox-unit-capabilities'
+
+function capabilities(value: unknown): JsonValue {
+  let remaining = 2_048
+  const copy = (input: unknown, depth: number): JsonValue => {
+    if (--remaining < 0 || depth > 16) throw transportError('unit-transport-invalid')
+    if (input === null || typeof input === 'boolean') return input
+    if (typeof input === 'string' && input.length <= transportLimits.maxCapabilityBytes) return input
+    if (typeof input === 'number' && Number.isFinite(input)) return input
+    if (Array.isArray(input) && input.length <= 256) return Object.freeze(input.map(item => copy(item, depth + 1))) as JsonValue
+    if (input && typeof input === 'object' && Object.getPrototypeOf(input) === Object.prototype) {
+      const entries = Object.entries(input)
+      if (entries.length <= 256 && entries.every(([key]) => key.length <= 256)) return Object.freeze(Object.fromEntries(entries.map(([key, item]) => [key, copy(item, depth + 1)])))
+    }
+    throw transportError('unit-transport-invalid')
+  }
+  const result = copy(value, 0)
+  if (Buffer.byteLength(JSON.stringify(result), 'utf8') > transportLimits.maxCapabilityBytes) throw transportError('unit-transport-invalid')
+  return result
+}
+/** Optional header keeps new workers compatible with hosts that ignore capability reports. */
+export function parseUnitCapabilitiesHeader(value: string | readonly string[] | undefined): JsonValue | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > transportLimits.maxCapabilityBytes) throw transportError('unit-transport-invalid')
+  try { return capabilities(JSON.parse(value)) } catch { throw transportError('unit-transport-invalid') }
+}
 function text(value: unknown, max = 256): string {
   if (typeof value !== 'string' || !value.trim() || value.length > max || /[\0-\x1f\x7f]/.test(value)) throw transportError('unit-transport-invalid')
   return value
@@ -43,12 +72,13 @@ function text(value: unknown, max = 256): string {
 export function validateUnitRegistration(value: unknown): UnitRegistration {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw transportError('unit-transport-invalid')
   const input = value as Record<string, unknown>
-  if (Object.keys(input).some(key => !['unitId', 'bootId', 'platform', 'architecture', 'waitMs'].includes(key))) throw transportError('unit-transport-invalid')
+  if (Object.keys(input).some(key => !['unitId', 'bootId', 'platform', 'architecture', 'waitMs', 'capabilities'].includes(key))) throw transportError('unit-transport-invalid')
   let unitId: string
   try { unitId = validateUnitId(input.unitId) } catch { throw transportError('unit-transport-invalid') }
   const waitMs = input.waitMs === undefined ? transportLimits.defaultWaitMs : input.waitMs
   if (!Number.isSafeInteger(waitMs) || (waitMs as number) < 0 || (waitMs as number) > transportLimits.maxWaitMs) throw transportError('unit-transport-invalid')
-  return Object.freeze({ unitId, bootId: text(input.bootId), platform: text(input.platform, 64), architecture: text(input.architecture, 64), waitMs: waitMs as number })
+  return Object.freeze({ unitId, bootId: text(input.bootId), platform: text(input.platform, 64), architecture: text(input.architecture, 64), waitMs: waitMs as number,
+    ...(input.capabilities === undefined ? {} : { capabilities: capabilities(input.capabilities) }) })
 }
 export function validateUnitReply(value: unknown): UnitReply {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw transportError('unit-transport-invalid')

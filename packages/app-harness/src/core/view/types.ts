@@ -50,11 +50,17 @@ export interface ProtocolViewInput {
   readonly role: 'system' | 'context' | 'user'
   readonly text: string
 }
+/** Counts reported for one native request; absence is distinct from a reported zero. */
+export interface ProtocolTokenUsage {
+  readonly inputTokens?: number
+  readonly outputTokens?: number
+}
 export interface ProtocolViewExchange {
   readonly id: string
   readonly inputs?: readonly ProtocolViewInput[]
   readonly blocks: readonly ProtocolViewBlock[]
   readonly nativeState?: ProtocolNativeState
+  readonly usage?: ProtocolTokenUsage
 }
 export interface ProtocolViewSnapshot {
   readonly envelopeVersion: 1

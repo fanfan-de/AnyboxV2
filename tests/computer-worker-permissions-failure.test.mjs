@@ -41,7 +41,7 @@ async function fixture(t) {
     const root = new Context(); roots.push(root)
     await root.installComponent(createLocalSqliteComponent(join(directory, 'worker.sqlite')))
     for (const key of ['tools.bash', 'tools.apply-patch', 'tools.files', 'harness.image-assets']) root.provide(key, {})
-    root.provide('tools.processes', { openRun({ runId }) { return {
+    root.provide('tools.processes', { openScope({ scopeId: runId }) { return {
       execute() {
         executions++
         if (runId !== 'old') return immediate({ session_id: executions, output: 'started' })

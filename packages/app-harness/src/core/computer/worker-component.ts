@@ -9,6 +9,7 @@ import { ceilingPermitsRoot, queryRoot, validateComputerQuery } from './query-do
 import type { ComputerQueryResult } from './query-domain.js'
 import type { UnitScope } from '../unit/domain.js'
 import type { Component } from '@nya/core'
+import { createComputerToolManifest } from './tool-support.js'
 import type { JsonValue } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
 import { computerDeclarationDigest } from './operations-domain.js'
@@ -16,10 +17,10 @@ import type { ProcessRef } from './operations-domain.js'
 import { validateToolBatch } from '../run/domain.js'
 import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
 import type { LocalStoragePort, StorageReader, StorageTransaction, StorageMigration } from '@anybox/storage-sqlite/port'
-import { bashServiceKey, type BashPort } from '../tool/bash-component.js'
-import { applyPatchServiceKey, type ApplyPatchPort } from '../tool/apply-patch-component.js'
-import { processToolsServiceKey, type ProcessToolsPort } from '../tool/process-component.js'
-import { fileToolsServiceKey, type FileToolsPort } from '../tool/files-component.js'
+import { bashServiceKey, type BashPort } from '@anybox/computer-tools/bash'
+import { applyPatchServiceKey, type ApplyPatchPort } from '@anybox/computer-tools/apply-patch'
+import { processToolsServiceKey, type ProcessToolsPort } from '@anybox/computer-tools/processes'
+import { fileToolsServiceKey, type FileToolsPort } from '@anybox/computer-tools/files'
 import { imageAssetsServiceKey, type ImageAssetsPort } from '../image/port.js'
 import { sameWorkspaceBinding } from '../workspace/domain.js'
 import { createWorkerExecution, type WorkerExecution } from './worker-execution.js'
@@ -87,6 +88,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
 }> {
   return { name: 'computer-worker-executor', inject: [localStorageServiceKey, bashServiceKey, applyPatchServiceKey, processToolsServiceKey, fileToolsServiceKey, imageAssetsServiceKey, workerAttachmentsServiceKey],
     async apply(ctx, _config, deps) {
+      const toolManifest = createComputerToolManifest()
       const db = deps[localStorageServiceKey], attachments = deps[workerAttachmentsServiceKey]
       await db.migrate('computer-worker', migrations)
       await db.transaction(tx => {
@@ -282,7 +284,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
       const unsubscribe = attachments.onChanged((attachment, change) => attachment.state === 'revoked' || change === 'permissions' ? revokeRuns(attachment.attachmentId) : undefined)
       ctx.effect(() => () => unsubscribe(), 'stop observing attachment revocations')
       const service: ComputerWorkerPort = {
-        info: async () => ({ ...identity, platform: process.platform, architecture: process.arch }),
+        info: async () => ({ ...identity, platform: process.platform, architecture: process.arch, toolManifest }),
         claimRun(input) {
           assertOpen(); auth(input)
           return db.transaction(tx => {

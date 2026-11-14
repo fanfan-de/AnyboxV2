@@ -758,7 +758,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       void imageLeases.refresh(); void fileLeases.refresh(); archivePanel.refresh()
       for (const project of projects) void sessionIndex.load(project.id)
     }
-    if (document.hidden) { dragCleanup?.(); resizeCleanup?.() }
+    if (document.hidden) { dragCleanup?.(); resizeCleanup?.(); for (const bundle of bundles.values()) bundle.view?.closeContextUsage() }
     for (const bundle of bundles.values()) if (bundle.view) void bundle.controller.refresh()
   }, options)
   const unsubscribeModels = models?.subscribe(() => { for (const bundle of bundles.values()) bundle.view?.render() })
@@ -822,7 +822,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       applicationActive = active
       sidebarLayout.setActive(active)
       fileSidebar.setVisible(active && !document.hidden && sidebarLayout.rightVisible())
-      if (!active) { sessionMenu.close(); void projectPicker.close(); dragCleanup?.(); resizeCleanup?.(); return }
+      if (!active) { sessionMenu.close(); void projectPicker.close(); dragCleanup?.(); resizeCleanup?.(); for (const bundle of bundles.values()) bundle.view?.closeContextUsage(); return }
       if (disposed) return
       renderLayout()
       for (const bundle of bundles.values()) void bundle.controller.refresh()

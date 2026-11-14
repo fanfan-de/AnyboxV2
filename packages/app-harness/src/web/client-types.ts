@@ -1,7 +1,6 @@
 import type { FileSelection, FileRef } from '../core/project-files/domain.js'
-import type { ApplyPatchResult } from '../core/tool/apply-patch-types.js'
+import type { ApplyPatchResult } from '@anybox/computer-tools/apply-patch-types'
 import type { ImageRef } from '../core/image/port.js'
-import type { LibraryToolName } from '../core/api.js'
 import type { JsonValue } from '@anybox/models'
 export type * from '../core/api.js'
 export type { DirectoryPage } from '../core/project/directories.js'
@@ -33,12 +32,23 @@ export interface ApplyPatchTrace extends ToolTraceBase {
   result?: ApplyPatchResult
 }
 export interface LibraryToolTrace extends ToolTraceBase {
-  readonly name: LibraryToolName
+  readonly name: string
   readonly arguments: Readonly<Record<string, JsonValue>>
   result?: JsonValue
   images?: readonly ImageRef[]
 }
 export type ToolTrace = BashTrace | ApplyPatchTrace | LibraryToolTrace
+
+/** Legacy presentation is identified by its wire shape; generic tools may use any name. */
+export function isBashTrace(value: ToolTrace | undefined): value is BashTrace {
+  return value !== undefined && value.name === 'bash' && 'command' in value && typeof value.command === 'string'
+}
+export function isApplyPatchTrace(value: ToolTrace | undefined): value is ApplyPatchTrace {
+  return value !== undefined && value.name === 'apply_patch' && 'patch' in value && typeof value.patch === 'string'
+}
+export function isLibraryToolTrace(value: ToolTrace | undefined): value is LibraryToolTrace {
+  return value !== undefined && 'arguments' in value
+}
 export interface PendingSubmission {
   /** Missing on old pending inputs, which must be confirmed again. */
   readonly schemaVersion?: number

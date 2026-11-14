@@ -10,9 +10,10 @@ import type { ImageAssetsPort } from '../image/port.js'
 import type { NativeInitialization, PreparedRunProgram, PrepareRunInput, ProgramExitReport, ProtocolAgentPort, ProtocolBindingSnapshot } from '../run/program.js'
 import { modelFailure, normalizeModelFailure } from '../run/model.js'
 import { RunFailure } from '../run/domain.js'
-import { bashToolDefinition } from '../tool/bash-component.js'
-import { applyPatchToolDefinition } from '../tool/apply-patch-component.js'
+import { bashToolDefinition } from '@anybox/computer-tools/contracts'
+import { applyPatchToolDefinition } from '@anybox/computer-tools/contracts'
 import { validateToolSelection } from '../tool/catalog.js'
+import { parseToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 import { createExchangeRunner, initialMessages, maxToolRequestCorrections, serializable, toNativeRecord, toProtocolRecord } from './shared.js'
 import type { ExchangeRunner } from './shared.js'
 import type { ProtocolConclusion } from '../run/program.js'
@@ -33,6 +34,16 @@ export interface ProtocolAgentRegistry extends ProtocolAgentPort {
 }
 
 function validateInitialization(initialization: NativeInitialization): void {
+  if (initialization.schemaVersion === 3) {
+    if (initialization.toolContractVersion !== 'tool-environments-v1') throw modelFailure('unsupported-request')
+    try {
+      const snapshot = parseToolEnvironmentSnapshot(initialization.toolEnvironments)
+      const selection = { schemaVersion: 1, tools: snapshot.environments.flatMap(environment => environment.tools) }
+      if (!isDeepStrictEqual(selection, initialization.toolSelection) || initialization.tools.length &&
+        !isDeepStrictEqual(initialization.tools, selection.tools.map(tool => tool.definition))) throw modelFailure('unsupported-request')
+    } catch { throw modelFailure('unsupported-request') }
+    return
+  }
   if (initialization.schemaVersion === 2) {
     if (initialization.toolContractVersion !== 'tool-library-v1') throw modelFailure('unsupported-request')
     try { validateToolSelection(initialization.toolSelection) } catch { throw modelFailure('unsupported-request') }

@@ -16,7 +16,7 @@
 | [Worker 拨出](worker-dialout.md) | worker 根的 `computer.worker-dialout` | 消费附着码，为每个 approved 附着维持到远端 harness server 的长轮询循环 |
 | [Worker 固定项目绑定](worker-project-bindings.md) | worker 根的 `harness.projects` | 拒绝项目查询，只允许工具使用已固定 workspacePath |
 
-创建项目、Session、纯模型 Run 和计划工具不准备计算实例或工作区。Shell 和文件工具才建立需求，并在执行前准备 binding。Session 通过同步事务端口接纳声明、owner 和 resume cursor；Operations 固定 placement 后派发到 worker。RunRuntime 不再直接 inject 四种工具服务，原进程内执行路径被独立 worker 取代。
+创建项目、Session、纯模型 Run 和旧会话兼容的计划工具不准备计算实例或工作区。Shell 和文件工具才建立需求，并在执行前准备 binding。Session 通过同步事务端口接纳声明、owner 和 resume cursor；Operations 固定 placement 后派发到 worker。RunRuntime 不再直接 inject 四种工具服务，原进程内执行路径被独立 worker 取代。
 
 下图节选当前 inject 依赖，箭头指向被依赖的服务；Session 的图片、文件等既有依赖省略。
 

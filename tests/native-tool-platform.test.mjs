@@ -4,11 +4,10 @@ import { mkdtemp, realpath, rm, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Context } from '@nya/core'
-import { prepareShellCommand, toolEnvironment, bashExecutable } from '../packages/app-harness/dist/core/platform/shell.js'
+import { prepareShellCommand, toolEnvironment, bashExecutable } from '@anybox/computer-tools/platform/shell'
 import { toolEnvironmentPrompt } from '../packages/app-harness/dist/core/tool/environment.js'
-import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
-import { createProcessToolsComponent, processToolsServiceKey } from '../packages/app-harness/dist/core/tool/process-component.js'
-import { createBashComponent, bashServiceKey } from '../packages/app-harness/dist/core/tool/bash-component.js'
+import { createProcessToolsComponent, processToolsServiceKey } from '@anybox/computer-tools/processes'
+import { createBashComponent, bashServiceKey } from '@anybox/computer-tools/bash'
 
 function nodeCommand(script) {
   const encoded = Buffer.from(script).toString('base64')
@@ -19,7 +18,6 @@ function nodeCommand(script) {
 async function fixture() {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-native-tools-中文 '))), root = new Context()
   try {
-    await root.installComponent({ name: 'native-test-projects', apply(ctx) { ctx.provide(projectServiceKey, { async requireAvailable() { return { path: directory } } }) } })
     await root.installComponent(createProcessToolsComponent({ terminationGraceMs: 100, timeoutMs: 10_000 }))
     await root.installComponent(createBashComponent({ terminationGraceMs: 100 }))
     return { directory, root, tools: root.get(processToolsServiceKey), bash: root.get(bashServiceKey), async close() { try { await root.fiber.dispose() } finally { await rm(directory, { recursive: true, force: true }) } } }
@@ -29,7 +27,7 @@ async function finish(call) { try { return await call.result } finally { await c
 async function drain(scope, first) {
   let result = first, output = first.output
   for (let attempts = 0; result.session_id && attempts < 100; attempts++) {
-    result = await finish(scope.execute('codex_write_stdin', { session_id: first.session_id, yield_time_ms: 100 }))
+    result = await finish(scope.write( { sessionId: first.session_id, yieldTimeMs: 100 }))
     output += result.output
   }
   assert.equal(result.session_id, undefined, 'process must exit within the bounded observation period')
@@ -70,9 +68,9 @@ test('environment prompt states the selected Computer OS and does not infer it f
 test('native default shell executes Unicode commands in a Unicode project directory', async () => {
   const f = await fixture()
   try {
-    const scope = f.tools.openRun({ runId: 'unicode', projectId: 'project' })
-    const output = await drain(scope, await finish(scope.execute('codex_exec_command', {
-      cmd: nodeCommand("process.stdout.write(JSON.stringify({text:'你好 🌏', cwd:process.cwd()})); process.stderr.write('error-stream');"), yield_time_ms: 10,
+    const scope = f.tools.openScope({ scopeId: 'unicode', workspacePath: f.directory })
+    const output = await drain(scope, await finish(scope.execute( {
+      command: nodeCommand("process.stdout.write(JSON.stringify({text:'你好 🌏', cwd:process.cwd()})); process.stderr.write('error-stream');"), yieldTimeMs: 10,
     })))
     assert.equal(output.exit_code, 0)
     assert.ok(output.output.includes('你好 🌏'))
@@ -85,13 +83,13 @@ test('native default shell executes Unicode commands in a Unicode project direct
 test('an explicitly selected shell preserves command quoting and explicit exit status', async () => {
   const f = await fixture()
   try {
-    const scope = f.tools.openRun({ runId: 'explicit-shell', projectId: 'project' })
+    const scope = f.tools.openScope({ scopeId: 'explicit-shell', workspacePath: f.directory })
     const commands = process.platform === 'win32'
-      ? [{ shell: 'cmd', cmd: 'echo "a b" & exit /b 7', expected: '"a b"' },
-        { shell: 'pwsh', cmd: "Write-Output 'a b'; exit 7", expected: 'a b' }]
-      : [{ shell: 'bash', cmd: "printf 'a b'; exit 7", expected: 'a b' }]
+      ? [{ shell: 'cmd', command: 'echo "a b" & exit /b 7', expected: '"a b"' },
+        { shell: 'pwsh', command: "Write-Output 'a b'; exit 7", expected: 'a b' }]
+      : [{ shell: 'bash', command: "printf 'a b'; exit 7", expected: 'a b' }]
     for (const command of commands) {
-      const output = await drain(scope, await finish(scope.execute('codex_exec_command', { shell: command.shell, cmd: command.cmd, yield_time_ms: 10 })))
+      const output = await drain(scope, await finish(scope.execute( { shell: command.shell, command: command.command, yieldTimeMs: 10 })))
       assert.equal(output.output.trim(), command.expected)
       assert.equal(output.exit_code, 7)
     }
@@ -101,14 +99,14 @@ test('an explicitly selected shell preserves command quoting and explicit exit s
 test('native pipe sessions preserve stdin and isolate cancellation between sessions', async () => {
   const f = await fixture()
   try {
-    const scope = f.tools.openRun({ runId: 'stdin', projectId: 'project' })
+    const scope = f.tools.openScope({ scopeId: 'stdin', workspacePath: f.directory })
     const script = "process.stdin.once('data', bytes=>{process.stdout.write('got:'+bytes.toString());process.exit(0)}); process.stdout.write('ready:');"
-    const first = await finish(scope.execute('codex_exec_command', { cmd: nodeCommand(script), yield_time_ms: 10 }))
+    const first = await finish(scope.execute( { command: nodeCommand(script), yieldTimeMs: 10 }))
     assert.equal(typeof first.session_id, 'number')
-    const secondCall = scope.execute('codex_exec_command', { cmd: nodeCommand("setInterval(()=>{},1000)"), yield_time_ms: 10 })
+    const secondCall = scope.execute( { command: nodeCommand("setInterval(()=>{},1000)"), yieldTimeMs: 10 })
     const second = await finish(secondCall)
     secondCall.cancel()
-    const answer = await finish(scope.execute('codex_write_stdin', { session_id: first.session_id, chars: '回答\n', yield_time_ms: 100 }))
+    const answer = await finish(scope.write( { sessionId: first.session_id, chars: '回答\n', yieldTimeMs: 100 }))
     const observed = await drain(scope, { ...answer, session_id: answer.session_id, output: first.output + answer.output })
     assert.equal(observed.output, 'ready:got:回答\n')
     assert.equal(observed.exit_code, 0)
@@ -119,22 +117,41 @@ test('native pipe sessions preserve stdin and isolate cancellation between sessi
 test('Run cleanup waits for native child processes and preserves other Run scopes', async () => {
   const f = await fixture()
   try {
-    const a = f.tools.openRun({ runId: 'a', projectId: 'project' }), b = f.tools.openRun({ runId: 'b', projectId: 'project' })
+    const a = f.tools.openScope({ scopeId: 'a', workspacePath: f.directory }), b = f.tools.openScope({ scopeId: 'b', workspacePath: f.directory })
     const code = "const {spawn}=require('node:child_process');const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});require('node:fs').writeFileSync('child.pid',String(c.pid));setInterval(()=>{},1000)"
-    await finish(a.execute('codex_exec_command', { cmd: nodeCommand(code), yield_time_ms: 10 }))
+    await finish(a.execute( { command: nodeCommand(code), yieldTimeMs: 10 }))
     const childPid = Number(await untilFile(join(f.directory, 'child.pid')))
-    const other = await finish(b.execute('codex_exec_command', { cmd: nodeCommand("process.stdin.once('data',()=>{process.stdout.write('survived');process.exit()})"), yield_time_ms: 10 }))
+    const other = await finish(b.execute( { command: nodeCommand("process.stdin.once('data',()=>{process.stdout.write('survived');process.exit()})"), yieldTimeMs: 10 }))
     assert.equal((await finish(a.close())).cleanup, 'completed')
     assert.throws(() => process.kill(childPid, 0), error => error.code === 'ESRCH')
-    const value = await drain(b, await finish(b.execute('codex_write_stdin', { session_id: other.session_id, chars: 'finish\n', yield_time_ms: 100 })))
+    const value = await drain(b, await finish(b.write( { sessionId: other.session_id, chars: 'finish\n', yieldTimeMs: 100 })))
     assert.equal(value.output, 'survived')
     assert.equal((await finish(b.close())).cleanup, 'completed')
+  } finally { await f.close() }
+})
+test('repeated native group exits retain ownership until both parent and child are absent', { timeout: 20000 }, async () => {
+  const f = await fixture()
+  try {
+    // On macOS a group can transiently contain only exiting/zombie members.
+    // Every iteration still requires the native cleanup receipt and actual PID
+    // absence; neither a signal error nor an initial parent exit proves cleanup.
+    for (let index = 0; index < 24; index++) {
+      const scope = f.tools.openScope({ scopeId: `group-exit-${index}`, workspacePath: f.directory })
+      const marker = `group-exit-${index}.json`
+      const code = `const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(marker)},JSON.stringify([process.pid,child.pid]));setInterval(()=>{},1000)`
+      await finish(scope.execute({ command: nodeCommand(code), yieldTimeMs: 0 }))
+      const pids = JSON.parse(await untilFile(join(f.directory, marker)))
+      for (const pid of pids) process.kill(pid, 0)
+      const closed = await finish(scope.close())
+      assert.equal(closed.cleanup, 'completed')
+      for (const pid of pids) assert.throws(() => process.kill(pid, 0), error => error.code === 'ESRCH')
+    }
   } finally { await f.close() }
 })
 test('explicit Bash remains Bash on all native platforms', async () => {
   const f = await fixture()
   try {
-    const value = await finish(f.bash.execute({ projectId: 'project', command: "printf '%s' \"${BASH_VERSION%%.*}\"; printf '你好'; exit 7" }))
+    const value = await finish(f.bash.execute({ workspacePath: f.directory, command: "printf '%s' \"${BASH_VERSION%%.*}\"; printf '你好'; exit 7" }))
     assert.equal(value.exitCode, 7)
     assert.match(value.stdout, /^\d+你好$/)
   } finally { await f.close() }

@@ -1,4 +1,5 @@
 import type { RunEventView, RunView, ToolTrace } from './client-types.js'
+import { isBashTrace, isApplyPatchTrace, isLibraryToolTrace } from './client-types.js'
 import { runTrace, traceElapsed } from './run-trace.js'
 import { imageURL } from './image-client.js'
 
@@ -107,7 +108,7 @@ export function findProtocolToolFact(context: ProtocolToolContext | undefined, e
 }
 
 export function toolTraceStatus(call: ToolTrace): string {
-  if (call.name !== 'bash' && call.name !== 'apply_patch' && isCommand(call.name)) {
+  if (isLibraryToolTrace(call) && isCommand(call.name)) {
     const value = record(call.result)
     if (value?.timed_out === true) return '执行超时'
     if (value?.terminated === true) return '进程已终止'
@@ -119,7 +120,7 @@ export function toolTraceStatus(call: ToolTrace): string {
   return {
     queued: '等待执行', running: '执行中', completed: '已完成', applied: '已应用',
     rejected: '已拒绝', partial: '部分完成',
-    failed: call.name === 'bash' && typeof call.exitCode === 'number' && call.exitCode !== 0 ? '非零退出' : call.name === 'bash' && call.signal ? '信号终止' : '执行失败',
+    failed: isBashTrace(call) && typeof call.exitCode === 'number' && call.exitCode !== 0 ? '非零退出' : isBashTrace(call) && call.signal ? '信号终止' : '执行失败',
     skipped: '未执行', cancelled: '已取消', interrupted: '意外中断',
   }[call.state]
 }
@@ -173,7 +174,7 @@ export function summarizeToolRequest(request: ToolRequestView, fact?: ToolTrace,
   readiness: ProtocolToolContext['readiness'] = 'loading', runStatus?: ProtocolToolContext['runStatus']): ToolSummary {
   const title = toolDisplayName(request.name)
   const args = parseToolArguments(request.arguments)
-  let preview = fact?.name === 'bash' ? oneLine(fact.command) : fact?.name === 'apply_patch' ? '补丁请求' :
+  let preview = isBashTrace(fact) ? oneLine(fact.command) : isApplyPatchTrace(fact) ? '补丁请求' :
     !args ? '参数生成中' : request.name === 'bash' && typeof args.command === 'string' ? oneLine(args.command) :
       request.name === 'apply_patch' ? '补丁请求' : /^(codex_|claude_code_|deepseek_harness_)/.test(request.name) ? argumentPreview(args) : '工具请求'
   if (!fact) {
@@ -188,12 +189,12 @@ export function summarizeToolRequest(request: ToolRequestView, fact?: ToolTrace,
   const attention = !busy && !success
   const tone = fact.state === 'failed' || fact.state === 'rejected' ? 'danger' : attention ? 'warning' : 'neutral'
   let shortReason: string | undefined
-  if (fact.name === 'apply_patch' && fact.result) {
+  if (isApplyPatchTrace(fact) && fact.result) {
     const { changes, pending, diagnostic } = fact.result
     preview = `已变更 ${changes.length} 个文件${pending.length ? `，${pending.length} 项未完成` : ''}`
     if (attention && diagnostic) shortReason = `${diagnostic.code}：${diagnostic.message}`
   }
-  if (fact.name !== 'bash' && fact.name !== 'apply_patch') {
+  if (isLibraryToolTrace(fact)) {
     const value = record(fact.result), changes = fileFacts(value?.changes), pending = fileFacts(value?.pending, true), note = record(value?.diagnostic)
     if (Array.isArray(value?.changes)) preview = `已变更 ${changes.length} 个文件${pending.length ? `，${pending.length} 项未完成` : ''}`
     if (attention && typeof note?.code === 'string' && typeof note.message === 'string') shortReason = `${note.code}：${note.message}`
@@ -204,8 +205,8 @@ export function summarizeToolRequest(request: ToolRequestView, fact?: ToolTrace,
   }
   if (attention && !shortReason) {
     if (fact.category) shortReason = `失败类别：${fact.category}`
-    else if (fact.name === 'bash' && fact.signal) shortReason = `信号：${fact.signal}`
-    else if (fact.name === 'bash' && typeof fact.exitCode === 'number' && fact.exitCode !== 0) shortReason = `退出码：${fact.exitCode}`
+    else if (isBashTrace(fact) && fact.signal) shortReason = `信号：${fact.signal}`
+    else if (isBashTrace(fact) && typeof fact.exitCode === 'number' && fact.exitCode !== 0) shortReason = `退出码：${fact.exitCode}`
     else shortReason = toolTraceStatus(fact)
   }
   const elapsedMs = busy ? undefined : traceElapsed(fact.startedAt, fact.finishedAt)
@@ -281,13 +282,13 @@ export function mountToolCallDetails(initial: ToolTrace, sessionId?: string,
   const update = (call: ToolTrace) => {
     if (disposed) return
     label.textContent = toolDisplayName(call.name); status.textContent = toolTraceStatus(call)
-    const library = call.name !== 'bash' && call.name !== 'apply_patch'
+    const library = isLibraryToolTrace(call)
     const value = library ? record(call.result) : undefined
     if (options.showArguments !== false) set('arguments', library ? JSON.stringify(call.arguments, null, 2) : undefined)
-    set('result', library && call.result !== undefined ? typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2) : undefined)
-    set('command', call.name === 'bash' ? call.command : library && isCommand(call.name) ? string(call.arguments.cmd ?? call.arguments.command) : undefined)
-    set('patch', call.name === 'apply_patch' ? call.patch : library && call.name === 'codex_apply_patch' ? string(call.arguments.patch) : undefined)
-    set('stdout', call.name === 'bash' ? call.stdout : undefined); set('stderr', call.name === 'bash' ? call.stderr : undefined)
+    set('result', library && call.result !== undefined ? typeof call.result === 'string' && call.result.length ? call.result : JSON.stringify(call.result, null, 2) : undefined)
+    set('command', isBashTrace(call) ? call.command : library && isCommand(call.name) ? string(call.arguments.cmd ?? call.arguments.command) : undefined)
+    set('patch', isApplyPatchTrace(call) ? call.patch : library && call.name === 'codex_apply_patch' ? string(call.arguments.patch) : undefined)
+    set('stdout', isBashTrace(call) ? call.stdout : undefined); set('stderr', isBashTrace(call) ? call.stderr : undefined)
     set('output', library ? string(value?.output) : undefined); set('text', library ? string(value?.text) : undefined)
     const matches = value?.paths ?? value?.matches
     set('matches', library && Array.isArray(matches) ? matches.map(item => {
@@ -295,12 +296,12 @@ export function mountToolCallDetails(initial: ToolTrace, sessionId?: string,
       const match = record(item)
       return [string(match?.path), typeof match?.line === 'number' ? `:${match.line}` : '', typeof match?.count === 'number' ? ` (${match.count})` : '', string(match?.text)].filter(Boolean).join('')
     }).join('\n') : undefined)
-    if (call.name === 'bash') {
+    if (isBashTrace(call)) {
       result.textContent = [call.exitCode === undefined ? '' : `退出码：${call.exitCode === null ? '无' : call.exitCode}`,
         call.signal ? `信号：${call.signal}` : '', call.category ? `失败类别：${call.category}` : ''].filter(Boolean).join(' · ')
       set('changes', undefined); set('pending', undefined); diagnostic.textContent = ''
       truncation.textContent = call.truncated ? '输出摘要已截断' : ''
-    } else if (call.name === 'apply_patch') {
+    } else if (isApplyPatchTrace(call)) {
       const observed = call.result
       result.textContent = [observed ? `补丁结果：${toolTraceStatus({ ...call, state: observed.status })}` : '',
         call.category ? `失败类别：${call.category}` : ''].filter(Boolean).join(' · ')
@@ -311,7 +312,7 @@ export function mountToolCallDetails(initial: ToolTrace, sessionId?: string,
       truncation.textContent = call.patchTruncated ? '补丁预览已截断' : ''
     } else {
       const notes = [call.category ? `失败类别：${call.category}` : '', typeof value?.path === 'string' ? `文件：${value.path}` : '',
-        call.images?.length ? `已读取 ${call.images.length} 张图片` : '']
+        library && call.images?.length ? `已读取 ${call.images.length} 张图片` : '']
       if (isCommand(call.name)) notes.push(typeof value?.session_id === 'number' ? `进程：${value.session_id}` : '',
         value?.exit_code === undefined ? '' : `退出码：${value.exit_code === null ? '无' : value.exit_code}`, typeof value?.signal === 'string' ? `信号：${value.signal}` : '',
         typeof value?.wall_time_seconds === 'number' ? `耗时：${value.wall_time_seconds.toFixed(2)} 秒` : '', value?.timed_out === true ? '已超时' : '', value?.terminated === true ? '已终止' : '', value?.closed === true ? '已退出' : '')

@@ -8,7 +8,7 @@ import { dirname, join, resolve, relative, sep } from 'node:path'
 const sharedPackages = Object.freeze(['@nya/core', '@anybox/application-api', '@anybox/storage-sqlite'])
 // The builder consumes the same explicitly declared dependency as the host contract validator.
 const { satisfies } = createRequire(new URL('../packages/host/package.json', import.meta.url))('semver')
-const localPackages = new Set(['@anybox/host', '@anybox/application-api', '@anybox/storage-sqlite', '@anybox/directory-picker', '@anybox/models', '@anybox/api-key-manager', '@anybox/app-harness', '@anybox/app-claude-agent', '@anybox/app-personal-agent', '@nya/core'])
+const localPackages = new Set(['@anybox/host', '@anybox/application-api', '@anybox/storage-sqlite', '@anybox/directory-picker', '@anybox/models', '@anybox/api-key-manager', '@anybox/tool-api', '@anybox/computer-tools', '@anybox/app-harness', '@anybox/app-claude-agent', '@anybox/app-personal-agent', '@nya/core'])
 const excludedClaudeBinary = name => name.startsWith('@anthropic-ai/claude-agent-sdk-')
 const safeRelative = value => typeof value === 'string' && value.length > 0 && !value.includes('\\') && !value.startsWith('/') && !value.split('/').some(part => !part || part === '.' || part === '..')
 const jsonBytes = value => Buffer.from(JSON.stringify(value, null, 2) + '\n')

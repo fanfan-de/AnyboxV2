@@ -1,44 +1,54 @@
 # 工具模块
 
+环境插入、会话快照、通用执行与恢复契约见[环境提供工具](../../tool-environments.md)。四个资源组件之外，worker 的[图片窄适配](image-adapter.md)将应用图片能力提供给独立 Files 工具，不另持有资源。
+
 [返回模块导航](../README.md)
 
-工具库是受信静态内置目录：Codex、Claude Code、DeepSeek Harness 的 20 个独立来源契约及两个既有 Anybox 契约可按 Agent 自由混选。来源标签用于追溯，不决定模型协议；固定模型调用前缀避免重名，稳定 toolId 与版本用于选择和恢复。目录与参数校验是纯数据/函数，不是插件市场或额外 Nya 组件。跨组件设计见[工具库设计](../../tools-library-design.md)。
+Computer 工具库是受信静态内置目录：Codex、Claude Code、DeepSeek Harness 的 17 个独立来源契约及两个既有 Anybox 契约可按 Agent 自由混选。来源标签用于追溯，不决定模型协议；固定模型调用前缀避免重名，稳定 toolId 与版本用于选择和恢复。目录与参数校验是纯数据/函数，不是插件市场或额外 Nya 组件。其他受信环境提供自己的工具集。跨组件设计见[工具库设计](../../tools-library-design.md)。
+
+## 独立包与环境接入
+
+[`@anybox/tool-api`](../../../packages/tool-api/README.md) 定义中立的 `ToolDefinition`、`ToolDescriptor`、`ToolCall` 与 `ToolEnvironment`，不依赖模型、Harness、Nya 或传输。受信组合根把环境提供方注入 Harness，Agent 的 `environmentIds` 选择其环境；省略时使用 `computer`。环境提供工具身份、定义和执行 scope，模型协议 Loop 只编码已固定的定义。
+
+[`@anybox/computer-tools`](../../../packages/computer-tools/README.md) 是独立计算机工具能力包。`/contracts` 保存来源定义和纯校验，`/adapters` 将来源调用转换成中立请求，两者均不导入 Node 或执行组件。`/bash`、`/processes`、`/apply-patch`、`/files` 提供实际 Nya 组件。工具包不读取 Agent、Session、Projects 或 Computer 业务；Harness 的 Computer 环境适配继续持有工作区绑定、权限和耐久操作。
 
 ## 组件
 
-四个实际 Nya 组件按资源所有权拆分，全部安装在独立本机 worker 的唯一根上：
+四个实际 Nya 组件按资源所有权拆分，生产装配位于独立 worker 的唯一根上；其他受信消费者也可在自己的唯一根直接装配该包：
 
 | 组件 | Nya 名称 | 服务 | 资源所有权 |
 | --- | --- | --- | --- |
 | [Bash](bash.md) | `bash-tool` | `tools.bash` | 既有前台 Bash 子进程、输出缓冲及终止计时器 |
 | [Apply Patch](apply-patch.md) | `apply-patch-tool` | `tools.apply-patch` | 跨项目串行队列、文件预检、逐文件提交及临时文件/目录 |
-| [进程工具](processes.md) | `process-tools` | `tools.processes` | 按 Run 的管道进程组、stdin、增量输出及关闭等待 |
+| [进程工具](processes.md) | `process-tools` | `tools.processes` | 按调用方 scope 的管道进程组、stdin、增量输出及关闭等待 |
 | [文件工具](files.md) | `file-tools` | `tools.files` | 文件读取 handle、随包搜索进程、图片导入及嵌套变更调用 |
 
-组件通过 inject 获取真实依赖和本轮 deps 快照。项目路径是相对路径基准，不是文件系统沙箱；命令具有应用用户的文件及网络访问权限。文件 Write/Edit 共用 Apply Patch 的预检与串行提交所有权，工具目录不会复制一套生命周期或写入队列。
+组件通过 inject 获取真实依赖和本轮 deps 快照。每次执行必须提供受信绝对 `workspacePath`；工具不接收项目 ID，也不回查 Projects。路径是相对路径基准，不是文件系统沙箱；命令具有应用用户的文件及网络访问权限。文件 Write/Edit 共用 Apply Patch 的预检与串行提交所有权；Files 还通过 `tools.images` 窄能力导入图片。工具目录不会复制生命周期或写入队列。
 
-Windows 原生进程、shell 与目录适配位于本应用 `src/core/platform/`，由上述组件私有调用，不新增平台 Nya 服务。Windows 通用命令默认 PowerShell 7，明确的 Bash 契约仍运行原生 Bash；Files 搜索同样进入受管进程后端。当前配置与验证边界见[原生平台支持](../../native-platform-support.md)。
+原生进程监督器与 shell 适配位于 `packages/computer-tools/src/platform/`，随独立工具包构建和分发；Harness 的目录身份、私有目录权限和 worker 入口定位继续位于应用自身的平台适配中。两者均不新增平台 Nya 服务。Windows 通用命令默认 PowerShell 7，明确的 Bash 契约仍运行原生 Bash；Files 搜索同样进入受管进程后端。当前配置与验证边界见[原生平台支持](../../native-platform-support.md)。
 
 ## 工具选择和历史
 
-Session 在业务库保存该执行设备按 Agent 的工具 ID 列表与修订号；创建 Session 时原子复制完整选择快照，之后不可修改。更新 Agent 只影响新 Session，旧会话、分支、在途 Run 和编辑/重新生成沿用原选择。默认选择 Codex 五项及 Claude Read/Write/Edit/Glob/Grep；Codex exec/write 必须成对选择，服务器拒绝缺失依赖，不静默补入工具。用户也可明确选择空集。
+Session 在业务库保存该执行设备按 Agent 的 Computer 工具 ID 列表与修订号；创建 Session 时原子取得所选环境的身份、版本和完整工具定义快照，之后不可修改。Computer 环境继续应用既有工具选择，其余环境提供自己的工具集。环境或 Agent 配置更新只影响新 Session，旧会话、分支、在途 Run 和编辑/重新生成沿用原快照；执行前核对当前环境与确切定义，失配明确拒绝，不静默替换。默认选择 Codex 四项及 Claude Read/Write/Edit/Glob/Grep，共九项；Codex exec/write 必须成对选择，服务器拒绝缺失依赖，不静默补入工具。用户也可明确选择空集。
 
-首次接受 Run 固定 NativeInitialization v2 / tool-library-v1、Prompt 与实际工具声明；无工具能力模型声明为空，仍保留会话选择。旧初始化 v1 / known-tools-v1 和旧原生记录保持原样，既有 bash/apply_patch 定义可继续执行或与新工具混选。静态目录声明必须与选择中的身份、版本和完整参数定义一致。
+计划与待办工具 `codex.update_plan`、`claude-code.TodoWrite`、`deepseek-harness.todo_write` 已退出公开目录和新选择。新会话从旧 Agent 设置中排除这些 ID；旧 Session 快照、声明及历史保持原样，校验和完整列表观察仅保留旧会话继续执行与恢复所需的兼容路径。
+
+带环境快照的新会话首次接受 Run 固定 NativeInitialization v3 / tool-environments-v1、Prompt、环境快照与实际工具声明；既有 v2 / tool-library-v1 初始化继续兼容。无工具能力模型声明为空，仍保留会话选择。旧初始化 v1 / known-tools-v1 和旧原生记录保持原样，既有 bash/apply_patch 定义可继续执行或与新工具混选。静态目录声明必须与选择中的身份、版本和完整参数定义一致。
 
 ## 调用和清理契约
 
-工具声明使用 ToolDefinition，各协议 Loop 负责原生编码。RunRuntime 在任何工具资源启动前验证完整调用批次、来源参数及是否确实声明，再按模型顺序串行分派。工具不读取原生可变状态，不持有凭据，也不自己决定 Run 终态。
+工具声明使用 `@anybox/tool-api` 的 ToolDefinition，各协议 Loop 负责原生编码。通用 schema 校验只接受明确支持的子集，未支持的关键词在环境注册时拒绝；Computer 来源的附加参数语义由 `/contracts` 验证，来源参数转换由 `/adapters` 完成。RunRuntime 在任何工具资源启动前验证完整调用批次、来源参数及是否确实声明，再按模型顺序串行分派。工具不读取原生可变状态，不持有凭据，也不自己决定 Run 终态。
 
 协议管道在调用 Runtime 前进行纯名称/schema 预检：在原生调用 ID 合法、唯一且有界时，未知工具名和参数错误作为同 ID 的结构化 invalid-tool-request 反馈给模型，列出精确 availableTools 和适用 schema；合法同伴也收到 batch-rejected，整批不执行。每 Run 累计最多三批反馈，第四批终止，额度随 protocolCursor 跨恢复保留。没有工具别名、模糊匹配或隐式副作用重试；损坏原生 JSON/ID，以及实际执行、存储或清理故障不进入此修正路径。详见[协议 Agent 注册表](../execution/protocol-agent-registry.md#准备与执行)。
 
-Session 同事务接纳计算声明及恢复批次，[Computer Operations](../computers/computer-operations.md) 按需准备本机实例与 pinned-local 工作区，提交独立 [worker 执行器](../computers/worker-executor.md)。Bash、补丁、进程和文件工具使用固定 workspacePath，嵌套 Write/Edit 同样传递此路径；原模型工具契约不增加路径参数。worker 的 Projects 兼容端口拒绝隐式查询 Authority 目录，独立工具组件测试仍可直接安装原 Projects。Runtime 进程异常退出后，worker 保留工具与真实结果；worker 自身故障的未知副作用不重放。
+Session 同事务接纳计算声明及恢复批次，[Computer Operations](../computers/computer-operations.md) 按需准备本机实例与 pinned-local 工作区，提交独立 [worker 执行器](../computers/worker-executor.md)。Bash、补丁、进程和文件工具使用必填的固定 workspacePath，嵌套 Write/Edit 同样传递此路径；原模型工具契约不增加路径参数。worker 不再为工具装配 Projects 兼容端口。独立消费者只需固定工作目录、提供所需图片能力并装配资源组件。Runtime 进程异常退出后，worker 保留工具与真实结果；worker 自身故障的未知副作用不重放。
 
-OwnedCall 分离 result、cancel 和 done：结果可早于资源退出；取消只发出请求；done 必须等待实际退出及清理。Codex 命令提前返回后的进程由 Run scope 继续持有；正常模型结束也关闭 scope，并经通用 tool-process-cleanup operation 保存最终退出事实后才结算。清理失败不创建成功节点，取消不回滚已发生文件修改。
+`ToolCall`（兼容类型名 `OwnedCall`）分离 result、cancel 和 done：结果可早于资源退出；取消只发出请求；done 必须等待实际退出及清理。Codex 命令提前返回后的进程由不透明调用方 scope 继续持有；Harness 将该 scope 绑定到所属 Run，正常模型结束也关闭 scope，并经通用 tool-process-cleanup operation 保存最终退出事实后才结算。清理失败不创建成功节点，取消不回滚已发生文件修改。
 
-工具事实继续使用 tool-started、tool-observed、tool-failed 及 toolCalls，旧 bash-* / bashCalls 仅在读取边界归一化。计划工具返回完整列表形成持久观察，不建立独立后台任务。普通文件和补丁诊断可交回模型修正；存储、资源清理和依赖撤销仍阻止继续执行。
+工具事实继续使用 tool-started、tool-observed、tool-failed 及 toolCalls，旧 bash-* / bashCalls 仅在读取边界归一化。旧会话的兼容计划工具返回完整列表形成持久观察，不建立独立后台任务。普通文件和补丁诊断可交回模型修正；存储、资源清理和依赖撤销仍阻止继续执行。
 
-工具读图经既有图片组件保存不可变 JPEG/PNG/WebP 原字节，与工具观察同业务事务保留。协议 Loop 在文本工具结果后追加用户图片块和匹配资源引用；模型调用启动后才编码原图，base64 不进入持久历史。文本模型获得明确不支持结果。PTY、独立后台作业、PDF、notebook、联网搜索和子 Agent 未纳入当前库。
+工具读图经注入的 `tools.images` 保存不可变 JPEG/PNG/WebP 原字节，工具只识别不透明 scope 与 `ToolImageRef`。Harness 的窄适配把它绑定到既有图片组件和所属 Session，Session 与工具观察同业务事务保留引用。协议 Loop 在文本工具结果后追加用户图片块和匹配资源引用；模型调用启动后才编码原图，base64 不进入持久历史。文本模型获得明确不支持结果。PTY、独立后台作业、PDF、notebook、联网搜索和子 Agent 未纳入当前库。
 
 ## 维护与验证
 
-目录和进程测试位于 tool-catalog.test.mjs、process-tools.test.mjs，文件行为位于 file-tools.test.mjs，跨协议、图片、选择和生命周期集成位于 native-tool-library.test.mjs；已有工具循环、Apply Patch 循环及组件测试继续验证兼容。修改取消、资源所有权或清理时同步更新行为测试，完成后执行根 npm run check。
+独立包测试为 `packages/tool-api/tests/validation.test.mjs`、`packages/computer-tools/tests/{independent-tools,apply-patch-domain,package-consumer}.test.mjs`，覆盖 schema 拒绝、独立 Nya 根、真实生产文件闭包和原生资源。可分别运行 `npm test --workspace @anybox/tool-api` 与 `npm test --workspace @anybox/computer-tools`。目录和进程测试位于 tool-catalog.test.mjs、process-tools.test.mjs，文件行为位于 file-tools.test.mjs，跨协议、图片、选择和生命周期集成位于 native-tool-library.test.mjs；已有工具循环、Apply Patch 循环及组件测试继续验证兼容。修改取消、资源所有权或清理时同步更新行为测试，完成后执行根 npm run check。

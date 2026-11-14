@@ -27,7 +27,8 @@ export interface ApplicationCapabilityManager {
   closeAdmission(): void
   awaitIdle(): Promise<void>
 }
-const managers = new WeakMap<Context, { providers: readonly ApplicationCapabilityProvider[]; manager: ApplicationCapabilityManager }>()
+interface ManagerGroup { providers: readonly ApplicationCapabilityProvider[]; manager: ApplicationCapabilityManager }
+const managers = new WeakMap<Context, Map<string, ManagerGroup>>()
 const idPattern = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+)*$/
 export const validCapabilityRange = (range: string) => validRange(range) !== null
 const cleanupFailure = (errors: readonly unknown[]) => Object.assign(new AggregateError(errors, 'application capability cleanup failed'), { phase: 'cleanup' })
@@ -39,9 +40,13 @@ const diagnostic = ({ id, range, required }: Requirement, status: ApplicationCap
   Object.freeze({ id, range, required, status, ...(version ? { version } : {}) })
 
 /** Selects resource owners; Nya alone coordinates their service dependencies and cleanup. */
-export function createApplicationCapabilityManager(root: Context, input: readonly ApplicationCapabilityProvider[] = []): ApplicationCapabilityManager {
+export function createApplicationCapabilityManager(root: Context, input: readonly ApplicationCapabilityProvider[] = [], bindings: Readonly<Record<string, string>> = {}): ApplicationCapabilityManager {
+  bindings = Object.freeze({ ...bindings })
   if (!Context.is(root) || root.root !== root) throw new TypeError('application root Context required')
-  const existing = managers.get(root)
+  const key = JSON.stringify(Object.entries(bindings).sort(([a], [b]) => a.localeCompare(b)))
+  const groups = managers.get(root) ?? new Map<string, ManagerGroup>()
+  managers.set(root, groups)
+  const existing = groups.get(key)
   if (existing) {
     if (existing.providers.length !== input.length || existing.providers.some((provider, index) => provider !== input[index])) throw new TypeError('application capability manager already belongs to this root')
     return existing.manager
@@ -55,7 +60,7 @@ export function createApplicationCapabilityManager(root: Context, input: readonl
         value.resident !== undefined && typeof value.resident !== 'boolean') throw new TypeError('invalid application capability provider')
     const versions = offered.get(value.id) ?? []
     if (versions.some(provider => valid(provider.version) === valid(value.version))) throw new TypeError('duplicate application capability provider version')
-    const provider = Object.freeze({ ...value, services: Object.freeze([...value.services]) })
+    const provider = Object.freeze({ ...value, services: Object.freeze(value.services.map(name => bindings[name] ?? name)) })
     versions.push(provider); offered.set(provider.id, versions)
     if (provider.resident) {
       if (entries.has(provider.id) || provider.services.some(service => serviceOwners.has(service))) throw new TypeError('conflicting resident application capability providers')
@@ -191,7 +196,7 @@ export function createApplicationCapabilityManager(root: Context, input: readonl
             try {
               const component = entry.provider.create(Object.freeze({ signal: entry.abort!.signal }))
               guard()
-              entry.fiber = root.installComponent(component)
+              entry.fiber = root.installComponent(component, undefined, { bindings })
               const abort = entry.abort!
               // Root cleanup aborts before this provider's fiber is disposed; preparation only
               // aborts providers whose initial acquisition has not yet committed.
@@ -237,6 +242,6 @@ export function createApplicationCapabilityManager(root: Context, input: readonl
     },
     async awaitIdle() { while (pending.size) await Promise.all([...pending]) },
   }
-  managers.set(root, { providers: [...input], manager })
+  groups.set(key, { providers: [...input], manager })
   return manager
 }

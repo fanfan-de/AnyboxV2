@@ -8,10 +8,10 @@ import { createHash } from 'node:crypto'
 const run = promisify(execFile)
 const packageRoot = fileURLToPath(new URL('..', import.meta.url))
 
-/** Build the Harness-owned process supervisor with the application, including standalone builds. */
-export async function buildProcessNative(root = packageRoot, outputDirectory = join(root, 'dist/core/platform/native')) {
+/** Build the tool-owned process supervisor with the application, including standalone builds. */
+export async function buildProcessNative(root = packageRoot, outputDirectory = join(root, 'dist/platform/native')) {
   if (!['win32', 'linux', 'darwin'].includes(process.platform)) throw new Error('Unsupported native process platform')
-  const source = join(root, 'src/core/platform/native')
+  const source = join(root, 'src/platform/native')
   const files = ['process-host.rs', 'windows.rs', 'unix.rs']
   const compilerFlags = ['--edition=2021', '--crate-name', 'anybox_process_host', '-C', 'opt-level=2', '-C', 'debuginfo=0', '-C', 'strip=debuginfo',
     ...(process.platform === 'win32' ? ['-C', 'target-feature=+crt-static'] : [])]

@@ -35,7 +35,7 @@ export function processRuntimeAvailable(): boolean {
     return metadata.platform === process.platform && metadata.arch === process.arch && metadata.protocol === 1 && existsSync(nativePath(process.platform === 'win32' ? 'anybox-process-host.exe' : 'anybox-process-host'))
   } catch { return false }
 }
-const failure = () => new Error('managed process runtime unavailable or cleanup failed')
+const failure = (stage = 'unavailable') => new Error('managed process runtime unavailable or cleanup failed', { cause: stage })
 const maximumFrameBytes = 1_048_576
 function frame(type: string, data: Buffer = Buffer.alloc(0)): Buffer {
   const header = Buffer.alloc(5); header[0] = type.charCodeAt(0); header.writeUInt32LE(data.length, 1)
@@ -66,7 +66,7 @@ export function spawnManagedProcess(options: ManagedProcessOptions): ManagedProc
   let resolveDone!: () => void, rejectDone!: (error: Error) => void
   const exited = new Promise<ManagedProcessExit>((yes, no) => { resolveExit = yes; rejectExit = no })
   const done = new Promise<void>((yes, no) => { resolveDone = yes; rejectDone = no })
-  // Consumers commonly attach observers only after returning from a project lookup.
+  // Consumers can attach observers after ownership has been synchronously acquired.
   void exited.catch(() => {}); void done.catch(() => {})
   const stdout = new Readable({ read() {} }), stderr = new Readable({ read() {} })
   const limit = options.maxBufferedOutputBytes ?? 1_048_576
@@ -93,7 +93,8 @@ export function spawnManagedProcess(options: ManagedProcessOptions): ManagedProc
     settled = true
     stdout.push(null); stderr.push(null)
     if (!stdin.destroyed) stdin.destroy()
-    if (!nativeDone || !exitedValue && !launchFailed) fail()
+    if (!nativeDone) fail(failure('missing-cleanup-receipt'))
+    if (!exitedValue && !launchFailed) fail(failure('missing-exit-receipt'))
     if (launchFailed && nativeDone && !failureValue) { rejectExit(failure()); resolveDone() }
     else if (failureValue) { rejectExit(failureValue); rejectDone(failureValue) }
     else resolveDone()
@@ -110,7 +111,7 @@ export function spawnManagedProcess(options: ManagedProcessOptions): ManagedProc
     // exit/cleanup receipt, rather than the control pipe's write status, proves
     // ownership cleanup; write callbacks still report failure to their caller.
     child.stdin!.on('error', () => {})
-    child.stdout!.on('error', () => { fail() })
+    child.stdout!.on('error', () => { fail(failure('output-pipe-error')) })
     // Native diagnostics are never mixed into the command's stderr or leaked to models.
     child.stderr!.on('data', () => {})
     let pending: Buffer = Buffer.alloc(0)
@@ -118,7 +119,7 @@ export function spawnManagedProcess(options: ManagedProcessOptions): ManagedProc
       pending = pending.length ? Buffer.concat([pending, chunk]) : chunk
       while (pending.length >= 5) {
         const length = pending.readUInt32LE(1)
-        if (length > maximumFrameBytes) { fail(); child!.stdin!.destroy(); pending = Buffer.alloc(0); return }
+        if (length > maximumFrameBytes) { fail(failure('oversize-frame')); child!.stdin!.destroy(); pending = Buffer.alloc(0); return }
         if (pending.length < 5 + length) return
         const type = String.fromCharCode(pending[0]), bytes = pending.subarray(5, 5 + length)
         pending = pending.subarray(5 + length)
@@ -134,11 +135,11 @@ export function spawnManagedProcess(options: ManagedProcessOptions): ManagedProc
           resolveExit(exitedValue)
         } else if (type === 'N' && length === 0 && !exitedValue && !launchFailed) launchFailed = true
         else if (type === 'D' && length === 0 && !nativeDone) nativeDone = true
-        else if (type === 'F') fail()
-        else { fail(); child!.stdin!.destroy() }
+        else if (type === 'F') fail(failure('native-reported-failure'))
+        else { fail(failure('invalid-frame')); child!.stdin!.destroy() }
       }
     })
-    child.once('close', code => { if (code !== 0 || pending.length) fail(); finish() })
+    child.once('close', (code, signal) => { if (code !== 0) fail(failure(`supervisor-exit:${code}:${signal}`)); if (pending.length) fail(failure('incomplete-frame')); finish() })
     send('S', config)
     if (options.stdin === 'ignore') stdin.end()
   } catch {

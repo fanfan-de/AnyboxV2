@@ -5,16 +5,17 @@ import type { NativeModelSnapshot } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from './legacy-snapshot.js'
 import type { ProtocolBindingSnapshot, NativeRunInput, NativeInitialization, ProtocolRecord } from './program.js'
 import type { ModelFailureCategory } from './model.js'
-import type { BashResult } from '../tool/bash-component.js'
-import type { ApplyPatchResult } from '../tool/apply-patch-types.js'
 import { nonEmpty } from '../validation.js'
 import type { ImageRef } from '../image/port.js'
 import { imageLimits } from '../image/limits.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { JsonValue } from '@anybox/models'
-import type { ToolDefinition } from '../tool/definition.js'
+import type { ToolDefinition } from '@anybox/tool-api'
 import type { RunUnitBindings } from '../unit/domain.js'
-import { validateLibraryArguments, type LibraryToolName } from '../tool/catalog.js'
+import { validateToolArguments, type ToolRequest } from '@anybox/tool-api'
+import { getToolByName } from '../tool/catalog.js'
+import { validateComputerToolArguments, computerToolOutputBytes } from '@anybox/computer-tools/contracts'
+import { isDeepStrictEqual } from 'node:util'
 
 export type RunHistory =
   | { readonly kind: 'tree'; readonly parentNodeId: string | null }
@@ -44,18 +45,23 @@ export class RunFailure extends Error {
 
 export const runLimits = Object.freeze({
   finalBytes: 65_536,
-  totalToolOutputBytes: 131_072,
 })
 
-export type ValidatedToolRequest =
-  | (Readonly<{ id: string }> & { readonly name: 'bash'; readonly arguments: Readonly<{ command: string }> })
-  | (Readonly<{ id: string }> & { readonly name: 'apply_patch'; readonly arguments: Readonly<{ patch: string }> })
-  | (Readonly<{ id: string }> & { readonly name: LibraryToolName; readonly arguments: Readonly<Record<string, JsonValue>> })
+export type ValidatedToolRequest = ToolRequest
 
-export type ToolObservation =
-  | { readonly name: 'bash'; readonly result: BashResult }
-  | { readonly name: 'apply_patch'; readonly result: ApplyPatchResult }
-  | { readonly name: LibraryToolName; readonly result: JsonValue; readonly images?: readonly ImageRef[] }
+export interface ToolObservation {
+  readonly name: string
+  readonly result: JsonValue
+  readonly images?: readonly ImageRef[]
+}
+
+function freezeToolValue<T>(value: T): T {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeToolValue(child)
+    Object.freeze(value)
+  }
+  return value
+}
 
 /** Validate the complete batch envelope before acquiring any tool resource.
  * Patch syntax is an execution observation so the model can correct it. */
@@ -64,29 +70,29 @@ export function validateToolBatch(calls: unknown, allowed?: readonly ToolDefinit
   const ids = new Set<string>()
   return Object.freeze(calls.map((call: unknown): ValidatedToolRequest => {
     if (!call || typeof call !== 'object' || Array.isArray(call) ||
-      !('id' in call) || typeof call.id !== 'string' || !call.id.trim() || call.id.length > 256 ||
+      !('id' in call) || typeof call.id !== 'string' || !call.id.trim() || call.id.length > 256 || call.id.includes('\0') ||
       ids.has(call.id) || !('name' in call) || !('arguments' in call) ||
+      typeof call.name !== 'string' || !call.name.trim() || call.name.length > 256 || call.name.includes('\0') ||
       !call.arguments || typeof call.arguments !== 'object' || Array.isArray(call.arguments) ||
       allowed !== undefined && !allowed.some(tool => tool.name === call.name)) throw new RunFailure('invalid-tool-request')
     ids.add(call.id)
-    if (call.name === 'bash' && Object.keys(call.arguments).length === 1 && 'command' in call.arguments && typeof call.arguments.command === 'string' &&
-      call.arguments.command.trim() && !call.arguments.command.includes('\0')) {
-      return Object.freeze({ id: call.id, name: 'bash', arguments: Object.freeze({ command: call.arguments.command }) })
-    }
-    if (call.name === 'apply_patch' && Object.keys(call.arguments).length === 1 && 'patch' in call.arguments && typeof call.arguments.patch === 'string') {
-      return Object.freeze({ id: call.id, name: 'apply_patch', arguments: Object.freeze({ patch: call.arguments.patch }) })
-    }
     try {
-      const args = validateLibraryArguments(call.name, call.arguments)
-      return Object.freeze({ id: call.id, name: call.name as LibraryToolName, arguments: args })
+      // Historical envelopes remain readable when their environment is not currently inserted.
+      // Live calls always supply the Session's exact admitted declarations.
+      const definition = allowed?.find(tool => tool.name === call.name) ?? {
+        name: call.name, parameters: { type: 'object', additionalProperties: true },
+      }
+      const args = validateToolArguments(definition, call.arguments)
+      const builtin = allowed && getToolByName(definition.name)
+      // Exact legacy Computer contracts retain their source-specific pure preflight checks.
+      if (builtin && isDeepStrictEqual(builtin.definition, definition)) validateComputerToolArguments(definition.name, args)
+      return Object.freeze({ id: call.id, name: definition.name, arguments: freezeToolValue(structuredClone(args)) })
     } catch { throw new RunFailure('invalid-tool-request') }
   }))
 }
 
 export function toolOutputBytes(observation: ToolObservation): number {
-  return observation.name === 'bash'
-    ? Buffer.byteLength(observation.result.stdout, 'utf8') + Buffer.byteLength(observation.result.stderr, 'utf8')
-    : Buffer.byteLength(JSON.stringify(observation.result), 'utf8')
+  return computerToolOutputBytes(observation.name, observation.result)
 }
 
 export interface Run {

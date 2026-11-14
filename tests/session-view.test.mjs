@@ -170,6 +170,30 @@ function fixture(t, { runs = [run('first')], position = {}, initialScroll = { di
   return { panel, state, calls, document, find, mount, dialogue: () => find('[data-view-mode="dialogue"]'), history: () => find('[data-view-mode="runs"]') }
 }
 
+test('composer context details open with hover, keyboard and touch and close with Escape or an outside click', t => {
+  const f = fixture(t)
+  const root = f.find('.context-usage'), button = f.find('.context-usage-button')
+  root.dispatch('pointerenter')
+  assert.equal(button.getAttribute('aria-expanded'), 'true')
+  f.find('textarea').dispatch('keydown', { key: 'Escape' })
+  assert.equal(button.getAttribute('aria-expanded'), 'false', 'Escape dismisses hover details while input keeps focus')
+  button.dispatch('focusin')
+  assert.equal(button.getAttribute('aria-expanded'), 'true')
+  f.find('textarea').dispatch('pointerdown')
+  assert.equal(button.getAttribute('aria-expanded'), 'false')
+  button.click()
+  root.dispatch('pointerleave')
+  assert.equal(button.getAttribute('aria-expanded'), 'true', 'a tap pins the details')
+  button.click()
+  assert.equal(button.getAttribute('aria-expanded'), 'false')
+  root.dispatch('pointerenter')
+  f.history().click()
+  assert.equal(button.getAttribute('aria-expanded'), 'false', 'hidden composers do not retain a fixed popup')
+  f.panel.dispose()
+  root.dispatch('pointerenter')
+  assert.equal(button.getAttribute('aria-expanded'), 'false', 'disposed panels remove their listeners')
+})
+
 test('assistant Markdown renders CommonMark and GFM blocks with readable tables and copyable literal code', t => {
   const source = '# Heading\n\nA **bold** and *emphasis* with `inline` and ~~removed~~.\n\n> Quoted text\n\n1. First\n2. Second\n\n- [x] Done\n- [ ] Pending\n\n| Name | Value |\n| --- | --- |\n| Alpha | 42 |\n\n```ts\nconst answer = 42\n```'
   const content = markdownFixture(t, source)

@@ -1,9 +1,9 @@
 import { installHarnessServerCore } from '../../packages/app-harness/dist/core/index.js'
 import { runAdmissionServiceKey } from '../../packages/app-harness/dist/core/run/component.js'
-import { createBashComponent } from '../../packages/app-harness/dist/core/tool/bash-component.js'
-import { createApplyPatchComponent } from '../../packages/app-harness/dist/core/tool/apply-patch-component.js'
-import { createProcessToolsComponent } from '../../packages/app-harness/dist/core/tool/process-component.js'
-import { createFileToolsComponent } from '../../packages/app-harness/dist/core/tool/files-component.js'
+import { createBashComponent } from '@anybox/computer-tools/bash'
+import { createApplyPatchComponent } from '@anybox/computer-tools/apply-patch'
+import { createProcessToolsComponent } from '@anybox/computer-tools/processes'
+import { createFileToolsComponent } from '@anybox/computer-tools/files'
 import { createControlledComputerWorker } from './computer-services.mjs'
 
 /** Test application host: its close owns the root; the Harness facade has no close method. */
@@ -14,6 +14,9 @@ export async function createTestHarnessServerCore(root, options, { legacyTools =
     // Projects, which the application composition supplies on this same root.
     // The composition's router serves `computer.worker`; the fixture only stands in for the loopback worker behind it.
     if (!root.get('computer.local-worker')) {
+      if (!root.get('tools.images')) await root.installComponent({ name: 'fixture-tool-images', inject: ['harness.image-assets'], apply(ctx, _config, deps) {
+        ctx.provide('tools.images', { importImage: (...args) => deps['harness.image-assets'].importImage(...args) })
+      } })
       const fibers = [createBashComponent(), createApplyPatchComponent(), createProcessToolsComponent(), createFileToolsComponent()]
         .map(component => root.installComponent(component))
       for (const fiber of fibers) void Promise.resolve(fiber).catch(() => {})

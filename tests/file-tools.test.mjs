@@ -5,10 +5,10 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
 import sharp from 'sharp'
-import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
-import { createApplyPatchComponent } from '../packages/app-harness/dist/core/tool/apply-patch-component.js'
-import { createFileToolsComponent, fileToolsServiceKey, searchBinaryPath } from '../packages/app-harness/dist/core/tool/files-component.js'
-import { imageAssetsServiceKey } from '../packages/app-harness/dist/core/image/port.js'
+import { createApplyPatchComponent } from '@anybox/computer-tools/apply-patch'
+import { createFileToolsComponent, fileToolsServiceKey, searchBinaryPath } from '@anybox/computer-tools/files'
+import { toolImagesServiceKey } from '@anybox/computer-tools/images'
+import { adaptFileToolCall } from '@anybox/computer-tools/adapters'
 
 function deferred() { let resolve; const promise = new Promise(yes => { resolve = yes }); return { promise, resolve } }
 
@@ -22,11 +22,7 @@ async function fixture(options = {}) {
   const directory = await fs.realpath(await fs.mkdtemp(join(tmpdir(), 'anybox-file-tools-')))
   const root = new Context(), imported = []
   await root.installComponent({ name: 'file-tool-test-dependencies', apply(ctx) {
-    ctx.provide(projectServiceKey, { async requireAvailable(id) {
-      if (options.lookup) await options.lookup()
-      return { id, path: directory, available: true }
-    } })
-    ctx.provide(imageAssetsServiceKey, { importImage(input, signal) {
+    ctx.provide(toolImagesServiceKey, { importImage(input, signal) {
       if (options.importImage) return options.importImage(input, signal)
       const operation = (async () => {
         const chunks = []; for await (const chunk of input.bytes) { signal?.throwIfAborted(); chunks.push(Buffer.from(chunk)) }
@@ -39,7 +35,7 @@ async function fixture(options = {}) {
   await root.installComponent(createApplyPatchComponent(options.patchOptions))
   await root.installComponent(createFileToolsComponent())
   const files = root.get(fileToolsServiceKey)
-  const call = (name, args, imageInput = false, signal) => files.execute({ runId: 'run-1', sessionId: 'session-1', projectId: 'project-1', name, args, imageInput, signal })
+  const call = (name, args, imageInput = false, signal) => files.execute({ scopeId: 'session-1', workspacePath: directory, request: adaptFileToolCall(name, args), imageInput, signal })
   return { root, directory, imported, call,
     async execute(name, args, imageInput = false) { const operation = call(name, args, imageInput); const result = await operation.result; await operation.done; return result },
     async close() { try { await root.fiber.dispose() } finally { await fs.rm(directory, { recursive: true, force: true }) } },
@@ -112,7 +108,7 @@ test('search includes hidden and ignored files, excludes dependencies and does n
     const deepseek = await f.execute('deepseek_harness_grep', { pattern: 'needle', include: '*.ts' })
     assert.equal(deepseek.result.matches.length, 2)
     assert.deepEqual(deepseek.result.matches.map(value => value.line), [1, 3])
-    assert.equal((await f.execute('deepseek_harness_grep', { pattern: 'needle', include: '*.ts,*.js' })).result.code, 'invalid-input')
+    assert.throws(() => f.call('deepseek_harness_grep', { pattern: 'needle', include: '*.ts,*.js' }), /invalid include glob/)
     assert.equal((await f.execute('claude_code_Grep', { pattern: '[' })).result.code, 'invalid-pattern')
     assert.equal((await f.execute('claude_code_Read', { file_path: 'directory-link/a.ts' })).result.code, 'symbolic-link')
     assert.equal((await f.execute('claude_code_Glob', { pattern: '*', path: 'directory-link' })).result.code, 'symbolic-link')
@@ -138,9 +134,9 @@ test('image reads enforce model capabilities and return immutable refs without i
   } finally { await f.close() }
 })
 
-test('file-tool cancellation joins accepted lookups and prevents mutations', async () => {
+test('file-tool cancellation joins accepted filesystem preflight and prevents mutations', async () => {
   const entered = deferred(), release = deferred()
-  const f = await fixture({ lookup: async () => { entered.resolve(); await release.promise } })
+  const f = await fixture({ patchOptions: { filesystem: { async lstat(path) { entered.resolve(); await release.promise; return fs.lstat(path) } } } })
   try {
     const operation = f.call('claude_code_Write', { file_path: 'cancelled', content: 'text' })
     await entered.promise

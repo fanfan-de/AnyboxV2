@@ -40,6 +40,16 @@ test('native parameter paths retain nesting and reject conflicting or prototype 
   ], { thinking: 'scalar', 'thinking.type': 'enabled' }), /参数路径冲突/)
 })
 
+test('new Gemini forms enable summaries only for models with declared reasoning support', () => {
+  const fields = [{ key: 'generation_config.thinking_summaries', label: 'Thinking summaries', type: 'enum', values: ['auto', 'none'], defaultValue: 'auto' }]
+  const capabilities = support => ({ tools: { support: 'unknown' }, streaming: { support: 'unknown' }, imageInput: { support: 'unknown' }, reasoning: { support } })
+  assert.deepEqual(initialNativeParameters(fields, { capabilities: capabilities('supported') }), { generation_config: { thinking_summaries: 'auto' } })
+  for (const support of ['unknown', 'unsupported']) assert.deepEqual(initialNativeParameters(fields, { capabilities: capabilities(support) }), {})
+  assert.deepEqual(initialNativeParameters(fields), {})
+  assert.deepEqual(nativeParameterValues(fields, { 'generation_config.thinking_summaries': '"none"' }), { generation_config: { thinking_summaries: 'none' } })
+  assert.deepEqual(nativeParameterValues(fields, {}), {}, 'saved omissions remain omitted')
+})
+
 test('directory models require a compatible explicitly associated connection for automatic setup', () => {
   const model = { source: { kind: 'external', sourceId: 'models.dev', providerId: 'anthropic' }, providerId: 'anthropic-definition', modalities: { input: ['text', 'image'], output: ['text'] },
     connectionHints: { protocolIds: ['anthropic-messages'] }, connections: [] }

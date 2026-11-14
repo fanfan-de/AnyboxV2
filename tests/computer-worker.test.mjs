@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, realpath, rm, mkdir, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -12,6 +14,8 @@ import { createWorkerAttachmentsComponent } from '../packages/app-harness/dist/c
 import { connectLocalComputerWorker, createLocalComputerWorkerComponent } from '../packages/app-harness/dist/core/computer/worker-client.js'
 import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
+import { createComputerToolManifest, parseComputerToolManifest } from '../packages/app-harness/dist/core/computer/tool-support.js'
+import { projectComputerEnvironments } from '../packages/app-harness/dist/core/computer/environments.js'
 
 import { nodeCommand } from './helpers/native-shell.mjs'
 async function finish(port, input) {
@@ -25,11 +29,20 @@ async function finish(port, input) {
 async function fixture(t) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-worker-contract-')))
   const port = connectLocalComputerWorker({ directory: join(directory, 'worker') })
-  t.after(async () => { try { await port.shutdown(); await port.closeObserver() } finally { await rm(directory, { recursive: true, force: true }) } })
+  t.after(async () => { try { await port.shutdown(); await port.closeObserver(); assert.equal(port.observedInfo(), undefined) } finally { await rm(directory, { recursive: true, force: true }) } })
+  assert.equal(port.observedInfo(), undefined)
+  assert.equal(existsSync(join(directory, 'worker')), false, 'reading unobserved tools does not create a worker directory')
   let owner = { runId: 'run', runOwnerEpoch: 1, attachmentId: 'local:computer' }
   const cold = await Promise.all([port.info(), port.info(), port.info()])
   assert.deepEqual(cold[1], cold[0]); assert.deepEqual(cold[2], cold[0])
   const info = cold[0]
+  assert.deepEqual(info.toolManifest, createComputerToolManifest())
+  assert.ok(parseComputerToolManifest(info.toolManifest))
+  const observed = port.observedInfo()
+  assert.deepEqual(observed, info)
+  assert.ok(Object.isFrozen(observed))
+  assert.ok(Object.isFrozen(observed.toolManifest))
+  assert.ok(Object.isFrozen(observed.toolManifest.tools))
   let binding = { bindingId: 'binding', reservationId: 'reservation', workspaceId: 'workspace', projectId: 'project', scopeId: owner.runId,
     computerId: 'local', computerInstanceId: `${info.workerId}:${info.bootId}`, instanceGeneration: 1, workspaceEpoch: 1,
     revision: 0, path: directory, preparedAt: 'now' }
@@ -70,6 +83,8 @@ test('a worker that died since the last call is replaced by the next call instea
     const second = await port.info()
     assert.equal(second.workerId, first.workerId, 'the directory keeps the worker identity')
     assert.notEqual(second.bootId, first.bootId, 'the first call after the death already talks to a replacement boot')
+    assert.equal(port.observedInfo().bootId, second.bootId)
+    assert.deepEqual(port.observedInfo().toolManifest, createComputerToolManifest())
   } catch (error) {
     // This random fixture has no credentials or user tools. Keep the worker's
     // fixed startup diagnostic before cleanup removes evidence of a failure.
@@ -84,11 +99,76 @@ test('installing and disposing the worker proxy does not allocate computer or cr
   t.after(() => rm(directory, { recursive: true, force: true }))
   const root = new Context()
   await root.installComponent(createLocalComputerWorkerComponent({ directory: join(directory, 'worker') }))
+  const observer = root.get('computer.local-worker')
+  assert.equal(observer.observedInfo(), undefined)
+  assert.equal(observer.observedInfo(), undefined)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(existsSync(join(directory, 'worker')), false, 'the observation getter neither starts nor probes an absent worker')
   await root.fiber.dispose()
+  assert.equal(observer.observedInfo(), undefined)
   await assert.rejects(readFile(join(directory, 'worker', 'endpoint.json')), { code: 'ENOENT' })
   const port = connectLocalComputerWorker({ directory: join(directory, 'worker') })
   await port.shutdown(); await port.closeObserver()
   await assert.rejects(readFile(join(directory, 'worker', 'worker.sqlite')), { code: 'ENOENT' })
+})
+
+test('legacy worker observations remain read-only and late info replies cannot replace newer reports or refill a closed observer', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-worker-old-info-'))
+  const legacy = { workerId: 'legacy-worker', bootId: 'legacy-boot', platform: process.platform, architecture: process.arch }
+  let requests = 0, hold = false
+  const held = []
+  const reply = (response, value) => response.end(JSON.stringify({ value }))
+  const server = createServer((request, response) => {
+    requests++
+    assert.equal(request.url, '/info')
+    response.setHeader('content-type', 'application/json')
+    if (hold) held.push(response)
+    else reply(response, legacy)
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  await writeFile(join(directory, 'endpoint.json'), JSON.stringify({ url: `http://127.0.0.1:${server.address().port}`, token: 'x'.repeat(64), pid: process.pid, workerId: legacy.workerId, bootId: legacy.bootId }))
+  const port = connectLocalComputerWorker({ directory, autoStart: false })
+  t.after(async () => { await port.closeObserver(); await new Promise(resolve => server.close(resolve)); await rm(directory, { recursive: true, force: true }) })
+  assert.equal(port.observedInfo(), undefined)
+  assert.deepEqual(await port.info(), legacy)
+  const count = requests
+  assert.deepEqual(port.observedInfo(), legacy)
+  assert.equal(Object.isFrozen(port.observedInfo()), true)
+  assert.equal(port.observedInfo().toolManifest, undefined)
+  await new Promise(resolve => setImmediate(resolve))
+  assert.equal(requests, count, 'reading cached information does not send another info request')
+  const environments = projectComputerEnvironments([{ attachmentId: 'local:computer', unitKind: 'computer', origin: 'local', state: 'approved', unitId: 'computer-local', capabilities: null }],
+    { platform: process.platform, architecture: process.arch }, new Map(), port.observedInfo())
+  assert.deepEqual(environments.environments[0].toolSupport, { state: 'unknown' })
+
+  const waitFor = async count => {
+    for (let n = 0; n < 1_000; n++) { if (held.length >= count) return; await delay(1) }
+    assert.fail('the info request did not reach the fixture')
+  }
+  hold = true
+  const earlier = port.info(); await waitFor(1)
+  const later = port.info(); await waitFor(2)
+  const subset = createComputerToolManifest(['anybox.bash'])
+  reply(held[1], { ...legacy, toolManifest: subset }); await later
+  assert.deepEqual(port.observedInfo().toolManifest, subset)
+  reply(held[0], { ...legacy, toolManifest: createComputerToolManifest() }); await earlier
+  assert.deepEqual(port.observedInfo().toolManifest, subset, 'an earlier request completing last cannot overwrite the newer observation')
+
+  const mismatch = port.info(); await waitFor(3)
+  reply(held[2], { ...legacy, workerId: 'different-worker', toolManifest: subset })
+  assert.equal((await mismatch).workerId, 'different-worker', 'report validation does not change the existing request result')
+  assert.equal(port.observedInfo(), undefined, 'a latest mismatched target cannot leave an older report looking current')
+  const restored = port.info(); await waitFor(4)
+  reply(held[3], { ...legacy, toolManifest: subset }); await restored
+  assert.deepEqual(port.observedInfo().toolManifest, subset)
+
+  const duringClose = port.info(); void duringClose.catch(() => {})
+  await waitFor(5)
+  const closing = port.closeObserver()
+  reply(held[4], { ...legacy, toolManifest: createComputerToolManifest() })
+  await assert.rejects(duringClose)
+  await closing
+  assert.equal(port.observedInfo(), undefined)
 })
 
 test('worker freezes file bindings and remembers maximum workspace and instance generations after scope exit', { timeout: 60000 }, async t => {

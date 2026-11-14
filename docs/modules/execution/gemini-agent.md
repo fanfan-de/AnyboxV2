@@ -32,7 +32,7 @@ Loop 1.4.0 的可修正预检反馈保持原始 call_id 与 name，同批合法�
 
 展示 v2 分别定义 model_output（含有序 text 子块）、thought 和 function_call 的 Gemini 专属类型、白名单投影及 Web 组件，保留 step 与内容的父子顺序。exchange 保留原生 interaction.status。已知 annotations 的安全引用关联原始正文，有效位置显示编号，无位置时显示块级来源。
 
-thought 显示为“推理摘要”，默认折叠；当前面板的手动展开选择在流式更新和终态替换中保留。function_call 只表示原生工具请求，本地工具状态及结果通过持久事件关联。thought 签名和其他私有 continuation 不进入展示；旧原生记录读取时重新投影为展示 v2，不改写历史或改变恢复约束。
+thought 显示为“推理摘要”，默认折叠；当前面板的手动展开选择在流式更新和终态替换中保留。生成中允许空摘要占位；exchange 已返回（含 requires_action、失败、取消和诊断）或投影已提交后，无非空白正文的摘要块隐藏且不可交互，有正文的块继续显示。该规则同时用于对话与轨迹明细，只改变展示，不删除原生 thought 或补造历史摘要。function_call 只表示原生工具请求，本地工具状态及结果通过持久事件关联。thought 签名和其他私有 continuation 不进入展示；旧原生记录读取时重新投影为展示 v2，不改写历史或改变恢复约束。
 
 ## 数据归属、取消与清理
 

@@ -13,12 +13,12 @@ export type { ClaudeAgentServerOptions } from './server-runtime.js'
 
 /** Execution-side registration: index store, SDK adapter, runs and the HTTP adapter, installed when the product is opened. */
 export function claudeAgentServerApplication(config: ClaudeAgentConfig, options: ClaudeAgentServerOptions = {}): ApplicationRegistration {
-  return { capabilityRequirements: { required: { 'storage.sqlite': '^1.0.0' } }, definition: claudeAgentDefinition, http: claudeAgentServerHttp, channel: createClaudeAgentLocalExecutionChannel(), createRuntime: root => createApplicationRuntime(root, installation => {
+  return { capabilityRequirements: { required: { 'storage.sqlite': '^1.0.0' } }, definition: claudeAgentDefinition, http: claudeAgentServerHttp, channel: createClaudeAgentLocalExecutionChannel(), createRuntime: (root, context) => createApplicationRuntime(root, installation => {
     // Stopping the application waits for idle; active Runs refuse the stop until they have exited.
-    installation.effect(() => root.get<ProductActivityPort>(productActivityServiceKey)!.registerGuard(claudeAgentId, () => {
+    installation.effect(() => root.get<ProductActivityPort>(context?.serviceBindings?.[productActivityServiceKey] ?? productActivityServiceKey)!.registerGuard(claudeAgentId, () => {
       const admission = root.get<ClaudeAgentRunAdmissionPort>(claudeAgentRunAdmissionServiceKey)
       return admission ? admission.pauseIfIdle() : () => {}
     }), 'unregister Claude Agent stop protection')
     installClaudeAgentBusiness(root, installation, config, options)
-  }, () => root.get<ClaudeAgentRunAdmissionPort>(claudeAgentRunAdmissionServiceKey)?.closeAdmission()) }
+  }, () => root.get<ClaudeAgentRunAdmissionPort>(claudeAgentRunAdmissionServiceKey)?.closeAdmission(), context?.serviceBindings) }
 }

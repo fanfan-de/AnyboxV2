@@ -1,6 +1,6 @@
 import type { JsonValue } from '@anybox/models'
 import type { PromptSnapshot } from '../prompt/domain.js'
-import type { ProtocolViewBlock, ProtocolViewExchange, ProtocolViewInput, ProtocolNativeState } from '../view/types.js'
+import type { ProtocolViewBlock, ProtocolViewExchange, ProtocolViewInput, ProtocolNativeState, ProtocolTokenUsage } from '../view/types.js'
 import { object, array, string, identity } from './projection-common.js'
 import { projectResponses, reduceResponses, responsesState } from './projection-responses.js'
 import { projectAnthropic, reduceAnthropic, anthropicState } from './projection-anthropic.js'
@@ -94,8 +94,30 @@ export function projectNativeState(protocolId: string, response: unknown, diagno
     default: return undefined
   }
 }
-export function projectNativeExchange(protocolId: string, response: unknown, diagnostic = false): Pick<ProtocolViewExchange, 'blocks' | 'nativeState'> {
-  return { blocks: projectNativeResponse(protocolId, response), nativeState: projectNativeState(protocolId, response, diagnostic) }
+const tokenCount = (value: unknown): number | undefined => Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined
+/** Interpret usage only at the owning protocol boundary. Cache subsets are not added twice. */
+export function projectNativeUsage(protocolId: string, response: unknown): ProtocolTokenUsage | undefined {
+  const usage = object(object(response).usage)
+  let inputTokens: number | undefined, outputTokens: number | undefined
+  if (protocolId === 'responses') {
+    inputTokens = tokenCount(usage.input_tokens); outputTokens = tokenCount(usage.output_tokens)
+  } else if (protocolId === 'chat-completions') {
+    inputTokens = tokenCount(usage.prompt_tokens); outputTokens = tokenCount(usage.completion_tokens)
+  } else if (protocolId === 'gemini-interactions') {
+    inputTokens = tokenCount(usage.total_input_tokens); outputTokens = tokenCount(usage.total_output_tokens)
+  } else if (protocolId === 'anthropic-messages') {
+    const input = tokenCount(usage.input_tokens), read = usage.cache_read_input_tokens === undefined ? 0 : tokenCount(usage.cache_read_input_tokens),
+      created = usage.cache_creation_input_tokens === undefined ? 0 : tokenCount(usage.cache_creation_input_tokens)
+    if (input !== undefined && read !== undefined && created !== undefined) inputTokens = tokenCount(input + read + created)
+    outputTokens = tokenCount(usage.output_tokens)
+  }
+  return inputTokens === undefined && outputTokens === undefined ? undefined : {
+    ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }),
+  }
+}
+export function projectNativeExchange(protocolId: string, response: unknown, diagnostic = false): Pick<ProtocolViewExchange, 'blocks' | 'nativeState' | 'usage'> {
+  const usage = projectNativeUsage(protocolId, response)
+  return { blocks: projectNativeResponse(protocolId, response), nativeState: projectNativeState(protocolId, response, diagnostic), ...(usage ? { usage } : {}) }
 }
 
 function displayLength(block: ProtocolViewBlock): number {
@@ -165,7 +187,7 @@ export function boundProtocolView(exchanges: readonly ProtocolViewExchange[]): r
       if (text !== input.text) clipped = true
       inputs.unshift({ id: identity(input.id), role: input.role, text })
     }
-    result.unshift({ id: identity(exchange.id), ...(inputs.length ? { inputs } : {}), blocks, ...(exchange.nativeState ? { nativeState: exchange.nativeState } : {}) })
+    result.unshift({ id: identity(exchange.id), ...(inputs.length ? { inputs } : {}), blocks, ...(exchange.nativeState ? { nativeState: exchange.nativeState } : {}), ...(exchange.usage ? { usage: exchange.usage } : {}) })
   }
   const bytes = () => Buffer.byteLength(JSON.stringify(result), 'utf8')
   if (bytes() > 48 * 1024 - 512) {
@@ -222,16 +244,28 @@ export function reduceNativeView(protocolId: string, previous: readonly Protocol
 /** Stream state contains only safe display data, never a second native continuation. */
 export function reduceNativeExchange(protocolId: string, previous: ProtocolViewExchange, event: unknown): ProtocolViewExchange {
   const raw = object(event), type = string(raw.type ?? raw.event_type)
-  let state = previous.nativeState
+  let state = previous.nativeState, reportedUsage: ProtocolTokenUsage | undefined
   if (protocolId === 'responses') {
+    if (raw.response !== undefined && type.startsWith('response.')) reportedUsage = projectNativeUsage(protocolId, raw.response)
     if (raw.response !== undefined && type.startsWith('response.')) state = responsesState(raw.response)
     else if (['response.in_progress', 'response.queued', 'response.failed', 'response.cancelled'].includes(type)) state = responsesState({ status: type.slice(9) })
   } else if (protocolId === 'anthropic-messages') {
-    if (type === 'message_start') state = anthropicState(raw.message)
-    if (type === 'message_delta') state = anthropicState(raw.delta)
+    if (type === 'message_start') { state = anthropicState(raw.message); reportedUsage = projectNativeUsage(protocolId, raw.message) }
+    if (type === 'message_delta') {
+      state = anthropicState(raw.delta)
+      reportedUsage = projectNativeUsage(protocolId, { usage: raw.usage })
+      // Input/cache buckets arrive at message_start. A partial delta cannot replace their total.
+      const usage = object(raw.usage)
+      if (previous.usage?.inputTokens !== undefined && reportedUsage?.inputTokens !== undefined &&
+        (usage.cache_read_input_tokens === undefined || usage.cache_creation_input_tokens === undefined)) {
+        reportedUsage = reportedUsage.outputTokens === undefined ? undefined : { outputTokens: reportedUsage.outputTokens }
+      }
+    }
   } else if (protocolId === 'chat-completions') {
+    reportedUsage = projectNativeUsage(protocolId, raw)
     if (array(raw.choices).some(choice => typeof object(choice).finish_reason === 'string')) state = chatState(raw)
   } else if (protocolId === 'gemini-interactions' && type.startsWith('interaction.')) {
+    reportedUsage = projectNativeUsage(protocolId, raw.interaction)
     const native = object(raw.interaction), eventStatus = type === 'interaction.in_progress' ? 'in_progress' : type === 'interaction.requires_action' ? 'requires_action' : undefined
     state = geminiState({ ...native, ...(typeof raw.status === 'string' ? { status: raw.status } : native.status === undefined && eventStatus ? { status: eventStatus } : {}) })
   }
@@ -243,5 +277,7 @@ export function reduceNativeExchange(protocolId: string, previous: ProtocolViewE
   if (state && previous.nativeState?.type === state.type) {
     state = settled(previous.nativeState) && !settled(state) ? previous.nativeState : { ...previous.nativeState, ...state }
   }
-  return { ...previous, blocks: reduceNativeView(protocolId, previous.blocks, event), ...(state ? { nativeState: state } : {}) }
+  // Stream counters are cumulative snapshots, never increments to sum across events or exchanges.
+  const usage = reportedUsage ? { ...previous.usage, ...reportedUsage } : previous.usage
+  return { ...previous, blocks: reduceNativeView(protocolId, previous.blocks, event), ...(state ? { nativeState: state } : {}), ...(usage ? { usage } : {}) }
 }

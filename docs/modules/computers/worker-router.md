@@ -10,7 +10,7 @@
 
 | 方法 | 行为 |
 | --- | --- |
-| `info()` | 按需确认本机 worker 的身份、平台与架构；环境列表查询不调用此方法 |
+| `info()` | 按需确认本机 worker 的身份、平台与架构，以及可选的工具支持清单；环境列表查询不调用此方法 |
 | `claimRun` / `submit` / `get` / `query` | 按 `attachmentId` 路由。远端：同一单元 boot 上已成功的 claim 不重复投递；`get` 附带上次状态让单元在本地等待变化；`query(input, signal?)` 复核附着仍 approved 后投递；目录 scope 与 ceiling 的 canonical 交集由持有文件系统的 worker 统一检查 |
 | `shutdown()` | 只停止自己拥有的本机 worker；远端拨出不提供停止整个 worker 的请求 |
 | `activate({ resource, previousInstance })` | `spec.providerId` 为 `local` 时向本机 worker 取身份；为 `unit` 时按 `resource.computerId = unit:<attachmentId>` 向该单元请求 `info`。校验平台/架构后返回 `providerRef = workerId:bootId`；上一实例属于同一提供方且 workerId 相同、bootId 不同时附带 `previousExited: true`（同一 worker 目录只有一个存活进程，旧 boot 必已退出），让 Computers 在旧实例仍有未释放 pin 时也能换代。不可达返回 `computer-unavailable`，取消返回 `computer-cancelled`。`providerIds` 列出本组合服务的提供方 ID，Computers 按它接受资源 |
@@ -20,6 +20,8 @@
 ## 数据与资源归属
 
 组件没有账本、文件或网络监听；只持有 claim 缓存、`get` 提示、已领取提交及所属 Run 的内存表，以及本代在途请求的中止信号。远端单元的逻辑计算机由 Computer Operations 在声明时以 `unit:<attachmentId>` 保留，规格取附着记录里单元声明的平台与架构；本机 worker 的逻辑计算机仍是 `local`。
+
+环境工具清单通过既有只读环境列表公布：本机读取回环客户端已经收到的 `info.toolManifest` 内存观察，远端读取单元最近一次轮询的 `capabilities.computerTools`。列表不向本路由发送 `info` 或激活请求，不读取 worker 目录，不新增探测循环。支持报告与 `workerId/bootId` 一起投影，旧 worker 缺少清单时为未知；报告不改变路由、工具授权、模型声明或原操作账本。
 
 ## 执行、取消与清理
 

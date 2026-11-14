@@ -25,7 +25,17 @@ export function mountGeminiModelOutput(initial: Extract<GeminiViewBlock, { type:
 }
 export function mountGeminiThought(initial: Extract<GeminiViewBlock, { type: 'gemini.thought' }>, context: NativeBlockContext): MountedNativeBlock {
   const view = mountReasoning(initial.type, '推理摘要', initial.summary, context)
-  return asNativeBlock<typeof initial>({ ...view, update: (value, ctx) => view.update(value.summary, ctx) })
+  const update = (value: typeof initial, ctx: NativeBlockContext) => {
+    const state = ctx.exchange.nativeState
+    const returned = state?.type === 'gemini.state' && (state.diagnostic ||
+      ['completed', 'requires_action', 'incomplete', 'budget_exceeded', 'failed', 'cancelled'].includes(state.status ?? ''))
+    const empty = !value.summary.some(part => part.text.trim())
+    view.element.hidden = empty && (ctx.snapshotStatus === 'committed' || Boolean(returned))
+    view.element.inert = view.element.hidden
+    view.update(value.summary, ctx)
+  }
+  update(initial, context)
+  return asNativeBlock<typeof initial>({ ...view, update })
 }
 export function mountGeminiFunctionCall(initial: Extract<GeminiViewBlock, { type: 'gemini.function_call' }>, context: NativeBlockContext): MountedNativeBlock {
   return asNativeBlock<typeof initial>(mountFunctionRequest(initial.type, initial, context))

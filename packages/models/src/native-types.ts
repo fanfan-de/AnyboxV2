@@ -1,4 +1,4 @@
-import type { DeclaredCapabilities, EffectiveCapabilities, JsonValue, ModelQuery, ProtocolConnection, ProtocolDescriptor, ProtocolOperation, ProviderConnectionInput, RunnableModelSummary } from './types.js';
+import type { DeclaredCapabilities, EffectiveCapabilities, JsonValue, ModelInput, ModelQuery, ProtocolConnection, ProtocolDescriptor, ProtocolOperation, ProviderConnectionInput, RunnableModelSummary } from './types.js';
 
 export type NativeObject = Readonly<Record<string, JsonValue>>;
 export type NativeResponseMode = 'stream' | 'complete';
@@ -56,6 +56,8 @@ export interface NativeModelSnapshot {
   readonly historyScopeEpoch: string;
   readonly parameters: NativeParameters;
   readonly capabilities: EffectiveCapabilities;
+  /** Optional display metadata; it is not part of native restore compatibility. */
+  readonly limits?: ModelInput['limits'];
 }
 export interface NativeRecordDraft {
   readonly id: string;
@@ -136,7 +138,8 @@ export interface NativeProtocol<I extends NativeObject = NativeObject, R extends
   validateProvider(provider: ProviderConnectionInput): void;
   validateParameters(parameters: NativeObject, declared: DeclaredCapabilities): void;
   effectiveCapabilities(declared: DeclaredCapabilities, parameters: NativeObject): EffectiveCapabilities;
-  initialParameters?(outputLimit?: number): NativeObject;
+  /** Produces explicit values for new configurations, respecting the model's declared capabilities. */
+  initialParameters?(outputLimit?: number, declared?: DeclaredCapabilities): NativeObject;
   restore(records: readonly NativeRecordDraft[]): NativeObject;
   prepare(input: { readonly state: NativeObject; readonly intent: I; readonly remoteModelId: string; readonly parameters: NativeObject; readonly capabilities: EffectiveCapabilities; readonly responseMode?: NativeResponseMode }): NativeObject;
   exchange(input: ProtocolConnection & { readonly request: NativeObject; readonly onEvent: (event: E) => void; readonly resources?: NativeResourceResolver; readonly resourceRefs?: readonly NativeImageResourceRef[] }): ProtocolOperation<R>;

@@ -1,6 +1,6 @@
 # harness server 独立部署与多设备连接
 
-[应用模块化分发与按需安装](application-packages-design.md)已确定最小宿主、可选公共能力与具体应用独立安装的方向；SQL 业务存储、设备连接和目录能力按实际消费者选择；客户端服务、harness server 与 Computer worker 继续遵守[独立进程和生命周期约定](runtime-roles-and-distribution.md)。下文记录当前静态目录的 Node 发行和部署步骤；应用包管理、随包无头运行时及三平台服务管理仍待补齐，现有平台限制继续适用。
+[应用模块化分发与按需安装](application-packages-design.md)已确定最小宿主、可选公共能力与具体应用独立安装的方向；SQL 业务存储、设备连接和目录能力按实际消费者选择；客户端服务、harness server 与 Computer worker 继续遵守[运行角色和生命周期约定](runtime-roles-and-distribution.md)。下文记录当前静态目录的 Node 发行和部署步骤；应用包管理、随包无头运行时及三平台服务管理仍待补齐，现有平台限制继续适用。
 
 harness server 是 Anybox Harness 的通用服务端核心，可部署在本地设备或远端服务器。执行端支持 macOS / Linux，要求 Node.js >=22.13.0。命名与客户端边界见 [命名规范](naming.md)。每台设备独立运行一个应用宿主，在同一个根上按 Anybox Harness 打开目标装配内部 Models、Prompt 和 Agent 能力，并独立保存配置、业务数据库与附件目录。本机客户端拥有独立 `client.sqlite` 与系统凭据命名空间，不需要本机 harness server 在线。
 
@@ -18,13 +18,13 @@ D1.2 的最小宿主与完整 `.anybox-app` 构建、离线验证命令见[产�
 npm run web:local
 ```
 
-`web:local` 显式启动本机 harness server 与客户端，打开 Anybox Harness 或 Claude Agent 后，各应用自动建立自己的「本机」连接，无需初始化命令或手工复制令牌。本机默认服务地址 `http://127.0.0.1:3001`，客户端页面 `http://127.0.0.1:3000`。组合启动器只通过继承的私有父子 IPC 转送配对请求，应用各自持有连接和系统 Vault 中的凭据；完整令牌不进入环境变量、日志或浏览器。重启复用原实例、连接及有效凭据，端口改变时更新原连接。配对不自动打开执行端 Agent 或配置模型，仍通过原有运行目标和模型设置显式启用。
+`web:local` 显式启动本机 harness server 与客户端，打开 Anybox Harness 或 Claude Agent 后，各应用自动建立自己的「本机」连接，无需初始化命令或手工复制令牌。本机默认服务地址 `http://127.0.0.1:3001`，客户端页面 `http://127.0.0.1:3000`。客户端与执行端共用一个 Node.js 进程及一个 Nya 根；两侧 HTTP 监听地址保留，本机配对通过进程内私有回调完成，应用各自持有连接和系统 Vault 中的凭据；完整令牌不进入环境变量、日志或浏览器。重启复用原实例、连接及有效凭据，端口改变时更新原连接。配对不自动打开执行端 Agent 或配置模型，仍通过原有运行目标和模型设置显式启用。
 
 系统凭据库锁定或不可用时，客户端仍可打开并显示配对失败，解锁后可在连接管理中重试；不会改用文件或 SQLite 保存令牌。harness server 启动失败时仍保留客户端供管理远端连接。该自动配对仅授予当前组合启动器实际创建的本机执行端，不按环境变量中的地址或实例 ID 接管其他服务。
 
 独立部署的执行端继续先运行 `npm run harness:server:init`，初始化命令只在本次终端输出完整设备令牌；通过工作区「管理连接」填写地址与令牌，配对后仅保存到客户端系统凭据库。执行端已运行时不能再通过初始化命令并发打开同一业务库。
 
-`npm run client` 与 `npm run web` 都只启动客户端，连接远端时无需运行本机 harness server。`npm run harness:server` 单独启动执行端；`npm run computer:worker -- <独立数据目录>` 单独启动 Computer worker。旧 `npm run harness` 和 `npm run harness:init` 保留为服务端兼容别名。显式 `npm run web:local` 才组合启动客户端与 harness server 两个独立子进程；harness server 初始化失败时客户端仍启动。停止组合命令会关闭其启动的两个应用。关闭浏览器或单独客户端服务不会取消任何远端 Run；重新连接通过原实例和幂等键补查。取消 Run 是单独的显式操作，关闭远端进程仅由其宿主负责；Anybox Harness 连接管理通过「启动 Agent」「停止 Agent」显式控制对应设备的执行组件。
+`npm run client` 与 `npm run web` 都只启动客户端，连接远端时无需运行本机 harness server。`npm run harness:server` 单独启动执行端；`npm run computer:worker -- <独立数据目录>` 单独启动 Computer worker。旧 `npm run harness` 和 `npm run harness:init` 保留为服务端兼容别名。显式 `npm run web:local` 将客户端与 harness server 组合在同一进程及根中；配置或监听初始化失败且清理已确认时，客户端仍可启动并连接远端，清理未知则整个启动失败。停止该命令会关闭两侧准入并由唯一根完成资源退出。关闭浏览器或单独客户端服务不会取消任何远端 Run；重新连接通过原实例和幂等键补查。取消 Run 是单独的显式操作，关闭远端进程仅由其宿主负责；Anybox Harness 连接管理通过「启动 Agent」「停止 Agent」显式控制对应设备的执行组件。
 
 共享构建后，开发目录和 Node 发行物均可使用以下入口；分派器只动态加载选中的角色。`--help` 和未知角色不装配任何服务。原角色 main 保留独立调用能力，已有 systemd 与 worker 进程入口无需迁移。
 

@@ -16,6 +16,8 @@ import { hostHttpServiceKey } from '../packages/host/dist/component.js'
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 import { installManagedModels } from './helpers/managed-models.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
+import { localComputerWorkerServiceKey } from '../packages/app-harness/dist/core/computer/worker-port.js'
+import { createComputerToolManifest } from '../packages/app-harness/dist/core/computer/tool-support.js'
 
 const memoryKeys = () => {
   const values = new Map(); let fail = false
@@ -186,6 +188,14 @@ test('owner unit controls retain their application route through the authenticat
     assert.equal(environments.status, 200)
     assert.equal(environments.data.defaultEnvironmentId, 'local:computer')
     assert.deepEqual(environments.data.environments.map(environment => [environment.environmentId, environment.connectionState]), [['local:computer', 'on-demand']])
+    assert.deepEqual(environments.data.environments[0].toolSupport, { state: 'unknown' }, 'HTTP does not invent a tool report before observing a worker')
+    const observer = host.root.get(localComputerWorkerServiceKey), previousObservation = observer.observedInfo
+    const manifest = createComputerToolManifest(['claude-code.Read'])
+    observer.observedInfo = () => ({ workerId: 'observed-worker', bootId: 'observed-boot', platform: process.platform, architecture: process.arch, toolManifest: manifest })
+    try {
+      const reported = await call(gateway.url, environmentsPath)
+      assert.deepEqual(reported.data.environments[0].toolSupport, { state: 'reported', workerId: 'observed-worker', bootId: 'observed-boot', manifest })
+    } finally { observer.observedInfo = previousObservation }
     assert.equal((await call(host.server.url, '/api/v1/apps/agent/computer-environments')).status, 401)
     assert.equal((await call(gateway.url, environmentsPath, {})).status, 404, 'environment listing is read-only')
     assert.equal((await call(gateway.url, environmentsPath + '?unknown=true')).status, 400)

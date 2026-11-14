@@ -6,7 +6,15 @@
 
 执行器 inject worker 独占的 `local-storage`、`tools.bash`、`tools.apply-patch`、`tools.processes`、`tools.files`、`harness.image-assets` 和 [`computer.worker-attachments`](worker-attachments.md)。每个 Run scope 固定工具依赖代及精确 WorkspaceBinding；所有调用传入 binding.path，不读取 Authority 项目目录或 Session 表。worker 自己安装 Bash、补丁、管道进程、文件与图片组件，资源仍由各组件 Effect 持有。内部 `createWorkerExecution` 是闭包适配器，不另注册组件。
 
+四个工具资源组件来自独立 `@anybox/computer-tools` 包；来源参数先经纯 adapter 转换为中立文件/进程操作。`computer-worker-tool-images` 将 `harness.image-assets` 窄适配为 `tools.images`，详见[图片适配](../tools/image-adapter.md)。工具执行只接收必填 workspacePath 与不透明 scope，worker 不再安装只为满足工具依赖的虚假 Projects 组件。
+
 此根支持 Harness 私有原生后端：Windows 工具进程由 Job Object 监督，Unix 使用进程组；Bash、Processes、Files 与图片仍由现有组件持有，不新增平台组件。Windows 目录授权在 canonical 路径检查之上核对真实目录身份，同时保留设备 ceiling 与批准 scope 的交集，junction 与大小写别名不能扩大范围。平台配置、宿主启动边界及分轮验证见[原生平台支持](../../native-platform-support.md)。
+
+## 只读工具支持报告
+
+`info()` 返回稳定 workerId、本次 bootId、平台与架构，并可带 `toolManifest`。清单从本根实际装配的工具执行适配导出，包含 `schemaVersion/revision/tools/constraints`，逐项报告工具 ID、契约版本、定义摘要 `definitionHash` 及执行器 `executor`（`bash/processes/files/apply-patch`），同时公开管道命令、无独立后台作业、非文件系统沙箱、UTF-8 文本和 JPEG/PNG/WebP 静态图片等约束。定义摘要由受信 ToolDefinition 的 JSON 字节计算 SHA-256；清单修订按工具 ID 排序后计算。未升级的 worker 缺少该字段时，调用方将支持状态保留为未知。定义与校验见 [tool-support.ts](../../../packages/app-harness/src/core/computer/tool-support.ts)。
+
+报告只表示该 boot 实现这些契约，不执行命令或探测项目，不证明 Shell/依赖当前就绪，也不授予调用权限。读取报告不创建 Run、操作账本或 WorkspaceBinding。实际工具声明、授权复核、接纳和执行仍走下述原有流程；宿主不加载 worker 提供的任意工具 schema 或代码。环境侧投影与边界见[执行环境管理](environments.md#工具支持清单)。
 
 ## 账本与执行提交
 

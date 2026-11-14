@@ -5,6 +5,7 @@ import { findProtocolToolFact, summarizeToolRequest, parseToolArguments, mountTo
   type ToolRequestView, type ToolSummary, type MountedToolCallDetails } from '../tool-call-view.js'
 import { formatTraceDuration } from '../run-trace.js'
 import type { NativeBlockContext, MountedNativeBlock } from './view.js'
+import { isLibraryToolTrace } from '../client-types.js'
 
 export interface TextPart { readonly id: string; readonly text: string; readonly citations?: readonly ProtocolCitation[] }
 export interface TextMount { readonly element: HTMLElement; update(part: TextPart): void; dispose(): void }
@@ -163,7 +164,7 @@ export function mountFunctionRequest(type: string, initial: FunctionRequest, con
     heading.hidden = ctx.presentation === 'compact'
     const fact = value.requestId ? findProtocolToolFact(ctx.toolContext, ctx.exchange.id, value.requestId, value.name, ctx.toolOccurrence) : undefined
     const parsed = parseToolArguments(value.arguments)
-    const useExecutionArguments = !parsed && fact && fact.name !== 'bash' && fact.name !== 'apply_patch'
+    const useExecutionArguments = !parsed && isLibraryToolTrace(fact)
     const displayedArguments = useExecutionArguments ? JSON.stringify(fact.arguments, null, 2) : value.arguments
     argsSource.hidden = !useExecutionArguments
     argsSource.textContent = useExecutionArguments ? '模型请求的参数展示不完整，以下参数来自执行记录。' : ''

@@ -2,9 +2,10 @@
 import type { FileRef } from './project-files/domain.js'
 import type { Model, Provider, NativeModelSnapshot, ProviderTemplate } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from './run/legacy-snapshot.js'
-import type { ApplyPatchResult } from './tool/apply-patch-types.js'
+import type { ApplyPatchResult } from '@anybox/computer-tools/apply-patch-types'
 import type { ImageRef } from './image/port.js'
 import type { ToolSelectionSnapshot } from './tool/catalog.js'
+import type { ToolEnvironmentSnapshot } from './tool-environments/domain.js'
 import type { UnitAttachment } from './unit/domain.js'
 export type { ImageRef } from './image/port.js'
 /** Attachment facts carry no code or credential material, so the ledger record is its own public view. */
@@ -18,6 +19,7 @@ export interface SessionView {
   readonly agentId: string
   readonly modelId: string | null
   readonly toolSelection: ToolSelectionSnapshot
+  readonly toolEnvironments?: ToolEnvironmentSnapshot
   readonly protocolId: string | null
   readonly historyMode: 'dialogue-v1' | 'native-local-v1'
   readonly archivedAt: string | null
@@ -58,7 +60,7 @@ export interface RunView {
 export type ToolCallView =
   | { readonly id: string; readonly name: 'bash'; readonly command: string }
   | { readonly id: string; readonly name: 'apply_patch'; readonly patch: string; readonly patchTruncated: boolean }
-  | { readonly id: string; readonly name: LibraryToolName; readonly arguments: Readonly<Record<string, import('@anybox/models').JsonValue>> }
+  | { readonly id: string; readonly name: string; readonly arguments: Readonly<Record<string, import('@anybox/models').JsonValue>> }
 export type LibraryToolName = `codex_${string}` | `claude_code_${string}` | `deepseek_harness_${string}`
 export interface ProcessExitView {
   readonly sessionId: number
@@ -82,11 +84,11 @@ export type RunEventView = { readonly seq: number; readonly at: string } & (
       readonly stderr: string; readonly truncated: boolean }
   | { readonly kind: 'tool-observed'; readonly name: 'apply_patch'; readonly requestId: string;
       readonly result: ApplyPatchResult }
-  | { readonly kind: 'tool-observed'; readonly name: LibraryToolName; readonly requestId: string;
+  | { readonly kind: 'tool-observed'; readonly name: string; readonly requestId: string;
       readonly result: import('@anybox/models').JsonValue; readonly images?: readonly ImageRef[] }
   | { readonly kind: 'tool-failed'; readonly name: 'bash' | 'apply_patch'; readonly requestId: string;
       readonly category: string; readonly result?: ApplyPatchResult }
-  | { readonly kind: 'tool-failed'; readonly name: LibraryToolName; readonly requestId: string;
+  | { readonly kind: 'tool-failed'; readonly name: string; readonly requestId: string;
       readonly category: string; readonly result?: import('@anybox/models').JsonValue; readonly images?: readonly ImageRef[] }
 )
 /** Connection recipes are resolved by the trusted host against installed protocols. */

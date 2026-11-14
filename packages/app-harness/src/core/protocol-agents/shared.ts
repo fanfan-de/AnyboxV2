@@ -6,7 +6,7 @@ import type { ToolObservation, ValidatedToolRequest } from '../run/domain.js'
 import type { ProtocolViewExchange, ProtocolViewSnapshot } from '../view/types.js'
 import { boundProtocolView, projectNativeRequest, projectNativeExchange, reduceNativeExchange } from './projection.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
-import type { ToolDefinition } from '../tool/definition.js'
+import type { ToolDefinition } from '@anybox/tool-api'
 import { validateImageBatch } from '../image/limits.js'
 
 export function nativeObject(value: unknown): NativeObject {

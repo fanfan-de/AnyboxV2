@@ -5,7 +5,7 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { once } from 'node:events'
-import { spawnManagedProcess, processRuntimeAvailable } from '../packages/app-harness/dist/core/platform/process-runtime.js'
+import { spawnManagedProcess, processRuntimeAvailable } from '@anybox/computer-tools/platform/process-runtime'
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 function live(pid) {

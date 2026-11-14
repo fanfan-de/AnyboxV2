@@ -75,5 +75,7 @@ export interface ApplicationCapabilityStatus {
 
 /** Immutable selection metadata, not a service locator or permission grant. */
 export interface ApplicationRuntimeContext {
+  /** Trusted same-root installation bindings, supplied by the role composition. */
+  readonly serviceBindings?: Readonly<Record<string, string>>
   readonly capabilities: Readonly<Record<string, string>>
 }

@@ -1,8 +1,9 @@
 import type { JsonValue, NativeModelSnapshot, NativeImageResourceRef } from '@anybox/models'
 import type { FileRef, FileContent } from '../project-files/domain.js'
 import type { ImageRef } from '../image/port.js'
-import type { ToolDefinition } from '../tool/definition.js'
+import type { ToolDefinition } from '@anybox/tool-api'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
+import type { ToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 export type { NativeModelSnapshot } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
@@ -29,6 +30,13 @@ export type NativeInitialization = {
   readonly tools: readonly ToolDefinition[]
   readonly toolContractVersion: 'tool-library-v1'
   readonly toolSelection: ToolSelectionSnapshot
+} | {
+  readonly schemaVersion: 3
+  readonly prompts: readonly PromptSnapshot[]
+  readonly tools: readonly ToolDefinition[]
+  readonly toolContractVersion: 'tool-environments-v1'
+  readonly toolSelection: ToolSelectionSnapshot
+  readonly toolEnvironments: ToolEnvironmentSnapshot
 }
 
 /** The template is applied exactly once before protocol encoding. */
@@ -102,6 +110,7 @@ export interface RunResumeState {
   readonly stage: 'model-pending' | 'response' | 'cleanup' | 'settling'
   readonly protocolCursor?: JsonValue
   readonly batch?: RunResumeBatch
+  /** Durable output accounting only; does not impose a cumulative Run limit. */
   readonly totalToolOutputBytes: number
   readonly conclusion?: ProtocolConclusion
   /** Final exit facts and outcome, fixed before the terminal transaction; records live in the immutable ledger. */

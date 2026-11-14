@@ -17,6 +17,16 @@ test('library tool summaries distinguish provenance while using observed facts a
   assert.equal(summarizeToolRequest(request('deepseek_harness_read')).title, 'DeepSeek Harness · read')
 })
 
+test('environment tool summaries accept arbitrary names and generic records that reuse a legacy display name', () => {
+  for (const name of ['notes_lookup', 'bash', 'apply_patch']) for (const result of [null, false, 0, '', 'a note']) {
+    const fact = { id: 'lookup', name, arguments: { key: 'a' }, state: 'completed', result }
+    const summary = summarizeToolRequest(request(name, '{"key":"a"}'), fact, 'ready', 'completed')
+    assert.equal(summary.success, true)
+    assert.equal(summary.statusLabel, '已完成')
+    assert.equal(summary.attention, false)
+  }
+})
+
 test('library cards summarize observed process exits and actual partial file changes', () => {
   const command = { id: 'exec', name: 'codex_exec_command', arguments: { cmd: 'printf output' }, state: 'failed',
     result: { session_id: 4, output: 'output', exit_code: 7, signal: null, closed: true } }

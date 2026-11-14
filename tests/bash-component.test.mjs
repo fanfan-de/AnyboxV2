@@ -4,23 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { Context } from '@nya/core'
-import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
-import { bashServiceKey, createBashComponent } from '../packages/app-harness/dist/core/tool/bash-component.js'
+import { bashServiceKey, createBashComponent } from '@anybox/computer-tools/bash'
 
 async function fixture(options = {}) {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-bash-')))
   const root = new Context()
-  await root.installComponent({
-    name: 'test-projects',
-    apply(ctx) {
-      ctx.provide(projectServiceKey, {
-        async requireAvailable(id) {
-          if (id !== 'project-1') throw new Error('unknown project')
-          return { id, path: directory, name: 'test', available: true, createdAt: 'now' }
-        },
-      })
-    },
-  })
   await root.installComponent(createBashComponent(options))
   return {
     directory, root, bash: root.get(bashServiceKey),
@@ -50,7 +38,7 @@ test('Bash runs in the selected project with only the chosen host environment', 
   process.env.ANYBOX_BASH_TEST_SECRET = 'private-value'
   try {
     const call = f.bash.execute({
-      projectId: 'project-1',
+      workspacePath: f.directory,
       command: process.platform === 'win32' ? 'printf "PWD=%s\\nHOME=%s\\nSECRET=%s\\n" "$(cygpath -w \"$PWD\")" "$(cygpath -w \"$HOME\")" "${ANYBOX_BASH_TEST_SECRET-unset}"' : 'printf "PWD=%s\\nHOME=%s\\nSECRET=%s\\n" "$PWD" "$HOME" "${ANYBOX_BASH_TEST_SECRET-unset}"',
     })
     const result = await call.result
@@ -70,7 +58,7 @@ test('Bash runs in the selected project with only the chosen host environment', 
 test('Bash returns nonzero exit status and bounds combined output', async () => {
   const f = await fixture({ maxOutputBytes: 6 })
   try {
-    const call = f.bash.execute({ projectId: 'project-1', command: "printf 'abcdef'; printf '1234' >&2; exit 7" })
+    const call = f.bash.execute({ workspacePath: f.directory, command: "printf 'abcdef'; printf '1234' >&2; exit 7" })
     const result = await call.result
     await call.done
     assert.equal(result.exitCode, 7)
@@ -80,14 +68,14 @@ test('Bash returns nonzero exit status and bounds combined output', async () => 
   } finally { await f.close() }
 })
 
-test('Bash rejects invalid commands before execution and unavailable projects with a fixed category', async () => {
+test('Bash rejects invalid commands before execution and unavailable working directories with a fixed category', async () => {
   const f = await fixture()
   try {
-    assert.throws(() => f.bash.execute({ projectId: 'project-1', command: '   ' }),
+    assert.throws(() => f.bash.execute({ workspacePath: f.directory, command: '   ' }),
       error => error.category === 'invalid-request')
-    assert.throws(() => f.bash.execute({ projectId: 'project-1', command: 'printf invalid\0command' }),
+    assert.throws(() => f.bash.execute({ workspacePath: f.directory, command: 'printf invalid\0command' }),
       error => error.category === 'invalid-request')
-    const call = f.bash.execute({ projectId: 'missing', command: 'pwd' })
+    const call = f.bash.execute({ workspacePath: join(f.directory, 'missing'), command: 'pwd' })
     await assert.rejects(call.result, error => error.category === 'unavailable' && !error.message.includes('missing'))
     await call.done
   } finally { await f.close() }
@@ -96,7 +84,7 @@ test('Bash rejects invalid commands before execution and unavailable projects wi
 test('Bash truncates Unicode output on a complete UTF-8 boundary', async () => {
   const f = await fixture({ maxOutputBytes: 5 })
   try {
-    const call = f.bash.execute({ projectId: 'project-1', command: "printf '你你'" })
+    const call = f.bash.execute({ workspacePath: f.directory, command: "printf '你你'" })
     const result = await call.result
     await call.done
     assert.equal(result.stdout, '你')
@@ -109,7 +97,7 @@ test('Bash timeout rejects result before the resistant process has exited', asyn
   const f = await fixture({ timeoutMs: 300, terminationGraceMs: 250 })
   try {
     const call = f.bash.execute({
-      projectId: 'project-1', command: "trap '' TERM; printf ready > started; while :; do sleep 1; done",
+      workspacePath: f.directory, command: "trap '' TERM; printf ready > started; while :; do sleep 1; done",
     })
     await untilFile(join(f.directory, 'started'))
     let exited = false
@@ -125,7 +113,7 @@ test('explicit cancellation and component disposal wait for Bash to exit', async
   const f = await fixture({ terminationGraceMs: 250 })
   try {
     const first = f.bash.execute({
-      projectId: 'project-1', command: "trap '' TERM; printf ready > first-started; while :; do sleep 1; done",
+      workspacePath: f.directory, command: "trap '' TERM; printf ready > first-started; while :; do sleep 1; done",
     })
     await untilFile(join(f.directory, 'first-started'))
     first.cancel('user-requested')
@@ -137,7 +125,7 @@ test('explicit cancellation and component disposal wait for Bash to exit', async
     assert.equal(firstExited, true)
 
     const second = f.bash.execute({
-      projectId: 'project-1', command: "trap '' TERM; printf ready > second-started; while :; do sleep 1; done",
+      workspacePath: f.directory, command: "trap '' TERM; printf ready > second-started; while :; do sleep 1; done",
     })
     await untilFile(join(f.directory, 'second-started'))
     const closing = f.close()
@@ -150,40 +138,11 @@ test('explicit cancellation and component disposal wait for Bash to exit', async
   } finally { await f.close() }
 })
 
-test('disposal waits for an accepted project lookup and never spawns after cancellation', async () => {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-bash-')))
-  const root = new Context()
-  const lookupStarted = deferred()
-  const releaseLookup = deferred()
+test('Bash rejects an unresolved workspace before acquiring process resources', async () => {
+  const f = await fixture()
   try {
-    await root.installComponent({
-      name: 'delayed-projects',
-      apply(ctx) {
-        ctx.provide(projectServiceKey, {
-          async requireAvailable(id) {
-            lookupStarted.resolve()
-            await releaseLookup.promise
-            return { id, path: directory, name: 'test', available: true, createdAt: 'now' }
-          },
-        })
-      },
-    })
-    await root.installComponent(createBashComponent())
-    const bash = root.get(bashServiceKey)
-    const call = bash.execute({ projectId: 'project-1', command: 'printf ran > should-not-exist' })
-    await lookupStarted.promise
-    const closing = root.fiber.dispose()
-    let closed = false
-    void closing.then(() => { closed = true })
-    await assert.rejects(call.result, error => error.category === 'cancelled')
-    assert.equal(closed, false)
-    releaseLookup.resolve()
-    await call.done
-    await closing
-    assert.equal(existsSync(join(directory, 'should-not-exist')), false)
-  } finally {
-    releaseLookup.resolve()
-    await root.fiber.dispose()
-    rmSync(directory, { recursive: true, force: true })
-  }
+    for (const workspacePath of [undefined, '', 'relative', 'bad\0path']) {
+      assert.throws(() => f.bash.execute({ workspacePath, command: 'printf forbidden' }), error => error.category === 'invalid-request')
+    }
+  } finally { await f.close() }
 })

@@ -14,7 +14,7 @@ import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { localStorageServiceKey } from '../packages/storage-sqlite/dist/port.js'
 import { createProjectComponent, projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
-import { applyPatchServiceKey } from '../packages/app-harness/dist/core/tool/apply-patch-component.js'
+import { applyPatchServiceKey } from '@anybox/computer-tools/apply-patch'
 import { controlledModels, modelSnapshot, deferred, ids } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', instructions: 'Use the available tools.', modelId: 'default' }]

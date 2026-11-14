@@ -1,6 +1,6 @@
 # harness server 组件说明
 
-多实例部署已实现，当前目录与 HTTP/客户端边界见 [Anybox Harness 模块边界](harness-module-boundary.md)；独立启动和凭据/恢复见[部署说明](harness-server-deployment.md)。每个执行进程保留以下单根组件关系，客户端使用独立根。
+多实例部署已实现，当前目录与 HTTP/客户端边界见 [Anybox Harness 模块边界](harness-module-boundary.md)；独立启动和凭据/恢复见[部署说明](harness-server-deployment.md)。每个执行进程保留以下单根组件关系，独立客户端部署使用独立根，单机 `web:local` 与执行端共享同一根。
 
 本文以 harness server 的服务端核心为主，附列客户端与通用宿主组件以说明调用和资源边界；它们分别位于各自进程根。本文保留跨组件协作总览；逐个组件的完整说明见 [模块与组件手册](./modules/README.md)，按 Models、执行、Computer 资源、项目与会话、图片、Prompt、工具、存储、Web 和资源验证分目录。新增组件或调整接口、依赖和清理行为时，同步更新相应独立文档。
 
@@ -166,3 +166,7 @@ harness server 在应用根安装 [Project Files](modules/sessions/project-files
 harness server 业务 HTTP/SSE 已归 [harness server HTTP](modules/web/harness-http.md)（harness-http / harness.http）；仅在执行端应用打开时安装。通用注册目录与运行时不是组件，详见[应用宿主设计](products-v1.md)。
 
 工具图片扩展不新增数据库或目录。File Tools 导入原字节，Session 保存工具观察时同事务保留图片，program 在提交后接纳私有读取许可，四种 Loop 在文本工具结果后附加既有用户图片块。工具库和 Run 进程退出关系详见[工具库设计](./tools-library-design.md)。
+
+## 单机共根装配
+
+`distribution/composition/local-web.ts` 只拥有一个根与最终退出。执行端通过 Nya 安装绑定把 `local-storage`、`app.products`、`app.activity` 和 Models 系列服务映射到独立身份；客户端原服务名保留。两侧数据库、应用目标及凭据不合并，Harness 与 Personal Agent 的 Models 可同时运行并独立退出。组件依赖仍通过 inject 和 deps 由 Nya 管理，根上门面通过明确绑定读取本代服务。独立 harness server 继续使用原服务名和相同业务实现。验证见 `tests/local-web-host.test.mjs`。

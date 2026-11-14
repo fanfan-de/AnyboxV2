@@ -1,12 +1,12 @@
 import { isAbsolute } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { Component } from '@nya/core'
-import type { OwnedCall } from '../contracts.js'
-import type { ToolDefinition } from './definition.js'
-import { projectServiceKey } from '../project/component.js'
-import type { ProjectPort } from '../project/component.js'
-import { spawnManagedProcess, type ManagedProcess } from '../platform/process-runtime.js'
-import { prepareShellCommand } from '../platform/shell.js'
+import type { OwnedCall } from '@anybox/tool-api'
+import type { ToolDefinition } from '@anybox/tool-api'
+import { bashToolDefinition } from './contracts/legacy.js'
+export { bashToolDefinition } from './contracts/legacy.js'
+import { spawnManagedProcess, type ManagedProcess } from '@anybox/computer-tools/platform/process-runtime'
+import { prepareShellCommand, type ShellRuntimeOptions } from './platform/shell.js'
 
 export const bashServiceKey = 'tools.bash'
 
@@ -20,20 +20,9 @@ export interface BashResult {
 
 export interface BashPort {
   readonly definition: ToolDefinition
-  /** A trusted workspacePath fixes cwd; omission retains the project lookup compatibility path. */
-  execute(input: { readonly projectId: string; readonly command: string; readonly workspacePath?: string }): OwnedCall<BashResult>
+  /** A trusted workspacePath fixes cwd; the caller resolves its workspace before tool admission. */
+  execute(input: { readonly command: string; readonly workspacePath: string }): OwnedCall<BashResult>
 }
-
-export const bashToolDefinition: ToolDefinition = Object.freeze({
-  name: 'bash',
-  description: 'Run a Bash command in the current project directory. The command has the application user\'s filesystem and network access.',
-  parameters: Object.freeze({
-    type: 'object',
-    properties: Object.freeze({ command: Object.freeze({ type: 'string', description: 'Bash command to execute' }) }),
-    required: Object.freeze(['command']),
-    additionalProperties: false,
-  }),
-})
 
 export type BashFailureCategory = 'invalid-request' | 'unavailable' | 'timeout' | 'cancelled' | 'cleanup-failure'
 
@@ -51,6 +40,7 @@ export class BashFailure extends Error {
 }
 
 export interface BashOptions {
+  readonly shell?: ShellRuntimeOptions
   readonly timeoutMs?: number
   readonly maxOutputBytes?: number
   readonly terminationGraceMs?: number
@@ -64,27 +54,21 @@ function positiveInteger(value: number | undefined, fallback: number, name: stri
   return chosen
 }
 
-function validateInput(input: { readonly projectId: string; readonly command: string; readonly workspacePath?: string }): void {
-  if (!input || typeof input.projectId !== 'string' || !input.projectId.trim() ||
-    typeof input.command !== 'string' || !input.command.trim() ||
-    input.command.includes('\0') || input.workspacePath !== undefined &&
-      (typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0'))) {
+function validateInput(input: { readonly command: string; readonly workspacePath: string }): void {
+  if (!input || typeof input.command !== 'string' || !input.command.trim() ||
+    input.command.includes('\0') || typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0')) {
     throw new BashFailure('invalid-request')
   }
 }
 
-/** Owns one local Bash process per call. Its cwd is a project identity, not a filesystem sandbox. */
-export function createBashComponent(options: BashOptions = {}): Component.Object<void, {
-  [projectServiceKey]: ProjectPort
-}> {
+/** Owns one local Bash process per call. The trusted cwd is a relative-path base, not a filesystem sandbox. */
+export function createBashComponent(options: BashOptions = {}): Component.Object<void> {
   const timeoutMs = positiveInteger(options.timeoutMs, 120_000, 'timeoutMs')
   const maxOutputBytes = positiveInteger(options.maxOutputBytes, 65_536, 'maxOutputBytes')
   const terminationGraceMs = positiveInteger(options.terminationGraceMs, 5_000, 'terminationGraceMs')
   return {
     name: 'bash-tool',
-    inject: [projectServiceKey],
-    apply(ctx, _config, deps) {
-      const projects = deps[projectServiceKey]
+    apply(ctx) {
       const active = new Set<OwnedCall<BashResult>>()
       const failures = new Set<unknown>()
       let accepting = true
@@ -124,12 +108,10 @@ export function createBashComponent(options: BashOptions = {}): Component.Object
           }
 
           const operation = (async (): Promise<BashResult> => {
-            let path: string
-            try { path = workspacePath ?? (await projects.requireAvailable(input.projectId)).path }
-            catch { throw new BashFailure('unavailable') }
+            const path = workspacePath
             if (interrupted) throw interrupted
             try {
-              child = spawnManagedProcess({ ...prepareShellCommand({ command: input.command, bash: true, login: false }), cwd: path, stdin: 'ignore', terminationGraceMs })
+              child = spawnManagedProcess({ ...prepareShellCommand({ command: input.command, bash: true, login: false }, options.shell), cwd: path, stdin: 'ignore', terminationGraceMs })
             } catch { throw new BashFailure('unavailable') }
             const stdout: string[] = [], stderr: string[] = []
             const outputDecoder = new StringDecoder('utf8'), errorDecoder = new StringDecoder('utf8')

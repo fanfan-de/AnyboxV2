@@ -1,15 +1,15 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { listTools, createToolSelection, validateToolSelection, validateLibraryArguments, defaultToolIds, legacyToolSelection } from '../packages/app-harness/dist/core/tool/catalog.js'
-import { bashToolDefinition } from '../packages/app-harness/dist/core/tool/bash-component.js'
-import { applyPatchToolDefinition } from '../packages/app-harness/dist/core/tool/apply-patch-component.js'
+import { listTools, getToolById, createToolSelection, validateToolSelection, validateLibraryArguments, defaultToolIds, legacyToolSelection } from '../packages/app-harness/dist/core/tool/catalog.js'
+import { bashToolDefinition } from '@anybox/computer-tools/bash'
+import { applyPatchToolDefinition } from '@anybox/computer-tools/apply-patch'
 
 test('the built-in catalog has distinct versioned source contracts and the recommended mixed subset', () => {
   const tools = listTools()
-  assert.equal(tools.length, 22)
-  assert.equal(new Set(tools.map(tool => tool.toolId)).size, 22)
-  assert.equal(new Set(tools.map(tool => tool.definition.name)).size, 22)
-  assert.equal(defaultToolIds.length, 10)
+  assert.equal(tools.length, 19)
+  assert.equal(new Set(tools.map(tool => tool.toolId)).size, 19)
+  assert.equal(new Set(tools.map(tool => tool.definition.name)).size, 19)
+  assert.equal(defaultToolIds.length, 9)
   assert.ok(defaultToolIds.includes('codex.view_image'))
   assert.ok(tools.every(tool => tool.source.harnessId && tool.source.referenceUrl && tool.scope && tool.adaptation))
   const chosen = createToolSelection(['deepseek-harness.edit', 'claude-code.Grep', 'anybox.bash'])
@@ -55,7 +55,20 @@ test('source schemas reject unsupported modes and retain their own argument shap
   assert.throws(() => validateLibraryArguments('deepseek_harness_grep', { pattern: 'x', include: '*.ts,*.js' }))
 })
 
-test('plan and todo contracts reject multiple active entries and preserve source-specific fields', () => {
+test('retired planning contracts are excluded from new selections while exact historical snapshots remain valid', () => {
+  const retired = ['codex.update_plan', 'claude-code.TodoWrite', 'deepseek-harness.todo_write']
+  const historical = { schemaVersion: 1, tools: retired.map(toolId => {
+    const tool = getToolById(toolId)
+    assert.equal(tool.selectable, false)
+    assert.equal(listTools().some(candidate => candidate.toolId === toolId), false)
+    assert.equal(defaultToolIds.includes(toolId), false)
+    assert.throws(() => createToolSelection([toolId]), /unknown or retired/)
+    return { toolId, version: tool.version, definition: structuredClone(tool.definition) }
+  }) }
+  assert.deepEqual(validateToolSelection(historical), historical)
+  const changed = structuredClone(historical)
+  changed.tools[0].definition.parameters.additionalProperties = true
+  assert.throws(() => validateToolSelection(changed))
   const todo = { todos: [{ content: 'Read file', status: 'in_progress' }] }
   assert.deepEqual(validateLibraryArguments('deepseek_harness_todo_write', todo), todo)
   assert.throws(() => validateLibraryArguments('claude_code_TodoWrite', todo))

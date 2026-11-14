@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "lifecycleVersion": 1,
   "appId": "agent",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "anybox",
   "displayName": "Anybox Harness",
   "applicationApi": "^0.1.0",

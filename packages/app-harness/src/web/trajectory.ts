@@ -1,8 +1,8 @@
 import type { RunEventView, RunView, ToolTrace } from './client-types.js'
+import { isBashTrace, isApplyPatchTrace } from './client-types.js'
 import type { NativeToolRequest, ProtocolViewBlock, ProtocolViewExchange, ProtocolViewSnapshot } from '../core/view/types.js'
 import { runTrace, traceElapsed, type RunTraceStep, type ToolTraceStep } from './run-trace.js'
 import { toolContextReadiness, toolDisplayName } from './tool-call-view.js'
-import type { LibraryToolName } from '../core/api.js'
 import type { JsonValue } from '@anybox/models'
 
 export type TrajectoryRole = 'system' | 'user' | 'context' | 'assistant' | 'tool' | 'status'
@@ -64,9 +64,9 @@ function exchangeProjection(view: ProtocolViewSnapshot, exchange: ProtocolViewEx
 }
 function toolOutput(call: ToolTrace): string {
   const failure = call.category ? `失败类别：${call.category}` : ''
-  if (call.name === 'apply_patch') return [call.result ? JSON.stringify(call.result, null, 2) : '', failure,
+  if (isApplyPatchTrace(call)) return [call.result ? JSON.stringify(call.result, null, 2) : '', failure,
     call.patchTruncated ? '补丁预览已截断' : ''].filter(Boolean).join('\n\n')
-  if (call.name !== 'bash') return [call.result === undefined ? '' : typeof call.result === 'string' ? call.result : JSON.stringify(call.result, null, 2), failure].filter(Boolean).join('\n\n')
+  if (!isBashTrace(call)) return [call.result === undefined ? '' : typeof call.result === 'string' && call.result.length ? call.result : JSON.stringify(call.result, null, 2), failure].filter(Boolean).join('\n\n')
   return [typeof call.exitCode === 'number' ? `退出码：${call.exitCode}` : '', call.signal ? `信号：${call.signal}` : '',
     call.stdout ? `stdout\n${call.stdout}` : '', call.stderr ? `stderr\n${call.stderr}` : '', failure,
     call.truncated ? '输出摘要已截断' : ''].filter(Boolean).join('\n\n')
@@ -90,19 +90,19 @@ function localRequest(block: ProtocolViewBlock): NativeToolRequest | undefined {
     'arguments' in block ? block : undefined
 }
 function requestedTool(block: NativeToolRequest): ToolTrace | undefined {
-  if (!block.requestId || !/^(bash$|apply_patch$|codex_|claude_code_|deepseek_harness_)/.test(block.name)) return undefined
+  if (!block.requestId || !block.name.trim()) return undefined
   let args: Record<string, unknown> = {}
   try {
     const value: unknown = JSON.parse(block.arguments)
     if (value && typeof value === 'object' && !Array.isArray(value)) args = value as Record<string, unknown>
   } catch { /* Partial streaming arguments remain a display request, never an execution fact. */ }
-  return block.name === 'bash'
-    ? { id: block.requestId, name: 'bash', command: typeof args.command === 'string' ? args.command : block.arguments, state: 'queued' }
-    : block.name === 'apply_patch'
-      ? { id: block.requestId, name: 'apply_patch', patch: typeof args.patch === 'string' ? args.patch : block.arguments, patchTruncated: false, state: 'queued' }
-      : { id: block.requestId, name: block.name as LibraryToolName, arguments: args as Record<string, JsonValue>, state: 'queued' }
+  return block.name === 'bash' && typeof args.command === 'string'
+    ? { id: block.requestId, name: 'bash', command: args.command, state: 'queued' }
+    : block.name === 'apply_patch' && typeof args.patch === 'string'
+      ? { id: block.requestId, name: 'apply_patch', patch: args.patch, patchTruncated: false, state: 'queued' }
+      : { id: block.requestId, name: block.name, arguments: args as Record<string, JsonValue>, state: 'queued' }
 }
-function toolInput(call: ToolTrace): string { return call.name === 'bash' ? call.command : call.name === 'apply_patch' ? call.patch : JSON.stringify(call.arguments, null, 2) }
+function toolInput(call: ToolTrace): string { return isBashTrace(call) ? call.command : isApplyPatchTrace(call) ? call.patch : JSON.stringify(call.arguments, null, 2) }
 function blockText(block: ProtocolViewBlock, preview = false): string {
   switch (block.type) {
     case 'responses.message': return block.content.filter(part => !preview || part.type === 'output_text').map(part => part.text).join('\n\n')

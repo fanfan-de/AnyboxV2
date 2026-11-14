@@ -21,9 +21,10 @@ import { computerOperationsServiceKey } from '../computer/operations-port.js'
 import type { ComputerOperationsPort } from '../computer/operations-port.js'
 import { unitAttachmentsServiceKey } from '../unit/port.js'
 import type { UnitAttachmentsPort } from '../unit/port.js'
+import type { ToolEnvironmentRegistry } from '../tool-environments/port.js'
 
 /** One owner for every Session's conversation and execution records; execution resources stay in RunRuntime. */
-export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[]): Component.Object<void, {
+export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], environments?: ToolEnvironmentRegistry): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
   [projectServiceKey]: ProjectPort
   [imageAssetsServiceKey]: ImageAssetsPort
@@ -40,7 +41,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         const change = Object.freeze({ sessionId: run.sessionId, runId: run.id, revision: run.revision })
         try { await ctx.parallel(runChangedEvent, change) }
         catch { ctx.logger.warn('Run change notification failed after commit', change) }
-      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey])
+      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey], environments)
       let accepting = true
       const pending = new Set<Promise<unknown>>()
       const resourceCalls = new Set<OwnedCall<unknown>>()
@@ -174,7 +175,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
             const agent = requireAgent(agentId)
             const modelId = requestedModelId === undefined ? undefined : nonEmpty(requestedModelId, 'modelId')
             await projects.requireAvailable(nonEmpty(projectId, 'projectId'))
-            return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.modelId ?? null)
+            return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.modelId ?? null, agent.environmentIds)
           })
         },
         selectSessionModel(sessionId, rawModelId, protocolId) {

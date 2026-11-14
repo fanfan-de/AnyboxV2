@@ -9,6 +9,7 @@ import { createModelsComponent, createModelsStoreComponent, createModelsVaultCom
   createResponsesProtocol, createChatCompletionsProtocol, createAnthropicMessagesProtocol, createGeminiInteractionsProtocol } from '@anybox/models'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
+import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { nodeCommand } from './helpers/native-shell.mjs'
 
@@ -75,7 +76,8 @@ function assertRejectedResults(protocol, request, ids) {
   for (const result of results) {
     assert.equal(result.value.error.code, 'invalid-tool-request')
     assert.equal(result.value.error.executed, false)
-    assert.ok(result.value.error.availableTools.includes('codex_update_plan'))
+    assert.ok(result.value.error.availableTools.includes('claude_code_Read'))
+    assert.equal(result.value.error.availableTools.includes('codex_update_plan'), false)
   }
   return results
 }
@@ -83,16 +85,17 @@ function assertRejectedResults(protocol, request, ids) {
 for (const protocol of Object.keys(factories)) for (const invalid of ['unknown name', 'invalid arguments'])
   test(`${protocol}: ${invalid} receives native feedback and a corrected declared tool executes without aliases`, { timeout: 15_000 }, async () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-correction-')))
-    const bad = invalid === 'unknown name' ? call('rejected-call', 'update_plan', { plan: [{ step: 'Inspect the project', status: 'in_progress' }] })
+    writeFileSync(join(directory, 'inspect.txt'), 'Inspect the project\n')
+    const bad = invalid === 'unknown name' ? call('rejected-call', 'read_file', { file_path: 'inspect.txt' })
       : call('rejected-call', 'claude_code_Write', { path: 'corrected.txt', content: 'corrected content' })
-    const good = invalid === 'unknown name' ? call('corrected-call', 'codex_update_plan', bad.arguments)
+    const good = invalid === 'unknown name' ? call('corrected-call', 'claude_code_Read', bad.arguments)
       : call('corrected-call', 'claude_code_Write', { file_path: 'corrected.txt', content: 'corrected content' })
     const state = { secrets: new Map(), requests: [], responses: [response(protocol, [bad]), request => {
       const [rejected] = assertRejectedResults(protocol, request, ['rejected-call'])
       assert.equal(rejected.value.error.reason, invalid === 'unknown name' ? 'unknown-tool' : 'invalid-arguments')
       if (invalid === 'invalid arguments') assert.equal(rejected.value.error.schema.properties.file_path.type, 'string')
       assert.equal(existsSync(join(directory, 'corrected.txt')), false)
-      assert.match(JSON.stringify(request), /codex_update_plan/)
+      assert.match(JSON.stringify(request), /claude_code_Read/)
       return response(protocol, [good])
     }, request => {
       assert.equal(nativeToolResults(protocol, request).at(-1).id, 'corrected-call')
@@ -132,7 +135,7 @@ for (const protocol of Object.keys(factories)) test(`${protocol}: the fourth rej
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-correction-bound-')))
   const state = { secrets: new Map(), requests: [], responses: Array.from({ length: 4 }, (_, index) => request => {
     if (index) assertRejectedResults(protocol, request, [`rejected-${index - 1}`])
-    return response(protocol, [call(`rejected-${index}`, 'update_plan', { plan: [] })])
+    return response(protocol, [call(`rejected-${index}`, 'read_file', { file_path: 'inspect.txt' })])
   }) }
   const f = await open(directory, protocol, state)
   try {
@@ -147,14 +150,65 @@ for (const protocol of Object.keys(factories)) test(`${protocol}: the fourth rej
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
+for (const protocol of Object.keys(factories)) test(`${protocol}: retired planning tools reject new calls but historical Session snapshots still execute and reload`, { timeout: 15_000 }, async () => {
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-retired-tools-')))
+  const calls = [
+    call('old-plan', 'codex_update_plan', { plan: [{ step: 'Inspect', status: 'in_progress' }], explanation: 'Continue the original Session' }),
+    call('old-claude-todo', 'claude_code_TodoWrite', { todos: [{ content: 'Verify', status: 'pending', activeForm: 'Verifying' }] }),
+    call('old-deepseek-todo', 'deepseek_harness_todo_write', { todos: [{ content: 'Finish', status: 'completed' }] }),
+  ]
+  const state = { secrets: new Map(), requests: [], responses: [response(protocol, calls), request => {
+    const rejected = assertRejectedResults(protocol, request, calls.map(call => call.id))
+    assert.ok(rejected.every(result => result.value.error.reason === 'unknown-tool'))
+    return response(protocol, [], 'Retired tools were not executed')
+  }] }
+  let f = await open(directory, protocol, state)
+  try {
+    const current = await f.harness.createSession(f.project.id, 'assistant')
+    const rejected = await start(f, current)
+    assert.equal(rejected.status, 'completed', JSON.stringify(rejected))
+    assert.equal((await f.harness.getRunEvents(rejected.id)).some(event => event.kind === 'tool-started'), false)
+    const toolSelection = { schemaVersion: 1, tools: ['codex.update_plan', 'claude-code.TodoWrite', 'deepseek-harness.todo_write'].map(toolId => {
+      const tool = getToolById(toolId)
+      return { toolId, version: tool.version, definition: tool.definition }
+    }) }
+    await f.root.get('local-storage').transaction(tx => tx.execute(`INSERT INTO harness_sessions
+      (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ['historical-session', f.project.id, 'assistant', 'now', 'default', 'native-local-v1', JSON.stringify(toolSelection)]))
+    const historical = await f.harness.getSession('historical-session')
+    state.responses.push(response(protocol, calls), request => {
+      const results = nativeToolResults(protocol, request).slice(-calls.length)
+      assert.deepEqual(results.map(result => result.id), calls.map(call => call.id))
+      assert.deepEqual(results.map(result => result.value), [
+        { status: 'updated', plan: calls[0].arguments.plan, explanation: calls[0].arguments.explanation },
+        { status: 'updated', todos: calls[1].arguments.todos },
+        { status: 'updated', todos: calls[2].arguments.todos },
+      ])
+      return response(protocol, [], 'Original tools completed')
+    })
+    const finished = await start(f, historical)
+    assert.equal(finished.status, 'completed', JSON.stringify(finished))
+    assert.deepEqual((await f.harness.getRunEvents(finished.id)).filter(event => event.kind === 'tool-observed').map(event => event.name), calls.map(call => call.name))
+    const records = await f.harness.getRunRecords(finished.id)
+    await f.close(); f = await open(directory, protocol, state)
+    state.responses.push(response(protocol, [], 'Historical Session continued'))
+    const continued = await start(f, historical, finished.resultNodeId, 'after-restart')
+    assert.equal(continued.status, 'completed', JSON.stringify(continued))
+    assert.deepEqual((await f.harness.getSession(historical.id)).toolSelection, toolSelection)
+    assert.deepEqual(await f.harness.getRunRecords(finished.id), records)
+    assert.deepEqual((await f.harness.getRunEvents(finished.id)).filter(event => event.kind === 'tool-observed').map(event => event.name), calls.map(call => call.name))
+  } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
 for (const protocol of Object.keys(factories)) test(`${protocol}: successful tools do not reset the per-Run tool correction budget`, { timeout: 15_000 }, async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-correction-total-')))
+  writeFileSync(join(directory, 'inspect.txt'), 'Inspect the project\n')
   const responses = []
   for (let index = 0; index < 4; index++) {
-    responses.push(response(protocol, [call(`rejected-${index}`, 'update_plan', { plan: [] })]))
+    responses.push(response(protocol, [call(`rejected-${index}`, 'read_file', { file_path: 'inspect.txt' })]))
     if (index < 3) responses.push(request => {
       assertRejectedResults(protocol, request, [`rejected-${index}`])
-      return response(protocol, [call(`corrected-${index}`, 'codex_update_plan', { plan: [{ step: `Corrected step ${index}`, status: 'completed' }] })])
+      return response(protocol, [call(`corrected-${index}`, 'claude_code_Read', { file_path: 'inspect.txt' })])
     })
   }
   const state = { secrets: new Map(), requests: [], responses }, f = await open(directory, protocol, state)
@@ -171,7 +225,7 @@ for (const protocol of Object.keys(factories)) test(`${protocol}: successful too
 for (const protocol of Object.keys(factories)) for (const identity of ['duplicate', 'overlong'])
   test(`${protocol}: ${identity} tool identities remain fatal before correction or side effects`, { timeout: 15_000 }, async () => {
     const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-tool-identity-')))
-    const calls = identity === 'duplicate' ? [call('same', 'claude_code_Write', { file_path: 'never.txt', content: 'never' }), call('same', 'codex_update_plan', { plan: [] })]
+    const calls = identity === 'duplicate' ? [call('same', 'claude_code_Write', { file_path: 'never.txt', content: 'never' }), call('same', 'claude_code_Read', { file_path: 'never.txt' })]
       : [call('x'.repeat(257), 'claude_code_Write', { file_path: 'never.txt', content: 'never' })]
     const state = { secrets: new Map(), requests: [], responses: [response(protocol, calls), response(protocol, [])] }
     const f = await open(directory, protocol, state)
@@ -243,12 +297,11 @@ for (const protocol of Object.keys(factories)) for (const imageInput of [true, f
   try {
     const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#336699' } }).png().toBuffer()
     writeFileSync(join(directory, 'image.png'), png)
-    const toolIds = ['codex.exec_command', 'codex.write_stdin', 'codex.update_plan', 'claude-code.Write', 'deepseek-harness.read', 'codex.view_image']
+    const toolIds = ['codex.exec_command', 'codex.write_stdin', 'claude-code.Write', 'deepseek-harness.read', 'codex.view_image']
     await f.harness.setAgentTools('assistant', { toolIds, expectedRevision: 0 })
     const session = await f.harness.createSession(f.project.id, 'assistant')
     state.responses.push(response(protocol, [
       call('exec', 'codex_exec_command', { cmd: nodeCommand("process.stdout.write('ready'); process.stdin.once('data', bytes => { process.stdout.write(bytes.toString().trim()); process.exit(0) });"), yield_time_ms: 0 }),
-      call('plan', 'codex_update_plan', { plan: [{ step: 'inspect', status: 'in_progress' }] }),
       call('write', 'claude_code_Write', { file_path: 'new.txt', content: 'cross-source text\n' }),
       call('read', 'deepseek_harness_read', { file_path: 'new.txt' }),
       call('image', 'codex_view_image', { path: 'image.png' }),
@@ -266,7 +319,7 @@ for (const protocol of Object.keys(factories)) for (const imageInput of [true, f
     assert.equal(readFileSync(join(directory, 'new.txt'), 'utf8'), 'cross-source text\n')
     const events = await f.harness.getRunEvents(first.id)
     assert.deepEqual(events.filter(event => event.kind === 'tool-observed').map(event => event.name),
-      ['codex_exec_command', 'codex_update_plan', 'claude_code_Write', 'deepseek_harness_read', 'codex_view_image', 'codex_write_stdin'])
+      ['codex_exec_command', 'claude_code_Write', 'deepseek_harness_read', 'codex_view_image', 'codex_write_stdin'])
     const records = await f.harness.getRunRecords(first.id)
     const encoded = JSON.stringify(records)
     assert.doesNotMatch(encoded, new RegExp(png.toString('base64')))
@@ -316,7 +369,7 @@ for (const protocol of Object.keys(factories)) test(`${protocol}: unselected too
   const f = await open(directory, protocol, state)
   try {
     const session = await f.harness.createSession(f.project.id, 'assistant')
-    assert.equal(session.toolSelection.tools.length, 10)
+    assert.equal(session.toolSelection.tools.length, 9)
     const finished = await start(f, session)
     assert.equal(finished.status, 'completed', JSON.stringify(finished))
     assert.equal(state.requests.length, 2)

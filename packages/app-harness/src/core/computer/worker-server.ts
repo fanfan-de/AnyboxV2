@@ -6,12 +6,13 @@ import { randomUUID } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '@anybox/storage-sqlite/sqlite'
-import { projectServiceKey, type ProjectPort } from '../project/component.js'
-import { createBashComponent } from '../tool/bash-component.js'
-import { createApplyPatchComponent } from '../tool/apply-patch-component.js'
-import { createProcessToolsComponent } from '../tool/process-component.js'
-import { createFileToolsComponent } from '../tool/files-component.js'
+import { createBashComponent } from '@anybox/computer-tools/bash'
+import { createApplyPatchComponent } from '@anybox/computer-tools/apply-patch'
+import { createProcessToolsComponent } from '@anybox/computer-tools/processes'
+import { createFileToolsComponent } from '@anybox/computer-tools/files'
+import { toolImagesServiceKey, type ToolImagesPort } from '@anybox/computer-tools/images'
 import { createImageAssetsComponent } from '../image/component.js'
+import { imageAssetsServiceKey, type ImageAssetsPort } from '../image/port.js'
 import { createComputerWorkerExecutorComponent } from './worker-component.js'
 import { createWorkerAttachmentsComponent } from './worker-attachments.js'
 import type { WorkerAttachmentsOptions } from './worker-attachments.js'
@@ -20,7 +21,8 @@ import type { WorkerDialoutOptions, WorkerDialoutPort } from './worker-dialout.j
 import { computerWorkerServiceKey, workerError } from './worker-port.js'
 import type { ComputerWorkerPort, WorkerAuthorization, WorkerSubmission } from './worker-port.js'
 import { ensurePrivateDirectory } from '../platform/private-directory.js'
-import { processRuntimeAvailable } from '../platform/process-runtime.js'
+import { resolveRuntimeDirectory } from '../platform/runtime-path.js'
+import { processRuntimeAvailable } from '@anybox/computer-tools/platform/process-runtime'
 
 export interface WorkerEndpoint { readonly url: string; readonly token: string; readonly pid: number; readonly workerId: string; readonly bootId: string }
 export interface OpenComputerWorkerOptions {
@@ -28,14 +30,6 @@ export interface OpenComputerWorkerOptions {
   readonly credentialNamespace?: string
   readonly openEntry?: WorkerAttachmentsOptions['openEntry']
   readonly dialout?: WorkerDialoutOptions
-}
-const missing = async (): Promise<never> => { throw workerError('worker-fixed-binding-required') }
-/** Tools get a root service for their compatibility dependency, but worker requests must carry a fixed path. */
-function trustedProjectBindings(): ProjectPort {
-  return { directoryBrowsingSupported: false, directoryCreationSupported: false, localDirectorySelectionSupported: false, getIn: () => undefined,
-    openDirectoryBrowse: () => { throw workerError('worker-fixed-binding-required') }, readDirectoryPage: () => { throw workerError('worker-fixed-binding-required') },
-    createDirectory: () => { throw workerError('worker-fixed-binding-required') }, closeDirectoryBrowse: missing,
-    onDirectoryBrowseRetired: () => () => {}, openProject: missing, listProjects: missing, getProject: missing, requireAvailable: missing }
 }
 function authentic(given: string | undefined, token: string): boolean {
   if (!given) return false
@@ -81,11 +75,16 @@ export async function openComputerWorker(directory: string, options: OpenCompute
       workerId = randomUUID(); await writeFile(join(path, 'worker-id'), workerId, { flag: 'wx', mode: 0o600 })
     }
     const bootId = randomUUID()
-    await root.installComponent({ name: 'computer-worker-project-bindings', apply(ctx) { ctx.provide(projectServiceKey, trustedProjectBindings()) } })
     await root.installComponent(createImageAssetsComponent({ directory: join(path, 'images') }))
-    await root.installComponent(createBashComponent())
+    await root.installComponent({ name: 'computer-worker-tool-images', inject: [imageAssetsServiceKey],
+      apply(ctx, _config, deps: { [imageAssetsServiceKey]: ImageAssetsPort }) {
+        const service: ToolImagesPort = { importImage: (input, signal) => deps[imageAssetsServiceKey].importImage(input, signal) }
+        ctx.provide(toolImagesServiceKey, service)
+      } })
+    const shell = { runtimeDirectory: resolveRuntimeDirectory() }
+    await root.installComponent(createBashComponent({ shell }))
     await root.installComponent(createApplyPatchComponent())
-    await root.installComponent(createProcessToolsComponent())
+    await root.installComponent(createProcessToolsComponent({ shell }))
     await root.installComponent(createFileToolsComponent())
     await root.installComponent(createWorkerAttachmentsComponent({ namespace: options.credentialNamespace, openEntry: options.openEntry }))
     await root.installComponent(createComputerWorkerExecutorComponent({ workerId, bootId }))

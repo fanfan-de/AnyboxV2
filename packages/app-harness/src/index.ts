@@ -8,3 +8,5 @@ export { createStandaloneHarnessServer } from './server.js'
 export type { StandaloneHarnessServerOptions } from './server.js'
 export { createHarnessServerAccessComponent, harnessServerAccessServiceKey } from './server-access.js'
 export type { HarnessServerAccessPort } from './server-access.js'
+export type { ToolEnvironment, ToolEnvironmentScope, ToolEnvironmentRequest, ToolEnvironmentResult,
+  ToolEnvironmentScopeContext, ToolDescriptor, ToolCall } from '@anybox/tool-api'

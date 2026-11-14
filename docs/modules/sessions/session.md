@@ -7,7 +7,7 @@ Session 是会话、新会话初始化默认值、不可变对话节点、Run �
 ## 实现与装配
 
 - 源码：[组件](../../../packages/app-harness/src/core/session/component.ts)、[完整端口](../../../packages/app-harness/src/core/session/port.ts)、[领域值与路径校验](../../../packages/app-harness/src/core/session/domain.ts)、[SQLite 记录实现](../../../packages/app-harness/src/core/session/sqlite-records.ts)、[Run 事件读写](../../../packages/app-harness/src/core/run/execution.ts)。
-- 工厂：`createSessionComponent(inputs, agents)`；组件名：`harness-sessions`；配置类型：`void`。
+- 工厂：`createSessionComponent(inputs, agents, environments?)`；组件名：`harness-sessions`；配置类型：`void`。正式组合根传入与 Run 共用的受信环境注册表。
 - `inputs` 注入 now/newId；`agents` 是组合根启动时校验的只读定义，用于创建校验与默认模型。
 - 注入 `local-storage`、`harness.projects`、`harness.image-assets`、`harness.project-files` 和 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`；提供 `harness.sessions: SessionPort` 与 `harness.session-runs: SessionRunPort`。服务名称不构成访问权限边界。
 
@@ -17,7 +17,7 @@ Session 是会话、新会话初始化默认值、不可变对话节点、Run �
 | --- | --- |
 | `getSessionDefaults(agentId)` | 查询该执行设备上指定 Agent 的新会话模型覆盖、启动后备值、有效默认值和 revision |
 | `setSessionDefaults(agentId, modelId, expectedRevision)` | CAS 保存模型配置 ID；modelId 为 null 时清除覆盖，恢复启动后备值；初始 revision 为 0 |
-| `getAgentTools(agentId)` / `setAgentTools(agentId, { toolIds, expectedRevision })` | 查询或 CAS 保存该设备上 Agent 的新会话工具选择；独立 revision；空数组明确关闭工具 |
+| `getAgentTools(agentId)` / `setAgentTools(agentId, { toolIds, expectedRevision })` | 查询或 CAS 保存该设备上 Agent 的新会话 Computer 工具偏好；独立 revision；空数组清空 Computer 工具，其他环境由其自身定义提供 |
 | `createSession(projectId, agentId, modelId?)` | 检查 Agent 和可用项目，在创建事务内按显式模型、已保存覆盖、Agent 启动默认、null 的顺序选定并复制 modelId |
 | `selectSessionModel(sessionId, modelId, protocolId?)` | 保存后续 Run 默认模型；已绑定协议时必须匹配，旧 Session 不可修改 |
 | `getSession(id)` / `listSessions(projectId)` | 按 ID 查询包含归档会话；项目列表只返回未归档会话，要求项目存在但目录可暂时不可用 |
@@ -47,11 +47,13 @@ harness server API 及 HTTP 保存非空覆盖时检查 Models 配置存在且�
 
 ## Agent 工具与会话固定
 
+正式装配从 `AgentDefinition.environmentIds` 选择[工具环境](../../tool-environments.md)，缺省使用 Computer，显式空数组不提供工具。创建事务保存不可变的 `toolEnvironments` 与工具完整定义；环境配置变更只影响新会话。已有 Computer 工具偏好仅缩小该环境实际提供的工具，其他环境的工具不受 Computer 来源目录限制。`run-state` v12 增加不可变 `tool_environments_json`，旧行保留 null 并继续使用原 Computer 兼容路径。
+
 Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude Code、DeepSeek Harness 来源组合；来源标签只描述出处，不选择模型协议或执行器。保存先验证已知工具及明确依赖，再通过独立 revision 提交，冲突返回 `agent-tools-conflict`。默认配置仅在尚无保存记录时使用；保存 `[]` 与默认配置有不同语义。
 
 创建 Session 的同一业务库事务读取 Agent 的最新选择，并保存 `ToolSelectionSnapshot { schemaVersion: 1, tools: [{ toolId, version, definition }] }`。后续修改 Agent、模型或来源展示不会改变已有会话工具；Session 没有改工具入口，数据库禁止更新 tool_selection_json。工具运行资源归对应执行组件，配置和快照不保存运行句柄。
 
-首次 Run 的原生 initialization v2 保存该选择与实际模型声明，接受事务复核选择等于 Session 快照；其后所有根、分支和重新生成复用同一 initialization。无工具能力模型继续纯文本调用。旧会话迁移保存原 Bash/Apply Patch 选择，历史 initialization v1 和记录 JSON 原样保留。
+新环境会话的首次 Run 使用原生 initialization v3，同时保存环境与工具快照；接受事务复核二者等于 Session 事实并再次验证当前环境契约。其后所有根、分支和重新生成复用同一 initialization。无工具能力模型继续纯文本调用。没有环境快照的旧会话保留 initialization v1/v2 与原有工具选择，历史记录 JSON 原样保留。非 Computer 工具只保存通用操作意图与观察，不建立 Computer 声明或 scope。
 
 ## 受信执行记录端口
 
@@ -76,7 +78,7 @@ Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude 
 
 `RunOperationStart` 包含 id、kind（model/operation/tool）、JSON intent、可选 records 与 tool，以及只用于通用 operation 的 cleanup:true 准入标记。Session 不解释 intent 来推断清理，模型或工具操作不能利用该标记在取消后启动。observation 的 kind 为 value/error/cleanup-failed，可携 records、checkpoint、工具事实、通用 JSON result 和失败分类；结果在现有 observation_json 中持久化，不增加事件种类。
 
-计算工具的 startOperation 在同一业务事务中复核固定工具声明，调用 Computer Operations.acceptIn 并传入 Run 固定的 Computer 附着引用，提交 Session 意图、started 事件、计算声明和逻辑实例/工作区需求。observeOperation 同事务提交真实工具观察、图片保留以及 Operations.observeIn 的 observed 标记。事务内不等待激活、目录检查或实际工具退出；计划和模型 operation 不创建 computer 声明。新增账本仍归各领域组件，Session 不直接读写其表。
+计算工具的 startOperation 在同一业务事务中复核固定工具声明，调用 Computer Operations.acceptIn 并传入 Run 固定的 Computer 附着引用，提交 Session 意图、started 事件、计算声明和逻辑实例/工作区需求。observeOperation 同事务提交真实工具观察、图片保留以及 Operations.observeIn 的 observed 标记。事务内不等待激活、目录检查或实际工具退出；模型 operation 和旧会话兼容的计划工具不创建 computer 声明。新增账本仍归各领域组件，Session 不直接读写其表。
 
 run-state v10 新增独立版本化 RunResumeState，不复活旧 Run phase 写入器。接受、模型意图、完整工具批次、工具观察/额度、清理及结算提案与恢复游标原子提交；runOwnerEpoch 是授权，写操作拒绝旧 owner。protocolCursor 由 Loop 解释，Session 只保存不透明 JSON。startOperation、observeOperation 与 settleRun 接受 ownerEpoch，缺省值只用于原 owner 兼容调用。
 

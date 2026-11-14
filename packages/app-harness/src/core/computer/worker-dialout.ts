@@ -3,14 +3,14 @@ import type { JsonValue } from '@anybox/models'
 import { fullScope } from '../unit/domain.js'
 import type { UnitAttachment } from '../unit/domain.js'
 import { unitAuthorization } from '../unit/domain.js'
-import { transportLimits } from '../unit/transport-domain.js'
+import { transportLimits, unitCapabilitiesHeader } from '../unit/transport-domain.js'
 import type { UnitReply, UnitRequest } from '../unit/transport-domain.js'
 import { unitApiUrl, validateComputerCeiling, validateHarnessUrl, workerContractVersion } from './worker-attachments-domain.js'
 import type { WorkerAttachment } from './worker-attachments-domain.js'
 import { workerAttachmentsServiceKey } from './worker-attachments.js'
 import type { WorkerAttachmentsPort } from './worker-attachments.js'
 import { computerWorkerServiceKey, workerError } from './worker-port.js'
-import type { ComputerWorkerPort, PushedBytes, WorkerAuthorization, WorkerImage, WorkerOperation, WorkerSubmission } from './worker-port.js'
+import type { ComputerWorkerPort, PushedBytes, WorkerAuthorization, WorkerImage, WorkerInfo, WorkerOperation, WorkerSubmission } from './worker-port.js'
 import { imageAssetsServiceKey } from '../image/port.js'
 import type { ImageAssetsPort } from '../image/port.js'
 import type { OwnedCall } from '../contracts.js'
@@ -142,15 +142,16 @@ export function createWorkerDialoutComponent(options: WorkerDialoutOptions = {})
         try { await http(unitApiUrl(attachment.harnessUrl, 'replies'), { method: 'POST', headers, body: JSON.stringify({ bootId: info.bootId, replies: [reply] }) }, options.requestTimeoutMs ?? 30_000, abort.signal) }
         catch { /* The harness server retries unanswered requests by identity; the executor keeps the fact. */ }
       }
-      let info: { workerId: string; bootId: string; platform: string; architecture: string }
+      let info: WorkerInfo
       loop.done = (async () => {
         info = await worker.info()
+        const pollHeaders = info.toolManifest ? { ...headers, [unitCapabilitiesHeader]: JSON.stringify({ computerTools: info.toolManifest }) } : headers
         let backoff = 1_000
         while (!abort.signal.aborted) {
           try {
             const waitMs = options.pollWaitMs ?? transportLimits.defaultWaitMs
             const query = new URLSearchParams({ unitId: info.workerId, bootId: info.bootId, platform: info.platform, architecture: info.architecture, waitMs: String(waitMs) })
-            const response = await http(`${unitApiUrl(attachment.harnessUrl, 'poll')}?${query}`, { method: 'GET', headers }, waitMs + (options.requestTimeoutMs ?? 30_000), abort.signal)
+            const response = await http(`${unitApiUrl(attachment.harnessUrl, 'poll')}?${query}`, { method: 'GET', headers: pollHeaders }, waitMs + (options.requestTimeoutMs ?? 30_000), abort.signal)
             if (response.status === 401 || (response.status === 409 && errorCode(response.body) === 'unit-attachment-state')) {
               // The harness server no longer honours this attachment: stop accepting and drop the credential.
               loop.state = 'revoked'; loop.lastError = errorCode(response.body) ?? 'unit-credential-invalid'
@@ -202,7 +203,8 @@ export function createWorkerDialoutComponent(options: WorkerDialoutOptions = {})
         if (typeof input.code !== 'string' || !input.code.trim() || input.code.length > 1024) throw workerError('worker-attachment-invalid')
         const identity = await worker.info()
         const payload = JSON.stringify({ code: input.code.trim(), unitKind: 'computer', unitId: identity.workerId,
-          contractVersion: workerContractVersion, capabilities: { platform: identity.platform, architecture: identity.architecture, workerId: identity.workerId, tools: 'all' }, ceiling })
+          contractVersion: workerContractVersion, capabilities: { platform: identity.platform, architecture: identity.architecture, workerId: identity.workerId,
+            ...(identity.toolManifest ? { computerTools: identity.toolManifest } : {}) }, ceiling })
         let response: { status: number; body: unknown } | undefined
         for (let attempt = 1; response === undefined; attempt++) {
           try { response = await http(unitApiUrl(harnessUrl, 'attach'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: payload }, options.requestTimeoutMs ?? 30_000, signal) }

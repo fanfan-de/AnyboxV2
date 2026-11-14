@@ -17,7 +17,7 @@ export function createApplicationApiComponent(root: Context, catalog: Applicatio
     async apply(ctx, _config, deps) {
       let server: ApplicationHttpServer | undefined
       ctx.effect(() => async () => { await server?.close() }, 'stop and join application HTTP requests')
-      server = await startApplicationHttpServer({ catalog, service: key => root.get<ApplicationHttpPort>(key), port: listenPort, host: options.host,
+      server = await startApplicationHttpServer({ catalog, service: key => root.get<ApplicationHttpPort>(ctx.resolveServiceName(key)), port: listenPort, host: options.host,
         products: deps[productsServiceKey], activity: deps[productActivityServiceKey], access: options.authenticated ? deps[hostAccessServiceKey] : undefined })
       listenPort = Number(new URL(server.url).port)
       ctx.provide(hostHttpServiceKey, server)

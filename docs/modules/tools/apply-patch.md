@@ -4,26 +4,26 @@
 
 ## 职责与入口
 
-Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统副作用；补丁解析与文本转换是独立纯函数。它对整个补丁先做预检，再按文件顺序提交；预检通过不代表多文件变更具有事务回滚能力。
+`@anybox/computer-tools/apply-patch` 提供精确的 UTF-8 文本文件变更。组件持有文件系统副作用；补丁解析与文本转换是独立纯函数。它对整个补丁先做预检，再按文件顺序提交；预检通过不代表多文件变更具有事务回滚能力。
 
 | 项目 | 定义 |
 | --- | --- |
-| 组件入口 | [apply-patch-component.ts](../../../packages/app-harness/src/core/tool/apply-patch-component.ts) |
-| 纯领域逻辑 | [apply-patch-domain.ts](../../../packages/app-harness/src/core/tool/apply-patch-domain.ts)：`parsePatch`、`validatePatchText`、`applyPatchText` |
-| 项目自有类型 | [apply-patch-types.ts](../../../packages/app-harness/src/core/tool/apply-patch-types.ts) |
+| 组件入口 | [apply-patch-component.ts](../../../packages/computer-tools/src/apply-patch-component.ts) |
+| 纯领域逻辑 | [apply-patch-domain.ts](../../../packages/computer-tools/src/apply-patch-domain.ts)：`parsePatch`、`validatePatchText`、`applyPatchText` |
+| 项目自有类型 | [apply-patch-types.ts](../../../packages/computer-tools/src/apply-patch-types.ts) |
 | 工厂 / Nya 名称 | `createApplyPatchComponent(options?)` / `apply-patch-tool` |
-| 服务 / `inject` | `tools.apply-patch: ApplyPatchPort` / `harness.projects` |
+| 服务 / `inject` | `tools.apply-patch: ApplyPatchPort` / 无应用服务依赖 |
 | 工具名 / 消费方 | `apply_patch` / 独立 [worker 执行器](../computers/worker-executor.md) |
 
 ## 配置、接口与结果
 
 唯一工厂选项为 `filesystem?: Partial<ApplyPatchFileSystem>`，按方法覆盖默认 `node:fs/promises` 实现，主要用于可控故障与取消测试。文件系统端口包括 `lstat`、`realpath`、`readFile`、`mkdir`、`mkdtemp`、`writeFile`、`chmod`、`link`、`rename`、`unlink`、`rmdir`；替身必须维持各方法的完成时间和文件事实，不能只返回成功值而跳过副作用。
 
-`ApplyPatchPort.definition` 声明唯一必填字符串参数 `patch`，禁止额外属性。宿主调用 `execute({ projectId, patch, workspacePath? }): OwnedCall<ApplyPatchResult>`，项目 ID 和可选固定绝对路径来自受信执行上下文。服务先同步验证项目 ID、patch 类型和可选路径；语法错误在队列内解析为诊断结果。
+`ApplyPatchPort.definition` 声明唯一必填字符串参数 `patch`，禁止额外属性。调用方使用 `execute({ patch, workspacePath }): ToolCall<ApplyPatchResult>`，必填固定绝对路径来自受信执行上下文。服务先同步验证 patch 类型和路径；语法错误在队列内解析为诊断结果。`OwnedCall` 是同一执行句柄的兼容类型名。
 
-文件工具另调用 `mutateText({projectId,path,mutation,workspacePath?})`：`mutation` 为整文件 `write` 或 `oldString/newString/replaceAll` 的精确 `edit`。它在同一队列内部读取最新快照并规划变更，共享全部文本校验、文件预检、逐文件提交及清理；不是第二个写入提供方。纯 `applyTextMutation` 保留显式文本、BOM 和末尾换行，不添加补丁 Add 的隐含换行。
+文件工具另调用 `mutateText({path,mutation,workspacePath})`：`mutation` 为整文件 `write` 或 `oldString/newString/replaceAll` 的精确 `edit`。它在同一队列内部读取最新快照并规划变更，共享全部文本校验、文件预检、逐文件提交及清理；不是第二个写入提供方。纯 `applyTextMutation` 保留显式文本、BOM 和末尾换行，不添加补丁 Add 的隐含换行。
 
-独立 worker 的内部执行适配器传入固定 binding.path，嵌套文件 Write/Edit 将同一 workspacePath 原样传给 mutateText，不在排队后重新选择项目路径。省略固定路径的直接调用保留 Projects.requireAvailable 兼容行为；文件预检、跨项目队列和实际部分提交规则保持不变。
+独立 worker 的内部执行适配器传入固定 binding.path，嵌套文件 Write/Edit 将同一 workspacePath 原样传给 mutateText，不在排队后重新选择项目路径。组件不接收项目 ID、不查询 Projects，也不依赖 Agent 或 Session；文件预检、跨工作目录队列和实际部分提交规则保持不变。
 
 | 结果字段 | 含义 |
 | --- | --- |
@@ -54,7 +54,7 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 
 ## 预检与提交流程
 
-1. 同一组件的所有调用进入一条跨项目串行队列；解析补丁并确认项目目录可用。
+1. 同一组件的所有调用进入一条跨工作目录串行队列；解析补丁，使用调用前固定的必填 workspacePath。
 2. 以项目路径解析相对路径；绝对路径、`..` 和父目录符号链接允许。目标最终路径本身不能是符号链接。项目目录不是沙箱。
 3. 解析现有父目录的真实路径，检查新建/移动目标不存在；已有目标须为单硬链接普通文件。读取前后核对设备、inode、权限、链接数、大小、mtime、ctime，再验证文本格式。
 4. 拒绝重复路径、别名以及父子目标重叠。macOS 保守折叠 Unicode 规范形式和大小写，Windows 折叠大小写。
@@ -80,9 +80,9 @@ Apply Patch 提供精确的 UTF-8 文本文件变更。组件持有文件系统�
 
 ## 验证依据
 
-- [apply-patch-domain.test.mjs](../../../packages/app-harness/tests/apply-patch-domain.test.mjs)：语法、精确匹配、锚点/EOF、Unicode/BOM、换行、大文件匹配。
+- [apply-patch-domain.test.mjs](../../../packages/computer-tools/tests/apply-patch-domain.test.mjs)：语法、精确匹配、锚点/EOF、Unicode/BOM、换行、大文件匹配。
 - [apply-patch-component.test.mjs](../../../tests/apply-patch-component.test.mjs)：全部预检、跨项目队列、路径别名、并发外部编辑、部分提交、Move 事实、取消及清理失败。
 - [apply-patch-loop.test.mjs](../../../tests/apply-patch-loop.test.mjs)：混合工具顺序、失败后修正、参数预检、旧事件读取及在途补丁恢复为 interrupted。
 - [harness-server-http.test.mjs](../../../tests/harness-server-http.test.mjs)、[tool-trace.test.mjs](../../../packages/app-harness/tests/tool-trace.test.mjs)：浏览器补丁预览截断与部分/取消结果展示。
 
-完整验收运行 `npm run check`。
+独立包验证运行 `npm test --workspace @anybox/computer-tools`；`packages/computer-tools/tests/independent-tools.test.mjs` 和 `package-consumer.test.mjs` 验证无 Harness 依赖的装配与生产资源闭包。完整验收运行 `npm run check`。

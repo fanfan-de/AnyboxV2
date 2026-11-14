@@ -40,6 +40,9 @@ import { createUnitTransportComponent } from './unit/transport-component.js'
 import { unitAttachmentsServiceKey } from './unit/port.js'
 import type { AttachCodeInput, UnitAttachment, UnitAttachmentsPort } from './unit/port.js'
 import { localComputerUnitId, localModelsUnitId } from './unit/domain.js'
+import type { ToolEnvironment } from '@anybox/tool-api'
+import { createToolEnvironmentRegistry } from './tool-environments/registry.js'
+import { createComputerToolEnvironment } from './tool-environments/computer.js'
 
 /** Reject the removed selector for JavaScript consumers before any component or storage is installed. */
 export function validateComputerEnvironmentOptions(options: object): void {
@@ -50,7 +53,11 @@ export function validateComputerEnvironmentOptions(options: object): void {
 
 /** The root must provide Models, local storage and image assets before the harness server core starts. */
 export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
+  /** Explicit bindings for a trusted same-root role composition. */
+  readonly serviceBindings?: Readonly<Record<string, string>>
   readonly agents: readonly AgentDefinition[]
+  /** Trusted capability providers selected by each Agent's environmentIds; Sessions freeze their exact declarations. */
+  readonly toolEnvironments?: readonly ToolEnvironment[]
   /** Stable private directory shared with the independent worker, never a Session path. */
   readonly localWorkerDirectory?: string
   /** Optional package role adapter; standalone assembly retains its direct worker entry. */
@@ -105,11 +112,13 @@ export function createHarnessServerPromptComponents(options: HarnessServerCoreOp
 /** Describes the Agent component closure; callers keep every installation on their root. */
 export function createHarnessServerAgentComponents(context: Context, options: HarnessServerCoreOptions, lifetime: HarnessServerLifetime): readonly Component<any, any>[] {
   validateComputerEnvironmentOptions(options)
+  const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
   const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
-  const configuredProtocols = context.get<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
-  const protocolComponents = context.get(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
+  const toolEnvironments = createToolEnvironmentRegistry([createComputerToolEnvironment(), ...(options.toolEnvironments ?? [])])
+  const configuredProtocols = lookup<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
+  const protocolComponents = lookup(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
-  const localWorkerComponents = !context.get(localComputerWorkerServiceKey)
+  const localWorkerComponents = !lookup(localComputerWorkerServiceKey)
     ? [createLocalComputerWorkerComponent({ directory: options.localWorkerDirectory ?? resolve('data/computer-worker'), ...(options.localWorkerLaunch ? { launch: options.localWorkerLaunch } : {}) })] : []
   const workerComponents = [...localWorkerComponents, createWorkerRouterComponent(options.computerTransport)]
   // The server's local environment always coexists with every attached remote Computer.
@@ -118,7 +127,7 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   ] }), createUnitTransportComponent(inputs)]
   // Remote-bound projects are checked through the current Computer contract; Projects stays a dependency of worker-root tools, so it resolves it per call.
   const computerQuery = (attachmentId: string, query: Parameters<ComputerWorkerPort['query']>[0]['query']) => {
-    const worker = context.get<ComputerWorkerPort>(computerWorkerServiceKey)
+    const worker = lookup<ComputerWorkerPort>(computerWorkerServiceKey)
     if (!worker) return Promise.reject(projectUnavailableError())
     return worker.query({ attachmentId, query })
   }
@@ -126,17 +135,18 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery }),
     createProjectFilesComponent(inputs),
     createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
-    createSessionComponent(inputs, agents), createRunRuntimeComponent(inputs),
-    createRunComponent(inputs, agents, lifetime.isClosing, lifetime.signal)]
+    createSessionComponent(inputs, agents, toolEnvironments), createRunRuntimeComponent(inputs, toolEnvironments),
+    createRunComponent(inputs, agents, lifetime.isClosing, lifetime.signal, toolEnvironments)]
 }
 
 /** The facade resolves the current services and never owns the application root. */
 export function createHarnessServerApi(context: Context, options: HarnessServerCoreOptions, lifetime: HarnessServerLifetime): HarnessServerApi {
   if (!Context.is(context) || context.root !== context) throw new TypeError('application root Context required')
+  const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
   const agents = validateAgents(options.agents)
   const validateSelectedModel = (modelId: string, requireAvailable = false): string => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const models = context.get<ModelsService>(modelsServiceKey)
+    const models = lookup<ModelsService>(modelsServiceKey)
     if (!models) throw modelsError('unavailable')
     const model = models.get(modelId)
     if (!model) throw modelsError('not-found')
@@ -145,37 +155,37 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
   }
   const current = (): RunPort => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const service = context.get<RunPort>(runServiceKey)
+    const service = lookup<RunPort>(runServiceKey)
     if (!service) throw new Error('run service is unavailable')
     return service
   }
   const currentSessions = (): SessionPort => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const service = context.get<SessionPort>(sessionServiceKey)
+    const service = lookup<SessionPort>(sessionServiceKey)
     if (!service) throw new Error('session service is unavailable')
     return service
   }
   const currentProjects = (): ProjectPort => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const service = context.get<ProjectPort>(projectServiceKey)
+    const service = lookup<ProjectPort>(projectServiceKey)
     if (!service) throw new Error('project service is unavailable')
     return service
   }
   const currentPrompts = (): PromptPort => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const service = context.get<PromptPort>(promptServiceKey)
+    const service = lookup<PromptPort>(promptServiceKey)
     if (!service) throw new Error('prompt service is unavailable')
     return service
   }
   const currentAgentPrompts = (): AgentPromptPort => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const service = context.get<AgentPromptPort>(agentPromptServiceKey)
+    const service = lookup<AgentPromptPort>(agentPromptServiceKey)
     if (!service) throw new Error('agent prompt service is unavailable')
     return service
   }
   const currentUnits = (): UnitAttachmentsPort => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const service = context.get<UnitAttachmentsPort>(unitAttachmentsServiceKey)
+    const service = lookup<UnitAttachmentsPort>(unitAttachmentsServiceKey)
     if (!service) throw new Error('unit attachment service is unavailable')
     return service
   }
@@ -189,11 +199,12 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
       return listTools()
     },
     listComputerEnvironments: async () => {
-      const units = currentUnits(), transport = context.get<UnitTransportPort>(unitTransportServiceKey)
+      const units = currentUnits(), transport = lookup<UnitTransportPort>(unitTransportServiceKey)
       if (!transport) throw new Error('unit transport service is unavailable')
       const attachments = await units.list()
       return projectComputerEnvironments(attachments, { platform: process.platform, architecture: process.arch },
-        new Map(attachments.map(attachment => [attachment.attachmentId, transport.connection(attachment.attachmentId)?.connected === true])))
+        new Map(attachments.map(attachment => [attachment.attachmentId, transport.connection(attachment.attachmentId) ?? false])),
+        lookup<ComputerWorkerPort>(localComputerWorkerServiceKey)?.observedInfo?.())
     },
     listUnitAttachments: () => currentUnits().list(),
     createUnitAttachCode: input => currentUnits().createAttachCode(input),
@@ -289,7 +300,7 @@ export async function installHarnessServerCore(context: Context, options: Harnes
   try {
     // Prompt providers are available before their Agent consumers start.
     for (const component of [...createHarnessServerPromptComponents(options), ...createHarnessServerAgentComponents(context, options, lifetime)]) {
-      const fiber = context.installComponent(component)
+      const fiber = context.installComponent(component, undefined, { bindings: options.serviceBindings })
       fibers.push(fiber)
       await fiber
       requireActive(fiber)

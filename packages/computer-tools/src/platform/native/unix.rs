@@ -11,6 +11,12 @@ extern "C" {
     fn prctl(option: i32, ...) -> i32;
 }
 pub struct Process { child: Child, pid: u32, exited: bool, tree_closed: bool }
+fn group_exit_may_be_in_progress(error: &io::Error) -> bool {
+    // XNU's killpg1 filters SZOMB members before checking nfound. A group
+    // which still exists but has no signalable live member can return EPERM.
+    // This is never absence proof: retain ownership until a later ESRCH.
+    cfg!(target_os = "macos") && error.raw_os_error() == Some(1)
+}
 impl Process {
     pub fn pid(&self) -> u32 { self.pid }
     pub fn try_wait(&mut self) -> io::Result<Option<Exit>> {
@@ -23,9 +29,11 @@ impl Process {
     pub fn terminate(&mut self, force: bool) -> io::Result<()> {
         if self.tree_closed { return Ok(()); }
         let result = unsafe { kill(-(self.pid as i32), if force { 9 } else { 15 }) };
-        if result == 0 { Ok(()) }
-        else if io::Error::last_os_error().raw_os_error() == Some(3) { self.tree_closed = true; Ok(()) }
-        else { Err(io::Error::last_os_error()) }
+        if result == 0 { return Ok(()); }
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(3) { self.tree_closed = true; Ok(()) }
+        else if group_exit_may_be_in_progress(&error) { Ok(()) }
+        else { Err(error) }
     }
     pub fn tree_alive(&mut self) -> io::Result<bool> {
         if self.tree_closed { return Ok(false); }
@@ -38,7 +46,9 @@ impl Process {
         }
         if unsafe { kill(-(self.pid as i32), 0) } == 0 { return Ok(true); }
         let error = io::Error::last_os_error();
-        if error.raw_os_error() == Some(3) { self.tree_closed = true; Ok(false) } else { Err(error) }
+        if error.raw_os_error() == Some(3) { self.tree_closed = true; Ok(false) }
+        else if group_exit_may_be_in_progress(&error) { Ok(true) }
+        else { Err(error) }
     }
 }
 impl Drop for Process { fn drop(&mut self) { let _ = self.terminate(true); let _ = self.child.wait(); } }

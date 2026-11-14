@@ -22,11 +22,19 @@ export const completedOutcome = (id, output, snapshot = modelSnapshot()) => ({ k
     { id: `response:${id}`, exchangeId: `exchange:${id}`, kind: 'response', formatVersion: 1, payload: { choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: output } }] } }],
   checkpoint: { protocolId: snapshot.protocolId, recordFormatVersion: 1, modelSnapshot: snapshot } })
 export const completeNativeRun = (records, id, output, now) => records.settleRun(id, completedOutcome(id, output), now)
+export function sessionInitialization(session, prompts = [], tools = []) {
+  return session.toolEnvironments ? { schemaVersion: 3, prompts, tools, toolContractVersion: 'tool-environments-v1',
+    toolSelection: session.toolSelection, toolEnvironments: session.toolEnvironments }
+    : { schemaVersion: 1, prompts, tools, toolContractVersion: 'known-tools-v1' }
+}
 export async function prepareTestProgram(root, id, input) {
+  const session = await root.get('harness.sessions').getSession(input.sessionId)
   const program = await root.get('harness.protocol-agents').prepare({ runId: id, sessionId: input.sessionId, modelId: input.modelId ?? 'default',
-    signal: new AbortController().signal, initialization: { schemaVersion: 1, prompts: [], tools: [], toolContractVersion: 'known-tools-v1' },
+    signal: new AbortController().signal, initialization: sessionInitialization(session),
     input: { schemaVersion: 1, raw: input.input, text: input.input, template: null } })
-  const accepted = await root.get('harness.session-runs').registerRun(id, input, 'now', [], program.modelSnapshot,
-    { binding: program.binding, input: program.input, initialization: program.initialization, parentContextRef: null })
-  return { program, run: accepted.run }
+  try {
+    const accepted = await root.get('harness.session-runs').registerRun(id, input, 'now', [], program.modelSnapshot,
+      { binding: program.binding, input: program.input, initialization: program.initialization, parentContextRef: null })
+    return { program, run: accepted.run }
+  } catch (error) { try { await program.close() } finally { program.release() }; throw error }
 }

@@ -1,10 +1,10 @@
 import * as fs from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { Component } from '@nya/core'
-import type { OwnedCall } from '../contracts.js'
-import type { ToolDefinition } from './definition.js'
-import { projectServiceKey } from '../project/component.js'
-import type { ProjectPort } from '../project/component.js'
+import type { OwnedCall } from '@anybox/tool-api'
+import type { ToolDefinition } from '@anybox/tool-api'
+import { applyPatchToolDefinition } from './contracts/legacy.js'
+export { applyPatchToolDefinition } from './contracts/legacy.js'
 import { applyPatchText, applyTextMutation, parsePatch, validatePatchText } from './apply-patch-domain.js'
 import { patchDiagnostic, patchRejection } from './apply-patch-types.js'
 import type { ApplyPatchResult, PatchChange, PatchDiagnostic, PatchOperation, PendingPatchOperation, TextMutation } from './apply-patch-types.js'
@@ -13,21 +13,10 @@ export const applyPatchServiceKey = 'tools.apply-patch'
 
 export interface ApplyPatchPort {
   readonly definition: ToolDefinition
-  /** A trusted workspacePath fixes the relative-path base without resolving the project again. */
-  execute(input: { readonly projectId: string; readonly patch: string; readonly workspacePath?: string }): OwnedCall<ApplyPatchResult>
-  mutateText(input: { readonly projectId: string; readonly path: string; readonly mutation: TextMutation; readonly workspacePath?: string }): OwnedCall<ApplyPatchResult>
+  /** A trusted workspacePath fixes the relative-path base without resolving application data. */
+  execute(input: { readonly patch: string; readonly workspacePath: string }): OwnedCall<ApplyPatchResult>
+  mutateText(input: { readonly path: string; readonly mutation: TextMutation; readonly workspacePath: string }): OwnedCall<ApplyPatchResult>
 }
-
-export const applyPatchToolDefinition: ToolDefinition = Object.freeze({
-  name: 'apply_patch',
-  description: 'Use this tool for precise UTF-8 text file edits. Use *** Begin Patch / *** End Patch with *** Add File:, *** Update File:, or *** Delete File: headers. An update may include *** Move to:. Add-file lines start with +; update hunks start with @@ (optionally followed by an exact anchor) and use space, -, and + lines for context, removal, and addition. *** End of File anchors a hunk at EOF. Context must match exactly and uniquely. Example:\n*** Begin Patch\n*** Add File: hello.txt\n+Hello\n*** End Patch\nRelative paths use the current project directory; absolute paths and parent-directory paths use the application user\'s filesystem permissions. All files are checked first, then committed in order. A failure or cancellation may leave completed changes; inspect changes and pending before retrying.',
-  parameters: Object.freeze({
-    type: 'object',
-    properties: Object.freeze({ patch: Object.freeze({ type: 'string', description: 'Complete patch text, including Begin Patch and End Patch markers' }) }),
-    required: Object.freeze(['patch']),
-    additionalProperties: false,
-  }),
-})
 
 type ApplyPatchFailureCategory = 'invalid-request' | 'unavailable' | 'cleanup-failure'
 type ApplyPatchFailure = Error & { readonly category: ApplyPatchFailureCategory }
@@ -139,16 +128,12 @@ function result(status: ApplyPatchResult['status'], changes: readonly PatchChang
     ...(diagnostic === undefined ? {} : { diagnostic }) })
 }
 
-/** Owns a single queue across projects, temporary files and accepted filesystem operations. */
-export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Component.Object<void, {
-  [projectServiceKey]: ProjectPort
-}> {
+/** Owns a single queue across workspaces, temporary files and accepted filesystem operations. */
+export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Component.Object<void> {
   const filesystem: ApplyPatchFileSystem = { ...defaultFilesystem, ...options.filesystem }
   return {
     name: 'apply-patch-tool',
-    inject: [projectServiceKey],
-    apply(ctx, _config, deps) {
-      const projects = deps[projectServiceKey]
+    apply(ctx) {
       const active = new Set<OwnedCall<ApplyPatchResult>>()
       const failures = new Set<unknown>()
       let accepting = true
@@ -165,10 +150,9 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
         if (failures.size > 1) throw new AggregateError([...failures], 'apply patch cleanup failed')
       }, 'cancel and join patch operations')
 
-      const enqueue = (input: { readonly projectId: string; readonly patch?: string; readonly path?: string; readonly mutation?: TextMutation; readonly workspacePath?: string }): OwnedCall<ApplyPatchResult> => {
+      const enqueue = (input: { readonly patch?: string; readonly path?: string; readonly mutation?: TextMutation; readonly workspacePath: string }): OwnedCall<ApplyPatchResult> => {
           if (!accepting) throw failure('unavailable')
-          if (!input || typeof input.projectId !== 'string' || !input.projectId.trim() ||
-            input.workspacePath !== undefined && (typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0')) ||
+          if (!input || typeof input.workspacePath !== 'string' || !isAbsolute(input.workspacePath) || input.workspacePath.includes('\0') ||
             (input.mutation === undefined ? typeof input.patch !== 'string' :
               typeof input.path !== 'string' || !input.path.trim() || input.path.includes('\0') ||
               !['write', 'edit'].includes(input.mutation.kind) || (input.mutation.kind === 'write'
@@ -296,9 +280,7 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
           const work = async (): Promise<ApplyPatchResult> => {
             operations = input.mutation === undefined ? parsePatch(input.patch!) : [Object.freeze({ kind: 'update' as const, path: input.path!, chunks: [] })]
             checkpoint()
-            let projectPath: string
-            try { projectPath = workspacePath ?? (await projects.requireAvailable(input.projectId)).path }
-            catch { throw failure('unavailable') }
+            const basePath = workspacePath
             checkpoint()
             const planned: PreparedOperation[] = []
             const claimed: string[] = []
@@ -316,7 +298,7 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
             for (const operation of operations) {
               diagnosticPath = operation.path
               checkpoint()
-              let source = await canonicalTarget(resolve(projectPath, operation.path))
+              let source = await canonicalTarget(resolve(basePath, operation.path))
               checkpoint()
               if (input.mutation !== undefined) {
                 const info = await existingInfo(source)
@@ -344,7 +326,7 @@ export function createApplyPatchComponent(options: ApplyPatchOptions = {}): Comp
                 let target = source
                 if (operation.kind === 'update' && operation.moveTo !== undefined) {
                   diagnosticPath = operation.moveTo
-                  target = await canonicalTarget(resolve(projectPath, operation.moveTo))
+                  target = await canonicalTarget(resolve(basePath, operation.moveTo))
                   claim(target, operation.moveTo)
                   if (await existingInfo(target)) throw patchRejection('target-exists', 'The destination already exists.', operation.moveTo)
                 }

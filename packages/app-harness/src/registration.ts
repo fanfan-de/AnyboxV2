@@ -18,7 +18,8 @@ export const harnessServerHttp = Object.freeze({ service: harnessServerHttpServi
   selfAuthenticated: Object.freeze(['/units/unit']) })
 export function harnessServerApplication(config: HarnessServerConfig, options: HarnessServerRuntimeOptions = {}): ApplicationRegistration {
   return { capabilityRequirements: { required: { 'storage.sqlite': '^1.0.0' }, optional: { 'system.directory-picker': '^1.0.0' } }, definition: harnessDefinition, createRuntime: (root, context) => createHarnessServerRuntime(root, config, options, {
-    registerStopGuard: guard => root.get<ProductActivityPort>(productActivityServiceKey)!.registerGuard('agent', guard),
+    serviceBindings: context?.serviceBindings,
+    registerStopGuard: guard => root.get<ProductActivityPort>(context?.serviceBindings?.[productActivityServiceKey] ?? productActivityServiceKey)!.registerGuard('agent', guard),
     http: { inject: [productActivityServiceKey, ...(options.authenticated === false ? [] : [hostAccessServiceKey]),
       ...(context?.capabilities[directoryPickerCapabilityId] ? [directoryPickerServiceKey] : [])], resolve: deps => {
       const access = deps[hostAccessServiceKey] as HostAccessPort | undefined

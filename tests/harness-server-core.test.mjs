@@ -1,12 +1,12 @@
 import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { createProjectFilesComponent } from '../packages/app-harness/dist/core/project-files/component.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
-import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun, nativeRegistration } from './helpers/native-records.mjs'
+import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun, nativeRegistration, sessionInitialization } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../packages/app-harness/dist/core/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../packages/app-harness/dist/core/session/port.js'
-import { createApplyPatchComponent } from '../packages/app-harness/dist/core/tool/apply-patch-component.js'
-import { createFileToolsComponent } from '../packages/app-harness/dist/core/tool/files-component.js'
-import { createProcessToolsComponent } from '../packages/app-harness/dist/core/tool/process-component.js'
+import { createApplyPatchComponent } from '@anybox/computer-tools/apply-patch'
+import { createFileToolsComponent } from '@anybox/computer-tools/files'
+import { createProcessToolsComponent } from '@anybox/computer-tools/processes'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -19,7 +19,7 @@ import { modelsServiceKey } from '@anybox/models'
 import { createRunComponent, runServiceKey } from '../packages/app-harness/dist/core/run/component.js'
 import { createRunRuntimeComponent, runRuntimeServiceKey } from '../packages/app-harness/dist/core/run/runtime-component.js'
 import { createProjectComponent, projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
-import { createBashComponent } from '../packages/app-harness/dist/core/tool/bash-component.js'
+import { createBashComponent } from '@anybox/computer-tools/bash'
 import { createPromptComponent } from '../packages/app-harness/dist/core/prompt/component.js'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { localStorageServiceKey } from '../packages/storage-sqlite/dist/port.js'
@@ -245,7 +245,7 @@ test('a stale unit attachment epoch settles an accepted Run on recovery instead 
     const records = f.root.get(sessionRunServiceKey), units = f.root.get('harness.unit-attachments')
     const bindings = { schemaVersion: 1, models: (await units.local('models')).binding, computer: (await units.local('computer')).binding }
     const input = { sessionId: session.id, parentNodeId: null, input: 'resume', idempotencyKey: 'resume' }
-    await records.registerRun('resume', input, 'now', [], modelSnapshot(), { ...nativeRegistration(input), units: bindings })
+    await records.registerRun('resume', input, 'now', [], modelSnapshot(), { ...nativeRegistration(input, modelSnapshot(), [], null, sessionInitialization(session)), units: bindings })
     const request = { id: 'resume:request', exchangeId: 'resume:exchange', kind: 'request', formatVersion: 1, payload: { messages: [{ role: 'user', content: 'resume' }] } }
     const response = { id: 'resume:response', exchangeId: 'resume:exchange', kind: 'response', formatVersion: 1,
       payload: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'saved response' } }] } }

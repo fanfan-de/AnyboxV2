@@ -23,7 +23,7 @@ Anybox Harness 的[原生 Computer 支持](../native-platform-support.md)由既�
 | [units/](./units/README.md) | 可部署单元的附着账本、本机自动附着、Run 固定的附着引用与单元拨出传输 | 2 |
 | [images/](./images/README.md) | 图片导入、不可变字节、草稿续期与事务保留 | 1 |
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
-| [tools/](./tools/README.md) | 来源工具契约、进程会话、文件变更与搜索 | 4 |
+| [tools/](./tools/README.md) | 独立工具包、环境契约、进程会话、文件变更、搜索与图片能力适配 | 5 |
 | [infrastructure/](./infrastructure/README.md) | 业务数据库与可替换存储端口 | 1 |
 | [web/](./web/README.md) | 执行 API、宿主及 Harness 独立访问管理和监听、客户端外壳与连接库、Anybox Harness 网关、目录选择 | 10 |
 | [diagnostics/](./diagnostics/README.md) | 资源归属探针 | 1 |
@@ -80,6 +80,7 @@ Anybox Harness 的[原生 Computer 支持](../native-platform-support.md)由既�
 | 工具 | [Apply Patch](./tools/apply-patch.md) | `apply-patch-tool` | `tools.apply-patch` |
 | 工具 | [进程工具](./tools/processes.md) | `process-tools` | `tools.processes` |
 | 工具 | [文件工具](./tools/files.md) | `file-tools` | `tools.files` |
+| 工具 | [Computer 工具图片适配](./tools/image-adapter.md) | `computer-worker-tool-images` | `tools.images`；注入 `harness.image-assets` |
 | 基础存储 | [业务与注册库 SQLite](./infrastructure/local-sqlite.md) | `local-sqlite` | 默认 `local-storage`；独立命名实例可提供 `host.package-registry-storage` |
 | 宿主 | [Application HTTP](./web/web-frontend.md) | `host-application-api` | `host.http` |
 | harness server 接入 | [harness server HTTP](./web/harness-http.md) | `harness-http` | `harness.http` |

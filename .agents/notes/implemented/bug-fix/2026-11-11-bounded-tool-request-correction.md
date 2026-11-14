@@ -46,3 +46,4 @@ Status: implemented
 - 实现：[共享预检与反馈](../../../../packages/app-harness/src/core/protocol-agents/shared.ts)、[版本和恢复](../../../../packages/app-harness/src/core/protocol-agents/registry.ts)、[四协议 Loop](../../../../packages/app-harness/src/core/protocol-agents/)。
 - 验证：[原生工具库](../../../../tests/native-tool-library.test.mjs)、[协议恢复](../../../../tests/computer-protocol-resume.test.mjs)、[工具循环](../../../../tests/tool-loop.test.mjs)、[Apply Patch 循环](../../../../tests/apply-patch-loop.test.mjs)。
 - 前项：[模型无新内容超时与失败输出保留](2026-11-11-stream-inactivity-and-failure-content.md)。
+- 后续：[退役计划与待办工具](../simplification/2026-11-14-retire-planning-tools.md)移除示例中计划契约的新选择入口，保留旧 Session 兼容及本记录的整批预检、有界纠错方向。

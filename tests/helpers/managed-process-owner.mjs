@@ -1,4 +1,4 @@
-import { spawnManagedProcess } from '../../packages/app-harness/dist/core/platform/process-runtime.js'
+import { spawnManagedProcess } from '@anybox/computer-tools/platform/process-runtime'
 
 const process_ = spawnManagedProcess({
   executable: process.execPath,

@@ -563,10 +563,34 @@
 #agent--models-settings .models-directory-provenance p { margin-top: 8px; }
 .models-draft-status:empty { display: none; }
 .models-draft-status { padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--secondary); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-.composer-model-row { display: flex; flex: 1 1 120px; min-width: 0; max-width: 320px; margin-right: auto; align-items: center; }
+.composer-model-row { display: flex; flex: 1 1 120px; min-width: 0; max-width: 320px; margin-right: auto; align-items: center; gap: 5px; }
 .composer-model-row[hidden] { display: none; }
 .composer-model { min-width: 0; max-width: 100%; background: transparent; border: 0; color: var(--secondary); font: inherit; font-size: 11px; padding: 4px 2px; text-overflow: ellipsis; }
 .composer-model-hint { font-size: 11px; line-height: 1.5; margin: 8px 0 0; color: var(--secondary); }
+.context-usage { position: relative; flex: 0 0 auto; color: var(--secondary); }
+.context-usage[data-open=true]::before { content: ''; position: absolute; bottom: 100%; left: 0; width: 100%; height: 10px; }
+.context-usage[data-side=below]::before { bottom: auto; top: 100%; }
+.context-usage-button { display: flex; align-items: center; justify-content: center; width: 26px; height: 28px; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.context-usage-button:hover { background: var(--hover); }
+.context-usage-button:focus-visible { outline: 2px solid var(--secondary); outline-offset: 1px; }
+.context-usage-button svg { width: 18px; height: 18px; overflow: visible; transform: rotate(-90deg); }
+.context-usage-track, .context-usage-fill { stroke-width: 2; }
+.context-usage-track { stroke: var(--line-strong); }
+.context-usage-fill { stroke: currentColor; transition: stroke-dasharray .2s ease; }
+.context-usage[data-tone=warning] { color: #a36b13; }
+.context-usage[data-tone=danger] { color: var(--danger); }
+.context-usage[data-tone=unknown] .context-usage-track { stroke-dasharray: 2 3; stroke: var(--muted); }
+.context-usage[data-tone=unknown] .context-usage-fill { visibility: hidden; }
+.context-usage-popover { display: none; position: fixed; z-index: 30; inset: auto; margin: 0; width: 270px; padding: 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 5px 20px #00000014; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; overflow: auto; overscroll-behavior: contain; }
+.context-usage[data-open=true] .context-usage-popover { display: block; }
+.context-usage-popover strong { font-size: 12px; font-weight: 600; }
+.context-usage-headline { margin: 6px 0 12px; }
+.context-usage-popover dl { margin: 0; }
+.context-usage-popover dl > div { display: flex; justify-content: space-between; gap: 12px; margin: 4px 0; }
+.context-usage-popover dt { color: var(--secondary); }
+.context-usage-popover dd { margin: 0; font-variant-numeric: tabular-nums; }
+.context-usage-detail { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line); font-size: 11px; color: var(--secondary); }
+@media (prefers-reduced-motion: reduce) { .context-usage-fill { transition: none; } }
 .streaming-label { font-size: 11px; color: var(--secondary); margin-block: -12px 20px; }
 .protocol-turn { min-width: 0; margin-block: 12px 24px; }
 .protocol-turn > .streaming-label { margin: 0 0 10px; }

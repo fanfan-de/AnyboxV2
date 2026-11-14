@@ -13,6 +13,9 @@ import { createApplicationCatalog, createApplicationRuntimes } from './applicati
 import type { ApplicationCapabilityProvider, ApplicationRegistration } from '@anybox/application-api/nya'
 
 export interface ExecutionHostOptions {
+  /** An enclosing local composition may own the single root and its final disposal. */
+  readonly root?: Context
+  readonly serviceBindings?: Readonly<Record<string, string>>
   readonly applications: readonly ApplicationRegistration[]
   readonly databasePath: string
   readonly port?: number
@@ -23,13 +26,18 @@ export interface ExecutionHostOptions {
 
 /** Owns one execution root; the trusted composition entry supplies its application catalog. */
 export async function createExecutionHost(options: ExecutionHostOptions) {
-  const root = new Context()
+  const root = options.root ?? new Context()
+  if (root.root !== root) throw new TypeError('application root Context required')
+  const bindings = Object.freeze({ ...options.serviceBindings })
+  const key = (name: string) => bindings[name] ?? name
+  const installed: ReturnType<Context['installComponent']>[] = []
+  const install = (component: Parameters<Context['installComponent']>[0]) => { const fiber = root.installComponent(component, undefined, { bindings }); installed.push(fiber); return fiber }
   const catalog = createApplicationCatalog(options.applications)
   const runtime = createApplicationRuntimes(root, catalog, [
     { id: 'storage.sqlite', version: '1.0.0', services: [localStorageServiceKey], resident: true,
       create: () => createLocalSqliteComponent(options.databasePath) },
     ...(options.providers ?? []),
-  ])
+  ], bindings)
   let products: ProductsPort | undefined
   let preparingClose: Promise<void> | undefined, closing: Promise<void> | undefined, restoring: Promise<void> | undefined, drainingRequests: Promise<void> | undefined
   let admissionClosed = false
@@ -38,10 +46,10 @@ export async function createExecutionHost(options: ExecutionHostOptions) {
     admissionClosed = true
     const admissionErrors: unknown[] = []
     const attempt = <T>(work: () => T): T | undefined => { try { return work() } catch (error) { admissionErrors.push(error) } }
-    const stopping = attempt(() => root.get<ProductsPort>(productsServiceKey)?.stop())
-    attempt(() => root.get<ProductActivityPort>(productActivityServiceKey)?.stop())
+    const stopping = attempt(() => root.get<ProductsPort>(key(productsServiceKey))?.stop())
+    attempt(() => root.get<ProductActivityPort>(key(productActivityServiceKey))?.stop())
     attempt(() => runtime.closeAdmission())
-    drainingRequests = attempt(() => root.get<ApplicationHttpServer>(hostHttpServiceKey)?.close())
+    drainingRequests = attempt(() => root.get<ApplicationHttpServer>(key(hostHttpServiceKey))?.close())
     // Retained Run leases exit during root cleanup, so preparation must not join their HTTP drain.
     void drainingRequests?.catch(() => {})
     preparingClose = Promise.allSettled([stopping, runtime.awaitIdle(), restoring]).then(results => {
@@ -53,24 +61,32 @@ export async function createExecutionHost(options: ExecutionHostOptions) {
   const close = () => closing ??= (async () => {
     const errors: unknown[] = []
     try { await prepareClose() } catch (error) { errors.push(error) }
-    const results = await Promise.allSettled([root.fiber.dispose(), drainingRequests])
+    const results = await Promise.allSettled([options.root ? undefined : root.fiber.dispose(), drainingRequests])
     errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))
     if (errors.length) throw new AggregateError(errors, 'Application shutdown failed')
   })()
   try {
-    await root.installComponent(createLocalSqliteComponent(options.databasePath))
-    await root.installComponent(createHostAccessComponent(options.name))
-    await root.installComponent(createProductActivityComponent())
-    await root.installComponent(createProductsComponent({ directory: catalog.applications.map(app => app.definition), runtime: id => runtime.get(id), capabilities: id => runtime.capabilities(id) }))
-    products = root.get<ProductsPort>(productsServiceKey)!
-    await root.installComponent(createApplicationApiComponent(root, catalog, options.port, { authenticated: true, host: options.host }))
+    await install(createLocalSqliteComponent(options.databasePath))
+    await install(createHostAccessComponent(options.name))
+    await install(createProductActivityComponent())
+    await install(createProductsComponent({ directory: catalog.applications.map(app => app.definition), runtime: id => runtime.get(id), capabilities: id => runtime.capabilities(id) }))
+    products = root.get<ProductsPort>(key(productsServiceKey))!
+    await install(createApplicationApiComponent(root, catalog, options.port, { authenticated: true, host: options.host }))
     restoring = products.restore()
     void restoring.catch(() => root.logger.warn('Application product restoration failed'))
-    const web = root.get<ApplicationHttpServer>(hostHttpServiceKey)!
-    const access = root.get<HostAccessPort>(hostAccessServiceKey)!
+    const web = root.get<ApplicationHttpServer>(key(hostHttpServiceKey))!
+    const access = root.get<HostAccessPort>(key(hostAccessServiceKey))!
     return { root, products, ready: restoring, url: web.url, instance: access.instance, get closing() { return admissionClosed }, prepareClose, close }
   } catch (error) {
-    try { await close() } catch (cleanup) { throw new AggregateError([error, cleanup], 'Application startup and cleanup failed') }
+    try {
+      if (options.root) {
+        await prepareClose()
+        const results = await Promise.allSettled([...installed].reverse().map(fiber => fiber.dispose()))
+        await drainingRequests
+        const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+        if (errors.length) throw new AggregateError(errors, 'Execution startup rollback failed')
+      } else await close()
+    } catch (cleanup) { throw Object.assign(new AggregateError([error, cleanup], 'Application startup and cleanup failed'), { phase: 'cleanup' }) }
     throw error
   }
 }

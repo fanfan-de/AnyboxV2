@@ -8,24 +8,15 @@ import { computerOperationsServiceKey } from '../../packages/app-harness/dist/co
 import { createImageAssetsComponent } from '../../packages/app-harness/dist/core/image/component.js'
 import { computerWorkerServiceKey, workerError } from '../../packages/app-harness/dist/core/computer/worker-port.js'
 import { installUnitAttachments } from './unit-attachments.mjs'
+import { createWorkerExecution } from '../../packages/app-harness/dist/core/computer/worker-execution.js'
 
 const immediate = result => ({ result: Promise.resolve(result), done: Promise.resolve(), cancel() {} })
 const map = (call, convert) => ({ ...call, result: call.result.then(convert) })
 function localExecution(root, input) {
-  const bash = root.get('tools.bash'), patch = root.get('tools.apply-patch'), files = root.get('tools.files'), processes = root.get('tools.processes')
-  let scope
-  return { execute(request, binding) {
-    const target = { projectId: input.declaration.projectId, workspacePath: binding.path }
-    const process = () => scope ??= processes.openRun({ ...target, runId: input.runId })
-    const name = request.name, args = request.arguments
-    if (name === 'bash') return map(bash.execute({ ...target, command: args.command }), result => ({ name, result }))
-    if (name === 'apply_patch' || name === 'codex_apply_patch') return map(patch.execute({ ...target, patch: args.patch }), result => ({ name, result }))
-    if (name === 'codex_exec_command' || name === 'codex_write_stdin') return map(process().execute(name, args), result => ({ name, result }))
-    if (name === 'claude_code_Bash' || name === 'deepseek_harness_bash') return map(process().foreground({ command: String(args.command),
-      ...(typeof (args.timeout ?? args.timeoutMs) === 'number' ? { timeoutMs: Number(args.timeout ?? args.timeoutMs) } : {}),
-      ...(typeof args.workdir === 'string' ? { workdir: args.workdir } : {}) }), result => ({ name, result }))
-    return map(files.execute({ ...target, runId: input.runId, sessionId: input.declaration.sessionId, name, args, imageInput: input.imageInput === true }), value => ({ name, ...value }))
-  }, hasProcesses: () => !!scope, close: () => scope?.close() ?? immediate({ processes: [] }) }
+  return createWorkerExecution({ runId: input.runId, sessionId: input.declaration.sessionId,
+    projectId: input.declaration.projectId, imageInput: input.imageInput === true, signal: new AbortController().signal,
+    bash: root.get('tools.bash'), patch: root.get('tools.apply-patch'),
+    processes: root.get('tools.processes'), files: root.get('tools.files') })
 }
 
 /** Controlled worker facts exercise Authority polling without launching a detached test daemon. */
@@ -104,6 +95,9 @@ export async function installComputerServices(root, inputs, options = {}) {
     const file = await root.get('local-storage').read(reader => reader.get('PRAGMA database_list').file)
     await root.installComponent(createImageAssetsComponent({ directory: `${file}.images` }))
   }
+  if (!root.get('tools.images')) await root.installComponent({ name: 'fixture-computer-tool-images', inject: ['harness.image-assets'],
+    apply(ctx, _config, deps) { ctx.provide('tools.images', { importImage: (...args) => deps['harness.image-assets'].importImage(...args) }) },
+  })
   let worker = options.worker ?? standIns.get(root), workerFiber
   if (!root.get(computerWorkerServiceKey)) {
     worker ??= createControlledComputerWorker(root)

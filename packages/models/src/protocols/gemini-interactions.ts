@@ -89,7 +89,8 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
   return {
     descriptor: { id: protocolId, version: '2.2.0', name: 'Gemini Interactions', responseModes: ['stream', 'complete'], connectionFields,
       modelFields: [{ key: 'generation_config.max_output_tokens', label: 'Maximum output tokens', type: 'number', min: 1, max: 2_147_483_647, integer: true },
-        { key: 'generation_config.thinking_level', label: 'Thinking level', type: 'enum', values: levels }, { key: 'generation_config.thinking_summaries', label: 'Thinking summaries', type: 'enum', values: ['auto', 'none'] }], supportsDiscovery: true, supportsCheck: true },
+        { key: 'generation_config.thinking_level', label: 'Thinking level', type: 'enum', values: levels }, { key: 'generation_config.thinking_summaries', label: 'Thinking summaries', type: 'enum', values: ['auto', 'none'], defaultValue: 'auto' }], supportsDiscovery: true, supportsCheck: true },
+    initialParameters: (_outputLimit, declared): NativeObject => declared?.reasoning.support === 'supported' ? { generation_config: { thinking_summaries: 'auto' } } : {},
     validateProvider: provider => validateProvider(provider, protocolId),
     validateParameters(options, declared) {
       optionKeys(options, ['generation_config']); const generation = options.generation_config === undefined ? {} : object(options.generation_config); optionKeys(generation, ['max_output_tokens', 'thinking_level', 'thinking_summaries']);

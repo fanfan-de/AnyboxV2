@@ -17,6 +17,7 @@ import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/co
 import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { ceilingPermits, localWorkerAttachment, validateHarnessUrl, validateWorkerAttachment } from '../packages/app-harness/dist/core/computer/worker-attachments-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
+import { createComputerToolManifest } from '../packages/app-harness/dist/core/computer/tool-support.js'
 import { startHarnessServerHttp } from './helpers/harness-server-http.mjs'
 import { nodeCommand } from './helpers/native-shell.mjs'
 
@@ -77,7 +78,11 @@ test('a worker serves a remote harness server through dial-out under the device 
   await mkdir(allowed); await mkdir(other)
   const remote = await harnessServer(t, directory)
   const { memory, openEntry } = memoryEntries()
-  const worker = await openComputerWorker(join(directory, 'worker'), { openEntry, dialout: { pollWaitMs: 300, getWaitMs: 200 } })
+  const polls = []
+  const worker = await openComputerWorker(join(directory, 'worker'), { openEntry, dialout: { pollWaitMs: 300, getWaitMs: 200, fetch: (url, init) => {
+    if (new URL(url).pathname.endsWith('/units/unit/poll')) polls.push({ url: String(url), capabilities: new Headers(init.headers).get('x-anybox-unit-capabilities') })
+    return fetch(url, init)
+  } } })
   const local = connectLocalComputerWorker({ directory: join(directory, 'worker') })
   t.after(async () => { await local.closeObserver(); await worker.close(); await rm(directory, { recursive: true, force: true }) })
   assert.deepEqual(await local.control.listAttachments(), [])
@@ -100,11 +105,22 @@ test('a worker serves a remote harness server through dial-out under the device 
   await until(async () => (await local.control.listAttachments())[0].connection === 'connected', 'first poll completes')
   const connection = remote.transport.connection(attached.attachmentId)
   assert.equal(connection.unitId, worker.endpoint.workerId); assert.equal(connection.bootId, worker.endpoint.bootId); assert.equal(connection.platform, process.platform)
+  const manifest = createComputerToolManifest()
+  assert.deepEqual(connection.capabilities, { computerTools: manifest })
+  assert.deepEqual(JSON.parse(polls[0].capabilities), { computerTools: manifest }, 'the worker publishes the manifest through an additive header')
+  assert.equal(new URL(polls[0].url).searchParams.has('capabilities'), false, 'older hosts keep receiving the existing poll query')
 
   // Requests travel through the mailbox; the unit derives the authorization from the attachment that delivered them.
   const id = attached.attachmentId
   const request = (kind, payload) => remote.transport.request(id, { kind, payload })
-  assert.deepEqual(await request('info', {}), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch })
+  assert.deepEqual(await request('info', {}), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: manifest })
+  const pollUrl = `${remote.web.url}/api/v1/apps/agent/units/unit/poll?${new URLSearchParams({ unitId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, waitMs: '0' })}`
+  const pollHeaders = { authorization: unitAuthorization(id, memory.values().next().value), 'x-anybox-instance-id': remote.access.instance.instanceId }
+  for (const value of ['{broken', JSON.stringify({ tooLarge: 'x'.repeat(8192) })]) {
+    const invalid = await fetch(pollUrl, { headers: { ...pollHeaders, 'x-anybox-unit-capabilities': value } })
+    assert.equal(invalid.status, 400)
+    assert.equal((await invalid.json()).error.code, 'invalid-input')
+  }
   const owner = { runId: 'remote-run', runOwnerEpoch: 1, attachmentId: 'local:computer' }
   assert.equal(await request('claim', owner), null, 'the payload attachment is ignored; the delivering attachment owns the Run')
   await assert.rejects(local.claimRun({ ...owner, attachmentId: 'local:computer' }), { code: 'worker-owner-rejected' }, 'the loopback owner cannot take over a remote attachment\'s Run')
@@ -191,7 +207,8 @@ test('a worker restart keeps approved attachments and resumes dial-out from the 
   assert.notEqual(worker.endpoint.bootId, firstBoot)
   const connection = await until(() => { const c = remote.transport.connection(attached.attachmentId); return c?.connected && c.bootId === worker.endpoint.bootId ? c : undefined }, 'second boot polls with the stored credential')
   assert.equal(connection.unitId, worker.endpoint.workerId)
-  assert.deepEqual(await remote.transport.request(attached.attachmentId, { kind: 'info', payload: {} }), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch })
+  assert.deepEqual(await remote.transport.request(attached.attachmentId, { kind: 'info', payload: {} }), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: createComputerToolManifest() })
+  assert.deepEqual(connection.capabilities, { computerTools: createComputerToolManifest() }, 'the new boot reports its own tool contracts')
   assert.equal(memory.size, 1)
   const relink = connectLocalComputerWorker({ directory: join(directory, 'worker') })
   assert.equal((await relink.control.listAttachments())[0].connection, 'connected')

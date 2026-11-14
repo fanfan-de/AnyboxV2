@@ -58,6 +58,48 @@ test('transport rules are pure: authorization headers, registrations, replies an
   assert.equal(unitConnected(undefined, '2026-10-14T00:00:00.000Z'), false)
 })
 
+test('poll capability reports are bounded immutable JSON observations and remain optional for older units', () => {
+  const capabilities = { computerTools: { revision: 'one', tools: ['anybox.bash'] } }
+  const parsed = validateUnitRegistration({ ...registration, capabilities })
+  assert.deepEqual(parsed.capabilities, capabilities)
+  assert.notEqual(parsed.capabilities, capabilities)
+  assert.ok(Object.isFrozen(parsed.capabilities))
+  assert.ok(Object.isFrozen(parsed.capabilities.computerTools))
+  assert.ok(Object.isFrozen(parsed.capabilities.computerTools.tools))
+  capabilities.computerTools.tools.push('changed-after-validation')
+  assert.deepEqual(parsed.capabilities.computerTools.tools, ['anybox.bash'])
+  assert.equal(Object.hasOwn(validateUnitRegistration(registration), 'capabilities'), false)
+  assert.throws(() => validateUnitRegistration({ ...registration, capabilities: { tooLarge: 'x'.repeat(8192) } }), { code: 'unit-transport-invalid' })
+  const cyclic = {}; cyclic.self = cyclic
+  assert.throws(() => validateUnitRegistration({ ...registration, capabilities: cyclic }), { code: 'unit-transport-invalid' })
+})
+
+test('late polls cannot republish a superseded boot report and legacy polls clear the current report', async t => {
+  const f = await fixture(t), id = f.attachment.attachmentId
+  const first = { computerTools: { revision: 'first' } }, second = { computerTools: { revision: 'second' } }
+  const oldAbort = new AbortController()
+  const oldPoll = f.transport.poll(id, { ...registration, waitMs: 5_000, capabilities: first }, oldAbort.signal)
+  assert.deepEqual(f.transport.connection(id).capabilities, first)
+  await f.transport.poll(id, { ...registration, bootId: 'boot-2', capabilities: second })
+  assert.deepEqual(f.transport.connection(id).capabilities, second)
+  oldAbort.abort(); await oldPoll
+  assert.equal(f.transport.connection(id).capabilities, undefined, 'a late old identity cannot publish its superseded report')
+
+  await f.transport.poll(id, { ...registration, bootId: 'boot-2', capabilities: second })
+  const sameBootAbort = new AbortController()
+  const sameBootPoll = f.transport.poll(id, { ...registration, bootId: 'boot-2', waitMs: 5_000, capabilities: first }, sameBootAbort.signal)
+  await f.transport.poll(id, { ...registration, bootId: 'boot-2', capabilities: second })
+  sameBootAbort.abort(); await sameBootPoll
+  assert.deepEqual(f.transport.connection(id).capabilities, second, 'late same-boot completion uses the latest reported capabilities')
+
+  const reportedAbort = new AbortController()
+  const reportedPoll = f.transport.poll(id, { ...registration, bootId: 'boot-2', waitMs: 5_000, capabilities: second }, reportedAbort.signal)
+  await f.transport.poll(id, { ...registration, bootId: 'boot-2' })
+  assert.equal(f.transport.connection(id).capabilities, undefined, 'an older unit omitting capabilities does not inherit the previous report')
+  reportedAbort.abort(); await reportedPoll
+  assert.equal(f.transport.connection(id).capabilities, undefined)
+})
+
 test('the host dispatches unit routes without device-token authentication only under the application path', () => {
   const catalog = createApplicationCatalog([{ definition: harnessDefinition, http: harnessServerHttp, createRuntime() { throw new Error('unused') } }])
   assert.deepEqual(catalog.route('/api/v1/apps/agent/units/unit/poll', '/api/v1'), { application: catalog.applications[0], path: '/units/unit/poll', selfAuthenticated: true })

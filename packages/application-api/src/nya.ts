@@ -8,6 +8,7 @@ import { productFailure } from './failure.js'
 
 export interface ApplicationInstallation {
   readonly signal: AbortSignal
+  readonly serviceBindings: Readonly<Record<string, string>>
   isClosing(): boolean
   install(component: Component<any, any>): Fiber
   track(fiber: Fiber): void
@@ -15,7 +16,8 @@ export interface ApplicationInstallation {
 }
 interface Installation { fibers: Fiber[]; disposers: (() => unknown | Promise<unknown>)[]; abort: AbortController; failedExits: Map<number, unknown> }
 /** Records ownership only. Nya owns dependency coordination and component cleanup. */
-export function createApplicationRuntime(root: Context, setup: (installation: ApplicationInstallation) => void | Promise<void>, closeAdmission?: () => void): ApplicationRuntime {
+export function createApplicationRuntime(root: Context, setup: (installation: ApplicationInstallation) => void | Promise<void>, closeAdmission?: () => void, serviceBindings: Readonly<Record<string, string>> = {}): ApplicationRuntime {
+  serviceBindings = Object.freeze({ ...serviceBindings })
   if (!Context.is(root) || root.root !== root) throw new TypeError('application root Context required')
   let current: Installation | undefined, failure: unknown, accepting = true, tail: Promise<void> = Promise.resolve()
   const guard = () => { if (!accepting) throw productFailure('product-unavailable') }
@@ -90,9 +92,9 @@ export function createApplicationRuntime(root: Context, setup: (installation: Ap
       guardInstallation()
     }
     const scope: ApplicationInstallation = {
-      signal: installation.abort.signal, isClosing: () => !accepting || current !== installation || installation.abort.signal.aborted,
+      serviceBindings, signal: installation.abort.signal, isClosing: () => !accepting || current !== installation || installation.abort.signal.aborted,
       track,
-      install(component) { guardInstallation(); const fiber = root.installComponent(component); track(fiber); return fiber },
+      install(component) { guardInstallation(); const fiber = root.installComponent(component, undefined, { bindings: serviceBindings }); track(fiber); return fiber },
       effect(setup, label) { guardInstallation(); installation.disposers.push(root.effect(setup, label)); guardInstallation() },
     }
     try {

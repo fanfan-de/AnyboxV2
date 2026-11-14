@@ -5,7 +5,7 @@ import { mapResourceIds } from '../packages/app-harness/dist/web/harness-client.
 import { allowedProxyPath } from '../packages/app-harness/dist/client/gateway.js'
 
 const settle = () => new Promise(resolve => setImmediate(resolve))
-const catalog = [{ toolId: 'codex.update_plan', name: 'update_plan', selectable: true, dependencies: [], definition: { name: 'codex_update_plan' }, source: { harnessId: 'codex' } },
+const catalog = [{ toolId: 'codex.view_image', name: 'view_image', selectable: true, dependencies: [], definition: { name: 'codex_view_image' }, source: { harnessId: 'codex' } },
   { toolId: 'claude-code.Read', name: 'Read', selectable: true, dependencies: [], definition: { name: 'claude_code_Read' }, source: { harnessId: 'claude-code' } }]
 function fixture() {
   const requests = []
@@ -32,14 +32,14 @@ test('tools settings isolate drafts by Agent and capture the target before a sav
 test('tools CAS conflicts preserve mixed selections until an explicit reload and disposal joins accepted saves', async () => {
   const { client, requests } = fixture()
   client.selectAgent('agent'); await settle(); requests[0].resolve({ agentId: 'agent', toolIds: [], revision: 0 }); await settle()
-  client.toggle('codex.update_plan', true); client.toggle('claude-code.Read', true)
+  client.toggle('codex.view_image', true); client.toggle('claude-code.Read', true)
   const saving = client.save(); await settle()
   requests[1].reject(Object.assign(new Error('conflict'), { code: 'agent-tools-conflict' })); await saving
-  assert.deepEqual(client.snapshot().toolIds, ['codex.update_plan', 'claude-code.Read'])
+  assert.deepEqual(client.snapshot().toolIds, ['codex.view_image', 'claude-code.Read'])
   assert.equal(client.snapshot().conflict, true); assert.equal(client.canLeave(), false)
   await client.save(); assert.equal(requests.length, 2)
-  const reload = client.reload(); await settle(); requests[2].resolve({ agentId: 'agent', toolIds: ['codex.update_plan'], revision: 2 }); await reload
-  client.toggle('codex.update_plan', false)
+  const reload = client.reload(); await settle(); requests[2].resolve({ agentId: 'agent', toolIds: ['codex.view_image'], revision: 2 }); await reload
+  client.toggle('codex.view_image', false)
   const clearing = client.save(); await settle()
   let disposed = false; const closing = client.dispose().then(() => { disposed = true }); await settle()
   assert.equal(disposed, false); assert.equal(requests[3].signal.aborted, false)
@@ -47,7 +47,7 @@ test('tools CAS conflicts preserve mixed selections until an explicit reload and
 })
 
 test('tool identities remain unscoped and remote proxy admits only the exact catalog and Agent settings routes', () => {
-  const data = { agentId: 'assistant', toolIds: ['codex.update_plan'], toolSelection: { schemaVersion: 1, tools: [{ toolId: 'claude-code.Read', version: '1.0.0', definition: { name: 'claude_code_Read', parameters: {} } }] } }
+  const data = { agentId: 'assistant', toolIds: ['codex.view_image'], toolSelection: { schemaVersion: 1, tools: [{ toolId: 'claude-code.Read', version: '1.0.0', definition: { name: 'claude_code_Read', parameters: {} } }] } }
   const scoped = mapResourceIds(data, value => `instance:${value}`)
   assert.equal(scoped.agentId, 'instance:assistant')
   assert.deepEqual(scoped.toolIds, data.toolIds); assert.deepEqual(scoped.toolSelection, data.toolSelection)

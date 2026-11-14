@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { JsonValue } from '@anybox/models'
 import type { ValidatedToolRequest } from '../run/domain.js'
-import type { ToolDefinition } from '../tool/definition.js'
+import type { ToolDefinition } from '@anybox/tool-api'
 import type { WorkspaceBinding } from '../workspace/port.js'
 import { unitComputerProviderId } from './port.js'
 import type { ComputerSpecification } from './port.js'

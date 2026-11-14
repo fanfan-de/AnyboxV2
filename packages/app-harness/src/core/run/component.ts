@@ -7,7 +7,7 @@ import type { AgentDefinition } from '../agent/domain.js'
 import { agentPromptServiceKey } from '../agent/prompt-binding-component.js'
 import type { AgentPromptPort } from '../agent/prompt-binding-component.js'
 import { modelFailure, normalizeModelFailure } from './model.js'
-import { listTools, validateToolSelection } from '../tool/catalog.js'
+import { getToolByName, validateToolSelection } from '../tool/catalog.js'
 import { toolEnvironmentPrompt } from '../tool/environment.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
@@ -27,6 +27,7 @@ import { unitAttachmentsServiceKey } from '../unit/port.js'
 import type { UnitAttachmentsPort, RunUnitBindings } from '../unit/port.js'
 import { localAttachmentId } from '../unit/domain.js'
 import { isUnitError } from '../unit/domain.js'
+import type { ToolEnvironmentRegistry } from '../tool-environments/port.js'
 
 export const runServiceKey = 'harness.runs'
 export const runAdmissionServiceKey = 'harness.run-admission'
@@ -45,7 +46,7 @@ export interface RunPort {
 }
 
 /** Admission owns a prepared program until the Runtime synchronously accepts it. */
-export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal): Component.Object<void, {
+export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentRegistry): Component.Object<void, {
   [sessionServiceKey]: SessionPort
   [sessionRunServiceKey]: SessionRunPort
   [agentPromptServiceKey]: AgentPromptPort
@@ -77,7 +78,13 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
         let program: PreparedRunProgram | undefined, transferred = false, resumed: RunResumeRecord | undefined
         try {
           resumed = await records.claimRunResume(id, candidate.state.runOwnerEpoch, inputs.now())
-          await deps[computerOperationsServiceKey].authorizeRun(id,resumed.state.runOwnerEpoch,controller.signal)
+          if (resumed.initialization.schemaVersion !== 3 || resumed.initialization.toolEnvironments.environments.some(environment => environment.environmentId === 'computer')) {
+            await deps[computerOperationsServiceKey].authorizeRun(id,resumed.state.runOwnerEpoch,controller.signal)
+          }
+          if (resumed.initialization.schemaVersion === 3) {
+            if (!environments) throw modelFailure('dependency-unavailable')
+            environments.validate(resumed.initialization.toolEnvironments)
+          }
           // A revoked or re-scoped unit attachment never rebinds silently; the Run settles instead.
           if (resumed.run.units) await attachments.verify(resumed.run.units)
           if (resumed.state.conclusion && ['cleanup','settling'].includes(resumed.state.stage) || resumed.run.status === 'cancelling') {
@@ -179,24 +186,31 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             const protocolId = protocols.protocolForModel(modelId)
             if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
             // Every Run runs against this harness server's own Models unit; the Computer unit comes from the project's binding.
-            const units: RunUnitBindings = Object.freeze({ schemaVersion: 1, models: (await attachments.local('models')).binding,
-              computer: project.computerAttachmentId === localAttachmentId('computer') ? (await attachments.local('computer')).binding : await attachments.binding(project.computerAttachmentId) })
+            const hasComputer = session.toolEnvironments === undefined || session.toolEnvironments.environments.some(environment => environment.environmentId === 'computer')
+            const units: RunUnitBindings | undefined = hasComputer ? Object.freeze({ schemaVersion: 1, models: (await attachments.local('models')).binding,
+              computer: project.computerAttachmentId === localAttachmentId('computer') ? (await attachments.local('computer')).binding : await attachments.binding(project.computerAttachmentId) }) : undefined
             const history = await records.loadNativeHistory(session.id, input.parentNodeId)
             const fixedInitialization = history?.initialization ?? await records.loadNativeInitialization(session.id)
-            const availableTools = listTools().map(tool => tool.definition)
-            if (fixedInitialization?.tools.some(tool => !availableTools.some(current => JSON.stringify(current) === JSON.stringify(tool)))) throw treeError('history-incompatible')
-            try { validateToolSelection(session.toolSelection) } catch { throw treeError('history-incompatible') }
-            const computerAttachment = fixedInitialization ? undefined : await attachments.get(project.computerAttachmentId)
+            if (fixedInitialization && fixedInitialization.schemaVersion !== 3 && fixedInitialization.tools.some(tool => JSON.stringify(getToolByName(tool.name)?.definition) !== JSON.stringify(tool))) throw treeError('history-incompatible')
+            try {
+              if (session.toolEnvironments) {
+                if (!environments) throw treeError('history-incompatible')
+                environments.validate(session.toolEnvironments)
+              } else validateToolSelection(session.toolSelection)
+            } catch { throw treeError('history-incompatible') }
+            const computerAttachment = fixedInitialization || !hasComputer ? undefined : await attachments.get(project.computerAttachmentId)
             const computerCapabilities = computerAttachment?.capabilities
             const toolPlatform = project.computerAttachmentId === localAttachmentId('computer') ? process.platform
               : computerCapabilities && typeof computerCapabilities === 'object' && 'platform' in computerCapabilities && typeof computerCapabilities.platform === 'string' ? computerCapabilities.platform : 'unknown'
             // Only the generic command tool has a platform-dependent default shell.
             // Fixed Bash contracts and tool-free Sessions need no extra instructions.
-            const needsShellEnvironment = models.get(modelId)?.effectiveCapabilities?.tools === true && session.toolSelection.tools.some(tool => tool.toolId === 'codex.exec_command')
-            const initialization: NativeInitialization = fixedInitialization ?? Object.freeze({ schemaVersion: 2,
+            const needsShellEnvironment = hasComputer && models.get(modelId)?.effectiveCapabilities?.tools === true && session.toolSelection.tools.some(tool => tool.toolId === 'codex.exec_command')
+            const initialization: NativeInitialization = fixedInitialization ?? Object.freeze({
+              ...(session.toolEnvironments ? { schemaVersion: 3 as const, toolContractVersion: 'tool-environments-v1' as const, toolEnvironments: session.toolEnvironments }
+                : { schemaVersion: 2 as const, toolContractVersion: 'tool-library-v1' as const }),
               prompts: Object.freeze([...prompts.resolveInitialPrompts(session.agentId), ...(needsShellEnvironment ? [toolEnvironmentPrompt(toolPlatform, project.path)] : [])]),
               tools: Object.freeze(models.get(modelId)?.effectiveCapabilities?.tools === true ? session.toolSelection.tools.map(tool => tool.definition) : []),
-              toolContractVersion: 'tool-library-v1', toolSelection: session.toolSelection })
+              toolSelection: session.toolSelection })
             const template = prompts.resolveTaskTemplate(session.agentId) ?? null
             const images = (input.images?.length ? await records.describeImages(session.id, input.images.map(image => image.assetId)) : [])
               .map(({ expiresAt: _expiresAt, ...image }) => Object.freeze(image))

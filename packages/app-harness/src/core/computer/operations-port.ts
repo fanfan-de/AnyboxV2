@@ -4,7 +4,7 @@ import type { StorageTransaction } from '@anybox/storage-sqlite/port'
 import type { ToolObservation, ValidatedToolRequest } from '../run/domain.js'
 import type { ComputerOperation } from './operations-domain.js'
 import type { ComputerSpecification } from './port.js'
-import type { ToolDefinition } from '../tool/definition.js'
+import type { ToolDefinition } from '@anybox/tool-api'
 import type { RunUnitBinding } from '../unit/domain.js'
 
 export const computerOperationsServiceKey = 'harness.computer-operations'

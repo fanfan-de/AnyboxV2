@@ -77,9 +77,11 @@ test('HTTP exposes the unified tool catalog and Agent CAS settings while fixing 
     assert.ok(catalog.data.some(tool => tool.toolId === 'codex.exec_command'))
     assert.ok(catalog.data.some(tool => tool.toolId === 'claude-code.Read'))
     assert.ok(catalog.data.some(tool => tool.toolId === 'deepseek-harness.read'))
+    assert.equal(catalog.data.length, 19)
+    assert.equal(catalog.data.some(tool => ['codex.update_plan', 'claude-code.TodoWrite', 'deepseek-harness.todo_write'].includes(tool.toolId)), false)
     const original = await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })
     const initialRevision = (await request(f.web, 'GET', '/agents/assistant/tools')).data.revision
-    const toolIds = ['codex.update_plan', 'claude-code.Read', 'deepseek-harness.edit']
+    const toolIds = ['codex.view_image', 'claude-code.Read', 'deepseek-harness.edit']
     const saved = await request(f.web, 'POST', '/agents/assistant/tools', { toolIds, expectedRevision: initialRevision })
     assert.equal(saved.response.status, 200); assert.equal(saved.data.revision, initialRevision + 1)
     assert.equal((await request(f.web, 'GET', '/agents/assistant/tools')).data.agentId, 'assistant')
@@ -88,6 +90,7 @@ test('HTTP exposes the unified tool catalog and Agent CAS settings while fixing 
     assert.deepEqual((await request(f.web, 'GET', `/sessions/${original.data.id}`)).data.toolSelection, original.data.toolSelection)
     assert.equal((await request(f.web, 'POST', '/agents/assistant/tools', { toolIds: [], expectedRevision: initialRevision })).response.status, 409)
     for (const body of [{ toolIds: ['unknown'], expectedRevision: saved.data.revision }, { toolIds: ['codex.exec_command'], expectedRevision: saved.data.revision },
+      ...['codex.update_plan', 'claude-code.TodoWrite', 'deepseek-harness.todo_write'].map(toolId => ({ toolIds: [toolId], expectedRevision: saved.data.revision })),
       { toolIds: [], expectedRevision: saved.data.revision, extra: true }]) assert.equal((await request(f.web, 'POST', '/agents/assistant/tools', body)).response.status, 400)
     const cleared = await request(f.web, 'POST', '/agents/assistant/tools', { toolIds: [], expectedRevision: saved.data.revision })
     assert.equal(cleared.response.status, 200)

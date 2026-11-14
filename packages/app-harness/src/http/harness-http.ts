@@ -27,8 +27,8 @@ import type { UnitAttachmentsPort } from '../core/unit/port.js'
 import { unitTransportServiceKey } from '../core/unit/transport-component.js'
 import type { UnitTransportPort } from '../core/unit/transport-component.js'
 import { projectComputerEnvironments } from '../core/computer/environments.js'
-import { localComputerWorkerControlServiceKey } from '../core/computer/worker-port.js'
-import type { LocalComputerWorkerControl } from '../core/computer/worker-port.js'
+import { localComputerWorkerControlServiceKey, localComputerWorkerServiceKey } from '../core/computer/worker-port.js'
+import type { ComputerWorkerPort, LocalComputerWorkerControl } from '../core/computer/worker-port.js'
 
 export const harnessServerHttpServiceKey = 'harness.http'
 const localActorId = 'local-web-user'
@@ -46,6 +46,7 @@ type CommandDependencies = {
   [unitAttachmentsServiceKey]: UnitAttachmentsPort
   [unitTransportServiceKey]: UnitTransportPort
   [localComputerWorkerControlServiceKey]: LocalComputerWorkerControl
+  [localComputerWorkerServiceKey]?: ComputerWorkerPort
 }
 
 function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies, instanceId: () => string | null): HarnessServerApiCommands {
@@ -56,7 +57,8 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
     async listComputerEnvironments() {
       const attachments = await deps[unitAttachmentsServiceKey].list()
       return projectComputerEnvironments(attachments, { platform: process.platform, architecture: process.arch },
-        new Map(attachments.map(attachment => [attachment.attachmentId, deps[unitTransportServiceKey].connection(attachment.attachmentId)?.connected === true])))
+        new Map(attachments.map(attachment => [attachment.attachmentId, deps[unitTransportServiceKey].connection(attachment.attachmentId) ?? false])),
+        deps[localComputerWorkerServiceKey]?.observedInfo?.())
     },
     listUnitAttachments: () => deps[unitAttachmentsServiceKey].list(),
     createUnitAttachCode: input => deps[unitAttachmentsServiceKey].createAttachCode(input),
@@ -186,15 +188,15 @@ export function createHarnessServerHttpComponent(root: Context, agents: readonly
   integration: HarnessServerHttpIntegrationSource | (() => HarnessServerHttpIntegration) | { authenticated?: boolean } = () => ({})): Component.Object<void, Record<string, unknown>> {
   if (root.root !== root) throw new TypeError('application root Context required')
   const agentIds = Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
-  const currentCommands = (hooks: HarnessServerHttpIntegration): HarnessServerApiCommands => {
+  const currentCommands = (hooks: HarnessServerHttpIntegration, serviceName: (name: string) => string): HarnessServerApiCommands => {
     const snapshots = new Map<string, unknown>()
     const services = {} as CommandDependencies
     for (const key of [sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
-      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey] as const) {
-      snapshots.set(key, key === directoryPickerServiceKey && hooks.directoryPicker !== undefined ? hooks.directoryPicker : root.get(key))
+      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey, localComputerWorkerServiceKey] as const) {
+      snapshots.set(key, key === directoryPickerServiceKey && hooks.directoryPicker !== undefined ? hooks.directoryPicker : root.get(serviceName(key)))
       Object.defineProperty(services, key, { get() {
         const service = snapshots.get(key)
-        if (!service && key !== directoryPickerServiceKey) throw failure(503, 'service-unavailable')
+        if (!service && key !== directoryPickerServiceKey && key !== localComputerWorkerServiceKey) throw failure(503, 'service-unavailable')
         return service
       } })
     }
@@ -210,7 +212,7 @@ export function createHarnessServerHttpComponent(root: Context, agents: readonly
     inject: typeof integration !== 'function' && 'resolve' in integration ? [...integration.inject] : [],
     async apply(ctx, _config, deps) {
       const hooks = typeof integration === 'function' ? integration() : 'resolve' in integration ? integration.resolve(deps) : {}
-      const commands = () => currentCommands(hooks)
+      const commands = () => currentCommands(hooks, key => ctx.resolveServiceName(key))
       let server: HarnessServerHttpHandler | undefined
       ctx.effect(() => async () => { await server?.close() }, 'stop and join application HTTP requests')
       server = createHarnessServerHttpHandler(commands(), { currentCommands: commands, ...hooks })

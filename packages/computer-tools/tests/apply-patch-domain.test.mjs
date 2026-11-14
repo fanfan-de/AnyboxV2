@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { applyPatchText, parsePatch, validatePatchText } from '../dist/core/tool/apply-patch-domain.js'
-import { patchDiagnostic } from '../dist/core/tool/apply-patch-types.js'
+import { applyPatchText, parsePatch, validatePatchText } from '@anybox/computer-tools/apply-patch-domain'
+import { patchDiagnostic } from '@anybox/computer-tools/apply-patch-types'
 
 const patch = (...lines) => ['*** Begin Patch', ...lines, '*** End Patch'].join('\n')
 const chunks = (...lines) => parsePatch(patch('*** Update File: example.txt', ...lines))[0].chunks

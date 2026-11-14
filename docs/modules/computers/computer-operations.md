@@ -22,7 +22,7 @@ createComputerOperationsComponent(inputs, options?) 安装 Authority 根的 harn
 | recoverCancelledRuns(excludeRunIds) | 协调终态 Run 的耐久取消及清理，不重新打开历史执行 |
 | openRun({runId,runOwnerEpoch?,imageInput?,unit?}) | 同步建立本代观察 scope，不激活实例；`unit` 是 Run 固定的 Computer 附着引用，缺省按本机附着 `local:computer` 解释 |
 
-scope 提供 execute(id)、hasProcesses()、cancel()、close()。cancel 先提交持久取消，再协调实际退出；即使协议恢复失败也可终止原 worker scope。OwnedCall.done 证明本地观察退出；worker 实际退出另由耐久事实证明。整批工具先按接受时声明校验；Session 接纳时再次复核 ID、版本及 definition。计划和模型 operation 不创建 computer 声明。
+scope 提供 execute(id)、hasProcesses()、cancel()、close()。cancel 先提交持久取消，再协调实际退出；即使协议恢复失败也可终止原 worker scope。OwnedCall.done 证明本地观察退出；worker 实际退出另由耐久事实证明。整批工具先按接受时声明校验；Session 接纳时再次复核 ID、版本及 definition。模型 operation 和旧会话兼容的计划工具不创建 computer 声明。
 
 声明保存 operation/session/run/project、工具契约/参数、workspaceId/revision 和资源规格；显式字段规范化 JSON 后计算 SHA-256。runOwnerEpoch 与 attachmentId 是授权，binding 单独首次固定，均不进入摘要。同 ID 同摘要复用原声明，冲突拒绝。首次置位时把 Run 的 Computer 附着引用写入 scope；每个新工具声明进入 starting 前在同一事务经单元附着账本复核引用仍为 approved、epoch 相同且批准的 `scope.tools` 包含该 toolId，空工具选择拒绝全部新工具。项目目录身份由 worker 用自身文件系统解析，同时核对批准 scope 与设备 ceiling，允许显式授权别名对应的 canonical 目录；Authority 不按自己的平台或 lexical 路径重复推断。撤销、收紧或超出批准工具范围的新声明以 `tool-unavailable` 失败，已置位的操作、取消与 close-scope 继续到退出。恢复的 authorizeRun、recoverCancelledRuns 与控制声明都使用 scope 保存的附着。
 

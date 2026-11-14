@@ -3,6 +3,7 @@ import type { ComputerDeclaration, ComputerOperationState, ProcessRef } from './
 import type { WorkspaceBinding } from '../workspace/port.js'
 import type { ImageRef } from '../image/port.js'
 import type { ComputerQuery, ComputerQueryResult } from './query-domain.js'
+import type { ComputerToolManifest } from './tool-support.js'
 
 /** The Computer contract as the harness server core consumes it; the router behind it dispatches by attachment. */
 export const computerWorkerServiceKey = 'computer.worker'
@@ -42,9 +43,21 @@ export interface WorkerOperation {
   readonly processRef?: ProcessRef
   readonly images?: readonly WorkerImage[]
 }
+export interface WorkerInfo {
+  readonly workerId: string
+  readonly bootId: string
+  readonly platform: string
+  readonly architecture: string
+  /** Older workers omit this read-only report; it is not an execution or authorization guarantee. */
+  readonly toolManifest?: ComputerToolManifest
+}
+/** A passive client retains bounded wire data; only the harness server validates the trusted tool catalog. */
+export type ObservedWorkerInfo = Omit<WorkerInfo, 'toolManifest'> & { readonly toolManifest?: JsonValue }
 /** Promises confirm durable worker facts; losing a caller never cancels accepted execution. */
 export interface ComputerWorkerPort {
-  info(): Promise<{ readonly workerId: string; readonly bootId: string; readonly platform: string; readonly architecture: string }>
+  info(): Promise<WorkerInfo>
+  /** Last authenticated info observation only; never connects to or starts a worker. */
+  observedInfo?(): ObservedWorkerInfo | undefined
   claimRun(input: WorkerAuthorization): Promise<void>
   submit(input: WorkerSubmission): Promise<WorkerOperation>
   get(input: WorkerAuthorization & { readonly operationId: string }): Promise<WorkerOperation | undefined>

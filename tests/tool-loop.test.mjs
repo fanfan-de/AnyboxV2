@@ -4,9 +4,9 @@ import { createImageAssetsComponent } from '../packages/app-harness/dist/core/im
 import { installTestProtocolAgents, prepareTestProgram, registerNativeRun, completeNativeRun } from './helpers/native-records.mjs'
 import { createSessionComponent } from '../packages/app-harness/dist/core/session/component.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../packages/app-harness/dist/core/session/port.js'
-import { createApplyPatchComponent } from '../packages/app-harness/dist/core/tool/apply-patch-component.js'
-import { createProcessToolsComponent } from '../packages/app-harness/dist/core/tool/process-component.js'
-import { createFileToolsComponent } from '../packages/app-harness/dist/core/tool/files-component.js'
+import { createApplyPatchComponent } from '@anybox/computer-tools/apply-patch'
+import { createProcessToolsComponent } from '@anybox/computer-tools/processes'
+import { createFileToolsComponent } from '@anybox/computer-tools/files'
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -22,7 +22,7 @@ import { runRuntimeServiceKey, createRunRuntimeComponent } from '../packages/app
 import { createRunComponent, runServiceKey } from '../packages/app-harness/dist/core/run/component.js'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { localStorageServiceKey } from '../packages/storage-sqlite/dist/port.js'
-import { bashServiceKey, bashToolDefinition } from '../packages/app-harness/dist/core/tool/bash-component.js'
+import { bashServiceKey, bashToolDefinition } from '@anybox/computer-tools/bash'
 import { controlledModels, modelSnapshot, deferred } from './helpers/controlled-models.mjs'
 import { nodeCommand } from './helpers/native-shell.mjs'
 
@@ -171,18 +171,31 @@ test('a Run completes multiple batches beyond the former model and Bash call lim
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
-test('the cumulative Bash output limit stops the Run before another model call', async () => {
+test('cumulative Bash output above 128 KiB permits later tools and a final answer', async () => {
   const f = await fixture()
   try {
     const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Large output', idempotencyKey: 'output-limit' })
-    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [1, 2, 3].map(number =>
+    f.llm.calls[0].result.resolve({ status: 'completed', text: '', toolCalls: [1, 2, 3, 4].map(number =>
       request(`call-${number}`, "printf '%*s' 65536 '' | tr ' ' a")) })
     f.llm.calls[0].done.resolve()
+    await until(() => f.llm.calls.length === 2)
+    const feedback = f.llm.calls[1].input.messages.filter(message => message.role === 'tool')
+    assert.deepEqual(feedback.map(message => message.callId), ['call-1', 'call-2', 'call-3', 'call-4'])
+    for (const message of feedback) assert.equal(JSON.parse(message.content).stdout, 'a'.repeat(65_536))
+    f.llm.calls[1].result.resolve({ toolCalls: [request('after-large-output', 'printf continued')] })
+    f.llm.calls[1].done.resolve()
+    await until(() => f.llm.calls.length === 3)
+    const last = f.llm.calls[2].input.messages.filter(message => message.role === 'tool').at(-1)
+    assert.equal(last.callId, 'after-large-output')
+    assert.equal(JSON.parse(last.content).stdout, 'continued')
+    f.llm.calls[2].result.resolve('Large output processed.')
+    f.llm.calls[2].done.resolve()
     const terminal = await f.harness.waitRun(run.id)
-    assert.equal(terminal.status, 'failed')
-    assert.equal(terminal.errorCategory, 'limit-exceeded')
-    assert.equal(f.llm.calls.length, 1)
-    assert.equal((await f.sessions.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed').length, 3)
+    assert.equal(terminal.status, 'completed')
+    assert.equal(terminal.output, 'Large output processed.')
+    assert.ok(terminal.resultNodeId)
+    assert.equal((await f.records.loadRunResume(run.id)).state.totalToolOutputBytes, 4 * 65_536 + Buffer.byteLength('continued'))
+    assert.equal((await f.sessions.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed').length, 5)
   } finally { for (const call of f.llm.calls) call.done.resolve(); await f.close() }
 })
 
@@ -444,9 +457,10 @@ test('revoking the worker waits for its Bash done and prevents another model ste
     await bashFiber
     await root.installComponent(createApplyPatchComponent())
     await root.installComponent(createProcessToolsComponent())
-    await root.installComponent(createFileToolsComponent())
+    const fileTools = root.installComponent(createFileToolsComponent())
     const worker = createControlledComputerWorker(root, { inject: [bashServiceKey] })
     const { workerFiber } = await installComputerServices(root, inputs, { worker })
+    await fileTools
     await root.installComponent(createSessionComponent(inputs, agents))
     await root.installComponent(createPromptComponent(inputs))
     await root.installComponent(createAgentPromptComponent(inputs, agents, () => true))

@@ -3,6 +3,7 @@ import type { FileRef } from '../project-files/domain.js'
 import type { ImageRef } from '../image/port.js'
 import { createToolSelection } from '../tool/catalog.js'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
+import type { ToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 export interface Session {
   readonly id: string
   readonly title: string | null
@@ -10,6 +11,8 @@ export interface Session {
   readonly agentId: string
   readonly modelId: string | null
   readonly toolSelection: ToolSelectionSnapshot
+  /** Absent only for Sessions created before environment insertion was enabled. */
+  readonly toolEnvironments?: ToolEnvironmentSnapshot
   readonly historyMode: 'dialogue-v1' | 'native-local-v1'
   readonly protocolId: string | null
   readonly archivedAt: string | null
@@ -96,6 +99,7 @@ export function assemblePath(sessionId: string, parentId: string | null, ancesto
 }
 
 export function createSession(id: string, projectId: string, agentId: string, now: string, modelId: string | null = null,
-  toolSelection: ToolSelectionSnapshot = createToolSelection()): Session {
-  return Object.freeze({ id, title: null, projectId, agentId, modelId, toolSelection, archivedAt: null, createdAt: now, historyMode: 'native-local-v1' as const, protocolId: null })
+  toolSelection: ToolSelectionSnapshot = createToolSelection(), toolEnvironments?: ToolEnvironmentSnapshot): Session {
+  return Object.freeze({ id, title: null, projectId, agentId, modelId, toolSelection,
+    ...(toolEnvironments === undefined ? {} : { toolEnvironments }), archivedAt: null, createdAt: now, historyMode: 'native-local-v1' as const, protocolId: null })
 }

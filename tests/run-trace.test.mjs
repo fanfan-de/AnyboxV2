@@ -68,6 +68,38 @@ test('tool observations retain separate timestamps when a provider reuses reques
   assert.equal(untimed.startedAt, undefined); assert.equal(untimed.finishedAt, undefined)
 })
 
+test('environment tool traces preserve arbitrary names and JSON scalar results using their generic wire shape', () => {
+  for (const name of ['notes_lookup', 'bash', 'apply_patch']) for (const result of [null, false, 0, '', 'a note']) {
+    const calls = toolTrace(run(), [
+      { kind: 'tool-started', id: 'lookup', requestId: 'lookup', name, arguments: { key: 'a' }, at: at(1) },
+      { kind: 'tool-observed', requestId: 'lookup', name, result, at: at(2) },
+    ])
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].name, name)
+    assert.deepEqual(calls[0].arguments, { key: 'a' })
+    assert.equal(calls[0].result, result)
+    assert.equal(calls[0].state, 'completed')
+  }
+  for (const started of [bash(1, 'scalar'), { kind: 'tool-started', id: 'scalar', requestId: 'scalar', name: 'apply_patch', patch: 'a patch', patchTruncated: false, at: at(1) }]) {
+    const call = toolTrace(run(), [started, { kind: 'tool-observed', requestId: 'scalar', name: started.name, result: null, at: at(2) }])[0]
+    assert.equal(call.result, null)
+    assert.equal(call.state, 'completed')
+    assert.equal('arguments' in call, true)
+  }
+})
+
+test('successful custom JSON is not interpreted as a built-in process or file failure', () => {
+  for (const name of ['notes_lookup', 'codex_custom_lookup']) {
+    const result = { error: 'a stored log field', status: 'cancelled', exit_code: 7, signal: 'business-state' }
+    const call = toolTrace(run(), [
+      { kind: 'tool-started', id: 'lookup', requestId: 'lookup', name, arguments: {}, at: at(1) },
+      { kind: 'tool-observed', requestId: 'lookup', name, result, at: at(2) },
+    ])[0]
+    assert.deepEqual(call.result, result)
+    assert.equal(call.state, 'completed')
+  }
+})
+
 test('Run timing uses terminal facts and omits unavailable or invalid durations', () => {
   assert.equal(runTrace(run('running'), [modelStart('working', 1)]).elapsedMs, undefined)
   assert.equal(runTrace(run('cancelling'), [modelStart('working', 1)]).finishedAt, undefined)

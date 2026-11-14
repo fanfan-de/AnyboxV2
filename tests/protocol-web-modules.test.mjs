@@ -187,6 +187,53 @@ test('native reasoning titles, default folds and focus survive active updates an
   }
 })
 
+test('Gemini hides ended empty or whitespace-only thoughts in both presentations, including signature-only history', t => {
+  withDocument(t)
+  const module = getProtocolWebModule('gemini-interactions')
+  for (const presentation of ['compact', 'detail']) {
+    for (const status of ['completed', 'requires_action', 'incomplete', 'budget_exceeded', 'failed', 'cancelled']) {
+      for (const summary of [[], [{ id: 'summary', text: ' \n\t ' }]]) {
+        const initial = { ...snapshot('gemini-interactions'), exchanges: [{ id: 'e', blocks: [{ id: 'step-0', type: 'gemini.thought', summary }], nativeState: { type: 'gemini.state', status } }] }
+        const mounted = module.mount(initial, { presentation })
+        const block = mounted.element.querySelector('.native-reasoning')
+        assert.equal(block.hidden, true, `${presentation}: ${status}`)
+        assert.equal(block.inert, true)
+        mounted.dispose()
+      }
+    }
+    for (const nativeState of [undefined, { type: 'gemini.state', diagnostic: true }]) {
+      const exchange = projectNativeExchange('gemini-interactions', { steps: [{ type: 'thought', signature: 'private-signature' }] })
+      const mounted = module.mount({ ...snapshot('gemini-interactions'), status: 'committed', exchanges: [{ ...exchange, id: 'e', nativeState }] }, { presentation })
+      assert.equal(mounted.element.querySelector('.native-reasoning').hidden, true)
+      assert.doesNotMatch(mounted.element.textContent, /private-signature/)
+      mounted.dispose()
+    }
+  }
+})
+
+test('Gemini retains active empty thoughts and preserves the mount and fold when summary text arrives', t => {
+  withDocument(t)
+  const module = getProtocolWebModule('gemini-interactions')
+  const empty = { id: 'step-0', type: 'gemini.thought', summary: [] }
+  const initial = { ...snapshot('gemini-interactions'), exchanges: [{ id: 'e', blocks: [empty], nativeState: { type: 'gemini.state', status: 'in_progress' } }] }
+  const mounted = module.mount(initial)
+  const block = mounted.element.querySelector('.native-reasoning'), toggle = block.querySelector('.native-reasoning-toggle')
+  assert.equal(block.hidden, false)
+  assert.equal(block.inert, false)
+  toggle.click()
+  mounted.update({ ...initial, viewRevision: 2, exchanges: [{ ...initial.exchanges[0], nativeState: { type: 'gemini.state', status: 'requires_action' } }] })
+  assert.equal(block.hidden, true, 'a returned tool-request exchange ends even while the Run is provisional')
+  const withText = { ...initial, viewRevision: 3, status: 'committed', exchanges: [{ id: 'e', blocks: reasoningBlocks('Summary')[module.protocolId], nativeState: { type: 'gemini.state', status: 'completed' } }] }
+  mounted.update(withText)
+  assert.equal(mounted.element.querySelector('.native-reasoning'), block)
+  assert.equal(block.hidden, false)
+  assert.equal(block.inert, false)
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+  assert.equal(block.querySelector('.native-reasoning-body').hidden, false)
+  assert.equal(block.querySelector('.native-reasoning-body').textContent, 'Summary')
+  mounted.dispose()
+})
+
 test('Responses safely replaces a same-ID text child with refusal while keeping the sibling and parent mounts', t => {
   const document = withDocument(t), module = getProtocolWebModule('responses')
   const initial = { ...snapshot('responses'), exchanges: [{ id: 'e', blocks: [{ id: 'item-0', type: 'responses.message', phase: 'commentary', content: [

@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url'
 import type { ApplicationAsset } from '@anybox/application-api/node'
 export const harnessAssets: readonly ApplicationAsset[] = [
+  { path: '/applications/harness/web/client-types.js', file: fileURLToPath(new URL('./web/client-types.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/client-errors.js', file: fileURLToPath(new URL('./web/client-errors.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/harness-page-client.js', file: fileURLToPath(new URL('./web/harness-page-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/harness-navigation.js', file: fileURLToPath(new URL('./web/harness-navigation.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
@@ -39,6 +40,7 @@ export const harnessAssets: readonly ApplicationAsset[] = [
   { path: '/applications/harness/web/trajectory.js', file: fileURLToPath(new URL('./web/trajectory.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/trajectory-view.js', file: fileURLToPath(new URL('./web/trajectory-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/session-view.js', file: fileURLToPath(new URL('./web/session-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
+  { path: '/applications/harness/web/context-usage.js', file: fileURLToPath(new URL('./web/context-usage.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/conversation-tree.js', file: fileURLToPath(new URL('./web/conversation-tree.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/conversation-tree-view.js', file: fileURLToPath(new URL('./web/conversation-tree-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/draft-client.js', file: fileURLToPath(new URL('./web/draft-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },

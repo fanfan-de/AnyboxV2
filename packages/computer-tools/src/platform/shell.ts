@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { basename, delimiter, dirname, isAbsolute, join, resolve } from 'node:path'
-import { resolveRuntimeDirectory } from './runtime-path.js'
 
+export interface ShellRuntimeOptions { readonly runtimeDirectory?: string; readonly bashExecutable?: string; readonly powershellExecutable?: string }
 export interface ShellCommand { readonly executable: string; readonly args: readonly string[]; readonly env: NodeJS.ProcessEnv; readonly windowsVerbatimArguments?: boolean }
 
 function firstFile(paths: readonly (string | undefined)[]): string | undefined {
@@ -19,14 +19,14 @@ function configured(name: 'ANYBOX_BASH' | 'ANYBOX_POWERSHELL'): string | undefin
 }
 
 /** Never select Windows' bash.exe/wsl.exe launcher for a native Bash contract. */
-export function bashExecutable(): string {
-  const explicit = configured('ANYBOX_BASH')
+export function bashExecutable(options: ShellRuntimeOptions = {}): string {
+  const explicit = options.bashExecutable ?? configured('ANYBOX_BASH')
   if (explicit) {
     if (process.platform === 'win32' && /[\\/]windows[\\/](?:system32|sysnative)[\\/]/i.test(explicit)) throw new Error('WSL is not a native Bash runtime')
     return explicit
   }
   if (process.platform !== 'win32') return firstFile(['/bin/bash', '/usr/bin/bash']) ?? 'bash'
-  const git = fromPath('git.exe'), runtime = resolveRuntimeDirectory()
+  const git = fromPath('git.exe'), runtime = options.runtimeDirectory
   const found = firstFile([
     runtime && join(runtime, 'bash/bin/bash.exe'),
     git && resolve(dirname(git), '../bin/bash.exe'),
@@ -37,9 +37,9 @@ export function bashExecutable(): string {
   if (!found) throw new Error('Native Bash is unavailable; install the complete Anybox runtime or configure ANYBOX_BASH')
   return found
 }
-export function powershellExecutable(): string {
-  const runtime = resolveRuntimeDirectory()
-  const found = configured('ANYBOX_POWERSHELL') ?? firstFile([
+export function powershellExecutable(options: ShellRuntimeOptions = {}): string {
+  const runtime = options.runtimeDirectory
+  const found = options.powershellExecutable ?? configured('ANYBOX_POWERSHELL') ?? firstFile([
     runtime && join(runtime, 'powershell/pwsh.exe'), fromPath('pwsh.exe'),
     process.env.ProgramFiles && join(process.env.ProgramFiles, 'PowerShell/7/pwsh.exe'),
   ])
@@ -62,14 +62,14 @@ export function toolEnvironment(): NodeJS.ProcessEnv {
 }
 
 /** Shell text remains code; only the shell's own invocation syntax is adapted. */
-export function prepareShellCommand(input: { command: string; shell?: string; login?: boolean; bash?: boolean }): ShellCommand {
-  let executable = input.bash ? bashExecutable() : input.shell ?? (process.platform === 'win32' ? powershellExecutable() : bashExecutable())
+export function prepareShellCommand(input: { command: string; shell?: string; login?: boolean; bash?: boolean }, options: ShellRuntimeOptions = {}): ShellCommand {
+  let executable = input.bash ? bashExecutable(options) : input.shell ?? (process.platform === 'win32' ? powershellExecutable(options) : bashExecutable(options))
   const kind = basename(executable).toLowerCase().replace(/\.exe$/, '')
   if (process.platform === 'win32') {
     if (['wsl', 'wslhost'].includes(kind) || kind === 'bash' && /[\\/]windows[\\/](?:system32|sysnative)[\\/]/i.test(executable)) throw new Error('WSL is not a native shell')
     if (!isAbsolute(executable)) {
-      if (kind === 'bash') executable = bashExecutable()
-      else if (kind === 'pwsh') executable = powershellExecutable()
+      if (kind === 'bash') executable = bashExecutable(options)
+      else if (kind === 'pwsh') executable = powershellExecutable(options)
       else if (kind === 'powershell') executable = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
       else if (kind === 'cmd') executable = process.env.ComSpec ?? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/cmd.exe')
       else executable = fromPath(executable.endsWith('.exe') ? executable : executable + '.exe') ?? executable

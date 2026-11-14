@@ -21,6 +21,8 @@ Anybox Harness 在 [server-models.ts](../../../packages/app-harness/src/server-m
 | `models.protocols` | `register(protocol)`、`acquire(protocolId)` | 协议代及租约 |
 | `models.source-data` | `accepted(sourceId)`、`accept(snapshot, options?)` | 受信来源原子接纳 |
 
+`models.list/get` 的 `RunnableModelSummary.limits` 与新 `NativeModelSnapshot.limits` 提供可选、非秘密的上下文/输入/输出限制。按配置固定的 `modelDefinitionVersionId` 读取准确历史；来源刷新不改写已有配置的展示上限，历史缺失则省略，不借用最新定义猜测。此元数据不参与恢复身份比较，旧 schema 3 快照无此字段仍可恢复。验证见 `packages/models/tests/context-limits.test.mjs`。
+
 Settings 的完整操作分组：
 
 - 定义：`providers`、`models`、`providerHistory`、`modelHistory`、`createProvider`、`updateProvider`、`createModel`、`updateModel`。查询支持来源、Provider、文本搜索、缺失/弃用条目和文本契约筛选；用户写入只产生或修改 `user` 定义。
