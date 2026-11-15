@@ -14,6 +14,7 @@ import { fullScope, localComputerUnitId, localModelsUnitId, unitAuthorization } 
 import { createUnitTransportComponent, unitTransportServiceKey } from '../packages/app-harness/dist/core/unit/transport-component.js'
 import { openComputerWorker } from '../packages/app-harness/dist/core/computer/worker-server.js'
 import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
+import { workerBuildId } from '../packages/app-harness/dist/core/computer/worker-runtime.js'
 import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { ceilingPermits, localWorkerAttachment, validateHarnessUrl, validateWorkerAttachment } from '../packages/app-harness/dist/core/computer/worker-attachments-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
@@ -113,7 +114,7 @@ test('a worker serves a remote harness server through dial-out under the device 
   // Requests travel through the mailbox; the unit derives the authorization from the attachment that delivered them.
   const id = attached.attachmentId
   const request = (kind, payload) => remote.transport.request(id, { kind, payload })
-  assert.deepEqual(await request('info', {}), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: manifest })
+  assert.deepEqual(await request('info', {}), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: manifest, buildId: workerBuildId, runtime: { state: 'ready' } })
   const pollUrl = `${remote.web.url}/api/v1/apps/agent/units/unit/poll?${new URLSearchParams({ unitId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, waitMs: '0' })}`
   const pollHeaders = { authorization: unitAuthorization(id, memory.values().next().value), 'x-anybox-instance-id': remote.access.instance.instanceId }
   for (const value of ['{broken', JSON.stringify({ tooLarge: 'x'.repeat(8192) })]) {
@@ -207,7 +208,7 @@ test('a worker restart keeps approved attachments and resumes dial-out from the 
   assert.notEqual(worker.endpoint.bootId, firstBoot)
   const connection = await until(() => { const c = remote.transport.connection(attached.attachmentId); return c?.connected && c.bootId === worker.endpoint.bootId ? c : undefined }, 'second boot polls with the stored credential')
   assert.equal(connection.unitId, worker.endpoint.workerId)
-  assert.deepEqual(await remote.transport.request(attached.attachmentId, { kind: 'info', payload: {} }), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: createComputerToolManifest() })
+  assert.deepEqual(await remote.transport.request(attached.attachmentId, { kind: 'info', payload: {} }), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: createComputerToolManifest(), buildId: workerBuildId, runtime: { state: 'ready' } })
   assert.deepEqual(connection.capabilities, { computerTools: createComputerToolManifest() }, 'the new boot reports its own tool contracts')
   assert.equal(memory.size, 1)
   const relink = connectLocalComputerWorker({ directory: join(directory, 'worker') })

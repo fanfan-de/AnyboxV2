@@ -1,4 +1,4 @@
-import { constants } from 'node:fs'
+import { accessSync, constants, statSync } from 'node:fs'
 import type { BigIntStats } from 'node:fs'
 import * as fs from 'node:fs/promises'
 import { basename, extname, isAbsolute, parse, relative, resolve, sep } from 'node:path'
@@ -46,6 +46,16 @@ const exclusionGlobs = ['**/.git/**', '**/.hg/**', '**/.svn/**', '**/node_module
 /** Electron resolution names the archive even for an unpacked executable; spawn needs its physical path. */
 export function searchBinaryPath(path: string = rgPath): string {
   return path.replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2')
+}
+
+/** Inspect this loaded tool package's own executable, without starting a search. */
+export function searchRuntimeAvailable(): boolean {
+  try {
+    const executable = searchBinaryPath()
+    if (!statSync(executable).isFile()) return false
+    accessSync(executable, process.platform === 'win32' ? constants.F_OK : constants.X_OK)
+    return true
+  } catch { return false }
 }
 
 function toolError(code: string, message: string): Error & { readonly code: string } {

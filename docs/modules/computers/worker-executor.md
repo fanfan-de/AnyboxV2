@@ -44,6 +44,12 @@ worker 异常重启将可能开始的 starting/running 操作转为 outcome-unkn
 
 不承诺任意 Shell 外部副作用 exactly-once，不迁移正在运行的进程，不支持 portable-managed、checkpoint 或独立模型 exchange。远端 harness server 的请求经[拨出](worker-dialout.md)循环到达同一端口，执行器不区分传输。这些边界详见[设计](../../computer-resource-design.md)。
 
+## 构建身份与运行条件
+
+构建在 `dist/core/computer/worker-build.json` 保存确定性身份，覆盖实际 worker 代码及生产依赖字节（含工具包、Nya 与原生辅助程序）；身份在模块加载时固定。`info()` 的 `runtime` 每次核对当前构建回执、worker 自己加载的进程 helper 与搜索二进制的平台、普通文件及可执行条件，分别报告 `build-changed`、`process-unavailable` 或 `search-unavailable`。检查不启动工具进程，也不保证未来执行成功；绕过应用构建单独替换依赖内容，不保证由回执检查发现。
+
+新工具在原 boot、声明及授权检查后、持久接纳前检查健康；已有 operation 的幂等事实与控制清理继续可用。远端 worker 只检查其自身运行条件，不与 harness server 的本机构建身份比较。实现位于 [构建身份](../../../packages/app-harness/src/core/computer/worker-build.ts)、[运行条件](../../../packages/app-harness/src/core/computer/worker-runtime.ts)及[身份生成脚本](../../../packages/app-harness/scripts/build-worker-identity.mjs)。
+
 ## 验证
 
 [Worker 行为](../../../tests/computer-worker.test.mjs)与[故障注入](../../../tests/computer-worker-resume.test.mjs)验证真实独立进程、接纳去重、owner 栅栏、排队取消、固定 scope、stdin/output 重复领取、worker 故障未知事实及 Runtime SIGKILL 后接续；[worker 附着测试](../../../tests/computer-worker-attachments.test.mjs)验证按附着授权与上限拒绝。[只读查询测试](../../../tests/computer-worker-query.test.mjs)以真实 SQLite 和文件句柄验证关闭/取消/撤销等待、canonical 范围交集及远端目录上限。补丁逐文件事实及取消屏障继续由 [Apply Patch 测试](../../../tests/apply-patch-component.test.mjs)验证。完整入口为 `npm run check`。

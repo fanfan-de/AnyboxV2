@@ -6,13 +6,28 @@ import { DatabaseSync } from 'node:sqlite'
 import type { Component } from '@nya/core'
 import type { JsonValue } from '@anybox/models'
 import { localComputerWorkerServiceKey, localComputerWorkerControlServiceKey, workerError } from './worker-port.js'
-import type { ComputerWorkerOptions, ComputerWorkerPort, LocalComputerWorkerControl, LocalComputerWorkerStatus, ObservedWorkerInfo, WorkerInfo, WorkerOperation } from './worker-port.js'
+import type { ComputerWorkerOptions, ComputerWorkerPort, LocalComputerWorkerControl, LocalComputerWorkerStatus, ObservedWorkerInfo, WorkerInfo, WorkerOperation, WorkerRuntimeHealth, WorkerSubmission } from './worker-port.js'
+import { workerBuildId } from './worker-build.js'
 import type { WorkerEndpoint } from './worker-server.js'
 import { ensurePrivateDirectory } from '../platform/private-directory.js'
 import { processRuntimeAvailable } from '@anybox/computer-tools/platform/process-runtime'
 import { resolveBackgroundRuntime } from '../platform/runtime-path.js'
 
 const wait = (ms: number) => new Promise<void>(yes => setTimeout(yes, ms))
+function runtimeHealth(value: unknown): WorkerRuntimeHealth | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const health = value as WorkerRuntimeHealth
+  if (health.state === 'ready') return Object.freeze({ state: 'ready' })
+  if (health.state === 'unavailable' && ['build-changed', 'process-unavailable', 'search-unavailable'].includes(health.reason ?? '')) {
+    return Object.freeze({ state: 'unavailable', reason: health.reason })
+  }
+  return undefined
+}
+function restartReason(info: WorkerInfo): LocalComputerWorkerStatus['reason'] {
+  if (!workerBuildId || info.buildId !== workerBuildId) return 'worker-build-mismatch'
+  if (runtimeHealth(info.runtime)?.state !== 'ready') return 'worker-runtime-unavailable'
+  return undefined
+}
 /** Passive clients copy bounded JSON without importing execution tools or interpreting their contracts. */
 function copyToolReport(value: unknown): JsonValue | undefined {
   try {
@@ -74,7 +89,10 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
         const info = output.value as WorkerInfo | undefined
         if (info && info.workerId === target.workerId && info.bootId === target.bootId && typeof info.platform === 'string' && typeof info.architecture === 'string') {
           const toolManifest = copyToolReport(info.toolManifest)
+          const runtime = runtimeHealth(info.runtime)
           observedInfo = Object.freeze({ workerId: info.workerId, bootId: info.bootId, platform: info.platform, architecture: info.architecture,
+            ...(typeof info.buildId === 'string' && /^[a-f0-9]{64}$/.test(info.buildId) ? { buildId: info.buildId } : {}),
+            ...(runtime === undefined ? {} : { runtime }),
             ...(toolManifest === undefined ? {} : { toolManifest }) })
         }
       }
@@ -198,9 +216,25 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
     if (!accepting || signal?.aborted) throw workerError('worker-observer-closed')
     const target = await ensure()
     if (signal?.aborted) throw workerError('worker-observer-closed')
-    try { return await send<T>(target, path, input, signal) }
+    try {
+      if (path === '/submit' && (input as { kind?: string }).kind === 'tool') {
+        // Repeated submissions keep observing the exact original operation even
+        // when this worker's implementation has since become unavailable.
+        const prior = await send<WorkerOperation | null>(target, '/get', input, signal)
+        // Let submit validate the original digest and binding on an idempotent
+        // retry; get alone does not validate a new submission's identity.
+        if (!prior) await ready(target, signal, input as WorkerSubmission)
+      }
+      return await send<T>(target, path, input, signal)
+    }
     catch (error) { if (!live(target.pid) && current === target) current = undefined; throw error }
   })())
+  const ready = async (target: WorkerEndpoint, signal?: AbortSignal, submission?: WorkerSubmission) => {
+    const info = await send<WorkerInfo>(target, '/info', {}, signal)
+    if (!info || info.workerId !== target.workerId || info.bootId !== target.bootId) throw workerError('worker-invalid-endpoint')
+    if (submission && submission.workerBootId !== info.bootId) throw workerError('worker-instance-replaced')
+    if (restartReason(info)) throw workerError('worker-restart-required')
+  }
   // Execution adapters may start on demand; independent management always uses autoStart: false.
   const control: LocalComputerWorkerControl = {
     listAttachments: signal => request<readonly JsonValue[]>('/attachments/list', {}, signal),
@@ -211,7 +245,7 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
   return {
     control,
     observedInfo: () => accepting ? observedInfo : undefined,
-    start: () => tracked(ensure(true).then(() => {})),
+    start: () => tracked(ensure(true).then(target => ready(target))),
     status: signal => tracked((async () => {
       if (!accepting) throw workerError('worker-observer-closed')
       const supported = processRuntimeAvailable(), target = await endpoint(directory)
@@ -219,7 +253,12 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
       try {
         const info = await send<Awaited<ReturnType<ComputerWorkerPort['info']>>>(target, '/info', {}, signal)
         if (info.workerId !== target.workerId || info.bootId !== target.bootId) throw workerError('worker-invalid-endpoint')
-        return { state: 'running', supported, ...info, pid: target.pid, attachments: await send<readonly JsonValue[]>(target, '/attachments/list', {}, signal) }
+        const reason = restartReason(info), runtime = runtimeHealth(info.runtime), toolManifest = copyToolReport(info.toolManifest)
+        return { state: reason ? 'restart-required' : 'running', supported, workerId: info.workerId, bootId: info.bootId,
+          platform: info.platform, architecture: info.architecture, ...(toolManifest === undefined ? {} : { toolManifest }),
+          ...(typeof info.buildId === 'string' && /^[a-f0-9]{64}$/.test(info.buildId) ? { buildId: info.buildId } : {}),
+          ...(workerBuildId ? { expectedBuildId: workerBuildId } : {}), ...(runtime ? { runtime } : {}), ...(reason ? { reason } : {}),
+          pid: target.pid, attachments: await send<readonly JsonValue[]>(target, '/attachments/list', {}, signal) }
       } catch (error) {
         if (!accepting || signal?.aborted) throw error
         return { state: 'unavailable', supported, attachments: [] }

@@ -43,11 +43,19 @@ export interface WorkerOperation {
   readonly processRef?: ProcessRef
   readonly images?: readonly WorkerImage[]
 }
+export interface WorkerRuntimeHealth {
+  readonly state: 'ready' | 'unavailable'
+  readonly reason?: 'build-changed' | 'process-unavailable' | 'search-unavailable'
+}
 export interface WorkerInfo {
   readonly workerId: string
   readonly bootId: string
   readonly platform: string
   readonly architecture: string
+  /** Identity of the loaded worker implementation, fixed before accepting work. */
+  readonly buildId?: string
+  /** Checked by the worker against its own current runtime files. Legacy workers omit it. */
+  readonly runtime?: WorkerRuntimeHealth
   /** Older workers omit this read-only report; it is not an execution or authorization guarantee. */
   readonly toolManifest?: ComputerToolManifest
 }
@@ -84,8 +92,15 @@ export interface ComputerWorkerOptions {
   readonly autoStart?: boolean
 }
 export interface LocalComputerWorkerStatus {
-  readonly state: 'stopped' | 'running' | 'unavailable'
+  readonly state: 'stopped' | 'running' | 'unavailable' | 'restart-required'
   readonly supported: boolean
+  readonly platform?: string
+  readonly architecture?: string
+  readonly toolManifest?: JsonValue
+  readonly reason?: 'worker-build-mismatch' | 'worker-runtime-unavailable'
+  readonly buildId?: string
+  readonly expectedBuildId?: string
+  readonly runtime?: WorkerRuntimeHealth
   readonly workerId?: string
   readonly bootId?: string
   readonly pid?: number

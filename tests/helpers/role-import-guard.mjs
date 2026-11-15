@@ -7,7 +7,7 @@ export async function resolve(specifier, context, next) {
   const url = result.url.replaceAll('\\', '/')
   const server = /\/packages\/app-harness\/dist\/(?:registration|server|server-runtime|server-models)\.js$/.test(url) ||
     /\/packages\/app-harness\/dist\/core\/(?:run|session|protocol-agents)\//.test(url) ||
-    /\/packages\/app-harness\/dist\/core\/computer\/(?!worker-(?:client|port)\.js$)/.test(url) || /\/packages\/app-harness\/dist\/core\/index\.js$/.test(url) ||
+    /\/packages\/app-harness\/dist\/core\/computer\/(?!worker-(?:client|port|build)\.js$)/.test(url) || /\/packages\/app-harness\/dist\/core\/index\.js$/.test(url) ||
     /\/packages\/host\/dist\/execution\.js$/.test(url) || /\/packages\/models\/dist\//.test(url)
   const nativeSmoke = /\/(?:desktop\/native-smoke\.js|sharp\/)/.test(url)
   const role = /\/entrypoints\/(?:client-main|harness-server-main|desktop-client|desktop-execution)\.js$/.test(url)

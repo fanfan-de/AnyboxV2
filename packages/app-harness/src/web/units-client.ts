@@ -3,6 +3,7 @@ import type { UnitAttachment, UnitScope } from '../core/unit/domain.js'
 import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
 import { environmentLabel, environmentStateLabel } from './project-directory-client.js'
 import { createPageRequests } from './page-lifecycle.js'
+import type { LocalComputerWorkerStatus } from '../core/computer/worker-port.js'
 
 /** Owner-side unit attachments of one fixed device: list, issue one-time attach codes, revoke. */
 export interface UnitsSettingsView {
@@ -48,7 +49,7 @@ export interface LocalAttachmentsView {
 /** Local client management, independent of every saved harness server connection. */
 export function setupLocalAttachments(source: Api, messageFor: (error: unknown) => string, section: HTMLElement, deviceName: string): LocalAttachmentsView {
   const requests = createPageRequests(source), api = requests.api
-  let attachments: readonly LocalAttachmentView[] = [], notice = '', disposed = false, busy = false, running = false, supported = true, unavailable = false
+  let attachments: readonly LocalAttachmentView[] = [], notice = '', disposed = false, busy = false, running = false, supported = true, unavailable = false, restartRequired = false
   let disposal: Promise<void> | undefined
   section.replaceChildren()
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] => {
@@ -108,17 +109,19 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
     if (disposed) throw new Error('view-disposed')
     busy = true; attachButton.disabled = startButton.disabled = refreshButton.disabled = true
     try { return await work() } catch (error) { setNotice(messageFor(error)); throw error }
-    finally { busy = false; attachButton.disabled = !running; startButton.disabled = running || !supported || unavailable; refreshButton.disabled = false }
+    finally { busy = false; attachButton.disabled = !running || restartRequired; startButton.disabled = running || !supported || unavailable; refreshButton.disabled = false }
   }
   const view: LocalAttachmentsView = {
     async refresh() {
       try {
-        const value = await api<{ state: 'stopped' | 'running' | 'unavailable'; supported: boolean; workerId?: string; attachments: readonly LocalAttachmentView[] }>('/computer/status')
+        const value = await api<Omit<LocalComputerWorkerStatus, 'attachments'> & { attachments: readonly LocalAttachmentView[] }>('/computer/status')
         if (disposed) return
-        running = value.state === 'running'; supported = value.supported; unavailable = value.state === 'unavailable'; attachments = value.attachments
-        workerStatus.textContent = !supported ? '当前平台尚不支持 Computer worker。' : running ? `运行中 · ${value.workerId}` : value.state === 'stopped' ? '尚未启动。启动后可查看和管理附着。' : '无法连接本机 worker，请检查进程状态后刷新。'
+        restartRequired = value.state === 'restart-required'
+        running = value.state === 'running' || restartRequired; supported = value.supported; unavailable = value.state === 'unavailable'; attachments = value.attachments
+        workerStatus.textContent = restartRequired ? 'Computer worker 的版本或运行条件已变化，已暂停新工具调用。请在任务退出后停止并重新启动 worker。'
+          : !supported ? '当前平台尚不支持 Computer worker。' : running ? `运行中 · ${value.workerId}` : value.state === 'stopped' ? '尚未启动。启动后可查看和管理附着。' : '无法连接本机 worker，请检查进程状态后刷新。'
         startButton.hidden = running; startButton.disabled = busy || !supported || value.state === 'unavailable'
-        form.hidden = !running; attachButton.disabled = !running || busy; setNotice('')
+        form.hidden = !running || restartRequired; attachButton.disabled = !running || restartRequired || busy; setNotice('')
       }
       catch (error) { if (!disposed) setNotice(messageFor(error)) }
       render()

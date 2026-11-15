@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { accessSync, constants, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { Readable, Writable } from 'node:stream'
 
@@ -32,7 +32,10 @@ const nativePath = (name: string) => fileURLToPath(new URL(`./native/${name}`, i
 export function processRuntimeAvailable(): boolean {
   try {
     const metadata = JSON.parse(readFileSync(nativePath('process-host.json'), 'utf8')) as { platform?: string; arch?: string; protocol?: number }
-    return metadata.platform === process.platform && metadata.arch === process.arch && metadata.protocol === 1 && existsSync(nativePath(process.platform === 'win32' ? 'anybox-process-host.exe' : 'anybox-process-host'))
+    const executable = nativePath(process.platform === 'win32' ? 'anybox-process-host.exe' : 'anybox-process-host')
+    if (metadata.platform !== process.platform || metadata.arch !== process.arch || metadata.protocol !== 1 || !statSync(executable).isFile()) return false
+    accessSync(executable, process.platform === 'win32' ? constants.F_OK : constants.X_OK)
+    return true
   } catch { return false }
 }
 const failure = (stage = 'unavailable') => new Error('managed process runtime unavailable or cleanup failed', { cause: stage })

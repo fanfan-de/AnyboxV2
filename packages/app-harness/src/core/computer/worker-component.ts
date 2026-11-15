@@ -28,6 +28,7 @@ import { ceilingPermits, localWorkerAttachmentId } from './worker-attachments-do
 import { workerAttachmentsServiceKey } from './worker-attachments.js'
 import type { WorkerAttachmentsPort } from './worker-attachments.js'
 import { computerWorkerServiceKey, workerError } from './worker-port.js'
+import { workerBuildId, workerRuntimeHealth } from './worker-runtime.js'
 import type { ComputerWorkerPort, WorkerAuthorization, WorkerSubmission, WorkerOperation, WorkerImage } from './worker-port.js'
 
 const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
@@ -284,7 +285,8 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
       const unsubscribe = attachments.onChanged((attachment, change) => attachment.state === 'revoked' || change === 'permissions' ? revokeRuns(attachment.attachmentId) : undefined)
       ctx.effect(() => () => unsubscribe(), 'stop observing attachment revocations')
       const service: ComputerWorkerPort = {
-        info: async () => ({ ...identity, platform: process.platform, architecture: process.arch, toolManifest }),
+        info: async () => ({ ...identity, platform: process.platform, architecture: process.arch, toolManifest,
+          ...(workerBuildId === undefined ? {} : { buildId: workerBuildId }), runtime: workerRuntimeHealth() }),
         claimRun(input) {
           assertOpen(); auth(input)
           return db.transaction(tx => {
@@ -340,6 +342,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
                 const bound = JSON.parse(String(other.binding_json)) as typeof binding
                 if (bound.workspaceId === binding.workspaceId && (bound.workspaceEpoch !== binding.workspaceEpoch || bound.computerInstanceId !== binding.computerInstanceId || bound.instanceGeneration !== binding.instanceGeneration)) throw workerError('worker-binding-conflict')
               }
+              if (workerRuntimeHealth().state !== 'ready') throw workerError('worker-restart-required')
               tx.execute('INSERT INTO computer_worker_workspace_fences (workspace_id, workspace_epoch, instance_id, instance_generation, path) VALUES (?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET workspace_epoch = excluded.workspace_epoch, instance_id = excluded.instance_id, instance_generation = excluded.instance_generation, path = excluded.path',
                 [binding.workspaceId, binding.workspaceEpoch, binding.computerInstanceId, binding.instanceGeneration, binding.path])
               tx.execute('INSERT INTO computer_worker_instance_fences (computer_id, instance_id, instance_generation) VALUES (?, ?, ?) ON CONFLICT(computer_id) DO UPDATE SET instance_id = excluded.instance_id, instance_generation = excluded.instance_generation', [binding.computerId, binding.computerInstanceId, binding.instanceGeneration])

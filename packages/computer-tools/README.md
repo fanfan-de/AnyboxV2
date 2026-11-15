@@ -9,3 +9,5 @@
 工作目录是相对路径基准，不是文件系统沙箱；权限、目录绑定与调用接纳由调用方提供。工具仅报告执行事实，不读取或决定 Agent 任务状态。外部操作的耐久账本、查询原结果、恢复与重试属于调用方。
 
 `/platform/process-runtime` 随包携带原生进程监督器；独立构建在开发机编译该包的目标二进制，安装快照不运行构建脚本。shell runtime 目录通过选项注入，既有显式 shell 环境变量保持兼容。测试运行 `npm test --workspace @anybox/computer-tools`。
+
+`processRuntimeAvailable()` 核对当前加载包自己的 helper 平台元数据、普通文件及执行权限；`/files` 的 `searchRuntimeAvailable()` 检查自己解析的搜索二进制。两者都是不启动工具的只读运行条件检查，调用方可用于状态与准入，不构成未来执行成功或资源退出保证。

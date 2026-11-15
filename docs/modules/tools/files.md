@@ -18,6 +18,6 @@ Glob 使用随包 `@vscode/ripgrep` 发现文件，再通过 `picomatch` 匹配�
 
 工厂可配置 `maxSourceBytes`、`maxResultBytes`、`searchTimeoutMs`。取消中止读取和搜索，传递到已接管的图片或补丁调用，并等待文件 handle、子进程及嵌套 `done`。嵌套结果失败会主动取消并等待实际退出；失败的实际退出不会被尚未完成的结果阻塞。已经提交的文件事实仍保留；清理失败拒绝 `done`，即使 `result` 包含成功观察。卸载 Effect 停止准入、取消并等待全部调用、聚合清理失败。基础设施异常归一固定错误，参数、文本及常见文件错误返回结构化诊断。
 
-Electron 下搜索进程使用 `searchBinaryPath` 将 `app.asar` 的模块解析路径转换为已解包的实际路径；普通 Node 路径保持原样。Windows worker 与文件工具使用原生 Windows 文件系统，不依赖 WSL 或 Claude Agent，配置及验证见[原生平台支持](../../native-platform-support.md)。发行与桌面二进制验证见 [桌面打包](../../desktop-packaging.md) 和 `tests/search-release.test.mjs`。
+Electron 下搜索进程使用 `searchBinaryPath` 将 `app.asar` 的模块解析路径转换为已解包的实际路径；普通 Node 路径保持原样。只读 `searchRuntimeAvailable()` 检查当前加载包所解析的搜索二进制是否为普通、可执行文件，不启动搜索，不代表调用必定成功。Windows worker 与文件工具使用原生 Windows 文件系统，不依赖 WSL 或 Claude Agent，配置及验证见[原生平台支持](../../native-platform-support.md)。发行与桌面二进制验证见 [桌面打包](../../desktop-packaging.md) 和 `tests/search-release.test.mjs`。
 
 独立包测试为 `packages/computer-tools/tests/independent-tools.test.mjs` 与 `package-consumer.test.mjs`，可运行 `npm test --workspace @anybox/computer-tools`。行为测试：[file-tools.test.mjs](../../../tests/file-tools.test.mjs)、[apply-patch-component.test.mjs](../../../tests/apply-patch-component.test.mjs)。验证包括分页、隐藏/ignore 搜索、排除和链接、原字节图片及能力、共享队列、外部并发修改、取消等待和清理失败。完整验收运行 `npm run check`。

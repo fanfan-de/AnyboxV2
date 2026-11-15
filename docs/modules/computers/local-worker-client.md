@@ -10,6 +10,10 @@
 
 客户端保留已经成功接收且端点身份吻合的 `info` 内存观察，供 Computer 环境列表同步读取工具支持报告；工具报告仅作为有界、深冻结的不透明 JSON 保存，客户端不加载执行端目录或工具实现，受信契约核对由 harness server 的环境投影完成。该读取不触发 HTTP、endpoint 检查、worker 目录访问或按需启动；从未收到报告或旧 worker 没有清单时保持未知。报告固定所属 `workerId/bootId`，仅说明该 boot 支持的工具契约，不证明当前进程仍存活、依赖已就绪或操作已获授权，也不承担准入判断。没有新增持久缓存或后台探测。
 
+`info` 另含加载时固定的 `buildId` 及 worker 自身的 `runtime` 健康；旧 worker 可缺少这些字段并继续只读观察。显式 `start()` 及每个新工具提交都读取实际 worker 的身份与健康；本地构建身份不同、报告缺失或 `runtime.state` 不为 ready 时返回 `worker-restart-required`，不自动终止存量进程。`status()` 对可连接但不就绪的 worker 返回 `restart-required`、`worker-build-mismatch` 或 `worker-runtime-unavailable` 原因，以及实际/预期构建身份。`supported` 仍描述客户端包的本机平台条件，不能代替实际 worker 的报告。
+
+已存在 operation 的重复 submit 继续交给原 worker 校验摘要与绑定并返回原事实；get、query、claim、cancel、close-scope、权限管理、撤销和 shutdown 不受新工具健康栅栏阻塞。旧 boot 的提交仍优先返回 `worker-instance-replaced`，不把未知副作用改写为普通拒绝。
+
 回环返回的工具图片仍以 base64 内嵌在 `WorkerOperation.images` 中，Operations 校验摘要后导入本机资源组件；这是回环传输的既有形态，拨出传输改用字节通道（见[worker 拨出](worker-dialout.md)）。
 
 `control` 是设备拥有者对本机 worker 附着的控制面，经回环转发到 worker 的 `/attachments/list`、`/attachments/consume`、`/attachments/revoke`、`/attachments/permissions`：列出附着及连接状态、消费其他 harness server 的附着码并设定目录与工具上限、撤销。这些调用会按需启动 worker，因为单元必须运行才能服务远端；HTTP 层在 `/units/local-computer/attachments` 路由暴露它们。统一环境装配始终提供该本机控制服务；读取执行环境列表不调用它，也不因此启动 worker。

@@ -44,6 +44,7 @@ export function messageFor(error: unknown): string {
     'worker-startup-failed': '本机执行器未能启动。',
     'worker-startup-timeout': '本机执行器启动超时。',
     'worker-not-running': 'Computer worker 尚未启动，请先点击“启动 Computer worker”。',
+    'worker-restart-required': 'Computer worker 的版本或运行条件已变化。请在任务退出后停止并重新启动 worker。',
     'worker-attachment-updating': '正在更新此附着的权限并等待工具退出，请稍后重试。',
     'worker-cleanup-failed': '部分工具退出未能确认，此附着已停止接收新工作。请重启 Computer worker 后再试。',
     'worker-platform-unsupported': '当前平台尚不支持 Computer worker。',

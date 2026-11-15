@@ -193,6 +193,26 @@ test('opening and refreshing local worker management never starts it; explicit s
   await view.dispose(); assert.equal(running, true, 'closing the panel does not stop the worker')
 })
 
+test('a worker requiring restart explains the blocked admission and keeps revocation available', async t => {
+  dom(t)
+  const attachment = { attachmentId: 'old-worker', harnessUrl: 'https://remote.example', instanceId: 'remote', state: 'approved',
+    connection: 'offline', lastError: null, ceiling: { kind: 'computer', projects: 'all', tools: 'all' } }
+  const { source, calls } = api({
+    '/computer/status': () => ({ state: 'restart-required', supported: true, workerId: 'worker', attachments: [attachment] }),
+    '/computer/attachments/old-worker/revoke': () => ({ ...attachment, state: 'revoked' }),
+  })
+  const section = new Element(), view = setupLocalAttachments(source, messageFor, section, '本机')
+  t.after(() => view.dispose())
+  await view.refresh()
+  assert.ok(section.find(node => node.textContent.includes('已暂停新工具调用')))
+  assert.equal(section.find(node => node.textContent === '启动 Computer worker').hidden, true)
+  assert.equal(section.find(node => node.textContent === '附着').disabled, true)
+  assert.ok(section.find(node => node.textContent === '撤销附着'))
+  await view.revoke('old-worker')
+  assert.equal(calls.some(call => call.path === '/computer/attachments/old-worker/revoke'), true)
+  assert.equal(calls.some(call => call.path === '/computer/start' || call.path === '/computer/stop'), false)
+})
+
 test('the client gateway proxies only the owner-side unit routes', () => {
   for (const [method, path] of [['GET', '/computer-environments'], ['GET', '/units/attachments'], ['GET', '/units/local-computer/attachments'], ['POST', '/units/attach-codes'], ['POST', '/units/local-computer/attachments'],
     ['POST', '/units/attachments/abc/revoke'], ['POST', '/units/local-computer/attachments/abc/revoke']]) assert.equal(allowedProxyPath(method, path), true, `${method} ${path}`)

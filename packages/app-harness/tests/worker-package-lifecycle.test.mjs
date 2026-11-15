@@ -7,10 +7,11 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { connectLocalComputerWorker } from '../dist/core/computer/worker-client.js'
+import { workerBuildId } from '../dist/core/computer/worker-runtime.js'
 
 async function stub(t) {
   const directory = await mkdtemp(join(tmpdir(), 'harness-package-worker-')), sockets = new Set(), workerId = randomUUID(), bootId = randomUUID(), token = randomUUID() + randomUUID()
-  const server = createServer(async (request, response) => { for await (const _bytes of request) { /* App-owned wire protocol. */ } response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ value: request.url === '/info' ? { workerId, bootId } : [] })) })
+  const server = createServer(async (request, response) => { for await (const _bytes of request) { /* App-owned wire protocol. */ } response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ value: request.url === '/info' ? { workerId, bootId, platform: process.platform, architecture: process.arch, buildId: workerBuildId, runtime: { state: 'ready' } } : [] })) })
   server.on('connection', socket => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) }); server.listen(0, '127.0.0.1'); await once(server, 'listening')
   t.after(async () => { const done = new Promise(resolve => server.close(resolve)); for (const socket of sockets) socket.destroy(); await done; await rm(directory, { recursive: true, force: true }) })
   return { directory, server, async publish() { await mkdir(directory, { recursive: true }); await writeFile(join(directory, 'endpoint.json'), JSON.stringify({ workerId, bootId, token, pid: process.pid, url: `http://127.0.0.1:${server.address().port}` })) } }

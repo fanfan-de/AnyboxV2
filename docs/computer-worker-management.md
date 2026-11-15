@@ -17,6 +17,8 @@ Computer worker 可以由本机客户端或命令行直接管理，无须安装�
 
 关闭面板、客户端或桌面只结束管理观察，不停止独立 worker，也不撤销附着。worker 故障不会由状态查看自动重启；需要显式启动，常驻部署使用独立系统服务管理器。
 
+旧 worker、构建身份不同或 worker 自己的辅助程序不可用时，状态为 `restart-required`，管理界面提示等待任务退出后受控重启，并停止新的工具调用及附着表单。已有事实查询、权限收紧、撤销、取消和清理继续可用；不会因刷新状态或点击启动自动终止旧 worker。`supported` 只描述客户端包的本机条件，实际就绪以 worker 自身报告为准。
+
 桌面固定使用用户数据目录下 `data/harness.sqlite.computer-worker`，与已有本机执行角色共用同一 worker 实例。独立客户端的默认目录为 `${ANYBOX_HARNESS_DATABASE ?? './data/harness.sqlite'}.computer-worker`，可通过 `ANYBOX_COMPUTER_WORKER_DIRECTORY` 指向已经部署的 worker。该变量只为客户端选择管理目标，不修改 harness server 的 worker 配置。目录沿用既有格式，未迁移或合并任何数据库。
 
 ## 无界面命令
@@ -39,6 +41,8 @@ node packages/distribution/dist/entrypoints/anybox-main.js computer-worker stop 
 ```
 
 `attach` / `permissions` 必须通过管道提供 JSON 标准输入；直接以交互终端调用会提示输入方式。附着码不作为命令行参数，不在输出中回显。输出为非秘密 JSON，错误退出码为 1。attach / permissions / revoke 要求 worker 已运行，不隐式启动它。
+
+遇到 `restart-required` 时，先等待工作退出，再用同一目录执行 `stop`，确认实际清理完成后执行 `start`。单独刷新页面或重启观察端不会更新独立 worker。历史操作不重放，数据库、附着及兼容数据保留。
 
 `attach` 输入：
 
