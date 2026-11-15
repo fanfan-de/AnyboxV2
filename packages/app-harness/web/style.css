@@ -565,7 +565,29 @@
 .models-draft-status { padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--secondary); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .composer-model-row { display: flex; flex: 1 1 120px; min-width: 0; max-width: 320px; margin-right: auto; align-items: center; gap: 5px; }
 .composer-model-row[hidden] { display: none; }
-.composer-model { min-width: 0; max-width: 100%; background: transparent; border: 0; color: var(--secondary); font: inherit; font-size: 11px; padding: 4px 2px; text-overflow: ellipsis; }
+.model-picker { min-width: 0; max-width: 100%; }
+.composer-model { display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; background: transparent; border: 0; border-radius: 4px; color: var(--secondary); font: inherit; font-size: 11px; padding: 5px 3px; text-align: left; }
+.composer-model:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.composer-model:focus-visible { outline: 2px solid var(--secondary); outline-offset: 1px; }
+.model-picker-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-model>svg { flex: 0 0 auto; width: 12px; height: 12px; }
+.model-picker-popover { display: flex; flex-direction: column; position: fixed; z-index: 31; inset: auto; margin: 0; padding: 5px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--panel); color: var(--text); box-shadow: 0 8px 30px #00000024, 0 2px 6px #00000012; overflow: hidden; }
+.model-picker-popover[hidden] { display: none; }
+.model-picker-popover::backdrop { background: transparent; pointer-events: none; }
+.model-picker-list { min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; outline: none; }
+.model-picker-group+.model-picker-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+.model-picker-group-label { padding: 7px 8px 4px; color: var(--secondary); font-size: 10px; line-height: 16px; overflow-wrap: anywhere; }
+.model-picker-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text); font: inherit; font-size: 12px; line-height: 18px; text-align: left; touch-action: manipulation; }
+.model-picker-option-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.model-picker-option[aria-selected=true] { background: var(--selected); }
+.model-picker-option[aria-selected=true]::before { content: '✓'; flex: 0 0 12px; font-size: 11px; }
+.model-picker-option:not([aria-selected=true]) { padding-left: 28px; }
+.model-picker-option:hover:not(:disabled), .model-picker-option[data-active=true]:not(:disabled) { background: var(--selected); }
+.model-picker-option:disabled { color: var(--muted); background: transparent; opacity: .7; }
+.model-picker-default { flex: 0 0 auto; padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--secondary); font-size: 10px; line-height: 17px; font-weight: 400; }
+.model-picker-default[hidden] { display: block !important; visibility: hidden; }
+.model-picker-help { flex: 0 0 auto; margin: 5px 3px 0; padding: 7px 5px 3px; border-top: 1px solid var(--line); color: var(--secondary); font-size: 10px; line-height: 16px; }
+.model-picker-empty { margin: 8px; color: var(--secondary); font-size: 12px; }
 .composer-model-hint { font-size: 11px; line-height: 1.5; margin: 8px 0 0; color: var(--secondary); }
 .context-usage { position: relative; flex: 0 0 auto; color: var(--secondary); }
 .context-usage[data-open=true]::before { content: ''; position: absolute; bottom: 100%; left: 0; width: 100%; height: 10px; }

@@ -13,6 +13,7 @@ import { createDraftStore, draftFromInput, isImageRef } from './draft-client.js'
 import type { DraftImage, DraftStore, DraftFile, MessageDraft } from './draft-client.js'
 import type { ImageRenewal } from './image-client.js'
 import { validateImageBatch } from '../core/image/limits.js'
+import type { SessionDefaults } from '../core/session/domain.js'
 
 export interface BrowserStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export const pendingKey = 'anybox.web.v3.pending'
@@ -80,6 +81,8 @@ export interface SessionSnapshot {
   readonly busy: boolean
   readonly loading: boolean
   readonly notice: string
+  readonly defaultModelId?: string | null
+  readonly savingDefaultModel?: boolean
   readonly draft: string
   readonly images: readonly DraftImage[]
   readonly files: readonly DraftFile[]
@@ -112,6 +115,8 @@ export interface SessionController {
   setTraceSearch(query: string): void
   retryTrace(id: string): void
   setModel(modelId: string): Promise<void>
+  refreshDefaultModel(): Promise<void>
+  setDefaultModel(modelId: string): Promise<void>
   protocolView(snapshot: ProtocolViewSnapshot): void
   incompatibleView(runId: string): void
   setDraft(value: string): void
@@ -158,6 +163,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   let position: SessionPosition = { ...initialPosition, viewMode: initialPosition.viewMode === 'runs' ? 'runs' : 'dialogue' }
   let pathNodes: readonly NodeView[] = [], children: readonly NodeView[] = [], childCursor: string | undefined
   let notice = '', busy = false, loading = true, locationVersion = 0
+  let defaultModelId: string | null | undefined, savingDefaultModel = false, defaultRead = 0
+  let modelSelection: { readonly modelId: string; readonly promise: Promise<void> } | undefined
   let listener: (() => void) | undefined, generation = 0, timer: unknown, refreshJob: Promise<void> | undefined
   let refreshAgain = false, locationAgain = false, live = false, locationJob: Promise<void> | undefined
   const drafts = env.drafts ?? createDraftStore()
@@ -556,11 +563,12 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   }
   const controller: SessionController = {
     snapshot: () => ({ session, runs, run: runs.find(item => item.id === position.focusedRunId), position,
-      path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice,
+      path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice, defaultModelId, savingDefaultModel,
       draft: draftAt(position.viewNodeId).text, images: draftAt(position.viewNodeId).images, files: draftAt(position.viewNodeId).files, events, expanded, views, traceLoading: traceLoading() }),
     attach(value) { listener = value; session = undefined; loading = true; invalidate(); void controller.refresh() },
     detach() {
       listener = undefined
+      defaultRead++
       invalidate()
       locationVersion++
       for (const [id, view] of views) if (view.status === 'provisional') views.delete(id)
@@ -605,6 +613,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       emit()
     },
     async setModel(modelId) {
+      if (modelSelection?.modelId === modelId) return modelSelection.promise
       if (readOnly() || !session || busy || pending() || !modelId) return
       if (session.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       if (env.models && !canUseModel(env.models().find(value => value.id === modelId))) {
@@ -614,9 +623,57 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId) { notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return }
       if (!getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId)) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return }
       busy = true; invalidate(); notice = ''; emit()
-      try { session = await env.api<SessionView>(`${path}/model`, { modelId }); refreshAgain = true }
-      catch (error) { notice = env.messageFor(error) }
-      finally { finishWrite() }
+      const promise = (async () => {
+        try { session = await env.api<SessionView>(`${path}/model`, { modelId }); refreshAgain = true }
+        catch (error) { notice = env.messageFor(error) }
+        finally { finishWrite() }
+      })()
+      modelSelection = { modelId, promise }
+      try { await promise }
+      finally { if (modelSelection?.promise === promise) modelSelection = undefined }
+    },
+    async refreshDefaultModel() {
+      if (!session || !attached() || savingDefaultModel) return
+      const id = session.agentId, request = ++defaultRead
+      try {
+        const defaults = await read<SessionDefaults>(`/agents/${encodeURIComponent(id)}/session-defaults`, generation)
+        if (request !== defaultRead || session?.agentId !== id) return
+        defaultModelId = defaults.effectiveModelId
+      } catch (error) {
+        if (request !== defaultRead || !attached() || (error instanceof Error && error.name === 'AbortError')) return
+        defaultModelId = undefined
+        notice = `新会话默认模型读取失败：${env.messageFor(error)}`
+      }
+      emit()
+    },
+    async setDefaultModel(modelId) {
+      if (readOnly() || !session || !attached() || loading || pending() || savingDefaultModel || !modelId ||
+          (busy && modelSelection?.modelId !== modelId)) return
+      const candidate = env.models?.().find(value => value.id === modelId)
+      if ((env.models && !canUseModel(candidate)) || !getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId) ||
+          (session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId)) return
+      const agentId = session.agentId, url = `/agents/${encodeURIComponent(agentId)}/session-defaults`
+      savingDefaultModel = true; defaultRead++; notice = ''; emit()
+      let submitted = false
+      try {
+        // The first click may still be saving the Session selection when dblclick arrives.
+        if (modelSelection?.modelId === modelId) await modelSelection.promise
+        else if (session.modelId !== modelId) await controller.setModel(modelId)
+        if (!attached() || session?.agentId !== agentId || session.modelId !== modelId || readOnly()) return
+        const defaults = await read<SessionDefaults>(url, generation)
+        defaultModelId = defaults.effectiveModelId
+        if (defaults.effectiveModelId === modelId) { notice = '已是新会话默认模型。'; return }
+        submitted = true
+        const saved = await env.api<SessionDefaults>(url, { modelId, expectedRevision: defaults.revision })
+        defaultModelId = saved.effectiveModelId
+        notice = '已设为新会话默认模型。'
+      } catch (error) {
+        if (error instanceof Error && error.name === 'AbortError') return
+        defaultModelId = undefined
+        notice = isApiError(error) && error.code === 'session-defaults-conflict'
+          ? '默认模型已被其他页面修改，请重新打开模型列表后重试。'
+          : submitted ? `${env.messageFor(error)}；无法确认默认模型是否保存，请重新打开模型列表查看。` : env.messageFor(error)
+      } finally { savingDefaultModel = false; emit() }
     },
     protocolView(snapshot) {
       if (!attached() || snapshot.sessionId !== ref.sessionId) return

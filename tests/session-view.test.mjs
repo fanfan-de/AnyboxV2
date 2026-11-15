@@ -139,7 +139,7 @@ const traceRun = (id, status = 'completed', extra = {}) => ({ ...run(id, status)
 const modelStarted = (id, seconds) => ({ kind: 'operation-started', operationId: id, operationKind: 'model', at: traceAt(seconds) })
 const operationObserved = (id, seconds) => ({ kind: 'operation-observed', operationId: id, at: traceAt(seconds) })
 
-function fixture(t, { runs = [run('first')], position = {}, initialScroll = { dialogue: 0 }, path } = {}) {
+function fixture(t, { runs = [run('first')], position = {}, initialScroll = { dialogue: 0 }, path, models } = {}) {
   const previous = globalThis.document, document = documentFixture(), calls = []
   globalThis.document = document
   const state = { session: { id: 'session', projectId: 'project', agentId: 'assistant', protocolId: 'chat-completions', historyMode: 'native-local-v1' },
@@ -158,9 +158,12 @@ function fixture(t, { runs = [run('first')], position = {}, initialScroll = { di
     cancel(id) { calls.push(['cancel', id]); return Promise.resolve() },
     setDraft(value) { state.draft = value; changed() }, setFiles(value) { state.files = value; changed() },
     submit() { calls.push(['submit']); return Promise.resolve() }, moreChildren() { return Promise.resolve() },
+    setModel(id) { calls.push(['model', id]); state.session.modelId = id; state.busy = true; changed(); return Promise.resolve() },
+    refreshDefaultModel() { calls.push(['read-default']); return Promise.resolve() },
+    setDefaultModel(id) { calls.push(['default', id]); state.defaultModelId = id; changed(); return Promise.resolve() },
   }
   const mount = scroll => {
-    panel = createSessionPanel({ id: 'session', sessionId: 'session', projectId: 'project' }, 'Project', controller, () => {}, () => {}, scroll)
+    panel = createSessionPanel({ id: 'session', sessionId: 'session', projectId: 'project' }, 'Project', controller, () => {}, () => {}, scroll, models)
     document.body.append(panel.element); panel.render()
     return panel
   }
@@ -169,6 +172,59 @@ function fixture(t, { runs = [run('first')], position = {}, initialScroll = { di
   const find = selector => { const found = panel.element.querySelector(selector); assert.ok(found, `missing ${selector}`); return found }
   return { panel, state, calls, document, find, mount, dialogue: () => find('[data-view-mode="dialogue"]'), history: () => find('[data-view-mode="runs"]') }
 }
+
+const pickerCatalog = () => ({ snapshot: () => ({ models: [
+  { id: 'first', name: 'First', connectionId: 'provider', available: true, parameters: { protocolId: 'chat-completions' } },
+  { id: 'other-protocol', name: 'Other protocol', connectionId: 'provider', available: true, parameters: { protocolId: 'responses' } },
+  { id: 'second', name: 'Second', connectionId: 'provider', available: true, parameters: { protocolId: 'chat-completions' } },
+], providers: [{ id: 'provider', name: 'Provider' }], loading: false }) })
+
+test('Composer single-click selects this Session and double-click sets a default through the same mounted option', t => {
+  const f = fixture(t, { models: pickerCatalog() })
+  const trigger = f.find('.composer-model'), option = f.find('[data-model-id="second"]')
+  trigger.click()
+  assert.deepEqual(f.calls, [['read-default']])
+  option.dispatch('click', { detail: 1 })
+  assert.deepEqual(f.calls.at(-1), ['model', 'second'])
+  assert.equal(f.calls.some(call => call[0] === 'default'), false)
+  assert.equal(trigger.getAttribute('aria-expanded'), 'true')
+  assert.equal(f.find('[data-model-id="second"]'), option, 'selection rerenders preserve the double-click target')
+  assert.equal(option.disabled, false, 'the second click can arrive while the selection is saving')
+  option.dispatch('click', { detail: 2 }); option.dispatch('dblclick')
+  assert.deepEqual(f.calls.filter(call => call[0] === 'model'), [['model', 'second']])
+  assert.deepEqual(f.calls.at(-1), ['default', 'second'])
+  assert.equal(option.querySelector('.model-picker-default').hidden, false)
+  f.find('.model-picker-list').dispatch('keydown', { key: 'Escape' })
+  assert.ok(f.document.activeElement === trigger, 'Escape restores focus even while the first selection is still saving')
+})
+
+test('Composer keyboard model selection skips incompatible options and supports setting a default', t => {
+  const f = fixture(t, { models: pickerCatalog() })
+  f.find('.composer-model').dispatch('keydown', { key: 'ArrowDown' })
+  const list = f.find('.model-picker-list')
+  assert.equal(f.document.activeElement, list)
+  assert.equal(f.find('[data-model-id="other-protocol"]').disabled, true)
+  list.dispatch('keydown', { key: 'ArrowDown' })
+  assert.equal(list.getAttribute('aria-activedescendant'), f.find('[data-model-id="second"]').id)
+  list.dispatch('keydown', { key: 'Enter', shiftKey: true })
+  assert.deepEqual(f.calls.at(-1), ['default', 'second'])
+  list.dispatch('keydown', { key: 'Escape' })
+  assert.equal(f.find('.composer-model').getAttribute('aria-expanded'), 'false')
+  assert.equal(f.document.activeElement, f.find('.composer-model'))
+})
+
+test('Composer model list closes on outside input, view changes and disposal', t => {
+  const f = fixture(t, { models: pickerCatalog() }), trigger = f.find('.composer-model')
+  trigger.click(); f.find('textarea').dispatch('pointerdown')
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false')
+  trigger.click(); f.history().click()
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false')
+  f.dialogue().click(); trigger.click(); f.panel.dispose()
+  assert.equal(trigger.getAttribute('aria-expanded'), 'false')
+  const callCount = f.calls.length
+  trigger.click()
+  assert.equal(f.calls.length, callCount)
+})
 
 test('composer context details open with hover, keyboard and touch and close with Escape or an outside click', t => {
   const f = fixture(t)

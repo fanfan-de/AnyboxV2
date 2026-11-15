@@ -15,6 +15,7 @@ import { getProtocolWebModule, type MountedProtocolTurn } from './protocols/modu
 import { renderMarkdown } from './markdown.js'
 import { protocolToolContext, toolContextReadiness } from './tool-call-view.js'
 import { contextUsage, createContextUsageView } from './context-usage.js'
+import { createModelPicker, type ModelPickerChoice } from './model-picker.js'
 export { createToolCallCard } from './tool-call-view.js'
 
 export interface SessionScrollPosition {
@@ -77,7 +78,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
       <input class="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
       <p class="composer-model-hint" role="status" hidden></p>
       <div class="composer-footer">
-      <div class="composer-model-row"><select class="composer-model" aria-label="本会话使用的模型"></select></div>
+      <div class="composer-model-row"></div>
       <div class="actions">
         <button class="attach-images" type="button" title="添加图片，也可粘贴或拖入 · 最多 8 张，每张 10 MiB">添加图片</button>
         <button class="cancel-button" type="button" aria-label="取消运行" title="取消运行" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
@@ -156,9 +157,13 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     restoring = true; restoreButton.disabled = true
     void restore().finally(() => { restoring = false; restoreButton.disabled = false })
   }, options)
-  const modelSelect = get<HTMLSelectElement>('.composer-model')
-  get<HTMLElement>('.composer-model-row').hidden = !models
-  modelSelect.addEventListener('change', () => { if (modelSelect.value) void controller.setModel(modelSelect.value) }, options)
+  const modelRow = get<HTMLElement>('.composer-model-row')
+  const modelPicker = createModelPicker(modelRow, `agent--model-picker-${pane.id}`, listeners.signal, {
+    select: id => { void controller.setModel(id) },
+    setDefault: id => { void controller.setDefaultModel(id) },
+    opened: () => { void controller.refreshDefaultModel() },
+  })
+  modelRow.hidden = !models
   const modelReady = () => {
     const session = controller.snapshot().session
     const model = models?.snapshot().models.find(value => value.id === session?.modelId)
@@ -203,6 +208,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   get('.pane-close').addEventListener('click', event => { event.stopPropagation(); close() }, options)
   const resizeInput = (): void => {
     usageView.position()
+    modelPicker.position()
     if (element.hidden || compose.hidden || !element.isConnected) return
     if (!element.isConnected || element.clientWidth === 0) return
     messageInput.style.height = 'auto'
@@ -279,7 +285,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   const panel: SessionPanel = {
     element,
     resizeInput,
-    closeContextUsage: usageView.close,
+    closeContextUsage() { usageView.close(); modelPicker.close() },
     captureScroll() {
       if (dialogueScrollReady && measurable(transcript)) {
         savedScroll.dialogue = transcript.scrollTop
@@ -316,7 +322,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       runHistory.inert = !records
       compose.hidden = records
       compose.inert = records
-      if (records) usageView.close()
+      if (records) { usageView.close(); modelPicker.close() }
       get('.branch-controls').hidden = records
       get('.branch-controls').inert = records
       get('.run-history-scope').hidden = !records
@@ -384,30 +390,20 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       cancel.title = cancel.disabled ? '正在取消运行' : '取消运行'
       if (models) {
         const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
-        const key = JSON.stringify([catalog.models.map(value => [value.id, value.name, value.connectionId, value.available, value.effectiveCapabilities?.tools, value.effectiveCapabilities?.imageInput, value.parameters.protocolId]), catalog.providers.map(value => [value.id, value.name]), selected, state.session?.protocolId])
-        if (modelSelect.dataset.choices !== key) {
-          modelSelect.dataset.choices = key
-          const placeholder = document.createElement('option'); placeholder.value = ''; placeholder.textContent = '选择模型'
-          modelSelect.replaceChildren(placeholder)
-          const groups = new Map<string, HTMLOptGroupElement>()
-          for (const value of catalog.models) {
-            let group = groups.get(value.connectionId)
-            if (!group) {
-              group = document.createElement('optgroup'); group.label = catalog.providers.find(provider => provider.id === value.connectionId)?.name ?? value.connectionId
-              groups.set(value.connectionId, group); modelSelect.append(group)
-            }
-            const choice = document.createElement('option'); choice.value = value.id
-            const incompatible = Boolean(state.session?.protocolId && value.parameters.protocolId !== state.session.protocolId)
-            const unsupported = !getProtocolWebModule(value.parameters.protocolId)
-            choice.textContent = incompatible ? `${value.name} · 需新建其他协议会话` : unsupported ? `${value.name} · 网页输入组件不可用` : canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`
-            choice.disabled = !canUseModel(value) || incompatible || unsupported; group.append(choice)
-          }
-          if (selected && !catalog.models.some(value => value.id === selected)) {
-            const unavailable = document.createElement('option'); unavailable.value = selected; unavailable.textContent = '原模型已不可用'; unavailable.disabled = true; modelSelect.append(unavailable)
-          }
+        const choices: ModelPickerChoice[] = catalog.models.map(value => {
+          const incompatible = Boolean(state.session?.protocolId && value.parameters.protocolId !== state.session.protocolId)
+          const unsupported = !getProtocolWebModule(value.parameters.protocolId)
+          return { id: value.id, name: value.name, group: value.connectionId,
+            groupLabel: catalog.providers.find(provider => provider.id === value.connectionId)?.name ?? value.connectionId,
+            label: incompatible ? `${value.name} · 需新建其他协议会话` : unsupported ? `${value.name} · 网页输入组件不可用` : canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`,
+            disabled: !canUseModel(value) || incompatible || unsupported }
+        })
+        if (selected && !catalog.models.some(value => value.id === selected)) {
+          choices.push({ id: selected, name: '原模型已不可用', label: '原模型已不可用', group: 'unavailable', groupLabel: '不可用模型', disabled: true })
         }
-        modelSelect.value = selected
-        modelSelect.disabled = (Boolean(state.session?.archivedAt) || state.session?.historyMode === 'dialogue-v1') || state.busy || state.loading || Boolean(state.pending) || catalog.loading
+        modelPicker.render({ choices, selectedId: selected, defaultId: state.defaultModelId,
+          disabled: !state.session || readOnly || state.loading || Boolean(state.pending) || catalog.loading,
+          busy: state.busy, savingDefault: Boolean(state.savingDefaultModel) })
         const hint = get<HTMLElement>('.composer-model-hint')
         hint.textContent = state.session?.archivedAt ? '恢复会话后可继续使用。' : state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“Anybox Harness 设置”的“模型管理”中选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
         hint.hidden = !hint.textContent
