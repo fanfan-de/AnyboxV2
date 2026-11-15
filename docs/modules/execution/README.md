@@ -30,6 +30,8 @@
 
 ## 一次 Run 的完整流程
 
+跨组件调用顺序见 [Run 执行时序图](run-sequence.md)，包括模型与工具往返、实际退出屏障和最终结算。
+
 1. 调用 `startRun({ sessionId, parentNodeId, input, images?, files?, idempotencyKey, modelId? })`。根分支显式传 `parentNodeId: null`；文本、图片、文件至少一项非空；先检查已接受幂等键，再解析当前配置。
 2. 检查 Session 未归档、项目目录、Agent、模型与协议。模型按显式输入、Session 选择、Agent 默认的顺序确定；恢复只沿指定成功父节点的路径。
 3. Session 创建时复制 Agent 工具选择，首次接受固定 instruction/context 和实际工具声明；后续复用。新 NativeInitialization v2 保存 tool-library-v1 与选择快照，旧 v1 初始化保持原样。当前 task-template 只处理本次原始输入一次。Run 受管读取文件快照并等待退出，注册表在模板后附加文件资料、编码图片引用，获取驱动代租约并准备独立 execution 和 `PreparedRunProgram`。
