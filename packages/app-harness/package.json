@@ -1,6 +1,6 @@
 {
   "name": "@anybox/app-harness",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "engines": {
@@ -50,6 +50,7 @@
     "esbuild": "0.28.2"
   },
   "bin": {
+    "anybox-harness": "./dist/entrypoints/cli-main.js",
     "anybox-harness-server": "./dist/entrypoints/server-main.js"
   }
 }

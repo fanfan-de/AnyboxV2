@@ -15,6 +15,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 - [发行与独立运行角色](runtime-roles-and-distribution.md)：统一产品与宿主入口、应用按需交付、四种运行角色独立进程与部署、按需启用和生命周期归属；列明当前实现差距与完成条件。
 - [harness server 独立部署与多设备接入](harness-server-deployment.md)：启动、配对、发行物、HTTPS、服务与恢复。
 - [Computer worker 独立管理](computer-worker-management.md)：无本机 harness server 的客户端与 CLI 附着、权限、状态和撤销。
+- [统一 CLI 与 Harness 客户端（预开发）](cli.md)：应用命令注册、懒加载、参数/JSON/退出码、显式目标与 HTTP/SSE 会话/Run 命令，含验证缺口。
 - [Anybox 桌面构建与安装](desktop-packaging.md)：macOS Electron 开发、打包及安装验收；[桌面运行边界](desktop-runtime.md)说明共享页面、私有进程、配对和退出。
 
 ## 按模块阅读
