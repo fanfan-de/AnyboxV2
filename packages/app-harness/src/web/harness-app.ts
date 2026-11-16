@@ -18,10 +18,11 @@ export async function mount(root: HTMLElement, input: ApplicationWebContext): Pr
   const surface = document.createElement('div'); surface.className = 'harness-surface'; root.append(surface)
   let page: HarnessMountedPage | undefined, active = false, disposed = false, tail: Promise<void> = Promise.resolve()
   const rebuild = async () => {
+    const settingsState = page?.settingsState()
     await page?.dispose(); page = undefined
     if (disposed || context.signal.aborted) return
     surface.replaceChildren()
-    page = await mountHarnessPage(surface, { context, templates: root, isActive: () => active, connectionsChanged() {
+    page = await mountHarnessPage(surface, { context, templates: root, isActive: () => active, settingsState, connectionsChanged() {
       tail = tail.then(rebuild).catch(() => { if (!disposed) surface.textContent = '连接界面暂时无法刷新，请重新打开界面。' })
     } })
     if (disposed || context.signal.aborted) { await page.dispose(); page = undefined; return }

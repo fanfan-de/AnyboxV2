@@ -9,11 +9,19 @@ import { setupUnitsSettings } from './units-client.js'
 import { messageFor } from './client-errors.js'
 import type { AgentView } from './client-types.js'
 import type { MountedPage } from './page-lifecycle.js'
+import { setupSettingsNavigation } from './settings-client.js'
+import type { SettingsSection, SettingsViewState } from './settings-client.js'
 
+export interface AgentMountedPage extends MountedPage {
+  settingsState(): SettingsViewState
+  restoreSettings(): void
+  showSettingsBlocked(): void
+}
 export function mountAgentPage(root: HTMLElement, api: HarnessClient, options: {
   selectedId?: string; selectedName?: string; selectedInstanceId?: string; layoutKey?: string; isActive(): boolean;
+  devices: readonly { id: string; name: string }[]; settingsState?: SettingsViewState; selectDevice(id: string): boolean;
   route: { read(): string; write(hash: string, push: boolean): void; subscribe(listener: () => void): () => void };
-}): MountedPage {
+}): AgentMountedPage {
   let closed = false
   const lifetime = new AbortController()
 function required<T extends HTMLElement>(id: string): T {
@@ -37,25 +45,7 @@ sidebar.addEventListener('click', event => {
 }, { capture: true, signal: lifetime.signal })
 
 const selected = options.selectedId === undefined ? api.connections[0] : api.connections.find(item => item.id === options.selectedId)
-required('agent--settings-target').textContent = `执行设备：${options.selectedName ?? selected?.name ?? '未选择'}`
-type SettingsSection = 'general' | 'connections' | 'archive' | 'models' | 'prompts' | 'tools' | 'units'
-const settingsNavigation = [...settingsDialog.querySelectorAll<HTMLButtonElement>('[data-settings-section]')]
-const settingsPanels = [...settingsDialog.querySelectorAll<HTMLElement>('[data-settings-panel]')]
-function selectSettingsSection(section: SettingsSection): void {
-  for (const button of settingsNavigation) {
-    if (button.dataset.settingsSection === section) button.setAttribute('aria-current', 'page')
-    else button.removeAttribute('aria-current')
-  }
-  // Keep each form mounted so navigating between sections preserves unfinished edits.
-  for (const panel of settingsPanels) panel.hidden = panel.dataset.settingsPanel !== section
-  required('agent--settings-target').hidden = section === 'archive' || section === 'connections'
-  required('agent--settings-content').scrollTop = 0
-  if (section === 'archive') workspace.refreshArchive()
-}
-for (const button of settingsNavigation) button.addEventListener('click', () => {
-  selectSettingsSection(button.dataset.settingsSection as SettingsSection)
-})
-openSettingsButton.addEventListener('click', () => { closeSidebar(); settingsDialog.showModal(); workspace.refreshArchive() })
+openSettingsButton.addEventListener('click', () => { closeSidebar(); settings.open(); workspace.refreshArchive() })
 closeSettingsButton.addEventListener('click', () => { settingsDialog.close() })
 settingsDialog.addEventListener('close', () => {
   const focus = document.activeElement
@@ -75,27 +65,29 @@ const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(h
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('agent--prompt-settings'), JSON.stringify(['agent', selected.instanceId, 'prompts'])) : undefined
 if (!selected) {
   required('agent--default-model-hint').textContent = '请先在管理连接中启动所选设备上的 Agent，再设置默认模型。'
-  for (const section of ['models', 'prompts'] as const) {
-    const panel = required<HTMLElement>(section === 'models' ? 'agent--models-settings' : 'agent--prompt-settings')
+  for (const [id, titleId, title, text] of [
+    ['agent--models-settings', 'agent--models-settings-title', '模型管理', '模型与配置'],
+    ['agent--prompt-settings', 'agent--prompt-title', 'Prompt 管理', 'Prompt'],
+    ['agent--tools-settings', 'agent--tools-title', 'Agent 工具', '工具'],
+    ['agent--units-settings', 'agent--units-title', '执行环境', '执行环境'],
+  ] as const) {
+    const panel = required<HTMLElement>(id)
     panel.replaceChildren()
-    const heading = document.createElement('h3'), hint = document.createElement('p')
-    heading.id = section === 'models' ? 'agent--models-settings-title' : 'agent--prompt-title'
-    heading.textContent = section === 'models' ? '模型管理' : 'Prompt 管理'
-    hint.textContent = '请先在管理连接中启动所选设备上的 Agent，再管理模型与 Prompt。'
-    panel.append(heading, hint)
+    const header = document.createElement('header'), heading = document.createElement('h3'), hint = document.createElement('p')
+    header.className = 'settings-panel-heading'; heading.id = titleId; heading.textContent = title
+    hint.textContent = `所选设备尚未启动或暂时无法连接。请先在“管理连接”中检查并启动 Agent，再管理${text}。`
+    header.append(heading); panel.append(header, hint)
   }
-  required('agent--tools-settings').textContent = '请先在管理连接中启动所选设备上的 Agent，再配置工具。'
-  required('agent--units-settings').textContent = '请先在管理连接中启动所选设备上的 Agent，再管理执行环境。'
 }
 function revealSettings(section: SettingsSection): void {
-  selectSettingsSection(section)
-  if (options.isActive() && !settingsDialog.open) { closeSidebar(); settingsDialog.showModal() }
+  closeSidebar(); settings.open(section)
 }
 function canLeave(): boolean {
   if (sessionDefaults && !sessionDefaults.canLeave()) { revealSettings('general'); return false }
   if (toolsSettings && !toolsSettings.canLeave()) { revealSettings('tools'); return false }
   if (modelsSettings && !modelsSettings.canLeave()) { revealSettings('models'); return false }
   if (promptSettings && !promptSettings.canLeave()) { revealSettings('prompts'); return false }
+  if (unitsSettings && !unitsSettings.canLeave()) { revealSettings('units'); return false }
   return true
 }
 let knownAgents: readonly AgentView[] = []
@@ -104,6 +96,11 @@ const workspace = setupWorkspace(api, messageFor, projectId => {
   const candidates = knownAgents.filter(agent => splitScopedId(agent.id)?.instanceId === instance)
   return candidates.find(agent => splitScopedId(agent.id)?.id === splitScopedId(agentSelect.value)?.id)?.id ?? candidates[0]?.id ?? ''
 }, models, { root, storageKey: options.layoutKey, selectedInstanceId: options.selectedInstanceId ?? selected?.instanceId, route: options.route, isActive: options.isActive })
+const settings = setupSettingsNavigation(root, {
+  devices: options.devices, selectedId: options.selectedId, selectedName: options.selectedName,
+  initialState: options.settingsState, isActive: options.isActive, selectDevice: options.selectDevice,
+  refreshArchive: () => workspace.refreshArchive(),
+})
 const receiveAgents = (agents: readonly AgentView[]) => {
   if (closed) return
   knownAgents = agents
@@ -130,13 +127,14 @@ void api<readonly AgentView[]>('/agents').then(receiveAgents).catch(error => {
 })
 agentSelect.addEventListener('change', () => { sessionDefaults?.selectAgent(agentSelect.value); toolsSettings?.selectAgent(agentSelect.value); workspace.refreshControls() }, { signal: lifetime.signal })
 return {
+  settingsState: () => settings.snapshot(), restoreSettings: () => settings.restore(), showSettingsBlocked: () => settings.showBlocked(),
   setActive(active) {
     if (!active) settingsDialog.close()
     workspace.setActive(active)
   },
   canLeave,
   async dispose() {
-    closed = true; lifetime.abort(); settingsDialog.close(); unsubscribeAgents(); const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
+    closed = true; lifetime.abort(); settings.dispose(); settingsDialog.close(); unsubscribeAgents(); const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
     await Promise.all([workspaceExit, modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings?.dispose()])
     await api.dispose()
   },

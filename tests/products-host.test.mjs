@@ -18,7 +18,7 @@ test('Harness owns its connections and opening a remote Agent leaves local execu
     getPassword: async () => secrets.get(key), setPassword: async value => { secrets.set(key, value) }, deleteCredential: async () => secrets.delete(key),
   } }
   const config = name => parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, name + '.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, name + '-models.sqlite') })
-  const models = { openEntry, readLegacyCredential: async () => undefined, catalogAutoRefresh: false, fetch: async () => { throw new Error('no model network in this test') } }
+  const models = { openEntry, catalogAutoRefresh: false, fetch: async () => { throw new Error('no model network in this test') } }
   let local, remote, client
   try {
     local = await createHarnessServer(config('local'), { models }); remote = await createHarnessServer(config('remote'), { models })

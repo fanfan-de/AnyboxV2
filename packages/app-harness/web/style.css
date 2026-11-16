@@ -430,7 +430,6 @@
 #agent--settings-dialog { width: min(1220px, calc(100% - 48px)); height: min(840px, calc(100dvh - 48px)); max-height: calc(100dvh - 48px); background: var(--panel); }
 .settings-workspace { display: grid; grid-template-columns: 196px minmax(0, 1fr); min-height: 0; flex: 1; }
 .settings-navigation { min-height: 0; overflow: auto; padding: 24px 12px; border-right: 1px solid var(--line); background: var(--rail); }
-#agent--settings-dialog .settings-nav-label { margin: 0 12px 12px; font-size: 11px; font-weight: 600; color: var(--muted); }
 #agent--settings-dialog .settings-navigation button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; margin-bottom: 4px; padding: 10px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--secondary); text-align: left; font-size: 13px; }
 #agent--settings-dialog .settings-navigation button:hover { filter: none; background: var(--hover); color: var(--text); }
 #agent--settings-dialog .settings-navigation button[aria-current=page] { background: var(--selected); color: var(--text); font-weight: 600; }
@@ -442,6 +441,16 @@
 #agent--settings-dialog .settings-panel-heading { margin-bottom: 24px; }
 #agent--settings-dialog .settings-panel-heading h3 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
 #agent--settings-dialog .settings-panel-heading p { margin: 6px 0 0; font-size: 12px; }
+#agent--settings-dialog .settings-panel-heading:has(> .settings-title-row) { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 6px 16px; }
+#agent--settings-dialog .settings-panel-heading > p { grid-column: 1 / -1; }
+.settings-title-row { display: flex; flex-wrap: wrap; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 12px 18px; min-width: 0; }
+.settings-scope { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: var(--secondary); }
+#agent--settings-dialog .settings-scope label { flex-shrink: 0; margin: 0; font-size: 12px; font-weight: 400; white-space: nowrap; }
+#agent--settings-dialog .settings-scope select { width: auto; min-width: 130px; max-width: 240px; padding: 7px 10px; }
+#agent--settings-all-devices { padding: 5px 10px; border: 1px solid var(--line); border-radius: 5px; font-size: 12px; }
+#agent--settings-dialog .settings-scope [hidden] { display: none; }
+#agent--settings-dialog .settings-scope-description { grid-column: 1 / -1; }
+#agent--settings-dialog .settings-device-status { grid-column: 1 / -1; margin-top: 12px; }
 .settings-card { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .computer-management { min-width: 0; padding: 16px 0; }
 .computer-management p, .computer-management strong { overflow-wrap: anywhere; }
@@ -722,10 +731,12 @@
   #agent--settings-dialog { width: calc(100% - 24px); height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); }
   .settings-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .settings-navigation { display: flex; gap: 4px; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
-  #agent--settings-dialog .settings-nav-label { display: none; }
   #agent--settings-dialog .settings-navigation button { flex: 1 0 auto; width: auto; margin: 0; padding: 9px 10px; min-height: 40px; justify-content: center; white-space: nowrap; font-size: 12px; gap: 7px; }
   #agent--settings-dialog .settings-content { padding: 22px 16px; scrollbar-gutter: auto; }
   #agent--settings-dialog .settings-panel-heading h3 { font-size: 18px; }
+  #agent--settings-dialog .settings-panel-heading:has(> .settings-title-row) { grid-template-columns: minmax(0, 1fr); }
+  .settings-scope { flex-wrap: wrap; }
+  #agent--settings-dialog .settings-scope select { min-width: 0; max-width: 100%; }
   .settings-card { padding: 16px; }
   .settings-field-row { grid-template-columns: minmax(0, 1fr); gap: 18px; }
   .settings-field-row > button { justify-self: start; }

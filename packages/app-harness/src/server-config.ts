@@ -1,12 +1,4 @@
 import { dirname, join, resolve } from 'node:path'
-import type { NativeParameters, ProviderConnectionInput } from '@anybox/models'
-
-export interface LegacyModelImport {
-  readonly provider: Omit<ProviderConnectionInput, 'providerDefinitionId'>
-  readonly remoteModelId: string
-  readonly parameters: NativeParameters
-  readonly credentialId: string
-}
 export interface HarnessServerConfig {
   readonly port: number
   readonly harnessDatabasePath: string
@@ -15,8 +7,6 @@ export interface HarnessServerConfig {
   readonly modelsConfigPath: string
   readonly modelsCatalogDatabasePath: string
   readonly credentialNamespace: string
-  /** Used only when the new Models database has not yet been configured. */
-  readonly legacy: LegacyModelImport
 }
 type Environment = Readonly<Record<string, string | undefined>>
 /** The former database location remains the one-time migration source. */
@@ -29,30 +19,8 @@ function optionalValue(env: Environment, name: string): string | undefined {
   if (!value.trim() || value.includes('\0')) throw new TypeError(`${name} must not be empty or contain NUL`)
   return value.trim()
 }
-function positiveInteger(env: Environment, name: string, maximum = Number.MAX_SAFE_INTEGER): number | undefined {
-  const value = optionalValue(env, name)
-  if (value === undefined) return undefined
-  const number = Number(value)
-  if (!Number.isSafeInteger(number) || number <= 0 || number > maximum) throw new TypeError(`${name} must be a positive integer no greater than ${maximum}`)
-  return number
-}
-
 /** harness server configuration is validated before resources are installed. Existing model edits stay in Models storage. */
 export function parseHarnessServerConfig(env: Environment): HarnessServerConfig {
-  const api = optionalValue(env, 'ANYBOX_LLM_API') ?? 'chat-completions'
-  if (!['chat-completions', 'openai-responses'].includes(api)) throw new TypeError('ANYBOX_LLM_API must be chat-completions or openai-responses for the initial import')
-  const configuredModel = optionalValue(env, 'ANYBOX_LLM_MODEL')
-  if (api === 'openai-responses' && !configuredModel) throw new TypeError('ANYBOX_LLM_MODEL is required for the initial Responses import')
-  const baseUrl = optionalValue(env, 'ANYBOX_LLM_BASE_URL') ?? (api === 'openai-responses' ? 'https://api.openai.com/v1' : 'https://api.deepseek.com')
-  try {
-    const url = new URL(baseUrl)
-    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error()
-  } catch { throw new TypeError('ANYBOX_LLM_BASE_URL must be an HTTP or HTTPS API base URL without credentials, query or fragment') }
-  const timeoutMs = positiveInteger(env, 'ANYBOX_LLM_TIMEOUT_MS', 2_147_483_647) ?? 30_000
-  const maxOutputTokens = positiveInteger(env, 'ANYBOX_LLM_MAX_OUTPUT_TOKENS')
-  const rawTemperature = optionalValue(env, 'ANYBOX_LLM_TEMPERATURE')
-  const temperature = rawTemperature === undefined ? undefined : Number(rawTemperature)
-  if (temperature !== undefined && (!Number.isFinite(temperature) || temperature < 0 || temperature > 2)) throw new TypeError('ANYBOX_LLM_TEMPERATURE must be between 0 and 2')
   const portName = env.ANYBOX_HARNESS_PORT === undefined ? 'ANYBOX_WEB_PORT' : 'ANYBOX_HARNESS_PORT'
   const rawPort = optionalValue(env, portName)
   const port = rawPort === undefined ? 0 : Number(rawPort)
@@ -75,12 +43,5 @@ export function parseHarnessServerConfig(env: Environment): HarnessServerConfig 
   }
   return Object.freeze({
     port, harnessDatabasePath, imageAssetsDirectory, modelsDatabasePath, modelsConfigPath, modelsCatalogDatabasePath, credentialNamespace,
-    legacy: Object.freeze({
-      provider: Object.freeze({ name: api === 'openai-responses' ? 'OpenAI（迁入）' : 'DeepSeek（迁入）', enabled: true,
-        protocolId: api === 'openai-responses' ? 'responses' : 'chat-completions', baseUrl, auth: 'api-key' as const, timeoutMs }),
-      remoteModelId: configuredModel ?? 'deepseek-flash',
-      parameters: Object.freeze({ protocolId: api === 'openai-responses' ? 'responses' : 'chat-completions', formatVersion: 1 as const, value: Object.freeze({ ...(temperature === undefined ? {} : { temperature }), ...(maxOutputTokens === undefined ? {} : { [api === 'openai-responses' ? 'max_output_tokens' : 'max_completion_tokens']: maxOutputTokens }) }) }),
-      credentialId: api === 'openai-responses' ? 'llm/openai-responses/default' : 'llm/chat-completions/default',
-    }),
   })
 }

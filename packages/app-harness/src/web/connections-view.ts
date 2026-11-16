@@ -20,11 +20,22 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
     try { sessionStorage.setItem('anybox.client.selected', connection.id) } catch { /* Optional selection. */ }
     changed(connection)
   }
-  select.addEventListener('change', () => {
-    if (!canLeave() || !canLeaveConnection()) { select.value = selectedId ?? api.connections[0]?.id ?? ''; return }
-    const connection = api.connections.find(item => item.id === select.value)
-    if (connection) selectConnection(connection)
-  }, { signal: lifetime.signal })
+  const requestConnection = (id: string): boolean => {
+    const currentId = selectedId ?? api.connections[0]?.id ?? ''
+    const connection = api.connections.find(item => item.id === id)
+    select.value = currentId
+    if (lifetime.signal.aborted || !connection) return false
+    if (id === currentId) return true
+    if (!canLeave()) return false
+    if (!canLeaveConnection()) {
+      open(); status('请先保存或放弃尚未保存的连接修改，等待进行中的操作完成后再切换设备。')
+      return false
+    }
+    select.value = connection.id
+    selectConnection(connection)
+    return true
+  }
+  select.addEventListener('change', () => { requestConnection(select.value) }, { signal: lifetime.signal })
   const settingsDialog = root.querySelector<HTMLDialogElement>('#agent--settings-dialog')!
   const panel = root.querySelector<HTMLElement>('#agent--connections-settings')!
   panel.innerHTML = `<header class="settings-panel-heading"><h3 id="agent--connections-title">管理连接</h3>
@@ -51,7 +62,7 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
     void exit.finally(() => attachmentExits.delete(exit)).catch(() => {})
     return exit
   }
-  const canLeaveConnection = () => !busy && !field('token').value && field('name').value === (editing?.name ?? '') && field('endpoint').value === (editing?.endpoint ?? '')
+  const canLeaveConnection = () => !busy && (attachmentsView?.canLeave() ?? true) && !field('token').value && field('name').value === (editing?.name ?? '') && field('endpoint').value === (editing?.endpoint ?? '')
   const status = (message: string) => { notice.textContent = message; notice.hidden = !message }
   const action = async (work: () => Promise<void>) => {
     if (busy) return; busy = true
@@ -195,7 +206,7 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
     root.querySelector<HTMLButtonElement>('[data-settings-section="connections"]')!.click()
     if (!settingsDialog.open) root.querySelector<HTMLButtonElement>('#agent--open-settings')!.click()
   }
-  return { open, setActive(active: boolean) { suspended = !active; clearTimeout(localTimer); localTimer = undefined; if (active) void refreshLocal() },
+  return { open, selectConnection: requestConnection, setActive(active: boolean) { suspended = !active; clearTimeout(localTimer); localTimer = undefined; if (active) void refreshLocal() },
     canLeave: canLeaveConnection, async dispose() {
       lifetime.abort(); clearTimeout(localTimer)
       const closingAttachments = closeAttachments()

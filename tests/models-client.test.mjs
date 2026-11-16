@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { canUseModel, createModelsCatalog, nativeParameterValues, initialNativeParameters, settingsConnectionSelection, settingsModelEditorSelection } from '../packages/app-harness/dist/web/models-client.js'
+import { canUseModel, createModelsCatalog, nativeParameterValues, initialNativeParameters, settingsConnectionSelection, settingsConnectionSourceAllowed, settingsModelEditorSelection } from '../packages/app-harness/dist/web/models-client.js'
 import { catalogSupportsText, catalogMatchesConnection, createModelsDirectory } from '../packages/app-harness/dist/web/models-directory-client.js'
 
 const fields = [
@@ -62,6 +62,35 @@ test('directory models require a compatible explicitly associated connection for
   assert.equal(catalogMatchesConnection(model, { ...provider, providerDefinitionId: 'other' }), false)
   assert.equal(catalogMatchesConnection(model, { ...provider, protocolId: 'chat-completions' }), false)
   assert.equal(catalogMatchesConnection({ ...model, connections: [{ values: { protocolId: 'host-special' } }] }, { ...provider, protocolId: 'host-special' }), true)
+})
+
+test('new connections require a present models.dev provider while existing custom connections remain editable', () => {
+  const directoryProvider = { state: 'present', source: { kind: 'external', sourceId: 'models.dev', providerId: 'deepseek', sourceVersion: 'current' } }
+  const customProvider = { state: 'present', source: { kind: 'user' } }
+  const existing = { id: 'saved-custom-connection', providerDefinitionId: 'saved-custom-provider' }
+  assert.equal(settingsConnectionSourceAllowed(undefined, undefined), false)
+  assert.equal(settingsConnectionSourceAllowed(undefined, customProvider), false)
+  assert.equal(settingsConnectionSourceAllowed(undefined, directoryProvider), true)
+  assert.equal(settingsConnectionSourceAllowed(undefined, { ...directoryProvider, state: 'missing' }), false)
+  assert.equal(settingsConnectionSourceAllowed(undefined, { ...directoryProvider, source: { ...directoryProvider.source, sourceId: 'other-directory' } }), false)
+  assert.equal(settingsConnectionSourceAllowed(existing, customProvider), true)
+  assert.equal(settingsConnectionSourceAllowed(existing, undefined), true)
+})
+
+test('provider directory reads always request models.dev while preserving search and cancellation', async () => {
+  const requests = [], controller = new AbortController()
+  const directory = createModelsDirectory(async (path, body, signal) => { requests.push({ path, body, signal }); return [] }, error => error.message)
+  for (const search of ['', 'DeepSeek & 自定义']) await directory.readProviders(search, controller.signal)
+  assert.equal(requests.length, 2)
+  for (const [index, request] of requests.entries()) {
+    const url = new URL(request.path, 'https://anybox.invalid')
+    assert.equal(url.pathname, '/models/providers')
+    assert.equal(url.searchParams.get('sourceId'), 'models.dev')
+    assert.equal(url.searchParams.get('search'), ['', 'DeepSeek & 自定义'][index])
+    assert.equal(request.body, undefined)
+    assert.equal(request.signal, controller.signal)
+  }
+  assert.deepEqual(directory.snapshot().providers, [])
 })
 
 test('public directory reads preserve the last valid candidates and ignore obsolete searches', async () => {

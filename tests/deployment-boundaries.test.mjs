@@ -44,7 +44,8 @@ test('client has its own root without Models or Harness services and cleans up f
 test('local entry still starts the client when Harness configuration fails and closes its single root on stop', { timeout: 10000 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'anybox-launcher-')); let child
   try {
-    child = spawn(process.execPath, ['packages/distribution/dist/entrypoints/serve.js'], { cwd, env: { ...process.env, ANYBOX_LLM_API: 'invalid-for-test', ANYBOX_WEB_PORT: '0', ANYBOX_CLIENT_DATABASE: join(dir, 'client.sqlite') }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
+    child = spawn(process.execPath, ['packages/distribution/dist/entrypoints/serve.js'], { cwd, env: { ...process.env, ANYBOX_WEB_PORT: '0', ANYBOX_CLIENT_DATABASE: join(dir, 'client.sqlite'),
+      ANYBOX_HARNESS_DATABASE: join(dir, 'harness.sqlite'), ANYBOX_MODELS_CONFIG: join(dir, 'harness.sqlite') }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
     let output = ''
     const ready = new Promise((resolve, reject) => {
       child.stdout.on('data', bytes => { output += bytes; const url = /Anybox Client: (http:\/\/127.0.0.1:\d+)/.exec(output)?.[1]; if (url) resolve(url) })

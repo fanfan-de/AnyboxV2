@@ -114,7 +114,7 @@ export async function startCatalogModelsHost(options = {}) {
     return new URL(url).pathname.endsWith('/messages') ? anthropicReply(body, network.generations.length) : geminiReply(body, network.generations.length)
   }
   try {
-    await installHarnessServerModels(root, config, { catalogAutoRefresh: false, catalogFetch, fetch: protocolFetch, readLegacyCredential: async () => undefined,
+    await installHarnessServerModels(root, config, { catalogAutoRefresh: false, catalogFetch, fetch: protocolFetch,
       openEntry(namespace, id) {
         const key = `${namespace}\0${id}`
         return {

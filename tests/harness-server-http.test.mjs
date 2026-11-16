@@ -20,23 +20,24 @@ import { promptServiceKey } from '../packages/app-harness/dist/core/prompt/compo
 import { installManagedModels } from './helpers/managed-models.mjs'
 import { installHarnessServerModels } from '../packages/app-harness/dist/server-models.js'
 import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
+import { seedHarnessModel } from './helpers/configured-models.mjs'
 import { runChangedEvent } from '../packages/app-harness/dist/core/run/notifications.js'
 import { decodeProtocolView } from '../packages/app-harness/dist/core/view/decode.js'
 import sharp from 'sharp'
 
-async function fixture(directory, pickerOptions = {}, startup) {
+async function fixture(directory, pickerOptions = {}, startupModel) {
   const root = new Context()
   const llm = controlledModels()
   const secrets = new Map()
   let assets
   try {
     let apiFiber, keyFiber, reinstall
-    if (startup) {
-      await installHarnessServerModels(root, { ...startup, modelsDatabasePath: join(directory, 'models.sqlite'), modelsConfigPath: join(directory, 'models.json'), modelsCatalogDatabasePath: join(directory, 'models-catalog.sqlite') }, {
+    if (startupModel) {
+      await installHarnessServerModels(root, parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') }), {
         catalogAutoRefresh: false,
         openEntry(_namespace, id) { return { async getPassword() { return secrets.get(id) }, async setPassword(value) { secrets.set(id, value) }, async deleteCredential() { return secrets.delete(id) } } },
-        readLegacyCredential: async () => undefined,
       })
+      await seedHarnessModel(root.get('models.settings'), startupModel)
     } else {
       const installed = await installManagedModels(root, directory, { controlled: llm, secrets })
       apiFiber = installed.apiFiber; keyFiber = installed.vaultFiber; reinstall = installed.installRuntime
@@ -332,7 +333,7 @@ test('harness server HTTP deletes only the selected connection with CAS and orig
   }
 })
 
-test('harness server Responses startup registers its key and exposes the existing Bash Run events over HTTP', async () => {
+test('harness server HTTP configures a Responses key and exposes the existing Bash Run events', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-responses-'))
   const received = []
   const server = createServer(async (incoming, response) => {
@@ -357,14 +358,10 @@ test('harness server Responses startup registers its key and exposes the existin
   })
   server.listen(0, '127.0.0.1')
   await once(server, 'listening')
-  const config = parseHarnessServerConfig({
-    ANYBOX_LLM_API: 'openai-responses', ANYBOX_LLM_MODEL: 'compatible-responses-model',
-    ANYBOX_LLM_BASE_URL: `http://127.0.0.1:${server.address().port}/v1`,
-    ANYBOX_LLM_MAX_OUTPUT_TOKENS: '2048', ANYBOX_LLM_TEMPERATURE: '0.2',
-  })
   let f
   try {
-    f = await fixture(directory, {}, config)
+    f = await fixture(directory, {}, { protocolId: 'responses', remoteModelId: 'compatible-responses-model',
+      baseUrl: `http://127.0.0.1:${server.address().port}/v1`, parameters: { max_output_tokens: 2048, temperature: 0.2 }, apiKey: false })
     const providers = await request(f.web, 'GET', '/models/connections')
     assert.equal(providers.data.length, 1)
     const provider = providers.data[0]

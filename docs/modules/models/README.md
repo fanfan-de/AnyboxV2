@@ -57,6 +57,8 @@ flowchart TD
 4. 用根控制面的 `context.get()` 获取当前 `models.settings` / `models`；配置连接后通过 `models.list()` 选择配置 ID。
 5. 原生执行先获取协议代租约，再 `models.openNative({ modelId, lease })`；宿主记录 `prepareExchange()` 的意图后调用 `start()`，结束时等待 `execution.close()` 并释放租约。单次纯文本可直接 `models.generateText({ modelId, instruction?, input, signal? })`，该操作自行捕获协议代、关闭 execution 并释放租约后才结算。
 
+Anybox Harness 的全新配置装配只接纳 models.dev 目录，不自动创建提供方连接或默认模型。新增提供方界面的候选仅来自 models.dev，保存新连接必须选中目录定义，不提供自定义新增提供方入口；已有自定义连接继续管理，通用 Models 管理 API 仍支持受信用户定义。用户在模型管理中从目录显式添加连接与 Key，满足运行条件后再自动准备适用模型的基础配置。旧 `ANYBOX_LLM_*` 不再解析或导入，也不读取或复制旧模型凭据；已有 JSON/SQLite 配置、连接、模型、凭据引用和历史继续读取，不再为未完成的旧引导补写固定迁入连接或默认模型；现有连接的通用基础模型同步保持原行为。已有稳定 `default` 配置仍可作为启动后备。
+
 完整关闭由应用宿主 `close()` 负责；运行期停止所选 Agent 时，由应用控制器卸载其 Models 组件。Models 停止准入、取消并等待初始化、请求、execution、来源接纳与配置写入退出，底层存储随后关闭。关闭后的门面不可复用；重新启动需重新装配。
 
 ## 维护与验证

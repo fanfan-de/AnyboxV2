@@ -135,6 +135,6 @@ Models 配置库、目录缓存库和业务 SQLite 是三套独立连接，不�
 
 ## 组件之外的代码
 
-[packages/app-harness/src/core/index.ts](../../packages/app-harness/src/core/index.ts) 和 [packages/distribution/src/entrypoints/serve.ts](../../packages/distribution/src/entrypoints/serve.ts) 是组合根/宿主入口；AgentDefinition 是只读配置；`execution`、`PreparedRunProgram`、协议 Loop、内部 SQLite 提供方及浏览器视图是所属组件持有或调用的实现。它们在相关文档中说明，不独立计作组件。`packages/api-key-manager` 保留独立工具包和旧凭据读取用途，说明见 [包 README](../../packages/api-key-manager/README.md)，不是当前应用的额外 Nya 凭据组件。
+[packages/app-harness/src/core/index.ts](../../packages/app-harness/src/core/index.ts) 和 [packages/distribution/src/entrypoints/serve.ts](../../packages/distribution/src/entrypoints/serve.ts) 是组合根/宿主入口；AgentDefinition 是只读配置；`execution`、`PreparedRunProgram`、协议 Loop、内部 SQLite 提供方及浏览器视图是所属组件持有或调用的实现。它们在相关文档中说明，不独立计作组件。`packages/api-key-manager` 保留独立工具包，并用于客户端连接与 Computer worker 附着的系统凭据适配，说明见 [包 README](../../packages/api-key-manager/README.md)，不是当前应用的额外 Nya 凭据组件。
 
 新增或调整组件时，按 [文档维护约定](../README.md#维护约定) 同步更新本清单和模块目录。组件文档描述当前实现，设计文档保存跨模块决策和迁移背景。

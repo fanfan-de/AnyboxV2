@@ -8,7 +8,6 @@ import { createModelsStoreComponent, createModelsVaultComponent, createModelsCom
 import { installHarnessServerModels as installModels } from '../packages/app-harness/dist/server-models.js'
 import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
 
-
 async function openNative(root, modelId = 'default') {
   const model = root.get('models').get(modelId)
   const lease = root.get('models.protocols').acquire(model.parameters.protocolId)
@@ -19,7 +18,12 @@ async function openNative(root, modelId = 'default') {
 }
 
 const entryKey = (namespace, id) => `${namespace}\0${id}`
-const installHarnessServerModels = (root, config, options = {}) => installModels(root, config, { catalogAutoRefresh: false, ...options })
+const installHarnessServerModels = (root, config, options = {}) => installModels(root, config, {
+  catalogAutoRefresh: false,
+  catalogFetch: async () => { throw new Error('startup must use the bundled catalog without network access') },
+  ...options,
+})
+const capabilities = { tools: { support: 'supported' }, streaming: { support: 'supported' }, imageInput: { support: 'unknown' }, reasoning: { support: 'unknown' } }
 function memoryKeyring() {
   const values = new Map(), operations = []
   return {
@@ -44,99 +48,135 @@ async function fixture(t, env = {}) {
   const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite'), ...env })
   return { directory, config, root() { const root = new Context(); roots.push(root); return root } }
 }
-async function seedProvider(root, config, keyring, provider) {
+async function seedProvider(root, config, keyring, input = {}) {
   for (const component of [createModelsStoreComponent({ path: config.modelsDatabasePath }),
     createModelsVaultComponent({ namespace: config.credentialNamespace, openEntry: keyring.openEntry }), createModelsComponent(), createChatCompletionsProtocolComponent(), createResponsesProtocolComponent()]) await root.installComponent(component)
   const settings = root.get('models.settings')
+  const provider = { id: 'anybox-imported-default', name: 'Saved connection', enabled: true, protocolId: 'chat-completions',
+    baseUrl: 'https://saved.invalid/v1', auth: 'api-key', timeoutMs: 30_000, ...input }
   const definition = await settings.createProvider({ id: `${provider.id}-definition`, name: provider.name, connectionHints: { protocolIds: [provider.protocolId], baseUrl: provider.baseUrl } })
   return settings.createConnection({ ...provider, providerDefinitionId: definition.id })
 }
+async function seedDefaultModel(root, connection) {
+  const settings = root.get('models.settings')
+  const definition = await settings.createModel({ id: 'anybox-imported-model', providerId: connection.providerDefinitionId,
+    name: 'Saved model definition', remoteModelId: 'saved-remote-model', capabilities,
+    controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [connection.protocolId] } })
+  return settings.createConfiguration({ id: 'default', connectionId: connection.id, modelDefinitionId: definition.id, name: 'My saved model',
+    enabled: true, baseline: true, capabilities, parameters: { protocolId: connection.protocolId, formatVersion: 1, value: { temperature: 0.3 } } })
+}
 
-test('deleting all connections stays empty after restart without reimporting legacy credentials or default models', async t => {
-  const f = await fixture(t), first = f.root(), keyring = memoryKeyring();
-  let reads = 0;
-  const options = { openEntry: keyring.openEntry, readLegacyCredential: async () => { reads++; return 'legacy-private-key'; } };
-  await installHarnessServerModels(first, f.config, options);
-  const settings = first.get('models.settings'), connection = settings.connections()[0];
-  await settings.deleteConnection(connection.id, connection.revision);
-  assert.deepEqual(settings.connections(), []); assert.deepEqual(settings.configurations(), []);
-  assert.equal(keyring.values.size, 0);
-  await first.fiber.dispose();
-  const second = f.root(), result = await installHarnessServerModels(second, f.config, options);
-  assert.deepEqual(result, {}); assert.equal(reads, 1);
-  assert.deepEqual(second.get('models.settings').connections(), []); assert.deepEqual(second.get('models').list(), []);
-  assert.equal(second.get('models.settings').connectionHistory(connection.id).length, 1);
-  assert.equal(second.get('models.settings').configurationHistory('default').length, 1);
-});
+test('fresh Models startup loads the directory and protocols without connections, configurations or legacy credential access', async t => {
+  const f = await fixture(t, { ANYBOX_LLM_API: 'openai-responses', ANYBOX_LLM_MODEL: 'unused-model', ANYBOX_LLM_BASE_URL: 'https://unused.invalid/v1' })
+  const keyring = memoryKeyring(), root = f.root(), oldKey = entryKey('anybox', 'llm/openai-responses/default')
+  keyring.values.set(oldKey, 'untouched-legacy-private-value')
+  await installHarnessServerModels(root, f.config, { openEntry: keyring.openEntry })
+  const settings = root.get('models.settings')
+  assert.deepEqual(settings.connections(), [])
+  assert.deepEqual(settings.configurations(), [])
+  assert.deepEqual(root.get('models').list(), [])
+  assert.deepEqual(settings.protocols().map(protocol => protocol.id).sort(), ['anthropic-messages', 'chat-completions', 'gemini-interactions', 'responses'])
+  assert.ok(settings.providers({ sourceId: 'models.dev' }).some(provider => provider.source.providerId === 'deepseek'))
+  assert.ok(settings.models({ sourceId: 'models.dev' }).length > 0)
+  assert.equal(settings.providers().some(provider => provider.source.kind === 'user'), false)
+  assert.equal(settings.models().some(model => model.source.kind === 'user'), false)
+  assert.equal(root.get('models.catalog').status().origin, 'bundled')
+  assert.deepEqual(keyring.operations, [])
+  assert.equal(keyring.values.get(oldKey), 'untouched-legacy-private-value')
+  await root.fiber.dispose()
+  const reopened = f.root()
+  await installHarnessServerModels(reopened, f.config, { openEntry: keyring.openEntry })
+  assert.deepEqual(reopened.get('models.settings').connections(), [])
+  assert.deepEqual(reopened.get('models.settings').configurations(), [])
+  assert.deepEqual(keyring.operations, [])
+  assert.doesNotMatch(await readFile(f.config.modelsConfigPath, 'utf8'), /untouched-legacy-private-value/)
+})
 
-test('An unavailable legacy credential store still opens Models configuration with an explicit missing-key state', async t => {
+test('a models.dev DeepSeek connection is created explicitly and prepares catalog models only after a Key is configured', async t => {
   const f = await fixture(t), root = f.root(), keyring = memoryKeyring()
-  await installHarnessServerModels(root, f.config, { openEntry: keyring.openEntry,
-    readLegacyCredential: async () => { throw new Error('legacy failure contains private details') } })
+  await installHarnessServerModels(root, f.config, { openEntry: keyring.openEntry })
   const settings = root.get('models.settings')
-  assert.equal(settings.connections()[0].credentialConfigured, false)
-  assert.equal(root.get('models').get('default').unavailableReason, 'credential-missing')
-  assert.equal(settings.configurations().length, 1)
-  assert.equal(settings.protocols().length, 4)
-})
-
-test('A failed new-vault write keeps editable provider/model metadata and sanitized failure state', async t => {
-  const f = await fixture(t), root = f.root()
-  await installHarnessServerModels(root, f.config, {
-    readLegacyCredential: async () => 'private-import-value',
-    openEntry: () => ({ async getPassword() { throw new Error('private-import-value') },
-      async setPassword() { throw new Error('private-import-value') }, async deleteCredential() { return false } }),
-  })
-  const settings = root.get('models.settings')
+  const definition = settings.providers({ sourceId: 'models.dev' }).find(provider => provider.source.providerId === 'deepseek')
+  const connection = await settings.createConnection({ providerDefinitionId: definition.id, id: 'explicit-deepseek', name: 'DeepSeek', enabled: true,
+    protocolId: 'chat-completions', baseUrl: 'https://api.deepseek.com', auth: 'api-key', timeoutMs: 30_000 })
+  assert.equal(connection.credentialConfigured, false)
+  assert.equal(connection.sync.state, 'pending')
+  assert.deepEqual(settings.configurations(), [])
+  const saved = await settings.setApiKey(connection.id, 'explicit-deepseek-private-value', connection.revision)
+  assert.equal(saved.credentialConfigured, true)
+  assert.equal(saved.sync.state, 'ready')
+  const models = settings.configurations(connection.id)
+  assert.ok(models.length > 0)
+  for (const model of models) {
+    const source = settings.models({ providerId: definition.id }).find(value => value.id === model.modelDefinitionId).source
+    assert.equal(source.kind, 'external')
+    assert.equal(source.sourceId, 'models.dev')
+    assert.equal(source.providerId, 'deepseek')
+    assert.equal(model.baseline, true)
+  }
   assert.equal(settings.connections().length, 1)
-  assert.equal(settings.connections()[0].credentialConfigured, false)
-  assert.equal(settings.configurations().length, 1)
-  assert.ok(!JSON.stringify(settings.connections()).includes('private-import-value'))
-  await assert.rejects(openNative(root), { code: 'credential-missing' })
+  assert.equal(settings.configurations().some(model => model.id === 'default'), false)
+  const execution = await openNative(root, models[0].id)
+  await execution.close()
+  assert.doesNotMatch(await readFile(f.config.modelsConfigPath, 'utf8'), /explicit-deepseek-private-value/)
 })
 
-test('Interrupted bootstrap creates only its missing model and preserves the committed provider/key', async t => {
+test('deleting the last explicit connection stays empty after restart without recreating a default', async t => {
   const f = await fixture(t), first = f.root(), keyring = memoryKeyring()
-  const provider = await seedProvider(first, f.config, keyring, { ...f.config.legacy.provider,
-    id: 'anybox-imported-default', name: 'Committed import', baseUrl: 'http://saved.invalid/api', apiKey: 'already-copied-private-value' })
+  const connection = await seedProvider(first, f.config, keyring, { apiKey: 'saved-private-value' })
+  await seedDefaultModel(first, connection)
   await first.fiber.dispose()
   const second = f.root()
-  let reads = 0
-  await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry,
-    readLegacyCredential: async () => { reads++; throw new Error('old entry should not be read') } })
-  assert.equal(reads, 0)
-  const settings = second.get('models.settings')
-  assert.deepEqual(settings.protocols().map(protocol => protocol.id).sort(), ['anthropic-messages', 'chat-completions', 'gemini-interactions', 'responses'])
-  await access(f.config.modelsDatabasePath)
-  const stored = JSON.parse(await readFile(f.config.modelsConfigPath, 'utf8'))
-  assert.equal(stored.connections[0].id, provider.id)
-  assert.equal(stored.configurations[0].id, 'default')
-  assert.ok(!JSON.stringify(stored).includes('already-copied-private-value'))
-  const execution = await openNative(second)
-  const visible = JSON.stringify([settings.connections(), settings.configurations(), settings.connectionHistory(provider.id), execution.snapshot])
-  assert.ok(!visible.includes('already-copied-private-value'))
-  assert.ok(!visible.includes('credentialRef'))
-  await execution.close()
-  assert.deepEqual(second.get('models.settings').connections(), [provider])
-  assert.equal(second.get('models.settings').configurations()[0].connectionId, provider.id)
-  assert.equal(second.get('models').get('default').available, true)
+  await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
+  const settings = second.get('models.settings'), imported = settings.connections()[0]
+  await settings.deleteConnection(imported.id, imported.revision)
+  assert.deepEqual(settings.connections(), [])
+  assert.deepEqual(settings.configurations(), [])
+  assert.equal(keyring.values.size, 0)
+  await second.fiber.dispose()
+  const third = f.root()
+  await installHarnessServerModels(third, f.config, { openEntry: keyring.openEntry })
+  assert.deepEqual(third.get('models.settings').connections(), [])
+  assert.deepEqual(third.get('models').list(), [])
+  assert.equal(third.get('models.settings').connectionHistory(connection.id).length, 1)
+  assert.equal(third.get('models.settings').configurationHistory('default').length, 1)
 })
 
-test('Models use editable JSON directly and record capability edits on reopening without rereading the old Key', async t => {
-  const f = await fixture(t, { ANYBOX_LLM_API: 'openai-responses', ANYBOX_LLM_MODEL: 'reasoning-model' })
-  const keyring = memoryKeyring(), first = f.root()
-  let legacyReads = 0
-  const options = { openEntry: keyring.openEntry, readLegacyCredential: async () => { legacyReads++; return 'private-json-test-key' } }
-  await installHarnessServerModels(first, f.config, options)
+test('existing SQLite connection, Key and stable default configuration remain usable without being rewritten on startup', async t => {
+  const f = await fixture(t), first = f.root(), keyring = memoryKeyring()
+  const connection = await seedProvider(first, f.config, keyring, { name: 'Committed import', apiKey: 'already-copied-private-value' })
+  const original = await seedDefaultModel(first, connection)
+  await first.fiber.dispose()
+  const second = f.root()
+  await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
+  const settings = second.get('models.settings')
+  await access(f.config.modelsDatabasePath)
+  assert.deepEqual(settings.connections(), [connection])
+  assert.deepEqual(settings.configurations(), [original])
+  assert.equal(second.get('models').get('default').available, true)
+  const execution = await openNative(second)
+  const visible = JSON.stringify([settings.connections(), settings.configurations(), settings.connectionHistory(connection.id), execution.snapshot])
+  assert.doesNotMatch(visible, /already-copied-private-value|credentialRef/)
+  await execution.close()
+  assert.doesNotMatch(await readFile(f.config.modelsConfigPath, 'utf8'), /already-copied-private-value/)
+  assert.equal(keyring.operations.filter(operation => operation.kind === 'write').length, 1)
+})
+
+test('editable JSON capability changes retain configuration identity, parameters, Key and revision history across restarts', async t => {
+  const f = await fixture(t), keyring = memoryKeyring(), seed = f.root()
+  const connection = await seedProvider(seed, f.config, keyring, { protocolId: 'responses', apiKey: 'private-json-test-key' })
+  await seedDefaultModel(seed, connection)
+  await seed.fiber.dispose()
+  const first = f.root()
+  await installHarnessServerModels(first, f.config, { openEntry: keyring.openEntry })
   const before = first.get('models.settings').configurations().find(model => model.id === 'default')
   await first.fiber.dispose()
-  await assert.rejects(access(f.config.modelsDatabasePath), { code: 'ENOENT' })
   const document = JSON.parse(await readFile(f.config.modelsConfigPath, 'utf8'))
   const edited = document.configurations.find(model => model.id === 'default')
   edited.capabilities.reasoning = { support: 'supported', efforts: ['low', 'high'] }
   await writeFile(f.config.modelsConfigPath, JSON.stringify(document, null, 2) + '\n')
   const second = f.root()
-  await installHarnessServerModels(second, f.config, options)
+  await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
   const after = second.get('models.settings').configurations().find(model => model.id === 'default')
   assert.deepEqual(after.capabilities.reasoning, edited.capabilities.reasoning)
   assert.equal(after.revision, before.revision + 1)
@@ -145,77 +185,47 @@ test('Models use editable JSON directly and record capability edits on reopening
   const history = second.get('models.settings').configurationHistory('default')
   assert.deepEqual(history.at(-2), before)
   assert.deepEqual(history.at(-1), after)
-  assert.equal(legacyReads, 1)
   assert.equal(second.get('models.settings').connections()[0].credentialConfigured, true)
-  assert.ok(!JSON.stringify(JSON.parse(await readFile(f.config.modelsConfigPath, 'utf8'))).includes('private-json-test-key'))
+  assert.equal(keyring.operations.filter(operation => operation.kind === 'write').length, 1)
+  assert.doesNotMatch(await readFile(f.config.modelsConfigPath, 'utf8'), /private-json-test-key/)
   await second.fiber.dispose()
   const third = f.root()
-  await installHarnessServerModels(third, f.config, options)
+  await installHarnessServerModels(third, f.config, { openEntry: keyring.openEntry })
   assert.equal(third.get('models.settings').configurations().find(model => model.id === 'default').revision, after.revision)
 })
 
-test('An existing user-managed provider with no models is not mistaken for an interrupted import', async t => {
+for (const id of ['anybox-imported-default', 'user-managed']) test(`startup preserves the existing ${id} connection without inventing a missing model`, async t => {
   const f = await fixture(t), first = f.root(), keyring = memoryKeyring()
-  const provider = await seedProvider(first, f.config, keyring, { ...f.config.legacy.provider, id: 'user-managed', name: 'User connection' })
+  const connection = await seedProvider(first, f.config, keyring, { id, name: 'Saved partial connection', apiKey: 'saved-partial-key' })
   await first.fiber.dispose()
   const second = f.root()
-  const result = await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry,
-    readLegacyCredential: async () => { throw new Error('old entry should not be read') } })
-  assert.deepEqual(result, {})
-  assert.deepEqual(second.get('models.settings').connections(), [provider])
-  assert.deepEqual(second.get('models.settings').configurations(), [])
+  await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
+  const settings = second.get('models.settings')
+  assert.deepEqual(settings.connections(), [connection])
+  assert.deepEqual(settings.configurations(), [])
+  assert.equal(settings.models({ providerId: connection.providerDefinitionId }).length, 0)
+  assert.deepEqual([...keyring.values.values()], ['saved-partial-key'])
 })
 
-test('The default legacy-vault adapter only reads the old namespace and copies into the Models namespace', async t => {
-  const f = await fixture(t), root = f.root(), keyring = memoryKeyring()
-  const legacyId = 'llm/chat-completions/default'
-  keyring.values.set(entryKey('anybox', legacyId), 'legacy-copy-value')
-  await installHarnessServerModels(root, f.config, { openEntry: keyring.openEntry })
-  assert.deepEqual(keyring.operations.filter(operation => operation.namespace === 'anybox'), [{ kind: 'read', namespace: 'anybox', id: legacyId }])
-  assert.equal(keyring.values.get(entryKey('anybox', legacyId)), 'legacy-copy-value')
-  assert.equal(keyring.operations.filter(operation => operation.namespace === f.config.credentialNamespace && operation.kind === 'write').length, 1)
-  assert.equal(root.get('models.settings').connections()[0].credentialConfigured, true)
-})
-
-test('Partial import with a different protocol keeps its provider without inventing a model from changed environment defaults', async t => {
+for (const hasKey of [false, true]) test(`a saved partial import with a model definition ${hasKey ? 'uses normal baseline synchronization' : 'and no Key remains incomplete'} without an invented default`, async t => {
   const f = await fixture(t), first = f.root(), keyring = memoryKeyring()
-  const provider = await seedProvider(first, f.config, keyring, { ...f.config.legacy.provider,
-    id: 'anybox-imported-default', name: 'Original Responses import', protocolId: 'responses',
-    baseUrl: 'https://saved.invalid/v1', apiKey: 'committed-response-key' })
-  await first.fiber.dispose()
-  const second = f.root()
-  let legacyReads = 0
-  const result = await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry,
-    readLegacyCredential: async () => { legacyReads++; return 'new-environment-key' } })
-  assert.deepEqual(result, {})
-  assert.equal(legacyReads, 0)
-  assert.deepEqual(second.get('models.settings').connections(), [provider])
-  assert.deepEqual(second.get('models.settings').configurations(), [])
-  assert.deepEqual([...keyring.values.values()], ['committed-response-key'])
-})
-
-
-test('Interrupted bootstrap after its model definition preserves the stable default configuration ID on restart', async t => {
-  const f = await fixture(t), first = f.root(), keyring = memoryKeyring()
-  const connection = await seedProvider(first, f.config, keyring, { ...f.config.legacy.provider,
-    id: 'anybox-imported-default', name: 'Committed import', apiKey: 'committed-import-key' })
+  const connection = await seedProvider(first, f.config, keyring, hasKey ? { apiKey: 'saved-partial-definition-key' } : {})
   const definition = await first.get('models.settings').createModel({ id: 'anybox-imported-model', providerId: connection.providerDefinitionId,
-    name: 'Saved default definition', remoteModelId: f.config.legacy.remoteModelId,
-    capabilities: { tools: { support: 'supported' }, streaming: { support: 'supported' }, imageInput: { support: 'unknown' }, reasoning: { support: 'unsupported' } },
+    name: 'Saved partial definition', remoteModelId: 'saved-remote-model', capabilities,
     controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [connection.protocolId] } })
-  assert.deepEqual(first.get('models.settings').configurations(), [])
   await first.fiber.dispose()
   const second = f.root()
-  const result = await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry,
-    readLegacyCredential: async () => { throw new Error('committed Key must be preserved') } })
-  assert.deepEqual(result, { defaultModelId: 'default' })
-  const configurations = second.get('models.settings').configurations()
-  assert.equal(configurations.length, 1)
-  assert.equal(configurations[0].id, 'default')
-  assert.equal(configurations[0].modelDefinitionId, definition.id)
-  assert.equal(configurations[0].connectionId, connection.id)
-  assert.equal(configurations[0].baseline, true)
-  const execution = await openNative(second)
-  await execution.close()
-  assert.deepEqual([...keyring.values.values()], ['committed-import-key'])
+  await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
+  const settings = second.get('models.settings')
+  const configurations = settings.configurations()
+  if (hasKey) {
+    assert.equal(configurations.length, 1)
+    assert.equal(configurations[0].modelDefinitionId, definition.id)
+    assert.equal(configurations[0].remoteModelId, definition.remoteModelId)
+    assert.equal(configurations[0].baseline, true)
+    assert.notEqual(configurations[0].id, 'default')
+  } else assert.deepEqual(configurations, [])
+  assert.deepEqual(settings.models({ providerId: connection.providerDefinitionId }), [definition])
+  assert.equal(settings.connections()[0].credentialConfigured, hasKey)
+  if (!hasKey) assert.deepEqual(keyring.operations, [])
 })

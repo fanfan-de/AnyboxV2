@@ -15,19 +15,22 @@ import { createHarnessServerListenerComponent, harnessServerListenerServiceKey }
 import { createHarnessServerRuntime } from '@anybox/app-harness/server-runtime'
 import { createStandaloneHarnessServer } from '@anybox/app-harness/server'
 import { parseHarnessServerConfig } from '@anybox/app-harness/server-config'
+import { seedHarnessModel } from '../../../tests/helpers/configured-models.mjs'
 
 function deferred() { let resolve; const promise = new Promise(yes => { resolve = yes }); return { promise, resolve } }
 async function fixture(t, fetchModel) {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-standalone-harness-'))
   const secrets = new Map()
   const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
-  const options = { models: { catalogAutoRefresh: false, readLegacyCredential: async () => 'test-secret', fetch: fetchModel,
+  const options = { models: { catalogAutoRefresh: false, fetch: fetchModel,
     openEntry(namespace, id) { const key = `${namespace}:${id}`; return {
       getPassword: async () => secrets.get(key), setPassword: async value => { secrets.set(key, value) }, deleteCredential: async () => secrets.delete(key),
     } },
   } }
   const server = await createStandaloneHarnessServer(config, options)
   t.after(async () => { await server.close(); await rm(directory, { recursive: true, force: true }) })
+  const model = await seedHarnessModel(server.root.get('models.settings'), { apiKey: 'test-secret' })
+  await server.api.setSessionDefaults('assistant', model.id, 0)
   const issued = await server.access.issue('Test device')
   const headers = { Authorization: `Bearer ${issued.token}`, 'X-Anybox-Instance-Id': server.instance.instanceId, 'Content-Type': 'application/json' }
   const request = (path, body) => fetch(server.url + path, { headers, ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }) })

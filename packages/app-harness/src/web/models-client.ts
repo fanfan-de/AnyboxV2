@@ -85,6 +85,11 @@ export function settingsConnectionSelection(connections: readonly ProviderConnec
     connections.find(value => value.enabled && (value.auth === 'none' || value.credentialConfigured)) ?? connections[0]
 }
 
+/** New accounts use the public directory; existing accounts retain their saved provider association. */
+export function settingsConnectionSourceAllowed(connection: ProviderConnection | undefined, provider: Pick<DirectoryProvider, 'source' | 'state'> | undefined): boolean {
+  return Boolean(connection || provider?.state === 'present' && provider.source.kind === 'external' && provider.source.sourceId === 'models.dev')
+}
+
 export interface SettingsModelEditorState {
   readonly connectionId: string
   readonly target: { readonly kind: 'configuration'; readonly id: string } | { readonly kind: 'draft' }
@@ -162,9 +167,9 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
         </div>
       </div>
       <section class="settings-card" data-add-flow hidden>
-        <header class="models-flow-heading"><div><h4>添加提供方连接</h4><p>选择提供方，填写 Key；保存后自动准备适用模型。</p></div><div class="settings-actions"><button type="button" data-custom-provider class="secondary-button">自定义连接</button><button type="button" data-cancel-add class="secondary-button">返回我的连接</button></div></header>
+        <header class="models-flow-heading"><div><h4>添加提供方连接</h4><p>从 models.dev 目录选择提供方，填写 Key；保存后自动准备适用模型。</p></div><div class="settings-actions"><button type="button" data-cancel-add class="secondary-button">返回我的连接</button></div></header>
         <ol class="models-flow-steps"><li>选择提供方</li><li>配置连接和 API Key</li><li>使用模型</li></ol>
-        <div class="models-add-flow"><section class="models-directory" aria-label="选择提供方"></section><div data-add-form-slot><p data-provider-placeholder class="settings-hint">先选择提供方，连接信息会自动填写；也可点击“自定义连接”手动配置。</p></div></div>
+        <div class="models-add-flow"><section class="models-directory" aria-label="选择提供方"></section><div data-add-form-slot><p data-provider-placeholder class="settings-hint">先从 models.dev 目录选择提供方，连接信息会自动填写。</p></div></div>
       </section>
     </fieldset>
     <section data-provider-section class="models-provider-section" hidden>
@@ -192,7 +197,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   let definitions: readonly DirectoryProvider[] = [], inventory: readonly ConnectionModel[] = []
   let inventoryRead = 0, reloadRead = 0, selectionRead = 0, secretRevision = 0, inventoryLoading = false, inventoryError = ''
   let provider: ProviderConnection | undefined, model: ModelConfiguration | undefined, busy = false, loaded = false
-  let mode: 'manage' | 'add' = 'manage', returnConnectionId: string | undefined, customConnection = false
+  let mode: 'manage' | 'add' = 'manage', returnConnectionId: string | undefined
   let providerDefinitionId = '', configurationDefinitionId = '', variantDefaults: NativeObject | undefined, variantCapabilities: DeclaredCapabilities | undefined
   let modelCapabilities = unknownCapabilities()
   let directory: ReturnType<typeof setupModelsDirectory> | undefined
@@ -380,14 +385,14 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     get('[data-management]').hidden = mode !== 'manage'; get('[data-add-flow]').hidden = mode !== 'add'
     const slot = get(mode === 'add' ? '[data-add-form-slot]' : '[data-manage-form-slot]')
     if (providerSection.parentElement !== slot) slot.append(providerSection)
-    const waitingForProvider = mode === 'add' && !providerDefinitionId && !customConnection
+    const waitingForProvider = mode === 'add' && !settingsConnectionSourceAllowed(provider, definition())
     providerSection.hidden = waitingForProvider
     get('[data-provider-placeholder]').hidden = !waitingForProvider
     get<HTMLButtonElement>('[data-cancel-add]').hidden = !providers.length
     get('[data-provider-form-title]').textContent = mode === 'add' ? '配置连接和 API Key' : '编辑连接'
     get('[data-template-label]').hidden = Boolean(provider)
     protocolSelect.disabled = Boolean(provider)
-    get('[data-provider-origin]').textContent = definition() ? `${definition()!.name} · 来源：${sourceLabel(definition()!.source)}` : '自定义提供方'
+    get('[data-provider-origin]').textContent = definition() ? `${definition()!.name} · 来源：${sourceLabel(definition()!.source)}` : '提供方定义暂不可用'
     get('[data-connection-title]').textContent = provider?.name ?? '选择连接'
     get('[data-connection-subtitle]').textContent = definition() ? `${definition()!.name} · ${sourceLabel(definition()!.source)}` : ''
     const [statusLabel, statusTone] = provider ? connectionStatus(provider) : ['未配置', 'pending']
@@ -437,9 +442,9 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
       preferredConnectionId = value.id
       try { localStorage.setItem(`anybox.models.connection.${instanceId}`, value.id) } catch { /* Selection still works without persistence. */ }
     }
-    provider = value; mode = value ? 'manage' : 'add'; customConnection = false; key.value = ''; candidates = []; inventory = []; inventoryError = ''; inventoryLoading = false; inventoryRead++
+    provider = value; mode = value ? 'manage' : 'add'; key.value = ''; candidates = []; inventory = []; inventoryError = ''; inventoryLoading = false; inventoryRead++
     configurationDefinitionId = ''; variantDefaults = variantCapabilities = undefined; modelDraftKey = ''
-    providerDefinitionId = value?.providerDefinitionId ?? ''; draftKey = value?.id ?? 'add:custom'
+    providerDefinitionId = value?.providerDefinitionId ?? ''; draftKey = value?.id ?? ''
     get('[data-candidates-label]').hidden = true; get('[data-delete-confirm]').hidden = true; get('[data-delete-connection-confirm]').hidden = true; history.hidden = true; modelEditor.hidden = true; modelEditor.open = false
     protocolSelect.replaceChildren(...protocols.map(item => option(item.id, item.name)))
     if (value && !protocols.some(item => item.id === value.protocolId)) protocolSelect.append(option(value.protocolId, `${value.protocolId} · 未安装`))
@@ -501,7 +506,9 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     loadProvider(); directory?.select(''); root.scrollIntoView({ block: 'start', behavior: 'smooth' }); get<HTMLInputElement>('[data-directory-provider-search]').focus()
   }
   function prepareDirectoryConnection(value: DirectoryProvider, recipe?: ProviderTemplate, focus = true): void {
-    if (busy || !loaded) return
+    if (busy || !loaded || !settingsConnectionSourceAllowed(undefined, value)) return
+    // A directory search may observe a newer source snapshot than the management read.
+    definitions = definitions.some(item => item.id === value.id) ? definitions.map(item => item.id === value.id ? value : item) : [...definitions, value]
     const nextDraftKey = `add:${value.id}:${recipe?.id ?? ''}`
     if (mode === 'add' && providerDefinitionId === value.id && draftKey === nextDraftKey) {
       if (focus) { key.focus(); providerForm.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) }
@@ -509,7 +516,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     }
     selectionRead++
     captureConnection(); captureModel()
-    provider = undefined; mode = 'add'; customConnection = false; key.value = ''; providerDefinitionId = value.id; configurationDefinitionId = ''; variantDefaults = variantCapabilities = undefined
+    provider = undefined; mode = 'add'; key.value = ''; providerDefinitionId = value.id; configurationDefinitionId = ''; variantDefaults = variantCapabilities = undefined
     inventory = []; inventoryRead++; modelEditor.hidden = true; get('[data-delete-confirm]').hidden = true
     draftKey = nextDraftKey
     protocolSelect.replaceChildren(...protocols.map(item => option(item.id, item.name)))
@@ -543,11 +550,8 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
       captureModel()
       const name = input('provider-name').value.trim(), apiKey = key.value
       if (!name) throw new Error('请填写连接名称。')
+      if (!settingsConnectionSourceAllowed(provider, definition())) throw new Error('请先从 models.dev 目录选择提供方。')
       if (!provider && select('auth').value === 'api-key' && !apiKey.trim()) throw new Error('请输入 API Key。')
-      if (!providerDefinitionId) {
-        const savedDefinition = await api<DirectoryProvider>('/models/providers', { name, connectionHints: { baseUrl: input('base-url').value.trim(), protocolIds: [protocolSelect.value] } })
-        providerDefinitionId = savedDefinition.id
-      }
       const values: ProviderConnectionInput = { providerDefinitionId, name, protocolId: protocolSelect.value, baseUrl: input('base-url').value.trim(), auth: select('auth').value as ProviderConnectionInput['auth'], timeoutMs: Number(input('timeout').value), enabled: input('provider-enabled').checked }
       const { protocolId: _protocol, providerDefinitionId: _definition, ...patch } = values
       const existing = Boolean(provider)
@@ -578,7 +582,6 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   protocolSelect.addEventListener('change', () => { captureModel(); select('template').value = ''; renderParameters(initialNativeParameters(currentProtocol()?.modelFields ?? [], { capabilities: modelCapabilities })); renderState() })
   select('auth').addEventListener('change', () => { secretRevision++; key.value = ''; renderState() })
   get('[data-add-provider]').addEventListener('click', beginAdd)
-  get('[data-custom-provider]').addEventListener('click', () => { captureConnection(); show(); loadProvider(); customConnection = true; directory?.select(''); renderState(); input('provider-name').focus() })
   get('[data-cancel-add]').addEventListener('click', () => { captureConnection(); show(); loadProvider(providers.find(value => value.id === returnConnectionId) ?? providers[0]) })
   get('[data-reset-provider]').addEventListener('click', () => {
     captureModel()

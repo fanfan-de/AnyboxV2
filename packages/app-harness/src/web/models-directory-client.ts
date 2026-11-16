@@ -42,7 +42,7 @@ export function createModelsDirectory(api: Api, messageFor: (error: unknown) => 
       if (signal?.aborted) return
       const read = ++providerRead
       try {
-        const providers = await api<readonly DirectoryProvider[]>(`/models/providers?${new URLSearchParams({ search })}`, undefined, signal)
+        const providers = await api<readonly DirectoryProvider[]>(`/models/providers?${new URLSearchParams({ sourceId: 'models.dev', search })}`, undefined, signal)
         if (read === providerRead && !signal?.aborted) result('providers', { providers })
       } catch (error) { if (read === providerRead) failed('providers', error, signal) }
     },
@@ -109,7 +109,7 @@ interface DirectoryActions {
 
 export function setupModelsDirectory(root: HTMLElement, api: Api, messageFor: (error: unknown) => string, actions: DirectoryActions) {
   root.innerHTML = `
-    <div class="models-card-heading models-directory-heading"><div><h4>选择提供方</h4><p>从目录填写连接信息。</p></div><button type="button" data-directory-refresh class="secondary-button">刷新目录</button></div>
+    <div class="models-card-heading models-directory-heading"><div><h4>选择提供方</h4><p>从 models.dev 目录填写连接信息。</p></div><button type="button" data-directory-refresh class="secondary-button">刷新目录</button></div>
     <p data-directory-status class="settings-hint" role="status" aria-live="polite">正在读取模型目录。</p>
     <p data-directory-error class="models-notice error" role="status" hidden></p>
     <div class="models-directory-grid">
@@ -186,7 +186,7 @@ export function setupModelsDirectory(root: HTMLElement, api: Api, messageFor: (e
     get('[data-directory-provider-count]').textContent = `${candidates.length} 个提供方`
     const empty = get('[data-directory-provider-empty]')
     empty.hidden = candidates.length > 0
-    empty.textContent = providerSearch.value.trim() ? '没有匹配的提供方，请调整搜索。' : '暂时没有提供方，可刷新目录或添加自定义连接。'
+    empty.textContent = providerSearch.value.trim() ? '没有匹配的提供方，请调整搜索。' : '暂时没有提供方，请刷新 models.dev 目录后重试。'
     providerSearch.disabled = !context.ready || context.busy
     modelSelect.replaceChildren(option('', provider ? '查看模型详情' : '先选择提供方'), ...state.models.map(item => option(item.id, `${item.name} · ${item.remoteModelId}${item.status === 'deprecated' ? ' · 已弃用' : ''}`)))
     modelSelect.value = selectedModelId
@@ -290,8 +290,11 @@ export function setupModelsDirectory(root: HTMLElement, api: Api, messageFor: (e
   }
   const unsubscribe = directory.subscribe(render)
   const observer = new MutationObserver(sync)
-  if (dialog) observer.observe(dialog, { attributes: true, attributeFilter: ['open'] })
-  observer.observe(root, { attributes: true, attributeFilter: ['hidden'] })
+  // Settings categories and the add flow toggle ancestor panels after startup.
+  // Observe the same hidden ancestors that visible() checks, without watching rendered descendants.
+  for (let element: HTMLElement | null = root; element; element = element.parentElement) {
+    observer.observe(element, { attributes: true, attributeFilter: element === dialog ? ['open', 'hidden'] : ['hidden'] })
+  }
   const closed = () => { if (dialog && !dialog.open && active) stop() }
   dialog?.addEventListener('close', closed)
   providerList.addEventListener('click', event => {

@@ -19,7 +19,7 @@ test('real deployment platform: native credentials, headless host, Bash, image b
   try {
     await vault.write(id, 'test-only-value'); assert.equal(await vault.read(id), 'test-only-value')
     const config = parseHarnessServerConfig({ ANYBOX_WEB_PORT: '0', ANYBOX_HARNESS_DATABASE: join(dir, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(dir, 'models.sqlite'), ANYBOX_MODELS_NAMESPACE: namespace })
-    h = await createHarnessServer(config, { models: { catalogAutoRefresh: false, readLegacyCredential: async () => undefined } })
+    h = await createHarnessServer(config, { models: { catalogAutoRefresh: false } })
     const issued = await h.root.get('host.access').issue('platform client')
     c = await createClientHost({ path: join(dir, 'client.sqlite'), namespace: namespace + '.client' })
     await c.products.open('agent'); await h.products.open('agent')

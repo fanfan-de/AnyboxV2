@@ -38,4 +38,4 @@ Effect 关闭先停止准入，取消所有已登记控制器，等待在途与�
 
 [vault.test.mjs](../../../packages/models/tests/vault.test.mjs) 使用 `openEntry` 替身验证按槽串行、跨槽并行、取消后等待真实退出、跳过排队写入和错误脱敏；[integration.test.mjs](../../../packages/models/tests/integration.test.mjs) 结合真实 Nya/SQLite 与测试 Vault 验证使用链路。这些测试不等于真实系统凭据存储已完成跨平台验收。
 
-参见 [Models 协调服务的 Key 事务](models.md) 和 [包使用说明](../../../packages/models/README.md)。旧 `packages/api-key-manager` 只承担独立包与宿主读取旧凭据的兼容用途，不替代本组件。
+参见 [Models 协调服务的 Key 事务](models.md) 和 [包使用说明](../../../packages/models/README.md)。`packages/api-key-manager` 仍为客户端连接和 Computer worker 附着提供系统凭据适配，不替代本组件；Models 启动不再通过该包读取或复制旧模型 Key。

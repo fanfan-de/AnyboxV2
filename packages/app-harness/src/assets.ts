@@ -6,6 +6,7 @@ export const harnessAssets: readonly ApplicationAsset[] = [
   { path: '/applications/harness/web/harness-page-client.js', file: fileURLToPath(new URL('./web/harness-page-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/harness-navigation.js', file: fileURLToPath(new URL('./web/harness-navigation.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/agent-client.js', file: fileURLToPath(new URL('./web/agent-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
+  { path: '/applications/harness/web/settings-client.js', file: fileURLToPath(new URL('./web/settings-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/product-view-state.js', file: fileURLToPath(new URL('./web/product-view-state.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/page-lifecycle.js', file: fileURLToPath(new URL('./web/page-lifecycle.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/event-stream.js', file: fileURLToPath(new URL('./web/event-stream.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },

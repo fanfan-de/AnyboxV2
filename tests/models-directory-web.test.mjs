@@ -5,6 +5,8 @@ import { join } from 'node:path'
 import { runViewEvent } from '../packages/app-harness/dist/core/run/notifications.js'
 import { catalogModelsData, startCatalogModelsHost } from './helpers/catalog-models-host.mjs'
 import { deferred } from './helpers/controlled-models.mjs'
+import { createModelsDirectory } from '../packages/app-harness/dist/web/models-directory-client.js'
+import { settingsConnectionSelection } from '../packages/app-harness/dist/web/models-client.js'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
 async function request(host, method, path, body) {
@@ -80,7 +82,8 @@ test('Web directory status, filtering and native connection suggestions are advi
   assert.deepEqual(google[0].connections.map(item => item.values.protocolId), ['gemini-interactions'])
   assert.equal(google[0].connections[0].values.baseUrl, 'https://generativelanguage.googleapis.com/v1beta')
   assert.equal(host.network.protocol.length, 0)
-  assert.equal(host.root.get('models.settings').configurations().length, 1)
+  assert.deepEqual(host.root.get('models.settings').connections(), [])
+  assert.deepEqual(host.root.get('models.settings').configurations(), [])
   for (const path of ['/models/definitions?includeDeprecated=1', '/models/providers?includeMissing=1']) {
     const rejected = await request(host, 'GET', path)
     assert.equal(rejected.status, 400)
@@ -88,6 +91,33 @@ test('Web directory status, filtering and native connection suggestions are advi
   }
   assert.equal((await request(host, 'POST', '/models/catalog/refresh', { unsupported: true })).status, 400)
 });
+
+test('the add-provider directory excludes user definitions while existing custom connections remain manageable', async t => {
+  const host = await startCatalogModelsHost()
+  t.after(() => host.close())
+  const custom = await accepted(host, 'POST', '/models/providers', { id: 'user-provider-definition', name: 'Anthropic（迁入）',
+    connectionHints: { baseUrl: 'https://custom.invalid/v1', protocolIds: ['anthropic-messages'] } })
+  const connection = await accepted(host, 'POST', '/models/connections', { id: 'saved-user-account', providerDefinitionId: custom.id,
+    name: 'My saved custom connection', enabled: true, protocolId: 'anthropic-messages', baseUrl: 'https://custom.invalid/v1', auth: 'api-key', timeoutMs: 30_000 })
+  const unfiltered = await accepted(host, 'GET', '/models/providers?search=Anthropic')
+  assert.ok(unfiltered.some(provider => provider.id === custom.id && provider.source.kind === 'user'))
+  const directory = createModelsDirectory((path, body) => accepted(host, body === undefined ? 'GET' : 'POST', path, body), error => error.message)
+  await directory.readProviders('Anthropic')
+  assert.equal(directory.snapshot().error, undefined)
+  assert.deepEqual(directory.snapshot().providers.map(provider => provider.name), ['Anthropic QA'])
+  assert.ok(directory.snapshot().providers.every(provider => provider.source.kind === 'external' && provider.source.sourceId === 'models.dev'))
+  const existing = await accepted(host, 'GET', '/models/connections')
+  assert.deepEqual(settingsConnectionSelection(existing, [], connection.id), connection)
+  const updated = await accepted(host, 'POST', `/models/connections/${connection.id}`, { patch: { name: 'Renamed saved custom connection' }, expectedRevision: connection.revision })
+  assert.equal(updated.name, 'Renamed saved custom connection')
+  assert.equal(updated.providerDefinitionId, custom.id)
+  assert.equal(updated.revision, connection.revision + 1)
+  const visible = await accepted(host, 'GET', '/models/connections')
+  assert.deepEqual(settingsConnectionSelection(visible, [], connection.id), updated)
+  await directory.readProviders()
+  assert.equal(directory.snapshot().providers.some(provider => provider.id === custom.id), false)
+  assert.equal(host.network.protocol.length, 0)
+})
 
 test('Provider selection and one saved Key automatically expose compatible models for each account', async t => {
   const host = await startCatalogModelsHost()

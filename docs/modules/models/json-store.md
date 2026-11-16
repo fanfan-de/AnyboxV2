@@ -36,6 +36,8 @@
 
 数组包含完整记录而非 UI 导出副本。配置固定连接、定义及定义版本、远端模型 ID 和 baseline 身份，历史仍为不可变事实。`tombstones` 保存通过管理接口删除的连接与配置 ID，防止重新使用；不能通过删除文件中的记录代替管理界面删除。连接只保存私有凭据引用和非秘密 `historyScopeEpoch`，日志只保存凭据操作意图；JSON 不含 Key 值、认证头或 execution 句柄。密钥始终由 [Vault](vault.md) 持有。
 
+维护清理不再使用的旧迁入 Provider/Model 定义时，先正常停止所属 Agent 并等待实际退出，确认当前连接和实际模型配置已不再引用这些固定定义，再由受信维护过程独占配置存储，通过公开 `ModelsStore.commit()` 以预期修订提交 `state: "missing"` 的新版本。普通定义查询不再返回这些条目，显式包含缺失条目的查询和历史仍可读取；保留稳定 ID、关联与不可变版本，不物理删除 JSON 记录或改写历史。该维护方式不新增面向用户的定义删除接口。
+
 Anybox Harness 界面只读展示能力，原生生成参数仍可编辑。需要人工修正能力时，先停止所属执行设备的 Agent，再打开文件，在 `configurations` 中按 `id`、`connectionId` 和名称找到目标，修改其 `capabilities`。`support` 接受 `supported`、`unsupported`、`unknown`；推理声明可包含 `efforts`、`modes` 和 `budget: {"min": ..., "max": ...}`。修改定义的能力不会代替实际配置的声明，来源拥有的 Provider/Model 仍由目录维护。
 
 人工编辑只修改当前记录的可变输入字段。保留稳定 ID、关联、来源身份、`revision`、`versionId`、`createdAt`、`updatedAt`、`credentialRef`、`historyScopeEpoch`、历史、删除账本和来源账本；不手工增加或改写版本。重新装配时，存储将当前记录与最新不可变历史比较，为合法修改自动生成新 revision、版本与时间，连接地址或认证方式变化时更新 epoch。格式、身份或关联错误拒绝启动并保留文件，既有原生参数与能力不兼容时仍由 Models 协调服务拒绝执行。
@@ -58,6 +60,6 @@ Anybox Harness 界面只读展示能力，原生生成参数仍可编辑。需�
 
 ## 验证与关联文档
 
-[json-storage.test.mjs](../../../packages/models/tests/json-storage.test.mjs) 验证原子提交、手工修改后版本生成、在途文件冲突、所有权与清理等待，以及旧 SQLite 的完整导入；[harness-server-models.test.mjs](../../../tests/harness-server-models.test.mjs) 验证宿主直接读写 JSON、能力修改生效及旧 Key 保留。根 `npm run check` 同时验证替换端口的 Models 和 Anybox Harness 行为。其他存储约束由 [SQLite 存储测试](store.md#验证与扩展)及 Models 协调层测试覆盖。
+[json-storage.test.mjs](../../../packages/models/tests/json-storage.test.mjs) 验证原子提交、手工修改后版本生成、在途文件冲突、所有权与清理等待，以及旧 SQLite 的完整导入；[harness-server-models.test.mjs](../../../tests/harness-server-models.test.mjs) 验证宿主空配置启动、目录添加、已有 JSON 配置与凭据引用保留，以及不会重新补写旧引导的固定迁入连接或默认模型。根 `npm run check` 同时验证替换端口的 Models 和 Anybox Harness 行为。其他存储约束由 [SQLite 存储测试](store.md#验证与扩展)及 Models 协调层测试覆盖。
 
 参见 [Models 协调服务](models.md)、[部署配置](../../harness-server-deployment.md#模型-json-配置)与 [Models 包使用说明](../../../packages/models/README.md)。

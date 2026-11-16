@@ -13,7 +13,7 @@ function launch(entry, args, directory, guard = 'client') {
     env: { ...process.env, ANYBOX_TEST_ROLE_GUARD: guard, ANYBOX_WEB_PORT: '0', ANYBOX_CLIENT_DATABASE: join(directory, 'client.sqlite'),
       ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_CONFIG: join(directory, 'models.json'),
       ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite'), ANYBOX_MODELS_CATALOG_DATABASE: join(directory, 'catalog.sqlite'),
-      ANYBOX_LLM_API: 'not-a-protocol-client-must-not-parse', ANYBOX_COMPUTER_UNIT: 'invalid-client-must-ignore' },
+      ANYBOX_COMPUTER_UNIT: 'invalid-client-must-ignore' },
   })
   let output = ''
   child.stdout.on('data', bytes => { output += bytes }); child.stderr.on('data', bytes => { output += bytes })

@@ -7,6 +7,7 @@ import type { LocalComputerWorkerStatus } from '../core/computer/worker-port.js'
 
 /** Owner-side unit attachments of one fixed device: list, issue one-time attach codes, revoke. */
 export interface UnitsSettingsView {
+  canLeave(): boolean
   refresh(): Promise<void>
   issue(input: { readonly projects: readonly string[]; readonly tools: readonly string[] }): Promise<string>
   revoke(attachmentId: string): Promise<void>
@@ -38,6 +39,7 @@ export function describeLocalAttachment(attachment: LocalAttachmentView): string
   return `${attachment.harnessUrl} · ${connectionLabels[attachment.connection]}${attachment.lastError ? `（${attachment.lastError}）` : ''} · 目录 ${attachment.ceiling.projects === 'all' ? '不限' : attachment.ceiling.projects.join('、')} · 工具 ${attachment.ceiling.tools === 'all' ? '不限' : attachment.ceiling.tools.join('、')}`
 }
 export interface LocalAttachmentsView {
+  canLeave(): boolean
   refresh(): Promise<void>
   start(): Promise<void>
   attach(input: { readonly harnessUrl: string; readonly code: string; readonly projects: readonly string[]; readonly tools: readonly string[] }): Promise<LocalAttachmentView>
@@ -112,6 +114,7 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
     finally { busy = false; attachButton.disabled = !running || restartRequired; startButton.disabled = running || !supported || unavailable; refreshButton.disabled = false }
   }
   const view: LocalAttachmentsView = {
+    canLeave: () => !busy && !requests.writing,
     async refresh() {
       try {
         const value = await api<Omit<LocalComputerWorkerStatus, 'attachments'> & { attachments: readonly LocalAttachmentView[] }>('/computer/status')
@@ -203,6 +206,7 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
     finally { busy = false; issueButton.disabled = false }
   }
   const view: UnitsSettingsView = {
+    canLeave: () => !busy && !requests.writing,
     async refresh() {
       try {
         const values = await Promise.all([api<readonly UnitAttachment[]>('/units/attachments'), api<ComputerEnvironments>('/computer-environments')])

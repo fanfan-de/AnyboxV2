@@ -78,15 +78,15 @@ harness server 在应用根安装 `tools.apply-patch`，向模型提供 `apply_p
 
 单机运行使用 `npm run web:local`：客户端和本机业务后端在同一个 Node.js 进程、同一个 Nya 根中运行，两个监听地址和各自数据文件保留，打开应用后自动配对。独立部署时，先运行 `npm run harness:server:init` 生成一次性显示的设备访问令牌，再运行 `npm run web`。先打开 Anybox Harness，在其连接管理中添加 `http://127.0.0.1:3001` 并填入令牌。独立部署的执行端与客户端使用不同进程，分别使用 `npm run harness:server` / `npm run client`。云端与其他设备使用 HTTPS 配对。详见[独立部署、发行与恢复](docs/harness-server-deployment.md)。打开终端打印的 `http://127.0.0.1:<port>` 地址。新安装点击 Anybox Harness 后打开所选 Agent；已有业务库保留 Agent 打开目标。在 Anybox Harness 内进入“模型管理”：
 
-1. 在公共目录中选择提供方和连接方案，点击“填写新提供方”；也可选择模板或手动填写。调整账号名称、代理地址、认证和 API Key 后保存。
+1. 点击“添加提供方”，从 models.dev 目录中选择提供方和连接方案，点击“填写 API Key”。新建连接必须选中目录提供方，界面不再提供自定义新增提供方入口；确认连接名称、API 地址和认证方式，填写 Key 后保存。
 2. 保存连接和 Key 后，适用目录模型自动准备基础配置。高级设置可编辑生成参数、新建参数预设或自定义模型；能力只读展示，人工修正需编辑执行设备的 JSON 配置。
 3. 回到会话的模型选择器，选择本地 Model 后发送消息。
 
-可以编辑、启停提供方与模型，替换或删除 Key，查询历史版本并显式检查连接。修改保存后立即作用于新 Run，已接受 Run 保留原配置。Key 只显示配置状态；无需认证的提供方也可使用。提供方的协议创建后不可更改，要切换协议需创建新提供方。
+已有连接（含历史自定义连接）仍可编辑和启停，也可替换或删除 Key，查询历史版本并显式检查连接。修改保存后立即作用于新 Run，已接受 Run 保留原配置。Key 只显示配置状态；无需认证的提供方也可使用。提供方的协议创建后不可更改，要切换协议需创建新提供方。
 
-在“我的连接”选择账号后，详情顶部的“删除连接”会先展示确认信息。确认后删除该连接、Key 及其基础模型和参数预设，保留 Provider/Model 定义、配置历史、历史对话和已开始的 Run；使用已删除配置的会话须重新选择模型。删除最后一个连接后，重启不会重新迁入旧默认连接。
+在“我的连接”选择账号后，详情顶部的“删除连接”会先展示确认信息。确认后删除该连接、Key 及其基础模型和参数预设，保留 Provider/Model 定义、配置历史、历史对话和已开始的 Run；使用已删除配置的会话须重新选择模型。删除最后一个连接后，重启仍保持没有连接，由用户从目录重新添加。
 
-首次使用空 Models 数据库时，宿主将旧 `ANYBOX_LLM_*` 配置导入固定的默认连接/模型，并尝试从旧 `anybox` 凭据命名空间复制对应密钥，保留原条目。之后重启不会重复读取旧密钥或覆盖用户配置；旧环境变量不再负责运行时切换。若启动中断后环境协议改变，已提交连接会保留，由设置页完成模型配置。
+首次使用且没有已有 Models 配置时，宿主只加载 models.dev 目录，连接和实际模型配置保持为空，不自动创建“迁入”连接或默认模型。提供方连接与 Key 由用户在模型管理中显式添加。旧 `ANYBOX_LLM_*` 环境变量不再解析或导入，也不再读取或复制旧 `anybox` 模型凭据。已有 JSON 配置及旧 Models SQLite 的导入兼容继续保留，已保存的连接、模型、Key 引用和历史继续读取；未完成的旧引导不再补写固定迁入连接或默认模型，既有配置中的稳定 `default` 模型仍可作为启动后备。
 
 | 环境变量 | 默认值与用途 |
 | --- | --- |
@@ -96,14 +96,8 @@ harness server 在应用根安装 `tools.apply-patch`，向模型提供 `apply_p
 | `ANYBOX_MODELS_DATABASE` | `./data/models.sqlite`，仅 JSON 不存在时的旧配置导入源 |
 | `ANYBOX_MODELS_CATALOG_DATABASE` | 默认在旧 Models 路径旁的 `models-catalog.sqlite`，不能与配置文件或其他库共用文件及文件别名 |
 | `ANYBOX_MODELS_NAMESPACE` | `anybox.models`，系统凭据命名空间 |
-| `ANYBOX_LLM_API` | 仅初次导入：`chat-completions` 或 `openai-responses`；旧 `deepseek-chat-completions` 保留为默认 DeepSeek 导入兼容入口，保存为 `chat-completions` |
-| `ANYBOX_LLM_MODEL` | 仅初次导入：DeepSeek 默认 `deepseek-flash`，Responses 必填 |
-| `ANYBOX_LLM_BASE_URL` | 仅初次导入：DeepSeek 默认 `https://api.deepseek.com`，Responses 默认 `https://api.openai.com/v1` |
-| `ANYBOX_LLM_TIMEOUT_MS` | 仅初次导入：`30000`，正整数且不超过 `2147483647` |
-| `ANYBOX_LLM_MAX_OUTPUT_TOKENS` | 仅初次导入：可选正整数，省略时使用服务端默认值 |
-| `ANYBOX_LLM_TEMPERATURE` | 仅初次导入：`0` 到 `2`，DeepSeek 默认 `0.7`，Responses 省略 |
 
-环境变量仍在安装资源前校验，不加载 dotenv；已设置的空值会报错。API 地址只填基础地址，不附加 `/responses` 或 `/chat/completions`，不带用户名、密码、查询串或 fragment。
+上述环境变量仍在安装资源前校验，不加载 dotenv；已设置的空值会报错。模型连接的 API 地址在设置中填写基础地址，不附加 `/responses` 或 `/chat/completions`，不带用户名、密码、查询串或 fragment。
 
 Anybox Harness 内的“Prompt 管理”可编辑、发布、预览并绑定版本。“模型服务”配置与会话选择通过薄 HTTP 入口调用 Nya 服务。`/api/v1/changes` 同时提供提交后的 Run 变更提示和临时模型进展；慢连接受有界队列限制，只影响展示订阅。最终内容以持久 Run 和节点查询为准，刷新不会恢复半截流式输出。工具过程、取消与失败仍由 Run 状态展示。
 
@@ -122,7 +116,7 @@ npm run check
 
 根检查同时构建和测试 `packages/models`，覆盖目录归一化、离线缓存、刷新调度、协议解析、配置版本、凭据日志、并发与生命周期，以及 Anybox Harness、迁移和 Web 行为。默认测试使用临时 SQLite、内存凭据和模拟 HTTP。可用 `node tests/helpers/catalog-browser-host.mjs` 在隔离宿主中复验目录建连接、参数配置、会话选模和原生工具续轮，范围与操作见 [Web 客户端验收](docs/web-client-design.md#验收)。
 
-真实凭据验证需另行运行 `ANYBOX_KEYRING_TESTS=1 node --test tests/system-keyring.test.mjs`；Linux 无 Secret Service 时加 `ANYBOX_KEYRING_EXPECT_NO_STORE=1` 验证固定拒绝且无明文回退。2026-09-25 的 macOS 验收属于旧 API Key 组件，不能代替新 Models Vault 的平台验收；本次 macOS、Windows、Linux 原生凭据测试均未执行。`packages/api-key-manager` 保留独立通用包与旧凭据读取用途，旧应用 `llm` 和凭据 Nya 包装已删除。
+真实凭据验证需另行运行 `ANYBOX_KEYRING_TESTS=1 node --test tests/system-keyring.test.mjs`；Linux 无 Secret Service 时加 `ANYBOX_KEYRING_EXPECT_NO_STORE=1` 验证固定拒绝且无明文回退。2026-09-25 的 macOS 验收属于旧 API Key 组件，不能代替新 Models Vault 的平台验收；本次 macOS、Windows、Linux 原生凭据测试均未执行。`packages/api-key-manager` 保留独立通用包与客户端连接、Computer worker 附着的系统凭据适配用途，旧应用 `llm` 和凭据 Nya 包装已删除。
 
 真实模型文本与重启续接冒烟测试位于 `tests/native-live-api.test.mjs`，默认跳过。它要求独立设置 `ANYBOX_NATIVE_API_TESTS=1`、显式选择协议并提供端点、模型、Key 和原生参数，使用临时库与内存 Vault；完整命令及范围见[联网验证入口](docs/native-protocol-agent-framework-design.md#11-独立联网验证入口)。普通检查不会发送真实模型请求，本次也未启用该门控。
 

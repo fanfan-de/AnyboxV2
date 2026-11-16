@@ -17,7 +17,7 @@ Computer 安装本机 worker 客户端、实例提供方、Computers、Workspace
 
 会话持久保存可空 modelId；新 native-local-v1 Session 首次接受 Run 原子固定协议，旧 dialogue-v1 只读。schemaVersion 3 快照包含定义身份、驱动代、原生参数与非秘密 historyScopeEpoch，不含凭据。根初始化与工具契约沿指定父链继承，每个新 Run 的当前 task-template 仅处理本次原始输入一次。恢复记录增量保存，跨 Run/重启重建本地原生上下文；失败、取消、清理失败没有可继续节点，有效工具等待游标可接续；无游标或模型响应未保存的异常中断结算 interrupted，不自动重放。
 
-本机 [Web 客户端](./web-client-design.md)通过统一 Provider/Model 目录选提供方、配置 Key 后自动准备适用模型，`models.settings` 提供连接与模型参数编辑、启停、Key 设置/替换/删除、能力和协议参数、发现、检查与历史。每个会话可以独立选模，提交和重试固定显式模型 ID。配置变更只影响新 execution，无需重启。启动环境变量继续校验，但旧 `ANYBOX_LLM_*` 只在空 Models 库初始化时导入，已有设置不会被覆盖。旧密钥复制到新命名空间，原条目保留；系统凭据不可用不会退回明文，也不阻止浏览非秘密配置。
+本机 [Web 客户端](./web-client-design.md)通过统一 Provider/Model 目录选提供方、配置 Key 后自动准备适用模型，`models.settings` 提供连接与模型参数编辑、启停、Key 设置/替换/删除、能力和协议参数、发现、检查与历史。每个会话可以独立选模，提交和重试固定显式模型 ID。配置变更只影响新 execution，无需重启。首次使用空 Models 配置时只加载 models.dev 目录，不自动创建连接或默认模型；提供方与 Key 由用户在设置中显式添加。旧 `ANYBOX_LLM_*` 不再解析或导入，也不读取或复制旧模型凭据。已有 JSON/SQLite 配置读取兼容和已保存的连接、模型、Key 引用、历史保留；系统凭据不可用不会退回明文，也不阻止浏览非秘密配置。
 
 Web 支持显式节点查看、同父节点并发、跨项目四面板和标签页内布局恢复；关闭视图不取消 Run。Session 提交后发送变更提示，RunRuntime 发布协议安全展示快照，共用有界 SSE 展示通道。最终节点和 Run 查询是事实来源，流式片段不落为成功历史。Prompt 草稿编辑、版本发布、历史预览与 Agent 绑定仍由独立服务提供。
 

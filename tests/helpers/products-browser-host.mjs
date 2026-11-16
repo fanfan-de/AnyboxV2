@@ -10,6 +10,7 @@ import { claudeAgentClientApplication } from '../../packages/app-claude-agent/di
 import { claudeAgentServerApplication } from '../../packages/app-claude-agent/dist/registration.js'
 import { testApplication } from './test-application.mjs'
 import { parseHarnessServerConfig } from '../../packages/app-harness/dist/server-config.js'
+import { seedHarnessModel } from './configured-models.mjs'
 
 const directory = await mkdtemp(join(tmpdir(), 'anybox-products-browser-'))
 const secrets = new Map()
@@ -31,7 +32,7 @@ try {
   const project = join(directory, 'Example'); await mkdir(project)
   const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'business.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
   host = await createHarnessServer(config, { name: '本地测试 Agent', projects: [project], additionalApplications: [claudeAgentServerApplication({})], models: {
-    openEntry, catalogAutoRefresh: false, readLegacyCredential: async () => 'disposable-controlled-model-key',
+    openEntry, catalogAutoRefresh: false,
     catalogFetch: async () => { throw new Error('Network is disabled in product acceptance') },
     fetch: async (_input, init) => {
       if (modelGate) await new Promise((resolve, reject) => {
@@ -46,6 +47,10 @@ try {
     },
   } })
   await host.ready
+  await host.products.open('agent')
+  const model = await seedHarnessModel(host.root.get('models.settings'), { apiKey: 'disposable-controlled-model-key' })
+  await host.api.setSessionDefaults('assistant', model.id, 0)
+  await host.products.disable('agent')
   client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [harnessClientApplication({ localInstanceId: host.instance.instanceId, openEntry }), claudeAgentClientApplication({ localInstanceId: host.instance.instanceId, openEntry }), notesRegistration] })
   await client.products.open('agent')
   const issued = await host.root.get('host.access').issue('Disposable browser acceptance')

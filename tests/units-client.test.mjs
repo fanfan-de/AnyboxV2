@@ -32,7 +32,9 @@ test('closing an attachment view drops its code immediately and joins writes wit
   t.after(async () => { pending.resolve({ attachmentId: 'old' }); await Promise.allSettled([submitted, closing, old.dispose(), replacement?.dispose()]) })
   await flush()
   const codeInput = section.find(node => node.type === 'password'); codeInput.value = 'one-time-code'
+  assert.equal(old.canLeave(), true)
   submitted = old.attach({ harnessUrl: 'https://remote.example', code: codeInput.value, projects: [], tools: [] })
+  assert.equal(old.canLeave(), false, 'a submitted attachment must finish before switching devices')
   await flush()
   let closed = false
   closing = old.dispose().then(() => { closed = true })
@@ -56,7 +58,9 @@ test('a closed units settings view joins code issuance without publishing its la
   let replacement, closing, issuing
   t.after(async () => { pending.resolve({ attachment: {}, code: 'late-secret' }); await Promise.allSettled([issuing, closing, old.dispose(), replacement?.dispose()]) })
   await flush()
+  assert.equal(old.canLeave(), true)
   issuing = old.issue({ projects: [], tools: [] })
+  assert.equal(old.canLeave(), false, 'a submitted one-time code must finish before switching devices')
   await flush()
   let closed = false
   closing = old.dispose().then(() => { closed = true })

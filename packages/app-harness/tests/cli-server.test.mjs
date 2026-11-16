@@ -7,20 +7,23 @@ import { runApplicationCli } from '@anybox/application-api/cli'
 import { harnessCliRegistration } from '../dist/cli/registration.js'
 import { createStandaloneHarnessServer } from '../dist/server.js'
 import { parseHarnessServerConfig } from '../dist/server-config.js'
+import { seedHarnessModel } from '../../../tests/helpers/configured-models.mjs'
 
 async function fixture(t, model, releaseModel = () => {}) {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-cli-server-'))
   let server
   t.after(async () => { releaseModel(); try { await server?.close() } finally { await rm(directory, { recursive: true, force: true }) } })
   const secrets = new Map()
-  const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite'), ANYBOX_LLM_BASE_URL: 'http://127.0.0.1:9' })
+  const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
   server = await createStandaloneHarnessServer(config, { projectDirectoryHome: directory, models: {
     catalogAutoRefresh: false, catalogFetch: async () => { throw new Error('Network forbidden in CLI tests') },
-    readLegacyCredential: async () => 'fake-model-key', fetch: model,
+    fetch: model,
     openEntry(namespace, id) { const key = namespace + ':' + id; return {
       getPassword: async () => secrets.get(key), setPassword: async value => { secrets.set(key, value) }, deleteCredential: async () => secrets.delete(key),
     } },
   } })
+  const configuration = await seedHarnessModel(server.root.get('models.settings'), { baseUrl: 'http://127.0.0.1:9', apiKey: 'fake-model-key' })
+  await server.api.setSessionDefaults('assistant', configuration.id, 0)
   await server.api.setAgentTools('assistant', { toolIds: [], expectedRevision: 0 })
   const issued = await server.access.issue('CLI test')
   const request = async (path, body) => {

@@ -9,6 +9,7 @@ import { createLocalWebHost } from '../packages/distribution/dist/composition/lo
 import { createHarnessServer } from '../packages/distribution/dist/composition/harness-server.js'
 import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
+import { seedHarnessModel } from './helpers/configured-models.mjs'
 
 function fixture(directory, fetch) {
   const secrets = new Map()
@@ -18,9 +19,9 @@ function fixture(directory, fetch) {
   }
   const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'),
     ANYBOX_MODELS_CONFIG: join(directory, 'models.json'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite'),
-    ANYBOX_MODELS_CATALOG_DATABASE: join(directory, 'catalog.sqlite'), ANYBOX_LLM_API: 'chat-completions' })
+    ANYBOX_MODELS_CATALOG_DATABASE: join(directory, 'catalog.sqlite') })
   return { config, client: { path: join(directory, 'client.sqlite'), port: 0, openEntry },
-    options: { models: { openEntry, readLegacyCredential: async () => undefined, catalogAutoRefresh: false, fetch } } }
+    options: { models: { openEntry, catalogAutoRefresh: false, fetch } } }
 }
 async function request(url, path, body) {
   const response = await fetch(url + path, { method: body === undefined ? 'GET' : 'POST',
@@ -49,6 +50,8 @@ test('local Web shares exactly one root while keeping storage, targets and appli
     assert.equal(host.execution.products.get('agent').state, 'running')
     const harnessModels = host.root.get('harness.models.settings')
     assert.ok(harnessModels)
+    assert.deepEqual(harnessModels.connections(), [])
+    await seedHarnessModel(harnessModels)
     assert.equal(host.root.get('models.settings'), undefined)
     await host.client.products.open('personal-agent')
     const personalModels = host.root.get('models.settings')
@@ -96,12 +99,11 @@ test('single-root shutdown cancels an accepted model call and persists its termi
   try {
     host = await createLocalWebHost({ client: f.client, execution: { config: f.config, options: f.options } })
     await host.execution.products.open('agent')
-    const settings = host.root.get('harness.models.settings'), connection = settings.connections()[0]
-    await settings.setApiKey(connection.id, 'test-private-key', connection.revision)
+    const model = await seedHarnessModel(host.root.get('harness.models.settings'), { apiKey: 'test-private-key' })
     const api = host.execution.api
     await api.setAgentTools('assistant', { toolIds: [], expectedRevision: 0 })
     const project = await api.openProject(directory)
-    const session = await api.createSession(project.id, 'assistant', 'default')
+    const session = await api.createSession(project.id, 'assistant', model.id)
     run = await api.startRun({ sessionId: session.id, parentNodeId: null, input: 'wait', idempotencyKey: 'local-shutdown' })
     await started
     await assert.rejects(host.execution.products.disable('agent'), { code: 'product-busy' })

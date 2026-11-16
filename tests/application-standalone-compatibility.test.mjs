@@ -18,7 +18,7 @@ test('Anybox and standalone applications reopen the same data, identity and toke
   const projectPath = join(directory, 'project'); await mkdir(projectPath)
   const env = { ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') }
   const config = parseHarnessServerConfig(env), claudeConfig = parseClaudeAgentServerConfig(env)
-  const secrets = new Map(), models = { catalogAutoRefresh: false, readLegacyCredential: async () => undefined,
+  const secrets = new Map(), models = { catalogAutoRefresh: false,
     openEntry(namespace, id) { const key = `${namespace}:${id}`; return {
       getPassword: async () => secrets.get(key), setPassword: async value => { secrets.set(key, value) }, deleteCredential: async () => secrets.delete(key),
     } },

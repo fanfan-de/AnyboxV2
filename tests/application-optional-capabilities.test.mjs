@@ -143,7 +143,7 @@ test('Harness server does not capture another application\'s incompatible picker
   const modern = { definition: { id: 'modern', name: 'Modern', icon: 'folder' }, capabilityRequirements: { required: { 'system.directory-picker': '^2.0.0' } },
     createRuntime(root) { return createApplicationRuntime(root, () => {}) } }
   host = await createExecutionHost({ databasePath: config.harnessDatabasePath, applications: [harnessServerApplication(config, {
-    models: { openEntry: memoryKeys(), readLegacyCredential: async () => undefined, catalogAutoRefresh: false },
+    models: { openEntry: memoryKeys(), catalogAutoRefresh: false },
   }), modern], providers: [{ id: 'system.directory-picker', version: '2.0.0', services: [directoryPickerServiceKey],
     create: () => createDirectoryPickerComponent({ platform: 'darwin', runDialog: async () => { picks++; return directory } }) }] })
   await host.ready

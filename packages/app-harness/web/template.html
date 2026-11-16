@@ -16,7 +16,7 @@
         </div>
         <footer class="sidebar-footer">
           <div class="harness-controls">
-            <label class="sr-only" for="agent--harness-select">执行设备</label><select id="agent--harness-select" title="执行设备"></select>
+            <label class="sr-only" for="agent--harness-select">当前设备</label><select id="agent--harness-select" title="当前设备"></select>
             <button id="agent--open-settings" class="icon-button sidebar-settings-button" type="button" aria-label="Anybox Harness 设置" title="Anybox Harness 设置" aria-haspopup="dialog" aria-controls="agent--settings-dialog"><svg class="icon" aria-hidden="true"><use href="#agent--icon-settings"/></svg></button>
           </div>
         </footer>
@@ -37,10 +37,9 @@
     </main>
   </div>
   <dialog id="agent--settings-dialog" class="settings-dialog" aria-labelledby="agent--settings-title">
-    <div class="settings-heading"><div><h2 id="agent--settings-title">Anybox Harness 设置</h2><p id="agent--settings-target" class="settings-hint"></p></div><button id="agent--close-settings" class="close-settings" type="button" aria-label="关闭设置" title="关闭设置" autofocus><svg aria-hidden="true"><use href="#agent--icon-close"/></svg></button></div>
+    <div class="settings-heading"><h2 id="agent--settings-title">Anybox Harness 设置</h2><button id="agent--close-settings" class="close-settings" type="button" aria-label="关闭设置" title="关闭设置" autofocus><svg aria-hidden="true"><use href="#agent--icon-close"/></svg></button></div>
     <div class="settings-workspace">
       <nav class="settings-navigation" aria-label="设置分类">
-        <p class="settings-nav-label">工作区</p>
         <button type="button" data-settings-section="general" aria-controls="agent--general-settings" aria-current="page"><span>会话设置</span></button>
         <button type="button" data-settings-section="connections" aria-controls="agent--connections-settings"><span>管理连接</span></button>
         <button type="button" data-settings-section="models" aria-controls="agent--models-settings"><span>模型管理</span></button>
@@ -50,6 +49,7 @@
         <button type="button" data-settings-section="units" aria-controls="agent--units-settings"><span>执行环境</span></button>
       </nav>
       <div id="agent--settings-content" class="settings-content">
+        <div id="agent--settings-scope" class="settings-scope"><label for="agent--settings-device">正在设置：</label><select id="agent--settings-device" aria-label="正在设置的设备"></select><span id="agent--settings-all-devices" hidden>所有设备</span></div>
         <section id="agent--connections-settings" class="settings-panel connections-settings" data-settings-panel="connections" aria-labelledby="agent--connections-title" hidden></section>
         <section id="agent--general-settings" class="settings-panel" data-settings-panel="general" aria-labelledby="agent--agent-settings-title">
           <header class="settings-panel-heading"><h3 id="agent--agent-settings-title">会话设置</h3><p>设置新会话使用的 Agent 和默认模型。</p></header>

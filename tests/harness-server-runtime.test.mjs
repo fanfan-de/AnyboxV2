@@ -21,7 +21,7 @@ async function fixture(t) {
   const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
   await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
   const secrets = new Map()
-  const runtime = createHarnessServerRuntime(root, config, { authenticated: false, models: { catalogAutoRefresh: false, readLegacyCredential: async () => undefined,
+  const runtime = createHarnessServerRuntime(root, config, { authenticated: false, models: { catalogAutoRefresh: false,
     openEntry(namespace, id) { const key = `${namespace}:${id}`; return {
       getPassword: async () => secrets.get(key), setPassword: async value => { secrets.set(key, value) }, deleteCredential: async () => secrets.delete(key),
     } },
