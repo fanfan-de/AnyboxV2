@@ -2,6 +2,7 @@
   "name": "@anybox/distribution",
   "version": "0.1.0",
   "private": true,
+  "bin": { "anybox": "./dist/entrypoints/anybox-main.js" },
   "type": "module",
   "engines": {
     "node": ">=22.13.0"
@@ -24,7 +25,7 @@
   "dependencies": {
     "@anybox/host": "0.1.0",
     "@anybox/application-api": "0.1.0",
-    "@anybox/app-harness": "0.1.5",
+    "@anybox/app-harness": "0.1.6",
     "@anybox/app-claude-agent": "0.1.11",
     "@anybox/app-personal-agent": "0.1.0",
     "@anybox/storage-sqlite": "0.1.0",

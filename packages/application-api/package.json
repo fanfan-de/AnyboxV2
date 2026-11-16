@@ -4,6 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./cli": {
+      "types": "./dist/cli.d.ts",
+      "default": "./dist/cli.js"
+    },
+    "./cli-node": {
+      "types": "./dist/cli-node.d.ts",
+      "default": "./dist/cli-node.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
