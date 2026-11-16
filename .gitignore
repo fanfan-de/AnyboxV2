@@ -7,6 +7,11 @@ dist/
 
 # Local runtime data: SQLite databases, journals, ownership locks, and original images.
 data/
+# Keep only the notes example's two static Markdown fixtures under version control.
+!/examples/tool-environments/notes/data/
+/examples/tool-environments/notes/data/*
+!/examples/tool-environments/notes/data/release-checklist.md
+!/examples/tool-environments/notes/data/environment-guide.md
 *.sqlite
 *.sqlite-journal
 *.sqlite-wal
