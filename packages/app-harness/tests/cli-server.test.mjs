@@ -30,11 +30,11 @@ async function fixture(t, model, releaseModel = () => {}) {
     assert.equal(response.status, 200); return response.json()
   }
   const project = await request('/projects', { path: directory })
-  const call = async (args, input = '') => {
+  const call = async (args, input = '', signal = new AbortController().signal) => {
     let stdout = '', stderr = ''
     const code = await runApplicationCli(['harness', ...args, '--json'], [harnessCliRegistration], {
       stdin: (async function* () { yield input })(), stdout: async text => { stdout += text }, stderr: async text => { stderr += text },
-      cwd: directory, env: { ANYBOX_HARNESS_CLI_CONFIG: join(directory, 'cli', 'targets.json') }, signal: new AbortController().signal,
+      cwd: directory, env: { ANYBOX_HARNESS_CLI_CONFIG: join(directory, 'cli', 'targets.json') }, signal,
     }, { version: 'test' })
     assert.ok(!(stdout + stderr).includes(issued.token))
     return { code, stdout, stderr, rows: stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) }
@@ -86,4 +86,51 @@ test('Harness CLI explicit cancellation observes actual model exit without cance
   release()
   const ended = await f.call(['run', 'watch', runId])
   assert.equal(ended.code, 8); assert.equal(ended.rows.at(-1).data.status, 'cancelled')
+})
+
+test('Harness CLI consumes live SSE and disconnects observation without cancelling the accepted run', { skip: process.platform === 'win32' }, async t => {
+  const entered = Promise.withResolvers(), release = Promise.withResolvers()
+  const f = await fixture(t, async () => { entered.resolve(); await release.promise; return successfulModel() }, () => release.resolve())
+  const session = (await f.call(['session', 'create', '--project', f.project.id, '--agent', 'assistant'])).rows[0].data
+  const started = await f.call(['run', 'start', session.id, '--parent', 'root', '--request-id', 'cli-live-sse', '--input', 'Wait for observation', '--detach'])
+  assert.equal(started.code, 0)
+  const runId = started.rows.at(-1).data.id
+  await entered.promise
+
+  const received = Promise.withResolvers(), closed = Promise.withResolvers()
+  const fetchHttp = globalThis.fetch
+  let subscriptions = 0
+  t.mock.method(globalThis, 'fetch', async (...args) => {
+    const response = await fetchHttp(...args)
+    if (!String(args[0]).startsWith(f.server.url + '/api/v1/apps/agent/changes?')) return response
+    assert.match(response.headers.get('content-type'), /^text\/event-stream/)
+    subscriptions++
+    const reader = response.body.getReader()
+    // Forward bytes from the real socket; reaching this gate proves a live SSE stream was read.
+    return new Response(new ReadableStream({
+      async pull(controller) {
+        try {
+          const next = await reader.read()
+          if (next.done) { closed.resolve(); controller.close(); return }
+          controller.enqueue(next.value)
+          received.resolve()
+        } catch (error) { closed.resolve(); controller.error(error) }
+      },
+      async cancel(reason) { try { await reader.cancel(reason) } finally { closed.resolve() } },
+    }), { status: response.status, headers: response.headers })
+  })
+  const observing = new AbortController()
+  const watched = f.call(['run', 'watch', runId], '', observing.signal)
+  await Promise.race([received.promise, watched.then(() => { throw new Error('Observation ended before receiving live SSE') })])
+  observing.abort()
+  assert.equal((await watched).code, 130)
+  await closed.promise
+  assert.equal(subscriptions, 1)
+  assert.equal((await f.call(['run', 'show', runId])).rows[0].data.status, 'running')
+
+  release.resolve()
+  const completed = await f.call(['run', 'watch', runId])
+  assert.equal(completed.code, 0)
+  assert.equal(completed.rows.at(-1).data.status, 'completed')
+  assert.equal(completed.rows.at(-1).data.output, 'CLI answer')
 })

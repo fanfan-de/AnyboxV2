@@ -52,15 +52,16 @@ for (const [entry, args] of [['client-main', []], ['anybox-main', ['client']]]) 
   })
 }
 
-test('role help and an unknown role do not load service runtimes or create files', { timeout: 20000 }, async t => {
+test('role help and an unknown command do not load service runtimes or create files', { timeout: 20000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-role-help-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   for (const args of [[], ['--help'], ['client', '--help'], ['harness-server', '--help'], ['computer-worker', '--help'], ['unknown']]) {
     const process = launch('anybox-main', args, directory, 'help')
     // No service owns the IPC channel in a help-only invocation.
     process.child.disconnect()
-    assert.equal((await process.exited).code, args[0] === 'unknown' ? 1 : 0, process.output())
-    assert.match(process.output(), /Usage: anybox/)
+    const unknown = args[0] === 'unknown'
+    assert.equal((await process.exited).code, unknown ? 2 : 0, process.output())
+    assert.match(process.output(), unknown ? /invalid-arguments: Unknown command; use --help/ : /Usage: anybox/)
     assert.deepEqual(await readdir(directory), [])
   }
 })

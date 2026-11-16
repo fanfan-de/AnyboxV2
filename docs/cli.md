@@ -152,6 +152,8 @@ export const cli: ApplicationCliRegistration = {
 
 ## 验证与后续
 
-测试入口：`packages/application-api/tests/cli.test.mjs`、`packages/app-harness/tests/cli.test.mjs`、`packages/app-harness/tests/cli-server.test.mjs`、`packages/distribution/tests/cli-framework.test.mjs`。真实服务集成使用临时 SQLite/Models JSON、内存凭据、禁用目录联网和受控假模型；无 keychain 或真实模型调用。完整检查为 `npm run check`，本轮实际结果和环境限制见[框架记录](cli-predev-notes/2026-11-15-cli-framework.md)与[应用记录](cli-predev-notes/2026-11-15-harness-cli.md)。
+测试入口：`packages/application-api/tests/cli.test.mjs`、`packages/app-harness/tests/cli.test.mjs`、`packages/app-harness/tests/cli-server.test.mjs`、`packages/distribution/tests/cli-framework.test.mjs`。真实服务集成使用临时 SQLite/Models JSON、内存凭据、禁用目录联网和受控假模型；无 keychain 或真实模型调用。完整检查为 `npm run check`，实际结果和环境限制见[框架记录](../.agents/notes/implemented/architecture/2026-11-16-cli-framework.md)与[应用记录](../.agents/notes/implemented/feature/2026-11-16-harness-cli.md)。
+
+2026-11-16 已在 Linux Node v24.16.0 跑通真实 HTTP/SSE 集成，包括幂等提交与分支、显式取消等待模型退出、实际 SSE 字节读取，以及中断观察后 Run 继续并可再次观察到完成。单机共根、两侧存储/Models 独立和关闭排空也已通过回归。当前源码需要相邻 NyaCore 同时支持 `ComponentInstallOptions.bindings` 与 `Context.resolveServiceName()`；这是同根装配的框架能力，不能仅添加类型声明。依赖衔接及上述验证见[后续修复记录](../.agents/notes/implemented/bug-fix/2026-11-16-restore-nya-bindings-and-cli-integration.md)。
 
 后续单独设计服务端审批契约、按会话工具环境选择、桌面零配置共享、自动启动服务。还需把已安装应用 CLI 与耐久包身份/使用锚和卸载 guard 接通，补齐 Windows ACL、真实终端信号/隐藏输入与各平台实测；当前 help/元数据契约不能替代这些加载安全条件。应用安装归档格式本轮没有新增 cli 入口字段。
