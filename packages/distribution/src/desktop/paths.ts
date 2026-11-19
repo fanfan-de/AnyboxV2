@@ -5,7 +5,7 @@ export function desktopPaths(userData: string) {
   const data = join(resolve(userData), 'data')
   return Object.freeze({ data, client: join(data, 'client.sqlite'), harness: join(data, 'harness.sqlite'),
     models: join(data, 'models.json'), legacyModels: join(data, 'models.sqlite'), catalog: join(data, 'models-catalog.sqlite'),
-    personalAgentModels: join(data, 'personal-agent-models.json'),
+    personalAgentModels: join(data, 'personal-agent-models.json'), personalAgentExecution: join(data, 'personal-agent-execution.sqlite'),
     images: join(data, 'images'), applications: join(resolve(userData), 'applications') })
 }
 export type { DesktopWorkerStart, DesktopWorkerReady } from '@anybox/host/desktop/contracts'

@@ -1,126 +1,172 @@
-import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { access, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { createClientHost } from '@anybox/host/client'
-import { personalAgentApplication } from '../dist/registration.js'
+import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
+import { test } from 'node:test'
+import { setTimeout as wait } from 'node:timers/promises'
+import { Context } from '@nya/core'
+import { createChatCompletionsProtocolComponent, createModelsComponent, createModelsJsonStoreComponent, createModelsVaultComponent } from '@anybox/models'
+import { createLocalSqliteComponent } from '@anybox/storage-sqlite/sqlite'
+import { createLocalWebHost } from '../../distribution/dist/composition/local-web.js'
+import { parseHarnessServerConfig } from '../../app-harness/dist/server-config.js'
+import { seedHarnessModel } from '../../../tests/helpers/configured-models.mjs'
+import { personalAgentServerApplication } from '../dist/registration.js'
+import { parsePersonalAgentServerConfig } from '../dist/server-config.js'
 
-async function fixture(t, options = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'anybox-personal-api-')), values = new Map(), calls = []
-  const modelsPath = join(directory, 'models.json'), path = join(directory, 'client.sqlite')
-  const host = await createClientHost({ path, applications: [personalAgentApplication({
-    databasePath: path, modelsPath,
-    openEntry: (namespace, key) => ({
-      getPassword: async () => values.get(`${namespace}:${key}`),
-      setPassword: async value => { values.set(`${namespace}:${key}`, value) },
-      deleteCredential: async () => { values.delete(`${namespace}:${key}`) },
-    }),
-    fetch: async (_url, init) => {
-      calls.push({ body: JSON.parse(init.body), headers: new Headers(init.headers) })
-      return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '可以验证的成果：第一步明确目标。' }, finish_reason: 'stop' }] }), { headers: { 'content-type': 'application/json' } })
-    }, ...options,
-  })] })
-  t.after(async () => { await host.close(); await rm(directory, { recursive: true, force: true }) })
-  await host.products.open('personal-agent')
-  const request = async (path, body, expectedStatus = 200) => {
-    const response = await fetch(`${host.url}/api/client/v1/apps/personal-agent${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: body === undefined ? {} : { Origin: host.url, 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    })
-    const data = await response.json()
-    assert.equal(response.status, expectedStatus, `${path}: ${JSON.stringify(data)}`)
-    return data
+const clientApi = '/api/client/v1'
+const ownApi = clientApi + '/apps/personal-agent'
+
+function vault() {
+  const secrets = new Map()
+  return {
+    secrets,
+    openEntry(namespace, id) {
+      const key = namespace + ':' + id
+      return {
+        getPassword: async () => secrets.get(key),
+        setPassword: async value => { secrets.set(key, value) },
+        deleteCredential: async () => { secrets.delete(key) },
+      }
+    },
   }
-  const waitRun = async id => {
-    for (let tries = 0; tries < 200; tries++) {
-      const detail = await request(`/works/${id}`)
-      if (detail.runs.length && detail.runs.every(run => run.status !== 'running')) return detail
-      await new Promise(resolve => setTimeout(resolve, 10))
-    }
-    throw new Error('Run did not finish')
-  }
-  return { request, waitRun, host, values, calls, modelsPath }
 }
 
-test('real host API configures private Models, performs work and preserves explicit facts', async t => {
-  const { request, waitRun, values, calls, modelsPath } = await fixture(t)
-  const initial = await request('/state')
-  assert.equal(initial.agents.length, 1)
-  assert.equal((await request('/models')).models.length, 0)
-  const choices = await request('/models', { name: '验证模型', protocolId: 'chat-completions', baseUrl: 'https://model.example/v1', remoteModelId: 'private-text-model', auth: 'api-key', apiKey: 'private-api-secret' })
-  assert.equal(choices.models.length, 1)
-  assert.equal(choices.models[0].available, true)
-  assert.equal(choices.connections[0].credentialConfigured, true)
-  assert.equal(values.size, 1)
-  assert.ok([...values.keys()].every(key => key.startsWith('anybox.personal-agent.models:')))
-  assert.ok(!JSON.stringify(choices).includes('private-api-secret'))
-  assert.ok(!(await readFile(modelsPath, 'utf8')).includes('private-api-secret'))
-  let agent = await request('/agents', { ...initial.agents[0], id: initial.agents[0].id, expectedRevision: 1 }, 400)
-  const { id, revision, createdAt, updatedAt, ...configuration } = initial.agents[0]
-  agent = await request('/agents', { ...configuration, id, expectedRevision: revision, modelId: choices.models[0].id, memory: '用户明确告知：偏好中文。', skills: '先澄清，再给建议。' })
-  const task = await request('/works', { agentId: agent.id, kind: 'task', title: '验证产品', goal: '生成一个最小验证步骤' })
-  const accepted = await request(`/works/${task.id}/runs`, { expectedRevision: task.revision, input: '请给出第一步' })
-  assert.equal(accepted.agent.revision, agent.revision)
-  assert.match(accepted.instruction, /偏好中文/)
-  const detail = await waitRun(task.id)
-  assert.equal(detail.work.status, 'open', 'a model reply never marks a task complete automatically')
-  assert.equal(detail.runs[0].status, 'succeeded')
-  assert.match(detail.runs[0].output, /明确目标/)
-  assert.equal(detail.runs[0].modelRevision, 1)
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].headers.get('authorization'), 'Bearer private-api-secret')
-  assert.match(JSON.stringify(calls[0].body), /最小验证步骤/)
-  const artifact = await request(`/works/${task.id}/artifacts`, { title: '验证成果', content: detail.runs[0].output, runId: accepted.id })
-  assert.equal(artifact.runId, accepted.id)
-  const { id: _id, revision: _revision, createdAt: _created, updatedAt: _updated, ...same } = agent
-  const second = await request('/agents', { ...same, name: '审阅 Agent' })
-  const child = await request(`/works/${task.id}/delegate`, { agentId: second.id, title: '独立审阅', goal: '检查验证步骤是否清楚' })
-  await request(`/works/${task.id}`, { expectedRevision: detail.work.revision, status: 'cancelled' })
-  assert.equal((await request(`/works/${child.id}`)).work.status, 'open')
-  assert.equal((await request(`/works/${task.id}`)).delegations[0].sourceWorkId, task.id)
-  assert.equal((await request(`/works/${task.id}`)).artifacts.length, 1)
-})
+async function seedPreviousModels(config, openEntry) {
+  const root = new Context()
+  try {
+    await root.installComponent(createModelsJsonStoreComponent({ path: config.modelsConfigPath }))
+    await root.installComponent(createModelsVaultComponent({ namespace: config.credentialNamespace, openEntry }))
+    await root.installComponent(createModelsComponent())
+    await root.installComponent(createChatCompletionsProtocolComponent())
+    const model = await seedHarnessModel(root.get('models.settings'), { id: 'retained-model', apiKey: 'personal-test-secret' })
+    return { id: model.id, connectionId: model.connectionId }
+  } finally {
+    await root.fiber.dispose()
+  }
+}
 
-test('HTTP rejects malformed model setup before metadata writes and does not expose internal failures', async t => {
-  const { request } = await fixture(t)
-  const input = { name: '测试', protocolId: 'chat-completions', baseUrl: 'https://example.test/v1', remoteModelId: 'text', auth: 'none' }
-  await request('/models', { ...input, protocolId: 'guess-provider' }, 400)
-  await request('/models', { ...input, baseUrl: 'https://username:secret@example.test/v1' }, 400)
-  await request('/models', { ...input, baseUrl: 'https://example.test/v1/chat/completions' }, 400)
-  await request('/models', { ...input, command: 'never' }, 400)
-  assert.deepEqual(await request('/models'), { models: [], connections: [] })
-  assert.equal((await request('/state?unexpected=true', undefined, 400)).error.code, 'invalid-input')
-  assert.equal((await request('/works/missing', undefined, 404)).error.code, 'not-found')
-})
+async function request(origin, path, body, headers = {}, status = 200) {
+  const response = await fetch(origin + path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { ...headers, ...(body === undefined ? {} : { Origin: origin, 'Content-Type': 'application/json' }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(20000),
+  })
+  const data = await response.json()
+  assert.equal(response.status, status, path + ' ' + JSON.stringify(data))
+  return data
+}
 
-test('unavailable OS Vault retains visible editable metadata without persisting the supplied Key', async t => {
-  const { request, modelsPath } = await fixture(t, { openEntry: () => { throw new Error('OS failure includes secret detail') } })
-  const response = await request('/models', { name: '无系统凭据', protocolId: 'chat-completions', baseUrl: 'https://example.test/v1', remoteModelId: 'text', auth: 'api-key', apiKey: 'vault-only-secret' }, 503)
-  assert.deepEqual(response, { error: { code: 'credential-unavailable' } })
-  const state = await request('/models')
-  assert.equal(state.connections.length, 1)
-  assert.equal(state.connections[0].credentialConfigured, false)
-  assert.ok(state.models.every(model => !model.available))
-  assert.ok(!(await readFile(modelsPath, 'utf8')).includes('vault-only-secret'))
-})
+async function managedConnection(origin, appId) {
+  const base = clientApi + '/apps/' + appId
+  assert.equal((await request(origin, clientApi + '/products/' + appId + '/open', {})).state, 'running')
+  const deadline = Date.now() + 10000
+  while (true) {
+    const state = await request(origin, base + '/local')
+    if (state.status?.state === 'ready') break
+    assert.notEqual(state.status?.state, 'failed', JSON.stringify(state))
+    assert.ok(Date.now() < deadline, 'Local pairing has not become ready: ' + JSON.stringify(state))
+    await wait(20)
+  }
+  const connections = await request(origin, base + '/connections')
+  assert.equal(connections.length, 1)
+  return connections[0]
+}
 
-test('a saved connection can receive its Key after Vault recovery and become runnable', async t => {
-  let available = false
-  const secrets = new Map()
-  const { request } = await fixture(t, { openEntry: (_namespace, id) => {
-    if (!available) throw new Error('Vault temporarily unavailable')
-    return { getPassword: async () => secrets.get(id), setPassword: async value => { secrets.set(id, value) }, deleteCredential: async () => secrets.delete(id) }
+test('Personal Agent uses an isolated native execution and retains earlier Personal Agent Models and text records', { timeout: 60000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-personal-agent-native-'))
+  let host
+  t.after(async () => {
+    try { await host?.close() } finally { await rm(directory, { recursive: true, force: true }) }
+  })
+  const clientPath = join(directory, 'client.sqlite')
+  const legacyWork = JSON.stringify({ id: 'earlier-task', agentId: 'legacy-agent', kind: 'task', status: 'completed', title: 'Earlier work' })
+  const previousRoot = new Context()
+  try {
+    await previousRoot.installComponent(createLocalSqliteComponent(clientPath))
+    const storage = previousRoot.get('local-storage')
+    await storage.migrate('personal-agent', [{ version: 1, up(tx) {
+      tx.execute('CREATE TABLE personal_agent_works (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_work_id TEXT, record TEXT NOT NULL)')
+      tx.execute('INSERT INTO personal_agent_works(id, agent_id, record) VALUES (?, ?, ?)', ['earlier-task', 'legacy-agent', legacyWork])
+    } }])
+  } finally {
+    await previousRoot.fiber.dispose()
+  }
+
+  const harnessConfig = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'harness-models.sqlite') })
+  const personalConfig = parsePersonalAgentServerConfig({}, clientPath)
+  const { openEntry, secrets } = vault()
+  const existingModel = await seedPreviousModels(personalConfig, openEntry)
+  const calls = []
+  const application = personalAgentServerApplication(personalConfig, { models: {
+    openEntry, catalogAutoRefresh: false,
+    async fetch(url, init) {
+      const input = JSON.parse(init.body)
+      calls.push({ url: String(url), auth: new Headers(init.headers).get('authorization'), input })
+      if (!input.stream) return Response.json({ choices: [{ index: 0, message: { role: 'assistant', content: 'Personal Agent native answer' }, finish_reason: 'stop' }] })
+      return new Response('data: {"choices":[{"index":0,"delta":{"role":"assistant","content":"Personal Agent native answer"},"finish_reason":null}]}\n\ndata: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+        { headers: { 'Content-Type': 'text/event-stream' } })
+    },
   } })
-  await request('/models', { name: '稍后补 Key', protocolId: 'chat-completions', baseUrl: 'https://example.test/v1', remoteModelId: 'text', auth: 'api-key', apiKey: 'initial-secret' }, 503)
-  const connection = (await request('/models')).connections[0]
-  available = true
-  const state = await request(`/models/connections/${connection.id}/key`, { expectedRevision: connection.revision, apiKey: 'recovered-secret' })
-  assert.equal(state.connections.length, 1)
-  assert.equal(state.connections[0].credentialConfigured, true)
-  assert.equal(state.models.length, 1)
-  assert.equal(state.models[0].available, true)
-  assert.deepEqual([...secrets.values()], ['recovered-secret'])
-  assert.ok(!JSON.stringify(state).includes('recovered-secret'))
+  host = await createLocalWebHost({
+    client: { path: clientPath, port: 0, openEntry },
+    execution: { config: harnessConfig, options: { additionalApplications: [application], models: {
+      openEntry, catalogAutoRefresh: false,
+      fetch() { throw new Error('Personal Agent ran a model through Harness') },
+    } } },
+  })
+  const origin = host.url
+  assert.equal(host.execution.products.get('personal-agent').state, 'disabled')
+  await assert.rejects(access(personalConfig.harnessDatabasePath), { code: 'ENOENT' })
+  const personalConnection = await managedConnection(origin, 'personal-agent')
+  const harnessConnection = await managedConnection(origin, 'agent')
+  assert.equal(personalConnection.instanceId, host.execution.instance.instanceId)
+  assert.equal(personalConnection.instanceId, harnessConnection.instanceId)
+  assert.notEqual(personalConnection.id, harnessConnection.id)
+  assert.ok([...secrets.keys()].some(key => key.startsWith('anybox.client.personal-agent:')))
+  assert.ok([...secrets.keys()].some(key => key.startsWith('anybox.client.agent:')))
+  assert.equal(host.execution.products.get('personal-agent').state, 'disabled')
+
+  const proxyBase = ownApi + '/connections/' + encodeURIComponent(personalConnection.id) + '/v1'
+  const binding = {
+    'X-Anybox-Product-Id': 'personal-agent',
+    'X-Anybox-Expected-Instance-Id': personalConnection.instanceId,
+    'X-Anybox-Connection-Revision': String(personalConnection.revision),
+  }
+  const execution = (path, body, status) => request(origin, proxyBase + path, body, binding, status)
+  assert.ok((await execution('/instance')).capabilities.includes('personal-agent.v1'))
+  assert.equal((await execution('/products/personal-agent/open', {})).state, 'running')
+  assert.equal((await execution('/products/agent/open', {}, 404)).error.code, 'not-found')
+  assert.equal(host.execution.products.get('agent').state, 'disabled')
+  assert.equal((await host.execution.products.open('agent')).state, 'running')
+
+  const connections = await execution('/models/connections')
+  assert.ok(connections.some(connection => connection.id === existingModel.connectionId && connection.credentialConfigured))
+  assert.equal(host.root.get('harness.models.settings').connections().length, 0)
+  await execution('/agents/assistant/tools', { toolIds: [], expectedRevision: 0 })
+  const project = await execution('/projects', { path: directory })
+  const harnessProjects = await request(origin, clientApi + '/apps/agent/connections/' + harnessConnection.id + '/v1/projects')
+  assert.deepEqual(harnessProjects, [])
+  const session = await execution('/sessions', { projectId: project.id, agentId: 'assistant', modelId: existingModel.id })
+  const run = await execution('/sessions/' + session.id + '/runs', { input: 'Personal Agent request', parentNodeId: null, idempotencyKey: 'first-personal-run' })
+  const settled = await execution('/runs/' + run.id + '/wait')
+  assert.equal(settled.done, true)
+  assert.equal(settled.run.status, 'completed')
+  assert.equal(settled.run.output, 'Personal Agent native answer')
+  const node = await execution('/sessions/' + session.id + '/nodes/' + settled.run.resultNodeId)
+  assert.equal(node.output, 'Personal Agent native answer')
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].auth, 'Bearer personal-test-secret')
+  assert.equal(calls[0].url, 'https://model.invalid/v1/chat/completions')
+  assert.ok(calls[0].input.messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Personal Agent request')))
+
+  await host.close()
+  host = undefined
+  const retained = new DatabaseSync(clientPath, { readOnly: true })
+  try {
+    assert.equal(retained.prepare('SELECT record FROM personal_agent_works WHERE id = ?').get('earlier-task').record, legacyWork)
+  } finally {
+    retained.close()
+  }
 })

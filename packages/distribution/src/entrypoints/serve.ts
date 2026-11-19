@@ -1,6 +1,8 @@
 import { parseHarnessServerConfig } from '@anybox/app-harness/server-config'
 import { parseClaudeAgentConfig } from '@anybox/app-claude-agent/config'
 import { claudeAgentServerApplication } from '@anybox/app-claude-agent/registration'
+import { personalAgentServerApplication } from '@anybox/app-personal-agent/registration'
+import { parsePersonalAgentServerConfig } from '@anybox/app-personal-agent/server-config'
 import { readApplicationTrustPolicy } from '@anybox/host/package-management/policy'
 import { createLocalWebHost } from '../composition/local-web.js'
 import { installProcessShutdown } from './process-shutdown.js'
@@ -19,6 +21,7 @@ async function main() {
     try { config = parseHarnessServerConfig({ ...process.env, ANYBOX_HARNESS_PORT: process.env.ANYBOX_HARNESS_PORT ?? '3001' }) }
     catch (error) { process.stderr.write(`harness server could not start: ${describeError(error)}\n`) }
     const path = process.env.ANYBOX_CLIENT_DATABASE ?? './data/client.sqlite'
+    const personalAgent = parsePersonalAgentServerConfig(process.env, path)
     const port = Number(process.env.ANYBOX_WEB_PORT ?? 3000)
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('Invalid client port')
     const projects: unknown = JSON.parse(process.env.ANYBOX_PROJECTS ?? '[]')
@@ -30,7 +33,7 @@ async function main() {
       computer: { directory: process.env.ANYBOX_COMPUTER_WORKER_DIRECTORY ?? `${config?.harnessDatabasePath ?? './data/harness.sqlite'}.computer-worker` } },
       ...(config ? { execution: { config, options: { name: process.env.ANYBOX_HARNESS_NAME,
         host: process.env.ANYBOX_HARNESS_BIND ?? '127.0.0.1', projects,
-        additionalApplications: [claudeAgentServerApplication(parseClaudeAgentConfig(process.env))] } } } : {}),
+        additionalApplications: [claudeAgentServerApplication(parseClaudeAgentConfig(process.env)), personalAgentServerApplication(personalAgent)] } } } : {}),
     })
     if (stopping) { await host.close(); return }
     if (host.execution) process.stdout.write(`harness server: ${host.execution.url} (${host.execution.instance.instanceId})\n`)

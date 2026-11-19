@@ -8,6 +8,8 @@ import { Context } from '@nya/core'
 import { createLocalWebHost } from '../packages/distribution/dist/composition/local-web.js'
 import { createHarnessServer } from '../packages/distribution/dist/composition/harness-server.js'
 import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
+import { personalAgentServerApplication } from '../packages/app-personal-agent/dist/registration.js'
+import { parsePersonalAgentServerConfig } from '../packages/app-personal-agent/dist/server-config.js'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { seedHarnessModel } from './helpers/configured-models.mjs'
 
@@ -37,9 +39,12 @@ async function reopen(path) {
 
 test('local Web shares exactly one root while keeping storage, targets and application Models independent', { timeout: 60000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-local-root-')), f = fixture(directory)
+  const personalConfig = parsePersonalAgentServerConfig({}, f.client.path)
   let host
   try {
-    host = await createLocalWebHost({ client: f.client, execution: { config: f.config, options: f.options } })
+    host = await createLocalWebHost({ client: f.client, execution: { config: f.config, options: { ...f.options,
+      additionalApplications: [personalAgentServerApplication(personalConfig, f.options)],
+    } } })
     assert.equal(host.root, host.client.root)
     assert.equal(host.root, host.execution.root)
     const clientDb = host.root.get('local-storage'), executionDb = host.root.get('host.execution.storage')
@@ -53,13 +58,15 @@ test('local Web shares exactly one root while keeping storage, targets and appli
     assert.deepEqual(harnessModels.connections(), [])
     await seedHarnessModel(harnessModels)
     assert.equal(host.root.get('models.settings'), undefined)
-    await host.client.products.open('personal-agent')
-    const personalModels = host.root.get('models.settings')
+    assert.equal((await host.client.products.open('personal-agent')).state, 'running')
+    assert.equal(host.execution.products.get('personal-agent').state, 'disabled')
+    assert.equal(host.root.get('personal-agent.models.settings'), undefined)
+    assert.equal((await host.execution.products.open('personal-agent')).state, 'running')
+    const personalModels = host.root.get('personal-agent.models.settings'), personalDb = host.root.get('personal-agent.local-storage')
     assert.ok(personalModels)
     assert.notEqual(personalModels, harnessModels)
     assert.equal(personalModels.connections().length, 0)
     assert.ok(harnessModels.connections().length)
-    assert.equal((await request(host.url, '/api/client/v1/apps/personal-agent/models')).connections.length, 0)
     const token = await host.root.get('host.access').issue('test HTTP identity')
     const response = await fetch(host.execution.url + '/api/v1/models/connections', { headers: {
       Authorization: `Bearer ${token.token}`, 'X-Anybox-Instance-Id': host.execution.instance.instanceId,
@@ -68,6 +75,7 @@ test('local Web shares exactly one root while keeping storage, targets and appli
     assert.equal((await response.json()).length, harnessModels.connections().length)
     assert.equal((await clientDb.read(r => r.all('SELECT * FROM schema_migrations WHERE domain=?', ['run-state']))).length, 0)
     assert.equal((await executionDb.read(r => r.all('SELECT * FROM schema_migrations WHERE domain=?', ['run-state']))).length, 1)
+    assert.equal((await personalDb.read(r => r.all('SELECT * FROM schema_migrations WHERE domain=?', ['run-state']))).length, 1)
     const lease = host.root.get('host.execution.activity').enter('agent')
     await assert.rejects(host.execution.products.disable('agent'), { code: 'product-busy' })
     await host.client.products.disable('agent')
@@ -75,11 +83,11 @@ test('local Web shares exactly one root while keeping storage, targets and appli
     lease.release()
     await host.execution.products.disable('agent')
     assert.equal(host.root.get('harness.models.settings'), undefined)
-    assert.equal(host.root.get('models.settings'), personalModels)
+    assert.equal(host.root.get('personal-agent.models.settings'), personalModels)
     const urls = [host.url, host.execution.url]
     await Promise.all([host.close(), host.close()])
     for (const url of urls) await assert.rejects(fetch(url))
-    await reopen(f.client.path); await reopen(f.config.harnessDatabasePath)
+    await reopen(f.client.path); await reopen(f.config.harnessDatabasePath); await reopen(personalConfig.harnessDatabasePath)
   } finally { await host?.close(); await rm(directory, { recursive: true, force: true }) }
 })
 

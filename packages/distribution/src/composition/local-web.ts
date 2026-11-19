@@ -54,6 +54,9 @@ export async function createLocalWebHost(options: {
     client = await createClientHost({ ...options.client, root,
       ...(target ? { localInstanceId: target.instanceId, localPairing: createLocalPairingOptions(access, target, 'agent'),
         claudeAgent: { ...options.client.claudeAgent, localInstanceId: target.instanceId, localPairing: createLocalPairingOptions(access, target, 'claude-agent') } } : {}),
+      ...(target && execution?.products.get('personal-agent') ? {
+        personalAgent: { ...options.client.personalAgent, localInstanceId: target.instanceId, localPairing: createLocalPairingOptions(access, target, 'personal-agent') },
+      } : {}),
     })
     return { root, client, execution, url: client.url, close }
   } catch (error) {

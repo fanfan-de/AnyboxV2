@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Personal Agent 0.2 已采用独立的 Harness 工作区和执行实现作为后续起点。本文保留首版验证决策。现行行为与旧数据边界见 [Personal Agent 的 Harness 起点](../architecture/2026-11-19-personal-agent-harness-baseline.md)。
+
 ## 问题
 
 用户希望用真实可用的最基础版本验证 Personal Agent：同级可配置 Agent、独立对话和任务、每次 Run 的配置及上下文事实、独立委派及成果管理。
@@ -42,9 +44,6 @@ Status: implemented
 
 - [Personal Agent 使用与组件手册](../../../../docs/modules/personal-agent/README.md)
 - [独立应用包](../../../../packages/app-personal-agent/README.md)
-- [业务契约](../../../../packages/app-personal-agent/src/contracts.ts)
-- [核心行为测试](../../../../packages/app-personal-agent/tests/core.test.mjs)
-- [宿主 API 测试](../../../../packages/app-personal-agent/tests/http.test.mjs)
-- [包与准备测试](../../../../packages/app-personal-agent/tests/package.test.mjs)
+- 首版业务契约及专属测试见 Git 历史中的 `packages/app-personal-agent`。
 - [应用开发](../../../../docs/application-development.md)
 - [Models](../../../../packages/models/README.md)

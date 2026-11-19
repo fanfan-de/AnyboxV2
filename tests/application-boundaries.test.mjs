@@ -140,13 +140,10 @@ test('applications never import host implementations or another application thro
 
 test('application cores remain independent of their application adapters', async () => {
   const modules = await sourceGraph()
-  for (const app of ['app-harness', 'app-claude-agent']) {
+  for (const app of ['app-harness', 'app-claude-agent', 'app-personal-agent']) {
     const own = `packages/${app}/src`, core = own + '/core'
     assertBoundary(modules, [...modules.keys()].filter(file => inside(file, core)), file => inside(file, own) && !inside(file, core), 'Application core depends on an adapter')
   }
-  const personal = 'packages/app-personal-agent/src'
-  assertBoundary(modules, [...modules.keys()].filter(file => inside(file, personal + '/core')), file =>
-    inside(file, personal) && !inside(file, personal + '/core') && file !== personal + '/contracts.ts', 'Personal Agent core depends on an application adapter')
   const sdkImporters = [...modules].filter(([, dependencies]) => dependencies.some(value => value === '@anthropic-ai/claude-agent-sdk' || value.startsWith('@anthropic-ai/claude-agent-sdk/'))).map(([file]) => file)
   assert.ok(sdkImporters.length, 'the real Claude SDK adapter is covered')
   for (const file of sdkImporters) assert.ok(inside(file, 'packages/app-claude-agent/src/core/sdk'), `SDK import outside its adapter: ${file}`)
@@ -162,6 +159,6 @@ test('browser runtime closures follow public workspace exports and never reach N
     ['packages/host/dist/web', file => inside(file, 'packages/host/dist/web') || file === 'packages/host/dist/package-management/directory-format.js' || file === `${api}/web.js` || file === `${api}/index.js`],
     ['packages/app-harness/dist/web', file => inside(file, 'packages/app-harness/dist/web') || inside(file, 'packages/app-harness/dist/core') || file === `${api}/web.js` || file === `${api}/index.js`],
     ['packages/app-claude-agent/dist/web', file => inside(file, 'packages/app-claude-agent/dist/web') || ['packages/app-claude-agent/dist/core/events.js', 'packages/app-claude-agent/dist/core/view.js', `${api}/web.js`, `${api}/index.js`].includes(file)],
-    ['packages/app-personal-agent/dist/web', file => inside(file, 'packages/app-personal-agent/dist/web') || file === `${api}/web.js` || file === `${api}/index.js`],
+    ['packages/app-personal-agent/dist/web', file => inside(file, 'packages/app-personal-agent/dist/web') || inside(file, 'packages/app-personal-agent/dist/core') || file === `${api}/web.js` || file === `${api}/index.js`],
   ]) assertBoundary(modules, [...modules.keys()].filter(file => inside(file, directory)), file => !allowed(file), 'Browser imports a native or unrelated implementation')
 })

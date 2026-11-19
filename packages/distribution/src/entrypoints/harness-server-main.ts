@@ -7,6 +7,8 @@ import { parseHarnessServerConfig } from '@anybox/app-harness/server-config'
 import { createHarnessServer } from '../composition/harness-server.js'
 import { parseClaudeAgentConfig } from '@anybox/app-claude-agent/config'
 import { claudeAgentServerApplication } from '@anybox/app-claude-agent/registration'
+import { personalAgentServerApplication } from '@anybox/app-personal-agent/registration'
+import { parsePersonalAgentServerConfig } from '@anybox/app-personal-agent/server-config'
 import { describeError } from './error-report.js'
 import { installProcessShutdown } from './process-shutdown.js'
 export { createHarnessServer }
@@ -32,7 +34,8 @@ export async function main(args: readonly string[] = process.argv.slice(2)) {
   const projects: unknown = JSON.parse(process.env.ANYBOX_PROJECTS ?? '[]')
   if (!Array.isArray(projects) || projects.some(path => typeof path !== 'string')) throw new Error('ANYBOX_PROJECTS must be a JSON array of absolute paths')
   const host = await createHarnessServer(config, { name: process.env.ANYBOX_HARNESS_NAME, host: process.env.ANYBOX_HARNESS_BIND ?? '127.0.0.1', projects,
-    additionalApplications: [claudeAgentServerApplication(parseClaudeAgentConfig(process.env))] })
+    additionalApplications: [claudeAgentServerApplication(parseClaudeAgentConfig(process.env)),
+      personalAgentServerApplication(parsePersonalAgentServerConfig(process.env, config.harnessDatabasePath))] })
   process.stdout.write(`harness server: ${host.url} (${host.instance.instanceId})\n`)
   process.send?.({ type: 'ready', instanceId: host.instance.instanceId, url: host.url }, () => {})
   installProcessShutdown(host.close, error => { process.stderr.write(`harness server shutdown failed: ${describeError(error)}\n`) })

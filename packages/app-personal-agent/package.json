@@ -1,26 +1,53 @@
 {
   "name": "@anybox/app-personal-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.15.0" },
-  "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-    "./*": { "types": "./dist/*.d.ts", "import": "./dist/*.js" }
+  "engines": {
+    "node": ">=22.15.0"
   },
-  "files": ["dist", "web", "anybox.app.json", "README.md"],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "import": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist",
+    "web",
+    "anybox.app.json",
+    "README.md"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json && node scripts/build-worker-identity.mjs && node scripts/build-web-vendors.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs"
   },
-  "peerDependencies": { "@nya/core": "^0.1.0-rc.1" },
+  "peerDependencies": {
+    "@nya/core": "^0.1.0-rc.1"
+  },
   "dependencies": {
     "@anybox/application-api": "0.1.0",
+    "@anybox/directory-picker": "0.1.0",
+    "@anybox/storage-sqlite": "0.1.0",
+    "@anybox/api-key-manager": "0.1.0",
     "@anybox/models": "0.2.0",
-    "@anybox/storage-sqlite": "0.1.0"
+    "@anybox/tool-api": "0.1.0",
+    "@anybox/computer-tools": "0.1.0",
+    "@napi-rs/keyring": "2.1.0",
+    "mdast-util-from-markdown": "2.0.3",
+    "mdast-util-gfm": "3.1.0",
+    "micromark-extension-gfm": "3.0.0",
+    "sharp": "0.35.5"
   },
   "devDependencies": {
+    "@types/mdast": "4.0.4",
+    "@types/picomatch": "4.0.3",
+    "esbuild": "0.28.2",
     "@anybox/host": "0.1.0"
   }
 }

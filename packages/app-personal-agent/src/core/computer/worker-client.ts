@@ -1,0 +1,298 @@
+import { spawn } from 'node:child_process'
+import { readFile, open } from 'node:fs/promises'
+import { join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { DatabaseSync } from 'node:sqlite'
+import type { Component } from '@nya/core'
+import type { JsonValue } from '@anybox/models'
+import { localComputerWorkerServiceKey, localComputerWorkerControlServiceKey, workerError } from './worker-port.js'
+import type { ComputerWorkerOptions, ComputerWorkerPort, LocalComputerWorkerControl, LocalComputerWorkerStatus, ObservedWorkerInfo, WorkerInfo, WorkerOperation, WorkerRuntimeHealth, WorkerSubmission } from './worker-port.js'
+import { workerBuildId } from './worker-build.js'
+import type { WorkerEndpoint } from './worker-server.js'
+import { ensurePrivateDirectory } from '../platform/private-directory.js'
+import { processRuntimeAvailable } from '@anybox/computer-tools/platform/process-runtime'
+import { resolveBackgroundRuntime } from '../platform/runtime-path.js'
+
+const wait = (ms: number) => new Promise<void>(yes => setTimeout(yes, ms))
+function runtimeHealth(value: unknown): WorkerRuntimeHealth | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const health = value as WorkerRuntimeHealth
+  if (health.state === 'ready') return Object.freeze({ state: 'ready' })
+  if (health.state === 'unavailable' && ['build-changed', 'process-unavailable', 'search-unavailable'].includes(health.reason ?? '')) {
+    return Object.freeze({ state: 'unavailable', reason: health.reason })
+  }
+  return undefined
+}
+function restartReason(info: WorkerInfo): LocalComputerWorkerStatus['reason'] {
+  if (!workerBuildId || info.buildId !== workerBuildId) return 'worker-build-mismatch'
+  if (runtimeHealth(info.runtime)?.state !== 'ready') return 'worker-runtime-unavailable'
+  return undefined
+}
+/** Passive clients copy bounded JSON without importing execution tools or interpreting their contracts. */
+function copyToolReport(value: unknown): JsonValue | undefined {
+  try {
+    const json = JSON.stringify(value)
+    if (json === undefined || Buffer.byteLength(json, 'utf8') > 16_384) return undefined
+    let remaining = 2_048
+    const freeze = (item: JsonValue, depth: number): JsonValue => {
+      if (--remaining < 0 || depth > 16) throw new Error('invalid worker report')
+      if (item && typeof item === 'object') {
+        for (const child of Object.values(item)) freeze(child, depth + 1)
+        Object.freeze(item)
+      }
+      return item
+    }
+    return freeze(JSON.parse(json) as JsonValue, 0)
+  } catch { return undefined }
+}
+function live(pid: number): boolean {
+  try { process.kill(pid, 0); return true } catch (error) { return error instanceof Error && 'code' in error && error.code === 'EPERM' }
+}
+async function endpoint(path: string): Promise<WorkerEndpoint | undefined> {
+  try {
+    const value = JSON.parse(await readFile(join(path, 'endpoint.json'), 'utf8')) as WorkerEndpoint
+    const url = new URL(value.url)
+    if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || url.pathname !== '/' || !Number.isSafeInteger(value.pid) || value.pid < 1 || typeof value.token !== 'string' || value.token.length < 32) throw workerError('worker-invalid-endpoint')
+    return value
+  } catch (error) { if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined; throw error }
+}
+/** The proxy owns only local HTTP observations. Unloading it never stops the independent worker. */
+export function connectLocalComputerWorker(options: ComputerWorkerOptions): ComputerWorkerPort & { readonly control: LocalComputerWorkerControl; status(signal?: AbortSignal): Promise<LocalComputerWorkerStatus>; start(): Promise<void>; closeObserver(): Promise<void> } {
+  const directory = resolve(options.directory)
+  let accepting = true
+  let observedInfo: ObservedWorkerInfo | undefined
+  let infoSequence = 0, observedSequence = 0
+  let connecting: Promise<WorkerEndpoint> | undefined
+  const observing = new Set<AbortController>()
+  const pending = new Set<Promise<unknown>>()
+  const tracked = <T>(promise: Promise<T>) => { pending.add(promise); void promise.finally(() => pending.delete(promise)).catch(() => {}); return promise }
+  const send = async <T>(target: WorkerEndpoint, path: string, input: unknown, signal?: AbortSignal, startupUntil?: number): Promise<T> => {
+    const sequence = path === '/info' ? ++infoSequence : 0
+    if (!accepting && startupUntil === undefined) throw workerError('worker-observer-closed')
+    const abort = new AbortController()
+    const forward = () => abort.abort(signal?.reason ?? 'worker-observer-closed')
+    signal?.addEventListener('abort', forward, { once: true })
+    if (signal?.aborted) forward()
+    // Once spawned, startup must finish its handoff even when this observer closes.
+    if (startupUntil === undefined) observing.add(abort)
+    const timeoutMs = options.requestTimeoutMs ?? 30_000
+    const requestTimeout = path === '/info' || path === '/attachments/list' ? Math.min(timeoutMs, 5_000) : timeoutMs
+    const timeout = setTimeout(() => abort.abort('worker-request-timeout'), startupUntil === undefined ? requestTimeout : Math.max(1, Math.min(requestTimeout, startupUntil - Date.now())))
+    try {
+      const response = await fetch(new URL(path, target.url), { method: 'POST', redirect: 'error', headers: { authorization: `Bearer ${target.token}`, 'content-type': 'application/json' }, body: JSON.stringify(input), signal: abort.signal })
+      const output = await response.json() as { value?: T; error?: string }
+      if (!response.ok || output.error) throw workerError(output.error ?? 'worker-request-failed')
+      // Reporting never changes request success or admission. Older or malformed reports remain unknown.
+      if (sequence && accepting && sequence >= observedSequence && !(current && live(current.pid) && current.bootId !== target.bootId)) {
+        observedSequence = sequence
+        observedInfo = undefined
+        const info = output.value as WorkerInfo | undefined
+        if (info && info.workerId === target.workerId && info.bootId === target.bootId && typeof info.platform === 'string' && typeof info.architecture === 'string') {
+          const toolManifest = copyToolReport(info.toolManifest)
+          const runtime = runtimeHealth(info.runtime)
+          observedInfo = Object.freeze({ workerId: info.workerId, bootId: info.bootId, platform: info.platform, architecture: info.architecture,
+            ...(typeof info.buildId === 'string' && /^[a-f0-9]{64}$/.test(info.buildId) ? { buildId: info.buildId } : {}),
+            ...(runtime === undefined ? {} : { runtime }),
+            ...(toolManifest === undefined ? {} : { toolManifest }) })
+        }
+      }
+      return output.value as T
+    } finally { clearTimeout(timeout); signal?.removeEventListener('abort', forward); observing.delete(abort) }
+  }
+  let current: WorkerEndpoint | undefined
+  const startupLock = async (until: number): Promise<DatabaseSync> => {
+    // This non-secret coordination file is separate from the worker-owned ledger.
+    // Keep the file: only the OS-held SQLite transaction denotes ownership.
+    const file = await open(join(directory, 'startup.sqlite'), 'a', 0o600)
+    try { await file.chmod(0o600) } finally { await file.close() }
+    while (Date.now() < until) {
+      if (!accepting) throw workerError('worker-observer-closed')
+      let db: DatabaseSync | undefined
+      try {
+        db = new DatabaseSync(join(directory, 'startup.sqlite'))
+        db.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE')
+        return db
+      } catch (error) {
+        db?.close()
+        if (!(error instanceof Error && 'errcode' in error && (error.errcode === 5 || error.errcode === 6))) throw workerError('worker-startup-failed')
+      }
+      await wait(25)
+    }
+    throw workerError('worker-startup-timeout')
+  }
+  const connect = async (start: boolean): Promise<WorkerEndpoint> => {
+    if (!accepting) throw workerError('worker-observer-closed')
+    const previous = await endpoint(directory)
+    if (!accepting) throw workerError('worker-observer-closed')
+    if (previous && live(previous.pid)) { await send(previous, '/info', {}); return previous }
+    if (!start) throw workerError('worker-not-running')
+    // A service launcher must own the worker's independent role instead of
+    // placing it in the harness server's Job/cgroup through direct spawning.
+    if (!options.launch && process.env.ANYBOX_SYSTEM_SERVICE_ROLE === 'harness-server') throw workerError('worker-service-start-required')
+    if (!processRuntimeAvailable()) throw workerError('worker-platform-unsupported')
+    const until = Date.now() + (options.startupTimeoutMs ?? 15_000)
+    try { await ensurePrivateDirectory(directory) } catch { throw workerError('worker-directory-unavailable') }
+    const lock = await startupLock(until)
+    try {
+      // Another process may have finished startup while this manager waited for the lock.
+      const previous = await endpoint(directory)
+      if (!accepting) throw workerError('worker-observer-closed')
+      if (previous && live(previous.pid)) { await send(previous, '/info', {}); return previous }
+      let child: ReturnType<typeof spawn> | undefined
+      let exited = false, published = false
+      let spawnFailure: unknown
+      let done: Promise<void> | undefined
+      const stopUnpublished = async () => {
+        if (child?.pid && !exited) {
+          try {
+            if (process.platform === 'win32') child.kill('SIGKILL')
+            else process.kill(-child.pid, 'SIGKILL')
+          }
+          catch (failure) { if (!(failure instanceof Error && 'code' in failure && failure.code === 'ESRCH')) throw failure }
+        }
+        await done
+      }
+      try {
+        if (options.launch) {
+          if (!accepting) throw workerError('worker-observer-closed')
+          // The package owner registers and starts its own signed role. Endpoint
+          // discovery, the single startup lock and publication remain app-owned.
+          try { await options.launch(directory) } catch (error) { spawnFailure = error }
+        } else {
+          const errorLog = await open(join(directory, 'worker.log'), 'a', 0o600)
+          try {
+            if (!accepting) throw workerError('worker-observer-closed')
+            const runtime = options.executable ? { executable: options.executable, prefixArgs: [] } : resolveBackgroundRuntime()
+            child = spawn(runtime.executable, [...runtime.prefixArgs, fileURLToPath(new URL('../../entrypoints/computer-worker-main.js', import.meta.url)), directory],
+              { detached: true, stdio: ['ignore', 'ignore', errorLog.fd], windowsHide: true, env: { ...process.env } })
+            child.once('error', error => { spawnFailure = error })
+            done = new Promise<void>(yes => child!.once('close', () => { exited = true; yes() }))
+            // Keep the child referenced until publication or failed-start cleanup
+            // finishes; awaiting close alone does not keep Node's event loop alive.
+          } finally { await errorLog.close() }
+        }
+        while (Date.now() < until) {
+          const found = await endpoint(directory)
+          if (found && live(found.pid)) {
+            published = child ? found.pid === child.pid : !!options.launch
+            // A separately served worker may have won outside the manager lock.
+            if (!published) await stopUnpublished()
+            await send(found, '/info', {}, undefined, until)
+            if (!accepting) throw workerError('worker-observer-closed')
+            return found
+          }
+          if (spawnFailure || exited) throw workerError('worker-startup-failed')
+          await wait(25)
+        }
+        throw workerError('worker-startup-timeout')
+      } catch (error) {
+        // A published endpoint transfers ownership to the independent worker. Before
+        // that handoff a failed startup owns its child and joins exit before unlocking.
+        if (!published && child?.pid && !exited) {
+          // Preserve cleanup even if the endpoint itself caused the startup failure.
+          let found: WorkerEndpoint | undefined
+          try { found = await endpoint(directory) } catch { /* No valid handoff was published. */ }
+          published = found?.pid === child.pid && live(child.pid)
+        }
+        if (!published) await stopUnpublished()
+        throw error
+      } finally {
+        // Publication transfers ownership even if its first observation failed.
+        // Closing this client must not keep that independent worker attached.
+        if (published) child?.unref()
+      }
+    } finally { lock.close() }
+  }
+  // A worker that died since the last call is replaced on this call instead of failing it first; nothing here supervises an idle worker.
+  const ensure = (start = options.autoStart !== false): Promise<WorkerEndpoint> => {
+    if (!accepting) return Promise.reject(workerError('worker-observer-closed'))
+    if (current && live(current.pid)) return Promise.resolve(current)
+    current = undefined
+    // A passive read must not reserve the explicit startup flight with a no-start result.
+    if (!start) return connect(false).then(found => { current = found; return found })
+    return connecting ??= connect(true).then(found => { current = found; return found }).finally(() => { connecting = undefined })
+  }
+  const request = <T>(path: string, input: unknown, signal?: AbortSignal) => tracked((async () => {
+    if (!accepting || signal?.aborted) throw workerError('worker-observer-closed')
+    const target = await ensure()
+    if (signal?.aborted) throw workerError('worker-observer-closed')
+    try {
+      if (path === '/submit' && (input as { kind?: string }).kind === 'tool') {
+        // Repeated submissions keep observing the exact original operation even
+        // when this worker's implementation has since become unavailable.
+        const prior = await send<WorkerOperation | null>(target, '/get', input, signal)
+        // Let submit validate the original digest and binding on an idempotent
+        // retry; get alone does not validate a new submission's identity.
+        if (!prior) await ready(target, signal, input as WorkerSubmission)
+      }
+      return await send<T>(target, path, input, signal)
+    }
+    catch (error) { if (!live(target.pid) && current === target) current = undefined; throw error }
+  })())
+  const ready = async (target: WorkerEndpoint, signal?: AbortSignal, submission?: WorkerSubmission) => {
+    const info = await send<WorkerInfo>(target, '/info', {}, signal)
+    if (!info || info.workerId !== target.workerId || info.bootId !== target.bootId) throw workerError('worker-invalid-endpoint')
+    if (submission && submission.workerBootId !== info.bootId) throw workerError('worker-instance-replaced')
+    if (restartReason(info)) throw workerError('worker-restart-required')
+  }
+  // Execution adapters may start on demand; independent management always uses autoStart: false.
+  const control: LocalComputerWorkerControl = {
+    listAttachments: signal => request<readonly JsonValue[]>('/attachments/list', {}, signal),
+    consumeAttachCode: (input, signal) => request<JsonValue>('/attachments/consume', input, signal),
+    revokeAttachment: (attachmentId, signal) => request<JsonValue>('/attachments/revoke', { attachmentId }, signal),
+    updatePermissions: (attachmentId, ceiling, signal) => request<JsonValue>('/attachments/permissions', { attachmentId, ceiling }, signal),
+  }
+  return {
+    control,
+    observedInfo: () => accepting ? observedInfo : undefined,
+    start: () => tracked(ensure(true).then(target => ready(target))),
+    status: signal => tracked((async () => {
+      if (!accepting) throw workerError('worker-observer-closed')
+      const supported = processRuntimeAvailable(), target = await endpoint(directory)
+      if (!target || !live(target.pid)) return { state: 'stopped', supported, attachments: [] }
+      try {
+        const info = await send<Awaited<ReturnType<ComputerWorkerPort['info']>>>(target, '/info', {}, signal)
+        if (info.workerId !== target.workerId || info.bootId !== target.bootId) throw workerError('worker-invalid-endpoint')
+        const reason = restartReason(info), runtime = runtimeHealth(info.runtime), toolManifest = copyToolReport(info.toolManifest)
+        return { state: reason ? 'restart-required' : 'running', supported, workerId: info.workerId, bootId: info.bootId,
+          platform: info.platform, architecture: info.architecture, ...(toolManifest === undefined ? {} : { toolManifest }),
+          ...(typeof info.buildId === 'string' && /^[a-f0-9]{64}$/.test(info.buildId) ? { buildId: info.buildId } : {}),
+          ...(workerBuildId ? { expectedBuildId: workerBuildId } : {}), ...(runtime ? { runtime } : {}), ...(reason ? { reason } : {}),
+          pid: target.pid, attachments: await send<readonly JsonValue[]>(target, '/attachments/list', {}, signal) }
+      } catch (error) {
+        if (!accepting || signal?.aborted) throw error
+        return { state: 'unavailable', supported, attachments: [] }
+      }
+    })()),
+    info: () => request('/info', {}), claimRun: input => request('/claim', input), submit: input => request<WorkerOperation>('/submit', input),
+    get: async input => (await request<WorkerOperation | null>('/get', input)) ?? undefined,
+    query: (input, signal) => request('/query', input, signal),
+    shutdown: async () => {
+      const running = await endpoint(directory)
+      if (!running || !live(running.pid)) return
+      await request('/shutdown', {})
+      const until = Date.now() + 120_000
+      while (Date.now() < until) {
+        const remaining = await endpoint(directory)
+        if (!remaining || remaining.bootId !== running.bootId || !live(running.pid)) {
+          connecting = undefined; current = undefined
+          const receipt = JSON.parse(await readFile(join(directory, 'shutdown.json'), 'utf8')) as { bootId?: string; error?: string }
+          if (receipt.bootId !== running.bootId) throw workerError('worker-shutdown-unknown')
+          if (receipt.error) throw workerError(receipt.error)
+          return
+        }
+        await wait(25)
+      }
+      throw workerError('worker-shutdown-timeout')
+    },
+    async closeObserver() { accepting = false; observedInfo = undefined; for (const abort of observing) abort.abort('worker-observer-closed'); await Promise.allSettled([...pending]) },
+  }
+}
+export function createLocalComputerWorkerComponent(options: ComputerWorkerOptions): Component.Object {
+  return { name: 'personal-agent-computer-local-worker-client', apply(ctx) {
+    const client = connectLocalComputerWorker(options)
+    ctx.effect(() => () => client.closeObserver(), 'cancel and join local worker observers')
+    ctx.provide(localComputerWorkerServiceKey, client)
+    ctx.provide(localComputerWorkerControlServiceKey, client.control)
+  } }
+}

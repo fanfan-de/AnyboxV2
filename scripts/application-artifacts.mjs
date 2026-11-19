@@ -178,7 +178,7 @@ async function walkFiles(directory, prefix = '') {
 export async function stageApplicationPackage(root, directory, appName, { target = currentArtifactTarget() } = {}) {
   root = resolve(root); const output = await emptyDirectory(directory, root)
   if (!['app-harness', 'app-claude-agent', 'app-personal-agent'].includes(appName)) throw new Error('Choose app-harness, app-claude-agent or app-personal-agent')
-  if (appName !== 'app-personal-agent' && target.os === 'darwin' && target.arch === 'arm64') {
+  if (target.os === 'darwin' && target.arch === 'arm64') {
     const native = join(root, 'packages/directory-picker/dist/native/mac-dialog.node')
     const ready = await lstat(native).then(info => info.isFile(), error => { if (error.code === 'ENOENT') return false; throw error })
     if (!ready) throw new Error('Complete macOS arm64 application artifacts require the prebuilt directory adapter; run node scripts/build-desktop-native.mjs after the JavaScript build')
@@ -204,7 +204,9 @@ export async function stageApplicationPackage(root, directory, appName, { target
   await writeFile(join(payload, 'assets.json'), jsonBytes({ schemaVersion: 1, assets }))
   await writeFile(join(payload, 'data-compatibility.json'), jsonBytes({ schemaVersion: 1, appId: recipe.appId,
     owner: 'application', uninstall: 'preserve', preparation: 'No business resources, migrations, credentials or network are opened during package preparation.',
-    existingData: 'Existing application-owned paths, identities and migration ledgers remain unchanged.' }))
+    existingData: appName === 'app-personal-agent'
+      ? 'Existing Personal Agent Models data and Vault references are reused. Legacy workspace tables are preserved. Native session and run data use a separate execution store.'
+      : 'Existing application-owned paths, identities and migration ledgers remain unchanged.' }))
   await writeFile(join(payload, 'runtime-closure.json'), jsonBytes({ schemaVersion: 1, kind: 'application', target,
     sharedRuntime: { id: 'nya-runtime-1', strategy: 'host-canonical-public-exports', packages: sharedPackages,
       hosted: 'Trusted host resolve hook maps these exact bare names and public subpaths to the host canonical packages before imports.',

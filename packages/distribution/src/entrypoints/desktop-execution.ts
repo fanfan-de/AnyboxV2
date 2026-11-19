@@ -10,6 +10,8 @@ import { parseHarnessServerConfig } from '@anybox/app-harness/server-config'
 import { harnessServerApplication } from '@anybox/app-harness/registration'
 import { parseClaudeAgentConfig } from '@anybox/app-claude-agent/config'
 import { claudeAgentServerApplication } from '@anybox/app-claude-agent/registration'
+import { personalAgentServerApplication } from '@anybox/app-personal-agent/registration'
+import { parsePersonalAgentServerConfig } from '@anybox/app-personal-agent/server-config'
 import { hostAccessServiceKey } from '@anybox/host/access'
 import type { HostAccessPort } from '@anybox/host/access'
 import { productActivityServiceKey } from '@anybox/application-api'
@@ -21,8 +23,10 @@ export async function startDesktopExecution(options: DesktopWorkerStart, rpc: De
   const config = parseHarnessServerConfig({ ANYBOX_HARNESS_PORT: '0', ANYBOX_HARNESS_DATABASE: paths.harness,
     ANYBOX_MODELS_CONFIG: paths.models, ANYBOX_MODELS_DATABASE: paths.legacyModels, ANYBOX_MODELS_CATALOG_DATABASE: paths.catalog,
     ANYBOX_IMAGE_ASSETS_DIRECTORY: paths.images, ANYBOX_MODELS_NAMESPACE: `${options.namespace}.models` })
+  const personalAgent = parsePersonalAgentServerConfig({ ANYBOX_PERSONAL_AGENT_EXECUTION_DATABASE: paths.personalAgentExecution,
+    ANYBOX_PERSONAL_AGENT_MODELS_CONFIG: paths.personalAgentModels, ANYBOX_PERSONAL_AGENT_MODELS_NAMESPACE: `${options.namespace}.personal-agent.models` }, paths.client)
   const host = await createExecutionHost({ databasePath: paths.harness, port: 0, name: '本机 Anybox Harness', host: '127.0.0.1',
-    applications: [harnessServerApplication(config), claudeAgentServerApplication(parseClaudeAgentConfig(process.env))] })
+    applications: [harnessServerApplication(config), claudeAgentServerApplication(parseClaudeAgentConfig(process.env)), personalAgentServerApplication(personalAgent)] })
   const access = () => {
     const service = host.root.get<HostAccessPort>(hostAccessServiceKey)
     if (!service) throw rpcFailure('service-unavailable')
@@ -30,9 +34,8 @@ export async function startDesktopExecution(options: DesktopWorkerStart, rpc: De
   }
   const managedOwner = (value: unknown) => {
     const appId = (value as { appId?: unknown } | undefined)?.appId ?? 'agent'
-    if (appId !== 'agent' && appId !== 'claude-agent') throw rpcFailure('invalid-input')
-    // Preserve existing Harness ownership; Claude Agent reconciles only its own tokens.
-    return appId === 'agent' ? 'anybox.desktop.local' : 'anybox.desktop.local.claude-agent'
+    if (appId !== 'agent' && appId !== 'claude-agent' && appId !== 'personal-agent') throw rpcFailure('invalid-input')
+    return appId === 'agent' ? 'anybox.desktop.local' : `anybox.desktop.local.${appId}`
   }
   rpc.handle('issue', async value => (await access().issueManaged(managedOwner(value), 'Anybox 桌面本机连接')).token)
   rpc.handle('reconcile', async value => access().reconcileManaged(managedOwner(value), (value as { token?: string }).token))

@@ -5,9 +5,9 @@ export async function resolve(specifier, context, next) {
   if (mockKeyring && specifier === '@napi-rs/keyring') return { url: new URL('./role-test-keyring.mjs', import.meta.url).href, shortCircuit: true }
   const result = await next(specifier, context)
   const url = result.url.replaceAll('\\', '/')
-  const server = /\/packages\/app-harness\/dist\/(?:registration|server|server-runtime|server-models)\.js$/.test(url) ||
-    /\/packages\/app-harness\/dist\/core\/(?:run|session|protocol-agents)\//.test(url) ||
-    /\/packages\/app-harness\/dist\/core\/computer\/(?!worker-(?:client|port|build)\.js$)/.test(url) || /\/packages\/app-harness\/dist\/core\/index\.js$/.test(url) ||
+  const server = /\/packages\/app-(?:harness|personal-agent)\/dist\/(?:registration|server|server-runtime|server-models)\.js$/.test(url) ||
+    /\/packages\/app-(?:harness|personal-agent)\/dist\/core\/(?:run|session|protocol-agents)\//.test(url) ||
+    /\/packages\/app-(?:harness|personal-agent)\/dist\/core\/computer\/(?!worker-(?:client|port|build)\.js$)/.test(url) || /\/packages\/app-(?:harness|personal-agent)\/dist\/core\/index\.js$/.test(url) ||
     /\/packages\/host\/dist\/execution\.js$/.test(url) || /\/packages\/models\/dist\//.test(url)
   const nativeSmoke = /\/(?:desktop\/native-smoke\.js|sharp\/)/.test(url)
   const role = /\/entrypoints\/(?:client-main|harness-server-main|desktop-client|desktop-execution)\.js$/.test(url)

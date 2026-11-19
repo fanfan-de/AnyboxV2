@@ -1,7 +1,7 @@
 import type { Context } from '@nya/core'
 import { createDirectoryPickerComponent, directoryPickerCapabilityId, directoryPickerCapabilityVersion, directoryPickerServiceKey, directoryPickerSupported } from '@anybox/directory-picker'
 import { pathToFileURL } from 'node:url'
-import { dirname, join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { createClientHost as createApplicationClientHost } from '@anybox/host/client'
 import { readApplicationTrustPolicy } from '@anybox/host/package-management/policy'
 import type { ApplicationTrustPolicy } from '@anybox/host/package-management/policy'
@@ -9,8 +9,9 @@ import type { DirectoryPickerOptions } from '@anybox/directory-picker'
 import { harnessClientApplication } from '@anybox/app-harness/client/registration'
 import { claudeAgentClientApplication } from '@anybox/app-claude-agent/client/registration'
 import type { ClaudeAgentClientOptions } from '@anybox/app-claude-agent/client/registration'
-import { personalAgentApplication } from '@anybox/app-personal-agent'
-import type { PersonalAgentOptions } from '@anybox/app-personal-agent'
+import { personalAgentClientApplication } from '@anybox/app-personal-agent'
+import type { PersonalAgentClientRuntimeOptions } from '@anybox/app-personal-agent'
+import { parsePersonalAgentServerConfig } from '@anybox/app-personal-agent/server-config'
 import type { HarnessClientRuntimeOptions } from '@anybox/app-harness/client/runtime'
 import type { ApplicationRegistration } from '@anybox/application-api/nya'
 import { defaultModelsConfigPath } from '@anybox/app-harness/server-config'
@@ -27,23 +28,24 @@ export interface DefaultClientHostOptions extends HarnessClientRuntimeOptions {
   readonly packageDirectory?: string
   readonly packageTrustPolicy?: ApplicationTrustPolicy
   readonly claudeAgent?: ClaudeAgentClientOptions
-  readonly personalAgent?: PersonalAgentOptions
+  readonly personalAgent?: PersonalAgentClientRuntimeOptions
+  readonly personalAgentOnly?: boolean
 }
 
 /** The default composition selects applications and the native adapter; each application owns its business services. */
 export async function createClientHost(options: DefaultClientHostOptions) {
-  const personalAgent = { databasePath: options.path,
-    modelsPath: process.env.ANYBOX_PERSONAL_AGENT_MODELS_CONFIG ?? join(dirname(resolve(options.path)), 'personal-agent-models.json'),
-    openEntry: options.openEntry, fetch: options.fetch, ...options.personalAgent }
+  const personalAgent = { openEntry: options.openEntry, fetch: options.fetch,
+    namespace: options.namespace, ...options.personalAgent,
+    computer: options.personalAgent?.computer ?? { directory: `${parsePersonalAgentServerConfig(process.env, options.path).harnessDatabasePath}.computer-worker` } }
   return createApplicationClientHost({ root: options.root, path: options.path, port: options.port, transportSecret: options.transportSecret, packageDirectory: options.packageDirectory, packageTrustPolicy: options.packageTrustPolicy,
     packageRoleConfig: { 'personal-agent': personalAgent },
     providers: [{ id: directoryPickerCapabilityId, version: directoryPickerCapabilityVersion, services: [directoryPickerServiceKey],
       supported: directoryPickerSupported(options.picker?.platform), create: () => createDirectoryPickerComponent(options.picker) }],
-    applications: options.applications ?? [
+    applications: options.applications ?? (options.personalAgentOnly ? [personalAgentClientApplication(personalAgent)] : [
       harnessClientApplication({ localInstanceId: options.localInstanceId, computer: options.computer, namespace: options.namespace, openEntry: options.openEntry, fetch: options.fetch, localPairing: options.localPairing }),
       claudeAgentClientApplication({ localInstanceId: options.localInstanceId, namespace: options.namespace, openEntry: options.openEntry, fetch: options.fetch, ...options.claudeAgent }),
-      personalAgentApplication(personalAgent),
-    ] })
+      personalAgentClientApplication(personalAgent),
+    ]) })
 }
 
 export async function main(args: readonly string[] = process.argv.slice(2)) {

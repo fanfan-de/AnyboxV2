@@ -169,4 +169,4 @@ harness server 业务 HTTP/SSE 已归 [harness server HTTP](modules/web/harness-
 
 ## 单机共根装配
 
-`distribution/composition/local-web.ts` 只拥有一个根与最终退出。执行端通过 Nya 安装绑定把 `local-storage`、`app.products`、`app.activity` 和 Models 系列服务映射到独立身份；客户端原服务名保留。两侧数据库、应用目标及凭据不合并，Harness 与 Personal Agent 的 Models 可同时运行并独立退出。组件依赖仍通过 inject 和 deps 由 Nya 管理，根上门面通过明确绑定读取本代服务。独立 harness server 继续使用原服务名和相同业务实现。验证见 `tests/local-web-host.test.mjs`。
+`distribution/composition/local-web.ts` 只拥有一个根与最终退出。执行端通过 Nya 安装绑定把 `local-storage`、`app.products`、`app.activity` 和 Models 系列服务映射到独立身份。Personal Agent 在同一个执行宿主中拥有独立业务库和 Models 绑定，可以与 Anybox Harness 同时运行并独立退出。组件依赖仍通过 inject 和 deps 由 Nya 管理，根上门面通过明确绑定读取本代服务。独立 harness server 继续使用原服务名和相同业务实现。详见 [Personal Agent 装配](modules/personal-agent/runtime.md)与本机装配测试 `tests/local-web-host.test.mjs`。

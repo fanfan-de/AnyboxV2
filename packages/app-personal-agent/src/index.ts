@@ -1,3 +1,3 @@
-export { personalAgentApplication, personalAgentId } from './registration.js'
-export type { PersonalAgentOptions } from './registration.js'
-export type * from './contracts.js'
+export { personalAgentClientApplication } from './client/registration.js'
+export type { PersonalAgentClientRuntimeOptions } from './client/runtime.js'
+export { personalAgentId } from './definition.js'

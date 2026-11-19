@@ -3,8 +3,8 @@ import type { DesktopLocalPairingOptions } from '@anybox/app-harness/client/conn
 
 /** Same-process callbacks retain the existing per-application managed token ownership. */
 export function createLocalPairingOptions(access: () => HostAccessPort,
-  target: { readonly endpoint: string; readonly instanceId: string }, appId: 'agent' | 'claude-agent'): DesktopLocalPairingOptions {
-  const owner = appId === 'agent' ? 'anybox.web.local' : 'anybox.web.local.claude-agent'
+  target: { readonly endpoint: string; readonly instanceId: string }, appId: 'agent' | 'claude-agent' | 'personal-agent'): DesktopLocalPairingOptions {
+  const owner = appId === 'agent' ? 'anybox.web.local' : `anybox.web.local.${appId}`
   return {
     async getLocal(signal) { signal.throwIfAborted(); return target },
     async issue(signal) {

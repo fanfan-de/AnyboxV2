@@ -10,12 +10,19 @@ import { connectionsServiceKey } from '@anybox/app-harness/client/connections'
 import type { ConnectionsPort } from '@anybox/app-harness/client/connections'
 import { connectionsServiceKey as claudeConnectionsServiceKey } from '@anybox/app-claude-agent/client/connections'
 import type { ConnectionsPort as ClaudeConnectionsPort } from '@anybox/app-claude-agent/client/connections'
+import { connectionsServiceKey as personalConnectionsServiceKey } from '@anybox/app-personal-agent/client/connections'
+import type { ConnectionsPort as PersonalConnectionsPort } from '@anybox/app-personal-agent/client/connections'
 
 export async function startDesktopClient(options: DesktopWorkerStart, rpc: DesktopRpc): Promise<DesktopRoleHost> {
   const paths = desktopPaths(options.userData)
   await mkdir(paths.data, { recursive: true })
   const host = await createClientHost({ path: paths.client, packageDirectory: paths.applications, port: 0, namespace: `${options.namespace}.client`, transportSecret: options.transportSecret,
-    personalAgent: { modelsPath: paths.personalAgentModels, namespace: `${options.namespace}.personal-agent.models` },
+    personalAgent: { computer: { directory: `${paths.personalAgentExecution}.computer-worker` }, localPairing: {
+      getLocal: signal => rpc.call('local.get', undefined, signal),
+      start: signal => rpc.call<void>('local.start', undefined, signal),
+      issue: signal => rpc.call('local.issue', { appId: 'personal-agent' }, signal),
+      reconcile: (token, signal) => rpc.call('local.reconcile', { appId: 'personal-agent', token }, signal),
+    } },
     packageTrustPolicy: process.env.ANYBOX_APPLICATION_TRUST ? await readApplicationTrustPolicy(process.env.ANYBOX_APPLICATION_TRUST) : undefined,
     computer: { directory: `${paths.harness}.computer-worker` },
     localPairing: { getLocal: signal => rpc.call('local.get', undefined, signal),
@@ -33,6 +40,7 @@ export async function startDesktopClient(options: DesktopWorkerStart, rpc: Deskt
     const results = await Promise.all([
       host.root.get<ConnectionsPort>(connectionsServiceKey)?.retryLocal(signal),
       host.root.get<ClaudeConnectionsPort>(claudeConnectionsServiceKey)?.retryLocal(signal),
+      host.root.get<PersonalConnectionsPort>(personalConnectionsServiceKey)?.retryLocal(signal),
     ])
     return results.find(result => result !== undefined)
   })

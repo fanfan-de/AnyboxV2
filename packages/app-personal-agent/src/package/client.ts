@@ -1,8 +1,11 @@
 import type { ApplicationPackageRuntimeContext } from '@anybox/application-api/node'
-import { personalAgentApplication } from '../registration.js'
-import type { PersonalAgentOptions } from '../registration.js'
+import { personalAgentClientApplication } from '../client/registration.js'
+import type { PersonalAgentClientRuntimeOptions } from '../client/runtime.js'
+import { parsePersonalAgentServerConfig } from '../server-config.js'
 
-/** Pure declaration; Models and business storage open only when the product is opened. */
-export function createRegistration(_context?: ApplicationPackageRuntimeContext, config: PersonalAgentOptions = {}) {
-  return personalAgentApplication(config)
+export function createRegistration(context?: ApplicationPackageRuntimeContext, config: PersonalAgentClientRuntimeOptions = {}) {
+  const startRole = context?.phase === 'runtime' ? context.startRole : undefined
+  const defaultDirectory = parsePersonalAgentServerConfig({}).harnessDatabasePath + '.computer-worker'
+  return personalAgentClientApplication(startRole ? { ...config, computer: { directory: defaultDirectory, ...config.computer,
+    launch: directory => startRole('computer-worker', { ownership: 'independent', args: ['serve', directory] }) } } : config)
 }
