@@ -1,5 +1,6 @@
-import { realpath, stat } from 'node:fs/promises'
-import { isAbsolute, posix, win32 } from 'node:path'
+import { createHash } from 'node:crypto'
+import { lstat, mkdir, realpath, stat } from 'node:fs/promises'
+import { isAbsolute, join, posix, win32 } from 'node:path'
 import type { Component } from '@nya/core'
 import type { OwnedCall, RuntimeInputs } from '../contracts.js'
 import { createDirectoryBrowser } from './directory-browser.js'
@@ -9,6 +10,7 @@ import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
 import type { LocalStoragePort, StorageMigration, StorageRow, StorageReader } from '@anybox/storage-sqlite/port'
 import type { ComputerQuery, ComputerQueryResult } from '../computer/query-domain.js'
 import { localAttachmentId, validateUnitId } from '../unit/domain.js'
+import { ensurePrivateDirectory } from '../platform/private-directory.js'
 
 export const projectServiceKey = 'personal-agent.projects'
 const localComputerAttachment = localAttachmentId('computer')
@@ -52,9 +54,10 @@ export interface ProjectPort {
   closeDirectoryBrowse(owner: string, browseId: string): Promise<void>
   onDirectoryBrowseRetired(listener: (browseId: string) => void): () => void
   openProject(path: string, options?: OpenProjectOptions): Promise<Project>
+  openAgentWorkspace(agentId: string): Promise<Project>
   listProjects(): Promise<readonly Project[]>
   getProject(id: string): Promise<Project | undefined>
-  requireAvailable(id: string): Promise<Project>
+  requireAvailable(id: string, agentId?: string): Promise<Project>
 }
 
 export interface ProjectOptions {
@@ -64,6 +67,8 @@ export interface ProjectOptions {
   readonly directoryBrowser?: Omit<DirectoryBrowserOptions, 'homePath'>
   /** Trusted host declarations, idempotently registered on each activation; always bound to the local execution environment. */
   readonly initialProjects?: readonly string[]
+  /** Managed local Agent workspaces live alongside this application's execution data. */
+  readonly agentWorkspacesDirectory?: string
   /**
    * Trusted composition-root entry to the current Computer contract's read-only query surface, resolved per call. Projects is a
    * dependency of the tools on a worker root, so it cannot inject `computer.worker` itself; without this entry remote bindings are unavailable.
@@ -95,6 +100,12 @@ const migrations: readonly StorageMigration[] = [{
       SELECT id, path, '${localComputerAttachment}', name, created_at FROM harness_projects_rebuild`)
     tx.execute('DROP TABLE harness_projects_rebuild')
   },
+}, {
+  version: 3,
+  up(tx) {
+    tx.execute('ALTER TABLE harness_projects ADD COLUMN managed_agent_id TEXT')
+    tx.execute('CREATE UNIQUE INDEX harness_projects_managed_agent ON harness_projects(managed_agent_id) WHERE managed_agent_id IS NOT NULL')
+  },
 }]
 
 function stored(row: StorageRow): Project {
@@ -107,9 +118,15 @@ function stored(row: StorageRow): Project {
 
 type ComputerQueryEntry = NonNullable<ProjectOptions['computerQuery']>
 /** Local projects are checked on this host; remote ones through the bound unit's read-only query surface. */
-async function availability(project: Project, computerQuery: ComputerQueryEntry): Promise<Project> {
+async function availability(row: StorageRow, computerQuery: ComputerQueryEntry): Promise<Project> {
+  const project = stored(row)
   try {
     if (project.computerAttachmentId === localComputerAttachment) {
+      if (row.managed_agent_id !== null) {
+        const info = await lstat(project.path)
+        const available = info.isDirectory() && await realpath(project.path) === project.path
+        return Object.freeze({ ...project, available })
+      }
       const info = await stat(project.path)
       return Object.freeze({ ...project, available: info.isDirectory() })
     }
@@ -186,7 +203,10 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
             }
             const row = await db.transaction(tx => {
               const prior = tx.get('SELECT * FROM harness_projects WHERE path = ? AND computer_attachment_id = ?', [canonical, binding])
-              if (prior) return prior
+              if (prior) {
+                if (prior.managed_agent_id !== null) throw projectUnavailableError()
+                return prior
+              }
               const id = inputs.newId()
               tx.execute('INSERT INTO harness_projects (id, path, computer_attachment_id, name, created_at) VALUES (?, ?, ?, ?, ?)',
                 [id, canonical, binding, (posix.isAbsolute(canonical) ? posix.basename(canonical) : win32.basename(canonical)) || canonical, inputs.now()])
@@ -195,24 +215,56 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
             return Object.freeze({ ...stored(row), available: true })
           })
         },
+        openAgentWorkspace(agentId) {
+          return track(async () => {
+            if (!options.agentWorkspacesDirectory) throw projectUnavailableError()
+            const prior = await db.read(reader => reader.get('SELECT * FROM harness_projects WHERE managed_agent_id = ?', [agentId]))
+            const key = createHash('sha256').update(JSON.stringify(agentId)).digest('hex')
+            let path: string
+            try {
+              const directory = await ensurePrivateDirectory(options.agentWorkspacesDirectory)
+              path = join(directory, key)
+              if (prior && prior.path !== path) throw projectUnavailableError()
+              await mkdir(path, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+                if (error.code !== 'EEXIST') throw error
+              })
+              if (!(await lstat(path)).isDirectory() || await realpath(path) !== path) throw projectUnavailableError()
+            } catch { throw projectUnavailableError() }
+            const row = await db.transaction(tx => {
+              const existing = tx.get('SELECT * FROM harness_projects WHERE path = ? AND computer_attachment_id = ?', [path, localComputerAttachment])
+              if (existing) {
+                if (existing.managed_agent_id !== agentId) throw projectUnavailableError()
+                return existing
+              }
+              const id = inputs.newId()
+              tx.execute(`INSERT INTO harness_projects (id, path, computer_attachment_id, name, created_at, managed_agent_id)
+                VALUES (?, ?, ?, ?, ?, ?)`, [id, path, localComputerAttachment, 'Agent 工作目录', inputs.now(), agentId])
+              return tx.get('SELECT * FROM harness_projects WHERE id = ?', [id])!
+            })
+            const project = await availability(row, computerQuery)
+            if (!project.available) throw projectUnavailableError()
+            return project
+          })
+        },
         listProjects() {
           return track(async () => {
             const rows = await db.read(reader => reader.all(
-              'SELECT * FROM harness_projects ORDER BY created_at, id'))
-            return Object.freeze(await Promise.all(rows.map(row => availability(stored(row), computerQuery))))
+              'SELECT * FROM harness_projects WHERE managed_agent_id IS NULL ORDER BY created_at, id'))
+            return Object.freeze(await Promise.all(rows.map(row => availability(row, computerQuery))))
           })
         },
         getProject(id) {
           return track(async () => {
             const row = await get(id)
-            return row ? availability(stored(row), computerQuery) : undefined
+            return row ? availability(row, computerQuery) : undefined
           })
         },
-        requireAvailable(id) {
+        requireAvailable(id, agentId) {
           return track(async () => {
             const row = await get(id)
             if (!row) throw new Error(`unknown project ${id}`)
-            const project = await availability(stored(row), computerQuery)
+            if (agentId !== undefined && row.managed_agent_id !== null && row.managed_agent_id !== agentId) throw projectUnavailableError()
+            const project = await availability(row, computerQuery)
             if (!project.available) throw projectUnavailableError()
             return project
           })

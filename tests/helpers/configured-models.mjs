@@ -6,7 +6,7 @@ export async function seedHarnessModel(settings, options = {}) {
   const capabilities = options.capabilities ?? { tools: { support: 'supported' }, streaming: { support: 'supported' }, imageInput: { support: 'unknown' }, reasoning: { support: 'unknown' } }
   const provider = await settings.createProvider({ id: `${id}-provider`, name: 'Test provider', connectionHints: { baseUrl, protocolIds: [protocolId] } })
   const model = await settings.createModel({ id: `${id}-definition`, providerId: provider.id, remoteModelId: options.remoteModelId ?? 'test-model',
-    name: options.name ?? 'Test model', capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {},
+    name: options.name ?? 'Test model', capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: options.limits ?? {},
     connectionHints: { baseUrl, protocolIds: [protocolId] } })
   // Seed the chosen stable configuration identity before Key synchronization creates missing baselines.
   const connection = await settings.createConnection({ id: `${id}-connection`, providerDefinitionId: provider.id, name: 'Test connection', enabled: true,

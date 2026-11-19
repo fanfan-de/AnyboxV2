@@ -10,12 +10,6 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   const owned = createPageRequests((path, body, signal) => requestJSON(path, body, signal))
   const targets: ReturnType<typeof createPageRequests>[] = []
   const control = owned.api
-  const select = root.querySelector('#personal-agent--harness-select') as HTMLSelectElement
-  select.replaceChildren(...api.connections.map(connection => {
-    const option = document.createElement('option'); option.value = connection.id; option.textContent = connection.name; return option
-  }))
-  if (selectedId) select.value = selectedId
-  select.disabled = !api.connections.length
   const selectConnection = (connection: HarnessConnection) => {
     try { sessionStorage.setItem('anybox.personal-agent.client.selected', connection.id) } catch { /* Optional selection. */ }
     changed(connection)
@@ -23,7 +17,6 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   const requestConnection = (id: string): boolean => {
     const currentId = selectedId ?? api.connections[0]?.id ?? ''
     const connection = api.connections.find(item => item.id === id)
-    select.value = currentId
     if (lifetime.signal.aborted || !connection) return false
     if (id === currentId) return true
     if (!canLeave()) return false
@@ -31,15 +24,13 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
       open(); status('请先保存或放弃尚未保存的连接修改，等待进行中的操作完成后再切换设备。')
       return false
     }
-    select.value = connection.id
     selectConnection(connection)
     return true
   }
-  select.addEventListener('change', () => { requestConnection(select.value) }, { signal: lifetime.signal })
   const settingsDialog = root.querySelector<HTMLDialogElement>('#personal-agent--settings-dialog')!
   const panel = root.querySelector<HTMLElement>('#personal-agent--connections-settings')!
   panel.innerHTML = `<header class="settings-panel-heading"><h3 id="personal-agent--connections-title">管理连接</h3>
-    <p>连接自己的执行设备。项目、模型配置和会话保存在对应设备上。</p></header>
+    <p>连接自己的执行设备。Agent、模型配置和会话保存在对应设备上。</p></header>
     <section data-local class="settings-card" hidden><p data-local-status role="status"></p><button type="button" data-local-retry>重试本机连接</button></section>
     <section class="settings-card"><button type="button" data-computer>管理本机 Computer worker</button></section>
     <div data-list></div><section data-tokens class="settings-card" hidden></section><section data-attachments class="computer-management" hidden></section><p data-status class="notice" role="status" hidden></p>

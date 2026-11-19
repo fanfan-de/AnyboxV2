@@ -7,7 +7,9 @@ import { modelsServiceKey, modelsSettingsServiceKey, modelsError } from '@anybox
 import type { ModelsService, ModelsSettingsService } from '@anybox/models'
 import type { RuntimeInputs } from './contracts.js'
 import { validateAgents } from './agent/domain.js'
-import type { AgentDefinition } from './agent/domain.js'
+import type { AgentDefinition, AgentSummary } from './agent/domain.js'
+import { agentDirectoryServiceKey, createAgentDirectoryComponent } from './agent/directory-component.js'
+import type { AgentDirectoryPort } from './agent/directory-component.js'
 import { agentPromptServiceKey, createAgentPromptComponent } from './agent/prompt-binding-component.js'
 import type { AgentPromptPort } from './agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from './run/component.js'
@@ -67,16 +69,17 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   /** Host-supplied default for its directory picker; omission disables browsing for embedded callers. */
   readonly projectDirectoryHome?: string
   readonly initialProjects?: readonly string[]
+  readonly agentWorkspacesDirectory?: string
   /** Optional one-time import of the previous Prompt JSON store. The source is left untouched. */
   readonly legacyPromptStorePath?: string
   /** Host-provided authorization for changing an Agent's prompt bindings. */
   readonly canManageAgent?: (actorId: string, agentId: string) => boolean
 }
 
-export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable' | 'getIn'>,
+export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable' | 'getIn' | 'openAgentWorkspace'>,
   Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
-  listAgents(): readonly Readonly<{ id: string }>[]
+  listAgents(): readonly AgentSummary[]
   listTools(): ReturnType<typeof listTools>
   listComputerEnvironments(): Promise<ComputerEnvironments>
   listUnitAttachments(): Promise<readonly UnitAttachment[]>
@@ -102,18 +105,19 @@ function runtimeInputs(options: HarnessServerCoreOptions): RuntimeInputs {
   return { now: options.now ?? (() => new Date().toISOString()), newId: options.newId ?? randomUUID }
 }
 
-/** Prompt capabilities do not require Models, Session or execution resources. */
+/** Installs the Prompt library and durable Agent configuration before execution. */
 export function createHarnessServerPromptComponents(options: HarnessServerCoreOptions): readonly Component<any, any>[] {
   const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
   return [createPromptComponent(inputs, options.legacyPromptStorePath),
-    createAgentPromptComponent(inputs, agents, options.canManageAgent ?? (() => true), options.legacyPromptStorePath)]
+    createAgentDirectoryComponent(inputs, agents, options.legacyPromptStorePath),
+    createAgentPromptComponent(inputs, options.canManageAgent ?? (() => true))]
 }
 
 /** Describes the Agent component closure; callers keep every installation on their root. */
 export function createHarnessServerAgentComponents(context: Context, options: HarnessServerCoreOptions, lifetime: HarnessServerLifetime): readonly Component<any, any>[] {
   validateComputerEnvironmentOptions(options)
   const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
-  const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
+  const inputs = runtimeInputs(options)
   const toolEnvironments = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry,
     ...(options.toolEnvironments ?? []).map(descriptor => ({ descriptor }))])
   const configuredProtocols = lookup<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
@@ -133,19 +137,19 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     return worker.query({ attachmentId, query })
   }
   return [...protocolComponents, ...attachmentComponents, ...workerComponents,
-    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery }),
+    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects,
+      agentWorkspacesDirectory: options.agentWorkspacesDirectory, computerQuery }),
     createProjectFilesComponent(inputs),
     createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
-    createSessionComponent(inputs, agents, toolEnvironments),
+    createSessionComponent(inputs, toolEnvironments),
     createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding(toolEnvironments, options.toolEnvironments)),
-    createRunComponent(inputs, agents, lifetime.isClosing, lifetime.signal, toolEnvironments)]
+    createRunComponent(inputs, lifetime.isClosing, lifetime.signal, toolEnvironments)]
 }
 
 /** The facade resolves the current services and never owns the application root. */
 export function createHarnessServerApi(context: Context, options: HarnessServerCoreOptions, lifetime: HarnessServerLifetime): HarnessServerApi {
   if (!Context.is(context) || context.root !== context) throw new TypeError('application root Context required')
   const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
-  const agents = validateAgents(options.agents)
   const validateSelectedModel = (modelId: string, requireAvailable = false): string => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
     const models = lookup<ModelsService>(modelsServiceKey)
@@ -194,7 +198,9 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
   return {
     listAgents: () => {
       if (lifetime.isClosing()) throw new Error('harness server is closing')
-      return Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
+      const agents = lookup<AgentDirectoryPort>(agentDirectoryServiceKey)
+      if (!agents) throw new Error('agent directory service is unavailable')
+      return agents.list()
     },
     listTools: () => {
       if (lifetime.isClosing()) throw new Error('harness server is closing')
@@ -233,6 +239,7 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
       if (modelId !== undefined) validateSelectedModel(modelId)
       return currentSessions().createSession(projectId, agentId, modelId)
     },
+    openContinuousSession: (projectId, agentId) => currentSessions().openContinuousSession(projectId, agentId),
     selectSessionModel: (sessionId, modelId) => {
       const protocolId = validateSelectedModel(modelId)
       return currentSessions().selectSessionModel(sessionId, modelId, protocolId)

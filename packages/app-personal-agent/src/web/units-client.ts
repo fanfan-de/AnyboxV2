@@ -1,9 +1,14 @@
 import type { Api } from './client-types.js'
 import type { UnitAttachment, UnitScope } from '../core/unit/domain.js'
 import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
-import { environmentLabel, environmentStateLabel } from './project-directory-client.js'
 import { createPageRequests } from './page-lifecycle.js'
 import type { LocalComputerWorkerStatus } from '../core/computer/worker-port.js'
+
+const environmentLabel = (environment: ComputerEnvironment): string => environment.origin === 'local' ? '本机（默认）'
+  : `远端环境 · ${environment.platform ?? '平台待确认'}${environment.architecture ? `/${environment.architecture}` : ''} · ${environment.environmentId.slice(0, 8)}`
+const environmentStateLabel = (environment: ComputerEnvironment): string => ({
+  'on-demand': '按需启动', connected: '已连接', offline: '离线', pending: '等待附着', revoked: '已撤销',
+})[environment.connectionState]
 
 /** Owner-side unit attachments of one fixed device: list, issue one-time attach codes, revoke. */
 export interface UnitsSettingsView {
@@ -67,7 +72,7 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
   const form = el('form', undefined, 'settings-card')
   const urlLabel = el('label', '远端 Personal Agent 执行服务 地址（HTTPS）'), urlInput = el('input'); urlInput.type = 'url'; urlInput.required = true; urlLabel.append(urlInput)
   const codeLabel = el('label', '附着码'), codeInput = el('input'); codeInput.type = 'password'; codeInput.required = true; codeLabel.append(codeInput)
-  const projectsLabel = el('label', '允许对方使用的项目目录（每行一个绝对路径，留空表示不限）'), projectsInput = el('textarea'); projectsInput.rows = 3; projectsLabel.append(projectsInput)
+  const projectsLabel = el('label', '允许对方访问的目录（每行一个绝对路径，留空表示不限）'), projectsInput = el('textarea'); projectsInput.rows = 3; projectsLabel.append(projectsInput)
   const toolsLabel = el('label', '允许对方使用的工具契约 ID（逗号分隔，留空表示不限）'), toolsInput = el('input'); toolsInput.type = 'text'; toolsLabel.append(toolsInput)
   const attachButton = el('button', '附着', 'primary-button'); attachButton.type = 'submit'
   form.append(urlLabel, codeLabel, projectsLabel, toolsLabel, attachButton)
@@ -83,9 +88,9 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
         const edit = el('button', '配置权限'); edit.type = 'button'
         edit.addEventListener('click', () => {
           if (busy) return
-          const editor = el('form'), projectLabel = el('label', '项目目录（每行一个，留空表示不允许）'), projects = el('textarea')
+          const editor = el('form'), projectLabel = el('label', '允许访问的目录（每行一个，留空表示不允许）'), projects = el('textarea')
           projects.rows = 3; projects.value = attachment.ceiling.projects === 'all' ? '' : attachment.ceiling.projects.join('\n'); projectLabel.append(projects)
-          const allProjectsLabel = el('label', '不限项目目录', 'computer-grant-toggle'), allProjects = el('input'); allProjects.type = 'checkbox'; allProjects.checked = attachment.ceiling.projects === 'all'; allProjectsLabel.append(allProjects)
+          const allProjectsLabel = el('label', '不限目录', 'computer-grant-toggle'), allProjects = el('input'); allProjects.type = 'checkbox'; allProjects.checked = attachment.ceiling.projects === 'all'; allProjectsLabel.append(allProjects)
           const toolLabel = el('label', '工具契约 ID（逗号分隔，留空表示不允许）'), tools = el('input')
           tools.value = attachment.ceiling.tools === 'all' ? '' : attachment.ceiling.tools.join(', '); toolLabel.append(tools)
           const allToolsLabel = el('label', '不限工具', 'computer-grant-toggle'), allTools = el('input'); allTools.type = 'checkbox'; allTools.checked = attachment.ceiling.tools === 'all'; allToolsLabel.append(allTools)
@@ -169,11 +174,11 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
     return node
   }
   const heading = el('header', undefined, 'settings-panel-heading'), title = el('h3', '执行环境'); title.id = 'personal-agent--units-title'
-  heading.append(title, el('p', '本机为默认执行环境，也可以添加多个远端环境。新建项目时选择环境，项目会保持该绑定。附着码只显示一次，由远端设备在其“管理连接”里消费。'))
+  heading.append(title, el('p', 'Agent 在本机执行环境中使用自己的工作目录。这里也可管理已附着的远端环境。附着码只显示一次，请在远端设备的“管理连接”中输入。'))
   const refreshButton = el('button', '刷新执行环境'); refreshButton.type = 'button'; heading.append(refreshButton)
   const list = el('div', undefined, 'units-list'), status = el('p', undefined, 'notice'); status.hidden = true
   const form = el('form', undefined, 'settings-card'), formTitle = el('h3', '生成 Computer 附着码')
-  const projectsLabel = el('label', '允许的项目目录（每行一个绝对路径，留空表示不限）'), projectsInput = el('textarea'); projectsInput.rows = 3; projectsLabel.append(projectsInput)
+  const projectsLabel = el('label', '允许访问的目录（每行一个绝对路径，留空表示不限）'), projectsInput = el('textarea'); projectsInput.rows = 3; projectsLabel.append(projectsInput)
   const toolsLabel = el('label', '允许的工具契约 ID（逗号分隔，留空表示不限）'), toolsInput = el('input'); toolsInput.type = 'text'; toolsLabel.append(toolsInput)
   const issueButton = el('button', '生成附着码', 'primary-button'); issueButton.type = 'submit'
   const once = el('p', undefined, 'token-once'); once.hidden = true

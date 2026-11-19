@@ -1,5 +1,6 @@
 import { createPageRequests } from './page-lifecycle.js'
 import type { Api } from './client-types.js'
+import type { AgentSummary } from '../core/agent/domain.js'
 import { readPromptViewState, rememberPromptViewState } from './product-view-state.js'
 /** Prompt settings use only the public browser protocol. */
 type PromptKind = 'agent-instruction' | 'task-template' | 'context'
@@ -224,11 +225,11 @@ export function setupPromptSettings(
   const load = () => {
     void perform(async () => {
       const [library, agents] = await Promise.all([
-        api<readonly PromptDocumentView[]>('/prompts'), api<readonly { readonly id: string }[]>('/agents'),
+        api<readonly PromptDocumentView[]>('/prompts'), api<readonly AgentSummary[]>('/agents'),
       ])
       documents = library
       const preferred = agent.value || remembered?.agentId || ''
-      agent.replaceChildren(...agents.map(item => option(item.id, item.id)))
+      agent.replaceChildren(...agents.map(item => option(item.id, item.name || item.id)))
       if (agents.some(item => item.id === preferred)) agent.value = preferred
       renderLibrary()
       const documentId = selected?.id ?? remembered?.documentId
@@ -312,13 +313,21 @@ export function setupPromptSettings(
   scrollContainer.addEventListener('scroll', rememberView, { signal: lifetime.signal, passive: true })
   apply.addEventListener('click', () => {
     if (apply.disabled) return
-    const agentId = agent.value
+    const agentId = agent.value, agentName = agent.selectedOptions[0]?.textContent || agentId
     const versionId = version.value
     void perform(async () => {
       await api(`/agents/${encodeURIComponent(agentId)}/prompts`, { versionId })
       await loadBindings()
-      showNotice(`已应用到 ${agentId}。所有项目中该 Agent 的后续运行使用此版本，正在进行的运行保持原内容。`)
+      showNotice(`已应用到 ${agentName}。后续运行使用此版本，正在进行的运行保持原内容。`)
     })
   })
-  return { canLeave: canLeaveDraft, async dispose() { rememberView(); disposed = true; lifetime.abort(); await owned.dispose() } }
+  return {
+    receiveAgent(item: AgentSummary) {
+      const entry = [...agent.options].find(value => value.value === item.id)
+      if (entry) entry.textContent = item.name
+      else agent.append(option(item.id, item.name))
+    },
+    canLeave: canLeaveDraft,
+    async dispose() { rememberView(); disposed = true; lifetime.abort(); await owned.dispose() },
+  }
 }

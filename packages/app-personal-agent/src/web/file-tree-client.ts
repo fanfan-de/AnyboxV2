@@ -66,7 +66,8 @@ export function createFileTreeClient(api: Api, ref: SessionRef, changed: () => v
       if (!current(path, version, abort)) return
       let raw: unknown, discardedCursor: string | undefined
       try {
-        raw = await api(continuation ? `${base}/page` : `${base}/open`, continuation ? { cursorId, page } : { path }, abort.signal)
+        const openPath = `${base}/open${ref.continuous ? `?projectId=${encodeURIComponent(ref.projectId)}` : ''}`
+        raw = await api(continuation ? `${base}/page` : openPath, continuation ? { cursorId, page } : { path }, abort.signal)
         const received = raw && typeof raw === 'object' && 'cursorId' in raw && validCursor(raw.cursorId) ? raw.cursorId : undefined
         if (!current(path, version, abort)) { if (received && (!cursorId || received !== cursorId)) await closeCursor(received); return }
         const value = decodePage(raw, path, page)

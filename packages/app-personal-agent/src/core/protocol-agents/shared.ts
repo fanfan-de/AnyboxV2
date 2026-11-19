@@ -63,7 +63,7 @@ export interface ExchangeRunner {
 export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string },
   initialResources: readonly NativeImageResourceRef[] = [], prompts?: readonly PromptSnapshot[],
   acceptResources?: (refs: readonly NativeImageResourceRef[]) => void, allowedTools?: readonly ToolDefinition[], replay?: NativeReply,
-  toolRequestCorrections = 0): ExchangeRunner {
+  toolRequestCorrections = 0, continuous = false): ExchangeRunner {
   let initial = replay === undefined, replayReply = replay, latestExchangeId: string | undefined
   let nextResources: readonly NativeImageResourceRef[] = []
   let exchanges: readonly ProtocolViewExchange[] = []
@@ -93,7 +93,7 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
       const resources = initial ? initialResources : nextResources
       const prepared = execution.prepareExchange(intent, resources.length ? { resourceRefs: resources } : undefined)
       nextResources = []
-      const inputs = projectNativeRequest(execution.snapshot.protocolId, prepared.record.payload, initial ? prompts : undefined)
+      const inputs = projectNativeRequest(execution.snapshot.protocolId, prepared.record.payload, initial ? prompts : undefined, initial && continuous)
       initial = false
       update({ id: prepared.exchangeId, ...(inputs.length ? { inputs } : {}), blocks: [] })
       publish(prepared.exchangeId)

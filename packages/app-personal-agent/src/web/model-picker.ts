@@ -25,7 +25,7 @@ export function createModelPicker(container: HTMLElement, id: string, signal: Ab
   const root = document.createElement('div')
   root.className = 'model-picker'
   root.innerHTML = `<button type="button" class="composer-model" aria-haspopup="listbox" aria-expanded="false"><span class="model-picker-label">选择模型</span><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg></button>
-    <div class="model-picker-popover" hidden><div class="model-picker-list" role="listbox" aria-label="本会话使用的模型" tabindex="-1"></div><p class="model-picker-help">单击选择，双击设为默认<span class="sr-only">；键盘使用方向键导航，Enter 选择，Shift + Enter 设为默认，Escape 关闭</span></p></div>`
+    <div class="model-picker-popover" hidden><div class="model-picker-list" role="listbox" aria-label="当前模型" tabindex="-1"></div><p class="model-picker-help">单击选择，双击设为默认<span class="sr-only">；键盘使用方向键导航，Enter 选择，Shift + Enter 设为默认，Escape 关闭</span></p></div>`
   const button = root.querySelector<HTMLButtonElement>('.composer-model')!
   const label = root.querySelector<HTMLElement>('.model-picker-label')!
   const popup = root.querySelector<HTMLElement>('.model-picker-popover')!
@@ -156,13 +156,13 @@ export function createModelPicker(container: HTMLElement, id: string, signal: Ab
         option.setAttribute('aria-selected', String(choice.id === state.selectedId))
         option.setAttribute('aria-disabled', String(choice.disabled || state.disabled || state.busy || state.savingDefault))
         option.disabled = choice.disabled || state.disabled || state.savingDefault
-        option.title = `${choice.label}${isDefault ? ' · 新会话默认模型' : ''}`
+        option.title = `${choice.label}${isDefault ? ' · Agent 默认模型' : ''}`
         option.querySelector<HTMLElement>('.model-picker-default')!.hidden = !isDefault
       }
       const selected = state.choices.find(choice => choice.id === state.selectedId)
       label.textContent = selected?.name ?? (state.selectedId ? '原模型已不可用' : '选择模型')
       button.title = `${label.textContent} · 单击选择，双击设为默认`
-      button.setAttribute('aria-label', `本会话使用的模型：${label.textContent}`)
+      button.setAttribute('aria-label', `当前模型：${label.textContent}`)
       button.disabled = state.disabled
       button.setAttribute('aria-disabled', String(state.disabled || state.busy || state.savingDefault))
       list.setAttribute('aria-busy', String(state.busy || state.savingDefault))

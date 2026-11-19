@@ -1,9 +1,11 @@
 import type { FileContent } from '../project-files/domain.js'
+import { encodeFileContents } from '../project-files/domain.js'
 import type { Component } from '@nya/core'
 import type { JsonValue, ModelsService } from '@anybox/models'
 import { modelsServiceKey } from '@anybox/models'
 import type { RuntimeInputs } from '../contracts.js'
-import type { AgentDefinition } from '../agent/domain.js'
+import { agentDirectoryServiceKey } from '../agent/directory-component.js'
+import type { AgentDirectoryPort } from '../agent/directory-component.js'
 import { agentPromptServiceKey } from '../agent/prompt-binding-component.js'
 import type { AgentPromptPort } from '../agent/prompt-binding-component.js'
 import { modelFailure, normalizeModelFailure } from './model.js'
@@ -14,6 +16,7 @@ import type { ProjectPort } from '../project/component.js'
 import { validateRunInput, sameRunInput } from './domain.js'
 import { validateImageBatch } from '../image/limits.js'
 import { treeError } from '../session/domain.js'
+import { continuousBudget, projectedTokens } from '../session/continuous-history.js'
 import type { Run, RunInput } from './domain.js'
 import { runRuntimeServiceKey } from './runtime-component.js'
 import type { RunRuntimePort, RunCancelReason } from './runtime-component.js'
@@ -46,7 +49,8 @@ export interface RunPort {
 }
 
 /** Admission owns a prepared program until the Runtime synchronously accepts it. */
-export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentCatalog): Component.Object<void, {
+export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentCatalog): Component.Object<void, {
+  [agentDirectoryServiceKey]: AgentDirectoryPort
   [sessionServiceKey]: SessionPort
   [sessionRunServiceKey]: SessionRunPort
   [agentPromptServiceKey]: AgentPromptPort
@@ -59,9 +63,9 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
 }> {
   return {
     name: 'personal-agent-runs',
-    inject: [sessionServiceKey, sessionRunServiceKey, agentPromptServiceKey, modelsServiceKey, protocolAgentServiceKey, runRuntimeServiceKey, projectServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey],
+    inject: [agentDirectoryServiceKey, sessionServiceKey, sessionRunServiceKey, agentPromptServiceKey, modelsServiceKey, protocolAgentServiceKey, runRuntimeServiceKey, projectServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey],
     apply(ctx, _config, deps) {
-      const sessions = deps[sessionServiceKey], records = deps[sessionRunServiceKey], prompts = deps[agentPromptServiceKey]
+      const sessions = deps[sessionServiceKey], records = deps[sessionRunServiceKey], prompts = deps[agentPromptServiceKey], agents = deps[agentDirectoryServiceKey]
       const models = deps[modelsServiceKey], protocols = deps[protocolAgentServiceKey], runtime = deps[runRuntimeServiceKey], projects = deps[projectServiceKey]
       const attachments = deps[unitAttachmentsServiceKey]
       const owned = new Set<string>(), admissions = new Set<Promise<unknown>>(), opening = new Set<AbortController>()
@@ -178,19 +182,27 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             if (!session) throw new Error(`unknown session ${input.sessionId}`)
             if (session.archivedAt !== null) throw treeError('session-archived')
             if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
-            const project = await projects.requireAvailable(session.projectId)
-            const agent = agents.find(value => value.id === session.agentId)
+            if (session.continuous) {
+              if (!input.projectId) throw new TypeError('projectId is required for a continuous Session')
+              if (session.headNodeId !== input.parentNodeId) throw treeError('history-position-changed')
+            } else if (input.projectId !== undefined) {
+              throw treeError('invalid-history')
+            }
+            const project = await projects.requireAvailable(input.projectId ?? session.projectId, session.agentId)
+            const agent = agents.get(session.agentId)
             if (!agent) throw new Error('agent is unavailable')
-            const modelId = input.modelId ?? session.modelId ?? agent.modelId
+            const history = session.continuous ? undefined : await records.loadNativeHistory(session.id, input.parentNodeId)
+            const modelId = input.modelId ?? session.modelId ?? history?.modelSnapshot.modelId ?? agent.modelId
             if (!modelId) throw modelFailure('model-unavailable')
             const protocolId = protocols.protocolForModel(modelId)
-            if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
+            const model = models.get(modelId)
+            if (!model) throw modelFailure('model-unavailable')
+            if (!session.continuous && session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
             // Every Run runs against this harness server's own Models unit; the Computer unit comes from the project's binding.
             const hasComputer = session.toolEnvironments === undefined || session.toolEnvironments.environments.some(environment => environment.environmentId === 'computer')
             const units: RunUnitBindings | undefined = hasComputer ? Object.freeze({ schemaVersion: 1, models: (await attachments.local('models')).binding,
               computer: project.computerAttachmentId === localAttachmentId('computer') ? (await attachments.local('computer')).binding : await attachments.binding(project.computerAttachmentId) }) : undefined
-            const history = await records.loadNativeHistory(session.id, input.parentNodeId)
-            const fixedInitialization = history?.initialization ?? await records.loadNativeInitialization(session.id)
+            const fixedInitialization = session.continuous ? undefined : history?.initialization ?? await records.loadNativeInitialization(session.id)
             if (fixedInitialization && fixedInitialization.schemaVersion !== 3 && fixedInitialization.tools.some(tool => JSON.stringify(getToolByName(tool.name)?.definition) !== JSON.stringify(tool))) throw treeError('history-incompatible')
             try {
               if (session.toolEnvironments) {
@@ -204,12 +216,12 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
               : computerCapabilities && typeof computerCapabilities === 'object' && 'platform' in computerCapabilities && typeof computerCapabilities.platform === 'string' ? computerCapabilities.platform : 'unknown'
             // Only the generic command tool has a platform-dependent default shell.
             // Fixed Bash contracts and tool-free Sessions need no extra instructions.
-            const needsShellEnvironment = hasComputer && models.get(modelId)?.effectiveCapabilities?.tools === true && session.toolSelection.tools.some(tool => tool.toolId === 'codex.exec_command')
+            const needsShellEnvironment = hasComputer && model.effectiveCapabilities?.tools === true && session.toolSelection.tools.some(tool => tool.toolId === 'codex.exec_command')
             const initialization: NativeInitialization = fixedInitialization ?? Object.freeze({
               ...(session.toolEnvironments ? { schemaVersion: 3 as const, toolContractVersion: 'tool-environments-v1' as const, toolEnvironments: session.toolEnvironments }
                 : { schemaVersion: 2 as const, toolContractVersion: 'tool-library-v1' as const }),
               prompts: Object.freeze([...prompts.resolveInitialPrompts(session.agentId), ...(needsShellEnvironment ? [toolEnvironmentPrompt(toolPlatform, project.path)] : [])]),
-              tools: Object.freeze(models.get(modelId)?.effectiveCapabilities?.tools === true ? session.toolSelection.tools.map(tool => tool.definition) : []),
+              tools: Object.freeze(model.effectiveCapabilities?.tools === true ? session.toolSelection.tools.map(tool => tool.definition) : []),
               toolSelection: session.toolSelection })
             const template = prompts.resolveTaskTemplate(session.agentId) ?? null
             const images = (input.images?.length ? await records.describeImages(session.id, input.images.map(image => image.assetId)) : [])
@@ -219,13 +231,22 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             if (input.files?.length) {
               const call = records.readFileSnapshots(session.id, input.files.map(file => file.snapshotId), controller.signal)
               try { fileContents = await call.result } finally { await call.done }
+              if (fileContents.some(({ file }) => file.projectId !== project.id)) throw treeError('invalid-history')
             }
             const files = fileContents.map(({ file: { expiresAt: _expiry, ...file } }) => Object.freeze(file))
             const nativeInput: NativeRunInput = Object.freeze({ schemaVersion: 3, raw: input.input,
               text: template ? template.content.replace('{{input}}', () => input.input) : input.input, images: Object.freeze(images), files: Object.freeze(files), template })
+            const continuity = session.continuous ? await records.planContinuousRun({
+              sessionId: session.id, projectId: project.id, parentNodeId: input.parentNodeId, query: input.input,
+              remainingTokens: continuousBudget(model, projectedTokens(JSON.stringify({
+                prompts: initialization.prompts.map(prompt => prompt.content), tools: initialization.tools,
+                current: nativeInput.text, files: encodeFileContents(fileContents),
+              })) + images.length * 768),
+            }) : undefined
             const id = inputs.newId()
             let program: PreparedRunProgram
-            try { program = await protocols.prepare({ runId: id, sessionId: session.id, modelId, signal: controller.signal, initialization, input: nativeInput, fileContents, ...(history ? { history } : {}) }) }
+            try { program = await protocols.prepare({ runId: id, sessionId: session.id, modelId, signal: controller.signal, initialization, input: nativeInput, fileContents,
+              ...(history ? { history } : {}), ...(continuity ? { continuity: continuity.context } : {}) }) }
             catch (error) { if (error instanceof Error && 'code' in error && String(error.code).startsWith('history-')) throw error; throw normalizeModelFailure(error) }
             let transferred = false
             untransferred.set(id, controller)
@@ -239,7 +260,8 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
               if (controller.signal.aborted || program.signal.aborted) throw modelFailure('dependency-unavailable')
               const handoff = Promise.resolve().then(async () => {
                 const accepted = await records.registerRun(id, input, inputs.now(), [...initialization.prompts, ...(template ? [template] : [])], program.modelSnapshot,
-                  { binding: program.binding, initialization: program.initialization, input: program.input, parentContextRef: history?.contextRef ?? null, units })
+                  { binding: program.binding, initialization: program.initialization, input: program.input, parentContextRef: history?.contextRef ?? null,
+                    ...(continuity ? { continuity } : {}), units })
                 if (!accepted.created) return accepted.run
                 owned.add(id)
                 try {

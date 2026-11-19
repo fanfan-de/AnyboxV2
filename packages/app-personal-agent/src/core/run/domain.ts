@@ -98,6 +98,7 @@ export function toolOutputBytes(observation: ToolObservation): number {
 export interface Run {
   readonly id: string
   readonly sessionId: string
+  readonly projectId?: string
   readonly input: string
   readonly images: readonly ImageRef[]
   readonly files: readonly FileRef[]
@@ -131,6 +132,7 @@ export interface Run {
 export interface RunInput {
   readonly modelId?: string
   readonly sessionId: string
+  readonly projectId?: string
   readonly parentNodeId: string | null
   readonly input: string
   readonly images?: readonly { readonly assetId: string }[]
@@ -161,6 +163,7 @@ export function validateRunInput(input: RunInput): RunInput {
   return Object.freeze({
     sessionId: nonEmpty(input?.sessionId, 'sessionId'),
     ...(input?.modelId === undefined ? {} : { modelId: nonEmpty(input.modelId, 'modelId') }),
+    ...(input?.projectId === undefined ? {} : { projectId: nonEmpty(input.projectId, 'projectId') }),
     parentNodeId: input?.parentNodeId === null ? null : nonEmpty(input?.parentNodeId, 'parentNodeId'),
     input: input.input.trim(),
     files: Object.freeze(files.map(snapshotId => Object.freeze({ snapshotId }))),
@@ -170,7 +173,7 @@ export function validateRunInput(input: RunInput): RunInput {
 }
 
 export function sameRunInput(left: RunInput, right: RunInput): boolean {
-  return left.input === right.input && left.parentNodeId === right.parentNodeId && left.modelId === right.modelId &&
+  return left.input === right.input && left.parentNodeId === right.parentNodeId && left.modelId === right.modelId && left.projectId === right.projectId &&
     JSON.stringify((left.images ?? []).map(image => image.assetId)) === JSON.stringify((right.images ?? []).map(image => image.assetId)) &&
     JSON.stringify((left.files ?? []).map(file => file.snapshotId)) === JSON.stringify((right.files ?? []).map(file => file.snapshotId))
 }

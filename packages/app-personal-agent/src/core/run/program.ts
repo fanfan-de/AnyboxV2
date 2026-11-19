@@ -8,6 +8,7 @@ export type { NativeModelSnapshot } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { RunFailureCategory, RunOutcome, ToolObservation, ValidatedToolRequest } from './domain.js'
+import type { ContinuousContext } from '../session/continuous-history.js'
 
 /** Application-owned serializable boundaries. Protocol SDK objects never cross these interfaces. */
 export interface ProtocolBindingSnapshot {
@@ -194,6 +195,7 @@ export interface PrepareRunInput {
   readonly input: NativeRunInput
   readonly fileContents?: readonly FileContent[]
   readonly history?: NativeHistory
+  readonly continuity?: ContinuousContext
   /** Trusted active-Run preparation; ordinary callers use prepareResume. */
   readonly resume?: RunResumeRecord
 }

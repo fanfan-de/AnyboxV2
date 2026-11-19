@@ -100,18 +100,10 @@ export async function mountHarnessPage(root: HTMLElement, options: { context: Ap
           if (child?.canLeave() === false) { child.showSettingsBlocked(); return false }
           return true
         }, refreshConnections, options.context.apiBase, () => refreshConnections())
-        const select = content.querySelector<HTMLSelectElement>('#personal-agent--harness-select')!
-        for (const option of select.options) {
-          const item = connections.find(value => value.id === option.value)!
-          const isLocal = item.instanceId === local.instanceId
-          option.textContent = deviceName(item)
-          option.title = `${isLocal ? '本地' : '远程'} · ${deviceName(item)}`
-        }
-        select.title = `当前设备：${select.selectedOptions[0]?.title ?? '未选择'}`
         api = createHarnessClient(options.context.apiBase, active, selectedId)
         const { mountAgentPage } = await import('./agent-client.js')
         child = mountAgentPage(content, api, {
-          selectedId, selectedName: connection ? deviceName(connection) : undefined, selectedInstanceId: connection?.instanceId, isActive: options.isActive,
+          selectedId, selectedName: connection ? deviceName(connection) : undefined, isActive: options.isActive,
           devices: connections.map(item => ({ id: item.id, name: deviceName(item) })), settingsState,
           selectDevice: id => connectionUI?.selectConnection(id) ?? false, route: {
           read: () => route().inner,
@@ -124,9 +116,6 @@ export async function mountHarnessPage(root: HTMLElement, options: { context: Ap
         } })
         child.setActive?.(options.isActive()); connectionUI.setActive(options.isActive())
         child.restoreSettings()
-        if (connections.length && !active.some(item => item.id === selectedId)) {
-          content.querySelector<HTMLElement>('#personal-agent--project-picker-status')!.textContent = '请先在“管理连接”中启动所选执行设备，再选择项目目录。'
-        }
         mountedKey = key
         show(activationError || (connection && !active.some(item => item.id === connection.id) ? '所选执行设备尚未启动或暂时无法连接，请在“管理连接”中检查并启动。' : ''))
       } finally { busy = false }

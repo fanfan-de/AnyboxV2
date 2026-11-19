@@ -18,6 +18,9 @@ import { promptServiceKey } from '../core/prompt/component.js'
 import type { PromptPort } from '../core/prompt/component.js'
 import { agentPromptServiceKey } from '../core/agent/prompt-binding-component.js'
 import type { AgentPromptPort } from '../core/agent/prompt-binding-component.js'
+import { agentDirectoryServiceKey } from '../core/agent/directory-component.js'
+import type { AgentDirectoryPort } from '../core/agent/directory-component.js'
+import { agentDetail } from '../core/agent/domain.js'
 import { runChangedEvent, runViewEvent } from '../core/run/notifications.js'
 import { decodeProtocolView } from '../core/view/decode.js'
 import { projectProtocolRecords } from '../core/protocol-agents/projection.js'
@@ -43,15 +46,22 @@ type CommandDependencies = {
   [directoryPickerServiceKey]?: DirectoryPickerPort
   [promptServiceKey]: PromptPort
   [agentPromptServiceKey]: AgentPromptPort
+  [agentDirectoryServiceKey]: AgentDirectoryPort
   [unitAttachmentsServiceKey]: UnitAttachmentsPort
   [unitTransportServiceKey]: UnitTransportPort
   [localComputerWorkerControlServiceKey]: LocalComputerWorkerControl
   [localComputerWorkerServiceKey]?: ComputerWorkerPort
 }
 
-function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies, instanceId: () => string | null): HarnessServerApiCommands {
+function createCommands(deps: CommandDependencies, instanceId: () => string | null): HarnessServerApiCommands {
   return {
-    listAgents: () => agentIds,
+    listAgents: () => deps[agentDirectoryServiceKey].list(),
+    getAgent(id) {
+      const agent = deps[agentDirectoryServiceKey].get(id)
+      return agent && agentDetail(agent)
+    },
+    createAgent: async input => agentDetail(await deps[agentDirectoryServiceKey].create(input)),
+    updateAgent: async (id, input) => agentDetail(await deps[agentDirectoryServiceKey].update(id, input)),
     listTools,
     instanceId,
     async listComputerEnvironments() {
@@ -95,6 +105,7 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
       if (modelId !== undefined && !deps[modelsServiceKey].get(modelId)) throw modelsError('not-found')
       return deps[sessionServiceKey].createSession(projectId, agentId, modelId)
     },
+    openContinuousSession: (projectId, agentId) => deps[sessionServiceKey].openContinuousSession(projectId, agentId),
     getSessionDefaults: agentId => deps[sessionServiceKey].getSessionDefaults(agentId),
     setSessionDefaults(agentId, modelId, expectedRevision) {
       if (modelId !== null) {
@@ -144,7 +155,7 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
         envelopeVersion: 1, protocolId: run.protocolBinding.protocolId, viewSchemaVersion: 2,
         sessionId: run.sessionId, runId: id, viewRevision: active ? 0 : run.revision,
         status: active ? 'provisional' : 'committed',
-        exchanges: projectProtocolRecords(run.protocolBinding.protocolId, records, run.promptSnapshots),
+        exchanges: projectProtocolRecords(run.protocolBinding.protocolId, records, run.promptSnapshots, run.projectId !== undefined),
       }
     },
     listRuns: (id, query) => deps[sessionServiceKey].listRuns(id, query),
@@ -184,15 +195,14 @@ export interface HarnessServerHttpIntegrationSource {
 }
 
 /** Owns application HTTP operations and subscriptions, with optional embedding hooks. */
-export function createHarnessServerHttpComponent(root: Context, agents: readonly Readonly<{ id: string }>[],
+export function createHarnessServerHttpComponent(root: Context,
   integration: HarnessServerHttpIntegrationSource | (() => HarnessServerHttpIntegration) | { authenticated?: boolean } = () => ({})): Component.Object<void, Record<string, unknown>> {
   if (root.root !== root) throw new TypeError('application root Context required')
-  const agentIds = Object.freeze(agents.map(agent => Object.freeze({ id: agent.id })))
   const currentCommands = (hooks: HarnessServerHttpIntegration, serviceName: (name: string) => string): HarnessServerApiCommands => {
     const snapshots = new Map<string, unknown>()
     const services = {} as CommandDependencies
     for (const key of [sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
-      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey, localComputerWorkerServiceKey] as const) {
+      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, agentDirectoryServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey, localComputerWorkerServiceKey] as const) {
       snapshots.set(key, key === directoryPickerServiceKey && hooks.directoryPicker !== undefined ? hooks.directoryPicker : root.get(serviceName(key)))
       Object.defineProperty(services, key, { get() {
         const service = snapshots.get(key)
@@ -200,7 +210,7 @@ export function createHarnessServerHttpComponent(root: Context, agents: readonly
         return service
       } })
     }
-    const commands = createCommands(agentIds, services, () => hooks.instanceId?.() ?? null)
+    const commands = createCommands(services, () => hooks.instanceId?.() ?? null)
     commands.directoryBrowsingSupported = () => (snapshots.get(projectServiceKey) as ProjectPort | undefined)?.directoryBrowsingSupported ?? false
     commands.directoryCreationSupported = () => (snapshots.get(projectServiceKey) as ProjectPort | undefined)?.directoryCreationSupported ?? false
     commands.localDirectorySelectionSupported = () => (snapshots.get(projectServiceKey) as ProjectPort | undefined)?.localDirectorySelectionSupported ?? false

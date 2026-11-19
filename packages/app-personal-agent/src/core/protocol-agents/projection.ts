@@ -24,7 +24,7 @@ function inputText(content: unknown, textTypes: readonly string[], imageTypes: r
 }
 
 /** Historical Prompt kinds preserve system/context meaning even when a protocol merges their native roles. */
-export function projectNativeRequest(protocolId: string, request: unknown, prompts?: readonly PromptSnapshot[]): readonly ProtocolViewInput[] {
+export function projectNativeRequest(protocolId: string, request: unknown, prompts?: readonly PromptSnapshot[], continuous = false): readonly ProtocolViewInput[] {
   const raw = object(request), messages: NativeInputText[] = []
   const append = (id: string, role: unknown, text: string | undefined) => {
     if (text !== undefined && (role === 'system' || role === 'developer' || role === 'user')) messages.push({ id, role, text })
@@ -52,8 +52,10 @@ export function projectNativeRequest(protocolId: string, request: unknown, promp
   } else return []
 
   const initial = prompts?.filter(prompt => prompt.kind === 'agent-instruction' || prompt.kind === 'context') ?? []
-  const nativeInputs = (values: readonly NativeInputText[]): readonly ProtocolViewInput[] => values.map(message => ({
-    id: identity(message.id), role: message.role === 'user' ? 'user' : 'system', text: message.text }))
+  const nativeInputs = (values: readonly NativeInputText[]): readonly ProtocolViewInput[] => values.map((message, index) => {
+    const context = continuous && index < values.length - 1 && /^\{"type":"(?:recent-conversation|historical-memory)"/u.test(message.text)
+    return { id: identity(message.id), role: message.role !== 'user' ? 'system' : context ? 'context' : 'user', text: message.text }
+  })
   if (!initial.length) return nativeInputs(messages)
   let appended: readonly NativeInputText[]
   if (protocolId === 'responses' || protocolId === 'chat-completions') {
@@ -212,14 +214,14 @@ export function boundProtocolView(exchanges: readonly ProtocolViewExchange[]): r
 }
 
 /** Read old native record versions without rewriting them; views always use the current schema. */
-export function projectProtocolRecords(protocolId: string, records: readonly ViewRecord[], prompts?: readonly PromptSnapshot[]): readonly ProtocolViewExchange[] {
+export function projectProtocolRecords(protocolId: string, records: readonly ViewRecord[], prompts?: readonly PromptSnapshot[], continuous = false): readonly ProtocolViewExchange[] {
   const exchanges = new Map<string, ProtocolViewExchange>()
   let firstRequest = true
   for (const record of records) {
     if (!['request', 'response', 'diagnostic'].includes(record.kind)) continue
     const id = record.exchangeId ?? record.id, previous = exchanges.get(id)
     if (record.kind === 'request') {
-      const inputs = projectNativeRequest(protocolId, record.payload, firstRequest ? prompts : undefined)
+      const inputs = projectNativeRequest(protocolId, record.payload, firstRequest ? prompts : undefined, firstRequest && continuous)
       firstRequest = false
       exchanges.set(id, { ...previous, id, ...(inputs.length ? { inputs } : {}), blocks: previous?.blocks ?? [] })
     } else {

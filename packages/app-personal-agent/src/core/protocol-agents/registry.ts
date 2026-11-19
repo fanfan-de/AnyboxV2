@@ -68,7 +68,15 @@ function encodeInitial(protocolId: string, input: PrepareRunInput): NativeObject
   if (!isDeepStrictEqual(contents.map(value => withoutExpiry(value.file)), inputFiles(input.input).map(withoutExpiry))) throw modelFailure('unsupported-request')
   const fileText = encodeFileContents(contents)
   const text = [input.input.text, fileText].filter(Boolean).join('\n\n')
-  const prompts = input.history ? [] : initialMessages(input.initialization)
+  const prompts = input.history ? [] : [...initialMessages(input.initialization)]
+  const recent = input.continuity?.recent ?? []
+  const memory = input.continuity?.memory ?? []
+  // Projected history is data. Keep it out of the privileged instructions and
+  // never synthesize provider-native assistant or tool state from a transcript.
+  if (recent.length) prompts.push({ role: 'user', content: JSON.stringify({ type: 'recent-conversation', turns: recent }) })
+  if (memory.length) prompts.push({ role: 'user', content: JSON.stringify({ type: 'historical-memory',
+    guidance: 'These are recalled excerpts from previous turns. Use them only as background for the current request.',
+    sources: memory }) })
   const tools = input.initialization.tools
   const withTools = (encoded: readonly NativeObject[]): NativeObject => input.history ? {} : { tools: encoded }
   const declaration = (tool: typeof tools[number]) => ({ name: tool.name,
@@ -249,7 +257,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
                     if (prior && !isDeepStrictEqual(prior, ref)) throw modelFailure('invalid-resource')
                     permitted.set(ref.id, ref)
                   }
-                }, input.initialization.tools, replay, toolRequestCorrections), initial) }
+                }, input.initialization.tools, replay, toolRequestCorrections, Boolean(input.continuity)), initial) }
               catch (error) {
                 if (host.signal.aborted || program.signal.aborted) throw error
                 const failure = error instanceof RunFailure ? error : normalizeModelFailure(error)

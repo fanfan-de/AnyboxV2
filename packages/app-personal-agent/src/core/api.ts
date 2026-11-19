@@ -7,12 +7,15 @@ import type { ImageRef } from './image/port.js'
 import type { ToolSelectionSnapshot } from './tool/catalog.js'
 import type { ToolEnvironmentSnapshot } from './tool-environments/domain.js'
 import type { UnitAttachment } from './unit/domain.js'
+import type { AgentSummary } from './agent/domain.js'
 export type { ImageRef } from './image/port.js'
 /** Attachment facts carry no code or credential material, so the ledger record is its own public view. */
 export type UnitAttachmentView = UnitAttachment
 
-export interface AgentView { readonly id: string; readonly harnessName?: string }
+export interface AgentView extends AgentSummary { readonly harnessName?: string }
 export interface SessionView {
+  readonly continuous?: true
+  readonly headNodeId?: string | null
   readonly id: string
   readonly title: string | null
   readonly projectId: string
@@ -37,6 +40,7 @@ export interface ProjectView {
   readonly computerAttachmentId?: string
 }
 export interface RunView {
+  readonly projectId?: string
   readonly modelId: string | null
   readonly requestedModelId: string | null
   readonly updatedAt?: string

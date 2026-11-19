@@ -6,6 +6,8 @@ import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 import type { ToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 export interface Session {
   readonly id: string
+  readonly continuous?: true
+  readonly headNodeId?: string | null
   readonly title: string | null
   readonly projectId: string
   readonly agentId: string
@@ -55,10 +57,6 @@ export function agentToolsConflict(): Error & { readonly code: string } {
   return Object.assign(new Error('Agent tools changed; reload before saving'), { code: 'agent-tools-conflict' })
 }
 
-export function resolveSessionModel(requested: string | undefined, saved: string | null, fallback: string | null): string | null {
-  return requested ?? saved ?? fallback
-}
-
 export function sessionDefaultsConflict(): Error & { readonly code: string } {
   return Object.assign(new Error('session defaults changed; reload before saving'), { code: 'session-defaults-conflict' })
 }
@@ -81,7 +79,7 @@ export interface NodePage {
 
 export interface NodeQuery { readonly cursor?: string; readonly limit?: number }
 
-export function treeError(code: 'session-archived' | 'session-has-active-runs' | 'node-not-found' | 'invalid-history' | 'idempotency-conflict' | 'legacy-session-readonly' | 'protocol-mismatch' | 'history-incompatible'): Error & { readonly code: string } {
+export function treeError(code: 'session-archived' | 'session-has-active-runs' | 'node-not-found' | 'invalid-history' | 'idempotency-conflict' | 'legacy-session-readonly' | 'protocol-mismatch' | 'history-incompatible' | 'history-position-changed' | 'continuous-session'): Error & { readonly code: string } {
   return Object.assign(new Error(code === 'idempotency-conflict' ? 'idempotency key already used with different input or history' : code), { code })
 }
 

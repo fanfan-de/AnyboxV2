@@ -79,7 +79,7 @@ export function createToolsSettingsClient(source: Api, messageFor: (error: unkno
           toolIds: draft.toolIds, expectedRevision: draft.saved.revision,
         })
         if (disposed) return
-        draft.saved = saved; draft.toolIds = [...saved.toolIds]; draft.notice = '已保存，接下来创建的会话将使用这些工具。'
+        draft.saved = saved; draft.toolIds = [...saved.toolIds]; draft.notice = '已保存。工具选择用于后续运行。'
       } catch (error) {
         if (disposed) return
         draft.conflict = error instanceof Error && 'code' in error && error.code === 'agent-tools-conflict'
@@ -100,9 +100,9 @@ export function createToolsSettingsClient(source: Api, messageFor: (error: unkno
   }
 }
 
-export function setupToolsSettings(source: Api, messageFor: (error: unknown) => string, container: HTMLElement, agentSelect: HTMLSelectElement) {
+export function setupToolsSettings(source: Api, messageFor: (error: unknown) => string, container: HTMLElement) {
   const client = createToolsSettingsClient(source, messageFor), lifetime = new AbortController()
-  container.innerHTML = `<header class="settings-panel-heading"><h3 id="personal-agent--tools-title">Computer 工具</h3><p>选择 Computer 环境提供的工具，可跨来源组合。保存后仅影响新会话。</p></header>
+  container.innerHTML = `<header class="settings-panel-heading"><h3 id="personal-agent--tools-title">Computer 工具</h3><p>选择 Computer 环境提供的工具，可跨来源组合。保存后用于后续运行。</p></header>
     <div class="tools-filters"><label>搜索工具<input type="search" data-tools-search placeholder="名称或功能"></label>
     <label>分类<select data-tools-category><option value="">全部分类</option><option value="command">命令</option><option value="files">文件</option><option value="search">搜索</option><option value="image">图片</option></select></label>
     <label>来源<select data-tools-source><option value="">全部来源</option></select></label></div>
@@ -136,7 +136,7 @@ export function setupToolsSettings(source: Api, messageFor: (error: unknown) => 
     const missing = state.toolIds.filter(id => !state.catalog.some(tool => tool.toolId === id))
     const dependencies = state.catalog.filter(tool => selected.has(tool.toolId)).flatMap(tool => tool.dependencies.filter(id => !selected.has(id)))
     summary.textContent = !state.agentId ? '请先选择执行设备上的 Agent。' : state.loading ? '正在读取工具配置…' : state.catalogError ? `工具目录读取失败：${state.catalogError}` :
-      `已选择 ${state.toolIds.length} 个工具${missing.length ? `，不可用：${missing.join('、')}` : ''}${dependencies.length ? `，请补选：${[...new Set(dependencies)].map(id => state.catalog.find(tool => tool.toolId === id)?.name ?? id).join('、')}` : ''}。已有会话保持创建时的工具。`
+      `已选择 ${state.toolIds.length} 个工具${missing.length ? `，不可用：${missing.join('、')}` : ''}${dependencies.length ? `，请补选：${[...new Set(dependencies)].map(id => state.catalog.find(tool => tool.toolId === id)?.name ?? id).join('、')}` : ''}。进行中的运行保留开始时的工具。`
     save.disabled = !state.saved || state.loading || state.saving || !state.dirty || state.conflict || Boolean(state.catalogError) || Boolean(missing.length) || Boolean(dependencies.length)
     save.textContent = state.saving ? '保存中…' : '保存工具'
     reload.disabled = !state.agentId || state.loading || state.saving
@@ -149,11 +149,7 @@ export function setupToolsSettings(source: Api, messageFor: (error: unknown) => 
   const unsubscribe = client.subscribe(render); render()
   return {
     selectAgent(id: string) { client.selectAgent(splitScopedId(id)?.id ?? id) },
-    canLeave() {
-      const result = client.canLeave()
-      if (!result) agentSelect.value = [...agentSelect.options].find(option => (splitScopedId(option.value)?.id ?? option.value) === client.snapshot().agentId)?.value ?? ''
-      return result
-    },
+    canLeave: client.canLeave,
     async dispose() { lifetime.abort(); unsubscribe(); await client.dispose() },
   }
 }

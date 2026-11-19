@@ -1,4 +1,4 @@
-export type SettingsSection = 'general' | 'connections' | 'archive' | 'models' | 'prompts' | 'tools' | 'units'
+export type SettingsSection = 'general' | 'agents' | 'connections' | 'archive' | 'models' | 'prompts' | 'tools' | 'units'
 export interface SettingsViewState { section: SettingsSection; open: boolean; focusDevice: boolean }
 
 /** The current device remains fixed until its owner accepts a guarded page replacement. */
@@ -10,6 +10,8 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   isActive(): boolean
   selectDevice(id: string): boolean
   refreshArchive(): void
+  refreshAgents(): void
+  leaveAgents?(): void
 }) {
   const required = <T extends HTMLElement>(selector: string): T => {
     const element = root.querySelector<T>(selector)
@@ -28,13 +30,14 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   const selected = options.selectedId ?? options.devices[0]?.id ?? ''
   const name = options.selectedName ?? options.devices.find(item => item.id === selected)?.name ?? '所选设备'
   const descriptions: Record<SettingsSection, string> = {
-    general: `设置${name}上的 Agent 和新会话默认模型，只影响新建会话。`,
+    general: `设置${name}上所选 Agent 的默认模型。未手动指定模型时，后续运行使用此设置。`,
+    agents: `在${name}上创建 Agent，或编辑已有 Agent 的资料、指令和默认模型。`,
     models: `管理${name}上保存的模型连接和调用配置。`,
     prompts: `这里的 Prompt 供${name}上的 Agent 使用。`,
-    tools: `为${name}上的 Agent 选择工具，只影响新建会话。`,
+    tools: `为${name}上所选 Agent 的后续运行选择工具。`,
     units: `管理${name}上的 Agent 可使用的执行环境。`,
     connections: '管理这台电脑和已连接的远端设备。',
-    archive: '查看所有设备、所有项目的已归档会话。',
+    archive: '查看已连接设备上的旧版对话及已归档记录。',
   }
   device.replaceChildren(...options.devices.map(item => {
     const option = document.createElement('option')
@@ -56,6 +59,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   const headingFor = (value: SettingsSection) => panelFor(value)?.querySelector<HTMLElement>('.settings-panel-heading')
   const selectSection = (value: SettingsSection) => {
     if (disposed || !panelFor(value)) return
+    if (section === 'agents' && value !== 'agents') options.leaveAgents?.()
     blocked.hidden = true
     section = value
     for (const button of buttons) {
@@ -94,6 +98,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     allDevices.hidden = !global
     content.scrollTop = 0
     if (section === 'archive') options.refreshArchive()
+    if (section === 'agents') options.refreshAgents()
   }
   const showBlocked = () => {
     if (disposed) return
@@ -119,7 +124,10 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   const open = (value?: SettingsSection) => {
     if (disposed) return
     if (value) selectSection(value)
-    if (options.isActive() && !dialog.open) dialog.showModal()
+    if (options.isActive() && !dialog.open) {
+      dialog.showModal()
+      if (section === 'archive') options.refreshArchive()
+    }
   }
   selectSection(options.initialState?.section ?? 'general')
   return {

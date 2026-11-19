@@ -16,6 +16,8 @@ import { renderMarkdown } from './markdown.js'
 import { protocolToolContext, toolContextReadiness } from './tool-call-view.js'
 import { contextUsage, createContextUsageView } from './context-usage.js'
 import { createModelPicker, type ModelPickerChoice } from './model-picker.js'
+import { createAgentLogo } from './agent-logo.js'
+import type { AgentSummary } from '../core/agent/domain.js'
 export { createToolCallCard } from './tool-call-view.js'
 
 export interface SessionScrollPosition {
@@ -25,7 +27,7 @@ export interface SessionScrollPosition {
 }
 export interface SessionPanel {
   readonly element: HTMLElement
-  setProjectName(name: string): void
+  setAgent(agent?: AgentSummary): void
   render(): void
   captureScroll(): SessionScrollPosition
   restoreScroll(position: SessionScrollPosition): void
@@ -34,19 +36,19 @@ export interface SessionPanel {
   dispose(): SessionScrollPosition
 }
 
-export function createSessionPanel(pane: Pane, projectName: string, controller: SessionController,
-  focus: () => void, close: () => void, initialScroll: SessionScrollPosition = { dialogue: 0 }, models?: ModelsCatalog, restore?: () => Promise<void>,
-  openFile?: (request: FilePreviewRequest) => void): SessionPanel {
+export function createSessionPanel(pane: Pane, controller: SessionController, close: () => void,
+  initialScroll: SessionScrollPosition, models?: ModelsCatalog, openFile?: (request: FilePreviewRequest) => void): SessionPanel {
   const element = document.createElement('section')
   element.className = 'conversation session-pane'
   element.tabIndex = -1
   element.dataset.paneId = pane.id
-  element.setAttribute('aria-label', `${projectName} · 会话 ${(splitScopedId(pane.sessionId)?.id ?? pane.sessionId).slice(0, 8)}`)
+  element.setAttribute('aria-label', pane.continuous ? '对话' : '历史对话')
   element.innerHTML = `
     <div class="pane-heading">
-      <div class="pane-title"><strong></strong><small></small></div>
+      <span class="pane-logo" hidden></span>
+      <div class="pane-title"><strong></strong></div>
       <span class="run-status" role="status"></span>
-      <button class="pane-close" type="button" aria-label="关闭会话面板" title="关闭会话面板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
+      <button class="pane-close" type="button" aria-label="返回当前对话" title="返回当前对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
     </div>
     <div class="branch-navigation" aria-label="对话与轨迹导航">
       <div class="branch-controls" aria-label="对话分支导航">
@@ -56,14 +58,14 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
       <span class="branch-position"></span>
       <select aria-label="选择后续分支"></select><button type="button" data-more-children title="加载更多后续分支" hidden>更多</button>
       </div>
-      <span class="run-history-scope" hidden>本会话全部运行</span>
-      <div class="session-view-switch" role="tablist" aria-label="会话视图">
+      <span class="run-history-scope" hidden>全部运行</span>
+      <div class="session-view-switch" role="tablist" aria-label="对话视图">
         <button type="button" role="tab" data-view-mode="dialogue" aria-selected="true">对话</button>
         <button type="button" role="tab" data-view-mode="runs" aria-selected="false" tabindex="-1">轨迹<span class="run-count" hidden><span class="run-count-wide"></span><span class="run-count-compact"></span></span></button>
       </div>
     </div>
     <aside class="conversation-tree-panel" aria-label="分支总览" hidden inert></aside>
-    <div class="archive-banner" hidden><span>此会话已归档，仅供查看。</span><button type="button" data-restore-session>恢复会话</button></div>
+    <div class="archive-banner" hidden>此会话已归档，仅供查看。</div>
     <div class="pane-notice notice" role="alert" hidden></div>
     <div class="transcript" role="log" aria-label="对话内容" aria-live="polite" tabindex="0" hidden></div>
     <div class="run-history" role="tabpanel" aria-label="轨迹" tabindex="0" hidden inert></div>
@@ -86,12 +88,11 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
       </div></div>
     </form>`
   const get = <T extends HTMLElement>(selector: string) => element.querySelector<T>(selector)!
-  const heading = get<HTMLElement>('.pane-heading')
-  heading.dataset.dragSession = pane.sessionId
-  heading.dataset.projectId = pane.projectId
-  heading.title = '拖动标题，将会话移动到其他面板边缘'
-  get('strong').textContent = '新建会话'
-  get('small').textContent = projectName
+  const logoHost = get<HTMLElement>('.pane-logo')
+  const logo = pane.continuous ? createAgentLogo(logoHost, { size: 24 }) : undefined
+  const title = get<HTMLElement>('.pane-title strong')
+  title.textContent = pane.continuous ? 'Personal Agent' : '历史对话'
+  get<HTMLButtonElement>('.pane-close').hidden = Boolean(pane.continuous)
   const transcript = get<HTMLElement>('.transcript'), messageInput = get<HTMLTextAreaElement>('textarea')
   const runHistory = get<HTMLElement>('.run-history'), viewSwitch = get<HTMLElement>('.session-view-switch')
   const viewButtons = [...viewSwitch.querySelectorAll<HTMLButtonElement>('[data-view-mode]')]
@@ -150,13 +151,6 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     selectMode(viewButtons[next]!.dataset.viewMode as SessionViewMode)
     viewButtons[next]!.focus({ preventScroll: true })
   }, options)
-  const restoreButton = get<HTMLButtonElement>('[data-restore-session]')
-  let restoring = false
-  restoreButton.addEventListener('click', () => {
-    if (!restore || restoring) return
-    restoring = true; restoreButton.disabled = true
-    void restore().finally(() => { restoring = false; restoreButton.disabled = false })
-  }, options)
   const modelRow = get<HTMLElement>('.composer-model-row')
   const modelPicker = createModelPicker(modelRow, `personal-agent--model-picker-${pane.id}`, listeners.signal, {
     select: id => { void controller.setModel(id) },
@@ -203,8 +197,6 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   get('[data-go-parent]').addEventListener('click', () => { void controller.navigate(controller.snapshot().path.at(-1)?.parentId ?? null) }, options)
   branchSelect.addEventListener('change', () => { if (branchSelect.value) void controller.navigate(branchSelect.value) }, options)
   get('[data-more-children]').addEventListener('click', () => { void controller.moreChildren() }, options)
-  element.addEventListener('pointerdown', focus, options)
-  element.addEventListener('focusin', focus, options)
   get('.pane-close').addEventListener('click', event => { event.stopPropagation(); close() }, options)
   const resizeInput = (): void => {
     usageView.position()
@@ -217,7 +209,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   const updateSend = (): void => {
     const state = controller.snapshot()
     const imagesReady = !state.images.length || (imageModelReady() && state.images.every(image => image.status === 'ready'))
-    send.disabled = !state.session || Boolean(state.session.archivedAt) || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || (!state.pending && (!modelReady() || !imagesReady || state.files.some(file => !file.selection || Boolean(file.error)) || (!messageInput.value.trim() && !state.images.length && !state.files.length)))
+    send.disabled = !state.session || state.historyOnly || Boolean(state.session.archivedAt) || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading || Boolean(state.continuous && state.runs.some(active)) || (!state.pending && (!modelReady() || !imagesReady || state.files.some(file => !file.selection || Boolean(file.error)) || (!messageInput.value.trim() && !state.images.length && !state.files.length)))
   }
   messageInput.addEventListener('input', () => { controller.setDraft(messageInput.value); resizeInput(); updateSend() }, options)
   messageInput.addEventListener('keydown', event => {
@@ -243,6 +235,15 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
     if (data.cancelRun) void controller.cancel(data.cancelRun)
     if (data.viewNode) { selectMode('dialogue'); void controller.navigate(data.viewNode) }
     if (data.locateNode) { treeOpen = true; panel.render(); treeView.locate(data.locateNode) }
+    if (data.referenceNode && !messageInput.disabled) {
+      const id = splitScopedId(data.referenceNode)?.id ?? data.referenceNode
+      const token = `[历史:${id}]`, draft = messageInput.value
+      if (!draft.includes(token)) {
+        messageInput.value = draft ? `${draft}${draft.endsWith('\n') ? '' : '\n'}${token}` : token
+        messageInput.dispatchEvent(new Event('input', { bubbles: true }))
+      }
+      messageInput.focus()
+    }
     const node = controller.snapshot().path.find(item => item.id === (data.editNode ?? data.regenerateNode))
     if (node && !controller.snapshot().session?.archivedAt && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images, node.files).then(() => messageInput.focus())
     if (node && data.regenerateNode) void controller.regenerate(node)
@@ -250,7 +251,11 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
   for (const container of [transcript, notice]) container.addEventListener('click', contentAction, options)
   const trajectory = createTrajectoryView(runHistory, {
     viewport: ids => controller.setTraceViewport(ids), search: query => controller.setTraceSearch(query),
-    retry: id => controller.retryTrace(id), answer: id => { selectMode('dialogue'); void controller.navigate(id) },
+    retry: id => controller.retryTrace(id), answer: id => {
+      selectMode('dialogue')
+      if (pane.continuous) requestAnimationFrame(() => transcript.querySelector(`[data-node-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'start' }))
+      else void controller.navigate(id)
+    },
     cancel: id => { void controller.cancel(id) },
   })
   const traceScroll = trajectory.scrollElement
@@ -316,17 +321,18 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       const state = controller.snapshot()
       usageView.render(contextUsage(state, models?.snapshot().models))
       const tree = conversationTree(state)
+      const continuous = Boolean(state.continuous)
       visibleMode = state.position.viewMode === 'runs' ? 'runs' : 'dialogue'
       const records = visibleMode === 'runs'
       runHistory.hidden = !records
       runHistory.inert = !records
-      compose.hidden = records
-      compose.inert = records
+      compose.hidden = records || Boolean(state.historyOnly)
+      compose.inert = compose.hidden
       if (records) { usageView.close(); modelPicker.close() }
-      get('.branch-controls').hidden = records
-      get('.branch-controls').inert = records
+      get('.branch-controls').hidden = records || continuous
+      get('.branch-controls').inert = records || continuous
       get('.run-history-scope').hidden = !records
-      const showTree = treeOpen && !records
+      const showTree = treeOpen && !records && !continuous
       treeContainer.hidden = !showTree
       treeContainer.inert = !showTree
       treeToggle.disabled = !state.session
@@ -340,21 +346,19 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         button.tabIndex = selected ? 0 : -1
       }
       fileView.render(state)
-      const readOnly = (Boolean(state.session?.archivedAt) || state.session?.historyMode === 'dialogue-v1')
+      const readOnly = Boolean(state.historyOnly || state.session?.archivedAt || state.session?.historyMode === 'dialogue-v1')
       const activeCount = state.runs.filter(active).length
       get('.run-count').hidden = activeCount === 0
       get('.run-count-wide').textContent = `${activeCount} 运行中`
       get('.run-count-compact').textContent = String(activeCount)
       get('[data-view-mode="runs"]').setAttribute('aria-label', activeCount ? `轨迹，${activeCount} 个运行中` : '轨迹')
-      get('[data-view-mode="runs"]').title = activeCount ? `${activeCount} 个运行中（含正在取消）` : '查看本会话全部运行'
+      get('[data-view-mode="runs"]').title = activeCount ? `${activeCount} 个运行中（含正在取消）` : '查看全部运行'
       const conversationTitle = state.session?.title
-      if (conversationTitle) {
+      if (conversationTitle && !continuous) {
         get('.pane-title strong').textContent = conversationTitle
         get('.pane-title strong').title = conversationTitle
       }
       get('.archive-banner').hidden = !state.session?.archivedAt
-      restoreButton.hidden = !restore
-      restoreButton.disabled = restoring
       status.textContent = state.loading ? '正在加载' : state.busy ? '正在处理' : activeCount ? `${activeCount} 个运行中` : state.session?.archivedAt ? '已归档' : '准备就绪'
       notice.hidden = !state.notice
       notice.textContent = state.notice
@@ -365,7 +369,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         details.type = 'button'; details.dataset.showRun = state.run.id; details.textContent = '查看轨迹'
         notice.append(details)
       }
-      messageInput.disabled = !state.session || Boolean(state.session.archivedAt) || state.session.historyMode === 'dialogue-v1' || state.busy || state.loading
+      messageInput.disabled = !state.session || readOnly || state.busy || state.loading
       attachImages.disabled = messageInput.disabled || Boolean(state.pending)
       const nextImagesKey = JSON.stringify([state.images, attachImages.disabled])
       if (nextImagesKey !== imageListKey) {
@@ -385,13 +389,13 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       imageList.hidden = state.images.length === 0
       send.setAttribute('aria-label', state.pending ? '重试提交' : '发送消息')
       send.title = state.pending ? '重试提交 · Enter' : '发送消息 · Enter'
-      cancel.hidden = !active(state.run)
+      cancel.hidden = readOnly || !active(state.run)
       cancel.disabled = state.busy || state.run?.status === 'cancelling'
       cancel.title = cancel.disabled ? '正在取消运行' : '取消运行'
       if (models) {
         const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
         const choices: ModelPickerChoice[] = catalog.models.map(value => {
-          const incompatible = Boolean(state.session?.protocolId && value.parameters.protocolId !== state.session.protocolId)
+          const incompatible = Boolean(!continuous && state.session?.protocolId && value.parameters.protocolId !== state.session.protocolId)
           const unsupported = !getProtocolWebModule(value.parameters.protocolId)
           return { id: value.id, name: value.name, group: value.connectionId,
             groupLabel: catalog.providers.find(provider => provider.id === value.connectionId)?.name ?? value.connectionId,
@@ -405,7 +409,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
           disabled: !state.session || readOnly || state.loading || Boolean(state.pending) || catalog.loading,
           busy: state.busy, savingDefault: Boolean(state.savingDefaultModel) })
         const hint = get<HTMLElement>('.composer-model-hint')
-        hint.textContent = state.session?.archivedAt ? '恢复会话后可继续使用。' : state.session?.historyMode === 'dialogue-v1' ? '旧版文本会话仅供查看；请新建会话使用原生协议。' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“Personal Agent 设置”的“模型管理”中选择提供方并配置 API Key。' : !modelReady() ? '选择本会话使用的模型后即可发送。' : '')
+        hint.textContent = readOnly ? '' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“Personal Agent 设置”的“模型管理”中选择提供方并配置 API Key。' : !modelReady() ? '选择要使用的模型后即可发送。' : '')
         hint.hidden = !hint.textContent
         if (state.images.length && !imageModelReady()) { hint.textContent = '当前模型不支持图片，请切换支持图片的模型，或移除图片后发送。'; hint.hidden = false }
       }
@@ -449,11 +453,11 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       transcript.hidden = records || !hasVisibleMessages
       transcript.inert = records || !hasVisibleMessages
       element.classList.toggle('is-empty', !records && !hasVisibleMessages)
-      emptyBranches.hidden = state.loading || !state.children.length
+      emptyBranches.hidden = continuous || state.loading || !state.children.length
       for (const button of emptyBranches.querySelectorAll('button')) button.disabled = state.loading || state.busy
       empty.classList.toggle('has-branches', !emptyBranches.hidden)
-      get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : readOnly ? state.session?.archivedAt ? '已归档会话' : '旧版会话历史' : state.children.length ? '从这里，继续你的想法' : activeCount ? 'Agent 正在思考…' : state.runs.length ? '你正在会话起点' : '有什么想法？'
-      get('.empty-state > p').textContent = state.loading ? '正在读取会话内容。' : readOnly ? state.children.length ? '选择已有分支，查看保存的对话。' : state.session?.archivedAt ? '恢复此会话后可继续使用。' : '此会话仅供查看；请新建会话继续使用。' : state.children.length ? '选择已有分支，或输入消息开启新的分支。' : activeCount ? '当前任务正在运行，回答完成后即可查看。' : state.runs.length ? '输入消息，从这里开启一个新的分支。' : '从这里开始，与 Personal Agent 一起完成。'
+      get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : readOnly ? '历史对话' : activeCount ? 'Agent 正在思考…' : '有什么想法？'
+      get('.empty-state > p').textContent = state.loading ? '正在读取对话。' : readOnly ? state.children.length ? '选择历史分支查看记录。' : '这里没有已保存的消息。' : activeCount ? '回答完成后即可查看。' : '发送消息，与 Personal Agent 一起完成工作。'
       trajectory.update(state)
       const key = JSON.stringify([state.path, state.children, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.position.follow, state.busy, readOnly, state.session?.historyMode, [...state.views], state.traceLoading && [...state.traceLoading.states]])
       if (key === contentKey) { panel.restoreScroll(savedScroll); return }
@@ -484,10 +488,13 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         button.dataset[key] = id
         return button
       }
+      const runProjects = continuous ? new Map(state.runs.map(run => [run.id, run.projectId])) : undefined
       for (const node of state.path) {
+        const runProjectId = node.sourceRunId ? runProjects?.get(node.sourceRunId) : undefined
         addMessage('user', node.input, false, node.images, node.files)
+        if (continuous) (renderNodes.at(-1) as HTMLElement).dataset.nodeId = node.id
         if (!appendTurn(node.sourceRunId)) {
-          if (state.session?.historyMode === 'dialogue-v1') addMessage('assistant', node.output)
+          if ((continuous && node.output) || state.session?.historyMode === 'dialogue-v1') addMessage('assistant', node.output)
           else {
             const message = document.createElement('p'), loading = node.sourceRunId ? state.traceLoading?.states.get(node.sourceRunId) : undefined
             message.className = 'native-display-missing streaming-label'; message.setAttribute('role', 'status')
@@ -497,6 +504,14 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         }
         const actions = document.createElement('div')
         actions.className = 'node-actions'
+        if (continuous) {
+          if (runProjectId === pane.projectId) {
+            const reference = action('引用此轮', 'referenceNode', node.id)
+            reference.disabled = readOnly || state.busy || state.loading || Boolean(state.pending)
+            actions.append(reference); renderNodes.push(actions)
+          }
+          continue
+        }
         const siblings = tree.children.get(node.parentId) ?? [], siblingIndex = siblings.findIndex(value => value.id === node.id)
         if (siblings.length > 1 && siblingIndex >= 0) {
           const versions = document.createElement('div'); versions.className = 'node-versions'
@@ -512,7 +527,8 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
           next.disabled = siblingIndex === siblings.length - 1 || state.loading
           versions.append(previous, label, next); actions.append(versions)
         }
-        actions.append(action(readOnly ? '查看此处' : '从这里继续', 'viewNode', node.id), action('编辑重发', 'editNode', node.id), action('重新生成', 'regenerateNode', node.id))
+        actions.append(action(readOnly ? '查看此处' : '从这里继续', 'viewNode', node.id))
+        if (!readOnly) actions.append(action('编辑重发', 'editNode', node.id), action('重新生成', 'regenerateNode', node.id))
         for (const button of actions.querySelectorAll<HTMLButtonElement>('button')) {
           if (button.closest('.node-versions')) continue
           button.disabled = Boolean(readOnly && !button.dataset.viewNode) || state.busy || Boolean(state.pending)
@@ -547,8 +563,14 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       if (focused?.isConnected && content.contains(focused)) focused.focus({ preventScroll: true })
       else if (focusedData) [...content.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
     },
-    setProjectName(name) { get('small').textContent = name; element.setAttribute('aria-label', `${name} · 会话 ${(splitScopedId(pane.sessionId)?.id ?? pane.sessionId).slice(0, 8)}`) },
-    dispose() { const scroll = panel.captureScroll(); fileView.dispose(); trajectory.dispose(); treeView.dispose(); listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return scroll },
+    setAgent(agent) {
+      if (!logo) return
+      logoHost.hidden = !agent
+      title.textContent = agent?.name || 'Personal Agent'
+      element.setAttribute('aria-label', `${title.textContent} · 对话`)
+      logo.set(agent ?? { name: '' })
+    },
+    dispose() { const scroll = panel.captureScroll(); logo?.dispose(); fileView.dispose(); trajectory.dispose(); treeView.dispose(); listeners.abort(); for (const turn of turns.values()) turn.dispose(); turns.clear(); return scroll },
   }
   panel.render()
   return panel

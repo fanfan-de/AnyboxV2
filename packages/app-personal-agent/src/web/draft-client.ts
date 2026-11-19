@@ -24,6 +24,15 @@ export interface DraftStore {
 }
 const emptyDraft: MessageDraft = Object.freeze({ text: '', images: Object.freeze([]), files: Object.freeze([]) })
 const keyFor = (sessionId: string, parentNodeId: string | null) => JSON.stringify([sessionId, parentNodeId])
+export const continuousDraftKey = (projectId: string) => JSON.stringify(['project', projectId])
+
+/** An unprepared path may resolve to a different file under the new workspace. */
+export function filesForWorkspaceChange(files: readonly DraftFile[]): readonly DraftFile[] {
+  return files.map(({ id, file, selection }) => {
+    const path = file?.path ?? (selection?.kind === 'project-file' ? selection.path : undefined)
+    return { id, error: `${path ? `${path} · ` : ''}请在当前工作目录重新引用此文件。` }
+  })
+}
 
 export function isImageRef(value: unknown): value is ImageRef {
   if (!value || typeof value !== 'object') return false
@@ -77,6 +86,8 @@ export function restoreDraftFiles(raw: unknown): readonly DraftFile[] {
       const [selection] = validateFileSelections([item.selection])
       if (selection.kind === 'snapshot' && (!isFileRef(item.file) || item.file.snapshotId !== selection.snapshotId)) throw new Error()
       return { id, selection, ...(isFileRef(item.file) ? { file: item.file } : {}), ...(typeof item.error === 'string' ? { error: item.error } : {}) }
-    } catch { return { id, error: '文件引用信息无效，请移除后重新添加。' } }
+    } catch {
+      return { id, error: typeof item?.error === 'string' ? item.error : '文件引用信息无效，请移除后重新添加。' }
+    }
   })
 }

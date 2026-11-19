@@ -1,6 +1,6 @@
 export interface HarnessRoute { hostId?: string; inner: string }
 export function harnessTargetRoute(route: HarnessRoute | undefined, hostId: string): HarnessRoute {
-  return { hostId, inner: route?.inner ?? '#' }
+  return { hostId, inner: route?.hostId === hostId ? route.inner : '#' }
 }
 export function harnessLocationRoute(route: HarnessRoute | undefined, inner: string, fallbackHostId?: string): HarnessRoute {
   return { hostId: route?.hostId ?? fallbackHostId, inner }

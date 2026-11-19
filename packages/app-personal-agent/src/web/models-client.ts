@@ -139,14 +139,14 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   let disposed = false
   const root = container
   root.innerHTML = `
-    <header class="settings-panel-heading models-heading"><div><h3 id="personal-agent--models-settings-title">模型服务</h3><p>配置一个提供方连接，即可在会话中使用它的模型。</p></div><div class="settings-actions"><button type="button" class="secondary-button" data-reload>刷新状态</button><button type="button" data-add-provider>添加提供方</button></div></header>
+    <header class="settings-panel-heading models-heading"><div><h3 id="personal-agent--models-settings-title">模型服务</h3><p>配置提供方连接后，即可选择它的模型。</p></div><div class="settings-actions"><button type="button" class="secondary-button" data-reload>刷新状态</button><button type="button" data-add-provider>添加提供方</button></div></header>
     <p class="models-notice" role="status" aria-live="polite" hidden></p>
     <fieldset class="models-controls">
       <div class="models-layout" data-management>
         <aside class="settings-card models-connections" aria-label="已配置连接"><div class="models-card-heading"><h4>我的连接</h4><p data-connections-count></p></div><div class="models-connection-list" data-connections></div></aside>
         <div class="models-main">
           <header class="models-detail-heading"><div><h4 data-connection-title></h4><p data-connection-subtitle class="settings-hint"></p></div><div class="settings-actions"><span data-connection-status class="models-status-badge"></span><button type="button" data-delete-connection class="secondary-button models-danger-button" hidden>删除连接</button></div></header>
-          <section class="settings-card models-delete-confirm" data-delete-connection-confirm aria-labelledby="personal-agent--models-delete-connection-title" hidden><h4 id="personal-agent--models-delete-connection-title">删除此连接？</h4><p data-delete-connection-description></p><p class="settings-hint">历史对话和已开始的运行会保留。依赖此连接的原生历史可能无法继续；其他协议需新建会话。</p><div class="settings-actions"><button type="button" data-confirm-delete-connection class="models-danger-button">确认删除连接</button><button type="button" data-cancel-delete-connection class="secondary-button">取消</button></div></section>
+          <section class="settings-card models-delete-confirm" data-delete-connection-confirm aria-labelledby="personal-agent--models-delete-connection-title" hidden><h4 id="personal-agent--models-delete-connection-title">删除此连接？</h4><p data-delete-connection-description></p><p class="settings-hint">历史对话和已开始的运行会保留。如当前模型依赖此连接，请选择其他可用模型后继续。</p><div class="settings-actions"><button type="button" data-confirm-delete-connection class="models-danger-button">确认删除连接</button><button type="button" data-cancel-delete-connection class="secondary-button">取消</button></div></section>
           <details class="settings-card models-connection-editor" data-connection-editor><summary><span>连接设置</span><span data-connection-summary class="settings-hint"></span></summary><div data-manage-form-slot></div></details>
           <section class="settings-card models-model-section" aria-labelledby="personal-agent--models-config-title">
             <div class="models-card-heading"><div><h4 id="personal-agent--models-config-title">模型列表</h4><p data-model-count class="models-model-count" role="status"></p></div><button type="button" data-new-model class="secondary-button">添加自定义模型</button></div>
@@ -355,7 +355,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     get('[data-model-count]').textContent = `${available} 个可用 · ${rows.length} 个模型${configured.some(value => !value.baseline) ? '（含参数预设）' : ''}`
     const search = input('model-search').value.trim().toLowerCase(), filter = select('model-filter').value
     const visible = rows.filter(value => `${value.name} ${value.remoteId}`.toLowerCase().includes(search) && (filter === 'all' || value.available === (filter === 'available')))
-    get('[data-inventory-status]').textContent = inventoryError || (inventoryLoading ? '正在读取此连接的模型…' : search || filter !== 'all' ? `显示 ${visible.length} / ${rows.length} 个模型` : '可用模型已加入会话选择器；远端权限以实际请求为准。')
+    get('[data-inventory-status]').textContent = inventoryError || (inventoryLoading ? '正在读取此连接的模型…' : search || filter !== 'all' ? `显示 ${visible.length} / ${rows.length} 个模型` : '可用模型已加入模型选择器；远端权限以实际请求为准。')
     const list = get('[data-connection-models]')
     list.replaceChildren(...visible.map(value => {
       const row = document.createElement('li'); row.className = 'models-model-row'
@@ -405,7 +405,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     get<HTMLButtonElement>('[data-retry-sync]').hidden = !provider || sync?.state !== 'failed' && !(sync?.state === 'pending' && (provider.credentialConfigured || provider.auth === 'none'))
     key.disabled = select('auth').value === 'none'; get('.models-key').hidden = select('auth').value === 'none' && !provider?.credentialConfigured
     key.placeholder = provider?.credentialConfigured ? '留空保留现有 Key；填写新 Key 可替换' : '填写 API Key'
-    get('[data-key-status]').textContent = provider?.credentialConfigured ? 'Key 已配置。填写新 Key 后，随连接一起保存。' : '填写并保存后，适用模型会自动加入会话选择器。'
+    get('[data-key-status]').textContent = provider?.credentialConfigured ? 'Key 已配置。填写新 Key 后，随连接一起保存。' : '填写并保存后，适用模型会自动加入模型选择器。'
     get<HTMLButtonElement>('[data-delete-key]').hidden = !provider?.credentialConfigured
     get<HTMLButtonElement>('[data-check]').disabled = !provider || !currentProtocol()?.supportsCheck
     get<HTMLButtonElement>('[data-provider-history]').disabled = !provider
@@ -424,7 +424,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     get('[data-save-provider]').textContent = busy ? '正在保存…' : provider ? '保存连接' : '保存并添加模型'
     get<HTMLButtonElement>('[data-reset-provider]').hidden = !provider
     const summary = catalog.snapshot().models.find(item => item.id === model?.id)
-    get('[data-model-status]').textContent = summary ? `${modelAvailability(summary)} · ${sourceLabel(summary.source)}` : variantDefaults ? '此预设会作为独立选项出现在会话选择器中，原配置保持不变。' : '保存后，此模型将加入当前连接的列表。'
+    get('[data-model-status]').textContent = summary ? `${modelAvailability(summary)} · ${sourceLabel(summary.source)}` : variantDefaults ? '此预设会作为独立选项出现在模型选择器中，原配置保持不变。' : '保存后，此模型将加入当前连接的列表。'
     updateDraftStatus(); renderConnections(); renderModels(); directory?.sync()
   }
   async function readInventory(id: string): Promise<void> {
@@ -568,7 +568,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
       catch (error) { show(`连接已保存，状态刷新失败：${errorText(error)}。请点击“刷新状态”。`, true); return }
       connectionEditor.open = saved.sync?.state === 'failed' || saved.auth === 'api-key' && !saved.credentialConfigured
       if (!existing) root.scrollIntoView({ block: 'start', behavior: 'smooth' })
-      show(saved.sync?.state === 'failed' ? '连接和 Key 已保存，模型准备失败，请点击重试。' : saved.sync?.state === 'pending' ? '连接已保存，模型尚未准备；请检查连接状态。' : '连接已保存，可用模型已加入会话选择器。', saved.sync?.state === 'failed')
+      show(saved.sync?.state === 'failed' ? '连接和 Key 已保存，模型准备失败，请点击重试。' : saved.sync?.state === 'pending' ? '连接已保存，模型尚未准备；请检查连接状态。' : '连接已保存，可用模型已加入模型选择器。', saved.sync?.state === 'failed')
     })
   })
   select('template').addEventListener('change', () => {
@@ -662,7 +662,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   get('[data-retry-sync]').addEventListener('click', () => { if (provider) void perform(async () => {
     const retried = await api<ProviderConnection>(`${connectionPath()}/retry`, {}); observeConnection(retried)
     try { await refreshCurrent() } catch (error) { show(`已完成重试，状态刷新失败：${errorText(error)}。请点击“刷新状态”。`, true); return }
-    show(retried.sync?.state === 'failed' ? '模型准备仍未成功，请稍后重试。' : retried.sync?.state === 'pending' ? '模型仍在等待准备，请检查连接状态。' : '模型已准备，可在会话中选择。', retried.sync?.state === 'failed')
+    show(retried.sync?.state === 'failed' ? '模型准备仍未成功，请稍后重试。' : retried.sync?.state === 'pending' ? '模型仍在等待准备，请检查连接状态。' : '模型已准备，可在输入框选择。', retried.sync?.state === 'failed')
   }) })
   get('[data-check]').addEventListener('click', () => { if (provider) void perform(async () => { await api(`${connectionPath()}/check`, {}); show('已保存的连接检查成功。') }) })
   get('[data-discover]').addEventListener('click', () => { if (provider) void perform(async () => {
@@ -702,7 +702,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
       loadModel(saved, undefined, false)
       try { await refreshCurrent() }
       catch (error) { show(`模型已保存，状态刷新失败：${errorText(error)}。请点击“刷新状态”。`, true); return }
-      show('模型参数已保存，会话选择器已更新。')
+      show('模型参数已保存，模型选择器已更新。')
     })
   })
   for (const kind of ['provider', 'model'] as const) get(`[data-${kind}-history]`).addEventListener('click', () => {

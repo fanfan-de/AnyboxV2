@@ -9,7 +9,7 @@ import type { ProtocolViewSnapshot } from '../core/view/types.js'
 import { getProtocolWebModule } from './protocols/modules.js'
 import type { ImageRef } from './client-types.js'
 import { applyImageRenewal, createImageUploads } from './image-client.js'
-import { createDraftStore, draftFromInput, isImageRef } from './draft-client.js'
+import { createDraftStore, continuousDraftKey, draftFromInput, filesForWorkspaceChange, isImageRef } from './draft-client.js'
 import type { DraftImage, DraftStore, DraftFile, MessageDraft } from './draft-client.js'
 import type { ImageRenewal } from './image-client.js'
 import { validateImageBatch } from '../core/image/limits.js'
@@ -32,6 +32,7 @@ export function createPendingStore(storage: BrowserStorage): PendingStore {
         const value = raw as Record<string, unknown>
         if (value.sessionId !== id || typeof value.input !== 'string' || typeof value.idempotencyKey !== 'string' ||
             (value.schemaVersion !== undefined && !Number.isSafeInteger(value.schemaVersion)) ||
+            (value.projectId !== undefined && typeof value.projectId !== 'string') ||
             (value.runId !== undefined && typeof value.runId !== 'string') ||
             (value.modelId !== undefined && typeof value.modelId !== 'string') ||
             (value.parentNodeId !== undefined && value.parentNodeId !== null && typeof value.parentNodeId !== 'string')) continue
@@ -71,6 +72,8 @@ export interface TraceLoading {
 }
 export interface SessionSnapshot {
   readonly session?: SessionView
+  readonly continuous?: boolean
+  readonly historyOnly?: boolean
   readonly runs: readonly RunView[]
   readonly run?: RunView
   readonly position: SessionPosition
@@ -95,6 +98,7 @@ export interface FileMention { readonly start: number; readonly end: number; rea
 /** The target and original chip are captured before a sidebar action can outlive its composer. */
 export interface FileReferenceInput {
   readonly sessionId: string
+  readonly projectId?: string
   readonly parentNodeId: string | null
   readonly item: DraftFile
   readonly expectedItem?: DraftFile
@@ -154,11 +158,14 @@ export interface SessionEnvironment {
   readonly models?: () => readonly RunnableModelSummary[]
   readonly position?: SessionPosition
   readonly savePosition?: (value: SessionPosition) => void
+  readonly continuous?: boolean
+  readonly historyOnly?: boolean
 }
 
 /** One controller per Session. A view may detach while its already-issued write still settles. */
 export function createSessionController(ref: SessionRef, env: SessionEnvironment): SessionController {
   let session: SessionView | undefined, runs: readonly RunView[] = []
+  const projectId = ref.projectId
   const initialPosition = env.position ?? { viewNodeId: null }
   let position: SessionPosition = { ...initialPosition, viewMode: initialPosition.viewMode === 'runs' ? 'runs' : 'dialogue' }
   let pathNodes: readonly NodeView[] = [], children: readonly NodeView[] = [], childCursor: string | undefined
@@ -168,10 +175,11 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   let listener: (() => void) | undefined, generation = 0, timer: unknown, refreshJob: Promise<void> | undefined
   let refreshAgain = false, locationAgain = false, live = false, locationJob: Promise<void> | undefined
   const drafts = env.drafts ?? createDraftStore()
-  const draftAt = (parent: string | null) => drafts.get(ref.sessionId, parent)
-  const setDraftAt = (parent: string | null, draft: MessageDraft) => {
-    try { drafts.set(ref.sessionId, parent, draft) }
-    catch { notice = '浏览器无法保存草稿；请保持页面打开，发送前会再次保存待提交信息。' }
+  const draftKey = (parent: string | null, project = projectId) => env.continuous ? continuousDraftKey(project) : parent
+  const draftAt = (parent: string | null, project?: string) => drafts.get(ref.sessionId, draftKey(parent, project))
+  const setDraftAt = (parent: string | null, draft: MessageDraft, project?: string) => {
+    try { drafts.set(ref.sessionId, draftKey(parent, project), draft); return true }
+    catch { notice = '浏览器无法保存草稿；请保持页面打开，发送前会再次保存待提交信息。'; return false }
   }
   const reads = new Set<AbortController>()
   const views = new Map<string, ProtocolViewSnapshot>()
@@ -191,7 +199,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   const traceJobs = new Map<string, TraceJob>()
   const path = `/sessions/${encodeURIComponent(ref.sessionId)}`
   const pending = () => env.pending.get(ref.sessionId)
-  const readOnly = () => !session || Boolean(session.archivedAt) || session.historyMode === 'dialogue-v1'
+  const readOnly = () => env.historyOnly || !session || Boolean(session.archivedAt) || session.historyMode === 'dialogue-v1'
+  const projectQuery = () => `projectId=${encodeURIComponent(projectId)}`
   const attached = () => listener !== undefined
   const emit = () => listener?.()
   const uploads = createImageUploads({ sessionId: ref.sessionId, drafts, newId: env.newId, changed: emit,
@@ -241,7 +250,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     catch { notice = '每次最多发送 8 张图片，每张最多 10 MiB、总计 20 MiB。请删减图片后重试。'; emit(); return undefined }
     const model = env.models?.().find(value => value.id === modelId)
     const protocolId = model?.parameters.protocolId ?? session?.protocolId
-    if (session?.protocolId && protocolId !== session.protocolId) {
+    if (!env.continuous && session?.protocolId && protocolId !== session.protocolId) {
       notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return undefined
     }
     const module = getProtocolWebModule(protocolId)
@@ -386,12 +395,12 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     const cursor = append ? childCursor : undefined
     try {
       const nodes = append ? pathNodes : await read<readonly NodeView[]>(`${path}/nodes/${encodeURIComponent(nodeId ?? 'root')}/path`, version)
-      const page = await read<NodePage>(`${path}/nodes?parentNodeId=${encodeURIComponent(nodeId ?? 'root')}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, version)
+      const page = env.continuous ? undefined : await read<NodePage>(`${path}/nodes?parentNodeId=${encodeURIComponent(nodeId ?? 'root')}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, version)
       if (location !== locationVersion) return
       pathNodes = nodes
-      children = append ? [...children, ...page.nodes] : page.nodes
-      childCursor = page.nextCursor
-      for (const node of nodes) {
+      children = append ? [...children, ...(page?.nodes ?? [])] : page?.nodes ?? []
+      childCursor = page?.nextCursor
+      for (const node of env.continuous ? [] : nodes) {
         const run = runs.find(value => value.id === node.sourceRunId)
         if (run?.protocolBinding && views.get(run.id)?.status !== 'committed') await loadTrace(run.id, version)
       }
@@ -399,7 +408,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       loading = false
     } catch (error) {
       if (version !== generation || location !== locationVersion || !attached()) return
-      if (isApiError(error) && error.status === 404 && nodeId !== null) {
+      if (!env.continuous && isApiError(error) && error.status === 404 && nodeId !== null) {
         position = { viewNodeId: null, viewMode: position.viewMode }
         remember()
         pathNodes = []; children = []; childCursor = undefined
@@ -456,12 +465,14 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     locationJob = undefined
     if (locationAgain) { locationAgain = false; void controller.refresh() }
   }
-  const restoreUnaccepted = (submission: PendingSubmission) => {
+  const restoreUnaccepted = (submission: PendingSubmission, moved = false) => {
     const parent = submission.parentNodeId ?? null
-    const current = draftAt(parent), restored = { ...draftFromInput(submission.input, submission.images), files: pendingFileDrafts(submission) }
+    const destination = moved ? projectId : submission.projectId
+    const current = draftAt(parent, destination), priorFiles = pendingFileDrafts(submission)
+    const restored = { ...draftFromInput(submission.input, submission.images), files: moved ? filesForWorkspaceChange(priorFiles) : priorFiles }
     // A user may have typed another draft while the uncertain submission was retained.
-    const text = !current.text || current.text === restored.text ? restored.text
-      : !restored.text ? current.text : `${restored.text}\n\n${current.text}`
+    const alreadyRestored = current.text === restored.text || (moved && current.text.startsWith(`${restored.text}\n\n`))
+    const text = !current.text ? restored.text : !restored.text || alreadyRestored ? current.text : `${restored.text}\n\n${current.text}`
     const originalIds = new Set(restored.images.map(image => image.image!.assetId))
     const images = [...restored.images.map(image => current.images.find(value => value.image?.assetId === image.image!.assetId) ?? image),
       ...current.images.filter(image => !image.image || !originalIds.has(image.image.assetId))]
@@ -470,12 +481,17 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     }
     const fileIds = new Set(restored.files.map(file => file.id))
     const files = [...restored.files, ...current.files.filter(file => !fileIds.has(file.id))]
-    setDraftAt(parent, { text, images, files })
-    if (pending()?.idempotencyKey === submission.idempotencyKey) save(undefined)
+    if (setDraftAt(parent, { text, images, files }, destination) && pending()?.idempotencyKey === submission.idempotencyKey) save(undefined)
     return Boolean(current.text && current.text !== restored.text) || images.length > restored.images.length || files.length > restored.files.length
   }
   const submitStored = async (submission: PendingSubmission, followVersion?: number) => {
     if (busy) return
+    if (env.continuous && submission.projectId !== projectId) {
+      notice = '此前未发送的消息已恢复为草稿。确认内容后可再次发送。'
+      restoreUnaccepted(submission, true)
+      emit()
+      return
+    }
     if (session?.archivedAt) { notice = '会话已归档，请先恢复后再继续。'; emit(); return }
     if (submission.invalidFiles || !pendingFilesValid(submission)) { notice = '待提交文件引用无效，请移除后重新添加。'; emit(); return }
     if (submission.invalidImages) { notice = '待提交图片信息不兼容，请移除后重新添加。'; emit(); return }
@@ -495,7 +511,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try {
       if (submission.fileSelections?.length && !submission.files?.length) {
         notice = '正在准备文件快照…'; emit()
-        const files = await env.api<readonly FileRef[]>(`${path}/project-files/prepare`, { preparationKey: submission.preparationKey, selections: submission.fileSelections })
+        const files = await env.api<readonly FileRef[]>(`${path}/project-files/prepare`, { preparationKey: submission.preparationKey, selections: submission.fileSelections,
+          ...(submission.projectId ? { projectId: submission.projectId } : {}) })
         if (!Array.isArray(files) || files.length !== submission.fileSelections.length || !files.every(isFileRef)) throw new Error('文件快照返回信息无效。')
         submission = { ...submission, files }
         // Never submit before the immutable identities are durably saved in the browser.
@@ -513,6 +530,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       }
       const accepted = await env.api<RunView>(`${path}/runs`, {
         input, idempotencyKey: submission.idempotencyKey, parentNodeId: submission.parentNodeId,
+        ...(submission.projectId ? { projectId: submission.projectId } : {}),
         ...(submission.files?.length ? { files: submission.files.map(file => ({ snapshotId: file.snapshotId })) } : {}),
         ...(submission.images?.length ? { images: submission.images.map(image => ({ assetId: image.assetId })) } : {}),
         ...(submission.modelId !== undefined ? { modelId: submission.modelId } : {}),
@@ -530,12 +548,15 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       notice = env.messageFor(error)
       if (isApiError(error) && error.code === 'session-archived') {
         restoreUnaccepted(submission); refreshAgain = true
+      } else if (env.continuous && isApiError(error) && ['history-position-changed', 'session-has-active-runs', 'project-unavailable'].includes(error.code)) {
+        restoreUnaccepted(submission); refreshAgain = true
       } else if (isApiError(error) && error.status < 500 && error.code !== 'project-unavailable') {
         const parent = submission.parentNodeId ?? null
-        if (!draftAt(parent).text && !draftAt(parent).images.length && !draftAt(parent).files.length) {
+        const draft = draftAt(parent, submission.projectId)
+        if (!draft.text && !draft.images.length && !draft.files.length) {
           const restored = { ...draftFromInput(submission.input, submission.images), files: pendingFileDrafts(submission).map((file, index) =>
             error.fileIndex === index || (error.code === 'file-expired' && file.selection?.kind === 'snapshot') ? { ...file, error: env.messageFor(error) } : file) }
-          setDraftAt(parent, error.code === 'asset-expired' ? { ...restored, images: restored.images.map(image => ({ ...image, status: 'expired', error: '图片已失效，请移除后重新添加。' })) } : restored)
+          setDraftAt(parent, error.code === 'asset-expired' ? { ...restored, images: restored.images.map(image => ({ ...image, status: 'expired', error: '图片已失效，请移除后重新添加。' })) } : restored, submission.projectId)
         }
         if (pending()?.idempotencyKey === submission.idempotencyKey) save(undefined)
       }
@@ -548,6 +569,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try { existing = await read<RunView>(`${path}/runs/by-key/${encodeURIComponent(submission.idempotencyKey)}`, version) }
     catch (error) { if (!isApiError(error) || error.status !== 404) throw error }
     if (existing) { adopt(existing); save(undefined) }
+    else if (env.historyOnly) { restoreUnaccepted(submission); notice = '未发送的消息已保留为原历史记录的草稿。' }
+    else if (env.continuous && submission.projectId !== projectId && !session?.archivedAt) await submitStored(submission)
     else if (session?.archivedAt) {
       restoreUnaccepted(submission)
       notice = '会话已归档，未接受的消息已保留为草稿。恢复后可继续。'
@@ -562,7 +585,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     } else await submitStored(submission)
   }
   const controller: SessionController = {
-    snapshot: () => ({ session, runs, run: runs.find(item => item.id === position.focusedRunId), position,
+    snapshot: () => ({ session, continuous: env.continuous, historyOnly: env.historyOnly, runs,
+      run: (env.continuous ? runs.find(isActive) : undefined) ?? runs.find(item => item.id === position.focusedRunId), position,
       path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice, defaultModelId, savingDefaultModel,
       draft: draftAt(position.viewNodeId).text, images: draftAt(position.viewNodeId).images, files: draftAt(position.viewNodeId).files, events, expanded, views, traceLoading: traceLoading() }),
     attach(value) { listener = value; session = undefined; loading = true; invalidate(); void controller.refresh() },
@@ -620,7 +644,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         notice = '此模型暂不可用，请检查提供方与模型配置。'; emit(); return
       }
       const candidate = env.models?.().find(value => value.id === modelId)
-      if (session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId) { notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return }
+      if (!env.continuous && session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId) { notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return }
       if (!getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId)) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return }
       busy = true; invalidate(); notice = ''; emit()
       const promise = (async () => {
@@ -642,7 +666,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       } catch (error) {
         if (request !== defaultRead || !attached() || (error instanceof Error && error.name === 'AbortError')) return
         defaultModelId = undefined
-        notice = `新会话默认模型读取失败：${env.messageFor(error)}`
+        notice = `Agent 默认模型读取失败：${env.messageFor(error)}`
       }
       emit()
     },
@@ -651,7 +675,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
           (busy && modelSelection?.modelId !== modelId)) return
       const candidate = env.models?.().find(value => value.id === modelId)
       if ((env.models && !canUseModel(candidate)) || !getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId) ||
-          (session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId)) return
+          (!env.continuous && session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId)) return
       const agentId = session.agentId, url = `/agents/${encodeURIComponent(agentId)}/session-defaults`
       savingDefaultModel = true; defaultRead++; notice = ''; emit()
       let submitted = false
@@ -662,11 +686,11 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         if (!attached() || session?.agentId !== agentId || session.modelId !== modelId || readOnly()) return
         const defaults = await read<SessionDefaults>(url, generation)
         defaultModelId = defaults.effectiveModelId
-        if (defaults.effectiveModelId === modelId) { notice = '已是新会话默认模型。'; return }
+        if (defaults.effectiveModelId === modelId) { notice = '已是 Agent 默认模型。'; return }
         submitted = true
         const saved = await env.api<SessionDefaults>(url, { modelId, expectedRevision: defaults.revision })
         defaultModelId = saved.effectiveModelId
-        notice = '已设为新会话默认模型。'
+        notice = '已设为 Agent 默认模型。'
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') return
         defaultModelId = undefined
@@ -711,9 +735,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       setDraftAt(position.viewNodeId, { ...draftAt(position.viewNodeId), text: value })
       stopFollowing()
     },
-    addImages(files) { if (!readOnly() && !busy && !pending() && files.length) { stopFollowing(); uploads.add(position.viewNodeId, files) } },
-    removeImage(id) { if (!readOnly() && !busy && !pending()) { stopFollowing(); uploads.remove(position.viewNodeId, id) } },
-    retryImage(id) { if (!readOnly() && !busy && !pending()) { stopFollowing(); uploads.retry(position.viewNodeId, id) } },
+    addImages(files) { if (!readOnly() && !busy && !pending() && files.length) { stopFollowing(); uploads.add(draftKey(position.viewNodeId), files) } },
+    removeImage(id) { if (!readOnly() && !busy && !pending()) { stopFollowing(); uploads.remove(draftKey(position.viewNodeId), id) } },
+    retryImage(id) { if (!readOnly() && !busy && !pending()) { stopFollowing(); uploads.retry(draftKey(position.viewNodeId), id) } },
     imagesChanged: emit,
     setFiles(files) {
       if (readOnly() || busy || pending()) return
@@ -723,7 +747,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     },
     applyFileReference(input) {
       if (readOnly() || busy || loading || pending()) return false
-      if (input.sessionId !== ref.sessionId || input.parentNodeId !== position.viewNodeId) {
+      if (input.sessionId !== ref.sessionId || (env.continuous && input.projectId !== projectId) || input.parentNodeId !== position.viewNodeId) {
         notice = '对话位置已改变，请在当前分支重新引用文件。'; emit(); return false
       }
       const draft = draftAt(position.viewNodeId), previous = draft.files.find(item => item.id === input.item.id)
@@ -732,7 +756,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       }
       try {
         const [selection] = validateFileSelections([input.item.selection])
-        if (selection.kind === 'snapshot' && (!isFileRef(input.item.file) || input.item.file.snapshotId !== selection.snapshotId || input.item.file.projectId !== ref.projectId)) throw new Error()
+        if (selection.kind === 'snapshot' && (!isFileRef(input.item.file) || input.item.file.snapshotId !== selection.snapshotId || input.item.file.projectId !== projectId)) throw new Error()
       } catch { notice = '文件引用信息无效，请重新打开文件。'; emit(); return false }
       if (draft.files.some(item => item.id !== input.item.id && JSON.stringify(item.selection) === JSON.stringify(input.item.selection))) {
         notice = '已添加相同文件与范围。'; emit(); return false
@@ -749,13 +773,13 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       emit()
       return true
     },
-    searchFiles: (query, signal) => env.api(`${path}/project-files/search?q=${encodeURIComponent(query)}`, undefined, signal),
-    previewFile: (selection, signal) => env.api(`${path}/project-files/preview`, { path: selection.path, ...(selection.range ? { range: selection.range } : {}) }, signal),
+    searchFiles: (query, signal) => env.api(`${path}/project-files/search?q=${encodeURIComponent(query)}${env.continuous ? `&${projectQuery()}` : ''}`, undefined, signal),
+    previewFile: (selection, signal) => env.api(`${path}/project-files/preview${env.continuous ? `?${projectQuery()}` : ''}`, { path: selection.path, ...(selection.range ? { range: selection.range } : {}) }, signal),
     readFile: (id, signal) => env.api(`${path}/project-files/snapshots/${encodeURIComponent(id)}`, undefined, signal),
     fileMessage: env.messageFor,
     dispose() { controller.detach(); uploads.dispose() },
     async navigate(id, draft, images, files) {
-      if (draft !== undefined && readOnly()) return
+      if (env.continuous || (draft !== undefined && readOnly())) return
       locationVersion++
       position = { viewNodeId: id, viewMode: position.viewMode }
       if (draft !== undefined) setDraftAt(id, draftFromInput(draft, images, files))
@@ -796,7 +820,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
           const version = generation
           try {
             const currentSession = await read<SessionView>(path, version)
-            if (currentSession.projectId !== ref.projectId) { env.missing(ref); return }
+            if (env.continuous ? !currentSession.continuous : currentSession.projectId !== ref.projectId) { env.missing(ref); return }
             const becameArchived = Boolean(session && !session.archivedAt && currentSession.archivedAt)
             session = currentSession
             if (becameArchived && env.archived) {
@@ -808,6 +832,12 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
             // Discover every run, including work started through another tab or host.
             const loaded = await read<readonly RunView[]>(`${path}/runs`, version)
             for (const value of loaded) adopt(value)
+            if (env.continuous && position.viewNodeId !== (currentSession.headNodeId ?? null)) {
+              locationVersion++
+              loading = true
+              position = { ...position, viewNodeId: currentSession.headNodeId ?? null, follow: undefined }
+              remember()
+            }
             // A display read failure must not prevent pending reconciliation or following a successful result.
             await Promise.allSettled(runs.filter(value => isActive(value) || terminalTrace.has(value.id) || expanded.has(value.id) || unfinishedAtPosition(value)).map(value => loadTrace(value.id, version)))
             if (locationJob) locationAgain = true
@@ -826,7 +856,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       return refreshJob
     },
     async submit() {
-      if (!session || busy || loading) return
+      if (!session || env.historyOnly || busy || loading || (env.continuous && runs.some(isActive))) return
       if (session.archivedAt) { await recover(generation); notice = '会话已归档，请先恢复后再继续。'; emit(); return }
       if (session.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       let submission = pending()
@@ -841,7 +871,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         const images = draft.images.map(image => image.image!)
         const input = encodeInput(draft.text.trim(), session.modelId, images, fileSelections.length)
         if (input === undefined) return
-        submission = { schemaVersion: 3, sessionId: ref.sessionId, input, images, fileSelections, ...(fileSelections.length ? { preparationKey: env.newId() } : {}), idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
+        submission = { schemaVersion: 3, sessionId: ref.sessionId, ...(env.continuous ? { projectId } : {}), input, images, fileSelections, ...(fileSelections.length ? { preparationKey: env.newId() } : {}), idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
         if (!save(submission)) return
         setDraftAt(position.viewNodeId, draftFromInput(''))
       }
@@ -853,7 +883,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       await submitStored(submission, locationVersion)
     },
     async regenerate(node) {
-      if (readOnly() || busy || pending() || node.sessionId !== ref.sessionId) return
+      if (env.continuous || readOnly() || busy || pending() || node.sessionId !== ref.sessionId) return
       if (session?.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
         notice = '请先选择一个可用模型。'; emit(); return
@@ -866,7 +896,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       await submitStored(submission, locationVersion)
     },
     async cancel(id) {
-      if (!runs.some(item => item.id === id && isActive(item)) || busy) return
+      if (env.historyOnly || !runs.some(item => item.id === id && isActive(item)) || busy) return
       busy = true
       invalidate()
       emit()

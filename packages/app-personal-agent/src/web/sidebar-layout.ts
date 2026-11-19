@@ -1,24 +1,24 @@
 /** Independent sidebar preferences. Automatic fitting never changes saved values. */
 export interface SidebarState {
   readonly version: 1
-  readonly leftWidth: number
   readonly rightWidth: number
   readonly leftExpanded: boolean
   readonly rightExpanded: boolean
-  readonly collapsedProjects: readonly string[]
   readonly perSession: Readonly<Record<string, unknown>>
 }
 
 export const defaultSidebarState: SidebarState = {
-  version: 1, leftWidth: 240, rightWidth: 600, leftExpanded: true, rightExpanded: true, collapsedProjects: [], perSession: {},
+  version: 1, rightWidth: 600, leftExpanded: true, rightExpanded: true, perSession: {},
 }
 export const sidebarSeparatorSize = 1
-export const sidebarBounds = { left: [200, 360], right: [320, 720] } as const
-export type SidebarSide = keyof typeof sidebarBounds
+const agentSidebarWidth = 72
+const minimumChatWidth = 320
+export const fileSidebarBounds = [320, 720] as const
+export type SidebarSide = 'left' | 'right'
 
-export function clampSidebarWidth(side: SidebarSide, width: number): number {
-  const [minimum, maximum] = sidebarBounds[side]
-  return Math.max(minimum, Math.min(maximum, Number.isFinite(width) ? width : defaultSidebarState[`${side}Width`]))
+export function clampFileSidebarWidth(width: number): number {
+  const [minimum, maximum] = fileSidebarBounds
+  return Math.max(minimum, Math.min(maximum, Number.isFinite(width) ? width : defaultSidebarState.rightWidth))
 }
 
 export function restoreSidebarState(value: unknown): SidebarState {
@@ -26,12 +26,9 @@ export function restoreSidebarState(value: unknown): SidebarState {
   const record = value as Record<string, unknown>
   return {
     version: 1,
-    leftWidth: typeof record.leftWidth === 'number' ? clampSidebarWidth('left', record.leftWidth) : 240,
-    rightWidth: typeof record.rightWidth === 'number' ? clampSidebarWidth('right', record.rightWidth) : defaultSidebarState.rightWidth,
+    rightWidth: typeof record.rightWidth === 'number' ? clampFileSidebarWidth(record.rightWidth) : defaultSidebarState.rightWidth,
     leftExpanded: typeof record.leftExpanded === 'boolean' ? record.leftExpanded : true,
     rightExpanded: typeof record.rightExpanded === 'boolean' ? record.rightExpanded : true,
-    collapsedProjects: Array.isArray(record.collapsedProjects)
-      ? [...new Set(record.collapsedProjects.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 512))] : [],
     perSession: record.perSession && typeof record.perSession === 'object' && !Array.isArray(record.perSession)
       ? Object.fromEntries(Object.entries(record.perSession)) : {},
   }
@@ -50,22 +47,16 @@ export interface SidebarFit {
 /** Fit the Personal Agent container, rather than the browser viewport. */
 export function fitSidebars(width: number, state: SidebarState): SidebarFit {
   const available = Math.max(0, Number.isFinite(width) ? width : 0)
-  const narrow = available <= 760
-  const leftDocked = !narrow && state.leftExpanded
+  const leftDrawer = available < 512
+  const leftDocked = !leftDrawer && state.leftExpanded
+  const leftWidth = leftDocked ? agentSidebarWidth : 0
   // Determine this even while collapsed so opening a drawer does not persist a collapsed preference.
-  const rightDrawer = narrow || available < 320 + 320 + sidebarSeparatorSize + (leftDocked ? 200 + sidebarSeparatorSize : 0)
+  const fileSpace = available - leftWidth - sidebarSeparatorSize - minimumChatWidth
+  const rightDrawer = fileSpace < fileSidebarBounds[0]
   const rightDocked = !rightDrawer && state.rightExpanded
-  let leftWidth = leftDocked ? clampSidebarWidth('left', state.leftWidth) : 0
-  let rightWidth = rightDocked ? clampSidebarWidth('right', state.rightWidth) : 0
-  const separators = (Number(leftDocked) + Number(rightDocked)) * sidebarSeparatorSize
-  let deficit = Math.max(0, leftWidth + rightWidth + separators + 320 - available)
-  if (rightDocked) {
-    const shrink = Math.min(deficit, rightWidth - sidebarBounds.right[0])
-    rightWidth -= shrink; deficit -= shrink
-  }
-  if (leftDocked) leftWidth -= Math.min(deficit, leftWidth - sidebarBounds.left[0])
-  return { leftWidth, rightWidth, leftDocked, rightDocked, leftDrawer: narrow, rightDrawer,
-    centerWidth: Math.max(0, available - leftWidth - rightWidth - separators) }
+  const rightWidth = rightDocked ? Math.min(fileSpace, clampFileSidebarWidth(state.rightWidth)) : 0
+  return { leftWidth, rightWidth, leftDocked, rightDocked, leftDrawer, rightDrawer,
+    centerWidth: Math.max(0, available - leftWidth - rightWidth - Number(rightDocked) * sidebarSeparatorSize) }
 }
 
 export interface SidebarStateStore {

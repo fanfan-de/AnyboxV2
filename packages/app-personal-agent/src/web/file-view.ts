@@ -12,11 +12,11 @@ export function createFileView(compose: HTMLFormElement, input: HTMLTextAreaElem
   const list = document.createElement('div'); list.className = 'composer-files'; list.setAttribute('aria-label', '待发送文件')
   compose.insertBefore(list, input)
   const picker = document.createElement('div'); picker.className = 'file-picker'; picker.hidden = true
-  const search = document.createElement('input'); search.type = 'search'; search.placeholder = '搜索项目文件路径'; search.setAttribute('aria-label', '搜索项目文件')
-  const results = document.createElement('div'); results.setAttribute('role', 'listbox'); results.setAttribute('aria-label', '项目文件候选')
+  const search = document.createElement('input'); search.type = 'search'; search.placeholder = '搜索文件路径'; search.setAttribute('aria-label', '搜索文件')
+  const results = document.createElement('div'); results.setAttribute('role', 'listbox'); results.setAttribute('aria-label', '文件候选')
   const hint = document.createElement('p'); hint.className = 'file-hint'; hint.setAttribute('role', 'status')
   picker.append(search, results, hint); compose.insertBefore(picker, input.nextSibling)
-  const attach = document.createElement('button'); attach.type = 'button'; attach.className = 'attach-files'; attach.textContent = '引用项目文件'; attach.title = '也可输入 @ 搜索项目文件'
+  const attach = document.createElement('button'); attach.type = 'button'; attach.className = 'attach-files'; attach.textContent = '引用文件'; attach.title = '也可输入 @ 搜索文件'
   compose.querySelector('.actions')!.prepend(attach)
   const namespace = `personal-agent--file-options-${++viewSequence}`
   let paths: readonly string[] = [], selected = 0, timer: ReturnType<typeof setTimeout> | undefined
@@ -27,7 +27,7 @@ export function createFileView(compose: HTMLFormElement, input: HTMLTextAreaElem
     clearTimeout(timer); searchAbort?.abort(); searchAbort = undefined; picker.hidden = true; paths = []; mention = undefined
     input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant')
   }
-  const locked = () => { const state = controller.snapshot(); return !open || state.loading || state.busy || Boolean(state.pending) || !state.session || Boolean(state.session.archivedAt) || state.session.historyMode === 'dialogue-v1' }
+  const locked = () => { const state = controller.snapshot(); return !open || state.historyOnly || state.loading || state.busy || Boolean(state.pending) || !state.session || Boolean(state.session.archivedAt) || state.session.historyMode === 'dialogue-v1' }
   const preview = (item: DraftFile, kind: FilePreviewRequest['kind']) => {
     const position = controller.snapshot().position.viewNodeId
     const fragment = kind === 'current' && mention ? { ...mention, text: input.value.slice(mention.start, mention.end) } : undefined

@@ -5,11 +5,10 @@ import { promptServiceKey } from '../prompt/component.js'
 import type { PromptPort } from '../prompt/component.js'
 import { promptSnapshot } from '../prompt/domain.js'
 import type { PromptBinding, PromptKind, PromptSnapshot, PromptVersion } from '../prompt/domain.js'
-import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
-import type { LocalStoragePort } from '@anybox/storage-sqlite/port'
 import { nonEmpty } from '../validation.js'
-import type { AgentDefinition } from './domain.js'
-import { openAgentPromptBindings } from './prompt-binding-storage.js'
+import type { AgentRecord } from './domain.js'
+import { agentDirectoryServiceKey } from './directory-component.js'
+import type { AgentDirectoryPort } from './directory-component.js'
 
 export const agentPromptServiceKey = 'personal-agent.agent-prompts'
 
@@ -21,7 +20,7 @@ export interface AgentPromptPort {
   resolveTaskTemplate(agentId: string): PromptSnapshot | undefined
 }
 
-function defaultInstruction(agent: AgentDefinition): PromptVersion {
+function defaultInstruction(agent: AgentRecord): PromptVersion {
   return Object.freeze({
     id: `builtin:${agent.id}:${createHash('sha256').update(agent.instructions).digest('hex')}`,
     documentId: `builtin:${agent.id}`, ownerId: '__builtin__',
@@ -32,23 +31,19 @@ function defaultInstruction(agent: AgentDefinition): PromptVersion {
 
 /** Agent-owned selection of reusable published Prompt versions. */
 export function createAgentPromptComponent(
-  inputs: RuntimeInputs, agents: readonly AgentDefinition[], canManageAgent: (actorId: string, agentId: string) => boolean,
-  legacyJsonPath?: string,
+  inputs: RuntimeInputs, canManageAgent: (actorId: string, agentId: string) => boolean,
 ): Component.Object<void, {
   [promptServiceKey]: PromptPort
-  [localStorageServiceKey]: LocalStoragePort
+  [agentDirectoryServiceKey]: AgentDirectoryPort
 }> {
   return {
     name: 'personal-agent-agent-prompts',
-    inject: [promptServiceKey, localStorageServiceKey],
-    async apply(ctx, _config, deps) {
-      const prompts = deps[promptServiceKey]
-      const storage = await openAgentPromptBindings(deps[localStorageServiceKey], prompts, legacyJsonPath)
-      ctx.effect(() => storage.close, 'join agent prompt binding operations')
-      const defaults = new Map(agents.map(agent => [agent.id, defaultInstruction(agent)]))
+    inject: [promptServiceKey, agentDirectoryServiceKey],
+    apply(ctx, _config, deps) {
+      const prompts = deps[promptServiceKey], directory = deps[agentDirectoryServiceKey]
 
-      const requireAgent = (agentId: string): AgentDefinition => {
-        const agent = agents.find(agent => agent.id === agentId)
+      const requireAgent = (agentId: string): AgentRecord => {
+        const agent = directory.get(agentId)
         if (!agent) throw new Error(`unknown agent ${agentId}`)
         return agent
       }
@@ -57,9 +52,9 @@ export function createAgentPromptComponent(
         if (!canManageAgent(actorId, agentId)) throw new Error('agent configuration access denied')
       }
       const resolve = (agentId: string, kinds: readonly PromptKind[] = ['agent-instruction', 'context', 'task-template']): readonly PromptSnapshot[] => {
-        requireAgent(agentId)
+        const agent = requireAgent(agentId)
         const selected = new Map<PromptKind, PromptVersion>()
-        for (const binding of storage.get(agentId)) {
+        for (const binding of directory.getContextBindings(agentId)) {
           if (!kinds.includes(binding.kind)) continue
           const version = prompts.getPublishedVersion(binding.versionId)
           if (!version || version.kind !== binding.kind) {
@@ -67,10 +62,10 @@ export function createAgentPromptComponent(
           }
           selected.set(binding.kind, version)
         }
-        if (kinds.includes('agent-instruction') && !selected.has('agent-instruction')) {
-          const fallback = defaults.get(agentId)
-          if (!fallback) throw new Error(`default prompt for ${agentId} is unavailable`)
-          selected.set('agent-instruction', fallback)
+        if (kinds.includes('agent-instruction')) {
+          const version = agent.instructionVersionId === null ? defaultInstruction(agent) : prompts.getPublishedVersion(agent.instructionVersionId)
+          if (!version || version.kind !== 'agent-instruction') throw new Error(`agent instruction for ${agentId} is unavailable`)
+          selected.set('agent-instruction', version)
         }
         return Object.freeze((['agent-instruction', 'context', 'task-template'] as const)
           .flatMap(kind => { const version = selected.get(kind); return version ? [promptSnapshot(version)] : [] }))
@@ -87,7 +82,7 @@ export function createAgentPromptComponent(
             kind: version.kind, versionId: version.id,
             updatedAt: nonEmpty(inputs.now(), 'timestamp'), updatedBy: actor,
           })
-          await storage.bind(target, binding)
+          await directory.bindPrompt(target, binding)
           return binding
         },
         getAgentPrompts(actorId, agentId) {

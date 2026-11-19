@@ -1,12 +1,12 @@
 import { requestJSON } from '@anybox/application-api/web'
 export { requestJSON } from '@anybox/application-api/web'
-import type { Api, ImageRef, ProjectView } from './client-types.js'
+import type { AgentSummary } from '../core/agent/domain.js'
+import type { Api, ImageRef } from './client-types.js'
 import type { ProtocolViewSnapshot } from '../core/view/types.js'
-import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
 import { createRunChangeClient } from './run-change-client.js'
 import { openChangeStream } from './event-stream.js'
 export interface HarnessConnection { readonly id: string; readonly name: string; readonly endpoint: string; readonly instanceId: string; readonly revision: number; readonly credentialConfigured: boolean }
-const identityKeys = new Set(['id', 'agentId', 'viewNodeId', 'focusedRunId', 'activePaneId', 'sidebarProjectId', 'projectId', 'sessionId', 'runId', 'parentId', 'parentNodeId', 'nodeId', 'sourceRunId', 'resultNodeId', 'modelId', 'fallbackModelId', 'effectiveModelId', 'requestedModelId', 'assetId', 'snapshotId', 'connectionId', 'providerId', 'modelDefinitionId', 'assetIds', 'snapshotIds', 'invalid'])
+const identityKeys = new Set(['id', 'agentId', 'viewNodeId', 'focusedRunId', 'activePaneId', 'projectId', 'sessionId', 'runId', 'parentId', 'parentNodeId', 'headNodeId', 'nodeId', 'sourceRunId', 'resultNodeId', 'modelId', 'fallbackModelId', 'effectiveModelId', 'requestedModelId', 'assetId', 'snapshotId', 'connectionId', 'providerId', 'modelDefinitionId', 'assetIds', 'snapshotIds', 'invalid'])
 export function scopedId(instanceId: string, id: string): string { return `h:${instanceId}:${id}` }
 export function splitScopedId(value: string): { instanceId: string; id: string } | undefined {
   const match = /^h:([0-9a-f-]{36}):([\s\S]+)$/.exec(value)
@@ -22,9 +22,9 @@ export function mapResourceIds(value: unknown, map: (id: string) => string, key 
 const executionProductId = 'personal-agent'
 export const executionProductPath = `/products/${executionProductId}`
 const resourceBindings = new Map<string, { readonly connection: HarnessConnection; readonly apiBase: string }>()
-function connectionHeaders(connection: HarnessConnection, local = false): Record<string, string> {
+function connectionHeaders(connection: HarnessConnection): Record<string, string> {
   return { 'X-Anybox-Expected-Instance-Id': connection.instanceId, 'X-Anybox-Connection-Revision': String(connection.revision),
-    ...(local ? {} : { 'X-Anybox-Product-Id': executionProductId }) }
+    'X-Anybox-Product-Id': executionProductId }
 }
 function connectionURL(apiBase: string, connection: HarnessConnection, path: string): string {
   return `${apiBase}/connections/${encodeURIComponent(connection.id)}/v1${path}`
@@ -57,22 +57,11 @@ export interface HarnessClient extends Api {
   readonly connections: readonly HarnessConnection[]
   readonly errors: ReadonlyMap<string, string>
   subscribeList(path: string, listener: (values: readonly unknown[]) => void): () => void
+  rememberAgent(connectionId: string, agent: AgentSummary): void
   forConnection(id: string): Api
-  directoryTarget(id?: string): ProjectDirectoryTarget | undefined
   upload(sessionId: string, file: File, signal: AbortSignal): Promise<ImageRef>
   changes(handlers: HarnessChangeHandlers): { update(ids: readonly string[]): void; dispose(): void }
   dispose(): Promise<void>
-}
-/** A selector holds this immutable binding until it closes, including its final write. */
-export interface ProjectDirectoryTarget {
-  readonly connection: HarnessConnection
-  readonly environment?: ComputerEnvironment
-  readonly api: Api
-  environments(signal: AbortSignal): Promise<ComputerEnvironments>
-  forEnvironment(environment: ComputerEnvironment): ProjectDirectoryTarget
-  nativeAvailable(signal: AbortSignal): Promise<boolean>
-  pickNative(signal: AbortSignal): Promise<string | null>
-  register(path: string, signal: AbortSignal): Promise<ProjectView>
 }
 export function createHarnessClient(apiBase: string, inputConnections: readonly HarnessConnection[], selectedId?: string): HarnessClient {
   const connections = inputConnections.map(connection => Object.freeze({ ...connection }))
@@ -82,13 +71,7 @@ export function createHarnessClient(apiBase: string, inputConnections: readonly 
   const listListeners = new Map<string, Set<(values: readonly unknown[]) => void>>(), revisions = new Map<string, number>()
   let disposed = false
   const selected = () => selectedId === undefined ? connections[0] : connections.find(item => item.id === selectedId)
-  const localDirectorySelection = async (connection: HarnessConnection, signal: AbortSignal) => {
-    const local = await call<{ instanceId: string | null; picker: boolean }>(connection, '/local', undefined, signal, true)
-    if (!local.picker || local.instanceId !== connection.instanceId) return false
-    const info = await call<{ instanceId: string; capabilities: readonly string[] }>(connection, '/instance', undefined, signal)
-    return info.instanceId === connection.instanceId && info.capabilities.includes('projects.local-directories')
-  }
-  const call = async <T>(connection: HarnessConnection, path: string, body?: object, signal?: AbortSignal, local = false): Promise<T> => {
+  const call = async <T>(connection: HarnessConnection, path: string, body?: object, signal?: AbortSignal): Promise<T> => {
     if (disposed) throw new Error('client-disposed')
     const controller = new AbortController(); requests.add(controller)
     let finish!: () => void
@@ -96,8 +79,7 @@ export function createHarnessClient(apiBase: string, inputConnections: readonly 
     if (body !== undefined) writes.add(controller)
     const abort = () => controller.abort(); signal?.addEventListener('abort', abort, { once: true }); if (signal?.aborted) abort()
     try {
-      const url = local ? apiBase + path : connectionURL(apiBase, connection, path)
-      const result = await requestJSON<T>(url, body, controller.signal, connectionHeaders(connection, local))
+      const result = await requestJSON<T>(connectionURL(apiBase, connection, path), body, controller.signal, connectionHeaders(connection))
       errors.delete(connection.id); return result
     } catch (error) {
       const code = error instanceof Error && 'code' in error ? String(error.code) : 'connection-unavailable'
@@ -121,7 +103,6 @@ export function createHarnessClient(apiBase: string, inputConnections: readonly 
   }
   const listSnapshot = (path: string) => connections.flatMap(connection => (cache.get(`${connection.id}:${path}`) ?? []).map(value => {
     const mapped = mapResourceIds(value, id => scopedId(connection.instanceId, id)) as Record<string, unknown>
-    if (path === '/projects') return { ...mapped, harnessName: connection.name, instanceId: connection.instanceId, available: !errors.has(connection.id) && mapped.available }
     return path === '/agents' ? { ...mapped, harnessName: connection.name } : mapped
   }))
   const aggregate = async (path: string, signal?: AbortSignal) => {
@@ -145,44 +126,18 @@ export function createHarnessClient(apiBase: string, inputConnections: readonly 
       const set = listListeners.get(path) ?? new Set(); listListeners.set(path, set); set.add(listener)
       return () => { set.delete(listener) }
     },
+    rememberAgent(connectionId: string, { id, name, description, logoShader }: AgentSummary) {
+      if (disposed || !connections.some(connection => connection.id === connectionId)) return
+      const path = '/agents', key = `${connectionId}:${path}`, summary: AgentSummary = { id, name, description, ...(logoShader ? { logoShader } : {}) }
+      const entries = (cache.get(key) ?? []) as AgentSummary[]
+      const index = entries.findIndex(agent => agent.id === id)
+      revisions.set(key, (revisions.get(key) ?? 0) + 1)
+      cache.set(key, index < 0 ? [...entries, summary] : entries.map(agent => agent.id === id ? summary : agent))
+      for (const listener of listListeners.get(path) ?? []) listener(listSnapshot(path))
+    },
     forConnection(id: string): Api {
       const connection = connections.find(item => item.id === id)
       return <T>(path: string, body?: object, signal?: AbortSignal) => connection ? call<T>(connection, path, body, signal) : Promise.reject(new Error('instance-unavailable'))
-    },
-    directoryTarget(id?: string): ProjectDirectoryTarget | undefined {
-      const value = id ? connections.find(item => item.id === id) : selected()
-      if (!value || disposed) return undefined
-      const connection = Object.freeze({ ...value })
-      const fixed: Api = (path, body, signal) => call(connection, path, body, signal)
-      const bind = (input?: ComputerEnvironment): ProjectDirectoryTarget => {
-        const environment = input ? Object.freeze({ ...input }) : undefined
-        if (environment && environment.state !== 'approved') throw Object.assign(new Error('computer-environment-unavailable'), { code: 'computer-environment-unavailable' })
-        const remote = environment?.origin === 'remote'
-        return {
-          connection, api: (path, body, signal) => remote && /^\/projects\/(directories\/|pick)/.test(path)
-            ? Promise.reject(Object.assign(new Error('directory-browse-unsupported'), { code: 'directory-browse-unsupported' })) : fixed(path, body, signal),
-          ...(environment ? { environment } : {}),
-          environments: signal => fixed<ComputerEnvironments>('/computer-environments', undefined, signal),
-          forEnvironment: bind,
-          async nativeAvailable(signal) {
-            if (remote) return false
-            return localDirectorySelection(connection, signal)
-          },
-          async pickNative(signal) {
-            if (remote) throw Object.assign(new Error('picker-unavailable'), { code: 'picker-unavailable' })
-            if (!await localDirectorySelection(connection, signal)) throw Object.assign(new Error('picker-unavailable'), { status: 403, code: 'picker-unavailable' })
-            return (await call<{ path: string | null }>(connection, `/connections/${encodeURIComponent(connection.id)}/pick`, {}, signal, true)).path
-          },
-          async register(path, signal) {
-            const raw = await fixed<ProjectView>('/projects', { path, ...(environment ? { computerAttachmentId: environment.environmentId } : {}) }, signal)
-            const key = `${connection.id}:/projects`
-            cache.set(key, [...(cache.get(key) ?? []).filter(value => (value as ProjectView).id !== raw.id), raw])
-            const project = mapResourceIds(raw, id => scopedId(connection.instanceId, id)) as ProjectView
-            return { ...project, instanceId: connection.instanceId, harnessName: connection.name }
-          },
-        }
-      }
-      return bind()
     },
     async upload(sessionId: string, file: File, signal: AbortSignal): Promise<ImageRef> {
       const target = route(`/sessions/${encodeURIComponent(sessionId)}/images`)

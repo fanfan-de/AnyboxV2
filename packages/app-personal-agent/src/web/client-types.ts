@@ -3,7 +3,6 @@ import type { ApplyPatchResult } from '@anybox/computer-tools/apply-patch-types'
 import type { ImageRef } from '../core/image/port.js'
 import type { JsonValue } from '@anybox/models'
 export type * from '../core/api.js'
-export type { DirectoryPage } from '../core/project/directories.js'
 
 export type ToolTraceState = 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'interrupted' |
   ApplyPatchResult['status']
@@ -54,6 +53,7 @@ export interface PendingSubmission {
   readonly schemaVersion?: number
   readonly modelId?: string
   readonly sessionId: string
+  readonly projectId?: string
   readonly input: string
   readonly images?: readonly ImageRef[]
   readonly files?: readonly FileRef[]

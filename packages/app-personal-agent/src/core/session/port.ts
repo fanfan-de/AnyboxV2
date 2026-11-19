@@ -9,19 +9,20 @@ import type { PromptSnapshot } from '../prompt/domain.js'
 import type { OwnedCall } from '../contracts.js'
 import type { ImageRef, ImageRenewal } from '../image/port.js'
 import type { RunUnitBindings } from '../unit/domain.js'
+import type { ContinuousContextSelection, ContinuousRunPlan, ContinuousRunQuery } from './continuous-history.js'
 
 export const sessionServiceKey = 'personal-agent.sessions'
 export const sessionRunServiceKey = 'personal-agent.session-runs'
 
 /** Public session facts. Run commands and in-flight resources belong to the execution components. */
 export interface SessionPort {
-  openProjectFileTree(sessionId: string, path: string, owner: string, signal?: AbortSignal): OwnedCall<FileTreePage>
+  openProjectFileTree(sessionId: string, path: string, owner: string, signal?: AbortSignal, projectId?: string): OwnedCall<FileTreePage>
   readProjectFileTreePage(sessionId: string, owner: string, cursorId: string, page: number, signal?: AbortSignal): OwnedCall<FileTreePage>
   closeProjectFileTree(sessionId: string, owner: string, cursorId: string): Promise<void>
   onProjectFileTreeRetired(listener: (cursorId: string) => void): () => void
-  searchProjectFiles(sessionId: string, query: string, signal?: AbortSignal): OwnedCall<FileSearch>
-  previewProjectFile(sessionId: string, selection: Extract<FileSelection, { kind: 'project-file' }>, signal?: AbortSignal): OwnedCall<FilePreview>
-  prepareProjectFiles(sessionId: string, key: string, selections: readonly FileSelection[], signal?: AbortSignal): OwnedCall<readonly FileRef[]>
+  searchProjectFiles(sessionId: string, query: string, signal?: AbortSignal, projectId?: string): OwnedCall<FileSearch>
+  previewProjectFile(sessionId: string, selection: Extract<FileSelection, { kind: 'project-file' }>, signal?: AbortSignal, projectId?: string): OwnedCall<FilePreview>
+  prepareProjectFiles(sessionId: string, key: string, selections: readonly FileSelection[], signal?: AbortSignal, projectId?: string): OwnedCall<readonly FileRef[]>
   getFileSnapshot(sessionId: string, snapshotId: string, signal?: AbortSignal): OwnedCall<FileContent>
   renewProjectFiles(sessionId: string, ids: readonly string[]): Promise<FileRenewal>
   importImage(sessionId: string, bytes: AsyncIterable<Uint8Array>, signal?: AbortSignal): OwnedCall<ImageRef>
@@ -32,6 +33,7 @@ export interface SessionPort {
   getAgentTools(agentId: string): Promise<AgentToolsSelection>
   setAgentTools(agentId: string, input: AgentToolsInput): Promise<AgentToolsSelection>
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
+  openContinuousSession(projectId: string | undefined, agentId: string): Promise<Session>
   selectSessionModel(sessionId: string, modelId: string, protocolId?: string): Promise<Session>
   archiveSession(id: string): Promise<Session>
   restoreSession(id: string): Promise<Session>
@@ -52,6 +54,7 @@ export interface SessionPort {
 export interface RunContext {
   readonly run: Run
   readonly projectId: string
+  readonly continuity?: ContinuousContextSelection
 }
 
 /** Trusted execution-facing operations on the same Session owner, not an access boundary. */
@@ -59,6 +62,7 @@ export interface SessionRunPort {
   readFileSnapshots(sessionId: string, ids: readonly string[], signal?: AbortSignal): OwnedCall<readonly FileContent[]>
   describeImages(sessionId: string, assetIds: readonly string[]): Promise<readonly ImageRef[]>
   findAcceptedRun(input: RunInput): Promise<Run | undefined>
+  planContinuousRun(input: ContinuousRunQuery): Promise<ContinuousRunPlan>
   registerRun(id: string, input: RunInput, now: string,
     prompts: readonly PromptSnapshot[], model: NativeModelSnapshot, native: NativeRunRegistration): Promise<{ readonly run: Run; readonly created: boolean }>
   loadRunContext(id: string): Promise<RunContext | undefined>
@@ -88,6 +92,7 @@ export interface NativeRunRegistration {
   readonly initialization: NativeInitialization
   readonly input: NativeRunInput
   readonly parentContextRef: string | null
+  readonly continuity?: ContinuousRunPlan
   /** Unit attachments the Run runs against; re-verified inside the acceptance transaction when present. */
   readonly units?: RunUnitBindings
 }

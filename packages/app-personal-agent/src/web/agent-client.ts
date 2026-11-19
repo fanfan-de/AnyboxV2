@@ -4,6 +4,8 @@ import { setupWorkspace } from './workspace-client.js'
 import { createModelsCatalog, setupModelsSettings } from './models-client.js'
 import { setupPromptSettings } from './prompt-client.js'
 import { setupSessionDefaults } from './session-defaults-client.js'
+import { setupAgentDirectory } from './agent-directory-client.js'
+import { createAgentLogo } from './agent-logo.js'
 import { setupToolsSettings } from './tools-client.js'
 import { setupUnitsSettings } from './units-client.js'
 import { messageFor } from './client-errors.js'
@@ -18,7 +20,7 @@ export interface AgentMountedPage extends MountedPage {
   showSettingsBlocked(): void
 }
 export function mountAgentPage(root: HTMLElement, api: HarnessClient, options: {
-  selectedId?: string; selectedName?: string; selectedInstanceId?: string; layoutKey?: string; isActive(): boolean;
+  selectedId?: string; selectedName?: string; layoutKey?: string; isActive(): boolean;
   devices: readonly { id: string; name: string }[]; settingsState?: SettingsViewState; selectDevice(id: string): boolean;
   route: { read(): string; write(hash: string, push: boolean): void; subscribe(listener: () => void): () => void };
 }): AgentMountedPage {
@@ -29,23 +31,19 @@ function required<T extends HTMLElement>(id: string): T {
   if (!found) throw new Error(`missing element ${id}`)
   return found as T
 }
-const agentSelect = required<HTMLSelectElement>('personal-agent--agent-select')
+const mainAgentSlot = required<HTMLElement>('personal-agent--main-agent')
+const otherAgentList = required<HTMLElement>('personal-agent--other-agents')
 const settingsDialog = required<HTMLDialogElement>('personal-agent--settings-dialog')
 const openSettingsButton = required<HTMLButtonElement>('personal-agent--open-settings')
 const closeSettingsButton = required<HTMLButtonElement>('personal-agent--close-settings')
-const sidebar = required<HTMLElement>('personal-agent--workspace-sidebar')
 const sidebarToggle = required<HTMLButtonElement>('personal-agent--toggle-sidebar')
 function closeSidebar(): void { workspace.closeSidebar() }
-sidebar.addEventListener('click', event => {
-  const action = event.target instanceof Element ? event.target.closest<HTMLButtonElement>('.session-open, [data-create-project-session], #personal-agent--add-project') : null
-  // Release a drawer's focus trap before the project selector opens its modal.
-  if (action?.id === 'personal-agent--add-project' && !action.disabled) { closeSidebar(); return }
-  // Creating a project session disables its button synchronously; inspect it before its handler runs.
-  if (action && !action.disabled) queueMicrotask(closeSidebar)
-}, { capture: true, signal: lifetime.signal })
 
 const selected = options.selectedId === undefined ? api.connections[0] : api.connections.find(item => item.id === options.selectedId)
-openSettingsButton.addEventListener('click', () => { closeSidebar(); settings.open(); workspace.refreshArchive() })
+const selectedAgentKey = selected && `anybox.personal-agent.client.agent.${selected.instanceId}`
+let preferredAgentId = ''
+try { if (selectedAgentKey) preferredAgentId = sessionStorage.getItem(selectedAgentKey) ?? '' } catch { /* Optional selection. */ }
+openSettingsButton.addEventListener('click', () => { closeSidebar(); settings.open() })
 closeSettingsButton.addEventListener('click', () => { settingsDialog.close() })
 settingsDialog.addEventListener('close', () => {
   const focus = document.activeElement
@@ -58,14 +56,26 @@ void models.refresh()
 settingsDialog.addEventListener('close', () => { void models.refresh() })
 const hostApi = selected ? api.forConnection(selected.id) : undefined
 const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefined
-const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('personal-agent--session-defaults'), agentSelect) : undefined
-const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('personal-agent--tools-settings'), agentSelect) : undefined
+const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('personal-agent--session-defaults')) : undefined
+const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('personal-agent--tools-settings')) : undefined
 const unitsSettings = hostApi ? setupUnitsSettings(hostApi, messageFor, required('personal-agent--units-settings')) : undefined
 const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, selected.instanceId, required('personal-agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('personal-agent--prompt-settings'), JSON.stringify([selected.instanceId, 'prompts'])) : undefined
+const agentDirectory = hostApi && hostModels && selected ? setupAgentDirectory(hostApi, messageFor, hostModels,
+  required('personal-agent--agent-directory'), selected.instanceId, agent => {
+    api.rememberAgent(selected.id, agent)
+    sessionDefaults?.refreshAgent(agent.id)
+    promptSettings?.receiveAgent(agent)
+    refreshAgentList()
+  }) : undefined
+settingsDialog.addEventListener('close', () => agentDirectory?.pauseLogo(), { signal: lifetime.signal })
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) agentDirectory?.pauseLogo()
+}, { signal: lifetime.signal })
 if (!selected) {
   required('personal-agent--default-model-hint').textContent = '请先在管理连接中启动所选设备上的 Agent，再设置默认模型。'
   for (const [id, titleId, title, text] of [
+    ['personal-agent--agent-directory', 'personal-agent--agent-directory-title', 'Agent 管理', 'Agent'],
     ['personal-agent--models-settings', 'personal-agent--models-settings-title', '模型管理', '模型与配置'],
     ['personal-agent--prompt-settings', 'personal-agent--prompt-title', 'Prompt 管理', 'Prompt'],
     ['personal-agent--tools-settings', 'personal-agent--tools-title', 'Agent 工具', '工具'],
@@ -83,6 +93,7 @@ function revealSettings(section: SettingsSection): void {
   closeSidebar(); settings.open(section)
 }
 function canLeave(): boolean {
+  if (agentDirectory && !agentDirectory.canLeave()) { revealSettings('agents'); return false }
   if (sessionDefaults && !sessionDefaults.canLeave()) { revealSettings('general'); return false }
   if (toolsSettings && !toolsSettings.canLeave()) { revealSettings('tools'); return false }
   if (modelsSettings && !modelsSettings.canLeave()) { revealSettings('models'); return false }
@@ -91,51 +102,109 @@ function canLeave(): boolean {
   return true
 }
 let knownAgents: readonly AgentView[] = []
-const workspace = setupWorkspace(api, messageFor, projectId => {
-  const instance = projectId && splitScopedId(projectId)?.instanceId
-  const candidates = knownAgents.filter(agent => splitScopedId(agent.id)?.instanceId === instance)
-  return candidates.find(agent => splitScopedId(agent.id)?.id === splitScopedId(agentSelect.value)?.id)?.id ?? candidates[0]?.id ?? ''
-}, models, { root, storageKey: options.layoutKey, selectedInstanceId: options.selectedInstanceId ?? selected?.instanceId, route: options.route, isActive: options.isActive })
+let activeAgentId = '', agentsSettled = !selected
+const agentButtons = new Map<string, { button: HTMLButtonElement; logo: ReturnType<typeof createAgentLogo>; main: boolean }>()
+const agentFor = (id: string) => knownAgents.find(agent => agent.id === id)
+const workspace = setupWorkspace(api, messageFor, () => activeAgentId, models, {
+  root, storageKey: options.layoutKey, route: options.route, isActive: options.isActive, agentFor, agentsSettled: () => agentsSettled,
+})
 const settings = setupSettingsNavigation(root, {
   devices: options.devices, selectedId: options.selectedId, selectedName: options.selectedName,
   initialState: options.settingsState, isActive: options.isActive, selectDevice: options.selectDevice,
   refreshArchive: () => workspace.refreshArchive(),
+  refreshAgents: () => { agentDirectory?.refresh(); refreshAgentList() },
+  leaveAgents: () => agentDirectory?.pauseLogo(),
 })
-const receiveAgents = (agents: readonly AgentView[]) => {
+function updateActiveAgent(id: string): void {
+  activeAgentId = id
+  for (const [key, { button }] of agentButtons) button.setAttribute('aria-pressed', String(key === id))
+  sessionDefaults?.selectAgent(id)
+  toolsSettings?.selectAgent(id)
+}
+function activateAgent(id: string): void {
+  if (id !== activeAgentId && !canLeave()) return
+  preferredAgentId = id
+  try { if (selectedAgentKey) sessionStorage.setItem(selectedAgentKey, id) } catch { /* Optional selection. */ }
+  updateActiveAgent(id)
+  closeSidebar()
+  workspace.selectAgent()
+}
+function renderAgentButtons(agents: readonly AgentView[]): void {
+  const ids = new Set(agents.map(agent => agent.id))
+  for (const [id, entry] of agentButtons) {
+    if (ids.has(id)) continue
+    entry.logo.dispose()
+    entry.button.remove()
+    agentButtons.delete(id)
+  }
+  let nextOther = otherAgentList.firstElementChild
+  agents.forEach((agent, index) => {
+    const main = index === 0
+    let entry = agentButtons.get(agent.id)
+    if (entry?.main !== main) {
+      entry?.logo.dispose()
+      const button = entry?.button ?? document.createElement('button')
+      button.className = 'agent-nav-button'
+      button.type = 'button'
+      if (!entry) button.addEventListener('click', () => activateAgent(agent.id), { signal: lifetime.signal })
+      entry = { button, logo: createAgentLogo(button, { size: main ? 40 : 34 }), main }
+      agentButtons.set(agent.id, entry)
+    }
+    const { button, logo } = entry
+    const name = agent.name || splitScopedId(agent.id)?.id || agent.id
+    const label = main ? `主 Agent · ${name}` : name
+    button.title = label
+    button.setAttribute('aria-label', label)
+    logo.set({ name, logoShader: agent.logoShader })
+    if (main) {
+      if (mainAgentSlot.firstElementChild !== button) mainAgentSlot.append(button)
+      if (nextOther === button) nextOther = otherAgentList.firstElementChild
+    } else {
+      if (nextOther !== button) otherAgentList.insertBefore(button, nextOther)
+      nextOther = button.nextElementSibling
+    }
+  })
+  mainAgentSlot.hidden = agents.length === 0
+  otherAgentList.hidden = agents.length < 2
+}
+function receiveAgents(agents: readonly AgentView[]) {
   if (closed) return
   knownAgents = agents
-  const previous = agentSelect.value
   const own = agents.filter(agent => splitScopedId(agent.id)?.instanceId === selected?.instanceId)
-  agentSelect.replaceChildren(...own.map(agent => {
-    const option = document.createElement('option')
-    option.value = agent.id
-    option.textContent = `${agent.harnessName ?? ''} · ${splitScopedId(agent.id)?.id ?? agent.id}`
-    return option
-  }))
-  if (own.some(agent => agent.id === previous)) agentSelect.value = previous
-  agentSelect.disabled = own.length === 0
-  sessionDefaults?.selectAgent(agentSelect.value)
-  toolsSettings?.selectAgent(agentSelect.value)
+  renderAgentButtons(own)
+  updateActiveAgent(own.find(agent => agent.id === preferredAgentId)?.id ?? own[0]?.id ?? '')
+  agentDirectory?.receiveAgents(own.map(agent => ({ ...agent, id: splitScopedId(agent.id)!.id })))
   workspace.refreshControls()
 }
 const unsubscribeAgents = api.subscribeList('/agents', values => receiveAgents(values as readonly AgentView[]))
-void api<readonly AgentView[]>('/agents').then(receiveAgents).catch(error => {
-  if (closed) return
-  const notice = required<HTMLElement>('personal-agent--workspace-notice')
-  notice.textContent = messageFor(error)
-  notice.hidden = false
-})
-agentSelect.addEventListener('change', () => { sessionDefaults?.selectAgent(agentSelect.value); toolsSettings?.selectAgent(agentSelect.value); workspace.refreshControls() }, { signal: lifetime.signal })
+function refreshAgentList() {
+  if (!selected) return
+  void api<readonly AgentView[]>('/agents').then(agents => {
+    agentsSettled = true
+    receiveAgents(agents)
+  }).catch(error => {
+    if (closed) return
+    agentsSettled = true
+    workspace.refreshControls()
+    const notice = required<HTMLElement>('personal-agent--workspace-notice')
+    notice.textContent = messageFor(error)
+    notice.hidden = false
+  })
+}
+refreshAgentList()
 return {
   settingsState: () => settings.snapshot(), restoreSettings: () => settings.restore(), showSettingsBlocked: () => settings.showBlocked(),
   setActive(active) {
-    if (!active) settingsDialog.close()
+    if (!active) { agentDirectory?.pauseLogo(); settingsDialog.close() }
     workspace.setActive(active)
   },
   canLeave,
   async dispose() {
-    closed = true; lifetime.abort(); settings.dispose(); settingsDialog.close(); unsubscribeAgents(); const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
-    await Promise.all([workspaceExit, modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings?.dispose()])
+    closed = true; lifetime.abort(); settings.dispose(); settingsDialog.close(); unsubscribeAgents()
+    for (const { logo } of agentButtons.values()) logo.dispose()
+    agentButtons.clear()
+    const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
+    await Promise.all([workspaceExit, agentDirectory?.dispose(), modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings?.dispose()])
     await api.dispose()
   },
 }

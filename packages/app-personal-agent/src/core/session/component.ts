@@ -1,12 +1,14 @@
 import { projectFilesServiceKey } from '../project-files/port.js'
 import type { ProjectFilesPort } from '../project-files/port.js'
 import { fileError } from '../project-files/domain.js'
-import { treeError, resolveSessionModel, type Session, type SessionDefaults } from './domain.js'
+import { treeError, type Session, type SessionDefaults } from './domain.js'
 import type { Component } from '@nya/core'
 import type { RuntimeInputs, OwnedCall } from '../contracts.js'
 import { imageAssetsServiceKey, imageAssetError } from '../image/port.js'
 import type { ImageAssetsPort } from '../image/port.js'
-import type { AgentDefinition } from '../agent/domain.js'
+import { agentDirectoryServiceKey } from '../agent/directory-component.js'
+import type { AgentDirectoryPort } from '../agent/directory-component.js'
+import type { AgentRecord } from '../agent/domain.js'
 import { nonEmpty } from '../validation.js'
 import { createToolSelection } from '../tool/catalog.js'
 import { projectServiceKey } from '../project/component.js'
@@ -24,8 +26,9 @@ import type { UnitAttachmentsPort } from '../unit/port.js'
 import type { ToolEnvironmentCatalog } from '../tool-environments/port.js'
 
 /** One owner for every Session's conversation and execution records; execution resources stay in RunRuntime. */
-export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], environments?: ToolEnvironmentCatalog): Component.Object<void, {
+export function createSessionComponent(inputs: RuntimeInputs, environments?: ToolEnvironmentCatalog): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
+  [agentDirectoryServiceKey]: AgentDirectoryPort
   [projectServiceKey]: ProjectPort
   [imageAssetsServiceKey]: ImageAssetsPort
   [projectFilesServiceKey]: ProjectFilesPort
@@ -34,9 +37,9 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
 }> {
   return {
     name: 'personal-agent-sessions',
-    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey],
+    inject: [localStorageServiceKey, agentDirectoryServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey],
     async apply(ctx, _config, deps) {
-      const projects = deps[projectServiceKey], images = deps[imageAssetsServiceKey], files = deps[projectFilesServiceKey]
+      const projects = deps[projectServiceKey], images = deps[imageAssetsServiceKey], files = deps[projectFilesServiceKey], agents = deps[agentDirectoryServiceKey]
       const records = await openSqliteSessionRecords(deps[localStorageServiceKey], inputs, async run => {
         const change = Object.freeze({ sessionId: run.sessionId, runId: run.id, revision: run.revision })
         try { await ctx.parallel(runChangedEvent, change) }
@@ -97,13 +100,25 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
       }
       const requireAgent = (rawId: string) => {
         const id = nonEmpty(rawId, 'agentId')
-        const agent = agents.find(agent => agent.id === id)
+        const agent = agents.get(id)
         if (!agent) throw new Error(`unknown agent ${id}`)
         return agent
       }
-      const withFallback = (saved: Pick<SessionDefaults, 'agentId' | 'modelId' | 'revision'>, agent: AgentDefinition): SessionDefaults => {
-        const fallbackModelId = agent.modelId ?? null
-        return Object.freeze({ ...saved, fallbackModelId, effectiveModelId: resolveSessionModel(undefined, saved.modelId, fallbackModelId) })
+      const resourceProject = async (session: Session, requestedProjectId?: string) => {
+        if (requestedProjectId === undefined) {
+          if (session.continuous) throw new TypeError('projectId is required for a continuous Session')
+          return session.projectId
+        }
+        const projectId = nonEmpty(requestedProjectId, 'projectId')
+        if (!session.continuous && projectId !== session.projectId) throw treeError('invalid-history')
+        return (await projects.requireAvailable(projectId, session.agentId)).id
+      }
+      const defaults = ({ id, modelId, revision }: AgentRecord): SessionDefaults =>
+        Object.freeze({ agentId: id, modelId, revision, fallbackModelId: null, effectiveModelId: modelId })
+      const withEffectiveModel = (session: Session): Session => {
+        if (!session.continuous || session.modelId !== null) return session
+        const modelId = agents.get(session.agentId)?.modelId ?? null
+        return modelId === null ? session : Object.freeze({ ...session, modelId })
       }
       ctx.effect(() => async () => {
         accepting = false
@@ -118,8 +133,10 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
       }, 'join session record operations')
 
       const sessions: SessionPort = {
-        openProjectFileTree: (id, path, owner, signal) => resourceCall(id, signal, async (signal, session) => {
-          const call = files.openTree(id, session.projectId, path, owner, signal)
+        openProjectFileTree: (id, path, owner, signal, projectId) => resourceCall(id, signal, async (signal, session) => {
+          const project = await resourceProject(session, projectId)
+          signal.throwIfAborted()
+          const call = files.openTree(id, project, path, owner, signal)
           return { ...call, result: call.result.then(page => {
             if (page.nextPage !== null) treeCursors.set(page.cursorId, { scope: id, owner })
             return page
@@ -130,9 +147,21 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         // Close retains the captured provider generation and remains valid after Session shutdown.
         closeProjectFileTree: (id, owner, cursorId) => files.closeTree(id, owner, cursorId),
         onProjectFileTreeRetired: listener => files.onTreeRetired(listener),
-        searchProjectFiles: (id, query, signal) => resourceCall(id, signal, async (signal, session) => files.search(session.projectId, query, signal), 'file', false, 'project-read'),
-        previewProjectFile: (id, selection, signal) => resourceCall(id, signal, async (signal, session) => files.preview(session.projectId, selection, signal), 'file', false, 'project-read'),
-        prepareProjectFiles: (id, key, selections, signal) => resourceCall(id, signal, async (signal, session) => files.prepare(id, session.projectId, key, selections, signal), 'file', true),
+        searchProjectFiles: (id, query, signal, projectId) => resourceCall(id, signal, async (signal, session) => {
+          const project = await resourceProject(session, projectId)
+          signal.throwIfAborted()
+          return files.search(project, query, signal)
+        }, 'file', false, 'project-read'),
+        previewProjectFile: (id, selection, signal, projectId) => resourceCall(id, signal, async (signal, session) => {
+          const project = await resourceProject(session, projectId)
+          signal.throwIfAborted()
+          return files.preview(project, selection, signal)
+        }, 'file', false, 'project-read'),
+        prepareProjectFiles: (id, key, selections, signal, projectId) => resourceCall(id, signal, async (signal, session) => {
+          const project = await resourceProject(session, projectId)
+          signal.throwIfAborted()
+          return files.prepare(id, project, key, selections, signal)
+        }, 'file', true),
         getFileSnapshot: (id, snapshotId, signal) => resourceCall(id, signal, async signal => {
           const call = files.read(id, [snapshotId], signal)
           return { ...call, result: call.result.then(values => values[0]) }
@@ -153,15 +182,10 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           if (!await records.getSession(sessionId)) throw new Error(`unknown session ${sessionId}`)
           return images.renew(sessionId, assetIds)
         }),
-        getSessionDefaults: agentId => track(async () => {
-          const agent = requireAgent(agentId)
-          return withFallback(await records.getSessionDefaults(agent.id), agent)
-        }),
+        getSessionDefaults: agentId => track(async () => defaults(requireAgent(agentId))),
         setSessionDefaults: (agentId, requestedModelId, expectedRevision) => track(async () => {
-          const agent = requireAgent(agentId)
           const modelId = requestedModelId === null ? null : nonEmpty(requestedModelId, 'modelId')
-          if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new TypeError('expectedRevision must be a non-negative safe integer')
-          return withFallback(await records.setSessionDefaults(agent.id, modelId, expectedRevision), agent)
+          return defaults(await agents.setDefaultModel(nonEmpty(agentId, 'agentId'), modelId, expectedRevision))
         }),
         getAgentTools: agentId => track(() => records.getAgentTools(requireAgent(agentId).id)),
         setAgentTools: (agentId, input) => track(() => {
@@ -173,9 +197,17 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         createSession(projectId, agentId, requestedModelId) {
           return track(async () => {
             const agent = requireAgent(agentId)
-            const modelId = requestedModelId === undefined ? undefined : nonEmpty(requestedModelId, 'modelId')
-            await projects.requireAvailable(nonEmpty(projectId, 'projectId'))
-            return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.modelId ?? null, agent.environmentIds)
+            await projects.requireAvailable(nonEmpty(projectId, 'projectId'), agent.id)
+            const modelId = requestedModelId === undefined ? agent.modelId : nonEmpty(requestedModelId, 'modelId')
+            return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.environmentIds)
+          })
+        },
+        openContinuousSession(projectId, agentId) {
+          return track(async () => {
+            const agent = requireAgent(agentId)
+            const project = projectId === undefined ? await projects.openAgentWorkspace(agent.id) :
+              await projects.requireAvailable(nonEmpty(projectId, 'projectId'), agent.id)
+            return withEffectiveModel(await records.createSession(inputs.newId(), project.id, agent.id, inputs.now(), null, agent.environmentIds, true))
           })
         },
         selectSessionModel(sessionId, rawModelId, protocolId) {
@@ -187,7 +219,10 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         archiveSession: id => track(() => records.archiveSession(nonEmpty(id, 'sessionId'))),
         restoreSession: id => track(() => records.restoreSession(nonEmpty(id, 'sessionId'))),
         listArchivedSessions: () => track(() => records.listArchivedSessions()),
-        getSession: id => track(() => records.getSession(id)),
+        getSession: id => track(async () => {
+          const session = await records.getSession(id)
+          return session ? withEffectiveModel(session) : undefined
+        }),
         listSessions: projectId => track(async () => {
           if (!await projects.getProject(projectId)) throw new Error(`unknown project ${projectId}`)
           return records.listSessions(projectId)
@@ -205,6 +240,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         readFileSnapshots: (id, ids, signal) => resourceCall(id, signal, async signal => files.read(id, ids, signal), 'file'),
         describeImages: (sessionId, assetIds) => track(() => images.describe(sessionId, assetIds)),
         findAcceptedRun: input => track(() => records.findAcceptedRun(input)),
+        planContinuousRun: input => track(() => records.planContinuousRun(input)),
         registerRun: (id, input, now, prompts, model, native) => track(() => records.registerRun(id, input, now, prompts, model, native)),
         loadNativeInitialization: sessionId => track(() => records.loadNativeInitialization(sessionId)),
         loadNativeHistory: (sessionId, parentNodeId) => track(() => records.loadNativeHistory(sessionId, parentNodeId)),

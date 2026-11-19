@@ -24,7 +24,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | --- | --- | --- |
 | 应用生命周期 | [products](./modules/products/README.md) | 当前目录与启停组件如何对应实际资源，以及完整生命周期目标与实现缺口 |
 | Claude Agent | [claude-agent](./modules/claude-agent/README.md) | 如何用用户自己的 Claude 环境执行、审批、取消并等待进程退出 |
-| Personal Agent | [personal-agent](./modules/personal-agent/README.md) | 以 Anybox Harness 为起点的独立应用，包含项目、会话树、模型设置、原生 Run 与 Computer |
+| Personal Agent | [personal-agent](./modules/personal-agent/README.md) | 独立 Agent 目录、连续对话、模型设置、原生 Run 与 Computer |
 | Models | [models](./modules/models/README.md) | 定义、连接、配置、凭据、目录与原生协议如何协作 |
 | 执行 | [execution](./modules/execution/README.md) | Run 如何准入、选择协议 Loop、执行操作并等待资源退出 |
 | Computer 资源 | [computers](./modules/computers/README.md) | 本机按需实例、固定工作区、工具声明接纳和实际 scope 退出 |

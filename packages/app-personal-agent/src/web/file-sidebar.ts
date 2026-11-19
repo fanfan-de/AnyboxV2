@@ -78,8 +78,7 @@ const iconURLs = {
 let viewSequence = 0
 /** One visible sidebar reuses the active thread's controller and joins all of its own reads. */
 export function createFileSidebar(container: HTMLElement, environment: {
-  api: Api; messageFor(error: unknown): string; changed(sessionId: string, state: FileSidebarSessionState): void
-  projectLabel?(ref: SessionRef): string | undefined
+  api: Api; messageFor(error: unknown): string; changed(ref: SessionRef, state: FileSidebarSessionState): void
 }): FileSidebar {
   const document = container.ownerDocument, lifetime = new AbortController(), options = { signal: lifetime.signal }
   const icon = (name: keyof typeof iconURLs, className = '') => {
@@ -90,19 +89,19 @@ export function createFileSidebar(container: HTMLElement, environment: {
   const pathbar = document.createElement('div'); pathbar.className = 'file-pathbar'
   const split = document.createElement('div'); split.className = 'file-sidebar-split'
   const treeSection = document.createElement('section'); treeSection.className = 'file-tree-section'
-  const collapse = document.createElement('button'); collapse.type = 'button'; collapse.append(icon('files')); collapse.setAttribute('aria-label', '折叠项目文件树')
-  const refreshTree = document.createElement('button'); refreshTree.type = 'button'; refreshTree.append(icon('refresh')); refreshTree.title = '刷新项目文件树'; refreshTree.setAttribute('aria-label', refreshTree.title)
+  const collapse = document.createElement('button'); collapse.type = 'button'; collapse.append(icon('files')); collapse.setAttribute('aria-label', '折叠文件树')
+  const refreshTree = document.createElement('button'); refreshTree.type = 'button'; refreshTree.append(icon('refresh')); refreshTree.title = '刷新文件树'; refreshTree.setAttribute('aria-label', refreshTree.title)
   const pathbarActions = document.createElement('div'); pathbarActions.className = 'file-pathbar-actions'; pathbarActions.append(refreshTree, collapse)
   const filterBox = document.createElement('label'); filterBox.className = 'file-tree-filter'
-  const filter = document.createElement('input'); filter.type = 'search'; filter.placeholder = '筛选文件…'; filter.setAttribute('aria-label', '筛选已加载的项目文件'); filter.title = '筛选已加载的目录和文件；展开目录或加载更多可查看更多条目'
+  const filter = document.createElement('input'); filter.type = 'search'; filter.placeholder = '筛选文件…'; filter.setAttribute('aria-label', '筛选已加载的文件'); filter.title = '筛选已加载的目录和文件；展开目录或加载更多可查看更多条目'
   filterBox.append(filter)
-  const treeList = document.createElement('div'); treeList.className = 'file-tree-list'; treeList.setAttribute('role', 'tree'); treeList.setAttribute('aria-label', '项目文件目录')
+  const treeList = document.createElement('div'); treeList.className = 'file-tree-list'; treeList.setAttribute('role', 'tree'); treeList.setAttribute('aria-label', '文件目录')
   treeSection.append(filterBox, treeList)
   const separator = document.createElement('div'); separator.className = 'file-tree-separator'; separator.tabIndex = 0
-  separator.setAttribute('role', 'separator'); separator.setAttribute('aria-label', '调整项目文件目录宽度'); separator.setAttribute('aria-orientation', 'vertical')
+  separator.setAttribute('role', 'separator'); separator.setAttribute('aria-label', '调整文件目录宽度'); separator.setAttribute('aria-orientation', 'vertical')
   const content = document.createElement('section'); content.className = 'file-content-section file-preview-pane'
   const empty = document.createElement('div'); empty.className = 'file-preview-empty'
-  const emptyTitle = document.createElement('strong'); emptyTitle.textContent = '预览项目文件'
+  const emptyTitle = document.createElement('strong'); emptyTitle.textContent = '预览文件'
   const emptyHint = document.createElement('p'); empty.append(emptyTitle, emptyHint)
   const tabs = document.createElement('div'); tabs.className = 'file-tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', '打开的文件')
   const body = document.createElement('div'); body.className = 'file-preview-body'
@@ -138,9 +137,9 @@ export function createFileSidebar(container: HTMLElement, environment: {
   const activeTab = () => state.tabs.find(tab => tab.id === state.activeTabId)
   const editable = () => {
     const snapshot = controller?.snapshot()
-    return Boolean(snapshot?.session && !snapshot.loading && !snapshot.busy && !snapshot.pending && !snapshot.session.archivedAt && snapshot.session.historyMode !== 'dialogue-v1')
+    return Boolean(snapshot?.session && !snapshot.historyOnly && !snapshot.loading && !snapshot.busy && !snapshot.pending && !snapshot.session.archivedAt && snapshot.session.historyMode !== 'dialogue-v1')
   }
-  const changed = () => { if (ref && !disposed) environment.changed(ref.sessionId, state) }
+  const changed = () => { if (ref && !disposed) environment.changed(ref, state) }
   const splitWidth = () => split.getBoundingClientRect?.().width ?? 0
   const stopDrag = () => {
     const previous = drag; drag = undefined
@@ -186,9 +185,9 @@ export function createFileSidebar(container: HTMLElement, environment: {
     const focused = treeList.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.treePath : undefined
     const scroll = treeList.scrollTop, rows: HTMLElement[] = [], client = tree
     if (!ref || !controller) {
-      const hint = document.createElement('p'); hint.className = 'file-tree-status'; hint.textContent = '选择一个会话以浏览项目文件'; rows.push(hint)
+      const hint = document.createElement('p'); hint.className = 'file-tree-status'; hint.textContent = '打开一个对话以浏览文件'; rows.push(hint)
     } else if (!client) {
-      const hint = document.createElement('p'); hint.className = 'file-tree-status'; hint.textContent = '正在读取项目文件…'; rows.push(hint)
+      const hint = document.createElement('p'); hint.className = 'file-tree-status'; hint.textContent = '正在读取文件…'; rows.push(hint)
     } else {
       const expanded = new Set(state.treeExpanded)
       const query = treeQuery.trim().toLocaleLowerCase(), included = new Set<string>()
@@ -269,10 +268,12 @@ export function createFileSidebar(container: HTMLElement, environment: {
     const tab = activeTab(), preview = tab ? previews.get(tab.id) : undefined
     const currentFile = tab?.item.selection?.kind === 'project-file'
     tabs.hidden = !tab; body.hidden = !tab; empty.hidden = Boolean(tab); view.classList.toggle('has-file-tabs', Boolean(tab))
-    emptyHint.textContent = ref ? '从右侧目录选择文件，在这里查看内容。' : '选择一个会话以浏览项目文件。'
-    treeList.hidden = state.treeCollapsed; filterBox.hidden = state.treeCollapsed; collapse.setAttribute('aria-expanded', String(!state.treeCollapsed)); collapse.setAttribute('aria-label', state.treeCollapsed ? '展开项目文件树' : '折叠项目文件树')
+    emptyHint.textContent = ref ? '从右侧目录选择文件，在这里查看内容。' : '打开一个对话以浏览文件。'
+    treeList.hidden = state.treeCollapsed; filterBox.hidden = state.treeCollapsed; collapse.setAttribute('aria-expanded', String(!state.treeCollapsed)); collapse.setAttribute('aria-label', state.treeCollapsed ? '展开文件树' : '折叠文件树')
     collapse.title = collapse.getAttribute('aria-label')!; collapse.setAttribute('aria-pressed', String(!state.treeCollapsed)); renderLayout()
-    const scope = ref ? environment.projectLabel?.(ref) || '项目' : '选择会话', parts = [scope, ...(tab ? tabPath(tab).split('/') : [])]
+    const snapshotProject = tab?.item.file?.projectId
+    const scope = '文件'
+    const parts = [scope, ...(tab ? tabPath(tab).split('/') : [])]
     breadcrumbs.title = parts.join(' / ')
     breadcrumbs.replaceChildren(...parts.flatMap((part, index) => {
       const crumb = document.createElement('span'); crumb.className = 'file-preview-breadcrumb'; crumb.textContent = part; crumb.title = part
@@ -282,7 +283,8 @@ export function createFileSidebar(container: HTMLElement, environment: {
     if (!tab) { pre.textContent = ''; title.title = scope; return }
     title.title = tabLabel(tab)
     pre.setAttribute('aria-label', `只读文件内容 ${tabLabel(tab)}`)
-    rangeBox.hidden = !currentFile; current.hidden = currentFile || !tab.item.file
+    const otherProject = Boolean(snapshotProject && snapshotProject !== ref?.projectId)
+    rangeBox.hidden = !currentFile; current.hidden = currentFile || !tab.item.file || otherProject
     current.textContent = tab.kind === 'draft' ? '更新为当前文件' : '查看当前文件'
     reload.hidden = !currentFile; previewRange.disabled = Boolean(preview?.loading)
     if (currentFile && !dirtyRange && document.activeElement !== start && document.activeElement !== end) {
@@ -299,7 +301,7 @@ export function createFileSidebar(container: HTMLElement, environment: {
     else if (value) detail.textContent = `当前文件预览，发送时重新读取 · 共 ${value.totalLines} 行 · ${value.byteLength} 字节${value.canReference ? '' : ' · 仅显示开头，请缩小行范围后引用'}`
     else detail.textContent = '选择文件查看只读内容。'
     const loaded = Boolean(value && !preview?.loading && preview.key === previewKey(tab))
-    apply.disabled = !loaded || !editable() || dirtyRange || Boolean(value && 'canReference' in value && !value.canReference)
+    apply.disabled = !loaded || !editable() || otherProject || dirtyRange || Boolean(value && 'canReference' in value && !value.canReference)
     const snapshot = controller?.snapshot(), previous = snapshot?.files.find(item => item.id === tab.item.id)
     const staleDraft = tab.kind === 'draft' && (tab.parentNodeId !== snapshot?.position.viewNodeId || !sameFileReference(previous, tab.item))
     if (staleDraft) apply.disabled = true
@@ -471,7 +473,7 @@ export function createFileSidebar(container: HTMLElement, environment: {
     const selection: FileSelection = { kind: 'project-file', path: tab.item.file.path, ...(tab.item.file.range ? { range: tab.item.file.range } : {}) }
     if (tab.kind === 'draft') {
       const item: DraftFile = { id: tab.item.id, selection }
-      if (!controller.applyFileReference({ sessionId: ref.sessionId, parentNodeId: tab.parentNodeId, item, expectedItem: tab.item })) {
+      if (!controller.applyFileReference({ ...ref, parentNodeId: tab.parentNodeId, item, expectedItem: tab.item })) {
         notice = controller.snapshot().notice || '当前引用暂不可修改，请重新打开。'; renderPreview(); return
       }
       state = { ...state, tabs: state.tabs.filter(item => item.id !== tab.id) }; previews.delete(tab.id); mentions.delete(tab.id)
@@ -485,7 +487,7 @@ export function createFileSidebar(container: HTMLElement, environment: {
     const parentNodeId = tab.kind === 'draft' || mention ? tab.parentNodeId : snapshot.position.viewNodeId
     const item: DraftFile = selection.kind === 'project-file' ? { id: tab.kind === 'draft' ? original.id : crypto.randomUUID(), selection: currentSelection(tab) }
       : { id: tab.kind === 'draft' ? original.id : crypto.randomUUID(), selection, file: original.file }
-    const accepted = controller.applyFileReference({ sessionId: ref.sessionId, parentNodeId, item, ...(tab.kind === 'draft' ? { expectedItem: original } : {}), ...(mention ? { mention } : {}) })
+    const accepted = controller.applyFileReference({ ...ref, parentNodeId, item, ...(tab.kind === 'draft' ? { expectedItem: original } : {}), ...(mention ? { mention } : {}) })
     if (accepted) { mentions.delete(tab.id); notice = '已引用到当前输入。'; if (tab.kind === 'draft') saveTab({ ...tab, item }); renderPreview() }
     else { notice = controller.snapshot().notice || '当前输入暂不可修改，请稍后重新引用。'; renderPreview() }
   }, options)

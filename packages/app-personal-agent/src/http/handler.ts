@@ -37,10 +37,14 @@ import { isTransportError, parseUnitCapabilitiesHeader, unitCapabilitiesHeader, 
 import type { UnitRegistration, UnitReply, UnitRequest } from '../core/unit/transport-domain.js'
 import type { JsonValue } from '@anybox/models'
 import type { ComputerEnvironments } from '../core/computer/environments.js'
+import type { AgentDetail, AgentSummary } from '../core/agent/domain.js'
 
 export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> {
-  listAgents(): readonly { readonly id: string }[]
+  listAgents(): readonly AgentSummary[]
+  getAgent(id: string): AgentDetail | undefined
+  createAgent(input: unknown): Promise<AgentDetail>
+  updateAgent(id: string, input: unknown): Promise<AgentDetail>
   listTools(): ReturnType<typeof listTools>
   directoryPickerSupported(): boolean
   localDirectorySelectionSupported?(): boolean
@@ -55,6 +59,7 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   openProject?(path: string, options?: { readonly computerAttachmentId?: string }): Promise<Project>
   listProjects(): Promise<readonly Project[]>
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
+  openContinuousSession(projectId: string | undefined, agentId: string): Promise<Session>
   getSessionDefaults(agentId: string): Promise<SessionDefaults>
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SessionDefaults>
   getAgentTools(agentId: string): Promise<AgentToolsSelection>
@@ -179,9 +184,10 @@ function knownFailure(error: unknown): HttpFailure {
     }
     if ('code' in error && error.code === 'node-not-found') return failure(404, 'node-not-found')
     if ('code' in error && error.code === 'invalid-history') return failure(409, 'invalid-history')
+    if ('code' in error && error.code === 'context-too-large') return failure(400, 'context-too-large')
     if ('code' in error && error.code === 'session-defaults-conflict') return failure(409, 'session-defaults-conflict')
     if ('code' in error && error.code === 'agent-tools-conflict') return failure(409, 'agent-tools-conflict')
-    if ('code' in error && ['session-archived', 'session-has-active-runs', 'legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable'].includes(String(error.code))) return failure(409, String(error.code))
+    if ('code' in error && ['session-archived', 'session-has-active-runs', 'legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable', 'history-position-changed', 'continuous-session'].includes(String(error.code))) return failure(409, String(error.code))
     if (/idempotency key already used/.test(error.message)) {
       return failure(409, 'conflict')
     }
@@ -198,9 +204,17 @@ function sessionView(session: Session): SessionView {
   return {
     id: session.id, title: session.title, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
     modelId: session.modelId, archivedAt: session.archivedAt, toolSelection: session.toolSelection,
+    ...(session.continuous ? { continuous: true, headNodeId: session.headNodeId ?? null } : {}),
     ...(session.toolEnvironments ? { toolEnvironments: session.toolEnvironments } : {}),
     protocolId: session.protocolId, historyMode: session.historyMode,
   }
+}
+
+function fileProjectId(url: URL): string | undefined {
+  const values = url.searchParams.getAll('projectId')
+  if (!values.length) return undefined
+  if (values.length !== 1 || !validId(values[0])) throw failure(400, 'invalid-input')
+  return values[0]
 }
 
 function runView(run: Run): RunView {
@@ -208,6 +222,7 @@ function runView(run: Run): RunView {
     id: run.id, sessionId: run.sessionId, input: run.input, images: run.images ?? [], files: run.files ?? [], status: run.status,
     createdAt: run.createdAt, updatedAt: run.updatedAt, revision: run.revision, history: run.history,
     modelId: run.modelId, requestedModelId: run.requestedModelId, modelSnapshot: run.modelSnapshot,
+    ...(run.projectId ? { projectId: run.projectId } : {}),
     ...(run.protocolBinding ? { protocolBinding: run.protocolBinding } : {}),
     ...(run.legacyModelSnapshot ? { legacyModelSnapshot: run.legacyModelSnapshot } : {}),
     ...(run.resultNodeId ? { resultNodeId: run.resultNodeId } : {}),
@@ -623,6 +638,36 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         json(response, 200, commands.listAgents())
         return
       }
+      const agentFields = ['name', 'description', 'instructions', 'modelId', 'logoShader']
+      if (method === 'POST' && path === '/api/v1/agents') {
+        const body = await requestObject(request, [...agentFields, 'requestId'], 1_048_576)
+        if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+        json(response, 201, await commands.createAgent(body))
+        return
+      }
+      const agentMatch = /^\/api\/v1\/agents\/([^/]+)$/.exec(path)
+      if (method === 'GET' && agentMatch) {
+        const agent = commands.getAgent(decodeURIComponent(agentMatch[1]))
+        if (!agent) throw failure(404, 'agent-not-found')
+        json(response, 200, agent)
+        return
+      }
+      if (method === 'POST' && agentMatch) {
+        const body = await requestObject(request, [...agentFields, 'expectedRevision'], 1_048_576)
+        if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+        json(response, 200, await commands.updateAgent(decodeURIComponent(agentMatch[1]), body))
+        return
+      }
+      const agentSessionMatch = /^\/api\/v1\/agents\/([^/]+)\/session$/.exec(path)
+      if (method === 'POST' && agentSessionMatch) {
+        const body = await requestObject(request, ['projectId'])
+        if (body.projectId !== undefined && !validId(body.projectId)) throw failure(400, 'invalid-input')
+        if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+        const agentId = decodeURIComponent(agentSessionMatch[1])
+        if (!commands.getAgent(agentId)) throw failure(404, 'agent-not-found')
+        json(response, 200, sessionView(await commands.openContinuousSession(body.projectId as string | undefined, agentId)))
+        return
+      }
       if (method === 'GET' && path === '/api/v1/tools') {
         json(response, 200, commands.listTools()); return
       }
@@ -797,12 +842,13 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
       const fileTreeMatch = /^\/api\/v1\/sessions\/([^/]+)\/project-files\/tree\/(open|page|close)$/.exec(path)
       if (fileTreeMatch) {
         if (method !== 'POST') throw failure(405, 'method-not-allowed')
-        if (url.search) throw failure(400, 'invalid-input')
         const sessionId = decodeURIComponent(fileTreeMatch[1]), action = fileTreeMatch[2], owner = context.actorId
+        if ([...url.searchParams.keys()].some(key => action !== 'open' || key !== 'projectId')) throw failure(400, 'invalid-input')
         if (action === 'open') {
           const body = await requestObject(request, ['path']), treePath = validateFileTreePath(body.path)
+          const projectId = fileProjectId(url)
           const opened = await imageRequest(request, response, async signal => {
-            const page = await joinImageCall(commands.openProjectFileTree(sessionId, treePath, owner, signal), signal, 'file')
+            const page = await joinImageCall(commands.openProjectFileTree(sessionId, treePath, owner, signal, projectId), signal, 'file')
             if (page.nextPage === null) return page
             const tree = { owner, sessionId,
               page: (number: number, readSignal: AbortSignal) => commands.readProjectFileTreePage(sessionId, owner, page.cursorId, number, readSignal),
@@ -840,19 +886,21 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
       if (projectFilesMatch) {
         const sessionId = decodeURIComponent(projectFilesMatch[1]), action = projectFilesMatch[2]
         if (method === 'GET' && action === 'search') {
-          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.searchProjectFiles(sessionId, url.searchParams.get('q') ?? '', signal), signal, 'file'))); return
+          const projectId = fileProjectId(url)
+          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.searchProjectFiles(sessionId, url.searchParams.get('q') ?? '', signal, projectId), signal, 'file'))); return
         }
         if (method === 'POST' && action === 'preview') {
           const body = await requestObject(request, ['path', 'range'])
           const [selection] = validateFileSelections([{ kind: 'project-file', ...body }])
           if (selection.kind !== 'project-file') throw failure(400, 'invalid-input')
-          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.previewProjectFile(sessionId, selection, signal), signal, 'file'))); return
+          const projectId = fileProjectId(url)
+          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.previewProjectFile(sessionId, selection, signal, projectId), signal, 'file'))); return
         }
         if (method === 'POST' && action === 'prepare') {
-          const body = await requestObject(request, ['preparationKey', 'selections'])
-          if (!validId(body.preparationKey)) throw failure(400, 'invalid-input')
+          const body = await requestObject(request, ['preparationKey', 'selections', 'projectId'])
+          if (!validId(body.preparationKey) || (body.projectId !== undefined && !validId(body.projectId))) throw failure(400, 'invalid-input')
           const selections = validateFileSelections(body.selections), key = body.preparationKey
-          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.prepareProjectFiles(sessionId, key, selections, signal), signal, 'file'))); return
+          json(response, 200, await imageRequest(request, response, signal => joinImageCall(commands.prepareProjectFiles(sessionId, key, selections, signal, body.projectId as string | undefined), signal, 'file'))); return
         }
         if (method === 'POST' && action === 'renew') {
           const body = await requestObject(request, ['snapshotIds']), ids = validateSnapshotIds(body.snapshotIds)
@@ -899,7 +947,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
       }
       const createRunMatch = /^\/api\/v1\/sessions\/([^/]+)\/runs$/.exec(path)
       if (method === 'POST' && createRunMatch) {
-        const body = await requestObject(request, ['parentNodeId', 'input', 'images', 'files', 'idempotencyKey', 'modelId'])
+        const body = await requestObject(request, ['parentNodeId', 'input', 'images', 'files', 'idempotencyKey', 'modelId', 'projectId'])
         if (body.images !== undefined && (!Array.isArray(body.images) || body.images.length > imageLimits.maxImages || body.images.some(image =>
           !image || typeof image !== 'object' || Array.isArray(image) || Object.keys(image).some(key => key !== 'assetId') || typeof image.assetId !== 'string' || !image.assetId || image.assetId.length > 1024))) throw failure(400, 'invalid-input')
         const run = await commands.startRun({
@@ -910,6 +958,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
           ...(body.images === undefined ? {} : { images: body.images as { assetId: string }[] }),
           idempotencyKey: body.idempotencyKey as string,
           ...(body.modelId === undefined ? {} : { modelId: body.modelId as string }),
+          ...(body.projectId === undefined ? {} : { projectId: body.projectId as string }),
         })
         if (run.status === 'running' || run.status === 'cancelling') {
           context.retainUntil(Promise.resolve().then(() => commands.waitRun(run.id)))

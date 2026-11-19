@@ -40,8 +40,9 @@ export function createHarnessServerRuntime(root: Context, config: HarnessServerC
     await installHarnessServerModels(root, config, options.models, installation.track, installation.serviceBindings)
     const hasDefault = service<ModelsSettingsService>(modelsSettingsServiceKey)?.configurations().some(model => model.id === 'default') ?? false
     const serverCoreOptions: HarnessServerCoreOptions = { ...options, serviceBindings: integration.serviceBindings, localWorkerDirectory: options.localWorkerDirectory ?? `${config.harnessDatabasePath}.computer-worker`, initialProjects: options.projects ?? options.initialProjects,
+      agentWorkspacesDirectory: options.agentWorkspacesDirectory ?? `${config.harnessDatabasePath}.workspaces`,
       agents: options.agents ?? definitions.map(agent => ({ ...agent, ...(hasDefault ? { modelId: 'default' } : {}) })) }
     for (const component of [...createHarnessServerPromptComponents(serverCoreOptions), createImageAssetsComponent({ directory: config.imageAssetsDirectory }),
-      ...createHarnessServerAgentComponents(root, serverCoreOptions, installation), createHarnessServerHttpComponent(root, definitions, integration.http)]) installation.install(component)
+      ...createHarnessServerAgentComponents(root, serverCoreOptions, installation), createHarnessServerHttpComponent(root, integration.http)]) installation.install(component)
   }, () => service<RunAdmissionPort>(runAdmissionServiceKey)?.closeAdmission(), integration.serviceBindings)
 }

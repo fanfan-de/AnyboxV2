@@ -65,6 +65,10 @@ export function createSessionDefaultsClient(source: Api, messageFor: (error: unk
       emit()
     },
     reload: () => load(agentId),
+    refresh(id: string): void {
+      const value = drafts.get(id)
+      if (value && !dirty(value)) void load(id)
+    },
     async save(): Promise<void> {
       const id = agentId, value = entry()
       if (disposed || !value?.defaults || value.loading || value.saving || value.conflict || !dirty(value)) return
@@ -73,7 +77,7 @@ export function createSessionDefaultsClient(source: Api, messageFor: (error: unk
       try {
         const defaults = await requests.api<SessionDefaults>(`/agents/${encodeURIComponent(id)}/session-defaults`, { modelId, expectedRevision })
         if (disposed) return
-        value.defaults = defaults; value.modelId = defaults.modelId; value.notice = '已保存，接下来创建的会话将使用此设置。'
+        value.defaults = defaults; value.modelId = defaults.modelId; value.notice = '已保存。未手动指定模型时，Agent 使用此设置。'
       } catch (error) {
         if (disposed) return
         value.conflict = error instanceof Error && 'code' in error && error.code === 'session-defaults-conflict'
@@ -87,7 +91,7 @@ export function createSessionDefaultsClient(source: Api, messageFor: (error: unk
       for (const [id, value] of drafts) {
         if (!value.saving && !dirty(value)) continue
         agentId = id
-        value.notice = value.saving ? '正在保存新会话默认模型，请稍候。' : '新会话默认模型尚未保存，请保存或重新加载以放弃修改。'
+        value.notice = value.saving ? '正在保存 Agent 默认模型，请稍候。' : 'Agent 默认模型尚未保存，请保存或重新加载以放弃修改。'
         value.failed = false; emit(); return false
       }
       return true
@@ -97,15 +101,15 @@ export function createSessionDefaultsClient(source: Api, messageFor: (error: unk
 }
 
 export function defaultModelDescription(modelId: string | null, models: readonly RunnableModelSummary[], providers: readonly ProviderConnection[]): string {
-  if (!modelId) return '尚未设置默认模型，新会话需先选择模型。'
+  if (!modelId) return '尚未设置默认模型，请先选择一个模型。'
   const model = models.find(item => item.id === modelId)
-  if (!model) return '原默认模型已不可用，请重新选择；新会话会保留此选择。'
+  if (!model) return '原默认模型已不可用，请重新选择。'
   const provider = providers.find(item => item.id === model.connectionId)
   const label = `${provider ? `${provider.name} · ` : ''}${model.name}`
-  return canUseModel(model) ? `新会话将使用：${label}。` : `${label}：${modelAvailability(model)}，请处理配置或重新选择。`
+  return canUseModel(model) ? `Agent 默认使用 ${label}。` : `${label}：${modelAvailability(model)}，请处理配置或重新选择。`
 }
 
-export function setupSessionDefaults(source: Api, messageFor: (error: unknown) => string, catalog: ModelsCatalog, container: HTMLElement, agentSelect: HTMLSelectElement) {
+export function setupSessionDefaults(source: Api, messageFor: (error: unknown) => string, catalog: ModelsCatalog, container: HTMLElement) {
   const client = createSessionDefaultsClient(source, messageFor), lifetime = new AbortController()
   const required = <T extends HTMLElement>(selector: string): T => {
     const value = container.querySelector<T>(selector)
@@ -141,7 +145,7 @@ export function setupSessionDefaults(source: Api, messageFor: (error: unknown) =
     const modelId = state.modelId ?? state.defaults?.fallbackModelId ?? null
     hint.textContent = !state.agentId ? '请先选择执行设备上的 Agent。' : state.loading ? '正在读取默认模型…' :
       !state.defaults ? '默认模型设置尚未读取。' : available.loading ? '正在读取模型列表…' : available.error ? `模型列表读取失败：${available.error}` :
-      `${defaultModelDescription(modelId, available.models, available.providers)} 仅影响新会话。`
+      `${defaultModelDescription(modelId, available.models, available.providers)}`
     notice.textContent = state.notice; notice.hidden = !state.notice; notice.dataset.error = String(state.failed)
   }
   modelSelect.addEventListener('change', () => { client.selectModel(modelSelect.value || null) }, { signal: lifetime.signal })
@@ -151,12 +155,8 @@ export function setupSessionDefaults(source: Api, messageFor: (error: unknown) =
   render()
   return {
     selectAgent(id: string) { client.selectAgent(splitScopedId(id)?.id ?? id) },
-    canLeave() {
-      const result = client.canLeave()
-      if (!result) agentSelect.value = [...agentSelect.options].find(option =>
-        (splitScopedId(option.value)?.id ?? option.value) === client.snapshot().agentId)?.value ?? ''
-      return result
-    },
+    refreshAgent(id: string) { client.refresh(id) },
+    canLeave: client.canLeave,
     async dispose() { lifetime.abort(); unsubscribeClient(); unsubscribeCatalog(); await client.dispose() },
   }
 }

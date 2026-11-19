@@ -178,7 +178,7 @@ export function createTrajectoryView(container: HTMLElement, actions: Trajectory
     nodes.push(fields)
     const controls = document.createElement('div'); controls.className = 'trajectory-detail-actions'
     if (run.resultNodeId) controls.append(button('查看回答', () => actions.answer(run.resultNodeId!)))
-    if (isActive(run)) { const cancel = button('取消此运行', () => actions.cancel(run.id)); cancel.disabled = Boolean(snapshot?.busy) || run.status === 'cancelling'; controls.append(cancel) }
+    if (isActive(run) && !snapshot?.historyOnly) { const cancel = button('取消此运行', () => actions.cancel(run.id)); cancel.disabled = Boolean(snapshot?.busy) || run.status === 'cancelling'; controls.append(cancel) }
     nodes.push(controls)
     const retained = new Set(nodes)
     for (const child of Array.from(inspector.childNodes)) if (!retained.has(child)) child.remove()
