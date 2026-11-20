@@ -200,6 +200,7 @@ export function setupAgentDirectory(source: Api, messageFor: (error: unknown) =>
   if (pendingCreate) { fill(pendingCreate); show('上次创建尚待确认，可用原请求重试。') }
   renderModels(); render()
   return {
+    create() { if (create.disabled) return false; select(null); return true },
     receiveAgents(values: readonly AgentSummary[]) { agents = values; renderAgents(); render() },
     refresh() {
       void catalog.refresh()

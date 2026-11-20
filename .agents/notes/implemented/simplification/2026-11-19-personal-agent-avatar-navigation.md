@@ -29,3 +29,4 @@ Personal Agent 的对话已按 Agent 持续保存，但进入工作区仍要先�
 - [Agent 目录](../feature/2026-11-19-personal-agent-directory.md)
 - [连续历史](../feature/2026-11-19-personal-agent-continuous-session.md)
 - [工作目录与运行时手册](../../../../docs/modules/personal-agent/runtime.md#工作目录)
+- [对话列表布局](../feature/2026-11-20-personal-agent-chat-layout.md) 接续头像导航，在 300 像素侧栏显示名称、摘要和搜索入口。

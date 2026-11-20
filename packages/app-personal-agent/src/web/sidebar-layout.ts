@@ -8,10 +8,10 @@ export interface SidebarState {
 }
 
 export const defaultSidebarState: SidebarState = {
-  version: 1, rightWidth: 600, leftExpanded: true, rightExpanded: true, perSession: {},
+  version: 1, rightWidth: 600, leftExpanded: true, rightExpanded: false, perSession: {},
 }
 export const sidebarSeparatorSize = 1
-const agentSidebarWidth = 72
+const agentSidebarWidth = 300
 const minimumChatWidth = 320
 export const fileSidebarBounds = [320, 720] as const
 export type SidebarSide = 'left' | 'right'
@@ -28,7 +28,7 @@ export function restoreSidebarState(value: unknown): SidebarState {
     version: 1,
     rightWidth: typeof record.rightWidth === 'number' ? clampFileSidebarWidth(record.rightWidth) : defaultSidebarState.rightWidth,
     leftExpanded: typeof record.leftExpanded === 'boolean' ? record.leftExpanded : true,
-    rightExpanded: typeof record.rightExpanded === 'boolean' ? record.rightExpanded : true,
+    rightExpanded: typeof record.rightExpanded === 'boolean' ? record.rightExpanded : defaultSidebarState.rightExpanded,
     perSession: record.perSession && typeof record.perSession === 'object' && !Array.isArray(record.perSession)
       ? Object.fromEntries(Object.entries(record.perSession)) : {},
   }
@@ -47,7 +47,7 @@ export interface SidebarFit {
 /** Fit the Personal Agent container, rather than the browser viewport. */
 export function fitSidebars(width: number, state: SidebarState): SidebarFit {
   const available = Math.max(0, Number.isFinite(width) ? width : 0)
-  const leftDrawer = available < 512
+  const leftDrawer = available < 760
   const leftDocked = !leftDrawer && state.leftExpanded
   const leftWidth = leftDocked ? agentSidebarWidth : 0
   // Determine this even while collapsed so opening a drawer does not persist a collapsed preference.

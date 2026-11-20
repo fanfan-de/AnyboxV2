@@ -33,6 +33,11 @@ function required<T extends HTMLElement>(id: string): T {
 }
 const mainAgentSlot = required<HTMLElement>('personal-agent--main-agent')
 const otherAgentList = required<HTMLElement>('personal-agent--other-agents')
+const searchToggle = required<HTMLButtonElement>('personal-agent--search-agents')
+const searchField = required<HTMLElement>('personal-agent--agent-search-field')
+const searchInput = required<HTMLInputElement>('personal-agent--agent-search')
+const searchEmpty = required<HTMLElement>('personal-agent--agent-search-empty')
+const createAgentButton = required<HTMLButtonElement>('personal-agent--create-agent')
 const settingsDialog = required<HTMLDialogElement>('personal-agent--settings-dialog')
 const openSettingsButton = required<HTMLButtonElement>('personal-agent--open-settings')
 const closeSettingsButton = required<HTMLButtonElement>('personal-agent--close-settings')
@@ -103,10 +108,19 @@ function canLeave(): boolean {
 }
 let knownAgents: readonly AgentView[] = []
 let activeAgentId = '', agentsSettled = !selected
-const agentButtons = new Map<string, { button: HTMLButtonElement; logo: ReturnType<typeof createAgentLogo>; main: boolean }>()
+const recentMessages = new Map<string, string>()
+const agentButtons = new Map<string, { button: HTMLButtonElement; logo: ReturnType<typeof createAgentLogo>; name: HTMLElement; preview: HTMLElement; main: boolean }>()
 const agentFor = (id: string) => knownAgents.find(agent => agent.id === id)
 const workspace = setupWorkspace(api, messageFor, () => activeAgentId, models, {
   root, storageKey: options.layoutKey, route: options.route, isActive: options.isActive, agentFor, agentsSettled: () => agentsSettled,
+  conversationPreview(id, text) {
+    if (!text) return
+    const preview = text.replace(/^\s{0,3}#{1,6}\s+/u, '').replace(/\s+/gu, ' ').trim().slice(0, 160)
+    if (!preview) return
+    recentMessages.set(id, preview)
+    const entry = agentButtons.get(id)
+    if (entry) entry.preview.textContent = preview
+  },
 })
 const settings = setupSettingsNavigation(root, {
   devices: options.devices, selectedId: options.selectedId, selectedName: options.selectedName,
@@ -129,6 +143,37 @@ function activateAgent(id: string): void {
   closeSidebar()
   workspace.selectAgent()
 }
+function filterAgents(): void {
+  const query = searchInput.value.trim().toLocaleLowerCase()
+  let mainVisible = false, otherVisible = false
+  for (const [id, entry] of agentButtons) {
+    const agent = agentFor(id)
+    const matches = !query || `${agent?.name ?? ''} ${agent?.description ?? ''}`.toLocaleLowerCase().includes(query)
+    entry.button.hidden = !matches
+    if (matches) { if (entry.main) mainVisible = true; else otherVisible = true }
+  }
+  mainAgentSlot.hidden = !mainVisible
+  otherAgentList.hidden = !otherVisible
+  searchEmpty.hidden = !query || mainVisible || otherVisible
+}
+function showAgentSearch(show: boolean): void {
+  searchField.hidden = !show
+  searchToggle.setAttribute('aria-expanded', String(show))
+  if (show) searchInput.focus()
+  else { searchInput.value = ''; filterAgents() }
+}
+searchToggle.addEventListener('click', () => showAgentSearch(searchField.hidden), { signal: lifetime.signal })
+searchInput.addEventListener('input', filterAgents, { signal: lifetime.signal })
+searchInput.addEventListener('keydown', event => {
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); showAgentSearch(false); searchToggle.focus() }
+}, { signal: lifetime.signal })
+createAgentButton.disabled = !agentDirectory
+createAgentButton.addEventListener('click', () => {
+  if (!canLeave()) return
+  const creating = agentDirectory?.create()
+  revealSettings('agents')
+  if (creating) root.querySelector<HTMLInputElement>('[data-agent-name]')?.focus()
+}, { signal: lifetime.signal })
 function renderAgentButtons(agents: readonly AgentView[]): void {
   const ids = new Set(agents.map(agent => agent.id))
   for (const [id, entry] of agentButtons) {
@@ -136,6 +181,7 @@ function renderAgentButtons(agents: readonly AgentView[]): void {
     entry.logo.dispose()
     entry.button.remove()
     agentButtons.delete(id)
+    recentMessages.delete(id)
   }
   let nextOther = otherAgentList.firstElementChild
   agents.forEach((agent, index) => {
@@ -144,10 +190,15 @@ function renderAgentButtons(agents: readonly AgentView[]): void {
     if (entry?.main !== main) {
       entry?.logo.dispose()
       const button = entry?.button ?? document.createElement('button')
+      button.replaceChildren()
       button.className = 'agent-nav-button'
       button.type = 'button'
       if (!entry) button.addEventListener('click', () => activateAgent(agent.id), { signal: lifetime.signal })
-      entry = { button, logo: createAgentLogo(button, { size: main ? 40 : 34 }), main }
+      const logo = createAgentLogo(button, { size: main ? 76 : 44 })
+      const copy = document.createElement('span'), name = document.createElement('span'), preview = document.createElement('span')
+      copy.className = 'agent-nav-copy'; name.className = 'agent-nav-name'; preview.className = 'agent-nav-preview'
+      copy.append(name, preview); button.append(copy)
+      entry = { button, logo, name, preview, main }
       agentButtons.set(agent.id, entry)
     }
     const { button, logo } = entry
@@ -155,6 +206,8 @@ function renderAgentButtons(agents: readonly AgentView[]): void {
     const label = main ? `主 Agent · ${name}` : name
     button.title = label
     button.setAttribute('aria-label', label)
+    entry.name.textContent = name
+    entry.preview.textContent = recentMessages.get(agent.id) || agent.description || '点击开始对话'
     logo.set({ name, logoShader: agent.logoShader })
     if (main) {
       if (mainAgentSlot.firstElementChild !== button) mainAgentSlot.append(button)
@@ -164,8 +217,7 @@ function renderAgentButtons(agents: readonly AgentView[]): void {
       nextOther = button.nextElementSibling
     }
   })
-  mainAgentSlot.hidden = agents.length === 0
-  otherAgentList.hidden = agents.length < 2
+  filterAgents()
 }
 function receiveAgents(agents: readonly AgentView[]) {
   if (closed) return

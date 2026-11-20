@@ -4,13 +4,19 @@
     <main class="workspace">
 
       <aside id="personal-agent--workspace-sidebar" class="sidebar" aria-label="Agent 侧栏" tabindex="-1">
+        <div class="sidebar-toolbar">
+          <button id="personal-agent--search-agents" class="icon-button agent-search-toggle" type="button" aria-label="搜索 Agent" title="搜索 Agent" aria-expanded="false" aria-controls="personal-agent--agent-search-field"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button>
+          <button id="personal-agent--create-agent" class="icon-button agent-create-button" type="button" aria-label="新建 Agent" title="新建 Agent" aria-haspopup="dialog"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+        <div id="personal-agent--agent-search-field" class="agent-search" hidden><input id="personal-agent--agent-search" type="search" placeholder="搜索 Agent" aria-label="按名称或简介搜索 Agent" autocomplete="off"></div>
         <button id="personal-agent--close-sidebar" class="icon-button sidebar-close" type="button" aria-label="关闭 Agent 侧栏" title="关闭 Agent 侧栏"><svg class="icon" aria-hidden="true"><use href="#personal-agent--icon-close"/></svg></button>
         <nav class="agent-navigation" aria-label="切换 Agent">
           <div id="personal-agent--main-agent" class="main-agent-slot" role="group" aria-label="主 Agent" hidden></div>
           <div id="personal-agent--other-agents" class="other-agent-list" role="group" aria-label="其他 Agent" hidden></div>
+          <p id="personal-agent--agent-search-empty" class="agent-search-empty" role="status" hidden>没有找到匹配的 Agent</p>
         </nav>
         <footer class="sidebar-footer">
-          <button id="personal-agent--open-settings" class="icon-button sidebar-settings-button" type="button" aria-label="Personal Agent 设置" title="Personal Agent 设置" aria-haspopup="dialog" aria-controls="personal-agent--settings-dialog"><svg class="icon" aria-hidden="true"><use href="#personal-agent--icon-settings"/></svg></button>
+          <button id="personal-agent--open-settings" class="icon-button sidebar-settings-button" type="button" aria-label="Personal Agent 设置" title="Personal Agent 设置" aria-haspopup="dialog" aria-controls="personal-agent--settings-dialog"><svg class="icon" aria-hidden="true"><use href="#personal-agent--icon-settings"/></svg><span>设置与连接</span></button>
         </footer>
       </aside>
       <button id="personal-agent--sidebar-backdrop" class="sidebar-backdrop" type="button" aria-label="关闭侧栏" tabindex="-1" hidden></button>

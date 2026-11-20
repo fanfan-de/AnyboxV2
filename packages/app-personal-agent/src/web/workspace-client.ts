@@ -29,7 +29,7 @@ interface CurrentPane { ref: SessionRef; agentId?: string; bundle: Bundle }
 
 export function setupWorkspace(api: HarnessClient, messageFor: (error: unknown) => string, selectedAgent: () => string,
   models: ModelsCatalog | undefined, environment: { root: HTMLElement; storageKey?: string; isActive(): boolean; agentsSettled(): boolean;
-    agentFor?(id: string): AgentView | undefined; route: {
+    agentFor?(id: string): AgentView | undefined; conversationPreview?(id: string, text: string): void; route: {
     read(): string; write(hash: string, push: boolean): void; subscribe(listener: () => void): () => void
   } }) {
   const root = environment.root
@@ -187,7 +187,15 @@ export function setupWorkspace(api: HarnessClient, messageFor: (error: unknown) 
     host.replaceChildren(bundle.view.element)
     current = { ref, agentId, bundle }
     fileSidebarSync()
-    bundle.controller.attach(() => { bundle.view?.render(); fileSidebar.refresh() })
+    bundle.controller.attach(() => {
+      bundle.view?.render(); fileSidebar.refresh()
+      if (agentId && ref.continuous) {
+        const state = bundle.controller.snapshot(), latest = state.path.at(-1)
+        const latestRun = state.runs.reduce<typeof state.run>((newest, run) => !newest || run.createdAt >= newest.createdAt ? run : newest, undefined)
+        const text = state.pending?.input || latestRun?.output || latestRun?.input || latest?.output || latest?.input
+        if (text) environment.conversationPreview?.(agentId, text)
+      }
+    })
     changes.update([ref.sessionId])
   }
 

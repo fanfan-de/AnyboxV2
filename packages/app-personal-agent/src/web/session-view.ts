@@ -45,8 +45,7 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
   element.setAttribute('aria-label', pane.continuous ? '对话' : '历史对话')
   element.innerHTML = `
     <div class="pane-heading">
-      <span class="pane-logo" hidden></span>
-      <div class="pane-title"><strong></strong></div>
+      <div class="pane-title"><span class="pane-logo" hidden></span><strong></strong></div>
       <span class="run-status" role="status"></span>
       <button class="pane-close" type="button" aria-label="返回当前对话" title="返回当前对话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m7 7 10 10M7 17 17 7"/></svg></button>
     </div>
@@ -76,7 +75,7 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
     </div>
     <form class="composer">
       <div class="composer-images" aria-label="待发送图片" aria-live="polite" hidden></div>
-      <textarea rows="2" placeholder="随心输入" aria-label="消息"></textarea>
+      <textarea rows="1" placeholder="发送消息" aria-label="消息"></textarea>
       <input class="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
       <p class="composer-model-hint" role="status" hidden></p>
       <div class="composer-footer">
@@ -89,7 +88,7 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
     </form>`
   const get = <T extends HTMLElement>(selector: string) => element.querySelector<T>(selector)!
   const logoHost = get<HTMLElement>('.pane-logo')
-  const logo = pane.continuous ? createAgentLogo(logoHost, { size: 24 }) : undefined
+  const logo = pane.continuous ? createAgentLogo(logoHost, { size: 30 }) : undefined
   const title = get<HTMLElement>('.pane-title strong')
   title.textContent = pane.continuous ? 'Personal Agent' : '历史对话'
   get<HTMLButtonElement>('.pane-close').hidden = Boolean(pane.continuous)
@@ -567,6 +566,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       if (!logo) return
       logoHost.hidden = !agent
       title.textContent = agent?.name || 'Personal Agent'
+      messageInput.placeholder = `给 ${title.textContent} 发消息`
       element.setAttribute('aria-label', `${title.textContent} · 对话`)
       logo.set(agent ?? { name: '' })
     },
