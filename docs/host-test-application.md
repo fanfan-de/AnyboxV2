@@ -8,9 +8,9 @@ Anybox Test 是用于手动验证 Anybox 宿主与应用契约的最小纯界面
 
 ```sh
 node packages/host/dist/main.js install ./tests/fixtures/host-test-app \
-  --endpoint http://127.0.0.1:3000 --trust-local --request-id host-test-install-0.1.0
+  --endpoint http://127.0.0.1:3000 --trust-local --request-id host-test-install-0.1.1
 node packages/host/dist/main.js apply --endpoint http://127.0.0.1:3000 \
-  --request-id host-test-apply-0.1.0 --app host-test
+  --request-id host-test-apply-0.1.1 --app host-test
 ```
 
 首次使用源码 CLI 前运行 `npm run build`。界面安装也可从悬浮菜单进入“管理应用 → 安装应用 → 选择文件夹”，选择 `tests/fixtures/host-test-app`，明确授信本地目录后安装，再应用更改。生效完成后手动打开 **Anybox Test**。

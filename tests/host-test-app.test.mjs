@@ -21,8 +21,8 @@ test('the host test application is a complete locally trusted interface-only dir
   assert.equal(verified.manifest.capabilityRequirements, undefined)
   const prepared = await prepareApplicationArchive(verified)
   assert.deepEqual(prepared.roles, { web: { status: 'prepared', reasons: [] } })
-  assert.equal(prepared.web.entry, '/apps/host-test/0.1.0/app.js')
-  assert.deepEqual(prepared.web.styles, ['/apps/host-test/0.1.0/style.css'])
+  assert.equal(prepared.web.entry, '/apps/host-test/0.1.1/app.js')
+  assert.deepEqual(prepared.web.styles, ['/apps/host-test/0.1.1/style.css'])
   assert.deepEqual(prepared.web.assets.map(asset => asset.file).sort(), ['payload/web/app.js', 'payload/web/style.css'])
 
   // The installable fixture must keep its stylesheet in the actual verified resource graph.

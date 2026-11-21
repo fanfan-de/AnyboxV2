@@ -17,7 +17,7 @@ button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .4; }
 button, select, input, textarea { -webkit-tap-highlight-color: transparent; }
 button { touch-action: manipulation; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
 [hidden] { display: none !important; }
 
 .workbench { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); height: 100vh; height: 100dvh; }

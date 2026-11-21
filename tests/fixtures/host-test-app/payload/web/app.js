@@ -41,7 +41,7 @@ export async function mount(container, context) {
   const header = element('header', '', 'test-header')
   const title = element('div', '', 'test-title')
   const heading = element('h1', 'Anybox Test')
-  title.append(heading, element('span', '0.1.0', 'test-version'))
+  title.append(heading, element('span', '0.1.1', 'test-version'))
   const closeStatus = element('span', '', 'test-badge')
   closeStatus.setAttribute('role', 'status')
   const introduction = element('p', '一个最小应用，用来验证安装、界面交互与宿主生命周期。', 'test-intro')

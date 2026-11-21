@@ -1,8 +1,9 @@
-/** Emit the portable Markdown parser as one application-owned browser module. */
+/** Emit application-owned browser vendors and their license files. */
 import { build } from 'esbuild'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
+import { buildProviderLogos } from '../../../scripts/build-provider-logos.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const output = join(root, 'dist/web/vendor/markdown-parser.js')
@@ -54,3 +55,5 @@ licenses.sort((first, second) => first.name < second.name ? -1 : first.name > se
 await mkdir(dirname(output), { recursive: true })
 for (const file of bundled.outputFiles) await writeFile(file.path, file.contents)
 await writeFile(join(dirname(output), 'markdown-parser.LICENSE.txt'), `Third-party licenses for markdown-parser.js\n\n${licenses.map(license => license.text).join('\n\n========================================\n\n')}\n`)
+
+await buildProviderLogos(dirname(output), 'agent')

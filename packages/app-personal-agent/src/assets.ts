@@ -31,6 +31,7 @@ export const personalAgentAssets: readonly ApplicationAsset[] = [
   { path: `${personalAgentAssetPrefix}/web/file-tree-client.js`, file: fileURLToPath(new URL('./web/file-tree-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/markdown.js`, file: fileURLToPath(new URL('./web/markdown.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/vendor/markdown-parser.js`, file: fileURLToPath(new URL('./web/vendor/markdown-parser.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
+  { path: `${personalAgentAssetPrefix}/web/vendor/provider-logos.js`, file: fileURLToPath(new URL('./web/vendor/provider-logos.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/protocols/view.js`, file: fileURLToPath(new URL('./web/protocols/view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/protocols/modules.js`, file: fileURLToPath(new URL('./web/protocols/modules.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   ...['primitives', 'responses', 'anthropic', 'chat', 'gemini'].map(name => ({

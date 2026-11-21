@@ -83,7 +83,7 @@
 :where(button) { min-height: 32px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); cursor: pointer; }
 :where(button):hover:not(:disabled) { background: var(--hover); }
 :where(input, select, textarea) { min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); }
-:where(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ca-accent); outline-offset: 3px; }
+:where(button, input, select, textarea, summary):focus-visible { outline-color: var(--ca-accent, var(--focus)); }
 .primary-button { border-color: var(--primary); background: var(--primary); color: var(--panel); font-weight: 550; }
 .primary-button:hover:not(:disabled) { background: var(--text); }
 .notice { color: var(--danger); font-size: 12px; line-height: 1.6; }
@@ -334,7 +334,7 @@
 .ca-workspace-body h3,.ca-mcp-interactions h3 { font-size: 15px; margin: 6px 0 14px; }
 .ca-workspace-body button,.ca-mcp-interactions button,.ca-workspace-dialog>button { border: 1px solid #d9d4cb; background: #fff; border-radius: 8px; padding: 8px 12px; color: #34312b; cursor: pointer; font: inherit; font-size: 13px; margin: 4px 8px 4px 0; }
 .ca-workspace-dialog button:disabled { cursor: default; opacity: .45; }
-.ca-workspace-dialog :focus-visible { outline: 2px solid #a36b47; outline-offset: 3px; }
+.ca-workspace-dialog :focus-visible { outline-color: #a36b47; }
 .ca-workspace-help { font-size: 13px; line-height: 1.65; color: #777167; margin: 8px 0 16px; overflow-wrap: anywhere; }
 .ca-context-card,.ca-workspace-section,.ca-workspace-form,.ca-mcp-auth-form { border: 1px solid #e0dbd1; background: #fff; border-radius: 12px; padding: 18px; margin-bottom: 18px; }
 .ca-context-card>strong { display: block; font-size: 22px; margin-bottom: 14px; font-weight: 550; }

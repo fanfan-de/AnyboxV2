@@ -97,7 +97,7 @@ test('provider groups show the whole directory and pin completed API settings by
   })
   const definitions = [
     definition('saved', 'Alpha catalogue name', 'missing'),
-    definition('pending-key', 'Beta catalogue name'),
+    { ...definition('pending-key', 'Beta catalogue name'), source: { kind: 'external', sourceId: 'models.dev', providerId: 'original-pending' } },
     definition('delta', 'Delta'),
     definition('missing', 'Missing', 'missing'),
     definition('unresolved', 'Unresolved', 'unresolved'),
@@ -120,6 +120,16 @@ test('provider groups show the whole directory and pin completed API settings by
     const unconfigured = group([], definitions)
     assert.deepEqual(unconfigured.configured, [])
     assert.deepEqual(unconfigured.other.map(({ id }) => id), ['beta', 'pending-key', 'delta'])
+
+    const byDisplayName = group(providers, definitions, '  ZULU  ')
+    assert.deepEqual(byDisplayName.configured.map(({ id }) => id), ['saved'])
+    assert.deepEqual(byDisplayName.other, [])
+    const byDirectoryName = group(providers, definitions, 'catalogue name')
+    assert.deepEqual(byDirectoryName.configured.map(({ id, definition }) => [id, definition.source.providerId]), [['saved', 'saved']])
+    assert.deepEqual(byDirectoryName.other.map(({ id }) => id), ['pending-key'])
+    assert.deepEqual(group(providers, definitions, 'ORIGINAL-PENDING').other.map(({ id }) => id), ['pending-key'])
+    assert.deepEqual(group(providers, definitions, 'missing'), { configured: [], other: [] })
+    assert.deepEqual(group(providers, definitions, '  '), { configured, other })
   }
 })
 

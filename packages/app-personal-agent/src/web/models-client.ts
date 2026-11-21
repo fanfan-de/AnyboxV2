@@ -1,4 +1,5 @@
 import { createPageRequests } from './page-lifecycle.js'
+import { providerLogo } from './vendor/provider-logos.js'
 import type { HarnessClient } from './harness-client.js'
 import type { CatalogStatus, ProviderModel, DeclaredCapabilities, DiscoveredModel, FormField, NativeObject, JsonValue, Model, ModelInput, ModelSettings, ModelSettingsInput, RunnableModelSummary, ProtocolDescriptor, ProviderSettingsInput, ProviderSettings, Support } from '@anybox/models'
 import type { Api } from './client-types.js'
@@ -92,29 +93,39 @@ interface ProviderListEntry {
   readonly id: string
   readonly name: string
   readonly settings?: ProviderSettings
+  readonly definition?: DirectoryProvider
 }
 
 function providerConfigured(settings?: ProviderSettings): boolean {
   return Boolean(settings && (settings.auth === 'none' || settings.credentialConfigured))
 }
 
-export function settingsProviderGroups(providers: readonly ProviderSettings[], definitions: readonly DirectoryProvider[]) {
+export function settingsProviderGroups(providers: readonly ProviderSettings[], definitions: readonly DirectoryProvider[], search = '') {
+  const query = search.trim().toLowerCase()
+  const definitionsById = new Map(definitions.map(value => [value.id, value]))
   const configured: ProviderListEntry[] = [], other: ProviderListEntry[] = []
   const seen = new Set<string>()
   for (const settings of providers) {
     if (seen.has(settings.id)) continue
     const group = providerConfigured(settings) ? configured : other
-    group.push({ id: settings.id, name: settings.name, settings })
+    const definition = definitionsById.get(settings.id)
+    group.push({ id: settings.id, name: settings.name, settings, ...(definition && { definition }) })
     seen.add(settings.id)
   }
   for (const definition of definitions) {
     if (!seen.has(definition.id) && settingsProviderSourceAllowed(undefined, definition)) {
-      other.push({ id: definition.id, name: definition.name })
+      other.push({ id: definition.id, name: definition.name, definition })
       seen.add(definition.id)
     }
   }
   const byName = (a: ProviderListEntry, b: ProviderListEntry) => a.name.localeCompare(b.name, 'zh-CN') || a.id.localeCompare(b.id)
-  return { configured: configured.sort(byName), other: other.sort(byName) }
+  const matches = ({ name, definition }: ProviderListEntry) => {
+    if (!query) return true
+    const source = definition?.source
+    return [name, definition?.name, source?.kind === 'external' ? source.providerId : undefined]
+      .some(value => value?.toLowerCase().includes(query))
+  }
+  return { configured: configured.filter(matches).sort(byName), other: other.filter(matches).sort(byName) }
 }
 
 export interface SettingsModelEditorState {
@@ -175,6 +186,10 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
             <div class="models-navigation-track">
               <section class="models-navigation-panel" data-provider-navigation aria-label="Provider 列表">
                 <div class="models-pane-heading"><h4>Provider</h4><button type="button" class="models-quiet-button models-directory-refresh" data-directory-refresh aria-label="刷新目录" title="刷新目录">↻</button></div>
+                <div class="models-provider-search">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+                  <input type="search" data-provider-search aria-label="按名称或目录 ID 搜索 Provider" placeholder="搜索" autocomplete="off">
+                </div>
                 <p data-provider-list-status class="settings-hint models-provider-list-status" role="status">正在读取…</p>
                 <div class="models-connection-list" data-connections></div>
                 <button type="button" class="models-quiet-button" data-reload-list hidden>刷新状态</button>
@@ -266,6 +281,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   const navigation = get('[data-models-navigation]'), providerNavigation = get('[data-provider-navigation]'), modelNavigation = get('[data-model-navigation]')
   const savedModelNavigation = get('[data-saved-model-navigation]'), providerSetup = get('[data-provider-setup]')
   const backToProviders = get<HTMLButtonElement>('[data-back-to-providers]')
+  const providerSearch = input('provider-search'), providerList = get('[data-connections]')
   let protocols: readonly ProtocolDescriptor[] = []
   let providers: readonly ProviderSettings[] = [], records: readonly ModelSettings[] = [], candidates: readonly DiscoveredModel[] = []
   let definitions: readonly DirectoryProvider[] = [], inventory: readonly ProviderModel[] = []
@@ -408,22 +424,23 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   }
 
   function renderProviders(): void {
-    const list = get('[data-connections]')
     const focus = document.activeElement
-    const focusedId = focus instanceof HTMLButtonElement && list.contains(focus) ? focus.dataset.providerId : undefined
-    const scrollTop = list.scrollTop
-    const { configured, other } = settingsProviderGroups(providers, definitions)
+    const focusedId = focus instanceof HTMLButtonElement && providerList.contains(focus) ? focus.dataset.providerId : undefined
+    const scrollTop = providerList.scrollTop
+    const query = providerSearch.value.trim()
+    const { configured, other } = settingsProviderGroups(providers, definitions, query)
+    const hasResults = configured.length + other.length > 0
     const status = get('[data-provider-list-status]')
-    status.hidden = configured.length + other.length > 0 || notice.classList.contains('error')
-    list.hidden = !configured.length && !other.length
-    status.textContent = loaded ? '暂无 Provider' : '正在读取…'
+    status.hidden = hasResults || (!loaded && notice.classList.contains('error'))
+    providerList.hidden = !hasResults
+    status.textContent = !loaded ? '正在读取…' : query ? '没有匹配的 Provider' : '暂无 Provider'
     const buttons: HTMLButtonElement[] = []
     const providersWithDrafts = new Set([...providerDrafts.values()].map(value => value.providerId))
     const groups = [
       { key: 'configured', label: '已配置', entries: configured },
-      { key: 'other', label: configured.length ? '其他 Provider' : '目录', entries: other },
+      { key: 'other', label: providers.some(providerConfigured) ? '其他 Provider' : '目录', entries: other },
     ].filter(group => group.entries.length)
-    list.replaceChildren(...groups.map(({ key, label, entries }) => {
+    providerList.replaceChildren(...groups.map(({ key, label, entries }) => {
       const section = document.createElement('section')
       section.dataset.providerGroup = key
       const heading = document.createElement('h5')
@@ -436,7 +453,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
       section.append(heading, rows)
       return section
     }))
-    list.scrollTop = scrollTop
+    providerList.scrollTop = scrollTop
     if (focusedId && !busy && !providerNavigation.inert) buttons.find(button => button.dataset.providerId === focusedId)?.focus({ preventScroll: true })
 
     function providerButton(value: ProviderListEntry): HTMLButtonElement {
@@ -444,14 +461,29 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
       button.dataset.providerId = value.id
       const selected = value.id === selectedProviderId && !selectionResetPending
       if (selected) button.setAttribute('aria-current', 'true')
-      const name = document.createElement('span'); name.textContent = value.name; button.append(name)
+      const icon = document.createElement('span')
+      icon.className = 'models-provider-logo'
+      icon.setAttribute('aria-hidden', 'true')
+      const source = value.definition?.source
+      const logo = source?.kind === 'external' && source.sourceId === 'models.dev' ? providerLogo(source.providerId) : undefined
+      // Only the bundled and validated drawings go into SVG markup.
+      if (logo) icon.innerHTML = logo
+      else {
+        icon.classList.add('models-provider-initial')
+        icon.textContent = Array.from(value.name.trim())[0]?.toUpperCase() || '·'
+      }
+      const copy = document.createElement('span')
+      const name = document.createElement('span')
+      name.textContent = value.name
+      copy.append(name)
+      button.append(icon, copy)
       const issue = !selected && value.settings ? providerIssue(value.settings) : undefined
       const hasDraft = providersWithDrafts.has(value.id) || modelDrafts.has(`new:${value.id}`) ||
         records.some(record => record.providerId === value.id && modelDrafts.has(record.id))
       const label = issue ?? (hasDraft ? '有草稿' : '')
       if (label) {
         const status = document.createElement('span')
-        status.className = 'models-provider-status'; status.textContent = label; button.append(status)
+        status.className = 'models-provider-status'; status.textContent = label; copy.append(status)
       }
       button.addEventListener('click', () => {
         if (busy || providerNavigation.inert || value.id === selectedProviderId) return
@@ -695,11 +727,17 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     captureProvider(); captureModel()
     show()
     loadProvider()
-    get('[data-connections]').scrollTop = 0
+    providerList.scrollTop = 0
   }
   function resetView(): void {
     if (disposed) return
-    if (!selectedProviderId) { get('[data-connections]').scrollTop = 0; return }
+    const wasSearching = Boolean(providerSearch.value)
+    providerSearch.value = ''
+    if (!selectedProviderId) {
+      providerList.scrollTop = 0
+      if (wasSearching) renderProviders()
+      return
+    }
     secretRevision++; key.value = ''
     // A mutation already accepted by the page still owns its provider until it settles.
     if (busy) { selectionResetPending = true; renderState() }
@@ -710,7 +748,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
     const id = selectedProviderId
     captureProvider(); captureModel(); secretRevision++; show(); loadProvider()
     const rows = [...providerNavigation.querySelectorAll<HTMLButtonElement>('[data-provider-id]')]
-    const next = rows.find(button => button.dataset.providerId === id) ?? get('[data-directory-refresh]')
+    const next = rows.find(button => button.dataset.providerId === id) ?? providerSearch
     next.focus({ preventScroll: true })
   }
   providerForm.addEventListener('input', updateDraftStatus)
@@ -765,7 +803,7 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
       key.value = ''
       try { await refreshCurrent() }
       catch (error) { show(`提供方设置已保存，状态刷新失败：${errorText(error)}。请点击“刷新状态”。`, true); return }
-      if (!selectionResetPending && wasSettingUp && providerConfigured(saved)) get('[data-connections]').scrollTop = 0
+      if (!selectionResetPending && wasSettingUp && providerConfigured(saved)) providerList.scrollTop = 0
       show(saved.sync?.state === 'failed' ? '提供方设置和 Key 已保存，模型准备失败，请点击重试。' : saved.sync?.state === 'pending' ? '提供方设置已保存，模型尚未准备；请检查 API 设置。' : '提供方设置已保存，可用模型已加入模型选择器。', saved.sync?.state === 'failed')
     }).then(() => {
       if (wasSettingUp && !modelNavigation.inert) backToProviders.focus({ preventScroll: true })
@@ -783,6 +821,10 @@ export function setupModelsSettings(source: Api, messageFor: (error: unknown) =>
   })
   protocolSelect.addEventListener('change', () => { captureModel(); renderParameters(initialNativeParameters(currentProtocol()?.modelFields ?? [], { capabilities: modelCapabilities })); renderState() })
   select('auth').addEventListener('change', () => { secretRevision++; key.value = ''; renderState() })
+  providerSearch.addEventListener('input', () => {
+    providerList.scrollTop = 0
+    renderProviders()
+  })
   backToProviders.addEventListener('click', returnToProviderList)
   get('[data-cancel-provider-setup]').addEventListener('click', returnToProviderList)
   get('[data-directory-refresh]').addEventListener('click', () => { void perform(async () => {

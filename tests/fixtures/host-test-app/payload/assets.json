@@ -2,12 +2,12 @@
   "schemaVersion": 1,
   "assets": [
     {
-      "path": "/apps/host-test/0.1.0/app.js",
+      "path": "/apps/host-test/0.1.1/app.js",
       "file": "payload/web/app.js",
       "type": "text/javascript; charset=utf-8"
     },
     {
-      "path": "/apps/host-test/0.1.0/style.css",
+      "path": "/apps/host-test/0.1.1/style.css",
       "file": "payload/web/style.css",
       "type": "text/css; charset=utf-8"
     }
