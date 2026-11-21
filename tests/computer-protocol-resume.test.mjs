@@ -34,6 +34,7 @@ async function fixture(protocolId, respond = count => answer(protocolId, count =
   await root.installComponent({ name: 'resume-model-fixture', apply(ctx) {
     ctx.provide('harness.image-assets', { readImage() { throw new Error('unexpected image read') } })
     ctx.provide('models.protocols', { acquire: lease })
+    ctx.provide('models.settings', { providerSettingsHistory() { assert.fail('restoring an accepted Run must not compare application-history settings') } })
     ctx.provide('models', { get() { return { parameters: { protocolId } } }, async openNative(input) {
       if (input.restore) validateRestore(input.restore, snapshot, protocol)
       const controller = new AbortController()

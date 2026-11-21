@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createModelsDevCatalogSourceComponent, createModelsCatalogCacheComponent, createModelsCatalogComponent, normalizeModelsDevCatalog } from '@anybox/models'
 import { controlledModels } from './controlled-models.mjs'
+import { seedTestModel } from './configured-models.mjs'
 
 /** Actual module storage, settings and executions with controllable protocol resources. */
 export async function installManagedModels(root, directory, { controlled = controlledModels(), secrets = new Map() } = {}) {
@@ -24,12 +25,10 @@ export async function installManagedModels(root, directory, { controlled = contr
   await root.installComponent(createModelsCatalogComponent({ autoRefresh: false, bundledSnapshot: normalizeModelsDevCatalog(directoryData) }))
   const settings = root.get('models.settings')
   const declarations = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: 'supported' } }
-  if (!settings.connections().length) {
-    const provider = await settings.createProvider({ id: 'default-provider-definition', name: 'Test service', connectionHints: { baseUrl: 'https://example.invalid/v1', protocolIds: ['chat-completions'] } })
-    const connection = await settings.createConnection({ id: 'default', providerDefinitionId: provider.id, name: 'Test service', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'none', timeoutMs: 30000 })
-    const model = await settings.createModel({ id: 'default-model-definition', name: 'Test model', providerId: provider.id, remoteModelId: 'remote-test', capabilities: declarations,
-      controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'], baseUrl: connection.baseUrl } })
-    await settings.createConfiguration({ id: 'default', name: 'Test model', enabled: true, connectionId: connection.id, modelDefinitionId: model.id, capabilities: declarations, parameters: { protocolId: 'chat-completions', formatVersion: 1, value: {} }, baseline: true })
+  if (!settings.configuredProviders().length) {
+    const provider = await settings.createProvider({ id: 'default', name: 'Test service', connectionHints: { baseUrl: 'https://example.invalid/v1', protocolIds: ['chat-completions'] } })
+    const configured = await settings.createProviderSettings({ providerId: provider.id, name: 'Test service', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'none', timeoutMs: 30000 })
+    await seedTestModel(settings, configured, { id: 'default', remoteModelId: 'remote-test', capabilities: declarations })
   }
   return { controlled, secrets, apiFiber, vaultFiber, installRuntime }
 }

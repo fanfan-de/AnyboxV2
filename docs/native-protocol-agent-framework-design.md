@@ -6,7 +6,7 @@
 
 四种协议为 Responses、Anthropic Messages、标准 Chat Completions 和 Gemini Interactions。DeepSeek 是使用标准 Chat Completions 的 Provider，不保留旧驱动或协议别名；旧协议历史仅供查看，不能续接执行。每种协议独立解释原生状态，共享 RunRuntime 的持久屏障、资源所有权、取消和退出保障。Session 沿指定成功父链保存完整原生恢复记录，可跨 Run、应用重启和分支继续；不能用文本投影替代恢复。
 
-Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResult 与统一消息执行路径。保留配置、Vault、目录和驱动注册，提供 openNative、原生参数、版本化记录和恢复 codec。旧 dialogue-v1 Session 只读，不导入文本，不提供跨协议或跨账户转换。新 Session 使用 native-local-v1，在第一次接受事务中固定协议，失败和取消不解除绑定。
+Models 升级为 0.2.0，移除统一 `models.open()`、`generate()`、ModelResult 与统一消息执行路径。保留配置、Vault、目录和驱动注册，提供 openNative、原生参数、版本化记录和恢复 codec。旧 dialogue-v1 Session 只读。新 Session 使用 native-local-v1，每次 Run 固定自己的协议和执行配置。当前 Harness 的换 API、换 Key 和分支历史规则见[会话树](session-conversation-tree.md)。
 
 继续采用每个进程一个 Nya 根、Models 独立包、Session 独占业务持久化、受信静态工具目录与按 Session 固定的来源契约判别联合、实际退出后结算和 interrupted 不重放规则。四种协议均支持显式声明能力的静态本地图片输入。工具图片以文本工具结果之后的原生用户图片块支持。当前不包含模型图片输出、音频、PTY、独立远端后台任务、PDF/notebook、并行工具调度、动态插件注册、联网搜索工具或用户交互等待机制。
 

@@ -35,6 +35,41 @@ const time = (value: string | undefined): string => value && Number.isFinite(Dat
 const origin = (run: RunView): string => run.history.kind === 'legacy-unknown' ? '旧版记录 · 起点未记录'
   : run.history.parentNodeId ? `起点 ${(splitScopedId(run.history.parentNodeId)?.id ?? run.history.parentNodeId).slice(0, 8)}` : '会话起点'
 
+function formatContextJson(input: string): string {
+  const start = input.trimStart()[0]
+  if (start !== '{' && start !== '[') return input
+  try { JSON.parse(input) } catch { return input }
+
+  // Change only whitespace between tokens to preserve the recorded JSON spelling and key order.
+  const tokens = input.match(/"(?:[^"\\]|\\.)*"|[{}\[\],:]|[^\s"{}\[\],:]+/gu)!
+  let depth = 0
+  const line = (): string => `\n${'  '.repeat(depth)}`
+  const formatted: string[] = []
+  for (const [index, token] of tokens.entries()) {
+    switch (token) {
+      case '{': case '[':
+        formatted.push(token)
+        if (tokens[index + 1] !== (token === '{' ? '}' : ']')) {
+          // Bound indentation when an input contains deeply nested JSON.
+          if (++depth > 64) return input
+          formatted.push(line())
+        }
+        break
+      case '}': case ']':
+        if (tokens[index - 1] !== (token === '}' ? '{' : '[')) {
+          depth--
+          formatted.push(line())
+        }
+        formatted.push(token)
+        break
+      case ',': formatted.push(token, line()); break
+      case ':': formatted.push(': '); break
+      default: formatted.push(token)
+    }
+  }
+  return formatted.join('')
+}
+
 /** The toolbar and selection stay mounted while derived rows are replaced. */
 export function createTrajectoryView(container: HTMLElement, actions: TrajectoryActions): MountedTrajectory {
   container.innerHTML = `<div class="trajectory-toolbar" role="toolbar" aria-label="轨迹显示选项">
@@ -128,7 +163,7 @@ export function createTrajectoryView(container: HTMLElement, actions: Trajectory
     }
     detailKey = next
     const heading = document.createElement('div'), title = document.createElement('strong')
-    heading.className = 'trajectory-detail-heading'; title.textContent = `${roles[row.role]} · ${row.label}`
+    heading.className = 'trajectory-detail-heading'; title.textContent = row.role === 'context' ? row.label : `${roles[row.role]} · ${row.label}`
     const close = button('关闭轨迹明细', closeDetails, 'trajectory-detail-close')
     const image = document.createElement('img'); image.src = new URL('../icons/close.svg', import.meta.url).href; image.alt = ''; image.setAttribute('aria-hidden', 'true'); close.replaceChildren(image)
     heading.append(title, close)
@@ -165,15 +200,26 @@ export function createTrajectoryView(container: HTMLElement, actions: Trajectory
       missing.className = 'native-display-missing'; missing.setAttribute('role', 'status')
       missing.textContent = loading === 'unloaded' || loading === 'loading' ? '正在读取原生模型展示…' : '原生模型展示暂不可用。'
       nodes.push(missing)
+    } else if (row.role === 'context') {
+      const content = document.createElement('pre')
+      content.className = 'trajectory-detail-text trajectory-context-json'; content.textContent = formatContextJson(row.input)
+      nodes.push(content)
     } else {
-      append(row.role === 'user' ? '用户原文与实际模型输入' : row.role === 'system' ? '系统提示词' : row.role === 'context' ? '上下文' : '输入与工具请求', row.input)
+      append(row.role === 'user' ? '用户原文与实际模型输入' : row.role === 'system' ? '系统提示词' : '输入与工具请求', row.input)
       append(row.role === 'assistant' ? '模型输出' : '结果', row.output)
     }
     if (run.error) append('运行错误', run.error)
     const fields = document.createElement('dl'); fields.className = 'trajectory-detail-fields'
-    for (const [label, value] of [['模型', run.modelSnapshot?.remoteModelId ?? '未记录'], ['协议', run.protocolBinding?.protocolId ?? '未记录'],
-      ['开始', time(row.startedAt)], ['结束', time(row.finishedAt)], ['Run ID', run.id]]) {
-      const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label!; dd.textContent = value!; fields.append(dt, dd)
+    const entries: [string, string][] = [['模型', run.modelSnapshot?.remoteModelId ?? '未记录'], ['协议', run.protocolBinding?.protocolId ?? '未记录'],
+      ['开始', time(row.startedAt)], ['结束', time(row.finishedAt)], ['Run ID', run.id]]
+    // A model row projects its own exchange after any display-limit marker.
+    const cache = row.step?.kind === 'model' ? row.protocolView?.exchanges.at(-1)?.usage : undefined
+    const cacheCounts: string[] = []
+    if (cache?.cachedInputTokens !== undefined) cacheCounts.push(`命中 ${cache.cachedInputTokens.toLocaleString('zh-CN')} tokens`)
+    if (cache?.uncachedInputTokens !== undefined) cacheCounts.push(`未命中 ${cache.uncachedInputTokens.toLocaleString('zh-CN')} tokens`)
+    if (cacheCounts.length) entries.push(['输入缓存', cacheCounts.join(' · ')])
+    for (const [label, value] of entries) {
+      const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; fields.append(dt, dd)
     }
     nodes.push(fields)
     const controls = document.createElement('div'); controls.className = 'trajectory-detail-actions'

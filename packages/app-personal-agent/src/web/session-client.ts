@@ -13,7 +13,6 @@ import { createDraftStore, continuousDraftKey, draftFromInput, filesForWorkspace
 import type { DraftImage, DraftStore, DraftFile, MessageDraft } from './draft-client.js'
 import type { ImageRenewal } from './image-client.js'
 import { validateImageBatch } from '../core/image/limits.js'
-import type { SessionDefaults } from '../core/session/domain.js'
 
 export interface BrowserStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export const pendingKey = 'anybox.personal-agent.web.v3.pending'
@@ -84,8 +83,6 @@ export interface SessionSnapshot {
   readonly busy: boolean
   readonly loading: boolean
   readonly notice: string
-  readonly defaultModelId?: string | null
-  readonly savingDefaultModel?: boolean
   readonly draft: string
   readonly images: readonly DraftImage[]
   readonly files: readonly DraftFile[]
@@ -118,9 +115,6 @@ export interface SessionController {
   setTraceViewport(ids: readonly string[]): void
   setTraceSearch(query: string): void
   retryTrace(id: string): void
-  setModel(modelId: string): Promise<void>
-  refreshDefaultModel(): Promise<void>
-  setDefaultModel(modelId: string): Promise<void>
   protocolView(snapshot: ProtocolViewSnapshot): void
   incompatibleView(runId: string): void
   setDraft(value: string): void
@@ -170,8 +164,6 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   let position: SessionPosition = { ...initialPosition, viewMode: initialPosition.viewMode === 'runs' ? 'runs' : 'dialogue' }
   let pathNodes: readonly NodeView[] = [], children: readonly NodeView[] = [], childCursor: string | undefined
   let notice = '', busy = false, loading = true, locationVersion = 0
-  let defaultModelId: string | null | undefined, savingDefaultModel = false, defaultRead = 0
-  let modelSelection: { readonly modelId: string; readonly promise: Promise<void> } | undefined
   let listener: (() => void) | undefined, generation = 0, timer: unknown, refreshJob: Promise<void> | undefined
   let refreshAgain = false, locationAgain = false, live = false, locationJob: Promise<void> | undefined
   const drafts = env.drafts ?? createDraftStore()
@@ -254,8 +246,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return undefined
     }
     const module = getProtocolWebModule(protocolId)
-    if (!module) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return undefined }
-    if (images.length && model && !model.effectiveCapabilities?.imageInput) { notice = '当前模型不支持图片，请切换模型或移除图片。'; emit(); return undefined }
+    if (!module) { notice = '请在 Agent 设置中选择支持的默认模型。'; emit(); return undefined }
+    if (images.length && model && !model.effectiveCapabilities?.imageInput) { notice = '当前模型不支持图片，请修改 Agent 的默认模型或移除图片。'; emit(); return undefined }
     try { return module.encodeInput(text, images.length, fileCount) }
     catch (error) { notice = error instanceof Error ? error.message : env.messageFor(error); emit(); return undefined }
   }
@@ -495,7 +487,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     if (session?.archivedAt) { notice = '会话已归档，请先恢复后再继续。'; emit(); return }
     if (submission.invalidFiles || !pendingFilesValid(submission)) { notice = '待提交文件引用无效，请移除后重新添加。'; emit(); return }
     if (submission.invalidImages) { notice = '待提交图片信息不兼容，请移除后重新添加。'; emit(); return }
-    const input = encodeInput(submission.input, submission.modelId, submission.images, submission.files?.length || submission.fileSelections?.length || 0)
+    const modelId = env.continuous ? session?.modelId ?? submission.modelId : submission.modelId
+    const input = encodeInput(submission.input, modelId, submission.images, submission.files?.length || submission.fileSelections?.length || 0)
     if (input === undefined) {
       // Existing submissions reach here only after their key was confirmed unaccepted.
       const combined = restoreUnaccepted(submission)
@@ -575,8 +568,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       restoreUnaccepted(submission)
       notice = '会话已归档，未接受的消息已保留为草稿。恢复后可继续。'
     }
-    else if (session?.historyMode === 'dialogue-v1' || ![1, 2, 3].includes(submission.schemaVersion ?? 0) || submission.invalidImages || submission.invalidFiles || submission.parentNodeId === undefined || (env.models && submission.modelId === undefined)) {
-      notice = session?.historyMode === 'dialogue-v1' ? '旧版会话仅供查看。待提交消息已恢复为草稿；请新建原生会话。' : '旧版待提交消息尚未被接受，已保留输入。请选定对话位置与模型后确认发送。'
+    else if (session?.historyMode === 'dialogue-v1' || ![1, 2, 3].includes(submission.schemaVersion ?? 0) || submission.invalidImages || submission.invalidFiles || submission.parentNodeId === undefined || (submission.schemaVersion !== 3 && env.models && submission.modelId === undefined)) {
+      notice = session?.historyMode === 'dialogue-v1' ? '旧版会话仅供查看。待提交消息已恢复为草稿；请新建原生会话。' : '旧版待提交消息尚未被接受，已保留输入。请确认对话位置后重新发送。'
       if (!draftAt(position.viewNodeId).text && !draftAt(position.viewNodeId).images.length && !draftAt(position.viewNodeId).files.length) {
         const restored = { ...draftFromInput(submission.input, submission.images), files: pendingFileDrafts(submission) }
         setDraftAt(position.viewNodeId, submission.invalidImages ? { ...restored, images: [...restored.images, { id: 'invalid-pending-image', name: '待恢复图片', status: 'failed', byteLength: 0, error: '图片信息不兼容，请移除后重新添加。' }] } : restored)
@@ -587,12 +580,11 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   const controller: SessionController = {
     snapshot: () => ({ session, continuous: env.continuous, historyOnly: env.historyOnly, runs,
       run: (env.continuous ? runs.find(isActive) : undefined) ?? runs.find(item => item.id === position.focusedRunId), position,
-      path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice, defaultModelId, savingDefaultModel,
+      path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice,
       draft: draftAt(position.viewNodeId).text, images: draftAt(position.viewNodeId).images, files: draftAt(position.viewNodeId).files, events, expanded, views, traceLoading: traceLoading() }),
     attach(value) { listener = value; session = undefined; loading = true; invalidate(); void controller.refresh() },
     detach() {
       listener = undefined
-      defaultRead++
       invalidate()
       locationVersion++
       for (const [id, view] of views) if (view.status === 'provisional') views.delete(id)
@@ -635,69 +627,6 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       traceErrors.delete(id)
       void loadTrace(id, generation).catch(() => {})
       emit()
-    },
-    async setModel(modelId) {
-      if (modelSelection?.modelId === modelId) return modelSelection.promise
-      if (readOnly() || !session || busy || pending() || !modelId) return
-      if (session.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
-      if (env.models && !canUseModel(env.models().find(value => value.id === modelId))) {
-        notice = '此模型暂不可用，请检查提供方与模型配置。'; emit(); return
-      }
-      const candidate = env.models?.().find(value => value.id === modelId)
-      if (!env.continuous && session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId) { notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return }
-      if (!getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId)) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return }
-      busy = true; invalidate(); notice = ''; emit()
-      const promise = (async () => {
-        try { session = await env.api<SessionView>(`${path}/model`, { modelId }); refreshAgain = true }
-        catch (error) { notice = env.messageFor(error) }
-        finally { finishWrite() }
-      })()
-      modelSelection = { modelId, promise }
-      try { await promise }
-      finally { if (modelSelection?.promise === promise) modelSelection = undefined }
-    },
-    async refreshDefaultModel() {
-      if (!session || !attached() || savingDefaultModel) return
-      const id = session.agentId, request = ++defaultRead
-      try {
-        const defaults = await read<SessionDefaults>(`/agents/${encodeURIComponent(id)}/session-defaults`, generation)
-        if (request !== defaultRead || session?.agentId !== id) return
-        defaultModelId = defaults.effectiveModelId
-      } catch (error) {
-        if (request !== defaultRead || !attached() || (error instanceof Error && error.name === 'AbortError')) return
-        defaultModelId = undefined
-        notice = `Agent 默认模型读取失败：${env.messageFor(error)}`
-      }
-      emit()
-    },
-    async setDefaultModel(modelId) {
-      if (readOnly() || !session || !attached() || loading || pending() || savingDefaultModel || !modelId ||
-          (busy && modelSelection?.modelId !== modelId)) return
-      const candidate = env.models?.().find(value => value.id === modelId)
-      if ((env.models && !canUseModel(candidate)) || !getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId) ||
-          (!env.continuous && session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId)) return
-      const agentId = session.agentId, url = `/agents/${encodeURIComponent(agentId)}/session-defaults`
-      savingDefaultModel = true; defaultRead++; notice = ''; emit()
-      let submitted = false
-      try {
-        // The first click may still be saving the Session selection when dblclick arrives.
-        if (modelSelection?.modelId === modelId) await modelSelection.promise
-        else if (session.modelId !== modelId) await controller.setModel(modelId)
-        if (!attached() || session?.agentId !== agentId || session.modelId !== modelId || readOnly()) return
-        const defaults = await read<SessionDefaults>(url, generation)
-        defaultModelId = defaults.effectiveModelId
-        if (defaults.effectiveModelId === modelId) { notice = '已是 Agent 默认模型。'; return }
-        submitted = true
-        const saved = await env.api<SessionDefaults>(url, { modelId, expectedRevision: defaults.revision })
-        defaultModelId = saved.effectiveModelId
-        notice = '已设为 Agent 默认模型。'
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') return
-        defaultModelId = undefined
-        notice = isApiError(error) && error.code === 'session-defaults-conflict'
-          ? '默认模型已被其他页面修改，请重新打开模型列表后重试。'
-          : submitted ? `${env.messageFor(error)}；无法确认默认模型是否保存，请重新打开模型列表查看。` : env.messageFor(error)
-      } finally { savingDefaultModel = false; emit() }
     },
     protocolView(snapshot) {
       if (!attached() || snapshot.sessionId !== ref.sessionId) return
@@ -862,7 +791,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       let submission = pending()
       if (!submission) {
         if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
-          notice = '请先选择一个可用模型；没有可用模型时，请打开“Personal Agent 设置”的“模型管理”配置提供方和模型。'; emit(); return
+          notice = '请在 Agent 设置中配置可用的默认模型。'; emit(); return
         }
         const draft = draftAt(position.viewNodeId)
         if (draft.images.some(image => image.status !== 'ready' || !image.image)) { notice = '请等待图片上传完成，或移除无法使用的图片。'; emit(); return }
@@ -871,7 +800,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         const images = draft.images.map(image => image.image!)
         const input = encodeInput(draft.text.trim(), session.modelId, images, fileSelections.length)
         if (input === undefined) return
-        submission = { schemaVersion: 3, sessionId: ref.sessionId, ...(env.continuous ? { projectId } : {}), input, images, fileSelections, ...(fileSelections.length ? { preparationKey: env.newId() } : {}), idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
+        submission = { schemaVersion: 3, sessionId: ref.sessionId, ...(env.continuous ? { projectId } : {}), input, images, fileSelections, ...(fileSelections.length ? { preparationKey: env.newId() } : {}), idempotencyKey: env.newId(), parentNodeId: position.viewNodeId }
         if (!save(submission)) return
         setDraftAt(position.viewNodeId, draftFromInput(''))
       }
@@ -886,11 +815,11 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (env.continuous || readOnly() || busy || pending() || node.sessionId !== ref.sessionId) return
       if (session?.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
       if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
-        notice = '请先选择一个可用模型。'; emit(); return
+        notice = '请在 Agent 设置中配置可用的默认模型。'; emit(); return
       }
       const input = encodeInput(node.input, session?.modelId, node.images, node.files?.length ?? 0)
       if (input === undefined) return
-      const submission: PendingSubmission = { schemaVersion: 3, files: node.files ?? [], sessionId: ref.sessionId, input, images: node.images ?? [], parentNodeId: node.parentId, idempotencyKey: env.newId(), ...(session?.modelId ? { modelId: session.modelId } : {}) }
+      const submission: PendingSubmission = { schemaVersion: 3, files: node.files ?? [], sessionId: ref.sessionId, input, images: node.images ?? [], parentNodeId: node.parentId, idempotencyKey: env.newId() }
       if (!save(submission)) return
       await controller.navigate(node.parentId)
       await submitStored(submission, locationVersion)

@@ -1,6 +1,6 @@
 import type { StoredParameters } from './native-types.js';
 import { modelsError } from './errors.js';
-import type { DeclaredCapabilities, ModelConfigurationInput, ModelInput, ProviderConnectionInput, ProviderInput } from './types.js';
+import type { DeclaredCapabilities, ModelSettingsInput, ModelInput, ProviderSettingsInput, ProviderInput } from './types.js';
 
 const immutableJson = new WeakSet<object>();
 /** Only copies frozen by this module are trusted; caller-frozen input is still copied. */
@@ -43,18 +43,17 @@ export function json(value: unknown, depth = 0): boolean {
 export function validateSignal(signal: unknown): asserts signal is AbortSignal | undefined {
   assert(signal === undefined || signal instanceof AbortSignal);
 }
-export function validateConnection(value: ProviderConnectionInput): void {
-  keys(value, ['providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs']);
+export function validateProviderSettings(value: ProviderSettingsInput): void {
+  keys(value, ['name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs']);
   assert(nonempty(value.name) && typeof value.enabled === 'boolean'); identifier(value.protocolId);
   assert(typeof value.baseUrl === 'string');
   let url: URL; try { url = new URL(value.baseUrl); } catch { throw modelsError('invalid-config'); }
   assert(['https:', 'http:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash);
   assert(value.auth === 'none' || value.auth === 'api-key');
   assert(Number.isSafeInteger(value.timeoutMs) && value.timeoutMs > 0 && value.timeoutMs <= 2_147_483_647);
-  identifier(value.providerDefinitionId);
 }
-export function connectionInput(value: ProviderConnectionInput): ProviderConnectionInput {
-  return { providerDefinitionId: value.providerDefinitionId, name: value.name, enabled: value.enabled, protocolId: value.protocolId, baseUrl: value.baseUrl, auth: value.auth, timeoutMs: value.timeoutMs };
+export function providerSettingsInput(value: ProviderSettingsInput): ProviderSettingsInput {
+  return { name: value.name, enabled: value.enabled, protocolId: value.protocolId, baseUrl: value.baseUrl, auth: value.auth, timeoutMs: value.timeoutMs };
 }
 function validateHttpUrl(value: unknown, base = false): void {
   assert(nonempty(value));
@@ -137,14 +136,13 @@ export function validateModel(value: ModelInput): void {
   keys(value.limits, ['context', 'input', 'output']); assert(Object.values(value.limits).every(finiteNonnegative));
   validateControls(value.controls); validateCost(value.cost); assert(json(value));
 }
-export function validateConfiguration(value: ModelConfigurationInput): void {
-  keys(value, ['modelDefinitionId', 'connectionId', 'name', 'enabled', 'capabilities', 'parameters', 'baseline']);
-  identifier(value.modelDefinitionId); identifier(value.connectionId);
-  assert(nonempty(value.name) && typeof value.enabled === 'boolean' && typeof value.baseline === 'boolean');
+export function validateModelSettings(value: ModelSettingsInput): void {
+  keys(value, ['name', 'enabled', 'capabilities', 'parameters']);
+  assert(nonempty(value.name) && typeof value.enabled === 'boolean');
   validateCapabilities(value.capabilities); validateParameters(value.parameters); assert(value.parameters.formatVersion === 1);
 }
-export function configurationInput(value: ModelConfigurationInput): ModelConfigurationInput {
-  return { name: value.name, enabled: value.enabled, connectionId: value.connectionId, modelDefinitionId: value.modelDefinitionId, capabilities: value.capabilities, parameters: value.parameters, baseline: value.baseline };
+export function modelSettingsInput(value: ModelSettingsInput): ModelSettingsInput {
+  return { name: value.name, enabled: value.enabled, capabilities: value.capabilities, parameters: value.parameters };
 }
 export function providerInput(value: ProviderInput): ProviderInput {
   return { name: value.name, connectionHints: value.connectionHints, ...(value.documentationUrl === undefined ? {} : { documentationUrl: value.documentationUrl }) };

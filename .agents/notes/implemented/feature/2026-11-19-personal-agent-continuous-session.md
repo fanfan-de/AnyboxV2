@@ -29,7 +29,9 @@ Personal Agent 从 Harness 继承项目会话列表和显式分支操作。用�
 
 ## 关联
 
-- [连续历史与记忆组件手册](../../../../docs/modules/personal-agent/history.md)
+- [连续历史与上下文手册](../../../../docs/modules/personal-agent/history.md)
+- [删除历史召回](../simplification/2026-11-21-remove-personal-agent-history-recall.md) 取代本文的旧问答全文索引及召回方向，沿用连续历史和模型窗口滚动。
 - [Personal Agent 的 Harness 起点](../architecture/2026-11-19-personal-agent-harness-baseline.md)
 - [Agent 目录](2026-11-19-personal-agent-directory.md)
 - [头像导航与工作目录](../simplification/2026-11-19-personal-agent-avatar-navigation.md) 将工作区的项目选择改为自动分配 Agent 工作目录。
+- [统一从 Agent 设置选模](../simplification/2026-11-21-personal-agent-default-model-in-settings.md) 取代本文的连续会话 Composer 手动选模方向。

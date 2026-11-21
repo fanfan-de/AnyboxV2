@@ -2,7 +2,7 @@
 
 [返回模块导航](../README.md)
 
-Models 负责统一模型定义、账户连接、可执行配置、系统凭据、原生模型 execution、单次纯文本生成与可选目录刷新。通用实现位于独立包 [packages/models](../../../packages/models/README.md)，只从 `@nya/core` 公共入口使用组件机制，不导入 Anybox 的 `src/`。DeepSeek 等兼容提供方使用标准 Chat Completions，不单独注册协议组件。
+Models 负责统一模型定义、提供方设置、可执行配置、系统凭据、原生模型 execution、单次纯文本生成与可选目录刷新。通用实现位于独立包 [packages/models](../../../packages/models/README.md)，只从 `@nya/core` 公共入口使用组件机制，不导入 Anybox 的 `src/`。DeepSeek 等兼容提供方使用标准 Chat Completions，不单独注册协议组件。
 
 ## 组件与边界
 
@@ -14,7 +14,7 @@ Models 负责统一模型定义、账户连接、可执行配置、系统凭据�
 | [系统凭据](vault.md) | `models.vault` | 系统安全存储、按槽串行及实际退出等待 |
 | [目录来源](catalog-source.md) | `models.catalog-source` | 匿名获取并规范化 models.dev 数据 |
 | [目录缓存](catalog-cache.md) | `models.catalog-cache` | 独立 SQLite 缓存与可观察的内存后备 |
-| [目录调度](catalog.md) | `models.catalog` | 启动来源选择、ETag 刷新、接纳及连接同步 |
+| [目录调度](catalog.md) | `models.catalog` | 启动来源选择、ETag 刷新、接纳及提供方模型同步 |
 | [Responses](responses.md) | 注册 `responses` | 原生请求、事件、结果与恢复编解码 |
 | [Chat Completions](chat-completions.md) | 注册 `chat-completions` | 标准 Chat 文本、用户图片和函数工具协议 |
 | [Anthropic Messages](anthropic-messages.md) | 注册 `anthropic-messages` | thinking、签名、工具与服务端搜索块 |
@@ -43,9 +43,9 @@ flowchart TD
 
 ## 核心数据关系
 
-`Provider` / `Model` 是带内部 ID、版本和来源的统一定义。来源可为 `user`，或包含来源命名空间与原始 ID 的 `external`。`ProviderConnection` 指向 Provider 定义，固定协议并保存本地地址、认证方式与凭据引用。`ModelConfiguration` 指向 Model 定义和连接，固定远端模型 ID、定义版本、能力和原生参数；Session 选模使用这个配置 ID。
+`Provider` / `Model` 是带内部 ID、版本和来源的统一定义。来源可为 `user`，或包含来源命名空间与原始 ID 的 `external`。每个 Provider 在执行端最多有一条以提供方定义 ID 索引的 `ProviderSettings`，固定协议并保存地址、认证方式与凭据引用。每个模型定义最多有一条本地 `ModelSettings`，用模型定义 ID 索引，固定远端模型 ID、定义版本、能力及原生参数。Session 使用可执行模型 ID，已有会话迁移时继续使用原 ID。
 
-保存可用连接后自动补齐适用文本模型的 baseline，每组连接/定义至多一个。额外预设使用 `baseline: false`。目录刷新只更新来源拥有的定义并补缺；已有执行配置与在途 execution 不被刷新覆盖。删除来源条目留下 `missing` 定义，已固定配置仍可执行。
+保存可用的提供方设置后，Models 为每个适用的文本模型补齐缺失设置。目录刷新只更新来源拥有的定义，已保存的参数和在途 execution 继续使用各自固定的版本。来源移除的定义标记为 `missing`，已有模型设置仍可执行。
 
 ## 装配与使用
 
@@ -54,10 +54,10 @@ flowchart TD
 1. 安装 `createModelsJsonStoreComponent({ path })`、`createModelsVaultComponent({ namespace })` 和 `createModelsComponent()`，等待 Nya 激活；需要 SQLite 配置提供方时替换为 `createModelsStoreComponent({ path })`。
 2. 安装需要的协议组件。没有驱动时仍可查看和保存非秘密配置，执行保持不可用。
 3. 按需安装来源、独立缓存和 `createModelsCatalogComponent()`。目录故障不应成为已配置模型执行的实时依赖。
-4. 用根控制面的 `context.get()` 获取当前 `models.settings` / `models`；配置连接后通过 `models.list()` 选择配置 ID。
+4. 用根控制面的 `context.get()` 获取当前 `models.settings` / `models`；配置提供方后通过 `models.list()` 选择可执行模型 ID。
 5. 原生执行先获取协议代租约，再 `models.openNative({ modelId, lease })`；宿主记录 `prepareExchange()` 的意图后调用 `start()`，结束时等待 `execution.close()` 并释放租约。单次纯文本可直接 `models.generateText({ modelId, instruction?, input, signal? })`，该操作自行捕获协议代、关闭 execution 并释放租约后才结算。
 
-Anybox Harness 的全新配置装配只接纳 models.dev 目录，不自动创建提供方连接或默认模型。新增提供方界面的候选仅来自 models.dev，保存新连接必须选中目录定义，不提供自定义新增提供方入口；已有自定义连接继续管理，通用 Models 管理 API 仍支持受信用户定义。用户在模型管理中从目录显式添加连接与 Key，满足运行条件后再自动准备适用模型的基础配置。旧 `ANYBOX_LLM_*` 不再解析或导入，也不读取或复制旧模型凭据；已有 JSON/SQLite 配置、连接、模型、凭据引用和历史继续读取，不再为未完成的旧引导补写固定迁入连接或默认模型；现有连接的通用基础模型同步保持原行为。已有稳定 `default` 配置仍可作为启动后备。
+Anybox Harness 和 Personal Agent 各自在执行端保存模型设置。首次启动接纳 models.dev 目录。在模型管理中选中尚未配置或待填写 Key 的提供方，右列打开 API 设置。保存并完成认证后，系统自动准备适用模型，左列进入该提供方的模型列表。已配置的提供方在左列置顶，可直接进入模型列表并从右列编辑 API 设置。通用 Models 管理 API 支持受信用户定义。已有配置、模型 ID、凭据引用和历史按 JSON 存储迁移保留，稳定的 `default` 配置可作为启动后备。 [JSON 存储迁移](json-store.md#sqlite-导入与兼容)
 
 完整关闭由应用宿主 `close()` 负责；运行期停止所选 Agent 时，由应用控制器卸载其 Models 组件。Models 停止准入、取消并等待初始化、请求、execution、来源接纳与配置写入退出，底层存储随后关闭。关闭后的门面不可复用；重新启动需重新装配。
 

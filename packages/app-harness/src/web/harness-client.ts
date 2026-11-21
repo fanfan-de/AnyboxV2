@@ -133,7 +133,7 @@ export function createHarnessClient(inputConnections: readonly HarnessConnection
   }
   const api = (async <T>(path: string, body?: object, signal?: AbortSignal): Promise<T> => {
     if (disposed) throw new Error('client-disposed')
-    if (!body && ['/projects', '/agents', '/models', '/models/connections', '/sessions/archived'].includes(path)) return await aggregate(path, signal) as T
+    if (!body && ['/projects', '/agents', '/models', '/models/provider-settings', '/sessions/archived'].includes(path)) return await aggregate(path, signal) as T
     const target = route(path, body)
     return mapResourceIds(await call(target.connection, target.path, target.body, signal), id => scopedId(target.connection.instanceId, id)) as T
   }) as HarnessClient

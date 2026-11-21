@@ -2,7 +2,7 @@
 
 [返回 Personal Agent 模块](README.md)
 
-在 Personal Agent 工作区打开「设置」中的 Agent 管理，选择执行设备后可创建和编辑 Agent，也可点击左栏顶部的加号直接进入新建表单。名称和简介用于识别 Agent，行为指令由执行端提供给模型。默认模型引用该设备的 Models 配置。可先保存 Agent，再设置默认模型或在工作区选模。
+在 Personal Agent 工作区打开「设置」中的 Agent 管理，选择执行设备后可创建和编辑 Agent，也可点击左栏顶部的加号直接进入新建表单。名称和简介用于识别 Agent，行为指令由执行端提供给模型。默认模型引用该设备的 Models 配置，可以在 Agent 表单中设置，或在「设置 → 常规」修改所选 Agent 的同一设置。
 
 左栏以浅灰对话列表展示当前设备上的 Agent：顶部固定主 Agent 的大头像与名称，其他 Agent 显示头像、名称及摘要。摘要优先使用本次页面已加载对话的最近消息，否则显示简介；刷新后重新读取当前对话，不为列表预先打开其他 Agent 的工作目录。点击列表打开对应连续对话。顶部搜索可按名称或简介筛选，按 Escape 清空并收起搜索。底部「设置与连接」管理设备和应用配置。
 
@@ -12,7 +12,7 @@
 
 `personal-agent-directory` 通过 `createAgentDirectoryComponent` 提供 `personal-agent.agents`，依赖应用自己的 SQLite、Prompt 库及 Models 配置服务。启动配置中的 Agent 首次进入目录时沿用已有 ID、实际生效的默认模型和已发布指令绑定。新 Agent 的 ID 由执行端生成。改名、编辑指令、调整模型和头像都在同一个 ID 下提交修订。目录的列表投影包含 ID、名称、简介和已设置的 `logoShader`，所有者可通过明细接口读取行为指令和默认模型。
 
-创建请求使用 `requestId` 查回原记录，编辑提交读取时的 `expectedRevision`。版本冲突要求重新读取后提交。Agent 设置、已有 Prompt 指令绑定和每 Agent 模型设置使用同一目录作为生效来源。在 Agent 表单修改指令会保存该 Agent 的文本指令，选择已发布 Prompt 会切换到该版本。连续历史的新 Run 采用当前指令和工具设置，默认模型按[连续历史的选模规则](history.md#组件所有权与接口)解析。已有的项目会话保留原快照。新建 Agent 的可用工具环境由应用装配决定。
+创建请求使用 `requestId` 查回原记录，编辑提交读取时的 `expectedRevision`。版本冲突要求重新读取后提交。Agent 设置、已有 Prompt 指令绑定和每 Agent 模型设置使用同一目录作为生效来源。在 Agent 表单修改指令会保存该 Agent 的文本指令，选择已发布 Prompt 会切换到该版本。配置默认模型后，下一次 Run 使用该设置。切换模型或指令后，连续会话的新 Run 按当前 API 和配置组包完整的应用历史，并继续使用原会话。已有 Run 保留原快照。新建 Agent 的可用工具环境由应用装配决定。 [连续历史与选模规则](history.md#组件所有权与接口)
 
 ## 手动维护 Shader 头像
 

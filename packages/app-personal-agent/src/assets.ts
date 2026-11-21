@@ -45,7 +45,6 @@ export const personalAgentAssets: readonly ApplicationAsset[] = [
   { path: `${personalAgentAssetPrefix}/web/trajectory-view.js`, file: fileURLToPath(new URL('./web/trajectory-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/session-view.js`, file: fileURLToPath(new URL('./web/session-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/context-usage.js`, file: fileURLToPath(new URL('./web/context-usage.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
-  { path: `${personalAgentAssetPrefix}/web/model-picker.js`, file: fileURLToPath(new URL('./web/model-picker.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/conversation-tree.js`, file: fileURLToPath(new URL('./web/conversation-tree.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/conversation-tree-view.js`, file: fileURLToPath(new URL('./web/conversation-tree-view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/draft-client.js`, file: fileURLToPath(new URL('./web/draft-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },

@@ -302,6 +302,7 @@ export function setupWorkspace(api: HarnessClient, messageFor: (error: unknown) 
   return {
     closeSidebar: () => sidebarLayout.closeDrawers(),
     refreshArchive: () => archivePanel.activate(),
+    refreshSession: () => current?.bundle.controller.notifyChange(),
     setActive(active: boolean) {
       applicationActive = active
       sidebarLayout.setActive(active)

@@ -25,7 +25,7 @@ import { installHarnessServerCore } from './dist/applications/harness/core/index
 import { createLocalSqliteComponent } from './dist/storage/sqlite.js'
 import { createImageAssetsComponent } from './dist/applications/harness/core/image/component.js'
 
-// root 已提供 models；assistant 是保存过的 ModelConfiguration ID。
+// root 已提供 models；assistant 是保存过的 可执行模型 ID。
 await root.installComponent(createLocalSqliteComponent('./data/harness.sqlite'))
 await root.installComponent(createImageAssetsComponent({ directory: './data/harness.sqlite.images' }))
 const installation = await installHarnessServerCore(root, {
@@ -46,7 +46,7 @@ try {
 }
 ```
 
-模型选择顺序为本次 `RunInput.modelId`、会话的 `modelId`、Agent 的可选默认 `modelId`。`selectSessionModel(sessionId, modelId)` 只影响后续 Run；同一幂等键始终返回原 Run，修改输入、父节点或显式模型 ID 会冲突。新会话在首次接受 Run 时固定协议；已有 dialogue-v1 会话只读，需新建空会话开始原生历史。具备有效工具能力的模型收到 Bash 与 Apply Patch 定义，其余可用模型执行纯文本调用。
+模型选择顺序为本次 `RunInput.modelId`、会话的 `modelId`、Agent 的可选默认 `modelId`。`selectSessionModel(sessionId, modelId)` 只影响后续 Run。同一幂等键始终返回原 Run，修改输入、父节点或显式模型 ID 会冲突。四种协议可以在同一会话沿所选父节点续接，换 Key 的条件见[会话树](docs/session-conversation-tree.md)。已有 `dialogue-v1` 会话只读。首轮按模型的有效工具能力固定声明，后续沿用。
 
 Run 先检查幂等键，再由协议应用绑定通过 `models.openNative()` 固定配置、驱动代与凭据，生成 PreparedRunProgram 交给 RunRuntime。协议 Loop 直接解释原生响应；每次调用先 `prepareExchange()`，经 Runtime 持久化意图后启动，等待结果与真实退出再提交观察。Session 保存增量原生记录及不可变父链，跨 Run、重启和分支恢复保留签名、reasoning、原生工具 ID 与顺序。Runtime 关闭 program 后才提交成功节点，取消或清理失败不会伪造完成。浏览器只接收安全展示投影。
 
@@ -56,7 +56,7 @@ Prompt 支持草稿、不可变发布版本及 Agent 绑定，用途为 `agent-i
 
 ## 模型配置与凭据
 
-Provider/Model 管统一服务商与模型定义，标记 user 或 external 来源。ProviderConnection 管账号连接、协议、地址、认证和超时；ModelConfiguration 关联定义和连接，固定远端标识/模型定义版本、能力和参数。保存连接与 Key 后自动准备适用模型，每个连接/模型定义只有一个基础配置，额外参数预设使用 baseline:false。每次保存生成不可变版本，`expectedRevision` 检查并发编辑；配置、停用或密钥变更只影响新 execution。模型能力区分支持、不支持和未知，前端只读显示声明与当前有效能力，生成参数仍可编辑。能力需修正时停止所属执行设备的 Agent，直接编辑 `models.json` 中的 `configurations[].capabilities` 再重新启动。未知工具、图片、搜索和推理能力不会自动判定为支持；流式在未知时按默认开启规则执行。
+Provider/Model 管统一服务商与模型定义，标记 user 或 external 来源。每个已配置的提供方有一套本地 `ProviderSettings`，管理协议、地址、认证、Key 引用和超时。每个模型定义有一套本地 `ModelSettings`，固定远端模型 ID、定义版本、能力和参数。保存提供方设置和 Key 后会自动准备适用的目录模型。旧会话继续按已保存的可执行模型 ID 选模。每次保存生成不可变版本，`expectedRevision` 检查并发编辑；配置、停用或密钥变更只影响新 execution。模型能力区分支持、不支持和未知，前端只读显示声明与当前有效能力，生成参数仍可编辑。能力需修正时停止所属执行设备的 Agent，直接编辑 `models.json` 中的 `modelSettings[].capabilities` 再重新启动。未知工具、图片、搜索和推理能力不会自动判定为支持；流式在未知时按默认开启规则执行。
 
 harness server 装配在 Models 启用后安装 Responses、标准 Chat Completions、Anthropic Messages 和 Gemini Interactions 四种协议。协议提供参数表单、范围、枚举和新建表单默认值；未设置的可选参数保持省略，模型发现只返回候选项，不覆盖本地配置。Anthropic 的 `max_tokens` 必填，新建表单预填 `4096`；Gemini Interactions 固定 `store: false`，当前参数不接受 temperature 或旧推理预算。保存不需要网络检查。当前调用契约接受文本、函数工具、流式事件，以及显式声明能力的本地静态 JPEG/PNG/WebP 图片输入；音频、视频和图片输出等其他模态只作为目录参考信息。
 
@@ -64,7 +64,7 @@ DeepSeek 使用标准 Chat Completions。通用参数支持互斥的 `max_tokens
 
 Models 默认独占 `./data/models.json`，直接保存非秘密配置、历史、凭据引用与清理日志。首次 JSON 不存在时完整导入旧 `models.sqlite`，保留旧库；已有 JSON 为当前权威，不与 harness server 数据库或目录缓存共用路径。停止 Agent 后可编辑当前配置，启动时校验并生成新版本；运行中外部修改会使后续保存报告冲突。完整结构见 [JSON 配置存储](docs/modules/models/json-store.md)。密钥保存在 macOS Keychain、Windows Credential Manager 或 Linux Secret Service，系统存储不可用时返回固定 `credential-unavailable`，仍可查看非秘密配置，不回退到明文或 SQLite。管理读取、Run 快照和错误均不返回密钥。服务名不是权限边界，`models.settings` 只交给受信宿主。
 
-公开来源匿名读取 [models.dev](https://models.dev) 的完整 JSON，使用独立 `models-catalog.sqlite` 缓存。启动优先采用 Models 配置库已接纳的来源，再使用有效缓存或随包离线快照；成功检查（含 304）24 小时后过期，失败一小时后重试，手动刷新可立即检查。来源接纳到统一 Provider/Model 定义后，新增适用模型补齐缺少的基础配置；已有连接、配置与在途 execution 保持固定，来源移除保留已配置模型。能力、价格与限制带显式来源，未知字段保持未知；同一 Provider 定义可对应多个独立账号连接。
+公开来源匿名读取 [models.dev](https://models.dev) 的完整 JSON，使用独立 `models-catalog.sqlite` 缓存。启动优先采用 Models 配置库已接纳的来源，再使用有效缓存或随包离线快照；成功检查（含 304）24 小时后过期，失败一小时后重试，手动刷新可立即检查。来源接纳到统一 Provider/Model 定义后，给新增的适用模型补齐本地设置；已有提供方设置、模型配置和在途 execution 保持固定，来源移除后已配置模型仍可用。能力、价格和限制带显式来源，未知字段保持未知。
 
 ## Apply Patch 工具
 
@@ -79,14 +79,14 @@ harness server 在应用根安装 `tools.apply-patch`，向模型提供 `apply_p
 单机运行使用 `npm run web:local`：客户端和本机业务后端在同一个 Node.js 进程、同一个 Nya 根中运行，两个监听地址和各自数据文件保留，打开应用后自动配对。独立部署时，先运行 `npm run harness:server:init` 生成一次性显示的设备访问令牌，再运行 `npm run web`。先打开 Anybox Harness，在其连接管理中添加 `http://127.0.0.1:3001` 并填入令牌。独立部署的执行端与客户端使用不同进程，分别使用 `npm run harness:server` / `npm run client`。云端与其他设备使用 HTTPS 配对。详见[独立部署、发行与恢复](docs/harness-server-deployment.md)。打开终端打印的 `http://127.0.0.1:<port>` 地址。新安装点击 Anybox Harness 后打开所选 Agent；已有业务库保留 Agent 打开目标。在 Anybox Harness 内进入“模型管理”：
 
 1. 点击“添加提供方”，从 models.dev 目录中选择提供方和连接方案，点击“填写 API Key”。新建连接必须选中目录提供方，界面不再提供自定义新增提供方入口；确认连接名称、API 地址和认证方式，填写 Key 后保存。
-2. 保存连接和 Key 后，适用目录模型自动准备基础配置。高级设置可编辑生成参数、新建参数预设或自定义模型；能力只读展示，人工修正需编辑执行设备的 JSON 配置。
+2. 保存提供方设置和 Key 后，兼容的目录模型自动可选。在模型列表中直接编辑生成参数，也可以添加目录中没有的自定义模型；能力只读展示，人工修正需编辑执行设备的 JSON 配置。
 3. 回到会话的模型选择器，选择本地 Model 后发送消息。
 
 已有连接（含历史自定义连接）仍可编辑和启停，也可替换或删除 Key，查询历史版本并显式检查连接。修改保存后立即作用于新 Run，已接受 Run 保留原配置。Key 只显示配置状态；无需认证的提供方也可使用。提供方的协议创建后不可更改，要切换协议需创建新提供方。
 
-在“我的连接”选择账号后，详情顶部的“删除连接”会先展示确认信息。确认后删除该连接、Key 及其基础模型和参数预设，保留 Provider/Model 定义、配置历史、历史对话和已开始的 Run；使用已删除配置的会话须重新选择模型。删除最后一个连接后，重启仍保持没有连接，由用户从目录重新添加。
+在提供方详情中可移除本地 API 设置、Key 和所属模型设置。目录定义、设置历史、历史对话和已开始的 Run 保留。使用已移除模型的会话需要重新选模，移除的提供方可从目录重新添加。
 
-首次使用且没有已有 Models 配置时，宿主只加载 models.dev 目录，连接和实际模型配置保持为空，不自动创建“迁入”连接或默认模型。提供方连接与 Key 由用户在模型管理中显式添加。旧 `ANYBOX_LLM_*` 环境变量不再解析或导入，也不再读取或复制旧 `anybox` 模型凭据。已有 JSON 配置及旧 Models SQLite 的导入兼容继续保留，已保存的连接、模型、Key 引用和历史继续读取；未完成的旧引导不再补写固定迁入连接或默认模型，既有配置中的稳定 `default` 模型仍可作为启动后备。
+首次使用且没有已有 Models 配置时，宿主只加载 models.dev 目录，提供方设置和模型配置保持为空，不自动创建“迁入”连接或默认模型。提供方设置和 Key 由用户在模型管理中添加。旧 `ANYBOX_LLM_*` 环境变量不再解析或导入，也不再读取或复制旧 `anybox` 模型凭据。已有 JSON 配置及旧 Models SQLite 的导入兼容继续保留，迁移保留模型配置 ID、Key 引用和历史；未完成的旧引导不再补写固定迁入连接或默认模型，既有配置中的稳定 `default` 模型仍可作为启动后备。
 
 | 环境变量 | 默认值与用途 |
 | --- | --- |
@@ -97,7 +97,7 @@ harness server 在应用根安装 `tools.apply-patch`，向模型提供 `apply_p
 | `ANYBOX_MODELS_CATALOG_DATABASE` | 默认在旧 Models 路径旁的 `models-catalog.sqlite`，不能与配置文件或其他库共用文件及文件别名 |
 | `ANYBOX_MODELS_NAMESPACE` | `anybox.models`，系统凭据命名空间 |
 
-上述环境变量仍在安装资源前校验，不加载 dotenv；已设置的空值会报错。模型连接的 API 地址在设置中填写基础地址，不附加 `/responses` 或 `/chat/completions`，不带用户名、密码、查询串或 fragment。
+上述环境变量仍在安装资源前校验，不加载 dotenv；已设置的空值会报错。提供方的 API 地址在设置中填写基础地址，不附加 `/responses` 或 `/chat/completions`，不带用户名、密码、查询串或 fragment。
 
 Anybox Harness 内的“Prompt 管理”可编辑、发布、预览并绑定版本。“模型服务”配置与会话选择通过薄 HTTP 入口调用 Nya 服务。`/api/v1/changes` 同时提供提交后的 Run 变更提示和临时模型进展；慢连接受有界队列限制，只影响展示订阅。最终内容以持久 Run 和节点查询为准，刷新不会恢复半截流式输出。工具过程、取消与失败仍由 Run 状态展示。
 

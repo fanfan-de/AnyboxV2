@@ -63,7 +63,7 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 
 等待超时只取消本次 waiter，不取消 Run；HTTP 断开也是如此。兄弟 Run 可以并发，浏览器必须选择明确父节点，服务端不推断 head。幂等恢复、成功节点创建条件及旧 Session 只读规则见 [Session](../sessions/session.md) 与 [Run](../execution/run.md)。
 
-新会话默认值由现有 Session 组件持久保存，不属于 Models 目录或浏览器偏好。保存非空值时 HTTP 捕获的 Models 服务检查配置存在且当前可用；已保存默认后来停用或删除时，查询与新会话创建保留其 ID，不静默换模型。未知 Agent 或新保存的模型返回 404；不可用模型返回 `409 model-unavailable`，过期 revision 返回 `409 session-defaults-conflict`，非法字段或缺失 modelId/revision 返回 400。revision 初始为 0，保存及清除均递增。默认变更只影响之后新建的会话，首次 Run 仍负责固定协议；已有会话的显式选模与 Run 优先级不变。
+新会话默认值由现有 Session 组件持久保存，不属于 Models 目录或浏览器偏好。保存非空值时 HTTP 捕获的 Models 服务检查配置存在且当前可用；已保存默认后来停用或删除时，查询与新会话创建保留其 ID，不静默换模型。未知 Agent 或新保存的模型返回 404；不可用模型返回 `409 model-unavailable`，过期 revision 返回 `409 session-defaults-conflict`，非法字段或缺失 modelId/revision 返回 400。revision 初始为 0，保存及清除均递增。默认变更只影响之后新建的会话。已有会话可显式选模，单次 Run 可覆盖会话选择。
 
 ## API：单元附着
 
@@ -118,21 +118,21 @@ selection 为 `{ kind: 'project-file', path, range? }` 或 `{ kind: 'snapshot', 
 | `POST /models/providers`、`POST /models/definitions` | 分别创建 `ProviderInput`、`ModelInput` 用户定义 |
 | `POST /models/providers/:id`、`POST /models/definitions/:id` | `{ patch, expectedRevision }` |
 | `GET /models/providers/:id/history`、`GET /models/definitions/:id/history` | 定义历史 |
-| `GET /models/connections`、`POST /models/connections` | 列表 / 用 `ProviderConnectionInput` 创建连接，可带 `apiKey` |
-| `POST /models/connections/:id` | `{ patch, expectedRevision }` |
-| `GET /models/connections/:id/history`、`GET /models/connections/:id/models` | 连接历史 / 该连接全部模型的可用与不可用原因 |
-| `POST /models/connections/:id/key` | `{ apiKey, expectedRevision }` |
-| `POST /models/connections/:id/key/delete`、`POST /models/connections/:id/delete` | `{ expectedRevision }`；删 Key / 删连接 |
-| `POST /models/connections/:id/retry` | `{}`；重试基础配置同步 |
-| `POST /models/connections/:id/discover`、`POST /models/connections/:id/check` | `{}`；可取消的远端模型发现 / 连通性检查 |
-| `GET /models/configurations` | 可选 `connectionId` 过滤 |
-| `POST /models/configurations` | `ModelConfigurationInput`，可指定原生 `parameters`、能力和 `baseline` |
-| `POST /models/configurations/:id` | `{ patch, expectedRevision }` |
-| `GET /models/configurations/:id/history` | 执行配置历史 |
+| `GET /models/provider-settings`、`POST /models/provider-settings` | 列表 / 用 `providerId` 和 `ProviderSettingsInput` 创建该提供方的设置，可带 `apiKey` |
+| `POST /models/provider-settings/:id` | `{ patch, expectedRevision }` |
+| `GET /models/provider-settings/:id/history`、`GET /models/provider-settings/:id/models` | 提供方设置历史 / 该提供方模型的可用状态和原因 |
+| `POST /models/provider-settings/:id/key` | `{ apiKey, expectedRevision }` |
+| `POST /models/provider-settings/:id/key/delete`、`POST /models/provider-settings/:id/delete` | `{ expectedRevision }`；删除 Key / 移除该提供方的本地设置 |
+| `POST /models/provider-settings/:id/retry` | `{}`；重试模型设置补齐 |
+| `POST /models/provider-settings/:id/discover`、`POST /models/provider-settings/:id/check` | `{}`；可取消的远端模型发现 / 连通性检查 |
+| `GET /models/settings` | 可选 `providerId` 过滤 |
+| `POST /models/settings` | 使用模型定义 ID `modelId` 保存一套 `ModelSettingsInput`。已存在时返回冲突 |
+| `POST /models/settings/:id` | 按模型定义 ID 提交 `{ patch, expectedRevision }` |
+| `GET /models/settings/:id/history` | 模型设置历史 |
 
-定义查询接受 `sourceId`、`providerId`、`search` 和字符串布尔值 `includeDeprecated`、`includeMissing`、`textOnly`。写操作的主字段白名单与完整类型以 [server.ts](../../../packages/app-harness/src/http/handler.ts) 及 [Models 模块](../models/README.md) 为准。`expectedRevision` 必须为大于零的安全整数，并交由领域服务执行版本冲突检查。
+定义查询接受 `sourceId`、`providerId`、`search` 和字符串布尔值 `includeDeprecated`、`includeMissing`、`textOnly`。写操作的主字段白名单与完整类型以 [模型 HTTP 适配](../../../packages/app-harness/src/http/models-api.ts)及 [Models 模块](../models/README.md) 为准。`expectedRevision` 必须为大于零的安全整数，并交由领域服务执行版本冲突检查。
 
-Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返回 Key 内容的 GET 接口。目录建议来自定义与显式 sourceMappings，不按 hostname 猜协议。保存连接/Key 后适用模型的基础配置补齐、失败重试和来源删除保留既有配置均由 Models 负责。
+每个提供方在该执行端只有一套设置，重复创建返回冲突。Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返回 Key 内容的 GET 接口。目录建议来自定义与显式 sourceMappings，不按 hostname 猜协议。保存提供方设置和 Key 后适用模型的基础配置补齐、失败重试和来源删除保留既有配置均由 Models 负责。
 
 ## API：Prompt 与 Agent 绑定
 
@@ -165,6 +165,8 @@ Key 写入直接交给 Models Settings，查询仅返回配置状态；没有返
 组件监听 Nya `runChangedEvent` 和 `runViewEvent`，转发到当前 HTTP 服务。每条流先发 `ready`，随后发 `run-changed` 刷新提示和 `protocol-view` 完整替换视图；每 15 秒空闲心跳。没有持久重放游标，初次连接/重连必须通过查询校准。
 
 一条流订阅 1..4 个不同 Session，服务最多同时 64 条流。背压时每个 Session 仅保留最新变更提示，原生视图按 Session/Run 替换；最多缓存 128 个视图、262144 字节，超过上限或 15 秒未 drain 就关闭该流。慢浏览器不会阻塞模型回调。
+
+Run 查询可包含首包估算 `estimatedInputTokens`。协议用量可包含逐次调用的 `cachedInputTokens` 和 `uncachedInputTokens`，供轨迹显示。
 
 运行中 `getRunView` 先使用 Run 的有效临时视图，核对会话、Run 和协议；否则从 Session 的原生记录生成投影。结束后读取持久记录生成 committed 视图。每个 exchange 可选 `inputs: {id,role,text}[]`，role 仅为 system/context/user，`blocks` 仍为响应。协议投影只读取真实增量请求的明确文本位置；首次请求中实际包含的初始 Prompt 由该 Run 保存的 Prompt kind 精确分类，后代继承的 Prompt 不伪装成重新发送。模板已处理的正文和当时的文件资料直接读取请求，不再展开模板、读取当前配置或重读源文件；图片仅保留空文本用户行供附件事实关联，不返回图片编码。工具返还及 assistant 续轮不生成用户行，工具观察继续读取事件。
 

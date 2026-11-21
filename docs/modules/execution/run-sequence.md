@@ -24,10 +24,11 @@ sequenceDiagram
         S-->>R: 原 Run
         R-->>U: 返回原 Run
     else 首次请求
-        R->>S: 读取 Session、父链历史与固定初始化
+        R->>S: 读取 Session 与固定初始化
+        Note over R,S: 按确切父引用复用缓存或重建祖先链
         R->>R: 校验项目、模型、协议、工具与附件
         R->>P: prepare
-        P->>M: openNative（固定配置与历史）
+        P->>M: openNative（固定本轮配置与缓存、原生记录或应用前缀）
         M-->>P: execution 与模型快照
         P-->>R: PreparedRunProgram
 

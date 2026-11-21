@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import sharp from 'sharp'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { Context } from '@nya/core'
 import { createModelsComponent, createModelsStoreComponent, createModelsVaultComponent, unknownCapabilities,
   createResponsesProtocol, createAnthropicMessagesProtocol, createChatCompletionsProtocol, createGeminiInteractionsProtocol } from '@anybox/models'
@@ -14,6 +15,7 @@ import { projectProtocolRecords } from '../packages/app-harness/dist/core/protoc
 import { decodeProtocolView } from '../packages/app-harness/dist/core/view/decode.js'
 import { runViewEvent } from '../packages/app-harness/dist/core/run/notifications.js'
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
+import { seedHarnessModel } from './helpers/configured-models.mjs'
 
 const factories = { responses: createResponsesProtocol, 'anthropic-messages': createAnthropicMessagesProtocol,
   'chat-completions': createChatCompletionsProtocol, 'gemini-interactions': createGeminiInteractionsProtocol }
@@ -39,35 +41,42 @@ function toolResponse(protocolId) {
   return { choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: 'Thinking',
     tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'bash', arguments: JSON.stringify(args) } }] } }] }
 }
-async function host(directory, protocolId, state, { search = false, images = false, legacy = false, streaming = false, timeoutMs = 5000, http = false } = {}) {
+async function host(directory, protocolId, state, { search = false, images = false, legacy = false, streaming = false, timeoutMs = 5000, http = false, additionalProtocols = [] } = {}) {
   const root = new Context()
   await root.installComponent(createModelsStoreComponent({ path: join(directory, 'models.sqlite') }))
   await root.installComponent(createModelsVaultComponent({ namespace: 'native-app-test', openEntry(_namespace, id) {
     return { async getPassword() { return state.secrets.get(id) }, async setPassword(value) { state.secrets.set(id, value) }, async deleteCredential() { return state.secrets.delete(id) } }
   } }))
   await root.installComponent(createModelsComponent())
-  const protocol = factories[protocolId]({ fetch: async (_url, init) => {
-    state.requests.push(JSON.parse(init.body))
+  const transport = id => async (url, init) => {
+    const body = JSON.parse(init.body)
+    state.requests.push(body)
+    state.transports?.push({ id, url: String(url), headers: new Headers(init.headers) })
     assert.ok(state.responses.length, 'unexpected provider request')
     const response = state.responses.shift()
     await state.beforeResponse?.()
     return response instanceof Response ? response : json(response)
-  } })
+  }
+  const protocol = factories[protocolId]({ fetch: transport(protocolId) })
   root.get('models.protocols').register(legacy ? { ...protocol, descriptor: { ...protocol.descriptor, version: '2.0.0' }, recordFormatVersion: 1,
     effectiveCapabilities: (...args) => ({ ...protocol.effectiveCapabilities(...args), imageInput: false }) } : protocol)
+  for (const id of additionalProtocols) root.get('models.protocols').register(factories[id]({ fetch: transport(id) }))
   const settings = root.get('models.settings')
-  if (!settings.connections().length) {
+  if (!settings.configuredProviders().length) {
     const capabilities = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: streaming ? 'supported' : 'unsupported' },
       imageInput: { support: images ? 'supported' : 'unsupported' }, webSearch: { support: search ? 'supported' : 'unknown' } }
     const provider = await settings.createProvider({ name: 'Native provider', connectionHints: { protocolIds: [protocolId] } })
-    const connection = await settings.createConnection({ id: 'connection', providerDefinitionId: provider.id, name: 'Native connection', enabled: true,
+    await settings.createProviderSettings({ providerId: provider.id, name: 'Native connection', enabled: true,
       protocolId, baseUrl: 'https://native.invalid/v1', auth: 'api-key', apiKey: 'private-api-key', timeoutMs })
-    const definition = await settings.createModel({ name: 'Native model', providerId: provider.id, remoteModelId: 'native-model', capabilities,
+    const definition = await settings.createModel({ id: 'default', name: 'Native model', providerId: provider.id, remoteModelId: 'native-model', capabilities,
       controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [protocolId] } })
     const value = protocolId === 'anthropic-messages' ? { max_tokens: 4096 } : {}
     if (search) value.tools = protocolId === 'responses' ? [{ type: 'web_search' }] : [{ type: 'web_search_20250305', name: 'web_search' }]
-    await settings.createConfiguration({ id: 'default', name: 'Native configuration', enabled: true, connectionId: connection.id, modelDefinitionId: definition.id,
-      capabilities, baseline: true, parameters: { protocolId, formatVersion: 1, value } })
+    await settings.createModelSettings({ modelId: definition.id, name: 'Native configuration', enabled: true, capabilities, parameters: { protocolId, formatVersion: 1, value } })
+    for (const id of additionalProtocols) await seedHarnessModel(settings, {
+      id, protocolId: id, baseUrl: `https://${id}.invalid/v1`, capabilities,
+      ...(id === 'anthropic-messages' ? { parameters: { max_tokens: 4096 } } : {}),
+    })
   }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'sessions.sqlite')) + ".images" }))
@@ -185,8 +194,8 @@ for (const protocolId of Object.keys(factories)) for (const failure of ['idle ti
       assert.deepEqual(await assertStoredView(f), storedView)
       assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
 
-      const configuration = f.settings.configurations().find(value => value.id === 'default')
-      await f.settings.updateConfiguration(configuration.id, { capabilities: { ...configuration.capabilities, streaming: { support: 'unsupported' } } }, configuration.revision)
+      const configuration = f.settings.modelSettings().find(value => value.id === 'default')
+      await f.settings.updateModelSettings(configuration.id, { capabilities: { ...configuration.capabilities, streaming: { support: 'unsupported' } } }, configuration.revision)
       state.responses.push(answer(protocolId, 'FRESH-ANSWER'))
       await run(f, session.id, null, 'Fresh root request', 'fresh')
       assert.doesNotMatch(JSON.stringify(state.requests.at(-1)), /RECEIVED-PARTIAL-ANSWER|unexecuted-call/)
@@ -311,12 +320,12 @@ for (const protocolId of Object.keys(factories)) test(`${protocolId}: native too
     assert.doesNotMatch(JSON.stringify(state.requests.at(-1)), /CHILD-INPUT|CHILD-ANSWER|RESTART-INPUT|RESTART-ANSWER/)
     assert.match(JSON.stringify(state.requests.at(-1)), /ROOT-ANSWER/)
     assert.deepEqual(await f.harness.getRunRecords(first.id), rootRecords)
-    const connection = f.settings.connections()[0]
-    await f.settings.updateConnection(connection.id, { name: 'Renamed' }, connection.revision)
+    const connection = f.settings.configuredProviders()[0]
+    await f.settings.updateProviderSettings(connection.id, { name: 'Renamed' }, connection.revision)
     state.responses.push(answer(protocolId, 'RENAMED-ANSWER'))
     await run(f, session.id, first.resultNodeId, 'RENAMED-INPUT')
-    const renamed = f.settings.connections()[0]
-    await f.settings.updateConnection(renamed.id, { baseUrl: 'https://changed.invalid/v1' }, renamed.revision)
+    const renamed = f.settings.configuredProviders()[0]
+    await f.settings.updateProviderSettings(renamed.id, { baseUrl: 'https://changed.invalid/v1' }, renamed.revision)
     const before = state.requests.length
     await assert.rejects(f.harness.startRun({ sessionId: session.id, parentNodeId: first.resultNodeId, input: 'REJECT', idempotencyKey: 'scope-changed' }))
     assert.equal(state.requests.length, before)
@@ -412,6 +421,101 @@ const requestMessages = request => request.messages ?? request.input
 const imageUrls = request => requestMessages(request).flatMap(message => Array.isArray(message.content)
   ? message.content.flatMap(part => part.type === 'image_url' ? [part.image_url.url] : part.type === 'input_image' ? [part.image_url]
     : part.type === 'image' ? [`data:${part.source?.media_type ?? part.mime_type};base64,${part.source?.data ?? part.data}`] : []) : [])
+
+test('Harness switches four APIs and Keys along the selected branch and reuses each immutable native parent', { timeout: 30_000 }, async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-branch-continuation-'))
+  const chat = 'chat-completions', additionalProtocols = ['responses', 'anthropic-messages', 'gemini-interactions']
+  const state = { secrets: new Map(), requests: [], responses: [], transports: [] }
+  const open = () => host(directory, chat, state, { images: true, http: true, additionalProtocols })
+  let f = await open()
+  t.after(async () => { try { await f?.close() } finally { rmSync(directory, { recursive: true, force: true }) } })
+  const nativeReads = [], prepare = DatabaseSync.prototype.prepare
+  t.mock.method(DatabaseSync.prototype, 'prepare', function (sql) {
+    const statement = prepare.call(this, sql)
+    if (sql === 'SELECT * FROM harness_native_records WHERE run_id = ? ORDER BY seq') {
+      const read = statement.all.bind(statement)
+      statement.all = (...args) => { nativeReads.push(args[0]); return read(...args) }
+    }
+    return statement
+  })
+  const session = await f.harness.createSession(f.project.id, 'assistant', 'default')
+  const { image, wire } = await importPicture(f, session.id)
+  const start = (parentNodeId, input, overrides = {}) => f.harness.startRun({ sessionId: session.id, parentNodeId, input, idempotencyKey: input, ...overrides })
+  const finish = async accepted => {
+    assert.ok(Number.isSafeInteger(accepted.estimatedInputTokens) && accepted.estimatedInputTokens > 0)
+    const run = await f.harness.waitRun(accepted.id)
+    assert.equal(run.status, 'completed', JSON.stringify(run))
+    return run
+  }
+  const rootReply = answer(chat, 'ROOT-ANSWER')
+  rootReply.choices[0].message.reasoning_content = 'private-chat-reasoning'
+  state.responses.push(toolResponse(chat), rootReply)
+  const root = await finish(await start(null, 'ROOT-QUESTION', { images: [{ assetId: image.assetId }] }))
+
+  nativeReads.length = 0
+  state.responses.push(answer(chat, 'A SIBLING ANSWER'), answer(chat, 'A SIBLING ANSWER'))
+  const siblings = await Promise.all(['WARM-SIBLING-A', 'WARM-SIBLING-B'].map(async value => finish(await start(root.resultNodeId, value))))
+  assert.ok(siblings.every(sibling => sibling.history.parentNodeId === root.resultNodeId))
+  assert.ok(!nativeReads.includes(root.id), 'warm admission and cleanup should not load the parent records')
+  const warm = state.requests.find(request => JSON.stringify(request).includes('WARM-SIBLING-A'))
+  assert.match(JSON.stringify(warm), /private-chat-reasoning/)
+  assert.doesNotMatch(JSON.stringify(warm), /WARM-SIBLING-B/)
+
+  await f.harness.selectSessionModel(session.id, 'responses')
+  state.responses.push(toolResponse('responses'), answer('responses', 'RESPONSES-ANSWER'))
+  const responses = await finish(await start(root.resultNodeId, 'RESPONSES-QUESTION'))
+  state.responses.push(answer('anthropic-messages', 'ANTHROPIC-ANSWER'))
+  const anthropic = await finish(await start(responses.resultNodeId, 'ANTHROPIC-QUESTION', { modelId: 'anthropic-messages' }))
+  assert.equal((await f.harness.getSession(session.id)).modelId, 'responses', 'a Run override does not change Session selection')
+  await f.harness.selectSessionModel(session.id, 'gemini-interactions')
+  state.responses.push({ ...answer('gemini-interactions', 'GEMINI-ANSWER'), usage: { total_input_tokens: 1730, total_output_tokens: 41 } })
+  const gemini = await finish(await start(anthropic.resultNodeId, 'GEMINI-QUESTION'))
+  assert.deepEqual(state.transports.slice(4).map(transport => transport.id), ['responses', 'responses', 'anthropic-messages', 'gemini-interactions'])
+  for (const request of state.requests.slice(4)) {
+    assert.deepEqual(imageUrls(request), [wire])
+    assert.match(JSON.stringify(request), /ROOT-QUESTION.*native-tool-result.*ROOT-ANSWER/)
+    assert.doesNotMatch(JSON.stringify(request), /WARM-SIBLING|private-chat-reasoning/)
+  }
+  assert.match(JSON.stringify(state.requests.at(-1)), /RESPONSES-QUESTION.*RESPONSES-ANSWER.*ANTHROPIC-QUESTION.*ANTHROPIC-ANSWER.*GEMINI-QUESTION/)
+  const geminiHistory = await f.root.get('harness.session-runs').loadNativeHistory(session.id, gemini.resultNodeId)
+  assert.ok(geminiHistory.applicationPrefix.some(event => event.role === 'tool'))
+  assert.deepEqual([...new Set(geminiHistory.records.map(record => record.runId))], [gemini.id])
+
+  state.responses.push(answer('gemini-interactions', 'GEMINI-WARM-ANSWER'))
+  const mixedWarm = await finish(await start(gemini.resultNodeId, 'GEMINI-NEXT', { idempotencyKey: 'gemini-warm' }))
+  assert.ok(mixedWarm.estimatedInputTokens > 1730)
+  const mixedWarmRequest = state.requests.at(-1)
+
+  const chatProvider = f.settings.configuredProviders().find(provider => provider.protocolId === chat)
+  await f.settings.setApiKey(chatProvider.id, 'rotated-key-for-test', chatProvider.revision)
+  state.responses.push(answer(chat, 'ROTATED-ANSWER'))
+  const rotated = await finish(await start(root.resultNodeId, 'ROTATE-QUESTION', { modelId: 'default' }))
+  assert.equal(rotated.history.parentNodeId, root.resultNodeId)
+  assert.equal(state.transports.at(-1).headers.get('authorization'), 'Bearer rotated-key-for-test')
+  assert.deepEqual(imageUrls(state.requests.at(-1)), [wire])
+  assert.match(JSON.stringify(state.requests.at(-1)), /ROOT-QUESTION.*native-tool-result.*ROOT-ANSWER.*ROTATE-QUESTION/)
+  assert.doesNotMatch(JSON.stringify(state.requests.at(-1)), /private-chat-reasoning|RESPONSES-QUESTION|WARM-SIBLING/)
+  const rotatedHistory = await f.root.get('harness.session-runs').loadRunResume(rotated.id)
+  assert.ok(rotatedHistory.applicationPrefix.some(event => event.role === 'tool'))
+  assert.ok((await f.harness.listNodes(session.id, root.resultNodeId)).nodes.some(node => node.id === responses.resultNodeId))
+
+  await f.close()
+  f = undefined
+  f = await open()
+  nativeReads.length = 0
+  state.responses.push(answer('gemini-interactions', 'GEMINI-COLD-ANSWER'))
+  const cold = await finish(await start(gemini.resultNodeId, 'GEMINI-NEXT', { idempotencyKey: 'gemini-cold' }))
+  assert.ok(nativeReads.includes(gemini.id), 'cold admission reads the native suffix')
+  assert.deepEqual(state.requests.at(-1), mixedWarmRequest)
+  assert.equal(cold.estimatedInputTokens, mixedWarm.estimatedInputTokens)
+  assert.equal((await readRunHTTP(f, `/runs/${cold.id}`)).estimatedInputTokens, cold.estimatedInputTokens)
+
+  const activeChatProvider = f.settings.configuredProviders().find(provider => provider.protocolId === chat)
+  await f.settings.updateProviderSettings(activeChatProvider.id, { baseUrl: 'https://other-account.invalid/v1' }, activeChatProvider.revision)
+  const priorRequestCount = state.requests.length
+  await assert.rejects(start(gemini.resultNodeId, 'REJECT-ENDPOINT-CHANGE', { modelId: 'default' }), { code: 'history-incompatible' })
+  assert.equal(state.requests.length, priorRequestCount, 'the former scope anywhere in the selected ancestry prevents retargeting')
+})
 
 for (const protocolId of Object.keys(factories)) test(`${protocolId}: images persist through tools, restart, regeneration and isolated branches`, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-images-history-'))

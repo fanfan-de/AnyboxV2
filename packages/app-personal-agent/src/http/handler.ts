@@ -140,7 +140,8 @@ function knownFailure(error: unknown): HttpFailure {
     return failure(status, error.code)
   }
   if (isModelFailure(error)) return failure(error.category === 'model-unavailable' ? 409
-    : error.category === 'unsupported-request' ? 400 : error.category === 'timeout' ? 504 : 503, error.category)
+    : error.category === 'unsupported-request' ? 400 : error.category === 'request-too-large' ? 413
+      : error.category === 'timeout' ? 504 : 503, error.category)
   if (isProjectUnavailableError(error)) return failure(409, 'project-unavailable')
   if (error instanceof DirectoryPickerFailure) {
     if (error.code === 'busy') return failure(409, 'picker-busy')
@@ -184,7 +185,6 @@ function knownFailure(error: unknown): HttpFailure {
     }
     if ('code' in error && error.code === 'node-not-found') return failure(404, 'node-not-found')
     if ('code' in error && error.code === 'invalid-history') return failure(409, 'invalid-history')
-    if ('code' in error && error.code === 'context-too-large') return failure(400, 'context-too-large')
     if ('code' in error && error.code === 'session-defaults-conflict') return failure(409, 'session-defaults-conflict')
     if ('code' in error && error.code === 'agent-tools-conflict') return failure(409, 'agent-tools-conflict')
     if ('code' in error && ['session-archived', 'session-has-active-runs', 'legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable', 'history-position-changed', 'continuous-session'].includes(String(error.code))) return failure(409, String(error.code))
@@ -222,6 +222,7 @@ function runView(run: Run): RunView {
     id: run.id, sessionId: run.sessionId, input: run.input, images: run.images ?? [], files: run.files ?? [], status: run.status,
     createdAt: run.createdAt, updatedAt: run.updatedAt, revision: run.revision, history: run.history,
     modelId: run.modelId, requestedModelId: run.requestedModelId, modelSnapshot: run.modelSnapshot,
+    ...(run.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: run.estimatedInputTokens }),
     ...(run.projectId ? { projectId: run.projectId } : {}),
     ...(run.protocolBinding ? { protocolBinding: run.protocolBinding } : {}),
     ...(run.legacyModelSnapshot ? { legacyModelSnapshot: run.legacyModelSnapshot } : {}),

@@ -50,10 +50,12 @@ export interface ProtocolViewInput {
   readonly role: 'system' | 'context' | 'user'
   readonly text: string
 }
-/** Counts reported for one native request; absence is distinct from a reported zero. */
+/** Usage for one native request; absence is distinct from a measured zero. */
 export interface ProtocolTokenUsage {
   readonly inputTokens?: number
   readonly outputTokens?: number
+  readonly cachedInputTokens?: number
+  readonly uncachedInputTokens?: number
 }
 export interface ProtocolViewExchange {
   readonly id: string

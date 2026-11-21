@@ -13,7 +13,7 @@ import type { ImageAssetsPort, ImageRef } from '../image/port.js'
 import { inputImages, inputFiles } from '../run/program.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
 import type { LegacyExecutionSnapshot } from '../run/legacy-snapshot.js'
-import type { NativeHistory, NativeInitialization, NativeRunInput, ProtocolBindingSnapshot, ProtocolRecord, StoredProtocolRecord, RunResumeState, RunResumeRecord } from '../run/program.js'
+import type { ApplicationHistory, NativeHistory, NativeInitialization, NativeRunInput, ProtocolBindingSnapshot, ProtocolRecord, StoredProtocolRecord, RunResumeState, RunResumeRecord } from '../run/program.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow, StorageTransaction } from '@anybox/storage-sqlite/port'
 import { assemblePath, treeError, createSession, deriveSessionTitle, resolveSessionModel, sessionDefaultsConflict, agentToolsConflict } from './domain.js'
@@ -25,6 +25,8 @@ import type { Run, RunInput } from '../run/domain.js'
 import { advanceExecution, initialRunExecution, parseRunExecution, parseRunEvent } from '../run/execution.js'
 import type { RunEventData } from '../run/execution.js'
 import type { SessionPort, SessionRunPort } from './port.js'
+import { portableHistory } from './portable-history.js'
+import type { PortableHistoryEvent } from './portable-history.js'
 import { environmentForTool, parseToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 import type { ToolEnvironmentCatalog } from '../tool-environments/port.js'
 import { computerCleanupReceipt } from '../tool-environments/history.js'
@@ -244,6 +246,16 @@ const migrations: readonly StorageMigration[] = [{
     tx.execute(`CREATE TRIGGER harness_sessions_environments_immutable BEFORE UPDATE OF tool_environments_json ON harness_sessions
       BEGIN SELECT RAISE(ABORT, 'Session tool environments are immutable'); END`)
   },
+}, {
+  version: 13,
+  up(tx) {
+    tx.execute(`ALTER TABLE harness_runs ADD COLUMN application_prefix INTEGER NOT NULL DEFAULT 0
+      CHECK(application_prefix = 0 OR (application_prefix = 1 AND parent_context_ref IS NOT NULL))`)
+    tx.execute('ALTER TABLE harness_runs ADD COLUMN estimated_input_tokens INTEGER CHECK(estimated_input_tokens >= 0)')
+    tx.execute(`CREATE TRIGGER harness_runs_history_prefix_immutable
+      BEFORE UPDATE OF application_prefix, estimated_input_tokens ON harness_runs
+      BEGIN SELECT RAISE(ABORT, 'Run input history is immutable'); END`)
+  },
 }]
 
 const initialResumeState: RunResumeState = Object.freeze({ schemaVersion: 1, runOwnerEpoch: 1, revision: 0,
@@ -277,9 +289,13 @@ function runResume(reader: StorageReader, id: string): RunResumeRecord | undefin
   if (!state || !row) return undefined
   const run = runFromRow(row), session = reader.get('SELECT project_id FROM harness_sessions WHERE id = ?', [run.sessionId])!
   const initialization = reader.get('SELECT payload_json FROM harness_native_initializations WHERE id = ?', [required(row, 'initialization_id')])!
-  const history = run.history.kind === 'tree' ? nativeHistory(reader, run.sessionId, run.history.parentNodeId) : undefined
+  const parentContextRef = optional(row, 'parent_context_ref') ?? null
+  const parentNodeId = run.history.kind === 'tree' ? run.history.parentNodeId : null
+  const portable = row.application_prefix === 1 && parentNodeId !== null ? applicationHistory(reader, run.sessionId, parentNodeId) : undefined
+  const history = !portable && parentNodeId !== null ? nativeHistory(reader, run.sessionId, parentNodeId) : undefined
+  if ((portable?.contextRef ?? history?.contextRef ?? null) !== parentContextRef) throw treeError('invalid-history')
   return Object.freeze({ run, projectId: required(session, 'project_id'), initialization: JSON.parse(required(initialization, 'payload_json')) as NativeInitialization,
-    ...(history ? { history } : {}), records: protocolRecords(reader, id), state })
+    ...(history ? { history } : {}), ...(portable ? { applicationPrefix: portable.events } : {}), records: protocolRecords(reader, id), state })
 }
 function cleanupOutputBytes(intent: JsonValue, result?: JsonValue): number {
   if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
@@ -400,42 +416,85 @@ function appendEvent(tx: StorageTransaction, runId: string, event: RunEventData,
   tx.execute('INSERT INTO harness_run_events (run_id, seq, at, payload_json) VALUES (?, ?, ?, ?)', [runId, next.revision, at, serialize(event)])
 }
 
-function nativeHistory(reader: StorageReader, sessionId: string, parentNodeId: string | null): NativeHistory | undefined {
+function completedNode(reader: StorageReader, sessionId: string, nodeId: string): StorageRow | undefined {
+  return reader.get(`SELECT n.parent_id AS node_parent_id, c.id AS context_id, c.protocol_id AS context_protocol_id,
+      c.parent_ref, c.checkpoint_json, r.*
+    FROM harness_nodes n
+    LEFT JOIN harness_native_contexts c ON c.id = n.context_ref AND c.session_id = n.session_id AND c.run_id = n.source_run_id
+    LEFT JOIN harness_runs r ON r.id = c.run_id AND r.session_id = n.session_id AND r.result_node_id = n.id
+      AND r.parent_node_id IS n.parent_id AND r.parent_context_ref IS c.parent_ref AND r.initialization_id = c.initialization_id
+      AND r.status = 'completed' AND r.context_version = 'native-local-v1'
+    WHERE n.id = ? AND n.session_id = ?`, [nodeId, sessionId])
+}
+
+function completedPath(reader: StorageReader, sessionId: string, parentNodeId: string | null) {
   const session = reader.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])
   if (!session) throw new Error(`unknown session ${sessionId}`)
   if (required(session, 'history_mode') !== 'native-local-v1') throw treeError('legacy-session-readonly')
-  const nodes = nodePath(reader, sessionId, parentNodeId)
-  if (!parentNodeId) return undefined
-  let expectedParent: string | null = null
-  let initializationId: string | undefined
-  const records: StoredProtocolRecord[] = []
-  let lastContext: StorageRow | undefined
-  let lastRun: Run | undefined
+  if (parentNodeId === null) return undefined
+  const initialization = reader.get('SELECT * FROM harness_native_initializations WHERE session_id = ?', [sessionId])
+  const initializationId = initialization ? required(initialization, 'id') : undefined
+  const steps: {
+    runId: string
+    contextRef: string
+    binding: ProtocolBindingSnapshot
+    modelSnapshot: NativeModelSnapshot
+    checkpoint: string
+    applicationPrefix: boolean
+  }[] = []
   const seen = new Set<string>()
-  for (const node of nodes) {
-    const stored = reader.get('SELECT context_ref FROM harness_nodes WHERE id = ?', [node.id])!
-    const contextId = optional(stored, 'context_ref')
-    if (!contextId || seen.has(contextId)) throw treeError('invalid-history')
-    seen.add(contextId)
-    const context = reader.get('SELECT * FROM harness_native_contexts WHERE id = ?', [contextId])
-    const run = node.sourceRunId ? getRun(reader, node.sourceRunId) : undefined
-    if (!context || !run || run.status !== 'completed' || run.contextVersion !== 'native-local-v1' || !run.protocolBinding || run.modelSnapshot?.schemaVersion !== 3 ||
-      required(context, 'session_id') !== sessionId || required(context, 'run_id') !== run.id || required(context, 'protocol_id') !== optional(session, 'protocol_id') ||
-      run.protocolBinding.protocolId !== required(context, 'protocol_id') || (optional(context, 'parent_ref') ?? null) !== expectedParent) throw treeError('invalid-history')
-    const init = required(context, 'initialization_id')
-    if (initializationId && initializationId !== init) throw treeError('invalid-history')
-    initializationId = init
-    const savedRecords = protocolRecords(reader, run.id)
-    if (!savedRecords.length || savedRecords.some(record => record.protocolId !== run.protocolBinding!.protocolId || record.formatVersion !== run.protocolBinding!.recordFormatVersion)) throw treeError('invalid-history')
-    records.push(...savedRecords)
-    expectedParent = contextId
-    lastContext = context; lastRun = run
+  let nodeId: string | null = parentNodeId, expectedRef: string | undefined
+  while (nodeId !== null) {
+    if (seen.has(nodeId)) throw treeError('invalid-history')
+    seen.add(nodeId)
+    const row = completedNode(reader, sessionId, nodeId)
+    if (!row) throw treeError(steps.length ? 'invalid-history' : 'node-not-found')
+    const contextRef = optional(row, 'context_id'), nextRef = optional(row, 'parent_ref'), nextNode = optional(row, 'node_parent_id')
+    if (!contextRef || !optional(row, 'id') || !initializationId || optional(row, 'initialization_id') !== initializationId ||
+      (expectedRef !== undefined && contextRef !== expectedRef) || (nextRef === undefined) !== (nextNode === undefined)) throw treeError('invalid-history')
+    const run = runFromRow(row), child = steps.at(-1), protocolId = required(row, 'context_protocol_id')
+    if (run.protocolBinding?.protocolId !== protocolId || run.modelSnapshot?.schemaVersion !== 3 || run.modelSnapshot.protocolId !== protocolId ||
+      (child && !child.applicationPrefix && child.binding.protocolId !== protocolId)) throw treeError('invalid-history')
+    steps.push({ runId: run.id, contextRef, binding: run.protocolBinding, modelSnapshot: run.modelSnapshot,
+      checkpoint: required(row, 'checkpoint_json'), applicationPrefix: row.application_prefix === 1 })
+    expectedRef = nextRef
+    nodeId = nextNode ?? null
   }
-  const initialization = reader.get('SELECT * FROM harness_native_initializations WHERE id = ?', [initializationId!])
-  if (!initialization || required(initialization, 'session_id') !== sessionId || required(initialization, 'protocol_id') !== lastRun!.protocolBinding!.protocolId) throw treeError('invalid-history')
-  return Object.freeze({ contextRef: expectedParent!, initialization: JSON.parse(required(initialization, 'payload_json')) as NativeInitialization,
-    modelSnapshot: lastRun!.modelSnapshot as NativeModelSnapshot, binding: lastRun!.protocolBinding!, records: Object.freeze(records),
-    checkpoint: JSON.parse(required(lastContext!, 'checkpoint_json')) as JsonValue })
+  if (!initialization || required(initialization, 'protocol_id') !== optional(session, 'protocol_id')) throw treeError('invalid-history')
+  return { initialization: JSON.parse(required(initialization, 'payload_json')) as NativeInitialization, steps: steps.reverse() }
+}
+
+type CompletedStep = NonNullable<ReturnType<typeof completedPath>>['steps'][number]
+
+function readCompletedRecords(reader: StorageReader, step: CompletedStep): readonly StoredProtocolRecord[] {
+  const records = protocolRecords(reader, step.runId)
+  if (!records.length || records.some(record => record.protocolId !== step.binding.protocolId || record.formatVersion !== step.binding.recordFormatVersion)) throw treeError('invalid-history')
+  return records
+}
+
+function portablePath(reader: StorageReader, steps: readonly CompletedStep[]): readonly PortableHistoryEvent[] {
+  return Object.freeze(steps.flatMap(step => portableHistory(readCompletedRecords(reader, step))))
+}
+
+function applicationHistory(reader: StorageReader, sessionId: string, parentNodeId: string): ApplicationHistory {
+  const path = completedPath(reader, sessionId, parentNodeId)
+  if (!path) throw treeError('invalid-history')
+  return Object.freeze({ contextRef: path.steps.at(-1)!.contextRef, events: portablePath(reader, path.steps),
+    modelSnapshots: Object.freeze(path.steps.map(step => step.modelSnapshot)) })
+}
+
+function nativeHistory(reader: StorageReader, sessionId: string, parentNodeId: string | null): NativeHistory | undefined {
+  const path = completedPath(reader, sessionId, parentNodeId)
+  if (!path) return undefined
+  const last = path.steps.at(-1)!
+  // The latest translated Run fixes the prefix representation of the following native suffix.
+  let prefixBoundary = path.steps.length - 1
+  while (prefixBoundary >= 0 && !path.steps[prefixBoundary]!.applicationPrefix) prefixBoundary--
+  const applicationPrefix = prefixBoundary > 0 ? portablePath(reader, path.steps.slice(0, prefixBoundary)) : undefined
+  const records = path.steps.slice(Math.max(0, prefixBoundary)).flatMap(step => readCompletedRecords(reader, step))
+  return Object.freeze({ contextRef: last.contextRef, initialization: path.initialization, modelSnapshot: last.modelSnapshot,
+    binding: last.binding, records: Object.freeze(records), checkpoint: JSON.parse(last.checkpoint) as JsonValue,
+    ...(applicationPrefix ? { applicationPrefix } : {}) })
 }
 
 function sessionTitle(reader: StorageReader, sessionId: string, historyMode: Session['historyMode']): string | null {
@@ -576,6 +635,7 @@ function runFromRow(row: StorageRow): Run {
     ...(optional(row, 'binding_json') ? { protocolBinding: JSON.parse(required(row, 'binding_json')) as ProtocolBindingSnapshot } : {}),
     ...(optional(row, 'native_input_json') ? { nativeInput: JSON.parse(required(row, 'native_input_json')) as NativeRunInput } : {}),
     ...(optional(row, 'unit_bindings_json') ? { units: validateRunUnitBindings(JSON.parse(required(row, 'unit_bindings_json'))) } : {}),
+    ...(typeof row.estimated_input_tokens === 'number' ? { estimatedInputTokens: row.estimated_input_tokens } : {}),
     ...(legacyModelSnapshot ? { legacyModelSnapshot } : {}),
     ...(optional(row, 'output') === undefined ? {} : { output: optional(row, 'output') }),
     ...(optional(row, 'error') === undefined ? {} : { error: optional(row, 'error') }),
@@ -684,13 +744,12 @@ export async function openSqliteSessionRecords(
         return session
       })
     },
-    selectSessionModel(sessionId, modelId, protocolId) {
+    selectSessionModel(sessionId, modelId) {
       return db.transaction(tx => {
         requireSession(tx, sessionId)
         const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!, tx)
         if (session.archivedAt !== null) throw treeError('session-archived')
         if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
-        if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
         tx.execute('UPDATE harness_sessions SET model_id = ? WHERE id = ?', [modelId, sessionId])
         return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!, tx)
       })
@@ -774,7 +833,9 @@ export async function openSqliteSessionRecords(
         const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [input.sessionId])!, tx)
         if (session.archivedAt !== null) throw treeError('session-archived')
         if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
-        if (!native || model.schemaVersion !== 3) throw treeError('invalid-history')
+        if (!native || model.schemaVersion !== 3 || (input.parentNodeId === null) !== (native.parentContextRef === null) ||
+          (native.applicationPrefix !== undefined && (native.applicationPrefix !== true || input.parentNodeId === null)) ||
+          (native.estimatedInputTokens !== undefined && (!Number.isSafeInteger(native.estimatedInputTokens) || native.estimatedInputTokens < 0))) throw treeError('invalid-history')
         if (session.toolEnvironments && native.initialization.schemaVersion !== 3) throw treeError('history-incompatible')
         if (native.initialization.schemaVersion !== 1 && !isDeepStrictEqual(native.initialization.toolSelection, session.toolSelection)) throw treeError('history-incompatible')
         if (native.initialization.schemaVersion === 3 && !isDeepStrictEqual(native.initialization.toolEnvironments, session.toolEnvironments)) throw treeError('history-incompatible')
@@ -783,25 +844,25 @@ export async function openSqliteSessionRecords(
           try { environments.validate(native.initialization.toolEnvironments) } catch { throw treeError('history-incompatible') }
         }
         const binding = checkedBinding(native.binding)
-        if (binding.protocolId !== model.protocolId || (session.protocolId && session.protocolId !== binding.protocolId)) throw treeError('protocol-mismatch')
-        nodePath(tx, input.sessionId, input.parentNodeId)
-        const parent = input.parentNodeId === null ? undefined : tx.get('SELECT context_ref FROM harness_nodes WHERE id = ?', [input.parentNodeId])
-        if ((parent ? optional(parent, 'context_ref') ?? null : null) !== native.parentContextRef) throw treeError('invalid-history')
+        if (binding.protocolId !== model.protocolId) throw treeError('protocol-mismatch')
         const savedInitialization = tx.get('SELECT * FROM harness_native_initializations WHERE session_id = ?', [input.sessionId])
+        const initializationJson = serialize(native.initialization)
         let initializationId: string
-        if (native.parentContextRef) {
-          const context = tx.get('SELECT * FROM harness_native_contexts WHERE id = ?', [native.parentContextRef])
-          if (!context || required(context, 'session_id') !== input.sessionId || required(context, 'protocol_id') !== binding.protocolId) throw treeError('invalid-history')
-          initializationId = required(context, 'initialization_id')
+        if (input.parentNodeId !== null) {
+          const parent = completedNode(tx, input.sessionId, input.parentNodeId)
+          if (!parent) throw treeError('node-not-found')
+          if (!optional(parent, 'id') || optional(parent, 'context_id') !== native.parentContextRef ||
+            (!native.applicationPrefix && optional(parent, 'context_protocol_id') !== binding.protocolId)) throw treeError('invalid-history')
+          initializationId = required(parent, 'initialization_id')
           if (!savedInitialization || required(savedInitialization, 'id') !== initializationId) throw treeError('invalid-history')
         } else if (savedInitialization) {
           initializationId = required(savedInitialization, 'id')
         } else {
           initializationId = inputs.newId()
           tx.execute('INSERT INTO harness_native_initializations (id, session_id, protocol_id, payload_json) VALUES (?, ?, ?, ?)',
-            [initializationId, input.sessionId, binding.protocolId, serialize(native.initialization)])
+            [initializationId, input.sessionId, binding.protocolId, initializationJson])
         }
-        if (savedInitialization && (required(savedInitialization, 'protocol_id') !== binding.protocolId || required(savedInitialization, 'payload_json') !== serialize(native.initialization))) throw treeError('history-incompatible')
+        if (savedInitialization && required(savedInitialization, 'payload_json') !== initializationJson) throw treeError('history-incompatible')
         if (native.input.raw !== input.input || ![1, 2, 3].includes(native.input.schemaVersion) ||
           !isDeepStrictEqual(inputFiles(native.input).map(file => file.snapshotId), (input.files ?? []).map(file => file.snapshotId)) ||
           !isDeepStrictEqual(inputImages(native.input).map(image => image.assetId), (input.images ?? []).map(image => image.assetId))) throw treeError('invalid-history')
@@ -815,11 +876,13 @@ export async function openSqliteSessionRecords(
         tx.execute(`INSERT INTO harness_runs (
           id, session_id, idempotency_key, input, status, created_at, updated_at,
           prompts_json, model_snapshot_json, history_kind, parent_node_id, context_version, model_id, requested_model_id,
-          binding_json, native_input_json, initialization_id, parent_context_ref, execution_json, unit_bindings_json
-        ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 'tree', ?, 'native-local-v1', ?, ?, ?, ?, ?, ?, ?, ?)`, [
+          binding_json, native_input_json, initialization_id, parent_context_ref, execution_json, unit_bindings_json,
+          application_prefix, estimated_input_tokens
+        ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 'tree', ?, 'native-local-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
           id, input.sessionId, input.idempotencyKey, input.input, now, now,
           serialize(prompts), serialize(model), input.parentNodeId, model.modelId, input.modelId ?? null,
           serialize(binding), serialize(native.input), initializationId, native.parentContextRef, serialize(execution), units ? serialize(units) : null,
+          native.applicationPrefix ? 1 : 0, native.estimatedInputTokens ?? null,
         ])
         tx.execute('INSERT INTO harness_run_resumes (run_id, state_json) VALUES (?, ?)', [id, serialize(initialResumeState)])
         return { run: getRun(tx, id)!, created: true }
@@ -837,8 +900,16 @@ export async function openSqliteSessionRecords(
       return Object.freeze(JSON.parse(required(initialization, 'payload_json')) as NativeInitialization)
     }) },
     loadNativeHistory(sessionId, parentNodeId) { return db.read(reader => nativeHistory(reader, sessionId, parentNodeId)) },
+    loadApplicationHistory(sessionId, parentNodeId) { return db.read(reader => applicationHistory(reader, sessionId, parentNodeId)) },
+    getCompletedContextRef(sessionId, nodeId, runId) { return db.read(reader => {
+      const parent = completedNode(reader, sessionId, nodeId)
+      if (!parent) return undefined
+      const id = optional(parent, 'id')
+      return id && (runId === undefined || runId === id) ? optional(parent, 'context_id') : undefined
+    }) },
     getRunRecords(id) { return db.read(reader => { if (!getRun(reader, id)) throw new Error(`unknown run ${id}`); return protocolRecords(reader, id) }) },
     loadRunResume(id) { return db.read(reader => runResume(reader, id)) },
+    loadRunResumeState(id) { return db.read(reader => resumeState(reader, id)) },
     listRunResumes() { return db.read(reader => Object.freeze(reader.all(`SELECT r.id FROM harness_runs r
       JOIN harness_run_resumes c ON c.run_id = r.id WHERE r.status IN ('running', 'cancelling') ORDER BY r.created_at, r.id`)
       .map(row => runResume(reader, required(row, 'id'))!).filter(resume => resume.state.protocolCursor !== undefined && resume.state.stage !== 'model-pending'))) },
@@ -874,10 +945,9 @@ export async function openSqliteSessionRecords(
           savedPatch.settlement = settlement
           if (settlement.checkpoint !== undefined) tx.execute('UPDATE harness_runs SET protocol_checkpoint_json = ? WHERE id = ?', [serialize(settlement.checkpoint), id])
         }
-        if (Object.entries(savedPatch).every(([key, value]) => isDeepStrictEqual(prior[key as keyof RunResumeState], value))) return runResume(tx, id)!
+        if (Object.entries(savedPatch).every(([key, value]) => isDeepStrictEqual(prior[key as keyof RunResumeState], value))) return
         updateResume(tx, id, prior, savedPatch)
         tx.execute('UPDATE harness_runs SET updated_at = ? WHERE id = ?', [at, id])
-        return runResume(tx, id)!
       })
     },
     getRunOperation(runId, id) { return db.read(reader => {

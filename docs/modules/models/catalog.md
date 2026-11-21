@@ -21,7 +21,7 @@
 
 三个时长必须为正的安全整数且不超过 `2_147_483_647`。快照来源 ID 必须与 source 匹配。
 
-`status()` 返回来源 ID、快照版本/抓取时间、`origin`（`bundled/cache/network/store`）、刷新中与过期状态、检查/下次刷新时间、缓存持久性、各连接补齐状态和固定错误。`refresh(signal?)` 返回上述状态的 promise；并发刷新返回 `busy`，关闭后返回 `closed`。
+`status()` 返回来源 ID、快照版本/抓取时间、`origin`（`bundled/cache/network/store`）、刷新中与过期状态、检查/下次刷新时间、缓存持久性、各提供方的模型配置补齐状态（`providers`）和固定错误。`refresh(signal?)` 返回上述状态的 promise；并发刷新返回 `busy`，关闭后返回 `closed`。
 
 ## 启动来源选择
 
@@ -42,10 +42,10 @@
 `modified` 响应必须包含正确来源快照；`not-modified` 必须建立在已有 ETag 上。进入本地提交前最后检查取消，随后标记 `committing` 并取消超时计时器：
 
 1. 原子保存缓存快照、ETag 与本次检查时间。
-2. 调用 `sourceData.accept(candidate, { confirmed: modified })`，等待统一定义事务与已接纳的连接补齐。
+2. 调用 `sourceData.accept(candidate, { confirmed: modified })`，等待统一定义事务与已接纳的模型配置补齐。
 3. 重新读取权威来源，发布状态；只有内容版本一致才保存 ETag/check 时间并标记 `origin: 'network'`，否则保留 `store`。
 
-缓存先写入意味着统一定义提交失败后，下次启动可重放已提交缓存。接纳成功与单个连接补齐失败分开表达：来源可以已更新，同时某连接 `sync.state` 为 `failed`，Key 仍保留并可显式重试。
+缓存先写入意味着统一定义提交失败后，下次启动可重放已提交缓存。接纳成功与单个提供方的模型配置补齐失败分开表达：来源可以已更新，同时某提供方 `sync.state` 为 `failed`，Key 仍保留并可显式重试。
 
 ## 生命周期、取消与失败
 

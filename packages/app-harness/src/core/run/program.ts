@@ -1,4 +1,4 @@
-import type { JsonValue, NativeModelSnapshot, NativeImageResourceRef } from '@anybox/models'
+import type { JsonValue, NativeContinuation, NativeModelSnapshot, NativeImageResourceRef } from '@anybox/models'
 import type { FileRef, FileContent } from '../project-files/domain.js'
 import type { ImageRef } from '../image/port.js'
 import type { ToolDefinition } from '@anybox/tool-api'
@@ -7,6 +7,7 @@ import type { ToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 export type { NativeModelSnapshot } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
+import type { PortableHistoryEvent } from '../session/portable-history.js'
 import type { RunFailureCategory, RunOutcome, ToolObservation, ValidatedToolRequest } from './domain.js'
 
 /** Application-owned serializable boundaries. Protocol SDK objects never cross these interfaces. */
@@ -88,6 +89,14 @@ export interface NativeHistory {
   readonly binding: ProtocolBindingSnapshot
   readonly records: readonly StoredProtocolRecord[]
   readonly checkpoint: JsonValue
+  readonly applicationPrefix?: readonly PortableHistoryEvent[]
+}
+
+/** The application timeline for a completed parent. Independent of the model used for each turn. */
+export interface ApplicationHistory {
+  readonly contextRef: string
+  readonly events: readonly PortableHistoryEvent[]
+  readonly modelSnapshots: readonly NativeModelSnapshot[]
 }
 
 export interface OperationObservation {
@@ -121,6 +130,7 @@ export interface RunResumeRecord {
   readonly projectId: string
   readonly initialization: NativeInitialization
   readonly history?: NativeHistory
+  readonly applicationPrefix?: readonly PortableHistoryEvent[]
   readonly records: readonly StoredProtocolRecord[]
   readonly state: RunResumeState
 }
@@ -170,6 +180,9 @@ export interface ProgramExitReport {
   /** Small protocol state; full historical messages belong in referenced immutable records. */
   readonly checkpoint: JsonValue
   readonly cleanup: 'completed' | 'failed'
+  /** Process-local Models handle, eligible only after Session settlement. */
+  readonly continuation?: NativeContinuation
+  readonly estimatedContinuationTokens?: number
 }
 
 export interface PreparedRunProgram {
@@ -177,6 +190,7 @@ export interface PreparedRunProgram {
   readonly modelSnapshot: NativeModelSnapshot
   readonly initialization: NativeInitialization
   readonly input: NativeRunInput
+  readonly estimatedInputTokens?: number
   /** Immediate per-generation revocation, including while a local tool is running. */
   readonly signal: AbortSignal
   execute(host: RunHost): Promise<ProtocolConclusion>
@@ -194,6 +208,9 @@ export interface PrepareRunInput {
   readonly input: NativeRunInput
   readonly fileContents?: readonly FileContent[]
   readonly history?: NativeHistory
+  readonly applicationHistory?: ApplicationHistory
+  readonly continuation?: NativeContinuation
+  readonly continuationInputTokens?: number
   /** Trusted active-Run preparation; ordinary callers use prepareResume. */
   readonly resume?: RunResumeRecord
 }

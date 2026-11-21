@@ -14,7 +14,7 @@ Personal Agent 0.2 起以 Anybox Harness 的客户端、执行端和 Computer wo
 | 执行设备业务 HTTP 与流式观察 | [业务 HTTP](../web/harness-http.md) |
 | 模型配置、凭据、协议和公开目录 | [Models 组件](../models/README.md) |
 | Agent 身份、创建、编辑与头像 | [Agent 目录](agent-directory.md) |
-| 工作目录、历史与记忆、文件和图片 | [工作目录](runtime.md#工作目录) · [连续历史与记忆](history.md) · [目录绑定](../sessions/projects.md) · [文件快照](../sessions/project-files.md) · [图片](../images/image-assets.md) |
+| 工作目录、连续历史、文件和图片 | [工作目录](runtime.md#工作目录) · [连续历史与上下文](history.md) · [目录绑定](../sessions/projects.md) · [文件快照](../sessions/project-files.md) · [图片](../images/image-assets.md) |
 | Prompt 内容、版本选择和 Agent 绑定 | [Prompts](../prompts/README.md) |
 | Run 准入、Runtime 与原生协议循环 | [执行组件](../execution/README.md) |
 | 工具环境、作用域、独立 worker 和远端附着 | [Computer 组件](../computers/README.md) · [工具组件](../tools/README.md) · [单元组件](../units/README.md) |

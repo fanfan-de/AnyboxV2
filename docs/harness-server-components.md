@@ -44,7 +44,7 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | Prompt | `harness.prompts`；注入 local-storage | 草稿、不可变发布版本及已接纳写入 |
 | Agent Prompt | `harness.agent-prompts`；注入 prompts/local-storage | Agent 绑定及 Prompt 快照解析 |
 | Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets/project-files/computer-operations/unit-attachments | 新会话默认值、Agent 工具配置及会话不可变选择、归档状态、Run、节点、原生记录与事务；计算工具意图/观察同事务参与，接受事务复核单元附着引用；等已接受写入与通知 |
-| 协议应用注册 | `harness.protocol-agents`；注入 models/models.protocols/image-assets | 固定驱动与 Loop 组合、准备中的资源、Run 租约；撤销后等 program 释放 |
+| 协议应用注册 | `harness.protocol-agents`；注入 models/models.settings/models.protocols/image-assets | 固定驱动与 Loop 组合、准备中的资源、Run 租约；撤销后等 program 释放 |
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
 | RunRuntime | `harness.run-runtime`；必需 session-runs，其余由本代 binding.inject 声明，Computer 绑定加入 computer-operations | program、工具观察、owner、取消/等待者和临时视图；所有环境 scope 与 program 退出后结算 |
 | Run | `harness.runs`；注入 projects/sessions/session-runs/agent-prompts/models/protocol-agents/run-runtime/computer-operations/unit-attachments | 准入、幂等、单元附着引用（本机或组合固定的远端 Computer 附着）和交接前资源；恢复接管前校验附着引用；停止准入并等交接与在途 Run |
@@ -96,7 +96,7 @@ Models JSON 配置文件、旧配置导入源、目录缓存与业务数据库�
 2. 检查项目、Session 模式、归档状态、选模与协议。`dialogue-v1` 和归档会话只读；新 Run 必须显式给出可空 `parentNodeId`。
 3. 只读取指定成功父链。创建 Session 时已经复制 Agent 的不可变工具选择；首次接受固定 instruction/context 和实际工具声明，所有根分支及后代继承。每个新 Run 固定当前 task-template，只替换本次原始输入一次。
 4. 经 Session 受管读取本轮文件快照并等待退出，在模板文本后附加用户文件资料、编码图片引用，再准备独立 program/execution；检查连接、模型、语义参数、历史格式和工具契约兼容。地址、认证方式或成功 Key 变更改变 epoch；失败写 Key、改名、超时、启停和目录刷新不改变。
-5. Session 接受事务复核归档状态、绑定与父恢复引用，原子固定首次协议，并通过图片与文件组件 retainIn 在同一事务验证及永久保留有序引用。不同协议并发首次准入只接受符合已提交绑定的一方；失败准备由 Run 关闭并等待。
+5. Session 接纳事务复核归档状态、本轮绑定、父上下文及固定初始化，在同一事务保留图片和文件引用，并保存历史组包方式。失败准备由 Run 关闭并等待。
 6. `RunRuntime.start({ runId, program })` 在第一次异步读取前同步登记所有权。同步拒绝表示未接管，由 Run 清理；之后均由 Runtime 清理和结算。
 
 `waitRun()` 覆盖已接受但尚未交接的窗口。取消 waiter 只停止等待，不取消 Run。关闭 `installHarnessServerCore()` 安装句柄先阻止新调用，随后只卸载该次安装的 harness server 核心组件，等待准备、工具与记录实际退出；宿主提供的 Models、Vault、数据库和图片组件由宿主关闭。应用宿主总关闭先停止产品装配与业务准入，再卸载根全部组件；harness server API 不暴露 `close()`；关闭后的门面不可复用。
@@ -123,7 +123,7 @@ Session 同时管理该执行设备按 Agent 保存的新会话默认模型配�
 
 成功终态、最终记录、恢复引用、完整节点、结果引用和终态事件在同一事务提交。失败、取消、清理失败只能归档事实与诊断，不发布可继续节点。重启保留有凭证及有效游标的活动 Run 供接管；其余遗留 Run 标为 interrupted，不重放网络或未知工具。只恢复所选父链；同父并发、编辑和重新生成均不包含兄弟或被替换节点。
 
-旧 Session、节点、事件和 schemaVersion 1/2 或 profile 快照保留读取兼容，旧 JSON 不重写，不保留旧写入器。编辑/重新生成取原始输入与原节点父引用，不能将已套模板的文本再次套模板。首次绑定后取消或失败不会解除 Session 协议。
+旧 Session、节点、事件和 schemaVersion 1/2 或 profile 快照保留读取兼容，旧 JSON 不重写，不保留旧写入器。编辑/重新生成取原始输入与原节点父引用，不能将已套模板的文本再次套模板。首次接纳后取消或失败仍保留已固定的逻辑初始化。
 
 `archiveSession` / `restoreSession` 幂等修改可空 archivedAt。项目列表默认排除归档会话，`listArchivedSessions` 跨项目按归档时间倒序查询。归档与接受 Run 在业务事务中串行裁决：存在 running/cancelling Run 时拒绝归档，归档先提交则新 Run 被拒绝，已经接受的幂等结果仍优先返回。归档不删除节点、原生记录、图片或文件引用；历史查询和附件读取、草稿续期继续可用，恢复旧 dialogue-v1 仍不能继续执行。
 

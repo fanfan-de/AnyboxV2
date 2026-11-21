@@ -41,14 +41,14 @@ async function open(directory, protocolId, state, imageInput = true) {
     return new Response(JSON.stringify(typeof reply === 'function' ? await reply(request) : reply), { headers: { 'content-type': 'application/json' } })
   } }))
   const settings = root.get('models.settings')
-  if (!settings.connections().length) {
+  if (!settings.configuredProviders().length) {
     const capabilities = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: 'unsupported' }, imageInput: { support: imageInput ? 'supported' : 'unsupported' } }
     const provider = await settings.createProvider({ name: 'Tools provider', connectionHints: { protocolIds: [protocolId] } })
-    const connection = await settings.createConnection({ id: 'connection', providerDefinitionId: provider.id, name: 'Tools', enabled: true, protocolId,
+    await settings.createProviderSettings({ providerId: provider.id, name: 'Tools', enabled: true, protocolId,
       baseUrl: 'https://tools.invalid/v1', auth: 'api-key', apiKey: 'private-key', timeoutMs: 5000 })
-    const definition = await settings.createModel({ name: 'Tools model', providerId: provider.id, remoteModelId: 'tool-model', capabilities,
+    const definition = await settings.createModel({ id: 'default', name: 'Tools model', providerId: provider.id, remoteModelId: 'tool-model', capabilities,
       controls: { temperature: 'unknown' }, modalities: { input: ['text', ...(imageInput ? ['image'] : [])], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [protocolId] } })
-    await settings.createConfiguration({ id: 'default', name: 'Tools', enabled: true, connectionId: connection.id, modelDefinitionId: definition.id, capabilities, baseline: true,
+    await settings.createModelSettings({ modelId: definition.id, name: 'Tools', enabled: true, capabilities,
       parameters: { protocolId, formatVersion: 1, value: protocolId === 'anthropic-messages' ? { max_tokens: 4096 } : {} } })
   }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))

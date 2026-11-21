@@ -34,9 +34,9 @@ try {
     await settings.createModel({ providerId: provider.id, remoteModelId: 'isolated-model', name: 'Isolated test model',
       capabilities: { streaming: { support: 'supported' }, tools: { support: 'unsupported' }, imageInput: { support: 'unknown' }, reasoning: { support: 'unknown' } },
       controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } })
-    const connection = await settings.createConnection({ providerDefinitionId: provider.id, name: 'Isolated test connection', enabled: true,
+    const connection = await settings.createProviderSettings({ providerId: provider.id, name: 'Isolated test connection', enabled: true,
       protocolId: 'chat-completions', baseUrl: 'https://model.invalid/v1', auth: 'api-key', apiKey: 'isolated-fixture-key', timeoutMs: 30_000 })
-    await server.api.setSessionDefaults('assistant', settings.configurations(connection.id)[0].id, 0)
+    await server.api.setSessionDefaults('assistant', settings.modelSettings(connection.id)[0].runtimeModelId, 0)
     await server.api.setAgentTools('assistant', { toolIds: [], expectedRevision: 0 })
     access = server.access
   } else {

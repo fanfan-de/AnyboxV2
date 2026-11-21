@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { resolveCatalogConnections } from '@anybox/models'
-import type { ProviderInput, ModelInput, ProviderConnectionInput, ModelConfigurationInput } from '@anybox/models'
+import type { ProviderInput, ModelInput, ProviderSettingsInput, ModelSettingsInput } from '@anybox/models'
 import type { HarnessServerApiCommands } from './handler.js'
 import { json, requestObject, failure } from '@anybox/application-api/node'
 import { promptRevision } from './validation.js'
@@ -67,22 +67,22 @@ export async function handleModelsApi(commands: HarnessServerApiCommands, reques
           json(response, 200, await commands.modelsSettings.updateModel(id, body.patch as Partial<ModelInput>, promptRevision(body.expectedRevision))); return true
         }
       }
-      if (path === '/api/v1/models/connections') {
-        if (method === 'GET') { json(response, 200, commands.modelsSettings.connections()); return true }
+      if (path === '/api/v1/models/provider-settings') {
+        if (method === 'GET') { json(response, 200, commands.modelsSettings.configuredProviders()); return true }
         if (method === 'POST') {
-          const body = await requestObject(request, ['id', 'providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'apiKey'])
-          json(response, 200, await commands.modelsSettings.createConnection(body as unknown as ProviderConnectionInput)); return true
+          const body = await requestObject(request, ['providerId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'apiKey'])
+          json(response, 200, await commands.modelsSettings.createProviderSettings(body as unknown as Parameters<HarnessServerApiCommands['modelsSettings']['createProviderSettings']>[0])); return true
         }
       }
-      const connectionMatch = /^\/api\/v1\/models\/connections\/([^/]+)(?:\/(history|models|retry|key|key\/delete|delete|discover|check))?$/.exec(path)
-      if (connectionMatch) {
-        const id = decodeURIComponent(connectionMatch[1]), action = connectionMatch[2]
-        if (method === 'GET' && action === 'history') { json(response, 200, commands.modelsSettings.connectionHistory(id)); return true }
-        if (method === 'GET' && action === 'models') { json(response, 200, commands.modelsSettings.connectionModels(id)); return true }
+      const providerSettingsMatch = /^\/api\/v1\/models\/provider-settings\/([^/]+)(?:\/(history|models|retry|key|key\/delete|delete|discover|check))?$/.exec(path)
+      if (providerSettingsMatch) {
+        const id = decodeURIComponent(providerSettingsMatch[1]), action = providerSettingsMatch[2]
+        if (method === 'GET' && action === 'history') { json(response, 200, commands.modelsSettings.providerSettingsHistory(id)); return true }
+        if (method === 'GET' && action === 'models') { json(response, 200, commands.modelsSettings.providerModels(id)); return true }
         if (method === 'POST') {
           if (!action) {
             const body = await requestObject(request, ['patch', 'expectedRevision'])
-            json(response, 200, await commands.modelsSettings.updateConnection(id, body.patch as Partial<ProviderConnectionInput>, promptRevision(body.expectedRevision))); return true
+            json(response, 200, await commands.modelsSettings.updateProviderSettings(id, body.patch as Partial<ProviderSettingsInput>, promptRevision(body.expectedRevision))); return true
           }
           if (action === 'key') {
             const body = await requestObject(request, ['apiKey', 'expectedRevision'])
@@ -94,35 +94,35 @@ export async function handleModelsApi(commands: HarnessServerApiCommands, reques
           }
           if (action === 'delete') {
             const body = await requestObject(request, ['expectedRevision'])
-            await commands.modelsSettings.deleteConnection(id, promptRevision(body.expectedRevision))
+            await commands.modelsSettings.deleteProviderSettings(id, promptRevision(body.expectedRevision))
             json(response, 200, { ok: true }); return true
           }
           if (action === 'retry') {
             await requestObject(request, [])
-            json(response, 200, await commands.modelsSettings.retryConnection(id)); return true
+            json(response, 200, await commands.modelsSettings.retryProviderSettings(id)); return true
           }
           if (action === 'discover' || action === 'check') {
             await requestObject(request, [])
             json(response, 200, await modelRequest<unknown>(response, signal => action === 'discover'
               ? commands.modelsSettings.discoverModels(id, signal)
-              : commands.modelsSettings.checkConnection(id, signal).then(() => ({ ok: true })))); return true
+              : commands.modelsSettings.checkProvider(id, signal).then(() => ({ ok: true })))); return true
           }
         }
       }
-      if (path === '/api/v1/models/configurations') {
-        if (method === 'GET') { json(response, 200, commands.modelsSettings.configurations(url.searchParams.get('connectionId') ?? undefined)); return true }
+      if (path === '/api/v1/models/settings') {
+        if (method === 'GET') { json(response, 200, commands.modelsSettings.modelSettings(url.searchParams.get('providerId') ?? undefined)); return true }
         if (method === 'POST') {
-          const body = await requestObject(request, ['id', 'modelDefinitionId', 'connectionId', 'name', 'enabled', 'capabilities', 'parameters', 'baseline'])
-          json(response, 200, await commands.modelsSettings.createConfiguration(body as unknown as ModelConfigurationInput)); return true
+          const body = await requestObject(request, ['modelId', 'name', 'enabled', 'capabilities', 'parameters'])
+          json(response, 200, await commands.modelsSettings.createModelSettings(body as unknown as Parameters<HarnessServerApiCommands['modelsSettings']['createModelSettings']>[0])); return true
         }
       }
-      const configurationMatch = /^\/api\/v1\/models\/configurations\/([^/]+)(?:\/(history))?$/.exec(path)
-      if (configurationMatch) {
-        const id = decodeURIComponent(configurationMatch[1])
-        if (method === 'GET' && configurationMatch[2] === 'history') { json(response, 200, commands.modelsSettings.configurationHistory(id)); return true }
-        if (method === 'POST' && !configurationMatch[2]) {
+      const settingsMatch = /^\/api\/v1\/models\/settings\/([^/]+)(?:\/(history))?$/.exec(path)
+      if (settingsMatch) {
+        const id = decodeURIComponent(settingsMatch[1])
+        if (method === 'GET' && settingsMatch[2] === 'history') { json(response, 200, commands.modelsSettings.modelSettingsHistory(id)); return true }
+        if (method === 'POST' && !settingsMatch[2]) {
           const body = await requestObject(request, ['patch', 'expectedRevision'])
-          json(response, 200, await commands.modelsSettings.updateConfiguration(id, body.patch as Partial<ModelConfigurationInput>, promptRevision(body.expectedRevision))); return true
+          json(response, 200, await commands.modelsSettings.updateModelSettings(id, body.patch as Partial<ModelSettingsInput>, promptRevision(body.expectedRevision))); return true
         }
       }
   return false

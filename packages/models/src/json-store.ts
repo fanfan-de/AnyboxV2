@@ -4,7 +4,7 @@ import type { FileHandle } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { Component } from '@nya/core';
 import { modelsError, normalizeError } from './errors.js';
-import { applyModelsJsonChange, emptyModelsJsonSnapshot, parseModelsJsonSnapshot } from './json-store-domain.js';
+import { applyModelsJsonChange, emptyModelsJsonSnapshot, LegacyModelSettingsConflict, LegacyProviderSettingsConflict, parseModelsJsonSnapshot } from './json-store-domain.js';
 import type { ModelsJsonSnapshot } from './json-store-domain.js';
 import type { LegacyParameterConverter } from './native-types.js';
 import { migrateLegacyParameters } from './legacy-parameters.js';
@@ -141,34 +141,40 @@ export function createModelsJsonStoreComponent(options: ModelsJsonStoreOptions):
     ctx.effect(() => close, 'join Models JSON commits and release exclusive file ownership');
     const initialize = async () => {
       fileHash = await currentHash(path);
+      const decisions = { now: new Date().toISOString(), versionId: () => randomUUID(), historyScopeEpoch: () => randomUUID() };
+      let changed = fileHash === null;
       if (fileHash === null) {
         const legacy = options.legacyPath && await fileInfo(options.legacyPath);
         const candidate = legacy ? readModelsSqliteSnapshot({ path: options.legacyPath!, legacyParameterConverters: options.legacyParameterConverters }) : emptyModelsJsonSnapshot();
-        snapshot = parseModelsJsonSnapshot(candidate, { now: new Date().toISOString(), versionId: () => randomUUID(), historyScopeEpoch: () => randomUUID() }).snapshot;
-        fileHash = await writeSnapshot(path, snapshot, null);
+        snapshot = parseModelsJsonSnapshot(candidate, decisions).snapshot;
       } else {
         const bytes = await readFile(path);
         if (digest(bytes) !== fileHash) throw modelsError('conflict');
-        const parsed = parseModelsJsonSnapshot(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown, { now: new Date().toISOString(), versionId: () => randomUUID(), historyScopeEpoch: () => randomUUID() });
+        const parsed = parseModelsJsonSnapshot(JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown, decisions);
         snapshot = parsed.snapshot;
-        const upgrades = snapshot.configurations.filter(record => record.parameters.formatVersion === 0).flatMap(record => {
-          const parameters = migrateLegacyParameters(record.parameters.protocolId, record.parameters.value, options.legacyParameterConverters);
-          return parameters.formatVersion === 1 ? [{ expectedRevision: record.revision, record: { ...record, parameters, revision: record.revision + 1, versionId: randomUUID(), updatedAt: new Date().toISOString() } }] : [];
-        });
-        if (upgrades.length) snapshot = applyModelsJsonChange(snapshot, { configurations: upgrades });
-        if (parsed.changed || upgrades.length) fileHash = await writeSnapshot(path, snapshot, fileHash);
+        changed = parsed.changed;
       }
+      const upgrades = snapshot.modelSettings.filter(record => record.parameters.formatVersion === 0).flatMap(record => {
+        const parameters = migrateLegacyParameters(record.parameters.protocolId, record.parameters.value, options.legacyParameterConverters);
+        return parameters.formatVersion === 1 ? [{ expectedRevision: record.revision, record: { ...record, parameters, revision: record.revision + 1, versionId: randomUUID(), updatedAt: decisions.now } }] : [];
+      });
+      if (upgrades.length) snapshot = applyModelsJsonChange(snapshot, { modelSettings: upgrades });
+      if (changed || upgrades.length) fileHash = await writeSnapshot(path, snapshot, fileHash);
     };
     const ready = initialize(); tail = ready.then(() => {}, () => {});
-    try { await ready; if (!accepting) throw modelsError('closed'); } catch (error) { await close(); throw normalizeError(error, 'storage-unavailable'); }
+    try { await ready; if (!accepting) throw modelsError('closed'); } catch (error) { await close(); throw error instanceof LegacyProviderSettingsConflict || error instanceof LegacyModelSettingsConflict ? error : normalizeError(error, 'storage-unavailable'); }
     const assertOpen = () => { if (!accepting) throw modelsError('closed'); };
     const clone = <T>(read: () => T): T => { assertOpen(); return structuredClone(read()); };
     const service: ModelsStore = {
       providers: () => clone(() => sorted(snapshot.providers)), provider: id => clone(() => byId(snapshot.providers, id)), providerHistory: id => clone(() => history(snapshot.history.providers, id)),
       models: () => clone(() => sorted(snapshot.models)), model: id => clone(() => byId(snapshot.models, id)), modelHistory: id => clone(() => history(snapshot.history.models, id)),
-      connections: () => clone(() => sorted(snapshot.connections)), connection: id => clone(() => byId(snapshot.connections, id)), connectionHistory: id => clone(() => history(snapshot.history.connections, id)),
-      configurations: () => clone(() => sorted(snapshot.configurations)), configuration: id => clone(() => byId(snapshot.configurations, id)), configurationHistory: id => clone(() => history(snapshot.history.configurations, id)),
-      sources: () => clone(() => [...snapshot.sources].sort((a, b) => a.sourceId.localeCompare(b.sourceId))), syncState: id => clone(() => snapshot.syncStates.find(record => record.connectionId === id)),
+      configuredProviders: () => clone(() => sorted(snapshot.providerSettings)), providerSettings: id => clone(() => byId(snapshot.providerSettings, id)), providerSettingsHistory: id => clone(() => history(snapshot.history.providerSettings, id)),
+      configuredModels: () => clone(() => sorted(snapshot.modelSettings)),
+      modelSettings: id => clone(() => byId(snapshot.modelSettings, id)),
+      runtimeModelSettings: id => clone(() => snapshot.modelSettings.find(record => record.runtimeModelId === id)),
+      modelSettingsHistory: id => clone(() => history(snapshot.history.modelSettings, id)),
+      modelRuntimeIdExists(id) { assertOpen(); return snapshot.history.modelSettings.some(record => record.runtimeModelId === id); },
+      sources: () => clone(() => [...snapshot.sources].sort((a, b) => a.sourceId.localeCompare(b.sourceId))), syncState: id => clone(() => snapshot.syncStates.find(record => record.providerId === id)),
       intents: () => clone(() => sorted(snapshot.credentialIntents)),
       commit(input) {
         let change: StoreChange;

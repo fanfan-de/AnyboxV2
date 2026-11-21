@@ -84,8 +84,8 @@ test('switching Agent keeps unfinished selections and disposal waits for submitt
 })
 
 test('default descriptions keep unavailable choices and never substitute another configuration', () => {
-  const models = [{ id: 'disabled', name: 'Saved', connectionId: 'account', available: false, unavailableReason: 'credential-missing' },
-    { id: 'ready', name: 'Ready', connectionId: 'other', available: true }]
+  const models = [{ id: 'disabled', name: 'Saved', providerId: 'account', available: false, unavailableReason: 'credential-missing' },
+    { id: 'ready', name: 'Ready', providerId: 'other', available: true }]
   const providers = [{ id: 'account', name: 'Work' }, { id: 'other', name: 'Personal' }]
   assert.match(defaultModelDescription('disabled', models, providers), /Work · Saved：尚未配置 Key/)
   assert.match(defaultModelDescription('missing', models, providers), /原默认模型已不可用/)

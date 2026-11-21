@@ -180,8 +180,8 @@ test('v1 text restores additively into v2 images while downgrade and unrelated c
     ]) await assert.rejects(f.open({ modelId: 'model', restore: invalid, resources: reader() }))
     for (const changes of [{ protocolVersion: '9.0.0' }, { historyScopeEpoch: 'different-account' }, { parameters: { ...legacy.modelSnapshot.parameters, value: { temperature: 1 } } },
       { capabilities: { ...legacy.modelSnapshot.capabilities, tools: false } }]) await assert.rejects(f.open({ modelId: 'model', restore: { ...legacy, modelSnapshot: { ...legacy.modelSnapshot, ...changes } }, resources: reader() }), { code: 'invalid-config' })
-    const current = f.settings.configurations()[0]
-    await f.settings.updateConfiguration(current.id, { capabilities: { ...current.capabilities, imageInput: { support: 'unsupported' } } }, current.revision)
+    const current = f.settings.modelSettings()[0]
+    await f.settings.updateModelSettings(current.id, { capabilities: { ...current.capabilities, imageInput: { support: 'unsupported' } } }, current.revision)
     await assert.rejects(f.open({ modelId: 'model', restore: chain, resources: reader() }), { code: 'invalid-config' })
   } finally { await f.root.fiber.dispose() }
 })

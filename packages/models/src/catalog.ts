@@ -6,7 +6,7 @@ import { abortLink, deferred, joinOperation, throwAborted } from './lifecycle.js
 import { catalogSnapshotVersion, validateCatalogSnapshot } from './catalog-domain.js';
 import { loadBundledModelsDevCatalog } from './catalog-builtin.js';
 import { modelsSourceDataServiceKey } from './types.js';
-import type { ConnectionSyncState, ModelsSourceDataService, SourceSnapshot } from './types.js';
+import type { ProviderSyncState, ModelsSourceDataService, SourceSnapshot } from './types.js';
 import { modelsCatalogCacheServiceKey, modelsCatalogServiceKey, modelsCatalogSourceServiceKey } from './catalog-types.js';
 import type { CatalogCacheRecord, CatalogStatus, ModelsCatalogCache, ModelsCatalogService, ModelsCatalogSource } from './catalog-types.js';
 
@@ -45,7 +45,7 @@ function createCatalogRuntime(source: ModelsCatalogSource, cache: ModelsCatalogC
   if (snapshot.sourceId !== source.id) throw modelsError('invalid-config');
   snapshot = immutable(snapshot);
   let origin: CatalogStatus['origin'] = 'bundled', checkedAt: number | undefined, etag: string | undefined;
-  let connections: readonly ConnectionSyncState[] = [];
+  let providers: readonly ProviderSyncState[] = [];
   let lastError: CatalogStatus['error'], accepting = true, cleanupFailed = false;
   let active: Active | undefined, initializing: Promise<void> | undefined, closing: Promise<void> | undefined;
   let scheduled: unknown, nextRefreshAt: number | undefined;
@@ -53,7 +53,7 @@ function createCatalogRuntime(source: ModelsCatalogSource, cache: ModelsCatalogC
   const stale = () => checkedAt === undefined || checkedAt > scheduler.now() || scheduler.now() - checkedAt >= refreshInterval;
   const view = (): CatalogStatus => immutable({ sourceId: source.id, snapshotVersion: snapshot.snapshotVersion, fetchedAt: snapshot.fetchedAt, origin,
     refreshing: !!active, stale: stale(), ...(checkedAt !== undefined ? { checkedAt } : {}), ...(nextRefreshAt !== undefined ? { nextRefreshAt } : {}),
-    connections, cache: cache.status(), ...(lastError ? { error: lastError } : {}) });
+    providers, cache: cache.status(), ...(lastError ? { error: lastError } : {}) });
   const status = (): CatalogStatus => { assertOpen(); return view(); };
   const clearSchedule = () => {
     if (scheduled !== undefined) scheduler.clearTimeout(scheduled);
@@ -102,7 +102,7 @@ function createCatalogRuntime(source: ModelsCatalogSource, cache: ModelsCatalogC
         try {
           await yieldToHost();
           const outcome = await sourceData.accept(candidate);
-          connections = immutable(outcome.connections);
+          providers = immutable(outcome.providers);
           await yieldToHost();
           publish(candidate);
           if (outcome.accepted || same) origin = candidateOrigin;
@@ -148,7 +148,7 @@ function createCatalogRuntime(source: ModelsCatalogSource, cache: ModelsCatalogC
         throwAborted(controller.signal); owned.phase = 'committing'; scheduler.clearTimeout(timer);
         await cache.write({ cacheKey: source.cacheKey, snapshot: candidate, checkedAt: now, ...(candidateEtag ? { etag: candidateEtag } : {}) });
         const committed = await sourceData.accept(candidate, { confirmed: outcome.status === 'modified' });
-        connections = immutable(committed.connections);
+        providers = immutable(committed.providers);
         publish(candidate);
         const matching = snapshot.snapshotVersion === candidate.snapshotVersion;
         etag = matching ? candidateEtag : undefined; checkedAt = matching ? now : undefined;

@@ -48,7 +48,7 @@ for (const item of cases) test(`${item.id} generateText projects terminal JSON e
   const f = await fixture({ protocols: [{ ...protocol, release() {} }] })
   try {
     await f.add()
-    const before = f.store.configurationHistory('model'), commit = f.store.commit.bind(f.store)
+    const before = f.store.modelSettingsHistory('model'), commit = f.store.commit.bind(f.store)
     let writes = 0
     f.store.commit = async change => { writes += 1; return commit(change) }
     for (const [, code] of item.replies) {
@@ -65,7 +65,7 @@ for (const item of cases) test(`${item.id} generateText projects terminal JSON e
     assert.equal(replies.length, 0)
     assert.ok(requests.every(request => request.stream === false))
     assert.equal(writes, 0, 'temporary native records and errors never reach the configuration store')
-    assert.deepEqual(f.store.configurationHistory('model'), before)
+    assert.deepEqual(f.store.modelSettingsHistory('model'), before)
   } finally { await f.close() }
 })
 
@@ -78,7 +78,7 @@ test('Responses generateText accepts declared search support and preserves saved
   try {
     const { model } = await f.add({ defaults: { maxOutputTokens: 120, protocol: { reasoningEffort: 'high', reasoningSummary: 'auto' } },
       capabilityDeclarations: capabilities({ webSearch: { support: 'supported' }, reasoning: { support: 'supported', efforts: ['high'] } }) })
-    const before = f.store.configurationHistory(model.id), parameters = model.parameters.value
+    const before = f.store.modelSettingsHistory(model.id), parameters = model.parameters.value
     const operation = f.models.generateText({ modelId: model.id, input: 'question' })
     assert.deepEqual(await operation.result, { text: '  # Final\n\nAnswer  ', modelId: model.id, modelRevision: model.revision, protocolId: 'responses' })
     await operation.done
@@ -87,15 +87,15 @@ test('Responses generateText accepts declared search support and preserves saved
     assert.equal(requests[0].max_output_tokens, 120)
     assert.deepEqual(requests[0].reasoning, { effort: 'high', summary: 'auto' })
     assert.equal('tools' in requests[0], false)
-    assert.deepEqual(f.store.configurationHistory(model.id), before)
-    const updated = await f.settings.updateConfiguration(model.id, { parameters: params('responses', { ...parameters, tools: [{ type: 'web_search' }] }) }, model.revision)
-    const withSearch = f.store.configurationHistory(model.id)
+    assert.deepEqual(f.store.modelSettingsHistory(model.id), before)
+    const updated = await f.settings.updateModelSettings(model.id, { parameters: params('responses', { ...parameters, tools: [{ type: 'web_search' }] }) }, model.revision)
+    const withSearch = f.store.modelSettingsHistory(model.id)
     const rejected = f.models.generateText({ modelId: model.id, input: 'question' })
     await assert.rejects(rejected.result, { code: 'capability-unsupported' })
     await rejected.done
     assert.equal(requests.length, 1, 'saved search is rejected before transport')
-    assert.deepEqual(f.settings.configurations().find(value => value.id === model.id).parameters, updated.parameters)
-    assert.deepEqual(f.store.configurationHistory(model.id), withSearch)
+    assert.deepEqual(f.settings.modelSettings().find(value => value.id === model.id).parameters, updated.parameters)
+    assert.deepEqual(f.store.modelSettingsHistory(model.id), withSearch)
   } finally { await f.close() }
 })
 
@@ -108,8 +108,8 @@ test('Chat generateText keeps saved token and enabled thinking parameters unchan
   try {
     const { model } = await f.add({ capabilityDeclarations: capabilities({ reasoning: { support: 'supported', modes: ['enabled'], efforts: ['high'] } }) })
     const parameters = params('chat-completions', { max_tokens: 120, thinking: { type: 'enabled' }, reasoning_effort: 'high' })
-    const saved = await f.settings.updateConfiguration(model.id, { parameters }, model.revision)
-    const before = f.store.configurationHistory(model.id)
+    const saved = await f.settings.updateModelSettings(model.id, { parameters }, model.revision)
+    const before = f.store.modelSettingsHistory(model.id)
     const operation = f.models.generateText({ modelId: model.id, input: 'question' })
     assert.deepEqual(await operation.result, { text: '  # Final\n\nAnswer  ', modelId: model.id, modelRevision: saved.revision, protocolId: 'chat-completions' })
     await operation.done
@@ -120,7 +120,7 @@ test('Chat generateText keeps saved token and enabled thinking parameters unchan
     assert.equal('max_completion_tokens' in requests[0], false)
     assert.deepEqual(requests[0].thinking, { type: 'enabled' })
     assert.equal(requests[0].reasoning_effort, 'high')
-    assert.deepEqual(f.settings.configurations().find(value => value.id === model.id).parameters, parameters)
-    assert.deepEqual(f.store.configurationHistory(model.id), before)
+    assert.deepEqual(f.settings.modelSettings().find(value => value.id === model.id).parameters, parameters)
+    assert.deepEqual(f.store.modelSettingsHistory(model.id), before)
   } finally { await f.close() }
 })

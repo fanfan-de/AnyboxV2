@@ -1,12 +1,14 @@
 # Session 原生对话树与分支并发
 
-状态：2026-09-29。新会话使用 `native-local-v1`，同一 Session 固定协议；完整原生历史通过不可变记录链跨 Run 和重启恢复。既有 `dialogue-v1` 会话只读，不导入、不补造原生上下文。验证使用临时 SQLite，不自动迁移工作区真实数据库。
+新会话使用 `native-local-v1`。每个 Run 固定自身协议和所选父节点，Session 可以在同一分支切换 API 或换 Key 后继续。既有 `dialogue-v1` 会话只读。
 
 ## 会话、节点与模型选择
 
-Session 保存项目、Agent、可空 `modelId`、`historyMode`、可空 `protocolId` 、可空 `archivedAt` 和创建时间，没有全局 head。`modelId` 始终是 ModelConfiguration ID。新空 Session 可以调整默认模型；首次 Run 的接受事务原子固定协议。两个协议并发提交首个 Run 时，只有符合已提交绑定的一方被接受。已接受 Run 随后失败、取消或中断也不解除绑定。
+Session 保存项目、Agent、可空 `modelId`、`historyMode`、首次接纳记录的 `protocolId`、可空 `archivedAt` 和创建时间，没有全局 head。`modelId` 始终是可执行模型 ID，旧会话继续沿用已有选模 ID。首次接纳事务原子固定逻辑初始化。根 Run 可以选择不同协议，同时使用同一份固定的指令和工具声明。Session 的 `protocolId` 是历史信息，各 Run 使用自己的协议绑定。
 
-后续默认模型选择和显式 `RunInput.modelId` 都检查协议。父节点恢复额外校验协议格式、驱动／Loop 版本、模型及有效参数、工具契约和 Models 的 `historyScopeEpoch`。Key、连接地址等语义变更使旧历史无法继续时明确拒绝，不按 hostname 或相同连接 ID 猜测账户兼容性。配置显示名变化不改写原生历史。切换协议或应用不兼容配置时新建 Session。
+会话选模与显式 `RunInput.modelId` 都可选择当前可用的四种协议。模型、驱动、参数和连接身份兼容时继续原生上下文。切换模型或 API，或者在同一提供方、同一地址及认证方式下更换 Key 时，新 Run 从指定父节点读取完整祖先链，逐项编码问答、图片、工具调用和已观察结果。签名、加密续接及协议私有推理留在原生记录。重组前核对该分支上目标提供方的已记录版本。同一提供方的恢复身份、地址或认证方式变化时返回 `history-incompatible`。
+
+重组仍受目标模型的图片能力、工具能力及提供方对导入工具记录的限制。失败的 Run 保留诊断，所选父节点仍可继续。
 
 节点保存原始输入和显示摘要、来源 Run、父节点及内部上下文恢复引用。摘要不是历史恢复依据，合法非文本结果允许空摘要。成功节点不可更新、删除或改变父节点；失败、取消及中断不创建节点。每个成功 Run 形成独立节点，没有独立 Branch 实体。
 
@@ -44,7 +46,9 @@ Session 保存项目、Agent、可空 `modelId`、`historyMode`、可空 `protoc
 
 v6 增加原生记录的通用 resource_refs_json 列；旧 v1 输入按无图片读取，旧 JSON 不重写。节点 images 从来源 Run 投影，不重复保存附件。Run 接纳事务通过图片组件同步 retainIn 验证与保留输入；失败、取消和 interrupted 的已接受 Run 仍保留图片供查看与重试。
 
-每个请求记录只保存本次原生 intent／增量请求配方与资源描述；响应内容只保存一次。上下文链节引用父链节、共享根初始化、本 Run 记录及小型恢复元数据，不复制完整历史或逐轮增长的 recordId 数组。读取时沿选定路径在内存展开，协议 codec 用固定版本重建请求及续轮上下文。历史格式未知、记录损坏、归属错误、父链缺失或有环都拒绝恢复，不退回文本拼接。
+每个请求记录保存本次原生 intent 和资源描述。上下文链节引用父链节、固定初始化、本 Run 记录及恢复元数据。`run-state` v13 增加 `application_prefix` 和可空首包输入估算。标记 `0` 使用原生父上下文，`1` 使用当前应用历史编码规则。应用事件按需从已完成 Run 的原生增量记录转换。冷恢复先重建最近一次重组的前缀，再恢复其后的原生增量。历史格式未知、记录损坏、归属错误、父链缺失或有环时拒绝恢复。
+
+成功结算后可按 Session 和父上下文引用缓存最多 16 个已组装上下文，合计估算上限为 16 MiB。缓存命中时跳过父历史负载读取和原生重放。每个新 Run 仍打开独立 execution，读取当前凭据并校验配置、驱动、图片引用和父上下文。重启或缓存淘汰后从持久记录恢复。
 
 同一 recordId 重复出现只在 Run／协议归属、格式、resourceRefs 和 payload 完全一致时幂等接纳。已有原生记录、上下文和结果引用均不可修改或删除。
 
@@ -75,7 +79,7 @@ Run 负责准入、取消和等待；RunRuntime 拥有交接后的 program、模
 | 接口 | 行为 |
 | --- | --- |
 | `POST /sessions` | 创建空原生 Session |
-| `POST /sessions/:id/model` | 检查只读状态和绑定协议后修改默认模型 |
+| `POST /sessions/:id/model` | 检查只读状态后修改会话默认模型，可选另一协议 |
 | `POST /sessions/:id/runs` | 显式父节点、输入、幂等键与可选模型 |
 | `GET /sessions/:id/nodes/:nodeId`、`/path` | 查询节点／有序祖先；不隐式选最新节点 |
 | `GET /sessions/:id/nodes?parentNodeId=root` | 按直接子节点分页 |
@@ -100,7 +104,7 @@ v1–v4 历史迁移保留原行为：旧 `turns_json` 按数组顺序迁为单�
 
 上线前停止旧宿主、备份数据库及图片目录并确认排他所有权。正常构建和测试不修改工作区数据库。
 
-验证覆盖 `conversation-tree` 的并发／竞态／事务故障，`conversation-migration` 的旧样本不重写与迁移回滚，`native-session` 的首次协议绑定、不可变增量引用、Prompt 固定与模板一次应用、持久启动屏障，以及工具／harness server 核心测试的取消、实际退出、清理失败与无副作用重放。四协议端到端及 Web 展示验收另由原生协议集成测试和 Web 测试覆盖。
+验证覆盖同父并发、迁移、首次初始化竞争、Prompt 固定、不可变增量引用、取消和实际退出。[四协议集成测试](../tests/native-protocol-agents.test.mjs)核对跨 API、换 Key、图片与工具结果、缓存命中、重启后组包一致和分支隔离。
 
 ## 会话归档
 

@@ -2,7 +2,7 @@ import type { Component } from '@nya/core';
 import { assert, equalJson, immutable, json, record } from '../domain.js';
 import { modelsError } from '../errors.js';
 import { modelsProtocolsServiceKey } from '../types.js';
-import type { DeclaredCapabilities, EffectiveCapabilities, FormField, JsonValue, ProviderConnectionInput } from '../types.js';
+import type { DeclaredCapabilities, EffectiveCapabilities, FormField, JsonValue, ProviderSettingsInput } from '../types.js';
 import type { ModelsProtocolsService, NativeObject, NativeProtocol, NativeRecordDraft } from '../native-types.js';
 export type { NativeObject } from '../native-types.js';
 export interface ProtocolOptions { readonly fetch?: typeof globalThis.fetch }
@@ -23,7 +23,7 @@ export function nonempty(value: unknown): string { const result = string(value);
 export function array(value: unknown): JsonValue[] { if (!Array.isArray(value)) throw modelsError('invalid-response'); return value; }
 export function parseJson(value: string): unknown { try { return JSON.parse(value) as unknown; } catch { throw modelsError('invalid-response'); } }
 export function index(value: unknown): number { if (!Number.isSafeInteger(value) || Number(value) < 0) throw modelsError('invalid-response'); return Number(value); }
-export function validateProvider(provider: ProviderConnectionInput, protocolId: string): void {
+export function validateProvider(provider: ProviderSettingsInput, protocolId: string): void {
   try { const url = new URL(provider.baseUrl); if (provider.protocolId !== protocolId || !['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || !['none', 'api-key'].includes(provider.auth) || !Number.isSafeInteger(provider.timeoutMs) || provider.timeoutMs < 1) throw new Error(); }
   catch { throw modelsError('invalid-config'); }
 }
@@ -71,8 +71,8 @@ export function mergeTools(local: JsonValue | undefined, server: JsonValue | und
   for (const tool of tools) { const item = object(tool); const fn = item.function === undefined ? item : object(item.function); const name = nonempty(fn.name); if (names.has(name)) throw modelsError('invalid-config'); names.add(name); }
   return [...tools, ...(server === undefined ? [] : array(server))];
 }
-export function restoreRecords(protocolId: string, records: readonly NativeRecordDraft[], commit: (state: NativeObject, intent: NativeObject, response: NativeObject) => NativeObject, versions: readonly number[] = [1]): NativeObject {
-  let state: NativeObject = {}, pending: NativeRecordDraft | undefined; const ids = new Set<string>();
+export function restoreRecords(protocolId: string, records: readonly NativeRecordDraft[], commit: (state: NativeObject, intent: NativeObject, response: NativeObject) => NativeObject, versions: readonly number[] = [1], prefix: NativeObject = {}): NativeObject {
+  let state = native(prefix), pending: NativeRecordDraft | undefined; const ids = new Set<string>();
   for (const record of records) {
     if (record.protocolId !== protocolId || !versions.includes(record.recordFormatVersion) || ids.has(record.id)) throw modelsError('invalid-response'); ids.add(record.id);
     if (record.kind === 'request') { if (pending) throw modelsError('invalid-response'); pending = record; }

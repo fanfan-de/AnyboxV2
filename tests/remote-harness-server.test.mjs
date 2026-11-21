@@ -228,7 +228,7 @@ test('owner unit controls retain their application route through the authenticat
 
 test('gateway whitelist omits control-plane internals and encoded traversal', () => {
   for (const path of ['/shutdown', '/sessions/a/records', '/sessions/a/images/%2e%2e/content', '/runs/a%2fb', '/runs/%00']) assert.equal(allowedProxyPath('GET', path), false)
-  for (const [method, path] of [['POST', '/projects'], ['POST', '/sessions/a/project-files/preview'], ['GET', '/sessions/archived'], ['GET', '/models/configurations/a/history'], ['POST', '/access/tokens/a/revoke']]) assert.equal(allowedProxyPath(method, path), true)
+  for (const [method, path] of [['POST', '/projects'], ['POST', '/sessions/a/project-files/preview'], ['GET', '/sessions/archived'], ['GET', '/models/settings/a/history'], ['POST', '/access/tokens/a/revoke']]) assert.equal(allowedProxyPath(method, path), true)
   for (const method of ['GET', 'POST']) {
     assert.equal(allowedProxyPath(method, '/agents/assistant/session-defaults'), true)
     for (const path of ['/agents/assistant/session-defaults/extra', '/agents/assistant/%73ession-defaults', '/agents/a%2fb/session-defaults']) {

@@ -24,7 +24,7 @@
 
 - Run 注入 Session 两个端口、[Agent Prompt](../prompts/agent-prompts.md)、`models`、协议 Agent 注册表、RunRuntime、[Computer Operations](../computers/computer-operations.md) 和 [Projects](../sessions/projects.md)。
 - RunRuntime 只注入 `harness.session-runs` 与 Computer Operations。Operations 按需准备固定执行 binding，通过 worker 代理派发；四工具服务由独立 worker 根的执行器持有。Runtime 不解释原生协议状态。
-- 协议注册表注入 `models`、`models.protocols` 和 [Image Assets](../images/image-assets.md)；每个绑定注入协议注册表与 `models.protocols`。文件正文由 Run 经 Session 读取后传入注册表，注册表不直接依赖 Project Files。
+- 协议注册表注入 `models`、`models.settings`、`models.protocols` 和 [Image Assets](../images/image-assets.md)。`models.settings` 用于核对历史重组涉及的提供方版本。每个绑定注入协议注册表与 `models.protocols`。文件正文由 Run 经 Session 读取后传入注册表。
 
 `apply` 只完成初始化和服务注册，不运行长期循环。组件使用本轮 `deps` 快照，通过 Effect 注册清理；Nya 负责依赖失效时的停止与重建。harness server API 每次请求重新获取当前服务，避免跨组件重启缓存引用。
 
@@ -35,7 +35,7 @@
 1. 调用 `startRun({ sessionId, parentNodeId, input, images?, files?, idempotencyKey, modelId? })`。根分支显式传 `parentNodeId: null`；文本、图片、文件至少一项非空；先检查已接受幂等键，再解析当前配置。
 2. 检查 Session 未归档、项目目录、Agent、模型与协议。模型按显式输入、Session 选择、Agent 默认的顺序确定；恢复只沿指定成功父节点的路径。
 3. Session 创建时复制 Agent 工具选择，首次接受固定 instruction/context 和实际工具声明；后续复用。新 NativeInitialization v2 保存 tool-library-v1 与选择快照，旧 v1 初始化保持原样。当前 task-template 只处理本次原始输入一次。Run 受管读取文件快照并等待退出，注册表在模板后附加文件资料、编码图片引用，获取驱动代租约并准备独立 execution 和 `PreparedRunProgram`。
-4. Session 接受事务再次验证归档状态、父上下文引用、协议与固定初始化，同事务永久保留图片及文件引用，保存 Run 和非秘密快照。首次接受原子固定 Session 协议。
+4. Session 接纳事务再次验证归档状态、精确父引用、本轮协议和固定初始化，同事务保留图片及文件引用，保存 Run 快照、历史组包标记和首包输入估算。
 5. RunRuntime 在首次异步读取前同步接管 program。每次操作先持久化 intent，再检查停止状态，同步启动并登记句柄，等待 `result` 和 `done`，最后提交实际 observation。
 6. 协议 Loop 直接解释原生结果；需要计算工具时，Session 同事务接纳声明及独立恢复游标，Runtime 经 Computer Operations 的 scope 串行提交本机 worker，工具使用固定 workspacePath，再只发送新增工具结果。模型和计划调用不激活 computer。工具图片先与观察同事务保留，再附加用户图片块及资源引用。后续协议轮次的完整上下文由 execution 管理。
 7. Runtime 停止新操作、等待工具和模型实际退出；正常结束也关闭 Run 进程 scope 并保存通用清理操作的真实退出结果，关闭 program 后，才请求 Session 结算。成功结算把 Run、原生记录、上下文链节、结果引用、完整节点和终态事件放在同一事务；失败和取消不创建节点。

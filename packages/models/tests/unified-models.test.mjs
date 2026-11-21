@@ -7,37 +7,40 @@ import { capabilities, deferred, fakeProtocol, fixture, memoryStore, memoryVault
 
 const rawModel = (id, extra = {}) => ({ id, name: id, tool_call: true, streaming: true, modalities: { input: ['text', 'image'], output: ['text'] }, limit: { context: 10000, output: 1000 }, ...extra })
 const snapshot = (models = [rawModel('a'), rawModel('b')], time = 1, provider = 'test-provider', npm = '@ai-sdk/openai-compatible') => normalizeModelsDevCatalog({ [provider]: { id: provider, name: 'Same name', api: 'https://example.invalid/v1', npm, models: Object.fromEntries(models.map(model => [model.id, model])) } }, 'models.dev', time)
-const account = (provider, id = 'account', extras = {}) => ({ id, providerDefinitionId: provider.id, name: id, enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 1000, apiKey: 'private-key', ...extras })
+const account = (provider, name = 'account', extras = {}) => ({ providerId: provider.id, name, enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 1000, apiKey: 'private-key', ...extras })
 async function setup(input = snapshot(), protocols = [fakeProtocol('chat-completions')]) {
   const f = await fixture({ protocols }); await f.sourceData.accept(input)
   return { f, provider: f.settings.providers()[0] }
 }
 
-test('one connection unlocks all compatible definitions; accounts and variants keep distinct stable selections', async () => {
+test('one provider setting unlocks compatible definitions and rejects duplicate model settings', async () => {
   const { f, provider } = await setup(snapshot([rawModel('a'), rawModel('b'), rawModel('image', { type: 'image', modalities: { input: ['text'], output: ['image'] } }), rawModel('old', { status: 'deprecated' })]))
   try {
-    const connection = await f.settings.createConnection(account(provider))
+    const connection = await f.settings.createProviderSettings(account(provider))
     assert.equal(connection.sync.state, 'ready'); assert.equal(f.settings.providers().length, 1)
     assert.equal(f.models.list({ available: true }).length, 2)
-    assert.ok(f.models.list().every(model => model.source.kind === 'external' && model.connectionId === connection.id && model.providerDefinitionId === provider.id))
+    assert.equal(connection.id, provider.id)
+    assert.ok(f.models.list().every(model => model.source.kind === 'external' && model.providerId === provider.id))
     assert.equal(f.vault.reads.length, 0)
-    assert.equal(f.settings.connectionModels(connection.id).find(model => model.remoteModelId === 'image').unavailableReason, 'text-unsupported')
-    assert.equal(f.settings.connectionModels(connection.id).find(model => model.remoteModelId === 'old').unavailableReason, 'deprecated')
-    const saved = f.settings.configurations()[0]
-    await f.settings.createConfiguration({ ...Object.fromEntries(['name','enabled','modelDefinitionId','connectionId','capabilities'].map(key => [key, saved[key]])), id: 'variant', baseline: false, parameters: params('chat-completions', { temperature: 0.9 }) })
-    await f.settings.createConnection(account(provider, 'second'))
-    assert.equal(f.models.list().length, 5)
-    const changed = await f.settings.updateConfiguration(saved.id, { name: 'My name', enabled: false, parameters: params('chat-completions', { temperature: 0.4 }) }, saved.revision)
+    assert.equal(f.settings.providerModels(connection.id).find(model => model.remoteModelId === 'image').unavailableReason, 'text-unsupported')
+    assert.equal(f.settings.providerModels(connection.id).find(model => model.remoteModelId === 'old').unavailableReason, 'deprecated')
+    const saved = f.settings.modelSettings()[0]
+    await assert.rejects(f.settings.createModelSettings({ modelId: saved.id, name: 'Duplicate settings',
+      enabled: true, capabilities: saved.capabilities, parameters: params('chat-completions', { temperature: 0.9 }) }), { code: 'conflict' })
+    await assert.rejects(f.settings.createProviderSettings(account(provider, 'second', { apiKey: 'rejected-key' })), { code: 'conflict' })
+    assert.deepEqual([...f.vault.secrets.values()], ['private-key'])
+    assert.equal(f.models.list().length, 2)
+    const changed = await f.settings.updateModelSettings(saved.id, { name: 'My name', enabled: false, parameters: params('chat-completions', { temperature: 0.4 }) }, saved.revision)
     const source = snapshot([rawModel('a'), rawModel('b'), rawModel('new')], 2)
-    await f.sourceData.accept(source); await f.settings.retryConnection(connection.id)
-    assert.equal(f.models.list().length, 7)
-    assert.deepEqual(f.settings.configurations().find(model => model.id === saved.id), changed)
-    assert.equal(f.settings.connections().find(c => c.id === connection.id).revision, connection.revision)
+    await f.sourceData.accept(source); await f.settings.retryProviderSettings(connection.id)
+    assert.equal(f.models.list().length, 3)
+    assert.deepEqual(f.settings.modelSettings().find(model => model.id === saved.id), changed)
+    assert.equal(f.settings.configuredProviders().find(c => c.id === connection.id).revision, connection.revision)
     const fresh = await f.settings.setApiKey(connection.id, 'replacement', connection.revision)
-    assert.equal(f.models.list().length, 7)
+    assert.equal(f.models.list().length, 3)
     await f.settings.deleteApiKey(connection.id, fresh.revision)
-    assert.ok(f.models.list({ connectionId: connection.id }).every(model => !model.available))
-    assert.ok(f.models.list({ connectionId: 'second' }).every(model => model.available))
+    assert.ok(f.models.list({ providerId: connection.id }).every(model => !model.available))
+    assert.equal(f.settings.configuredProviders().length, 1)
   } finally { await f.close() }
 })
 
@@ -47,9 +50,13 @@ test('user definitions may belong to external providers; source namespace and na
     const sameName = await f.settings.createProvider({ name: provider.name, connectionHints: { protocolIds: ['chat-completions'] } })
     assert.equal(sameName.source.kind, 'user'); assert.notEqual(sameName.id, provider.id)
     const first = f.settings.models()[0]
-    const custom = await f.settings.createModel({ name: first.name, providerId: provider.id, remoteModelId: first.remoteModelId, capabilities: capabilities(), controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } })
+    const input = { name: first.name, providerId: provider.id, capabilities: capabilities(), controls: { temperature: 'unknown' },
+      modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } }
+    await assert.rejects(f.settings.createModel({ ...input, remoteModelId: first.remoteModelId }), { code: 'conflict' })
+    const custom = await f.settings.createModel({ ...input, remoteModelId: 'custom' })
+    await assert.rejects(f.settings.updateModel(custom.id, { remoteModelId: first.remoteModelId }, custom.revision), { code: 'conflict' })
     assert.equal(custom.source.kind, 'user')
-    await f.settings.createConnection(account(provider))
+    await f.settings.createProviderSettings(account(provider))
     assert.equal(f.models.list().length, 3)
     const other = normalizeModelsDevCatalog({ p: { id: 'test-provider', name: provider.name, npm: '@ai-sdk/openai-compatible', api: 'https://example.invalid/v1', models: { a: rawModel('a') } } }, 'another.source', 2)
     await f.sourceData.accept(other)
@@ -62,15 +69,15 @@ test('user definitions may belong to external providers; source namespace and na
 test('missing source entries preserve configured versions and in-flight execution snapshots', async () => {
   const { f, provider } = await setup()
   try {
-    const connection = await f.settings.createConnection(account(provider))
-    const config = f.settings.configurations().find(model => model.remoteModelId === 'a')
-    const execution = await f.open({ modelId: config.id })
+    const connection = await f.settings.createProviderSettings(account(provider))
+    const config = f.settings.modelSettings().find(model => model.remoteModelId === 'a')
+    const execution = await f.open({ modelId: config.runtimeModelId })
     assert.equal(execution.snapshot.schemaVersion, 3)
     assert.equal(execution.snapshot.modelDefinitionVersionId, config.modelDefinitionVersionId)
     await f.sourceData.accept(snapshot([rawModel('b')], 2))
-    assert.equal(f.settings.models({ includeMissing: true }).find(model => model.id === config.modelDefinitionId).state, 'missing')
-    assert.equal(f.models.get(config.id).available, true)
-    const removed = await f.open({ modelId: config.id }); await removed.close()
+    assert.equal(f.settings.models({ includeMissing: true }).find(model => model.id === config.id).state, 'missing')
+    assert.equal(f.models.get(config.runtimeModelId).available, true)
+    const removed = await f.open({ modelId: config.runtimeModelId }); await removed.close()
     await f.settings.setApiKey(connection.id, 'new-private-key', connection.revision)
     await exchange(execution, { messages: [{ role: 'user', content: 'still old' }] }).result
     assert.equal(f.protocols[0].calls[0].input.credential, 'private-key')
@@ -84,27 +91,27 @@ test('saved key survives atomic model batch failure; retry and restart reconcile
   await f.sourceData.accept(snapshot())
   const provider = f.settings.providers()[0], original = store.commit.bind(store)
   let fail = true
-  store.commit = change => { if (fail && change.configurations?.length) { fail = false; return Promise.reject(Object.assign(new Error('private failure'), { code: 'storage-unavailable' })) } return original(change) }
-  const connection = await f.settings.createConnection(account(provider))
+  store.commit = change => { if (fail && change.modelSettings?.length) { fail = false; return Promise.reject(Object.assign(new Error('private failure'), { code: 'storage-unavailable' })) } return original(change) }
+  const connection = await f.settings.createProviderSettings(account(provider))
   assert.equal(connection.credentialConfigured, true); assert.equal(connection.sync.state, 'failed')
   assert.equal(f.models.list().length, 0); assert.deepEqual([...vault.secrets.values()], ['private-key'])
-  const repaired = await f.settings.retryConnection(connection.id)
+  const repaired = await f.settings.retryProviderSettings(connection.id)
   assert.equal(repaired.sync.state, 'ready'); assert.equal(repaired.revision, connection.revision)
   const ids = f.models.list().map(model => model.id).sort(); await f.close()
   const restarted = await fixture({ store, vault, protocols: [fakeProtocol('chat-completions')] })
-  try { await restarted.settings.retryConnection(connection.id); assert.deepEqual(restarted.models.list().map(model => model.id).sort(), ids) } finally { await restarted.close() }
+  try { await restarted.settings.retryProviderSettings(connection.id); assert.deepEqual(restarted.models.list().map(model => model.id).sort(), ids) } finally { await restarted.close() }
 })
 
 test('definitions import before protocol installation and registration resumes missing initializations', async () => {
   const { f, provider } = await setup()
   try {
-    const connection = await f.settings.createConnection(account(provider))
+    const connection = await f.settings.createProviderSettings(account(provider))
     await f.registrations[0].unregister()
     await f.sourceData.accept(snapshot([rawModel('a'), rawModel('b'), rawModel('c')], 2))
-    assert.equal(f.settings.connections()[0].sync.state, 'pending')
+    assert.equal(f.settings.configuredProviders()[0].sync.state, 'pending')
     assert.equal(f.models.list().length, 2)
     const replacement = fakeProtocol('chat-completions', '2'); f.protocols.push(replacement); f.registry.register(replacement)
-    await f.settings.retryConnection(connection.id)
+    await f.settings.retryProviderSettings(connection.id)
     assert.equal(f.models.list({ available: true }).length, 3)
   } finally { await f.close() }
 })
@@ -113,8 +120,8 @@ test('Anthropic required defaults are saved explicitly and bounded by output lim
   const protocol = createAnthropicMessagesProtocol(), data = snapshot([rawModel('claude')], 1, 'anthropic', '@ai-sdk/anthropic')
   const { f, provider } = await setup(data, [protocol])
   try {
-    await f.settings.createConnection(account(provider, 'anthropic', { protocolId: 'anthropic-messages' }))
-    assert.equal(f.settings.configurations()[0].parameters.value.max_tokens, 1000)
+    await f.settings.createProviderSettings(account(provider, 'anthropic', { protocolId: 'anthropic-messages' }))
+    assert.equal(f.settings.modelSettings()[0].parameters.value.max_tokens, 1000)
     assert.equal(f.models.list()[0].effectiveCapabilities.imageInput, true)
   } finally { await f.root.fiber.dispose() }
 })
@@ -133,7 +140,7 @@ test('source ledger blocks older and ambiguous cache candidates while complete c
 
 test('source and Key updates serialize configurations; core close waits admitted definition transactions', async () => {
   const { f, provider } = await setup()
-  const connection = await f.settings.createConnection(account(provider)), original = f.store.commit.bind(f.store)
+  const connection = await f.settings.createProviderSettings(account(provider)), original = f.store.commit.bind(f.store)
   const entered = deferred(), release = deferred(); let hold = true
   f.store.commit = async change => { if (hold && change.providers?.length) { hold = false; entered.resolve(); await release.promise } return original(change) }
   const next = snapshot([rawModel('a'), rawModel('b'), rawModel('c')], 2)
@@ -148,13 +155,13 @@ test('source and Key updates serialize configurations; core close waits admitted
   await f.close()
 })
 
-test('a stale admitted baseline batch retries against the latest source target without overwriting it', async () => {
+test('a stale admitted model settings batch retries against the latest source target without overwriting it', async () => {
   const { f, provider } = await setup()
   try {
-    const connection = await f.settings.createConnection(account(provider))
+    const connection = await f.settings.createProviderSettings(account(provider))
     const original = f.store.commit.bind(f.store), entered = deferred(), release = deferred(), latestCommitted = deferred(); let hold = true
     f.store.commit = async change => {
-      if (hold && change.configurations?.length) { hold = false; entered.resolve(); await release.promise }
+      if (hold && change.modelSettings?.length) { hold = false; entered.resolve(); await release.promise }
       await original(change)
       if (change.sources?.some(source => source.fetchedAt === 3)) latestCommitted.resolve()
     }
@@ -170,21 +177,30 @@ test('a stale admitted baseline batch retries against the latest source target w
     assert.equal(f.models.list().length, 4)
     assert.equal(f.store.syncState(connection.id).state, 'ready')
     assert.equal(f.store.syncState(connection.id).syncedSourceVersion, latest.snapshotVersion)
-    assert.equal(f.settings.connections()[0].revision, connection.revision)
+    assert.equal(f.settings.configuredProviders()[0].revision, connection.revision)
   } finally { await f.close() }
 })
 
-test('offline connection/configuration persistence allows stable bootstrap IDs before protocol registration', async () => {
+test('offline provider and model configuration persistence allows stable bootstrap IDs before protocol registration', async () => {
   const f = await fixture({ protocols: [] })
   try {
     const provider = await f.settings.createProvider({ id: 'imported-provider', name: 'Imported', connectionHints: { protocolIds: ['test'] } })
-    const connection = await f.settings.createConnection({ id: 'imported-connection', providerDefinitionId: provider.id, name: 'Imported account', protocolId: 'test', baseUrl: 'https://example.invalid/v1', enabled: true, auth: 'none', timeoutMs: 1000 })
+    const connection = await f.settings.createProviderSettings({ providerId: provider.id, name: 'Imported account', protocolId: 'test', baseUrl: 'https://example.invalid/v1', enabled: true, auth: 'none', timeoutMs: 1000 })
     assert.equal(connection.sync.state, 'pending')
-    const definition = await f.settings.createModel({ id: 'imported-definition', name: 'Imported model', providerId: provider.id, remoteModelId: 'remote', capabilities: capabilities(), controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['test'] } })
-    const config = await f.settings.createConfiguration({ id: 'default', connectionId: connection.id, modelDefinitionId: definition.id, baseline: true, name: 'Imported', enabled: true, parameters: params('test', { temperature: 0.2 }), capabilities: definition.capabilities })
-    assert.equal(f.models.get(config.id).unavailableReason, 'protocol-unavailable')
+    const definition = await f.settings.createModel({ id: 'default', name: 'Imported model', providerId: provider.id, remoteModelId: 'remote', capabilities: capabilities(), controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['test'] } })
+    const input = { modelId: definition.id, name: 'Imported', enabled: true,
+      parameters: params('test', { temperature: 0.2 }), capabilities: definition.capabilities }
+    const [saved, duplicate] = await Promise.allSettled([
+      f.settings.createModelSettings(input),
+      f.settings.createModelSettings({ ...input, name: 'Duplicate' }),
+    ])
+    assert.equal(saved.status, 'fulfilled')
+    assert.equal(duplicate.status, 'rejected')
+    assert.equal(duplicate.reason.code, 'conflict')
+    const config = saved.value
+    assert.equal(f.models.get(config.runtimeModelId).unavailableReason, 'protocol-unavailable')
     const protocol = fakeProtocol(); f.protocols.push(protocol); f.registry.register(protocol)
-    await f.settings.retryConnection(connection.id)
+    await f.settings.retryProviderSettings(connection.id)
     assert.deepEqual(f.models.list().map(value => value.id), ['default'])
     const execution = await f.open({ modelId: 'default' }); await execution.close()
   } finally { await f.close() }

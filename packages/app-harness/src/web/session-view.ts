@@ -391,12 +391,11 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       if (models) {
         const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
         const choices: ModelPickerChoice[] = catalog.models.map(value => {
-          const incompatible = Boolean(state.session?.protocolId && value.parameters.protocolId !== state.session.protocolId)
           const unsupported = !getProtocolWebModule(value.parameters.protocolId)
-          return { id: value.id, name: value.name, group: value.connectionId,
-            groupLabel: catalog.providers.find(provider => provider.id === value.connectionId)?.name ?? value.connectionId,
-            label: incompatible ? `${value.name} · 需新建其他协议会话` : unsupported ? `${value.name} · 网页输入组件不可用` : canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`,
-            disabled: !canUseModel(value) || incompatible || unsupported }
+          return { id: value.id, name: value.name, group: value.providerId,
+            groupLabel: catalog.providers.find(provider => provider.id === value.providerId)?.name ?? value.providerId,
+            label: unsupported ? `${value.name} · 网页输入组件不可用` : canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`,
+            disabled: !canUseModel(value) || unsupported }
         })
         if (selected && !catalog.models.some(value => value.id === selected)) {
           choices.push({ id: selected, name: '原模型已不可用', label: '原模型已不可用', group: 'unavailable', groupLabel: '不可用模型', disabled: true })

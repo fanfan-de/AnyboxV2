@@ -10,6 +10,7 @@ function fixture(t, options = {}) {
   const document = { activeElement: undefined }
   class Element extends EventTarget {
     constructor(tag) { super(); this.tagName = tag; this.children = []; this.dataset = {}; this.attributes = {}; this.hidden = false; this.disabled = false; this.open = false; this.value = ''; this.textContent = ''; this.className = ''; this.parentElement = null }
+    classList = { add: name => { this.className = [...new Set([...this.className.split(/\s+/).filter(Boolean), name])].join(' ') } }
     append(...children) { for (const child of children) { child.remove(); child.parentElement = this; this.children.push(child) } }
     prepend(...children) { for (const child of [...children].reverse()) { child.remove(); child.parentElement = this; this.children.unshift(child) } }
     insertBefore(child, reference) { child.remove(); const index = this.children.indexOf(reference); assert.ok(index >= 0); child.parentElement = this; this.children.splice(index, 0, child) }
@@ -37,17 +38,18 @@ function fixture(t, options = {}) {
   const previousDocument = globalThis.document; globalThis.document = document
   const el = (tag, id, text) => { const node = document.createElement(tag); if (id) node.id = id; if (text) node.textContent = text; return node }
   const root = el('div'), dialog = el('dialog', 'agent--settings-dialog'), content = el('div', 'agent--settings-content')
+  const sidebar = el('div'), navigation = el('nav'), modelDeviceSlot = el('div')
+  modelDeviceSlot.setAttribute('data-models-device-slot', '')
+  modelDeviceSlot.hidden = true; sidebar.append(navigation, modelDeviceSlot); dialog.append(sidebar)
   const scope = el('div', 'agent--settings-scope'), label = el('label'), device = el('select', 'agent--settings-device'), all = el('span', 'agent--settings-all-devices', '所有设备')
   label.setAttribute('for', 'agent--settings-device'); label.textContent = '正在设置：'; all.hidden = true; scope.append(label, device, all)
   const buttons = new Map(), panels = new Map(), headings = new Map()
   for (const section of sections) {
-    const button = el('button'); button.dataset.settingsSection = section; buttons.set(section, button); dialog.append(button)
+    const button = el('button'); button.dataset.settingsSection = section; buttons.set(section, button); navigation.append(button)
     const panel = el('section'), heading = el('header'), title = el('h3', undefined, section), workflow = el('p', undefined, `${section} existing description`)
     panel.dataset.settingsPanel = section; panel.hidden = section !== 'general'; heading.className = 'settings-panel-heading'
-    if (section === 'models') {
-      const group = el('div'); group.append(title, workflow)
-      const action = el('button', undefined, '添加提供方'); action.id = 'models-action'; heading.append(group, action)
-    } else heading.append(title, workflow)
+    heading.append(title)
+    if (section !== 'models') heading.append(workflow)
     panel.append(heading); panels.set(section, panel); headings.set(section, heading); content.append(panel)
   }
   content.prepend(scope); dialog.append(content); root.append(dialog)
@@ -56,13 +58,13 @@ function fixture(t, options = {}) {
     isActive: () => active, selectDevice: id => { changes.push(id); return true }, refreshArchive: () => { refreshes++ }, ...options }
   const view = setupSettingsNavigation(root, fixed)
   t.after(() => { view.dispose(); if (previousDocument === undefined) delete globalThis.document; else globalThis.document = previousDocument })
-  return { document, view, dialog, content, scope, label, device, all, buttons, panels, headings, changes,
+  return { document, view, dialog, content, scope, label, device, all, modelDeviceSlot, buttons, panels, headings, changes,
     setActive(value) { active = value }, get refreshes() { return refreshes },
     select(id) { device.value = id; device.dispatchEvent(new Event('change')) },
   }
 }
 
-test('device scope sits next to the current title and retains nested model descriptions and actions', t => {
+test('device scope moves from the current title to the models sidebar and back', t => {
   const f = fixture(t, { initialState: { section: 'prompts', open: false, focusDevice: false } })
   assert.equal(f.device.value, 'local')
   assert.deepEqual(f.device.children.map(option => option.textContent), ['这台电脑', '开发服务器'])
@@ -72,15 +74,19 @@ test('device scope sits next to the current title and retains nested model descr
   assert.equal(promptHeading.querySelector('p').textContent, 'prompts existing description', 'the Prompt save/publish workflow is retained')
   assert.equal(promptHeading.querySelector('.settings-scope-description').textContent, '这里的 Prompt 供这台电脑上的 Agent 使用。')
   assert.equal(f.panels.get('prompts').hidden, false)
+  assert.equal(f.modelDeviceSlot.hidden, true)
   f.buttons.get('models').click()
-  const modelsHeading = f.headings.get('models'), modelRow = modelsHeading.querySelector('.settings-title-row')
-  assert.equal(modelRow.parentElement, modelsHeading)
-  assert.equal(modelRow.querySelector('h3').textContent, 'models')
-  assert.equal(f.scope.parentElement, modelRow)
-  assert.ok(modelsHeading.children.some(child => child.tagName === 'p' && child.textContent === 'models existing description'))
-  assert.equal(modelsHeading.querySelector('#models-action').textContent, '添加提供方')
-  assert.equal(modelsHeading.querySelector('.settings-scope-description').textContent, '管理这台电脑上保存的模型连接和调用配置。')
+  const modelsHeading = f.headings.get('models')
+  assert.equal(f.scope.parentElement, f.modelDeviceSlot)
+  assert.equal(f.modelDeviceSlot.hidden, false)
+  assert.equal(f.label.textContent, '设备')
+  assert.equal(modelsHeading.querySelector('.sr-only').textContent, 'models')
+  assert.equal(f.panels.get('models').hidden, false)
+  assert.equal(f.buttons.get('models').getAttribute('aria-current'), 'page')
   f.buttons.get('prompts').click()
+  assert.equal(f.scope.parentElement, promptRow)
+  assert.equal(f.modelDeviceSlot.hidden, true)
+  assert.equal(f.label.textContent, '正在设置：')
   assert.equal(promptHeading.querySelectorAll('.settings-title-row').length, 1)
   assert.equal(promptHeading.querySelectorAll('.settings-scope-description').length, 1)
 })

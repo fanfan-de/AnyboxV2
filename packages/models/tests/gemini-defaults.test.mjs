@@ -19,21 +19,21 @@ async function setup() {
     controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {},
     connectionHints: { protocolIds: ['gemini-interactions'] },
   })
-  const connection = await f.settings.createConnection({ providerDefinitionId: provider.id, name: 'Account',
+  const connection = await f.settings.createProviderSettings({ providerId: provider.id, name: 'Account',
     enabled: true, protocolId: 'gemini-interactions', baseUrl: 'https://gemini.invalid/v1beta', auth: 'none', timeoutMs: 1000 })
-  return { ...f, requests, protocol, connection, configurations: f.settings.configurations(connection.id) }
+  return { ...f, requests, protocol, connection, configurations: f.settings.modelSettings(connection.id) }
 }
 
-test('new Gemini baselines persist and send enabled summaries only for declared reasoning support', async () => {
+test('new Gemini model settings persist and send enabled summaries only for declared reasoning support', async () => {
   const f = await setup()
   try {
     assert.equal(f.connection.sync.state, 'ready')
-    assert.equal(f.configurations.length, 3, 'unknown or unsupported reasoning must not prevent a text baseline')
+    assert.equal(f.configurations.length, 3, 'unknown or unsupported reasoning must not prevent text model settings')
     assert.equal(f.protocol.descriptor.modelFields.find(field => field.key === 'generation_config.thinking_summaries').defaultValue, 'auto')
     for (const configuration of f.configurations) {
       const expected = configuration.capabilities.reasoning.support === 'supported' ? { generation_config: { thinking_summaries: 'auto' } } : {}
       assert.deepEqual(configuration.parameters, params('gemini-interactions', expected))
-      const execution = await f.open({ modelId: configuration.id })
+      const execution = await f.open({ modelId: configuration.runtimeModelId })
       try {
         assert.deepEqual(execution.snapshot.parameters, configuration.parameters)
         await exchange(execution, intent).result
@@ -48,12 +48,12 @@ test('Gemini reconciliation preserves saved none and omitted summaries without r
   try {
     let configuration = f.configurations.find(value => value.capabilities.reasoning.support === 'supported')
     for (const value of [{ generation_config: { thinking_summaries: 'none' } }, {}]) {
-      configuration = await f.settings.updateConfiguration(configuration.id, { parameters: params('gemini-interactions', value) }, configuration.revision)
+      configuration = await f.settings.updateModelSettings(configuration.id, { parameters: params('gemini-interactions', value) }, configuration.revision)
       const before = configuration
-      await f.settings.retryConnection(f.connection.id)
-      assert.deepEqual(f.settings.configurations(f.connection.id).find(item => item.id === configuration.id), before)
-      assert.deepEqual(f.settings.configurationHistory(configuration.id).at(-1), before)
-      const execution = await f.open({ modelId: configuration.id })
+      await f.settings.retryProviderSettings(f.connection.id)
+      assert.deepEqual(f.settings.modelSettings(f.connection.id).find(item => item.id === configuration.id), before)
+      assert.deepEqual(f.settings.modelSettingsHistory(configuration.id).at(-1), before)
+      const execution = await f.open({ modelId: configuration.runtimeModelId })
       try {
         assert.deepEqual(execution.snapshot.parameters.value, value)
         await exchange(execution, intent).result

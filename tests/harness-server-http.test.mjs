@@ -20,7 +20,7 @@ import { promptServiceKey } from '../packages/app-harness/dist/core/prompt/compo
 import { installManagedModels } from './helpers/managed-models.mjs'
 import { installHarnessServerModels } from '../packages/app-harness/dist/server-models.js'
 import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-config.js'
-import { seedHarnessModel } from './helpers/configured-models.mjs'
+import { seedHarnessModel, seedTestModel } from './helpers/configured-models.mjs'
 import { runChangedEvent } from '../packages/app-harness/dist/core/run/notifications.js'
 import { decodeProtocolView } from '../packages/app-harness/dist/core/view/decode.js'
 import sharp from 'sharp'
@@ -138,8 +138,8 @@ async function changes(web, sessionIds) {
 }
 
 async function fixtureCredential(f, value) {
-  const settings = f.root.get('models.settings'), connection = settings.connections().find(item => item.id === 'default')
-  const updated = await settings.updateConnection(connection.id, { auth: 'api-key' }, connection.revision)
+  const settings = f.root.get('models.settings'), connection = settings.configuredProviders().find(item => item.id === 'default')
+  const updated = await settings.updateProviderSettings(connection.id, { auth: 'api-key' }, connection.revision)
   await settings.setApiKey(updated.id, value, updated.revision)
   assert.ok([...f.secrets.values()].includes(value))
 }
@@ -171,8 +171,9 @@ test('SSE follows committed Run changes and publishes the result node only after
     const run = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'inside', idempotencyKey: 'inside' })
     assert.equal(f.llm.calls[1].input.credential, secret)
     const dto = (await request(f.web, 'GET', `/runs/${run.id}`)).data
-    assert.deepEqual(Object.keys(dto).sort(), ['createdAt', 'files', 'history', 'id', 'images', 'input', 'modelId', 'modelSnapshot',
+    assert.deepEqual(Object.keys(dto).sort(), ['createdAt', 'estimatedInputTokens', 'files', 'history', 'id', 'images', 'input', 'modelId', 'modelSnapshot',
       'protocolBinding', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
+    assert.ok(dto.estimatedInputTokens > 0)
     assert.doesNotMatch(JSON.stringify(dto), /Private instructions|fixture-sse-private-key|promptSnapshots|nativeInput|initialization|credentialRef|apiKey|Authorization/)
     let resourceExited = false
     const assertFrame = frame => {
@@ -272,41 +273,53 @@ test('optional dependency restart retains one stable HTTP listener and SSE obser
 test('harness server HTTP Models settings manage provider keys, revisions and histories without exposing secrets', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-key-')), f = await fixture(directory)
   try {
-    const added = await request(f.web, 'POST', '/models/connections', { providerDefinitionId: 'default-provider-definition', id: 'managed', name: 'Work connection', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 1000, apiKey: 'first-private-value' })
+    const definition = await request(f.web, 'POST', '/models/providers', { id: 'managed', name: 'Managed provider', connectionHints: { protocolIds: ['chat-completions'] } })
+    assert.equal(definition.response.status, 200)
+    const input = { providerId: definition.data.id, name: 'Work connection', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 1000 }
+    const added = await request(f.web, 'POST', '/models/provider-settings', { ...input, apiKey: 'first-private-value' })
     assert.equal(added.response.status, 200)
     assert.equal(added.data.credentialConfigured, true)
+    assert.equal(added.data.id, definition.data.id)
+    assert.equal((await request(f.web, 'POST', '/models/provider-settings', { ...input, apiKey: 'rejected-private-value' })).response.status, 409)
+    assert.equal([...f.secrets.values()].includes('rejected-private-value'), false)
     assert.ok([...f.secrets.values()].includes('first-private-value'))
-    const saved = await request(f.web, 'POST', '/models/connections/managed/key', { apiKey: 'second-private-value', expectedRevision: added.data.revision })
+    const saved = await request(f.web, 'POST', '/models/provider-settings/managed/key', { apiKey: 'second-private-value', expectedRevision: added.data.revision })
     assert.equal(saved.response.status, 200)
     assert.ok([...f.secrets.values()].includes('second-private-value'))
     assert.equal([...f.secrets.values()].includes('first-private-value'), false)
-    const stale = await request(f.web, 'POST', '/models/connections/managed/key', { apiKey: 'stale-private-value', expectedRevision: added.data.revision })
+    const stale = await request(f.web, 'POST', '/models/provider-settings/managed/key', { apiKey: 'stale-private-value', expectedRevision: added.data.revision })
     assert.equal(stale.response.status, 409)
     assert.equal([...f.secrets.values()].includes('stale-private-value'), false)
-    assert.equal((await request(f.web, 'POST', '/models/connections/managed/key', { apiKey: '', expectedRevision: saved.data.revision })).response.status, 400)
-    const deleted = await request(f.web, 'POST', '/models/connections/managed/key/delete', { expectedRevision: saved.data.revision })
+    assert.equal((await request(f.web, 'POST', '/models/provider-settings/managed/key', { apiKey: '', expectedRevision: saved.data.revision })).response.status, 400)
+    const deleted = await request(f.web, 'POST', '/models/provider-settings/managed/key/delete', { expectedRevision: saved.data.revision })
     assert.equal(deleted.response.status, 200)
     assert.equal(deleted.data.credentialConfigured, false)
-    const history = await request(f.web, 'GET', '/models/connections/managed/history')
+    const history = await request(f.web, 'GET', '/models/provider-settings/managed/history')
     assert.equal(history.data.length, 3)
-    for (const data of [added.data, saved.data, deleted.data, history.data, (await request(f.web, 'GET', '/models/connections')).data]) assert.doesNotMatch(JSON.stringify(data), /private-value|credentialRef/)
+    for (const data of [added.data, saved.data, deleted.data, history.data, (await request(f.web, 'GET', '/models/provider-settings')).data]) assert.doesNotMatch(JSON.stringify(data), /private-value|credentialRef/)
+    assert.equal((await request(f.web, 'GET', '/models/connections')).response.status, 404)
     assert.equal((await request(f.web, 'GET', '/credentials')).response.status, 404)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
-test('harness server HTTP deletes only the selected connection with CAS and origin checks while preserving sessions and active Run settlement', async () => {
+test('harness server HTTP deletes only the selected provider settings with CAS and origin checks while preserving sessions and active Run settlement', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'anybox-web-delete-')), f = await fixture(directory)
   try {
     const settings = f.root.get('models.settings')
-    const connection = (await request(f.web, 'POST', '/models/connections', { providerDefinitionId: 'default-provider-definition', id: 'remove-account',
+    const provider = await settings.createProvider({ id: 'removed', name: 'Removed provider', connectionHints: { protocolIds: ['chat-completions'] } })
+    const { capabilities } = settings.modelSettings('default')[0]
+    await settings.createModel({ providerId: provider.id, name: 'Removed model', remoteModelId: 'remote-test', capabilities,
+      controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } })
+    const connection = (await request(f.web, 'POST', '/models/provider-settings', { providerId: provider.id,
       name: 'Remove account', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 30000, apiKey: 'removed-private-key' })).data
-    const baseline = settings.configurations(connection.id)[0]
-    const preset = await settings.createConfiguration({ connectionId: connection.id, modelDefinitionId: baseline.modelDefinitionId,
-      name: 'Preset', enabled: true, baseline: false, capabilities: baseline.capabilities, parameters: { protocolId: baseline.parameters.protocolId, formatVersion: 1, value: { temperature: 0.2 } } })
-    const session = await f.harness.createSession(f.project.id, 'assistant', baseline.id)
-    const started = await f.harness.startRun({ sessionId: session.id, modelId: baseline.id, parentNodeId: null, input: 'Keep running', idempotencyKey: 'before-delete' })
+    const configured = settings.modelSettings(connection.id)[0]
+    const alternate = await seedTestModel(settings, connection, { id: 'removed-alternate', name: 'Alternate',
+      capabilities: configured.capabilities, parameters: { temperature: 0.2 } })
+    const session = await f.harness.createSession(f.project.id, 'assistant', configured.runtimeModelId)
+    const started = await f.harness.startRun({ sessionId: session.id, modelId: configured.runtimeModelId,
+      parentNodeId: null, input: 'Keep running', idempotencyKey: 'before-delete' })
     const before = await f.harness.getRun(started.id)
-    const path = `/models/connections/${connection.id}/delete`
+    const path = `/models/provider-settings/${connection.id}/delete`
     assert.equal((await request(f.web, 'POST', path, { expectedRevision: connection.revision }, 'https://elsewhere.test')).response.status, 403)
     assert.equal((await request(f.web, 'POST', path, {})).response.status, 400)
     assert.equal((await request(f.web, 'POST', path, { expectedRevision: connection.revision + 1 })).response.status, 409)
@@ -314,12 +327,12 @@ test('harness server HTTP deletes only the selected connection with CAS and orig
     const deleted = await request(f.web, 'POST', path, { expectedRevision: connection.revision })
     assert.equal(deleted.response.status, 200); assert.deepEqual(deleted.data, { ok: true })
     assert.equal([...f.secrets.values()].includes('removed-private-key'), false)
-    assert.deepEqual((await request(f.web, 'GET', '/models/connections')).data.map(value => value.id), ['default'])
-    assert.deepEqual((await request(f.web, 'GET', `/models/configurations?connectionId=${connection.id}`)).data, [])
-    assert.equal((await request(f.web, 'GET', '/models')).data.some(value => value.id === baseline.id || value.id === preset.id), false)
-    assert.equal((await request(f.web, 'GET', `/sessions/${session.id}`)).data.modelId, baseline.id)
-    assert.equal((await request(f.web, 'GET', `/models/connections/${connection.id}/history`)).data.length, 1)
-    assert.equal((await request(f.web, 'GET', `/models/configurations/${preset.id}/history`)).data.length, 1)
+    assert.deepEqual((await request(f.web, 'GET', '/models/provider-settings')).data.map(value => value.id), ['default'])
+    assert.deepEqual((await request(f.web, 'GET', `/models/settings?providerId=${connection.id}`)).data, [])
+    assert.equal((await request(f.web, 'GET', '/models')).data.some(value => value.id === configured.runtimeModelId || value.id === alternate.runtimeModelId), false)
+    assert.equal((await request(f.web, 'GET', `/sessions/${session.id}`)).data.modelId, configured.runtimeModelId)
+    assert.equal((await request(f.web, 'GET', `/models/provider-settings/${connection.id}/history`)).data.length, 1)
+    assert.equal((await request(f.web, 'GET', `/models/settings/${alternate.id}/history`)).data.length, 1)
     assert.equal((await request(f.web, 'POST', path, { expectedRevision: connection.revision })).response.status, 404)
     assert.equal(f.llm.calls[0].input.signal.aborted, false)
     f.llm.calls[0].result.resolve('Answer after deletion'); f.llm.calls[0].done.resolve()
@@ -362,11 +375,11 @@ test('harness server HTTP configures a Responses key and exposes the existing Ba
   try {
     f = await fixture(directory, {}, { protocolId: 'responses', remoteModelId: 'compatible-responses-model',
       baseUrl: `http://127.0.0.1:${server.address().port}/v1`, parameters: { max_output_tokens: 2048, temperature: 0.2 }, apiKey: false })
-    const providers = await request(f.web, 'GET', '/models/connections')
+    const providers = await request(f.web, 'GET', '/models/provider-settings')
     assert.equal(providers.data.length, 1)
     const provider = providers.data[0]
     assert.equal(provider.credentialConfigured, false)
-    assert.equal((await request(f.web, 'POST', `/models/connections/${provider.id}/key`, { apiKey: 'web-secret-key', expectedRevision: provider.revision })).response.status, 200)
+    assert.equal((await request(f.web, 'POST', `/models/provider-settings/${provider.id}/key`, { apiKey: 'web-secret-key', expectedRevision: provider.revision })).response.status, 200)
     const session = (await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data
     const run = (await request(f.web, 'POST', `/sessions/${session.id}/runs`, {
       parentNodeId: null, input: 'Run Bash', idempotencyKey: 'responses-web',
@@ -563,7 +576,8 @@ test('Anybox Harness client assets and harness server HTTP complete one idempote
     assert.equal(first.response.status, 200)
     assert.equal(replay.data.id, first.data.id)
     assert.equal(f.llm.calls.length, 1)
-    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'files', 'history', 'id', 'images', 'input', 'modelId', 'modelSnapshot', 'protocolBinding', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
+    assert.deepEqual(Object.keys(first.data).sort(), ['createdAt', 'estimatedInputTokens', 'files', 'history', 'id', 'images', 'input', 'modelId', 'modelSnapshot', 'protocolBinding', 'requestedModelId', 'revision', 'sessionId', 'status', 'updatedAt'])
+    assert.ok(first.data.estimatedInputTokens > 0)
     assert.doesNotMatch(JSON.stringify(first.data), /Private instructions|llmSnapshot|promptVersionIds|promptSnapshots|nativeInput|initialization|idempotencyKey|credentialRef|apiKey|Authorization/)
     const inFlight = await request(f.web, 'GET', `/runs/${first.data.id}`)
     assert.equal(inFlight.data.status, 'running')
@@ -1145,19 +1159,20 @@ test('HTTP new-session defaults use explicit model configurations, validate writ
     assert.deepEqual(initial.data, { agentId: 'assistant', modelId: null, fallbackModelId: 'default', effectiveModelId: 'default', revision: 0 })
     const original = (await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data
     assert.equal(original.modelId, 'default')
-    const baseline = settings.configurations('default')[0]
-    const preset = await settings.createConfiguration({ id: 'session-preset', name: 'Session preset', enabled: true,
-      connectionId: baseline.connectionId, modelDefinitionId: baseline.modelDefinitionId, baseline: false,
-      capabilities: baseline.capabilities, parameters: { protocolId: baseline.parameters.protocolId, formatVersion: 1, value: { temperature: 0.2 } } })
-    const saved = await request(f.web, 'POST', path, { modelId: preset.id, expectedRevision: 0 })
+    const defaultSettings = settings.modelSettings('default')[0]
+    const initialProvider = settings.configuredProviders().find(value => value.id === defaultSettings.providerId)
+    const alternate = await seedTestModel(settings, initialProvider, { id: 'session-alternate', name: 'Alternate session model',
+      capabilities: defaultSettings.capabilities, parameters: { temperature: 0.2 } })
+    const modelId = alternate.runtimeModelId
+    const saved = await request(f.web, 'POST', path, { modelId, expectedRevision: 0 })
     assert.equal(saved.response.status, 200)
-    assert.deepEqual(saved.data, { agentId: 'assistant', modelId: preset.id, fallbackModelId: 'default', effectiveModelId: preset.id, revision: 1 })
+    assert.deepEqual(saved.data, { agentId: 'assistant', modelId, fallbackModelId: 'default', effectiveModelId: modelId, revision: 1 })
     const created = (await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data
-    assert.equal(created.modelId, preset.id); assert.equal(created.protocolId, null)
+    assert.equal(created.modelId, modelId); assert.equal(created.protocolId, null)
     assert.equal((await request(f.web, 'GET', `/sessions/${original.id}`)).data.modelId, 'default')
     assert.equal((await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant', modelId: 'default' })).data.modelId, 'default')
     await request(f.web, 'POST', `/sessions/${created.id}/model`, { modelId: 'default' })
-    assert.equal((await request(f.web, 'GET', path)).data.modelId, preset.id)
+    assert.equal((await request(f.web, 'GET', path)).data.modelId, modelId)
     const conflict = await request(f.web, 'POST', path, { modelId: 'default', expectedRevision: 0 })
     assert.equal(conflict.response.status, 409); assert.equal(conflict.data.error.code, 'session-defaults-conflict')
     for (const body of [{ modelId: null }, { expectedRevision: 1 }, { modelId: '', expectedRevision: 1 },
@@ -1169,22 +1184,23 @@ test('HTTP new-session defaults use explicit model configurations, validate writ
     assert.equal((await request(f.web, 'POST', '/agents/missing/session-defaults', { modelId: null, expectedRevision: 0 })).response.status, 404)
     assert.equal((await request(f.web, 'POST', path, { modelId: 'missing', expectedRevision: 1 })).response.status, 404)
     assert.equal((await request(f.web, 'POST', path, { modelId: null, expectedRevision: 1 }, 'https://elsewhere.test')).response.status, 403)
-    await settings.updateConfiguration(preset.id, { enabled: false }, preset.revision)
-    const unavailable = await request(f.web, 'POST', path, { modelId: preset.id, expectedRevision: 1 })
+    await settings.updateModelSettings(alternate.id, { enabled: false }, alternate.revision)
+    const unavailable = await request(f.web, 'POST', path, { modelId, expectedRevision: 1 })
     assert.equal(unavailable.response.status, 409); assert.equal(unavailable.data.error.code, 'model-unavailable')
-    const withoutKey = await settings.createConnection({ id: 'without-key', providerDefinitionId: 'default-provider-definition',
+    const provider = await settings.createProvider({ id: 'without-key', name: 'No Key', connectionHints: { protocolIds: ['chat-completions'] } })
+    const withoutKey = await settings.createProviderSettings({ providerId: provider.id,
       name: 'No Key', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'api-key', timeoutMs: 30000 })
-    const needsKey = await settings.createConfiguration({ id: 'without-key-model', name: 'Needs Key', connectionId: withoutKey.id,
-      modelDefinitionId: preset.modelDefinitionId, enabled: true, capabilities: preset.capabilities, parameters: preset.parameters, baseline: true })
-    assert.equal(f.root.get('models').get(needsKey.id).unavailableReason, 'credential-missing')
-    assert.equal((await request(f.web, 'POST', path, { modelId: needsKey.id, expectedRevision: 1 })).data.error.code, 'model-unavailable')
-    assert.equal((await request(f.web, 'GET', path)).data.effectiveModelId, preset.id)
-    assert.equal((await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data.modelId, preset.id)
-    const presetConnection = settings.connections().find(connection => connection.id === preset.connectionId)
-    await settings.deleteConnection(presetConnection.id, presetConnection.revision)
-    assert.equal(f.root.get('models').get(preset.id), undefined)
-    assert.equal((await request(f.web, 'GET', path)).data.effectiveModelId, preset.id)
-    assert.equal((await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data.modelId, preset.id)
+    const needsKey = await seedTestModel(settings, withoutKey, { id: 'without-key-model', name: 'Needs Key',
+      remoteModelId: 'remote-test', capabilities: alternate.capabilities })
+    assert.equal(f.root.get('models').get(needsKey.runtimeModelId).unavailableReason, 'credential-missing')
+    assert.equal((await request(f.web, 'POST', path, { modelId: needsKey.runtimeModelId, expectedRevision: 1 })).data.error.code, 'model-unavailable')
+    assert.equal((await request(f.web, 'GET', path)).data.effectiveModelId, modelId)
+    assert.equal((await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data.modelId, modelId)
+    const alternateProvider = settings.configuredProviders().find(value => value.id === alternate.providerId)
+    await settings.deleteProviderSettings(alternateProvider.id, alternateProvider.revision)
+    assert.equal(f.root.get('models').get(modelId), undefined)
+    assert.equal((await request(f.web, 'GET', path)).data.effectiveModelId, modelId)
+    assert.equal((await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant' })).data.modelId, modelId)
     const cleared = await request(f.web, 'POST', path, { modelId: null, expectedRevision: 1 })
     assert.equal(cleared.response.status, 200); assert.equal(cleared.data.revision, 2)
     assert.equal(cleared.data.effectiveModelId, 'default')
@@ -1201,22 +1217,26 @@ test('HTTP Models configuration and session selection use persisted model IDs wi
     assert.equal((await request(f.web, 'GET', '/models/protocols')).data[0].id, 'chat-completions')
     const definition = await request(f.web, 'POST', '/models/providers', { id: 'second-definition', name: 'Second service', connectionHints: { protocolIds: ['chat-completions'], baseUrl: 'https://second.example.invalid/v1' } })
     assert.equal(definition.response.status, 200)
-    const provider = await request(f.web, 'POST', '/models/connections', { providerDefinitionId: definition.data.id, id: 'second', name: 'Second connection', protocolId: 'chat-completions', baseUrl: 'https://second.example.invalid/v1', enabled: true, auth: 'none', timeoutMs: 1000 })
+    const provider = await request(f.web, 'POST', '/models/provider-settings', { providerId: definition.data.id, name: 'Second connection', protocolId: 'chat-completions', baseUrl: 'https://second.example.invalid/v1', enabled: true, auth: 'none', timeoutMs: 1000 })
     assert.equal(provider.response.status, 200)
-    const modelDefinition = await request(f.web, 'POST', '/models/definitions', { id: 'second-model-definition', name: 'Second model', providerId: definition.data.id, remoteModelId: 'remote-test', capabilities: catalog.data[0].capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } })
+    const modelDefinition = await request(f.web, 'POST', '/models/definitions', { id: 'alternate', name: 'Second model', providerId: definition.data.id, remoteModelId: 'remote-test', capabilities: catalog.data[0].capabilities, controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } })
     assert.equal(modelDefinition.response.status, 200)
-    const added = await request(f.web, 'POST', '/models/configurations', {
-      id: 'alternate', name: 'Alternate defaults', enabled: true, connectionId: 'second', modelDefinitionId: modelDefinition.data.id, baseline: true,
+    const input = {
+      modelId: modelDefinition.data.id, name: 'Alternate defaults', enabled: true,
       capabilities: catalog.data[0].capabilities, parameters: { protocolId: 'chat-completions', formatVersion: 1, value: { temperature: 0.4 } },
-    })
+    }
+    const added = await request(f.web, 'POST', '/models/settings', input)
     assert.equal(added.response.status, 200)
-    const updated = await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: added.data.revision, patch: { parameters: { protocolId: 'chat-completions', formatVersion: 1, value: { temperature: 0.8 } } } })
+    assert.equal(added.data.runtimeModelId, modelDefinition.data.id)
+    assert.equal((await request(f.web, 'POST', '/models/settings', input)).response.status, 409)
+    assert.equal((await request(f.web, 'GET', '/models/configurations')).response.status, 404)
+    const updated = await request(f.web, 'POST', '/models/settings/alternate', { expectedRevision: added.data.revision, patch: { parameters: { protocolId: 'chat-completions', formatVersion: 1, value: { temperature: 0.8 } } } })
     assert.equal(updated.response.status, 200)
-    assert.equal((await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: added.data.revision, patch: { name: 'Stale' } })).response.status, 409)
-    assert.equal((await request(f.web, 'GET', '/models/configurations/alternate/history')).data.length, 2)
-    assert.deepEqual((await request(f.web, 'POST', '/models/connections/second/check', {})).data, { ok: true })
-    assert.equal((await request(f.web, 'POST', '/models/connections/second/discover', {})).data[0].remoteModelId, 'candidate')
-    assert.equal((await request(f.web, 'GET', '/models/configurations')).data.length, 2)
+    assert.equal((await request(f.web, 'POST', '/models/settings/alternate', { expectedRevision: added.data.revision, patch: { name: 'Stale' } })).response.status, 409)
+    assert.equal((await request(f.web, 'GET', '/models/settings/alternate/history')).data.length, 2)
+    assert.deepEqual((await request(f.web, 'POST', `/models/provider-settings/${provider.data.id}/check`, {})).data, { ok: true })
+    assert.equal((await request(f.web, 'POST', `/models/provider-settings/${provider.data.id}/discover`, {})).data[0].remoteModelId, 'candidate')
+    assert.equal((await request(f.web, 'GET', '/models/settings')).data.length, 2)
     const session = (await request(f.web, 'POST', '/sessions', { projectId: f.project.id, agentId: 'assistant', modelId: 'alternate' })).data
     assert.equal(session.modelId, 'alternate')
     const first = await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Override', idempotencyKey: 'override', modelId: 'default' })
@@ -1226,7 +1246,7 @@ test('HTTP Models configuration and session selection use persisted model IDs wi
     assert.equal(f.llm.calls[1].input.request.temperature, 0.8)
     assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/model`, { modelId: 'default' })).data.modelId, 'default')
     assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Selection', idempotencyKey: 'selection' })).data.id, second.data.id)
-    const disabled = await request(f.web, 'POST', '/models/configurations/alternate', { expectedRevision: updated.data.revision, patch: { enabled: false } })
+    const disabled = await request(f.web, 'POST', '/models/settings/alternate', { expectedRevision: updated.data.revision, patch: { enabled: false } })
     assert.equal(disabled.response.status, 200)
     assert.equal((await request(f.web, 'POST', `/sessions/${session.id}/runs`, { parentNodeId: null, input: 'Disabled', idempotencyKey: 'disabled', modelId: 'alternate' })).response.status, 409)
     for (const call of f.llm.calls) { call.result.resolve('Done'); call.done.resolve() }

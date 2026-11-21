@@ -21,8 +21,8 @@ const active = (run: RunView): boolean => run.status === 'running' || run.status
 /** A pane observes its branch, never a newer sibling or a session-wide billing total. */
 export function contextUsage(state: Pick<SessionSnapshot, 'session' | 'position' | 'path' | 'runs' | 'views' | 'loading'>,
   models: readonly RunnableModelSummary[] = []): ContextUsage {
-  const model = models.find(value => value.id === state.session?.modelId)
-  let limit = positive(model?.limits?.context) ? model.limits.context : undefined
+  const selected = models.find(value => value.id === state.session?.modelId)
+  let limit = positive(selected?.limits?.context) ? selected.limits.context : undefined
   const unknown = (detail: string): ContextUsage => ({ limit, tone: 'unknown', label: '上下文用量未知', detail })
   if (state.loading) return unknown('正在读取当前分支的上下文统计。')
   if (state.session?.historyMode === 'dialogue-v1') return unknown('旧版会话没有可用的上下文统计。')
@@ -34,13 +34,18 @@ export function contextUsage(state: Pick<SessionSnapshot, 'session' | 'position'
   const sourceId = state.path.at(-1)?.sourceRunId
   const run = followed ?? focused ?? running[0] ?? state.runs.find(run => run.id === sourceId)
   if (!run) return unknown('尚无模型返回的用量统计；首次响应后更新。')
-  if (state.session?.modelId && run.modelId !== state.session.modelId) return unknown('模型已切换，等待所选模型返回新的用量统计。')
+  if (!active(run) && state.session?.modelId && run.modelId !== state.session.modelId) return unknown('模型已切换，等待所选模型返回新的用量统计。')
+  const model = run.modelId === selected?.id ? selected : models.find(value => value.id === run.modelId)
   const snapshot = run.modelSnapshot?.schemaVersion === 3 ? run.modelSnapshot : undefined
   // A recorded limit wins. An old snapshot may use the exact pinned definition from the catalog.
   limit = positive(snapshot?.limits?.context) ? snapshot.limits.context :
     snapshot && snapshot.modelDefinitionVersionId === model?.modelDefinitionVersionId && positive(model?.limits?.context) ? model.limits.context : undefined
   const view = state.views.get(run.id)
   const usage = view?.exchanges.at(-1)?.usage
+  if (!count(usage?.inputTokens) && (view?.exchanges.length ?? 0) <= 1 && active(run) && count(run.estimatedInputTokens)) {
+    return { limit, tone: 'unknown', label: `本轮输入估计 ${number(run.estimatedInputTokens)} tokens`,
+      detail: '这是首次请求的本地估算。收到模型用量后会更新。' }
+  }
   if (!usage) return unknown(active(run) ? '本次运行尚未返回用量统计；模型报告后更新。' : '模型未报告用量；无法计算当前分支的上下文占用。')
   const inputTokens = count(usage.inputTokens) ? usage.inputTokens : undefined
   const outputTokens = count(usage.outputTokens) ? usage.outputTokens : undefined

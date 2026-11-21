@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createPendingStore, createSessionController } from '../packages/app-harness/dist/web/session-client.js'
+import { createPendingStore as createPersonalPendingStore, createSessionController as createPersonalSessionController } from '../packages/app-personal-agent/dist/web/session-client.js'
 
 const exchange = (id, text) => ({ id, blocks: [{ id: 'item-0', type: 'responses.message', content: [{ id: 'item-0:part-0', type: 'output_text', text }] }] })
 
-function fixture() {
+function fixture({ personal = false } = {}) {
   const storage = new Map(), writes = [], timers = new Map(), runs = [], views = new Map()
-  const pending = createPendingStore({ getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) })
-  let session = { id: 's', projectId: 'p', agentId: 'a', modelId: null, protocolId: null, historyMode: 'native-local-v1' }, fail = false, sequence = 0
+  const pending = (personal ? createPersonalPendingStore : createPendingStore)({ getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) })
+  let session = { id: 's', projectId: 'p', agentId: 'a', modelId: null, protocolId: null, historyMode: 'native-local-v1',
+    ...(personal ? { continuous: true, headNodeId: null } : {}) }, fail = false, sequence = 0
   const models = ['a', 'b'].map(id => ({ id, parameters: { protocolId: 'responses', formatVersion: 1, value: {} }, available: true, effectiveCapabilities: { tools: true } }))
-  const controller = createSessionController({ sessionId: 's', projectId: 'p' }, {
+  const controller = (personal ? createPersonalSessionController : createSessionController)({ sessionId: 's', projectId: 'p' }, {
     api: async (path, body) => {
       if (body) writes.push({ path, body })
       if (path === '/sessions/s') return { ...session }
@@ -26,12 +28,35 @@ function fixture() {
         runs.push(run); return { ...run }
       }
       throw new Error(path)
-    }, pending, models: () => models, messageFor: error => error.message, newId: () => `k${++sequence}`,
+    }, pending, models: () => models, messageFor: error => error.message, newId: () => `k${++sequence}`, continuous: personal,
     hidden: () => false, schedule: callback => { const id = ++sequence; timers.set(id, callback); return id }, clear: id => timers.delete(id), missing: () => assert.fail('missing'),
   })
   return { controller, pending, writes, runs, models, views, load: async () => { controller.attach(() => {}); await controller.refresh() },
     setServerModel: value => { session = { ...session, modelId: value } }, setSession: value => { session = { ...session, ...value } }, setFail: value => { fail = value } }
 }
+
+test('Personal Agent sends and recovers submissions using the current Agent default', async () => {
+  const f = fixture({ personal: true })
+  f.setServerModel('a')
+  await f.load()
+  f.setFail(true)
+  f.controller.setDraft('continue')
+  await f.controller.submit()
+  const [{ body: request }] = f.writes
+  assert.equal(request.projectId, 'p')
+  assert.equal(request.input, 'continue')
+  assert.equal('modelId' in request, false)
+  assert.equal(f.pending.get('s').idempotencyKey, request.idempotencyKey)
+  f.controller.detach()
+
+  f.setServerModel('b')
+  f.setFail(false)
+  await f.load()
+  assert.equal(f.controller.snapshot().session.modelId, 'b')
+  assert.deepEqual(f.writes.map(({ body }) => body), [request, request])
+  assert.equal(f.pending.get('s'), undefined)
+  f.controller.detach()
+})
 
 test('model selection persists per session and pending retries keep the original selected model', async () => {
   const f = fixture(); await f.load()
@@ -107,17 +132,22 @@ test('legacy Sessions are read only and unaccepted legacy pending inputs never b
   f.controller.detach()
 })
 
-test('bound native Session rejects another protocol while retaining its draft', async () => {
+test('an existing Session selects another protocol and sends its draft with the selected model', async () => {
   const f = fixture()
   f.setSession({ protocolId: 'responses', modelId: 'a' })
   f.models[1].parameters = { protocolId: 'anthropic-messages', formatVersion: 1, value: { max_tokens: 4096 } }
   await f.load()
   f.controller.setDraft('retain this')
   await f.controller.setModel('b')
-  assert.equal(f.writes.length, 0)
-  assert.equal(f.controller.snapshot().session.modelId, 'a')
+  assert.deepEqual(f.writes, [{ path: '/sessions/s/model', body: { modelId: 'b' } }])
+  assert.equal(f.controller.snapshot().session.modelId, 'b')
   assert.equal(f.controller.snapshot().draft, 'retain this')
-  assert.match(f.controller.snapshot().notice, /固定协议/)
+  await f.controller.refresh()
+  await f.controller.submit()
+  const next = f.writes.at(-1)
+  assert.equal(next.path, '/sessions/s/runs')
+  assert.equal(next.body.input, 'retain this')
+  assert.equal(next.body.modelId, 'b')
   f.controller.detach()
 })
 

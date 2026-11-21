@@ -17,7 +17,7 @@ const sourceInput = (models = { first: { id: 'first', name: 'First' } }) => ({ u
   models: Object.fromEntries(Object.entries(models).map(([id, model]) => [id, { tool_call: true, streaming: true, temperature: true, modalities: { input: ['text'], output: ['text'] }, ...model }])),
 } });
 const imported = (models, fetchedAt = 1) => normalizeModelsDevCatalog(sourceInput(models), 'models.dev', fetchedAt);
-const connectionInput = (provider, id, extra = {}) => ({ id, providerDefinitionId: provider.id, name: id, enabled: true, protocolId: 'chat-completions', baseUrl: 'https://account.invalid/v1', auth: 'api-key', timeoutMs: 10_000, ...extra });
+const connectionInput = (provider, name, extra = {}) => ({ providerId: provider.id, name, enabled: true, protocolId: 'chat-completions', baseUrl: 'https://account.invalid/v1', auth: 'api-key', timeoutMs: 10_000, ...extra });
 async function sourceFixture(options = {}) {
   const f = await fixture({ protocols: [fakeProtocol('chat-completions')], ...options });
   await f.sourceData.accept(imported());
@@ -40,36 +40,40 @@ test('JSON and user definitions share module types while keeping namespaced sour
   await assert.rejects(f.settings.updateProvider(external.id, { name: 'User overwrite' }, external.revision), { code: 'invalid-config' });
 });
 
-test('saving two keyed connections creates distinct runnable groups without changing external provenance', async t => {
+test('different providers create distinct runnable groups without changing external provenance', async t => {
   const f = await sourceFixture(); t.after(() => f.close());
   const provider = f.settings.providers()[0], before = structuredClone(provider);
-  const first = await f.settings.createConnection(connectionInput(provider, 'first', { apiKey: 'private-first' }));
-  const second = await f.settings.createConnection(connectionInput(provider, 'second', { apiKey: 'private-second' }));
+  await f.sourceData.accept(normalizeModelsDevCatalog(sourceInput(), 'other-source', 1));
+  const other = f.settings.providers().find(value => value.source.sourceId === 'other-source');
+  const first = await f.settings.createProviderSettings(connectionInput(provider, 'first', { apiKey: 'private-first' }));
+  const second = await f.settings.createProviderSettings(connectionInput(other, 'second', { apiKey: 'private-second' }));
   assert.equal(first.sync.state, 'ready'); assert.equal(second.sync.state, 'ready');
   assert.equal(f.models.list({ available: true }).length, 2);
-  const [firstModel] = f.models.list({ connectionId: first.id }), [secondModel] = f.models.list({ connectionId: second.id });
-  assert.notEqual(firstModel.id, secondModel.id); assert.equal(firstModel.modelDefinitionId, secondModel.modelDefinitionId);
-  assert.equal(firstModel.providerDefinitionId, provider.id); assert.equal(firstModel.source.kind, 'external');
-  assert.notEqual(f.store.connection(first.id).credentialRef, f.store.connection(second.id).credentialRef);
-  assert.deepEqual(f.settings.providers()[0], before); assert.equal(f.vault.reads.length, 0);
-  await f.settings.retryConnection(first.id); await f.settings.retryConnection(second.id);
-  assert.equal(f.settings.configurations().length, 2);
+  const [firstModel] = f.models.list({ providerId: first.id }), [secondModel] = f.models.list({ providerId: second.id });
+  assert.notEqual(firstModel.id, secondModel.id); assert.notEqual(firstModel.modelDefinitionId, secondModel.modelDefinitionId);
+  assert.equal(firstModel.providerId, provider.id); assert.equal(firstModel.source.kind, 'external');
+  const inventoryModel = f.settings.providerModels(first.id).find(value => value.id === firstModel.modelDefinitionId);
+  assert.equal(inventoryModel.runtimeModelId, firstModel.id);
+  assert.notEqual(f.store.providerSettings(first.id).credentialRef, f.store.providerSettings(second.id).credentialRef);
+  assert.deepEqual(f.settings.providers().find(value => value.id === provider.id), before); assert.equal(f.vault.reads.length, 0);
+  await f.settings.retryProviderSettings(first.id); await f.settings.retryProviderSettings(second.id);
+  assert.equal(f.settings.modelSettings().length, 2);
   const removedKey = await f.settings.deleteApiKey(first.id, first.revision);
   assert.equal(removedKey.credentialConfigured, false); assert.equal(f.models.get(firstModel.id).unavailableReason, 'credential-missing');
   assert.equal(f.models.get(secondModel.id).available, true);
-  const publicText = JSON.stringify([f.settings.providers(), f.settings.connections(), f.settings.models(), f.models.list()]);
-  assert.ok(!publicText.includes('private-first')); assert.ok(!publicText.includes(f.store.connection(second.id).credentialRef));
+  const publicText = JSON.stringify([f.settings.providers(), f.settings.configuredProviders(), f.settings.models(), f.models.list()]);
+  assert.ok(!publicText.includes('private-first')); assert.ok(!publicText.includes(f.store.providerSettings(second.id).credentialRef));
 });
 
-test('a user Model may belong to a sourced Provider and is initialized using the same connection', async t => {
+test('a user Model may belong to a sourced Provider and is initialized using its provider settings', async t => {
   const f = await sourceFixture(); t.after(() => f.close());
   const provider = f.settings.providers()[0];
-  const connection = await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'key' }));
+  const connection = await f.settings.createProviderSettings(connectionInput(provider, 'account', { apiKey: 'key' }));
   const model = await f.settings.createModel({ providerId: provider.id, remoteModelId: 'private-model', name: 'Custom model', capabilities: capabilities(),
     controls: { temperature: 'supported' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } });
   assert.deepEqual(model.source, { kind: 'user' }); assert.equal(model.providerId, provider.id);
-  await f.settings.retryConnection(connection.id);
-  const runnable = f.models.list({ connectionId: connection.id });
+  await f.settings.retryProviderSettings(connection.id);
+  const runnable = f.models.list({ providerId: connection.id });
   assert.equal(runnable.length, 2); assert.equal(runnable.find(value => value.modelDefinitionId === model.id).source.kind, 'user');
   assert.equal(f.settings.providers()[0].source.kind, 'external');
 });
@@ -77,64 +81,64 @@ test('a user Model may belong to a sourced Provider and is initialized using the
 test('source refresh adds compatible models and preserves user parameters, disabled state and pinned versions', async t => {
   const f = await sourceFixture(); t.after(() => f.close());
   const provider = f.settings.providers()[0];
-  await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'key' }));
+  await f.settings.createProviderSettings(connectionInput(provider, 'account', { apiKey: 'key' }));
   const initial = f.models.list()[0];
-  const edited = await f.settings.updateConfiguration(initial.id, { name: 'My configuration', parameters: params('chat-completions', { temperature: 0.3, maxOutputTokens: 42 }), enabled: false }, initial.revision);
+  const edited = await f.settings.updateModelSettings(initial.id, { name: 'My configuration', parameters: params('chat-completions', { temperature: 0.3, maxOutputTokens: 42 }), enabled: false }, initial.revision);
   const candidate = imported({ first: { id: 'first', name: 'Renamed by source', tool_call: false }, second: { id: 'second', name: 'New model' },
     images: { id: 'images', name: 'Images', modalities: { input: ['text'], output: ['image'] } } }, 2);
   await f.sourceData.accept(candidate); await f.sourceData.accept(candidate);
-  assert.equal(f.settings.configurations().length, 2);
-  assert.deepEqual(f.settings.configurations().find(value => value.id === initial.id), edited);
+  assert.equal(f.settings.modelSettings().length, 2);
+  assert.deepEqual(f.settings.modelSettings().find(value => value.id === initial.id), edited);
   const definition = f.settings.models().find(value => value.id === initial.modelDefinitionId);
   assert.equal(definition.name, 'Renamed by source'); assert.notEqual(definition.versionId, initial.modelDefinitionVersionId);
   assert.equal(f.models.get(initial.id).modelDefinitionVersionId, initial.modelDefinitionVersionId);
   assert.equal(f.models.list({ available: true })[0].remoteModelId, 'second');
-  assert.equal(f.settings.connectionModels('account').find(value => value.remoteModelId === 'images').unavailableReason, 'text-unsupported');
+  assert.equal(f.settings.providerModels(provider.id).find(value => value.remoteModelId === 'images').unavailableReason, 'text-unsupported');
 });
 
 test('source removals retain historical definitions and existing configurations and executions', async t => {
   const f = await sourceFixture(); t.after(() => f.close());
   const provider = f.settings.providers()[0];
-  await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'original-key' }));
+  await f.settings.createProviderSettings(connectionInput(provider, 'account', { apiKey: 'original-key' }));
   const configuration = f.models.list()[0], existing = await f.open({ modelId: configuration.id });
-  const before = f.settings.configurations()[0];
+  const before = f.settings.modelSettings()[0];
   await f.sourceData.accept(normalizeModelsDevCatalog({}, 'models.dev', 2));
   assert.deepEqual(f.settings.providers(), []); assert.deepEqual(f.settings.models(), []);
   assert.equal(f.settings.models({ includeMissing: true })[0].state, 'missing');
-  assert.deepEqual(f.settings.configurations()[0], before); assert.equal(f.models.get(configuration.id).available, true);
+  assert.deepEqual(f.settings.modelSettings()[0], before); assert.equal(f.models.get(configuration.id).available, true);
   const next = await f.open({ modelId: configuration.id });
   for (const execution of [existing, next]) {
     assert.equal(execution.snapshot.schemaVersion, 3); assert.equal(execution.snapshot.modelId, configuration.id);
-    assert.equal(execution.snapshot.providerId, 'account'); assert.equal(execution.snapshot.providerDefinitionId, provider.id);
+    assert.equal(execution.snapshot.providerId, provider.id); assert.equal(execution.snapshot.providerDefinitionId, provider.id);
     assert.equal((await exchange(execution, { messages: [{ role: 'user', content: 'Still available' }] }).result).status, 'completed');
     await execution.close();
   }
 });
 
-test('saved connection and Key survive a failed automatic batch and idempotent retry repairs it', async t => {
+test('saved provider settings and Key survive a failed automatic batch and idempotent retry repairs it', async t => {
   const store = memoryStore(), commit = store.commit.bind(store); let failInitialization = false;
-  store.commit = async change => { if (failInitialization && change.configurations?.length) throw modelsError('storage-unavailable'); return commit(change); };
+  store.commit = async change => { if (failInitialization && change.modelSettings?.length) throw modelsError('storage-unavailable'); return commit(change); };
   const f = await sourceFixture({ store }); t.after(() => f.close());
   const provider = f.settings.providers()[0]; failInitialization = true;
-  const saved = await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'saved-key' }));
-  assert.equal(saved.credentialConfigured, true); assert.equal(saved.sync.state, 'failed'); assert.equal(f.settings.configurations().length, 0);
-  assert.ok(f.vault.secrets.has(store.connection(saved.id).credentialRef));
-  failInitialization = false; const repaired = await f.settings.retryConnection(saved.id);
+  const saved = await f.settings.createProviderSettings(connectionInput(provider, 'account', { apiKey: 'saved-key' }));
+  assert.equal(saved.credentialConfigured, true); assert.equal(saved.sync.state, 'failed'); assert.equal(f.settings.modelSettings().length, 0);
+  assert.ok(f.vault.secrets.has(store.providerSettings(saved.id).credentialRef));
+  failInitialization = false; const repaired = await f.settings.retryProviderSettings(saved.id);
   assert.equal(repaired.sync.state, 'ready'); assert.equal(repaired.revision, saved.revision);
-  await f.settings.retryConnection(saved.id); assert.equal(f.models.list({ available: true }).length, 1);
+  await f.settings.retryProviderSettings(saved.id); assert.equal(f.models.list({ available: true }).length, 1);
 });
 
-test('protocol re-registration initializes models added while their connection protocol was absent', async t => {
+test('protocol re-registration initializes models added while the provider protocol was absent', async t => {
   const protocol = fakeProtocol('chat-completions'), f = await sourceFixture({ protocols: [protocol] }); t.after(() => f.close());
   const provider = f.settings.providers()[0];
-  await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'key' }));
+  await f.settings.createProviderSettings(connectionInput(provider, 'account', { apiKey: 'key' }));
   await f.registrations[0].unregister();
   await f.sourceData.accept(imported({ first: { id: 'first', name: 'First' }, later: { id: 'later', name: 'Later' } }, 2));
-  assert.equal(f.models.list().length, 1); assert.equal(f.settings.connections()[0].sync.state, 'pending');
+  assert.equal(f.models.list().length, 1); assert.equal(f.settings.configuredProviders()[0].sync.state, 'pending');
   const replacement = fakeProtocol('chat-completions', '2');
   const registration = f.registry.register(replacement); t.after(() => registration.unregister());
   await tick();
-  assert.equal(f.models.list({ available: true }).length, 2); assert.equal(f.settings.connections()[0].sync.state, 'ready');
+  assert.equal(f.models.list({ available: true }).length, 2); assert.equal(f.settings.configuredProviders()[0].sync.state, 'ready');
 });
 
 test('user definition writes reject malformed URLs and metadata with fixed errors and immutable associations', async t => {
@@ -198,33 +202,33 @@ test('a concurrent Key rotation and source update serialize one additive model b
   const vault = memoryVault(), write = vault.write.bind(vault), gate = deferred(), started = deferred();
   vault.write = async (slot, value, signal) => { if (value === 'rotated-key') { started.resolve(); await gate.promise; } return write(slot, value, signal); };
   const f = await sourceFixture({ vault }); t.after(() => f.close());
-  const provider = f.settings.providers()[0], connection = await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'original-key' }));
+  const provider = f.settings.providers()[0], connection = await f.settings.createProviderSettings(connectionInput(provider, 'account', { apiKey: 'original-key' }));
   const first = f.models.list()[0];
   const sourceCommitted = deferred(), commit = f.store.commit.bind(f.store);
   f.store.commit = async change => { await commit(change); if (change.sources?.some(state => state.fetchedAt === 2)) sourceCommitted.resolve(); };
   const changingKey = f.settings.setApiKey(connection.id, 'rotated-key', connection.revision); await started.promise;
   const updatingSource = f.sourceData.accept(imported({ first: { id: 'first', name: 'First' }, later: { id: 'later', name: 'Later' } }, 2));
   await sourceCommitted.promise; assert.equal(f.settings.models().length, 2); assert.equal(f.models.list().length, 1);
-  const changingParams = f.settings.updateConfiguration(first.id, { parameters: params('chat-completions', { temperature: 0.4 }) }, first.revision);
+  const changingParams = f.settings.updateModelSettings(first.id, { parameters: params('chat-completions', { temperature: 0.4 }) }, first.revision);
   gate.resolve(); await Promise.all([changingKey, updatingSource, changingParams]);
   assert.equal(f.models.list({ available: true }).length, 2);
   assert.equal(f.models.get(first.id).parameters.value.temperature, 0.4);
   assert.equal(f.models.list().filter(value => value.remoteModelId === 'later').length, 1);
-  assert.equal(vault.secrets.get(f.store.connection(connection.id).credentialRef), 'rotated-key');
+  assert.equal(vault.secrets.get(f.store.providerSettings(connection.id).credentialRef), 'rotated-key');
   assert.equal(vault.reads.length, 0);
 });
 
-test('closing Models drains an admitted source transaction and its later connection synchronization', async () => {
+test('closing Models drains an admitted source transaction and its later provider synchronization', async () => {
   const store = memoryStore(), commit = store.commit.bind(store), gate = deferred(), started = deferred();
   store.commit = async change => { if (change.sources?.some(state => state.fetchedAt === 2)) { started.resolve(); await gate.promise; } return commit(change); };
   const vault = memoryVault(), f = await sourceFixture({ store, vault }), provider = f.settings.providers()[0];
-  await f.settings.createConnection(connectionInput(provider, 'account', { apiKey: 'key' }));
+  await f.settings.createProviderSettings(connectionInput(provider, 'account', { apiKey: 'key' }));
   const candidate = imported({ first: { id: 'first', name: 'First' }, later: { id: 'later', name: 'Later' } }, 2);
   const request = f.sourceData.accept(candidate); await started.promise;
   let disposed = false; const disposal = f.component.dispose().then(() => { disposed = true; }); await tick();
   assert.equal(disposed, false); gate.resolve(); await Promise.all([request, disposal]);
   assert.equal(store.sources()[0].snapshotVersion, candidate.snapshotVersion);
-  assert.equal(store.syncState('account').targetSourceVersion, candidate.snapshotVersion);
+  assert.equal(store.syncState(provider.id).targetSourceVersion, candidate.snapshotVersion);
   await f.close();
   const resumed = await fixture({ store, vault, protocols: [fakeProtocol('chat-completions')] });
   try { await tick(); assert.equal(resumed.models.list({ available: true }).length, 2); }

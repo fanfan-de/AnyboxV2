@@ -17,7 +17,12 @@ export const runRuntimeServiceKey = 'personal-agent.run-runtime'
 export type RunCancelReason = 'user-requested' | 'owner-disposed' | 'dependency-unavailable'
 export interface RunRuntimePort {
   /** Ownership is acquired synchronously. A synchronous refusal acquires nothing. */
-  start(input: { readonly runId: string; readonly program: PreparedRunProgram; readonly resume?: RunResumeRecord }): Promise<Run>
+  start(input: {
+    readonly runId: string
+    readonly program: PreparedRunProgram
+    readonly resume?: RunResumeRecord
+    readonly publishContinuation?: (run: Run, report: ProgramExitReport) => Promise<void>
+  }): Promise<Run>
   cancel(runId: string, reason: RunCancelReason): Promise<void>
   wait(runId: string, signal?: AbortSignal): Promise<Run | undefined>
   getView(runId: string): JsonValue | undefined
@@ -82,7 +87,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
       }, 'cancel and join Run resource owners')
 
       const service: RunRuntimePort = {
-        start({ runId, program, resume }) {
+        start({ runId, program, resume, publishContinuation }) {
           const existing = active.get(runId) ?? rejected.get(runId)
           if (existing) {
             if (existing.program !== program) throw modelFailure('model-unavailable')
@@ -284,8 +289,8 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
             await Promise.allSettled([...managed])
             if (environmentRun) {
               // A cancelling or unresumable program still owns the already-accepted tool facts.
-              const savedResume = await records.loadRunResume(runId)
-              for (const id of new Set([...acceptedTools,...(savedResume?.state.batch?.operationIds ?? [])])) {
+              const savedResume = await records.loadRunResumeState(runId)
+              for (const id of new Set([...acceptedTools,...(savedResume?.batch?.operationIds ?? [])])) {
                 const prior = await records.getRunOperation(runId,id)
                 if (!prior?.start.tool || prior.observation || stateFailed) continue
                 let observed: Observed<ToolObservation>
@@ -338,7 +343,12 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
             // A recovered proposal is immutable. Newly observed cleanup failures may
             // still settle the Run as failed; never rewrite or reuse its old success.
             if (!stateFailed && !resume?.state.settlement) await records.saveRunResume(runId, ownerEpoch, {stage: 'settling',settlement}, inputs.now())
-            return records.settleRun(runId, settlement, inputs.now(), ownerEpoch)
+            const settled = await records.settleRun(runId, settlement, inputs.now(), ownerEpoch)
+            if (settled.status === 'completed' && report.continuation && publishContinuation) {
+              try { await publishContinuation(settled, report) }
+              catch { /* A cache miss can always recover from the committed records. */ }
+            }
+            return settled
           }
           const entry: ActiveRun = {
             program, started, finished,

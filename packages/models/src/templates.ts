@@ -1,9 +1,9 @@
-import type { ProviderConnectionInput, SourceProviderIdentity } from './types.js';
+import type { ProviderSettingsInput, SourceProviderIdentity } from './types.js';
 
 export interface ProviderTemplate {
   readonly id: string;
   readonly name: string;
-  readonly values: Omit<ProviderConnectionInput, 'name' | 'providerDefinitionId'> & { readonly sourceRef?: SourceProviderIdentity };
+  readonly values: Omit<ProviderSettingsInput, 'name'> & { readonly sourceRef?: SourceProviderIdentity };
 }
 /** Optional UI defaults only. Runtime routing always uses the saved protocolId. */
 export const builtinProviderTemplates: readonly ProviderTemplate[] = Object.freeze([

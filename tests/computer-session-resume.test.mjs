@@ -11,7 +11,7 @@ import { createProjectFilesComponent } from '../packages/app-harness/dist/core/p
 import { createSessionComponent } from '../packages/app-harness/dist/core/session/component.js'
 import { installComputerServices, installComputerWorkerStub } from './helpers/computer-services.mjs'
 import { ids, modelSnapshot } from './helpers/controlled-models.mjs'
-import { registerNativeRun } from './helpers/native-records.mjs'
+import { nativeRegistration, registerNativeRun } from './helpers/native-records.mjs'
 import { getToolById } from '@anybox/computer-tools/contracts'
 
 async function fixture(t) {
@@ -91,6 +91,41 @@ test('new owner claims a committed response; old owner cannot admit, consume, up
   await assert.rejects(records.settleRun('run', { kind: 'failed', category: 'provider-failure', error: 'late' }, 'late', 1), { code: 'stale-run-owner' })
   await records.saveRunResume('run', 2, { stage: 'cleanup' }, 'now')
   assert.equal((await records.settleRun('run', { kind: 'failed', category: 'provider-failure', error: 'new owner' }, 'now', 2)).status, 'failed')
+})
+
+test('takeover recovers the stored application prefix and leaves it attached to native descendants', async t => {
+  const f = await fixture(t)
+  await acceptedResponse(f, 'original')
+  const original = await f.records.settleRun('original', { kind: 'completed', output: 'saved response',
+    resultRecordIds: ['original:response'], checkpoint: { protocolId: 'chat-completions', recordFormatVersion: 1, modelSnapshot: modelSnapshot() } }, 'now')
+  const { contextRef, events } = await f.records.loadApplicationHistory(f.session.id, original.resultNodeId)
+  const target = { ...modelSnapshot(), modelId: 'responses-model', protocolId: 'responses', parameters: { protocolId: 'responses', formatVersion: 1, value: {} } }
+  const input = { sessionId: f.session.id, parentNodeId: original.resultNodeId, input: 'Continue with Responses', idempotencyKey: 'switch', modelId: target.modelId }
+  const initialization = await f.records.loadNativeInitialization(f.session.id)
+  const registration = nativeRegistration(input, target, [], contextRef, initialization)
+  await f.records.registerRun('switch', input, 'now', [], target, { ...registration, applicationPrefix: true, estimatedInputTokens: 23 })
+  const request = { id: 'switch:request', exchangeId: 'switch:exchange', kind: 'request', formatVersion: 1,
+    payload: { input: [{ role: 'user', content: input.input }] } }
+  const response = { id: 'switch:response', exchangeId: 'switch:exchange', kind: 'response', formatVersion: 1,
+    payload: { status: 'completed', output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Responses reply' }] }] } }
+  await f.records.startOperation('switch', { id: request.exchangeId, kind: 'model', intent: {}, records: [request] }, 'now', 1)
+  await f.records.observeOperation('switch', request.exchangeId, { kind: 'value', records: [request, response],
+    protocolCursor: { schemaVersion: 1, protocolId: 'responses', exchangeId: request.exchangeId } }, 'now', 1)
+
+  const records = await f.restart()
+  const resumed = await records.claimRunResume('switch', 1, 'takeover')
+  assert.deepEqual(resumed.applicationPrefix, events)
+  assert.equal(resumed.history, undefined)
+  assert.equal(resumed.run.modelId, target.modelId)
+  assert.equal(resumed.run.estimatedInputTokens, 23)
+  assert.deepEqual(resumed.records.map(record => record.id), [request.id, response.id])
+  await assert.rejects(f.db.transaction(tx => tx.execute('UPDATE harness_runs SET application_prefix = 0 WHERE id = ?', ['switch'])), { code: 'operation-failed' })
+  const completed = await records.settleRun('switch', { kind: 'completed', output: 'Responses reply', resultRecordIds: [response.id],
+    checkpoint: { protocolId: 'responses', recordFormatVersion: 1, modelSnapshot: target } }, 'now', 2)
+  const native = await records.loadNativeHistory(f.session.id, completed.resultNodeId)
+  assert.deepEqual(native.applicationPrefix, events)
+  assert.deepEqual(native.records.map(record => record.id), [request.id, response.id])
+  assert.equal(native.modelSnapshot.protocolId, 'responses')
 })
 
 test('takeover preserves original call counts and the next exchange continues the same accounting', async t => {

@@ -69,11 +69,11 @@ export function setupAgentDirectory(source: Api, messageFor: (error: unknown) =>
     const available = catalog.snapshot(), options: (HTMLOptionElement | HTMLOptGroupElement)[] = [option('', '不设默认模型')]
     const groups = new Map<string, HTMLOptGroupElement>()
     for (const item of available.models) {
-      let group = groups.get(item.connectionId)
+      let group = groups.get(item.providerId)
       if (!group) {
         group = document.createElement('optgroup')
-        group.label = available.providers.find(provider => provider.id === item.connectionId)?.name ?? '未命名连接'
-        groups.set(item.connectionId, group); options.push(group)
+        group.label = available.providers.find(provider => provider.id === item.providerId)?.name ?? '未命名提供方'
+        groups.set(item.providerId, group); options.push(group)
       }
       const entry = option(item.id, canUseModel(item) ? item.name : `${item.name} · ${modelAvailability(item)}`)
       entry.disabled = !canUseModel(item); group.append(entry)
@@ -83,7 +83,7 @@ export function setupAgentDirectory(source: Api, messageFor: (error: unknown) =>
     }
     model.replaceChildren(...options); model.value = modelId ?? ''
     modelHint.textContent = available.loading ? '正在读取模型列表…' : available.error ? `模型列表读取失败：${available.error}`
-      : available.models.some(canUseModel) ? '未手动指定模型时，Agent 使用此默认模型。' : '可以先保存 Agent，再到“模型管理”配置模型。'
+      : available.models.some(canUseModel) ? 'Agent 的新运行使用此默认模型。' : '可以先保存 Agent，再到“模型管理”配置模型。'
   }
   function render() {
     const editing = target === null || detail !== undefined

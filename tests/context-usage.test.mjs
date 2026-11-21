@@ -51,6 +51,25 @@ test('ambiguous parallel runs require an explicit followed or focused run', () =
   assert.equal(contextUsage(s, [model]).used, 1200)
 })
 
+test('the selected active branch displays its first-call estimate until real input usage arrives', () => {
+  const s = state({ runs: [
+    run('parent'),
+    run('a', { status: 'running', estimatedInputTokens: 5, history: { kind: 'tree', parentNodeId: 'node' } }),
+    run('b', { status: 'running', modelId: 'override', estimatedInputTokens: 1200, history: { kind: 'tree', parentNodeId: 'node' } }),
+  ] })
+  assert.match(contextUsage(s, [model]).detail, /多个运行/)
+  s.position.focusedRunId = 'b'
+  const estimated = contextUsage(s, [model])
+  assert.match(estimated.label, /估计 1,200 tokens/)
+  assert.equal(estimated.used, undefined)
+  s.views.set('b', view({ outputTokens: 10 }))
+  assert.equal(contextUsage(s, [model]).label, estimated.label)
+  s.views.set('b', view({ inputTokens: 1205, outputTokens: 20 }))
+  assert.equal(contextUsage(s, [model]).used, 1225)
+  s.views.set('b', view({ inputTokens: 1205, outputTokens: 20 }, undefined))
+  assert.match(contextUsage(s, [model]).detail, /本次运行尚未返回/)
+})
+
 test('missing input/output or limits remains unknown while reported zero is valid', () => {
   const s = state()
   for (const usage of [{ outputTokens: 12 }, { inputTokens: 123 }, { inputTokens: -1, outputTokens: 12 }, { inputTokens: NaN, outputTokens: 12 }]) {

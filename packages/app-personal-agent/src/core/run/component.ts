@@ -1,7 +1,7 @@
 import type { FileContent } from '../project-files/domain.js'
-import { encodeFileContents } from '../project-files/domain.js'
+import { isDeepStrictEqual } from 'node:util'
 import type { Component } from '@nya/core'
-import type { JsonValue, ModelsService } from '@anybox/models'
+import type { JsonValue, ModelsService, NativeContinuation } from '@anybox/models'
 import { modelsServiceKey } from '@anybox/models'
 import type { RuntimeInputs } from '../contracts.js'
 import { agentDirectoryServiceKey } from '../agent/directory-component.js'
@@ -16,14 +16,15 @@ import type { ProjectPort } from '../project/component.js'
 import { validateRunInput, sameRunInput } from './domain.js'
 import { validateImageBatch } from '../image/limits.js'
 import { treeError } from '../session/domain.js'
-import { continuousBudget, projectedTokens } from '../session/continuous-history.js'
+import { addHistoryUsage, historyImagesFit, nativeHistoryUsage } from '../session/continuous-history.js'
+import type { HistoryUsage } from '../session/continuous-history.js'
 import type { Run, RunInput } from './domain.js'
 import { runRuntimeServiceKey } from './runtime-component.js'
 import type { RunRuntimePort, RunCancelReason } from './runtime-component.js'
 import { protocolAgentServiceKey, runResumeCheckpoint } from './program.js'
-import type { ProtocolAgentPort, PreparedRunProgram, NativeInitialization, NativeRunInput, RunResumeRecord } from './program.js'
+import type { ApplicationHistory, ProtocolAgentPort, PreparedRunProgram, NativeInitialization, NativeRunInput, RunResumeRecord } from './program.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../session/port.js'
-import type { SessionPort, SessionRunPort } from '../session/port.js'
+import type { ContinuousNativeHistoryScope, SessionPort, SessionRunPort } from '../session/port.js'
 import { createWaiters } from './waiters.js'
 import { computerOperationsServiceKey, type ComputerOperationsPort } from '../computer/operations-port.js'
 import { unitAttachmentsServiceKey } from '../unit/port.js'
@@ -47,6 +48,22 @@ export interface RunPort {
   waitRun(id: string, signal?: AbortSignal): Promise<Run | undefined>
   getView(id: string): JsonValue | undefined
 }
+
+interface CachedContinuation {
+  readonly nodeId: string
+  readonly contextRef: string
+  readonly projectId: string
+  readonly units?: RunUnitBindings
+  readonly modelId: string
+  readonly protocolId: string
+  readonly initialization: NativeInitialization
+  readonly usage: HistoryUsage
+  readonly continuation: NativeContinuation
+  readonly estimatedContinuationTokens: number
+}
+const maxCachedHeads = 16
+const maxCachedBytes = 16 * 1024 * 1024
+const emptyHistoryUsage: HistoryUsage = Object.freeze({ bytes: 0, images: 0, imageBytes: 0 })
 
 /** Admission owns a prepared program until the Runtime synchronously accepts it. */
 export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentCatalog): Component.Object<void, {
@@ -73,6 +90,24 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
       const requests = new Map<string, { input: RunInput; result: Promise<Run> }>()
       const handoffs = new Map<string, Promise<Run>>()
       const untransferred = new Map<string, AbortController>()
+      const continuationCache = new Map<string, CachedContinuation>()
+      let cachedBytes = 0
+      const forgetContinuation = (sessionId: string) => {
+        const previous = continuationCache.get(sessionId)
+        if (previous && continuationCache.delete(sessionId)) cachedBytes -= previous.usage.bytes
+      }
+      const rememberContinuation = (sessionId: string, entry: CachedContinuation) => {
+        const bytes = entry.usage.bytes
+        forgetContinuation(sessionId)
+        if (bytes > maxCachedBytes) return
+        continuationCache.set(sessionId, entry)
+        cachedBytes += bytes
+        while (continuationCache.size > maxCachedHeads || cachedBytes > maxCachedBytes) {
+          const oldest = continuationCache.keys().next()
+          if (oldest.done) return
+          forgetContinuation(oldest.value)
+        }
+      }
       const waitFor = createWaiters<Run>()
       const waitForRecoveryReady = createWaiters<readonly Promise<unknown>[]>()
       let accepting = true, pauseCount = 0
@@ -139,6 +174,8 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
       }, 'observe host admission shutdown')
       ctx.effect(() => async () => {
         accepting = false
+        continuationCache.clear()
+        cachedBytes = 0
         for (const controller of opening) controller.abort()
         const reason: RunCancelReason = isHarnessServerClosing() ? 'owner-disposed' : 'dependency-unavailable'
         const initial = new Set(owned)
@@ -191,8 +228,9 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
             const project = await projects.requireAvailable(input.projectId ?? session.projectId, session.agentId)
             const agent = agents.get(session.agentId)
             if (!agent) throw new Error('agent is unavailable')
-            const history = session.continuous ? undefined : await records.loadNativeHistory(session.id, input.parentNodeId)
-            const modelId = input.modelId ?? session.modelId ?? history?.modelSnapshot.modelId ?? agent.modelId
+            let history = session.continuous ? undefined : await records.loadNativeHistory(session.id, input.parentNodeId)
+            const fallbackModelId = input.modelId ?? session.modelId ?? history?.modelSnapshot.modelId
+            const modelId = session.continuous ? agent.modelId ?? fallbackModelId : fallbackModelId ?? agent.modelId
             if (!modelId) throw modelFailure('model-unavailable')
             const protocolId = protocols.protocolForModel(modelId)
             const model = models.get(modelId)
@@ -236,18 +274,49 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
             const files = fileContents.map(({ file: { expiresAt: _expiry, ...file } }) => Object.freeze(file))
             const nativeInput: NativeRunInput = Object.freeze({ schemaVersion: 3, raw: input.input,
               text: template ? template.content.replace('{{input}}', () => input.input) : input.input, images: Object.freeze(images), files: Object.freeze(files), template })
-            const continuity = session.continuous ? await records.planContinuousRun({
-              sessionId: session.id, projectId: project.id, parentNodeId: input.parentNodeId, query: input.input,
-              remainingTokens: continuousBudget(model, projectedTokens(JSON.stringify({
-                prompts: initialization.prompts.map(prompt => prompt.content), tools: initialization.tools,
-                current: nativeInput.text, files: encodeFileContents(fileContents),
-              })) + images.length * 768),
-            }) : undefined
+            let applicationHistory: ApplicationHistory | undefined
+            const historyScope: ContinuousNativeHistoryScope | undefined = session.continuous ? { projectId: project.id, units } : undefined
+            const parentNodeId = input.parentNodeId
+            const candidate = historyScope && parentNodeId !== null ? continuationCache.get(session.id) : undefined
+            let cached = historyScope && candidate && candidate.nodeId === parentNodeId && candidate.projectId === project.id &&
+              candidate.modelId === modelId && candidate.protocolId === protocolId &&
+              isDeepStrictEqual(candidate.units, units) && isDeepStrictEqual(candidate.initialization, initialization) ? candidate : undefined
             const id = inputs.newId()
+            const preparation = { runId: id, sessionId: session.id, modelId, signal: controller.signal,
+              initialization, input: nativeInput, fileContents, continuous: session.continuous === true }
+            const prepareFromRecords = async () => {
+              if (historyScope && parentNodeId !== null) {
+                const saved = await records.loadNativeHistory(session.id, parentNodeId, historyScope)
+                if (saved?.modelSnapshot.modelId === modelId && saved.binding.protocolId === protocolId &&
+                  isDeepStrictEqual(saved.initialization, initialization)) history = saved
+                else applicationHistory = await records.loadApplicationHistory(session.id, parentNodeId, historyScope)
+              }
+              return protocols.prepare({ ...preparation, history, applicationHistory }).catch(async error => {
+                if (!historyScope || !history || parentNodeId === null ||
+                  !(error instanceof Error && 'code' in error && error.code === 'history-incompatible')) throw error
+                applicationHistory = await records.loadApplicationHistory(session.id, parentNodeId, historyScope)
+                history = undefined
+                return protocols.prepare({ ...preparation, applicationHistory })
+              })
+            }
             let program: PreparedRunProgram
-            try { program = await protocols.prepare({ runId: id, sessionId: session.id, modelId, signal: controller.signal, initialization, input: nativeInput, fileContents,
-              ...(history ? { history } : {}), ...(continuity ? { continuity: continuity.context } : {}) }) }
-            catch (error) { if (error instanceof Error && 'code' in error && String(error.code).startsWith('history-')) throw error; throw normalizeModelFailure(error) }
+            try {
+              program = cached
+                ? await protocols.prepare({ ...preparation, continuation: cached.continuation,
+                    continuationInputTokens: cached.estimatedContinuationTokens }).catch(error => {
+                    if (!(error instanceof Error && 'code' in error && error.code === 'history-incompatible')) throw error
+                    if (continuationCache.get(session.id) === cached) forgetContinuation(session.id)
+                    cached = undefined
+                    return prepareFromRecords()
+                  })
+                : await prepareFromRecords()
+            }
+            catch (error) {
+              if (error instanceof Error && 'code' in error && String(error.code).startsWith('history-')) throw error
+              throw normalizeModelFailure(error)
+            }
+            const priorUsage = cached?.usage ?? history?.usage ?? applicationHistory?.usage ??
+              (historyScope && parentNodeId === null ? emptyHistoryUsage : undefined)
             let transferred = false
             untransferred.set(id, controller)
             const closeUntransferred = async () => {
@@ -258,10 +327,12 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
             try {
               ensureOpen()
               if (controller.signal.aborted || program.signal.aborted) throw modelFailure('dependency-unavailable')
+              if (priorUsage && !historyImagesFit(priorUsage, images)) throw modelFailure('request-too-large')
               const handoff = Promise.resolve().then(async () => {
                 const accepted = await records.registerRun(id, input, inputs.now(), [...initialization.prompts, ...(template ? [template] : [])], program.modelSnapshot,
-                  { binding: program.binding, initialization: program.initialization, input: program.input, parentContextRef: history?.contextRef ?? null,
-                    ...(continuity ? { continuity } : {}), units })
+                  { binding: program.binding, initialization: program.initialization, input: program.input,
+                    parentContextRef: cached?.contextRef ?? history?.contextRef ?? applicationHistory?.contextRef ?? null,
+                    ...(applicationHistory ? { applicationPrefix: true } : {}), estimatedInputTokens: program.estimatedInputTokens, units })
                 if (!accepted.created) return accepted.run
                 owned.add(id)
                 try {
@@ -272,7 +343,17 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
                   }
                   let started: Promise<Run>
                   try {
-                    started = runtime.start({ runId: id, program })
+                    started = runtime.start({ runId: id, program, ...(priorUsage ? {
+                      async publishContinuation(settled, report) {
+                        const nodeId = settled.resultNodeId, { continuation, estimatedContinuationTokens } = report
+                        if (!accepting || !nodeId || !continuation || estimatedContinuationTokens === undefined) return
+                        const contextRef = await records.getCompletedContextRef(session.id, nodeId, settled.id)
+                        if (!accepting || !contextRef) return
+                        const usage = addHistoryUsage(priorUsage, nativeHistoryUsage(report.records))
+                        rememberContinuation(session.id, { nodeId, contextRef, projectId: project.id, units, modelId,
+                          protocolId, initialization, usage, continuation, estimatedContinuationTokens })
+                      },
+                    } : {}) })
                     transferred = true
                     untransferred.delete(id)
                   } catch {

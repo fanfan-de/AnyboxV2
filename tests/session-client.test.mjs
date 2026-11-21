@@ -890,7 +890,8 @@ test('unknown or malformed pending image schemas restore visibly and never post 
 
 test('accepted image pending is recovered before changed model capabilities or expired draft checks', async () => {
   const f = fixture(), image = { ...imageRef('expired'), expiresAt: '2000-01-01T00:00:00.000Z' }
-  f.pending.set('a', { schemaVersion: 2, sessionId: 'a', parentNodeId: null, input: '', images: [image], idempotencyKey: 'accepted-key', modelId: 'deleted' })
+  f.pending.set('a', { schemaVersion: 2, sessionId: 'a', parentNodeId: null, input: '', images: [image], idempotencyKey: 'accepted-key',
+    modelId: 'deleted', protocolId: 'unavailable-protocol' })
   f.rows.set('accepted', { id: 'accepted', sessionId: 'a', key: 'accepted-key', history: { kind: 'tree', parentNodeId: null }, input: '', images: [image], status: 'failed', revision: 2, createdAt: '0' })
   const a = f.make('a', { models: () => [] }); await f.load(a)
   assert.equal(a.snapshot().runs[0].id, 'accepted')
@@ -900,15 +901,17 @@ test('accepted image pending is recovered before changed model capabilities or e
 })
 
 test('unaccepted image pending with changed capabilities or protocol restores its original parent draft and unlocks edits', async () => {
-  for (const model of [
-    { parameters: { protocolId: 'chat-completions' }, effectiveCapabilities: { imageInput: false } },
-    { parameters: { protocolId: 'anthropic-messages' }, effectiveCapabilities: { imageInput: true } },
+  for (const [protocolId, modelProtocol, imageInput] of [
+    [undefined, 'chat-completions', false],
+    [undefined, 'anthropic-messages', true],
+    ['anthropic-messages', 'chat-completions', true],
   ]) {
     const f = fixture(), drafts = createDraftStore(), images = [imageRef('pending-photo')]
     drafts.set('a', 'original-parent', draftFromInput('new unsent text', [imageRef('new-photo')]))
     drafts.set('a', null, draftFromInput('other branch'))
-    f.pending.set('a', { schemaVersion: 2, sessionId: 'a', parentNodeId: 'original-parent', input: 'original text', images, idempotencyKey: 'unaccepted', modelId: 'model' })
-    const a = f.make('a', { drafts, models: () => [{ id: 'model', ...model }] }); await f.load(a)
+    f.pending.set('a', { schemaVersion: 2, sessionId: 'a', parentNodeId: 'original-parent', input: 'original text', images,
+      idempotencyKey: 'unaccepted', modelId: 'model', ...(protocolId ? { protocolId } : {}) })
+    const a = f.make('a', { drafts, models: () => [{ id: 'model', parameters: { protocolId: modelProtocol }, effectiveCapabilities: { imageInput } }] }); await f.load(a)
     assert.equal(f.pending.get('a'), undefined)
     assert.equal(a.snapshot().draft, 'other branch')
     assert.deepEqual(drafts.get('a', 'original-parent').images.map(value => value.image.assetId), ['pending-photo', 'new-photo'])
@@ -922,6 +925,34 @@ test('unaccepted image pending with changed capabilities or protocol restores it
     assert.deepEqual(a.snapshot().images.map(value => value.image.assetId), ['new-photo'])
     a.dispose()
   }
+})
+
+test('regeneration after a protocol switch retries the saved protocol and parent after reload', async () => {
+  const f = fixture()
+  const models = () => [
+    { id: 'original', available: true, parameters: { protocolId: 'chat-completions' } },
+    { id: 'switched', available: true, parameters: { protocolId: 'anthropic-messages' } },
+  ]
+  let modelId = 'switched', offline = true
+  f.intercept((url, body) => {
+    if (url === '/sessions/a') return { id: 'a', projectId: 'p-a', historyMode: 'native-local-v1', protocolId: 'chat-completions', modelId }
+    if (url === '/sessions/a/runs' && body && offline) return Promise.reject(new Error('offline'))
+  })
+  const controller = f.make('a', { models }); await f.load(controller)
+  await controller.regenerate({ id: 'existing', sessionId: 'a', parentId: 'ancestor', input: 'regenerate here' })
+  const submitted = f.calls.find(call => call.url === '/sessions/a/runs' && call.body).body
+  assert.deepEqual(submitted, { input: 'regenerate here', idempotencyKey: submitted.idempotencyKey, parentNodeId: 'ancestor', modelId: 'switched' })
+  controller.dispose()
+
+  const pending = createPendingStore(f.store)
+  assert.equal(pending.get('a').protocolId, 'anthropic-messages')
+  modelId = 'original'
+  offline = false
+  const restored = f.make('a', { pending, models }); await f.load(restored)
+  assert.equal(restored.snapshot().session.modelId, 'original')
+  assert.equal(pending.get('a'), undefined)
+  assert.deepEqual(f.calls.filter(call => call.url === '/sessions/a/runs' && call.body).map(call => call.body), [submitted, submitted])
+  restored.dispose()
 })
 
 test('merged pending drafts retain more than eight images across reload and block oversized sends', async () => {

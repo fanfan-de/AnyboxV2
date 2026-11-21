@@ -47,42 +47,41 @@ test('v1 missing/null/valid/unknown references migrate without collapsing identi
   const database = await path(t);
   const first = provider('plain'), nullable = provider('nullable', { catalogRef: null }),
     known = provider('known', { catalogRef: { sourceId: 'models.dev', providerId: 'public' } }),
-    second = provider('second-account', { catalogRef: { sourceId: 'models.dev', providerId: 'public' }, enabled: false }),
     unknown = provider('unknown', { catalogRef: { sourceId: 'unregistered-source', providerId: 'nonexistent' } });
   const historyProvider = provider('known', { revision: 2, versionId: 'known-v2', updatedAt: '2026-01-02', name: 'Changed account',
     catalogRef: known.catalogRef, credentialRef: 'latest-slot' });
   const oldModel = model('default', 'known'), changedModel = model('default', 'known', { revision: 2, versionId: 'default-v2',
     updatedAt: '2026-01-02', name: 'Parameters changed', remoteModelId: 'changed-remote', defaults: { temperature: 0.7, maxOutputTokens: 2000 }, enabled: false }),
     variant = model('variant', 'known', { defaults: { temperature: 0.5 } });
-  const providers = [first, nullable, historyProvider, second, unknown], models = [changedModel, variant, model('other', 'plain')];
-  createV1(database, providers, models, [first, nullable, known, historyProvider, second, unknown], [oldModel, changedModel, variant, models[2]]);
+  const providers = [first, nullable, historyProvider, unknown], models = [changedModel, variant, model('other', 'plain')];
+  createV1(database, providers, models, [first, nullable, known, historyProvider, unknown], [oldModel, changedModel, variant, models[2]]);
   let opened = await open(database);
-  assert.equal(opened.store.connections().length, 5); assert.equal(opened.store.providers().length, 4);
-  assert.equal(opened.store.connection('known').providerDefinitionId, externalProviderId('models.dev', 'public'));
-  assert.equal(opened.store.connection('second-account').providerDefinitionId, opened.store.connection('known').providerDefinitionId);
-  assert.equal(opened.store.provider(opened.store.connection('plain').providerDefinitionId).source.kind, 'user');
-  assert.equal(opened.store.provider(opened.store.connection('nullable').providerDefinitionId).source.kind, 'user');
-  const unresolved = opened.store.provider(opened.store.connection('unknown').providerDefinitionId);
+  assert.equal(opened.store.configuredProviders().length, 4); assert.equal(opened.store.providers().length, 4);
+  const settingsFor = scope => opened.store.configuredProviders().find(value => value.restoreScopeId === scope);
+  const providerId = externalProviderId('models.dev', 'public');
+  assert.equal(settingsFor('known').id, externalProviderId('models.dev', 'public'));
+  assert.equal(opened.store.provider(settingsFor('plain').id).source.kind, 'user');
+  assert.equal(opened.store.provider(settingsFor('nullable').id).source.kind, 'user');
+  const unresolved = opened.store.provider(settingsFor('unknown').id);
   assert.equal(unresolved.state, 'unresolved'); assert.deepEqual(unresolved.source, { kind: 'external', sourceId: 'unregistered-source', providerId: 'nonexistent', sourceVersion: null });
-  assert.equal(opened.store.connection('known').credentialRef, 'latest-slot'); assert.equal(opened.store.connection('known').versionId, 'known-v2');
-  assert.deepEqual(opened.store.connectionHistory('known').map(item => [item.revision, item.versionId, item.credentialRef]), [[1, 'known-v1', 'slot-known'], [2, 'known-v2', 'latest-slot']]);
-  assert.equal(opened.store.connection('second-account').enabled, false);
-  assert.equal(opened.store.configuration('default').versionId, 'default-v2'); assert.equal(opened.store.configuration('default').enabled, false);
-  assert.deepEqual(opened.store.configurationHistory('default').map(item => [item.versionId, item.remoteModelId, item.parameters.value]),
+  assert.equal(opened.store.providerSettings(providerId).credentialRef, 'latest-slot'); assert.equal(opened.store.providerSettings(providerId).versionId, 'known-v2');
+  assert.deepEqual(opened.store.providerSettingsHistory(providerId).map(item => [item.revision, item.versionId, item.credentialRef]), [[1, 'known-v1', 'slot-known'], [2, 'known-v2', 'latest-slot']]);
+  assert.equal(opened.store.runtimeModelSettings('default').versionId, 'default-v2'); assert.equal(opened.store.runtimeModelSettings('default').enabled, false);
+  assert.deepEqual(opened.store.modelSettingsHistory(opened.store.runtimeModelSettings('default').id).map(item => [item.versionId, item.remoteModelId, item.parameters.value]),
     [['default-v1', 'same-remote', { temperature: 0.2 }], ['default-v2', 'changed-remote', { temperature: 0.7, maxOutputTokens: 2000 }]]);
-  assert.notEqual(opened.store.configuration('variant').modelDefinitionId, opened.store.configuration('default').modelDefinitionId);
+  assert.notEqual(opened.store.runtimeModelSettings('variant').id, opened.store.runtimeModelSettings('default').id);
   for (const item of opened.store.models()) assert.equal(item.source.kind, 'user');
-  assert.equal(opened.store.model(opened.store.configuration('default').modelDefinitionId).providerId, opened.store.connection('known').providerDefinitionId);
-  assert.equal(opened.store.modelHistory(opened.store.configuration('default').modelDefinitionId).length, 2);
+  assert.equal(opened.store.model(opened.store.runtimeModelSettings('default').id).providerId, settingsFor('known').id);
+  assert.equal(opened.store.modelHistory(opened.store.runtimeModelSettings('default').id).length, 2);
   assert.deepEqual(opened.store.intents(), [{ id: 'orphan', providerId: 'not-committed', slotId: 'uncommitted-secret', createdAt: '2026-01-02' }]);
   const ids = opened.store.models().map(item => item.id); await opened.root.fiber.dispose();
   const raw = new DatabaseSync(database);
-  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 3);
+  assert.equal(raw.prepare('PRAGMA user_version').get().user_version, 5);
   assert.deepEqual(JSON.parse(raw.prepare('SELECT record FROM legacy_provider_versions WHERE version_id=?').get('known-v1').record), known);
   assert.deepEqual(JSON.parse(raw.prepare('SELECT record FROM legacy_model_versions WHERE version_id=?').get('default-v1').record), oldModel);
   raw.close();
   opened = await open(database); t.after(() => opened.root.fiber.dispose()); assert.deepEqual(opened.store.models().map(item => item.id), ids);
-  assert.equal(opened.store.configurations().length, 3); assert.equal(opened.store.connectionHistory('known').length, 2);
+  assert.equal(opened.store.configuredModels().length, 3); assert.equal(opened.store.providerSettingsHistory(providerId).length, 2);
 });
 
 test('malformed v1 input rolls back table renames, records, and schema version atomically', async t => {
@@ -99,20 +98,35 @@ test('malformed v1 input rolls back table renames, records, and schema version a
   db.close();
 });
 
+test('v1 refuses two current accounts for one provider atomically, including disabled accounts', async t => {
+  const database = await path(t), catalogRef = { sourceId: 'models.dev', providerId: 'public' };
+  const first = provider('first-account', { catalogRef }), second = provider('second-account', { catalogRef, enabled: false });
+  createV1(database, [first, second], [model('selected', first.id)]);
+  const root = new Context(), fiber = root.installComponent(createModelsStoreComponent({ path: database }));
+  await assert.rejects(Promise.resolve(fiber), { code: 'conflict', message: /"first-account".*"second-account"/ });
+  assert.equal(fiber.state, FiberState.FAILED); await root.fiber.dispose();
+  const db = new DatabaseSync(database);
+  assert.equal(db.prepare('PRAGMA user_version').get().user_version, 1);
+  assert.deepEqual(db.prepare('SELECT record FROM providers ORDER BY id').all().map(row => JSON.parse(row.record)), [first, second]);
+  assert.equal(db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name IN ('provider_settings','legacy_providers')").get().count, 0);
+  db.close();
+});
+
 test('migrated external placeholders resolve in place while historical executable configurations remain pinned', async t => {
   const database = await path(t); createV1(database, [provider('account', { catalogRef: { sourceId: 'models.dev', providerId: 'remote-provider' } })], [model('selected', 'account')]);
   const { root, store } = await open(database); t.after(() => root.fiber.dispose());
-  const placeholder = store.provider(store.connection('account').providerDefinitionId), config = store.configuration('selected');
+  const providerId = externalProviderId('models.dev', 'remote-provider');
+  const placeholder = store.provider(providerId), config = store.runtimeModelSettings('selected');
   await store.commit({ providers: [{ record: { ...placeholder, revision: 2, versionId: 'upstream-provider-v2', name: 'Remote Provider', state: 'present',
     source: { ...placeholder.source, sourceVersion: 'snapshot-v2' }, connectionHints: { protocolIds: ['absent'] } }, expectedRevision: 1 }],
     sources: [{ sourceId: 'models.dev', snapshotVersion: 'snapshot-v2', fetchedAt: 20 }] });
-  assert.equal(store.connection('account').providerDefinitionId, placeholder.id); assert.equal(store.connection('account').revision, 1);
-  assert.deepEqual(store.configuration('selected'), config); assert.equal(store.models()[0].source.kind, 'user');
+  assert.equal(store.providerSettings(placeholder.id).restoreScopeId, 'account'); assert.equal(store.providerSettings(placeholder.id).revision, 1);
+  assert.deepEqual(store.runtimeModelSettings('selected'), config); assert.equal(store.models()[0].source.kind, 'user');
   assert.equal(store.providerHistory(placeholder.id)[0].state, 'unresolved');
 });
 
-test('a migrated legacy selection opens through Models before and after source import while external baselines remain independent', async t => {
-  const database = await path(t), connectionId = 'anybox-imported-default';
+test('a migrated legacy selection opens through Models before and after source import while external models remain independent', async t => {
+  const database = await path(t), connectionId = 'anybox-imported-default', providerId = externalProviderId('models.dev', 'upstream');
   const priorConnection = provider(connectionId, { protocolId: 'chat-completions', catalogRef: { sourceId: 'models.dev', providerId: 'upstream' } });
   const currentConnection = { ...priorConnection, revision: 2, versionId: 'legacy-connection-v2', updatedAt: '2026-01-02', credentialRef: 'retained-slot' };
   const priorModel = model('default', connectionId), currentModel = { ...priorModel, revision: 2, versionId: 'legacy-model-v2',
@@ -127,11 +141,11 @@ test('a migrated legacy selection opens through Models before and after source i
     await activeRoot.installComponent({ name: 'migration-runtime-vault', apply(ctx) { ctx.provide('models.vault', vault); } });
     await activeRoot.installComponent(createModelsComponent());
     activeRoot.get('models.protocols').register(protocol);
-    await activeRoot.get('models.settings').retryConnection(connectionId);
+    await activeRoot.get('models.settings').retryProviderSettings(providerId);
     return { ...opened, models: activeRoot.get('models'), open: input => activeRoot.get('models').openNative({ ...input, lease: activeRoot.get('models.protocols').acquire('chat-completions') }), settings: activeRoot.get('models.settings'), source: activeRoot.get('models.source-data') };
   };
   let runtime = await launch();
-  const saved = runtime.store.configuration('default'), before = await runtime.open({ modelId: 'default' });
+  const saved = runtime.store.runtimeModelSettings('default'), before = await runtime.open({ modelId: 'default' });
   assert.equal(before.snapshot.modelId, 'default'); assert.equal(before.snapshot.providerId, connectionId);
   assert.equal(before.snapshot.modelVersionId, 'legacy-model-v2'); assert.equal(before.snapshot.providerVersionId, 'legacy-connection-v2');
   assert.equal(before.snapshot.modelDefinitionVersionId, saved.modelDefinitionVersionId);
@@ -142,12 +156,12 @@ test('a migrated legacy selection opens through Models before and after source i
       modalities: { input: ['text'], output: ['text'] } } } } }, 'models.dev', 20);
   await runtime.source.accept(snapshot);
   const after = await runtime.open({ modelId: 'default' });
-  assert.deepEqual(after.snapshot, before.snapshot); assert.deepEqual(runtime.store.configuration('default'), saved);
-  assert.equal(runtime.store.connection(connectionId).credentialRef, 'retained-slot');
-  assert.equal(runtime.store.connection(connectionId).versionId, 'legacy-connection-v2');
+  assert.deepEqual(after.snapshot, before.snapshot); assert.deepEqual(runtime.store.runtimeModelSettings('default'), saved);
+  assert.equal(runtime.store.providerSettings(providerId).credentialRef, 'retained-slot');
+  assert.equal(runtime.store.providerSettings(providerId).versionId, 'legacy-connection-v2');
   const external = runtime.models.list().find(item => item.source.kind === 'external');
-  assert.ok(external); assert.notEqual(external.id, 'default'); assert.notEqual(external.modelDefinitionId, saved.modelDefinitionId);
-  assert.equal(external.connectionId, connectionId); assert.equal(external.providerDefinitionId, before.snapshot.providerDefinitionId);
+  assert.ok(external); assert.notEqual(external.id, 'default'); assert.notEqual(external.modelDefinitionId, saved.id);
+  assert.equal(external.providerId, before.snapshot.providerDefinitionId);
   assert.equal(external.remoteModelId, before.snapshot.remoteModelId); assert.equal(runtime.models.list({ available: true }).length, 2);
   const externalExecution = await runtime.open({ modelId: external.id });
   assert.deepEqual(externalExecution.snapshot.parameters.value, {});
@@ -157,13 +171,13 @@ test('a migrated legacy selection opens through Models before and after source i
   }
   assert.deepEqual(protocol.calls.map(call => call.input.credential), ['existing-key', 'existing-key', 'existing-key']);
   assert.equal(vault.operations.some(operation => operation.kind === 'write'), false);
-  assert.deepEqual(runtime.settings.configurationHistory('default').map(item => item.versionId), ['default-v1', 'legacy-model-v2']);
+  assert.deepEqual(runtime.settings.modelSettingsHistory(saved.id).map(item => item.versionId), ['default-v1', 'legacy-model-v2']);
   const stableIds = runtime.models.list().map(item => item.id).sort();
   await runtime.root.fiber.dispose(); activeRoot = undefined;
   runtime = await launch();
   assert.deepEqual(runtime.models.list().map(item => item.id).sort(), stableIds);
   const restarted = await runtime.open({ modelId: 'default' });
   assert.notEqual(restarted.snapshot.registrationGenerationId, before.snapshot.registrationGenerationId); assert.deepEqual({ ...restarted.snapshot, registrationGenerationId: before.snapshot.registrationGenerationId }, before.snapshot); await restarted.close();
-  assert.equal(runtime.store.connection(connectionId).credentialRef, 'retained-slot');
-  assert.deepEqual(runtime.store.configuration('default'), saved);
+  assert.equal(runtime.store.providerSettings(providerId).credentialRef, 'retained-slot');
+  assert.deepEqual(runtime.store.runtimeModelSettings('default'), saved);
 });

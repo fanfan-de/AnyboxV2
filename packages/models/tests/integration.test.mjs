@@ -1,5 +1,5 @@
 import test from 'node:test';
-import { addConnection, addConfiguration } from './helpers.mjs';
+import { addProviderSettings, addModelSettings } from './helpers.mjs';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -61,7 +61,7 @@ async function fixture(t, handle) {
   ];
   await Promise.all(fibers);
   for (const fiber of fibers) assert.equal(fiber.state, FiberState.ACTIVE);
-  return { root, baseUrl, path, open: input => { const config = root.get('models.settings').configurations().find(value => value.id === input.modelId); const connection = root.get('models.settings').connections().find(value => value.id === config.connectionId); return root.get('models').openNative({ ...input, lease: root.get('models.protocols').acquire(connection.protocolId) }); }, models: root.get('models'), settings: root.get('models.settings'), secretValues };
+  return { root, baseUrl, path, open: input => { const config = root.get('models.settings').modelSettings().find(value => value.runtimeModelId === input.modelId); const connection = root.get('models.settings').configuredProviders().find(value => value.id === config.providerId); return root.get('models').openNative({ ...input, lease: root.get('models.protocols').acquire(connection.protocolId) }); }, models: root.get('models'), settings: root.get('models.settings'), secretValues };
 }
 function sse(response, values) {
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
@@ -73,10 +73,10 @@ function responseMessage(text, phase = 'final_answer') {
   return { type: 'message', role: 'assistant', phase, status: 'completed', content: [{ type: 'output_text', text, annotations: [] }] };
 }
 async function provider(settings, protocolId, baseUrl, apiKey) {
-  return addConnection(settings, { name: protocolId, enabled: true, protocolId, baseUrl, auth: 'api-key', timeoutMs: 5000, apiKey });
+  return addProviderSettings(settings, { name: protocolId, enabled: true, protocolId, baseUrl, auth: 'api-key', timeoutMs: 5000, apiKey });
 }
 async function model(settings, owner, name, defaults = {}, remoteModelId = 'shared-remote') {
-  return addConfiguration(settings, { name, enabled: true, providerId: owner.id, remoteModelId, capabilities, defaults });
+  return addModelSettings(settings, { name, enabled: true, providerId: owner.id, remoteModelId, capabilities, defaults });
 }
 
 test('Real Nya, SQLite, Vault and HTTP retain native tool history across concurrent executions and reopening', { timeout: 15_000 }, async t => {
@@ -109,7 +109,7 @@ test('Real Nya, SQLite, Vault and HTTP retain native tool history across concurr
   await restored.prepareExchange({ input: [{ role: 'user', content: 'Next Run' }] }).start().result;
   assert.equal(requests.at(-1).body.input[1].encrypted_content, 'opaque-signature'); assert.equal(requests.at(-1).body.input.at(-1).content, 'Next Run');
   const chatReport = await chat.close(); await assert.rejects(f.open({ modelId: cm.id, restore: { ...chatReport.restoreState, records: chatReport.records } }), { code: 'invalid-config' }); await restored.close();
-  const publicValues = JSON.stringify({ connections: f.settings.connections(), histories: f.settings.connectionHistory(cp.id), models: f.models.list(), snapshots: [chat.snapshot, responses.snapshot], records: report.records });
+  const publicValues = JSON.stringify({ connections: f.settings.configuredProviders(), histories: f.settings.providerSettingsHistory(cp.id), models: f.models.list(), snapshots: [chat.snapshot, responses.snapshot], records: report.records });
   assert.doesNotMatch(publicValues, /chat-key|responses-key|credentialRef/); assert.doesNotMatch((await readFile(f.path)).toString('utf8'), /chat-key|responses-key/);
 });
 
@@ -136,7 +136,7 @@ test('Actual SSE output remains live beyond the configured inactivity window', {
     }
   });
   const connection = await provider(f.settings, 'chat-completions', `${f.baseUrl}/v1`, 'streaming-key');
-  await f.settings.updateConnection(connection.id, { timeoutMs: 250 }, connection.revision);
+  await f.settings.updateProviderSettings(connection.id, { timeoutMs: 250 }, connection.revision);
   const configuration = await model(f.settings, connection, 'Streaming');
   const execution = await f.open({ modelId: configuration.id });
   // No display callback: network progress alone must keep the request alive.

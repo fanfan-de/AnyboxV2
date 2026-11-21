@@ -117,6 +117,7 @@ export interface Run {
   readonly requestedModelId: string | null
   readonly modelSnapshot: LegacyExecutionSnapshot | NativeModelSnapshot | null
   readonly protocolBinding?: ProtocolBindingSnapshot
+  readonly estimatedInputTokens?: number
   readonly nativeInput?: NativeRunInput
   readonly initialization?: NativeInitialization
   /** Unit attachments fixed by the acceptance transaction; absent only for Runs accepted before the ledger existed. */

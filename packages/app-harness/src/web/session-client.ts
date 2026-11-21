@@ -37,7 +37,8 @@ export function createPendingStore(storage: BrowserStorage): PendingStore {
             (value.parentNodeId !== undefined && value.parentNodeId !== null && typeof value.parentNodeId !== 'string')) continue
         const images = Array.isArray(value.images) ? value.images.filter(isImageRef) : []
         const invalidImages = value.invalidImages === true || (value.images !== undefined && (!Array.isArray(value.images) || images.length !== value.images.length)) || (![2, 3].includes(Number(value.schemaVersion)) && images.length > 0)
-        entries.set(id, { ...value, images, ...(!pendingFilesValid(value as unknown as PendingSubmission) ? { invalidFiles: true } : {}), ...(invalidImages ? { invalidImages: true } : {}) } as unknown as PendingSubmission)
+        const protocolId = value.protocolId === undefined || typeof value.protocolId === 'string' ? value.protocolId : ''
+        entries.set(id, { ...value, images, protocolId, ...(!pendingFilesValid(value as unknown as PendingSubmission) ? { invalidFiles: true } : {}), ...(invalidImages ? { invalidImages: true } : {}) } as unknown as PendingSubmission)
       }
     }
   } catch { /* A new submission still must be saved successfully before it is sent. */ }
@@ -236,18 +237,18 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     try { env.pending.set(ref.sessionId, value); return true }
     catch { notice = '浏览器无法保存待提交信息，请启用此页面的会话存储后重试。'; emit(); return false }
   }
-  const encodeInput = (text: string, modelId = session?.modelId, images: readonly ImageRef[] = [], fileCount = 0): string | undefined => {
+  const encodeInput = (text: string, modelId: string | null | undefined, images: readonly ImageRef[] = [], fileCount = 0, expectedProtocol?: string | null) => {
     try { validateImageBatch(images) }
     catch { notice = '每次最多发送 8 张图片，每张最多 10 MiB、总计 20 MiB。请删减图片后重试。'; emit(); return undefined }
     const model = env.models?.().find(value => value.id === modelId)
-    const protocolId = model?.parameters.protocolId ?? session?.protocolId
-    if (session?.protocolId && protocolId !== session.protocolId) {
-      notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return undefined
+    const protocolId = model?.parameters.protocolId ?? expectedProtocol ?? session?.protocolId
+    if (expectedProtocol != null && expectedProtocol !== protocolId) {
+      notice = '待提交消息使用的协议已与模型配置不一致。'; emit(); return undefined
     }
     const module = getProtocolWebModule(protocolId)
     if (!module) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return undefined }
     if (images.length && model && !model.effectiveCapabilities?.imageInput) { notice = '当前模型不支持图片，请切换模型或移除图片。'; emit(); return undefined }
-    try { return module.encodeInput(text, images.length, fileCount) }
+    try { return { input: module.encodeInput(text, images.length, fileCount), protocolId: module.protocolId } }
     catch (error) { notice = error instanceof Error ? error.message : env.messageFor(error); emit(); return undefined }
   }
   const decodeView = (run: RunView, value: unknown): ProtocolViewSnapshot | undefined => {
@@ -479,8 +480,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     if (session?.archivedAt) { notice = '会话已归档，请先恢复后再继续。'; emit(); return }
     if (submission.invalidFiles || !pendingFilesValid(submission)) { notice = '待提交文件引用无效，请移除后重新添加。'; emit(); return }
     if (submission.invalidImages) { notice = '待提交图片信息不兼容，请移除后重新添加。'; emit(); return }
-    const input = encodeInput(submission.input, submission.modelId, submission.images, submission.files?.length || submission.fileSelections?.length || 0)
-    if (input === undefined) {
+    const expectedProtocol = submission.protocolId ?? session?.protocolId
+    const encoded = encodeInput(submission.input, submission.modelId, submission.images, submission.files?.length || submission.fileSelections?.length || 0, expectedProtocol)
+    if (encoded === undefined) {
       // Existing submissions reach here only after their key was confirmed unaccepted.
       const combined = restoreUnaccepted(submission)
       notice += ' 待提交内容已恢复到原对话位置的草稿。'
@@ -512,7 +514,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         if (renewed.invalid.length) throw Object.assign(new Error('图片已失效，请重新添加。'), { status: 409, code: 'asset-expired' })
       }
       const accepted = await env.api<RunView>(`${path}/runs`, {
-        input, idempotencyKey: submission.idempotencyKey, parentNodeId: submission.parentNodeId,
+        input: encoded.input, idempotencyKey: submission.idempotencyKey, parentNodeId: submission.parentNodeId,
         ...(submission.files?.length ? { files: submission.files.map(file => ({ snapshotId: file.snapshotId })) } : {}),
         ...(submission.images?.length ? { images: submission.images.map(image => ({ assetId: image.assetId })) } : {}),
         ...(submission.modelId !== undefined ? { modelId: submission.modelId } : {}),
@@ -620,7 +622,6 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         notice = '此模型暂不可用，请检查提供方与模型配置。'; emit(); return
       }
       const candidate = env.models?.().find(value => value.id === modelId)
-      if (session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId) { notice = '此会话已固定协议，请新建会话使用其他协议。'; emit(); return }
       if (!getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId)) { notice = '此协议的输入组件尚不可用，请选择受支持的模型。'; emit(); return }
       busy = true; invalidate(); notice = ''; emit()
       const promise = (async () => {
@@ -650,8 +651,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (readOnly() || !session || !attached() || loading || pending() || savingDefaultModel || !modelId ||
           (busy && modelSelection?.modelId !== modelId)) return
       const candidate = env.models?.().find(value => value.id === modelId)
-      if ((env.models && !canUseModel(candidate)) || !getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId) ||
-          (session.protocolId && candidate && candidate.parameters.protocolId !== session.protocolId)) return
+      if ((env.models && !canUseModel(candidate)) || !getProtocolWebModule(candidate?.parameters.protocolId ?? session.protocolId)) return
       const agentId = session.agentId, url = `/agents/${encodeURIComponent(agentId)}/session-defaults`
       savingDefaultModel = true; defaultRead++; notice = ''; emit()
       let submitted = false
@@ -839,9 +839,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
         if (draft.files.some(file => !file.selection || file.error)) { notice = '请修复或移除无法使用的文件引用。'; emit(); return }
         const fileSelections = validateFileSelections(draft.files.map(file => file.selection))
         const images = draft.images.map(image => image.image!)
-        const input = encodeInput(draft.text.trim(), session.modelId, images, fileSelections.length)
-        if (input === undefined) return
-        submission = { schemaVersion: 3, sessionId: ref.sessionId, input, images, fileSelections, ...(fileSelections.length ? { preparationKey: env.newId() } : {}), idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
+        const encoded = encodeInput(draft.text.trim(), session.modelId, images, fileSelections.length)
+        if (encoded === undefined) return
+        submission = { schemaVersion: 3, sessionId: ref.sessionId, ...encoded, images, fileSelections, ...(fileSelections.length ? { preparationKey: env.newId() } : {}), idempotencyKey: env.newId(), parentNodeId: position.viewNodeId, ...(session.modelId ? { modelId: session.modelId } : {}) }
         if (!save(submission)) return
         setDraftAt(position.viewNodeId, draftFromInput(''))
       }
@@ -858,9 +858,9 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
         notice = '请先选择一个可用模型。'; emit(); return
       }
-      const input = encodeInput(node.input, session?.modelId, node.images, node.files?.length ?? 0)
-      if (input === undefined) return
-      const submission: PendingSubmission = { schemaVersion: 3, files: node.files ?? [], sessionId: ref.sessionId, input, images: node.images ?? [], parentNodeId: node.parentId, idempotencyKey: env.newId(), ...(session?.modelId ? { modelId: session.modelId } : {}) }
+      const encoded = encodeInput(node.input, session?.modelId, node.images, node.files?.length ?? 0)
+      if (encoded === undefined) return
+      const submission: PendingSubmission = { schemaVersion: 3, files: node.files ?? [], sessionId: ref.sessionId, ...encoded, images: node.images ?? [], parentNodeId: node.parentId, idempotencyKey: env.newId(), ...(session?.modelId ? { modelId: session.modelId } : {}) }
       if (!save(submission)) return
       await controller.navigate(node.parentId)
       await submitStored(submission, locationVersion)

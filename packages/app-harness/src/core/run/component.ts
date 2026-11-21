@@ -1,6 +1,7 @@
 import type { FileContent } from '../project-files/domain.js'
 import type { Component } from '@nya/core'
-import type { JsonValue, ModelsService } from '@anybox/models'
+import { isDeepStrictEqual } from 'node:util'
+import type { JsonValue, ModelsService, NativeContinuation } from '@anybox/models'
 import { modelsServiceKey } from '@anybox/models'
 import type { RuntimeInputs } from '../contracts.js'
 import type { AgentDefinition } from '../agent/domain.js'
@@ -18,7 +19,7 @@ import type { Run, RunInput } from './domain.js'
 import { runRuntimeServiceKey } from './runtime-component.js'
 import type { RunRuntimePort, RunCancelReason } from './runtime-component.js'
 import { protocolAgentServiceKey, runResumeCheckpoint } from './program.js'
-import type { ProtocolAgentPort, PreparedRunProgram, NativeInitialization, NativeRunInput, RunResumeRecord } from './program.js'
+import type { ApplicationHistory, NativeHistory, ProtocolAgentPort, PrepareRunInput, PreparedRunProgram, NativeInitialization, NativeRunInput, RunResumeRecord } from './program.js'
 import { sessionServiceKey, sessionRunServiceKey } from '../session/port.js'
 import type { SessionPort, SessionRunPort } from '../session/port.js'
 import { createWaiters } from './waiters.js'
@@ -45,6 +46,28 @@ export interface RunPort {
   getView(id: string): JsonValue | undefined
 }
 
+interface CachedContinuation {
+  readonly contextRef: string
+  readonly continuation: NativeContinuation
+  readonly estimatedInputTokens: number
+  readonly bytes: number
+  readonly modelId: string
+  readonly protocolId: string
+  readonly units?: RunUnitBindings
+  readonly initialization: NativeInitialization
+}
+
+const maxCachedContexts = 16
+const maxCachedBytes = 16 * 1024 * 1024
+
+function serializedBytes(items: readonly unknown[]): number {
+  return items.reduce<number>((bytes, item) => bytes + Buffer.byteLength(JSON.stringify(item), 'utf8') + 1, 0)
+}
+
+function incompatibleHistory(error: unknown): boolean {
+  return error instanceof Error && 'code' in error && error.code === 'history-incompatible'
+}
+
 /** Admission owns a prepared program until the Runtime synchronously accepts it. */
 export function createRunComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentCatalog): Component.Object<void, {
   [sessionServiceKey]: SessionPort
@@ -69,6 +92,25 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
       const requests = new Map<string, { input: RunInput; result: Promise<Run> }>()
       const handoffs = new Map<string, Promise<Run>>()
       const untransferred = new Map<string, AbortController>()
+      const continuationCache = new Map<string, CachedContinuation>()
+      let cachedBytes = 0
+      const forgetContinuation = (key: string) => {
+        const previous = continuationCache.get(key)
+        if (!previous) return
+        continuationCache.delete(key)
+        cachedBytes -= previous.bytes
+      }
+      const rememberContinuation = (key: string, entry: CachedContinuation) => {
+        forgetContinuation(key)
+        if (entry.bytes > maxCachedBytes) return
+        continuationCache.set(key, entry)
+        cachedBytes += entry.bytes
+        while (continuationCache.size > maxCachedContexts || cachedBytes > maxCachedBytes) {
+          const oldest = continuationCache.keys().next().value
+          if (oldest === undefined) break
+          forgetContinuation(oldest)
+        }
+      }
       const waitFor = createWaiters<Run>()
       const waitForRecoveryReady = createWaiters<readonly Promise<unknown>[]>()
       let accepting = true, pauseCount = 0
@@ -135,6 +177,8 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
       }, 'observe host admission shutdown')
       ctx.effect(() => async () => {
         accepting = false
+        continuationCache.clear()
+        cachedBytes = 0
         for (const controller of opening) controller.abort()
         const reason: RunCancelReason = isHarnessServerClosing() ? 'owner-disposed' : 'dependency-unavailable'
         const initial = new Set(owned)
@@ -184,13 +228,11 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             const modelId = input.modelId ?? session.modelId ?? agent.modelId
             if (!modelId) throw modelFailure('model-unavailable')
             const protocolId = protocols.protocolForModel(modelId)
-            if (session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
             // Every Run runs against this harness server's own Models unit; the Computer unit comes from the project's binding.
             const hasComputer = session.toolEnvironments === undefined || session.toolEnvironments.environments.some(environment => environment.environmentId === 'computer')
             const units: RunUnitBindings | undefined = hasComputer ? Object.freeze({ schemaVersion: 1, models: (await attachments.local('models')).binding,
               computer: project.computerAttachmentId === localAttachmentId('computer') ? (await attachments.local('computer')).binding : await attachments.binding(project.computerAttachmentId) }) : undefined
-            const history = await records.loadNativeHistory(session.id, input.parentNodeId)
-            const fixedInitialization = history?.initialization ?? await records.loadNativeInitialization(session.id)
+            const fixedInitialization = await records.loadNativeInitialization(session.id)
             if (fixedInitialization && fixedInitialization.schemaVersion !== 3 && fixedInitialization.tools.some(tool => JSON.stringify(getToolByName(tool.name)?.definition) !== JSON.stringify(tool))) throw treeError('history-incompatible')
             try {
               if (session.toolEnvironments) {
@@ -224,9 +266,40 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
             const nativeInput: NativeRunInput = Object.freeze({ schemaVersion: 3, raw: input.input,
               text: template ? template.content.replace('{{input}}', () => input.input) : input.input, images: Object.freeze(images), files: Object.freeze(files), template })
             const id = inputs.newId()
-            let program: PreparedRunProgram
-            try { program = await protocols.prepare({ runId: id, sessionId: session.id, modelId, signal: controller.signal, initialization, input: nativeInput, fileContents, ...(history ? { history } : {}) }) }
-            catch (error) { if (error instanceof Error && 'code' in error && String(error.code).startsWith('history-')) throw error; throw normalizeModelFailure(error) }
+            const parentNodeId = input.parentNodeId
+            const parentRef = parentNodeId === null || !continuationCache.size ? undefined :
+              await records.getCompletedContextRef(session.id, parentNodeId)
+            const cacheKey = parentRef === undefined ? undefined : JSON.stringify([session.id, parentRef])
+            const candidate = cacheKey === undefined ? undefined : continuationCache.get(cacheKey)
+            let cached = candidate?.modelId === modelId && candidate.protocolId === protocolId &&
+              isDeepStrictEqual(candidate.units, units) && isDeepStrictEqual(candidate.initialization, initialization) ? candidate : undefined
+            let history: NativeHistory | undefined, applicationHistory: ApplicationHistory | undefined
+            const preparation = { runId: id, sessionId: session.id, modelId, signal: controller.signal, initialization, input: nativeInput, fileContents }
+            const prepareProgram = (request: PrepareRunInput) => protocols.prepare(request).catch(error => {
+              if (incompatibleHistory(error)) throw error
+              throw normalizeModelFailure(error)
+            })
+            const prepareFromRecords = async () => {
+              if (parentNodeId === null) return prepareProgram(preparation)
+              history = await records.loadNativeHistory(session.id, parentNodeId)
+              if (!history) throw treeError('invalid-history')
+              if (history.modelSnapshot.modelId === modelId && history.binding.protocolId === protocolId) {
+                try { return await prepareProgram({ ...preparation, history }) }
+                catch (error) { if (!incompatibleHistory(error)) throw error }
+              }
+              applicationHistory = await records.loadApplicationHistory(session.id, parentNodeId)
+              history = undefined
+              return prepareProgram({ ...preparation, applicationHistory })
+            }
+            const program = cached && cacheKey !== undefined
+              ? await prepareProgram({ ...preparation, continuation: cached.continuation,
+                  continuationInputTokens: cached.estimatedInputTokens }).catch(error => {
+                  if (!incompatibleHistory(error)) throw error
+                  if (continuationCache.get(cacheKey) === cached) forgetContinuation(cacheKey)
+                  cached = undefined
+                  return prepareFromRecords()
+                })
+              : await prepareFromRecords()
             let transferred = false
             untransferred.set(id, controller)
             const closeUntransferred = async () => {
@@ -239,7 +312,9 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
               if (controller.signal.aborted || program.signal.aborted) throw modelFailure('dependency-unavailable')
               const handoff = Promise.resolve().then(async () => {
                 const accepted = await records.registerRun(id, input, inputs.now(), [...initialization.prompts, ...(template ? [template] : [])], program.modelSnapshot,
-                  { binding: program.binding, initialization: program.initialization, input: program.input, parentContextRef: history?.contextRef ?? null, units })
+                  { binding: program.binding, initialization: program.initialization, input: program.input,
+                    parentContextRef: cached?.contextRef ?? history?.contextRef ?? applicationHistory?.contextRef ?? null,
+                    ...(applicationHistory ? { applicationPrefix: true } : {}), estimatedInputTokens: program.estimatedInputTokens, units })
                 if (!accepted.created) return accepted.run
                 owned.add(id)
                 try {
@@ -250,7 +325,19 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
                   }
                   let started: Promise<Run>
                   try {
-                    started = runtime.start({ runId: id, program })
+                    started = runtime.start({ runId: id, program,
+                      async publishContinuation(settled, report) {
+                        const { continuation, estimatedContinuationTokens } = report
+                        if (!accepting || !settled.resultNodeId || !continuation || estimatedContinuationTokens === undefined) return
+                        const ref = await records.getCompletedContextRef(session.id, settled.resultNodeId, settled.id)
+                        if (!accepting || ref === undefined) return
+                        const parentBytes = cached?.bytes ?? (serializedBytes(history?.records ?? []) +
+                          serializedBytes(applicationHistory?.events ?? history?.applicationPrefix ?? []) + serializedBytes([initialization]))
+                        const bytes = parentBytes + serializedBytes(report.records)
+                        rememberContinuation(JSON.stringify([session.id, ref]), { contextRef: ref, continuation, bytes, modelId, protocolId, units,
+                          initialization, estimatedInputTokens: estimatedContinuationTokens })
+                      },
+                    })
                     transferred = true
                     untransferred.delete(id)
                   } catch {

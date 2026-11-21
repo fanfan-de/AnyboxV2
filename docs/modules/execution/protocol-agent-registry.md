@@ -8,7 +8,7 @@
 
 - 源码：[注册与准备](../../../packages/app-harness/src/core/protocol-agents/registry.ts)、[公共契约](../../../packages/app-harness/src/core/run/program.ts)、[共享交换管道](../../../packages/app-harness/src/core/protocol-agents/shared.ts)、[展示投影](../../../packages/app-harness/src/core/protocol-agents/projection.ts)。
 - 工厂：`createProtocolAgentsComponent()`；组件名：`harness-protocol-agents`；配置类型：`void`。
-- 注入 `models`、`models.protocols` 和 `harness.image-assets`；提供 `harness.protocol-agents`，其运行接口为 `ProtocolAgentPort`，受信绑定接口为 `ProtocolAgentRegistry`。
+- 注入 `models`、`models.settings`、`models.protocols` 和 `harness.image-assets`。提供 `harness.protocol-agents`，其运行接口为 `ProtocolAgentPort`，受信绑定接口为 `ProtocolAgentRegistry`。
 
 ## 接口与固定版本
 
@@ -29,7 +29,7 @@
 
 prepare 先验证历史的协议、Loop 版本、记录格式和工具契约；checkpoint 必须是对象，其 protocolId、recordFormatVersion 与 modelSnapshot 必须与历史一致。随后获取 Models 协议租约并核对它仍等于绑定保存的驱动代，防止准备中途切到新驱动。
 
-每个 program 合并调用方、绑定代、owner 与驱动的取消信号。历史被转换为 `NativeRestoreState` 交给 `models.openNative`；Models 负责连接、账户作用域和执行参数的恢复兼容检查。若固定工具不为空而实际 execution 不具备工具能力，则拒绝准备。
+每个 program 合并调用方、绑定代、owner 与驱动的取消信号。兼容父链通过 `NativeRestoreState` 或缓存的 `NativeContinuation` 交给 `models.openNative`。需要重组时，注册表编码应用轮次并传入 `historyPrefix`。用 `models.settings` 核对目标提供方在该路径上的旧版本和本轮实际 execution 版本。相同提供方的连接身份、地址及认证方式须一致。图片与工具能力仍由目标配置和协议校验。
 
 活跃 Run 恢复使用独立版本化 protocolCursor，由对应 Loop 解释。prepareResume 不重新套模板、不读取当前 Prompt；重建 execution 的完整本 Run 记录后，首次 runner.call 仅回放最后耐久响应。已观察工具按原顺序形成下一增量请求，原请求与工具结果固定后才发出下一模型调用。没有保存响应的 model-pending 不经此接口重发；任意模型阶段接续属于后续独立 exchange owner。
 
@@ -61,7 +61,7 @@ program 的 `close()` 缓存关闭 Promise，等待 execution 退出，返回原
 
 [工具库原生测试](../../../tests/native-tool-library.test.mjs)、[工具循环](../../../tests/tool-loop.test.mjs) 与 [Apply Patch 循环](../../../tests/apply-patch-loop.test.mjs) 验证未知名称/错误参数反馈、同批合法调用不执行、修正后续轮与拒绝额度；[协议恢复测试](../../../tests/computer-protocol-resume.test.mjs) 验证修正额度跨响应游标恢复且不重放未知副作用。
 
-旧文本统一执行路径和 `dialogue-v1` 不通过这里迁入执行。不支持跨协议、任意记录格式或任意参数转换。统一执行 `npm run check`。
+新 Run 可按[会话树规则](../../session-conversation-tree.md)转换受支持的应用事件。协议私有续接数据仍留在原生记录里。旧文本路径和 `dialogue-v1` 只供查看。统一执行 `npm run check`。
 
 ## 图片资源与版本兼容
 

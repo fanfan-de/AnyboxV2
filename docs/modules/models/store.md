@@ -14,45 +14,43 @@
 | --- | --- |
 | `providers/provider/providerHistory` | Provider 当前定义与不可变版本 |
 | `models/model/modelHistory` | Model 当前定义与不可变版本 |
-| `connections/connection/connectionHistory` | 账户连接、私有槽引用与 epoch |
-| `configurations/configuration/configurationHistory` | 可执行配置及固定定义版本 |
-| `sources`、`syncState`、`intents` | 来源接纳账本、连接补齐状态、凭据清理日志 |
-| `commit(change)` | 一次原子批次写入或删除当前连接 |
+| `configuredProviders/providerSettings/providerSettingsHistory` | 按提供方定义 ID 保存唯一一套设置、凭据引用与恢复身份 |
+| `configuredModels/modelSettings/runtimeModelSettings/modelSettingsHistory` | 每个模型定义的一套设置、固定定义版本与历史运行 ID |
+| `sources`、`syncState`、`intents` | 来源接纳账本、模型配置补齐状态、凭据清理日志 |
+| `commit(change)` | 一次原子批次写入或移除提供方设置 |
 
-四类主体分别有当前表和版本表。另有 `sources`、`connection_sync_states` 与 `credential_intents`。配置库只保存 Key 引用与操作日志，不保存 Key 值、认证头或 execution 句柄。来源定义元数据按字段白名单写入，嵌套能力、成本、连接提示也经过校验。
+四类主体分别有当前表和版本表。另有 `sources`、`provider_sync_states` 与 `credential_intents`。配置库只保存 Key 引用与操作日志，不保存 Key 值、认证头或 execution 句柄。来源定义元数据按字段白名单写入，嵌套能力、成本、连接提示也经过校验。
 
 ## 原子提交与约束
 
-`commit()` 在准入时校验并复制输入，进入组件独占串行队列后执行 `BEGIN IMMEDIATE`。批次可同时修改定义、连接、配置、来源账本、同步状态与凭据意图；任一约束失败回滚整个批次。
+`commit()` 在准入时校验并复制输入，进入组件独占串行队列后执行 `BEGIN IMMEDIATE`。批次可同时修改定义、提供方设置、模型配置、来源账本、同步状态与凭据意图；任一约束失败回滚整个批次。
 
 存储复用内部固定 SQL 的 prepared statements，避免目录批量接纳时为每个模型重复编译语句；关闭连接时清空该缓存。事务内部不让出事件循环，读者只能观察完整批次，不能看见尚未提交的部分来源。
 
 - `expectedRevision: null` 表示创建，数字表示更新；当前版本不匹配返回 `conflict`，新 revision 必须恰好递增一次，`createdAt` 保持不变。
-- 外部身份按来源命名空间和原始 Provider/Model ID 唯一，已有来源身份、Model 的父 Provider、连接协议和关联定义不得更换。
-- 配置固定连接、模型定义、定义版本、远端 ID 和 baseline 身份；所固定定义版本必须存在，且与远端 ID 一致。
-- `(connectionId, modelDefinitionId)` 只能有一个 baseline，额外预设不占该唯一位置。
+- 外部身份按来源命名空间和原始 Provider/Model ID 唯一，已有来源身份、Model 的父 Provider 和已配置提供方的协议固定。
+- 模型设置固定提供方、定义版本、远端 ID 和可执行模型 ID。所固定定义版本须存在并与远端 ID 一致。
+- 每个模型定义同时只有一套设置。可执行模型 ID 可以查回活动设置，历史中已退休的 ID 保持退休。
 - `syncGuards` 在写入前复核目标来源版本，避免旧补齐覆盖较新目标。
-- 删除连接原子移除当前连接、其当前配置和同步状态，保留版本历史。连接和配置的历史 ID 不能被新对象复用。
+- 移除提供方设置时原子删除当前设置、所属模型配置和同步状态，保留版本历史。同一提供方可以重新添加，此时创建新的设置修订和可执行模型 ID。
 
 此层保证数据事务与完整性，补齐策略、Key 写入顺序和来源接纳策略由协调服务决定；调用存储不能代替上层业务验证。
 
 ## 迁移与历史兼容
 
-当前 SQLite schema 为 3。v1 先迁入统一 Provider/Model、连接与配置结构，再对旧原生参数完成 v2→v3 转换。迁移维持稳定 ID、版本身份、baseline、启停状态、固定定义与凭据引用；没有读取或复制任何 Key。
+当前 SQLite schema 为 5。v1 先升级到统一定义和原生参数格式，较早的账户设置随后归并到对应提供方 ID，模型设置归到模型定义 ID。保留可执行模型 ID、定义版本、凭据引用和既有会话恢复身份。历史保留原版本身份，原连接和配置版本表仅用于旧数据留档。内置原生参数转换器以外的参数可保留为 `formatVersion: 0`，随后在启动时提供扩展转换器升级。
 
-v3 当前配置保存 `{ protocolId, formatVersion, value }`，连接具有非秘密 `historyScopeEpoch`。内置纯转换器将旧 `maxOutputTokens` / `protocol.*` 转为原生字段，不补运行时默认。扩展可在启动传入转换器；未知或不可转换参数保留 `formatVersion: 0` 可读状态，之后可在提供转换器的启动中再迁移。它们不能原生执行，不存在旧执行后备路径。
-
-迁移处于一个独占事务，失败回滚表结构、记录和 schema 版本。历史 JSON 不被重写；历史配置查询可在读取边界投影旧字段为参数对象，即使连接已删除也可从历史获取协议。历史连接由上层转为非秘密公共视图。
+迁移在一个独占事务内提交。同一提供方有多套旧账户设置时报告冲突 ID，原表、记录和 schema 版本保持原样。用上一版显式移除多余连接后再升级。同一模型有多套旧设置时采用唯一启用的一套，多套启用或都停用时报告冲突。JSON 从旧 SQLite 导入时执行同样检查，保留原 SQLite。
 
 ## 生命周期与失败
 
-初始化失败会尝试关闭已打开连接，并抛固定 `storage-unavailable`，没有内存后备。已准入写入全部串行；某个批次失败不会使后续队列永久卡住。Effect 关闭先拒绝新查询/提交，再等待已准入尾任务，最后关闭 SQLite；关闭失败报告 `cleanup-failure`。
+初始化失败会尝试关闭已打开连接，并报告迁移冲突或 `storage-unavailable`，没有内存后备。已准入写入全部串行；某个批次失败不会使后续队列永久卡住。Effect 关闭先拒绝新查询/提交，再等待已准入尾任务，最后关闭 SQLite；关闭失败报告 `cleanup-failure`。
 
 另一个持有者不能并发打开同一配置库。进程异常退出后由 SQLite 释放排他锁；已提交凭据意图保留，由协调服务下次启动清理。宿主必须保证此路径与目录缓存、业务库独立。
 
 ## 验证与扩展
 
-[storage.test.mjs](../../../packages/models/tests/storage.test.mjs) 覆盖事务回滚、关联不可变、baseline、同步守卫、连接删除、排他与进程退出；[storage-migration.test.mjs](../../../packages/models/tests/storage-migration.test.mjs) 覆盖 v1 兼容；[native-migration.test.mjs](../../../packages/models/tests/native-migration.test.mjs) 覆盖 v3 与扩展延迟转换。
+[storage.test.mjs](../../../packages/models/tests/storage.test.mjs) 覆盖事务回滚、关联不可变、模型设置唯一性、同步守卫、提供方设置删除、排他与进程退出；[storage-migration.test.mjs](../../../packages/models/tests/storage-migration.test.mjs) 覆盖 v1 兼容；[native-migration.test.mjs](../../../packages/models/tests/native-migration.test.mjs) 覆盖 v3 与扩展延迟转换。
 
 测试夹具先等待其创建的全部 Nya 根实际关闭、释放 SQLite 连接和排他所有权，再删除临时目录；Windows 同样验证事务、重开与进程崩溃恢复，不依赖 Unix 允许删除已打开文件的行为。
 

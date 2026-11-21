@@ -89,8 +89,8 @@ try {
   }
   await installManagedModels(root, directory, { controlled: llm })
   if (process.env.ANYBOX_TEST_IMAGE_INPUT === '1') {
-    const settings = root.get('models.settings'), model = settings.configurations().find(model => model.id === 'default')
-    await settings.updateConfiguration(model.id, { capabilities: { ...model.capabilities, imageInput: { support: 'supported' } } }, model.revision)
+    const settings = root.get('models.settings'), model = settings.modelSettings().find(model => model.id === 'default')
+    await settings.updateModelSettings(model.id, { capabilities: { ...model.capabilities, imageInput: { support: 'supported' } } }, model.revision)
   }
   await root.installComponent(createLocalSqliteComponent(join(directory, 'test.sqlite')))
   await root.installComponent(createHostAccessComponent('Browser test device'))

@@ -1,8 +1,7 @@
-import { splitScopedId } from './harness-client.js'
 import { createFileView } from './file-view.js'
 import type { FilePreviewRequest } from './file-sidebar.js'
 import type { FileRef } from '../core/project-files/domain.js'
-import { canUseModel, modelAvailability, type ModelsCatalog } from './models-client.js'
+import { canUseModel, type ModelsCatalog } from './models-client.js'
 import type { ImageRef, SessionViewMode } from './client-types.js'
 import { imageURL } from './image-client.js'
 import type { SessionController } from './session-client.js'
@@ -15,7 +14,6 @@ import { getProtocolWebModule, type MountedProtocolTurn } from './protocols/modu
 import { renderMarkdown } from './markdown.js'
 import { protocolToolContext, toolContextReadiness } from './tool-call-view.js'
 import { contextUsage, createContextUsageView } from './context-usage.js'
-import { createModelPicker, type ModelPickerChoice } from './model-picker.js'
 import { createAgentLogo } from './agent-logo.js'
 import type { AgentSummary } from '../core/agent/domain.js'
 export { createToolCallCard } from './tool-call-view.js'
@@ -79,7 +77,6 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
       <input class="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
       <p class="composer-model-hint" role="status" hidden></p>
       <div class="composer-footer">
-      <div class="composer-model-row"></div>
       <div class="actions">
         <button class="attach-images" type="button" title="添加图片，也可粘贴或拖入 · 最多 8 张，每张 10 MiB">添加图片</button>
         <button class="cancel-button" type="button" aria-label="取消运行" title="取消运行" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
@@ -150,13 +147,6 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
     selectMode(viewButtons[next]!.dataset.viewMode as SessionViewMode)
     viewButtons[next]!.focus({ preventScroll: true })
   }, options)
-  const modelRow = get<HTMLElement>('.composer-model-row')
-  const modelPicker = createModelPicker(modelRow, `personal-agent--model-picker-${pane.id}`, listeners.signal, {
-    select: id => { void controller.setModel(id) },
-    setDefault: id => { void controller.setDefaultModel(id) },
-    opened: () => { void controller.refreshDefaultModel() },
-  })
-  modelRow.hidden = !models
   const modelReady = () => {
     const session = controller.snapshot().session
     const model = models?.snapshot().models.find(value => value.id === session?.modelId)
@@ -199,7 +189,6 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
   get('.pane-close').addEventListener('click', event => { event.stopPropagation(); close() }, options)
   const resizeInput = (): void => {
     usageView.position()
-    modelPicker.position()
     if (element.hidden || compose.hidden || !element.isConnected) return
     if (!element.isConnected || element.clientWidth === 0) return
     messageInput.style.height = 'auto'
@@ -234,15 +223,6 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
     if (data.cancelRun) void controller.cancel(data.cancelRun)
     if (data.viewNode) { selectMode('dialogue'); void controller.navigate(data.viewNode) }
     if (data.locateNode) { treeOpen = true; panel.render(); treeView.locate(data.locateNode) }
-    if (data.referenceNode && !messageInput.disabled) {
-      const id = splitScopedId(data.referenceNode)?.id ?? data.referenceNode
-      const token = `[历史:${id}]`, draft = messageInput.value
-      if (!draft.includes(token)) {
-        messageInput.value = draft ? `${draft}${draft.endsWith('\n') ? '' : '\n'}${token}` : token
-        messageInput.dispatchEvent(new Event('input', { bubbles: true }))
-      }
-      messageInput.focus()
-    }
     const node = controller.snapshot().path.find(item => item.id === (data.editNode ?? data.regenerateNode))
     if (node && !controller.snapshot().session?.archivedAt && controller.snapshot().session?.historyMode !== 'dialogue-v1' && data.editNode) void controller.navigate(node.parentId, node.input, node.images, node.files).then(() => messageInput.focus())
     if (node && data.regenerateNode) void controller.regenerate(node)
@@ -289,7 +269,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
   const panel: SessionPanel = {
     element,
     resizeInput,
-    closeContextUsage() { usageView.close(); modelPicker.close() },
+    closeContextUsage() { usageView.close() },
     captureScroll() {
       if (dialogueScrollReady && measurable(transcript)) {
         savedScroll.dialogue = transcript.scrollTop
@@ -327,7 +307,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       runHistory.inert = !records
       compose.hidden = records || Boolean(state.historyOnly)
       compose.inert = compose.hidden
-      if (records) { usageView.close(); modelPicker.close() }
+      if (records) usageView.close()
       get('.branch-controls').hidden = records || continuous
       get('.branch-controls').inert = records || continuous
       get('.run-history-scope').hidden = !records
@@ -392,25 +372,11 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       cancel.disabled = state.busy || state.run?.status === 'cancelling'
       cancel.title = cancel.disabled ? '正在取消运行' : '取消运行'
       if (models) {
-        const catalog = models.snapshot(), selected = state.session?.modelId ?? ''
-        const choices: ModelPickerChoice[] = catalog.models.map(value => {
-          const incompatible = Boolean(!continuous && state.session?.protocolId && value.parameters.protocolId !== state.session.protocolId)
-          const unsupported = !getProtocolWebModule(value.parameters.protocolId)
-          return { id: value.id, name: value.name, group: value.connectionId,
-            groupLabel: catalog.providers.find(provider => provider.id === value.connectionId)?.name ?? value.connectionId,
-            label: incompatible ? `${value.name} · 需新建其他协议会话` : unsupported ? `${value.name} · 网页输入组件不可用` : canUseModel(value) ? value.name : `${value.name} · ${modelAvailability(value)}`,
-            disabled: !canUseModel(value) || incompatible || unsupported }
-        })
-        if (selected && !catalog.models.some(value => value.id === selected)) {
-          choices.push({ id: selected, name: '原模型已不可用', label: '原模型已不可用', group: 'unavailable', groupLabel: '不可用模型', disabled: true })
-        }
-        modelPicker.render({ choices, selectedId: selected, defaultId: state.defaultModelId,
-          disabled: !state.session || readOnly || state.loading || Boolean(state.pending) || catalog.loading,
-          busy: state.busy, savingDefault: Boolean(state.savingDefaultModel) })
+        const catalog = models.snapshot()
         const hint = get<HTMLElement>('.composer-model-hint')
-        hint.textContent = readOnly ? '' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在“Personal Agent 设置”的“模型管理”中选择提供方并配置 API Key。' : !modelReady() ? '选择要使用的模型后即可发送。' : '')
+        hint.textContent = readOnly ? '' : catalog.error ?? (catalog.loading ? '正在读取模型…' : !catalog.models.some(canUseModel) ? '请在「设置 → 模型管理」中配置提供方和 API Key。' : !modelReady() ? '请在「设置 → 常规」中为此 Agent 设置可用的默认模型。' : '')
+        if (!readOnly && !hint.textContent && state.images.length && !imageModelReady()) hint.textContent = '当前模型不支持图片。请修改 Agent 的默认模型，或移除图片后发送。'
         hint.hidden = !hint.textContent
-        if (state.images.length && !imageModelReady()) { hint.textContent = '当前模型不支持图片，请切换支持图片的模型，或移除图片后发送。'; hint.hidden = false }
       }
       get('.branch-position').textContent = state.position.viewNodeId ? `第 ${state.path.length} 轮` : '会话起点'
       get<HTMLButtonElement>('[data-go-root]').disabled = state.loading || !state.position.viewNodeId
@@ -487,9 +453,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         button.dataset[key] = id
         return button
       }
-      const runProjects = continuous ? new Map(state.runs.map(run => [run.id, run.projectId])) : undefined
       for (const node of state.path) {
-        const runProjectId = node.sourceRunId ? runProjects?.get(node.sourceRunId) : undefined
         addMessage('user', node.input, false, node.images, node.files)
         if (continuous) (renderNodes.at(-1) as HTMLElement).dataset.nodeId = node.id
         if (!appendTurn(node.sourceRunId)) {
@@ -501,16 +465,9 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
             renderNodes.push(message)
           }
         }
+        if (continuous) continue
         const actions = document.createElement('div')
         actions.className = 'node-actions'
-        if (continuous) {
-          if (runProjectId === pane.projectId) {
-            const reference = action('引用此轮', 'referenceNode', node.id)
-            reference.disabled = readOnly || state.busy || state.loading || Boolean(state.pending)
-            actions.append(reference); renderNodes.push(actions)
-          }
-          continue
-        }
         const siblings = tree.children.get(node.parentId) ?? [], siblingIndex = siblings.findIndex(value => value.id === node.id)
         if (siblings.length > 1 && siblingIndex >= 0) {
           const versions = document.createElement('div'); versions.className = 'node-versions'

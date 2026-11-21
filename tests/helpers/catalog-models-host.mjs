@@ -130,10 +130,10 @@ export async function startCatalogModelsHost(options = {}) {
       for (const [providerId, protocolId, remoteModelId] of [['anthropic', 'anthropic-messages', 'claude-qa'], ['google', 'gemini-interactions', 'gemini-qa']]) {
         const settings = root.get('models.settings')
         const definition = settings.providers().find(value => value.source.kind === 'external' && value.source.sourceId === 'models.dev' && value.source.providerId === providerId)
-        const connection = await settings.createConnection({ id: `qa-${providerId}`, providerDefinitionId: definition.id, name: `${providerId} QA proxy`, enabled: true, protocolId,
+        const connection = await settings.createProviderSettings({ providerId: definition.id, name: `${providerId} QA proxy`, enabled: true, protocolId,
           baseUrl: providerId === 'anthropic' ? 'https://qa-proxy.invalid/anthropic/v1' : 'https://qa-proxy.invalid/google/v1beta', auth: 'api-key', apiKey: `qa-${providerId}-key`, timeoutMs: 30_000 })
-        const model = settings.configurations(connection.id).find(value => value.remoteModelId === remoteModelId && value.baseline)
-        seededModels.push(await settings.updateConfiguration(model.id, { parameters: { protocolId, formatVersion: 1, value: protocolId === 'anthropic-messages' ? { max_tokens: 4096 } : { generation_config: { max_output_tokens: 4096 } } } }, model.revision))
+        const model = settings.modelSettings(connection.id).find(value => value.remoteModelId === remoteModelId)
+        seededModels.push(await settings.updateModelSettings(model.id, { parameters: { protocolId, formatVersion: 1, value: protocolId === 'anthropic-messages' ? { max_tokens: 4096 } : { generation_config: { max_output_tokens: 4096 } } } }, model.revision))
       }
     }
     await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))

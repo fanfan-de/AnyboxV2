@@ -58,13 +58,13 @@ settingsDialog.addEventListener('close', () => {
 
 const models = createModelsCatalog(api, messageFor)
 void models.refresh()
-settingsDialog.addEventListener('close', () => { void models.refresh() })
+settingsDialog.addEventListener('close', () => { void models.refresh(); workspace.refreshSession() }, { signal: lifetime.signal })
 const hostApi = selected ? api.forConnection(selected.id) : undefined
 const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefined
 const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('personal-agent--session-defaults')) : undefined
 const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('personal-agent--tools-settings')) : undefined
 const unitsSettings = hostApi ? setupUnitsSettings(hostApi, messageFor, required('personal-agent--units-settings')) : undefined
-const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, selected.instanceId, required('personal-agent--models-settings')) : undefined
+const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, required('personal-agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('personal-agent--prompt-settings'), JSON.stringify([selected.instanceId, 'prompts'])) : undefined
 const agentDirectory = hostApi && hostModels && selected ? setupAgentDirectory(hostApi, messageFor, hostModels,
   required('personal-agent--agent-directory'), selected.instanceId, agent => {
@@ -126,6 +126,7 @@ const settings = setupSettingsNavigation(root, {
   devices: options.devices, selectedId: options.selectedId, selectedName: options.selectedName,
   initialState: options.settingsState, isActive: options.isActive, selectDevice: options.selectDevice,
   refreshArchive: () => workspace.refreshArchive(),
+  resetModelsView: () => modelsSettings?.resetView(),
   refreshAgents: () => { agentDirectory?.refresh(); refreshAgentList() },
   leaveAgents: () => agentDirectory?.pauseLogo(),
 })

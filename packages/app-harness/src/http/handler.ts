@@ -209,6 +209,7 @@ function runView(run: Run): RunView {
     createdAt: run.createdAt, updatedAt: run.updatedAt, revision: run.revision, history: run.history,
     modelId: run.modelId, requestedModelId: run.requestedModelId, modelSnapshot: run.modelSnapshot,
     ...(run.protocolBinding ? { protocolBinding: run.protocolBinding } : {}),
+    ...(run.estimatedInputTokens === undefined ? {} : { estimatedInputTokens: run.estimatedInputTokens }),
     ...(run.legacyModelSnapshot ? { legacyModelSnapshot: run.legacyModelSnapshot } : {}),
     ...(run.resultNodeId ? { resultNodeId: run.resultNodeId } : {}),
     ...(run.output === undefined ? {} : { output: run.output }),

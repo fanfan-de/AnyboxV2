@@ -146,14 +146,13 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
   if (!Context.is(context) || context.root !== context) throw new TypeError('application root Context required')
   const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
   const agents = validateAgents(options.agents)
-  const validateSelectedModel = (modelId: string, requireAvailable = false): string => {
+  const validateSelectedModel = (modelId: string, requireAvailable = false): void => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
     const models = lookup<ModelsService>(modelsServiceKey)
     if (!models) throw modelsError('unavailable')
     const model = models.get(modelId)
     if (!model) throw modelsError('not-found')
     if (requireAvailable && !model.available) throw modelsError('unavailable')
-    return model.parameters.protocolId
   }
   const current = (): RunPort => {
     if (lifetime.isClosing()) throw new Error('harness server is closing')
@@ -234,8 +233,8 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
       return currentSessions().createSession(projectId, agentId, modelId)
     },
     selectSessionModel: (sessionId, modelId) => {
-      const protocolId = validateSelectedModel(modelId)
-      return currentSessions().selectSessionModel(sessionId, modelId, protocolId)
+      validateSelectedModel(modelId)
+      return currentSessions().selectSessionModel(sessionId, modelId)
     },
     getSession: id => currentSessions().getSession(id),
     openProjectFileTree: (...args) => currentSessions().openProjectFileTree(...args),

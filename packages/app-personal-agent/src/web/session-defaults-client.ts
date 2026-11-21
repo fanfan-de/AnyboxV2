@@ -1,4 +1,4 @@
-import type { RunnableModelSummary, ProviderConnection } from '@anybox/models'
+import type { RunnableModelSummary, ProviderSettings } from '@anybox/models'
 import type { Api } from './client-types.js'
 import type { SessionDefaults } from '../core/session/domain.js'
 import type { ModelsCatalog } from './models-client.js'
@@ -100,11 +100,11 @@ export function createSessionDefaultsClient(source: Api, messageFor: (error: unk
   }
 }
 
-export function defaultModelDescription(modelId: string | null, models: readonly RunnableModelSummary[], providers: readonly ProviderConnection[]): string {
+export function defaultModelDescription(modelId: string | null, models: readonly RunnableModelSummary[], providers: readonly ProviderSettings[]): string {
   if (!modelId) return '尚未设置默认模型，请先选择一个模型。'
   const model = models.find(item => item.id === modelId)
   if (!model) return '原默认模型已不可用，请重新选择。'
-  const provider = providers.find(item => item.id === model.connectionId)
+  const provider = providers.find(item => item.id === model.providerId)
   const label = `${provider ? `${provider.name} · ` : ''}${model.name}`
   return canUseModel(model) ? `Agent 默认使用 ${label}。` : `${label}：${modelAvailability(model)}，请处理配置或重新选择。`
 }
@@ -127,10 +127,10 @@ export function setupSessionDefaults(source: Api, messageFor: (error: unknown) =
     const children: (HTMLOptionElement | HTMLOptGroupElement)[] = [option('', state.defaults?.fallbackModelId ? '使用 Agent 默认模型' : '未设置默认模型')]
     const groups = new Map<string, HTMLOptGroupElement>()
     for (const model of available.models) {
-      let group = groups.get(model.connectionId)
+      let group = groups.get(model.providerId)
       if (!group) {
-        group = document.createElement('optgroup'); group.label = available.providers.find(item => item.id === model.connectionId)?.name ?? '未命名连接'
-        groups.set(model.connectionId, group); children.push(group)
+        group = document.createElement('optgroup'); group.label = available.providers.find(item => item.id === model.providerId)?.name ?? '未命名提供方'
+        groups.set(model.providerId, group); children.push(group)
       }
       group.append(option(model.id, `${model.name}${canUseModel(model) ? '' : ` · ${modelAvailability(model)}`}`, !canUseModel(model)))
     }

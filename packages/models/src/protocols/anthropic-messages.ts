@@ -121,15 +121,17 @@ export function createAnthropicMessagesProtocol(options: ProtocolOptions = {}): 
       readText: readGeneratedText,
     },
     resourceIds: anthropicImages.ids,
-    restore: records => {
+    supportsHistoryPrefix: true,
+    restore: (records, prefix) => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
-      return restoreRecords(protocolId, records, commit, [1, 2]);
+      const initial = prefix === undefined ? undefined : conversation({}, prefix, 'messages', ['system', 'tools']);
+      return restoreRecords(protocolId, records, commit, [1, 2], initial);
     },
     prepare(input) {
       validateIntent(input.intent);
       if (anthropicImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
-      requireLocalTools(input.intent.tools, input.capabilities.tools);
       const next = conversation(input.state, input.intent, 'messages', ['system', 'tools']);
+      requireLocalTools(next.tools, input.capabilities.tools);
       for (const value of array(next.messages)) { const message = object(value); if (!['user', 'assistant'].includes(string(message.role))) throw modelsError('invalid-config'); if (typeof message.content !== 'string') array(message.content); }
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== undefined) throw modelsError('invalid-config'); nonempty(tool.name); object(tool.input_schema); }
       const tools = mergeTools(next.tools, input.parameters.tools);

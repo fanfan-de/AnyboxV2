@@ -61,7 +61,7 @@ const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefine
 const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('agent--session-defaults'), agentSelect) : undefined
 const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('agent--tools-settings'), agentSelect) : undefined
 const unitsSettings = hostApi ? setupUnitsSettings(hostApi, messageFor, required('agent--units-settings')) : undefined
-const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, selected.instanceId, required('agent--models-settings')) : undefined
+const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, required('agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('agent--prompt-settings'), JSON.stringify(['agent', selected.instanceId, 'prompts'])) : undefined
 if (!selected) {
   required('agent--default-model-hint').textContent = '请先在管理连接中启动所选设备上的 Agent，再设置默认模型。'
@@ -100,6 +100,7 @@ const settings = setupSettingsNavigation(root, {
   devices: options.devices, selectedId: options.selectedId, selectedName: options.selectedName,
   initialState: options.settingsState, isActive: options.isActive, selectDevice: options.selectDevice,
   refreshArchive: () => workspace.refreshArchive(),
+  resetModelsView: () => modelsSettings?.resetView(),
 })
 const receiveAgents = (agents: readonly AgentView[]) => {
   if (closed) return

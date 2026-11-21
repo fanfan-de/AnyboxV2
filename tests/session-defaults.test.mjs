@@ -11,6 +11,7 @@ import { sessionServiceKey } from '../packages/app-harness/dist/core/session/por
 import { projectServiceKey } from '../packages/app-harness/dist/core/project/component.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { installManagedModels } from './helpers/managed-models.mjs'
+import { seedTestModel } from './helpers/configured-models.mjs'
 import { deferred } from './helpers/controlled-models.mjs'
 
 const agents = [
@@ -23,12 +24,11 @@ async function openHost(directory, definitions = agents) {
   const root = new Context()
   try {
     const { controlled } = await installManagedModels(root, directory)
-    const settings = root.get('models.settings'), original = settings.configurations().find(value => value.id === 'default')
+    const settings = root.get('models.settings'), original = settings.modelSettings().find(value => value.id === 'default')
+    const provider = settings.configuredProviders().find(value => value.id === original.providerId)
     for (const id of ['alternate', 'explicit']) {
-      if (!settings.configurations().some(value => value.id === id)) {
-        await settings.createConfiguration({ id, name: id, modelDefinitionId: original.modelDefinitionId,
-          connectionId: original.connectionId, enabled: true, capabilities: original.capabilities,
-          parameters: original.parameters, baseline: false })
+      if (!settings.modelSettings().some(value => value.id === id)) {
+        await seedTestModel(settings, provider, { id, name: id, capabilities: original.capabilities })
       }
     }
     await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
@@ -140,15 +140,15 @@ test('unavailable saved defaults remain selected and never silently switch to st
   const f = await fixture()
   try {
     const saved = await f.harness.setSessionDefaults('assistant', 'alternate', 0)
-    const config = f.settings.configurations().find(value => value.id === 'alternate')
-    await f.settings.updateConfiguration(config.id, { enabled: false }, config.revision)
+    const config = f.settings.modelSettings().find(value => value.id === 'alternate')
+    await f.settings.updateModelSettings(config.id, { enabled: false }, config.revision)
     assert.deepEqual(await f.harness.getSessionDefaults('assistant'), saved)
     assert.equal((await f.harness.createSession(f.project.id, 'assistant')).modelId, 'alternate')
     await assert.rejects(async () => f.harness.setSessionDefaults('reviewer', 'alternate', 0))
     await assert.rejects(async () => f.harness.setSessionDefaults('reviewer', 'missing', 0))
     assert.equal((await f.harness.getSessionDefaults('reviewer')).revision, 0)
-    const connection = f.settings.connections().find(value => value.id === 'default')
-    await f.settings.deleteConnection(connection.id, connection.revision)
+    const connection = f.settings.configuredProviders().find(value => value.id === 'default')
+    await f.settings.deleteProviderSettings(connection.id, connection.revision)
     assert.deepEqual(await f.harness.getSessionDefaults('assistant'), saved)
     assert.equal((await f.harness.createSession(f.project.id, 'assistant')).modelId, 'alternate')
     await f.harness.setSessionDefaults('assistant', null, saved.revision)

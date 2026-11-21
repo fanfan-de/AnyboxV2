@@ -116,9 +116,9 @@ export function createSessionComponent(inputs: RuntimeInputs, environments?: Too
       const defaults = ({ id, modelId, revision }: AgentRecord): SessionDefaults =>
         Object.freeze({ agentId: id, modelId, revision, fallbackModelId: null, effectiveModelId: modelId })
       const withEffectiveModel = (session: Session): Session => {
-        if (!session.continuous || session.modelId !== null) return session
-        const modelId = agents.get(session.agentId)?.modelId ?? null
-        return modelId === null ? session : Object.freeze({ ...session, modelId })
+        if (!session.continuous) return session
+        const modelId = agents.get(session.agentId)?.modelId ?? session.modelId
+        return modelId === session.modelId ? session : Object.freeze({ ...session, modelId })
       }
       ctx.effect(() => async () => {
         accepting = false
@@ -213,7 +213,7 @@ export function createSessionComponent(inputs: RuntimeInputs, environments?: Too
         selectSessionModel(sessionId, rawModelId, protocolId) {
           return track(async () => {
             const modelId = nonEmpty(rawModelId, 'modelId')
-            return records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId, protocolId)
+            return withEffectiveModel(await records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId, protocolId))
           })
         },
         archiveSession: id => track(() => records.archiveSession(nonEmpty(id, 'sessionId'))),
@@ -240,11 +240,13 @@ export function createSessionComponent(inputs: RuntimeInputs, environments?: Too
         readFileSnapshots: (id, ids, signal) => resourceCall(id, signal, async signal => files.read(id, ids, signal), 'file'),
         describeImages: (sessionId, assetIds) => track(() => images.describe(sessionId, assetIds)),
         findAcceptedRun: input => track(() => records.findAcceptedRun(input)),
-        planContinuousRun: input => track(() => records.planContinuousRun(input)),
         registerRun: (id, input, now, prompts, model, native) => track(() => records.registerRun(id, input, now, prompts, model, native)),
         loadNativeInitialization: sessionId => track(() => records.loadNativeInitialization(sessionId)),
-        loadNativeHistory: (sessionId, parentNodeId) => track(() => records.loadNativeHistory(sessionId, parentNodeId)),
+        loadNativeHistory: (sessionId, parentNodeId, scope) => track(() => records.loadNativeHistory(sessionId, parentNodeId, scope)),
+        loadApplicationHistory: (sessionId, parentNodeId, scope) => track(() => records.loadApplicationHistory(sessionId, parentNodeId, scope)),
+        getCompletedContextRef: (sessionId, nodeId, runId) => track(() => records.getCompletedContextRef(sessionId, nodeId, runId)),
         loadRunResume: id => track(() => records.loadRunResume(id)),
+        loadRunResumeState: id => track(() => records.loadRunResumeState(id)),
         listRunResumes: () => track(() => records.listRunResumes()),
         claimRunResume: (id, epoch, at) => track(() => records.claimRunResume(id, epoch, at)),
         saveRunResume: (id, epoch, patch, at) => track(() => records.saveRunResume(id, epoch, patch, at)),

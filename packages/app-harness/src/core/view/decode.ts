@@ -58,13 +58,13 @@ function decodeState(value: unknown, protocolId: string): ProtocolNativeState | 
 }
 function decodeUsage(value: unknown): ProtocolTokenUsage | undefined {
   if (!object(value)) return undefined
-  const result: { inputTokens?: number; outputTokens?: number } = {}
-  for (const key of ['inputTokens', 'outputTokens'] as const) {
+  const result: Partial<Record<keyof ProtocolTokenUsage, number>> = {}
+  for (const key of ['inputTokens', 'outputTokens', 'cachedInputTokens', 'uncachedInputTokens'] as const) {
     if (value[key] === undefined) continue
     if (!Number.isSafeInteger(value[key]) || Number(value[key]) < 0) return undefined
     result[key] = Number(value[key])
   }
-  return result.inputTokens === undefined && result.outputTokens === undefined ? undefined : result
+  return Object.keys(result).length ? result : undefined
 }
 
 /** Decode only v2 display fields. Native response objects never enter renderers. */

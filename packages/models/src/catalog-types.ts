@@ -1,4 +1,4 @@
-import type { ConnectionSyncState, SourceSnapshot } from './types.js';
+import type { ProviderSyncState, SourceSnapshot } from './types.js';
 
 export interface CatalogOperation<T> {
   readonly result: Promise<T>;
@@ -39,7 +39,7 @@ export interface CatalogStatus {
   readonly stale: boolean;
   readonly checkedAt?: number;
   readonly nextRefreshAt?: number;
-  readonly connections?: readonly ConnectionSyncState[];
+  readonly providers?: readonly ProviderSyncState[];
   readonly cache: CatalogCacheStatus;
   readonly error?: 'unavailable' | 'invalid-response' | 'storage-unavailable' | 'cleanup-failure' | 'timeout';
 }

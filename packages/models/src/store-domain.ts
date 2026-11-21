@@ -1,6 +1,11 @@
 import { validateParameters } from './domain.js';
 import { modelsError } from './errors.js';
-import type { ConnectionHints, ConnectionSyncState, CredentialIntent, DeclaredCapabilities, Model, ModelConfiguration, Provider, ProviderConnectionRecord, SourceRef, SourceState, StoreChange, Versioned } from './types.js';
+import type { ConnectionHints, CredentialIntent, DeclaredCapabilities, Model, ModelSettings, Provider, ProviderSettingsRecord, ProviderSyncState, SourceRef, SourceState, StoreChange, Versioned } from './types.js';
+
+export type LegacyConnectionRecord = Omit<ProviderSettingsRecord, 'restoreScopeId'> & { readonly providerDefinitionId: string };
+export type LegacyModelConfiguration = Omit<ModelSettings, 'runtimeModelId'> & { readonly modelDefinitionId: string; readonly baseline: boolean };
+export type LegacyConfiguration = Omit<LegacyModelConfiguration, 'providerId'> & { readonly connectionId: string };
+export type LegacySyncState = Omit<ProviderSyncState, 'providerId'> & { readonly connectionId: string };
 
 export function requiredString(value: unknown): asserts value is string {
   if (typeof value !== 'string' || !value.trim()) throw modelsError('invalid-config');
@@ -104,30 +109,72 @@ export function modelRecord(record: Model): Model {
         return pick(tier, ['contextMin', 'contextMax', 'reasoning', ...costFields]);
       }) }) } } : {}) };
 }
-export function connectionRecord(record: ProviderConnectionRecord): ProviderConnectionRecord {
-  for (const value of [record.providerDefinitionId, record.name, record.protocolId, record.baseUrl]) requiredString(value);
+function providerSettingsFields(record: Omit<ProviderSettingsRecord, 'restoreScopeId'>): Omit<ProviderSettingsRecord, 'restoreScopeId'> {
+  for (const value of [record.name, record.protocolId, record.baseUrl]) requiredString(value);
   if (typeof record.enabled !== 'boolean' || !['none', 'api-key'].includes(record.auth) ||
       !Number.isSafeInteger(record.timeoutMs) || record.timeoutMs <= 0) throw modelsError('invalid-config');
   if (record.credentialRef !== null) requiredString(record.credentialRef); requiredString(record.historyScopeEpoch);
-  return { ...versionFields(record), ...pick(record, ['providerDefinitionId', 'name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'credentialRef', 'historyScopeEpoch']) };
+  return { ...versionFields(record), ...pick(record, ['name', 'enabled', 'protocolId', 'baseUrl', 'auth', 'timeoutMs', 'credentialRef', 'historyScopeEpoch']) };
 }
-export function configurationRecord(record: ModelConfiguration): ModelConfiguration {
-  for (const value of [record.modelDefinitionId, record.modelDefinitionVersionId, record.connectionId, record.name, record.remoteModelId]) requiredString(value);
-  if (typeof record.enabled !== 'boolean' || typeof record.baseline !== 'boolean') throw modelsError('invalid-config');
-  return { ...versionFields(record), ...pick(record, ['modelDefinitionId', 'modelDefinitionVersionId', 'connectionId', 'name', 'enabled', 'baseline', 'remoteModelId']),
+export function legacyConnectionRecord(record: LegacyConnectionRecord): LegacyConnectionRecord {
+  requiredString(record.providerDefinitionId);
+  return { ...providerSettingsFields(record), providerDefinitionId: record.providerDefinitionId };
+}
+export function providerSettingsRecord(record: ProviderSettingsRecord): ProviderSettingsRecord {
+  requiredString(record.restoreScopeId);
+  return { ...providerSettingsFields(record), restoreScopeId: record.restoreScopeId };
+}
+export function validateProviderSettingsWrite(record: ProviderSettingsRecord, current: ProviderSettingsRecord | undefined,
+  latest: ProviderSettingsRecord | undefined, expected: number | null): void {
+  if (current || !latest) {
+    validateVersion(record, current, expected);
+    if (current && (current.restoreScopeId !== record.restoreScopeId || current.protocolId !== record.protocolId)) throw modelsError('invalid-config');
+  } else {
+    if (expected !== null || record.revision <= latest.revision) throw modelsError('conflict');
+    validateVersion(record, latest, latest.revision);
+    if (record.historyScopeEpoch === latest.historyScopeEpoch) throw modelsError('invalid-config');
+  }
+}
+export function modelSettingsRecord(record: ModelSettings): ModelSettings {
+  for (const value of [record.runtimeModelId, record.modelDefinitionVersionId, record.providerId, record.name, record.remoteModelId]) requiredString(value);
+  if (typeof record.enabled !== 'boolean') throw modelsError('invalid-config');
+  return { ...versionFields(record), ...pick(record, ['runtimeModelId', 'modelDefinitionVersionId', 'providerId', 'name', 'enabled', 'remoteModelId']),
     capabilities: capabilities(record.capabilities), parameters: (validateParameters(record.parameters), structuredClone(record.parameters)) };
+}
+export const modelSettingsIdentity = ['runtimeModelId', 'providerId', 'modelDefinitionVersionId', 'remoteModelId'] as const;
+export function validateModelSettingsWrite(record: ModelSettings, current: ModelSettings | undefined, latestRevision: number | undefined, expected: number | null): void {
+  if (current || latestRevision === undefined) validateVersion(record, current, expected);
+  else {
+    if (expected !== null || record.revision <= latestRevision) throw modelsError('conflict');
+    if (record.revision !== latestRevision + 1) throw modelsError('invalid-config');
+  }
+  if (current && modelSettingsIdentity.some(key => record[key] !== current[key])) throw modelsError('invalid-config');
+}
+export function configurationRecord(record: LegacyModelConfiguration): LegacyModelConfiguration {
+  for (const value of [record.modelDefinitionId, record.modelDefinitionVersionId, record.providerId, record.name, record.remoteModelId]) requiredString(value);
+  if (typeof record.enabled !== 'boolean' || typeof record.baseline !== 'boolean') throw modelsError('invalid-config');
+  return { ...versionFields(record), ...pick(record, ['modelDefinitionId', 'modelDefinitionVersionId', 'providerId', 'name', 'enabled', 'baseline', 'remoteModelId']),
+    capabilities: capabilities(record.capabilities), parameters: (validateParameters(record.parameters), structuredClone(record.parameters)) };
+}
+export function legacyConfigurationRecord({ connectionId, ...record }: LegacyConfiguration): LegacyConfiguration {
+  const { providerId, ...values } = configurationRecord({ ...record, providerId: connectionId });
+  return { ...values, connectionId: providerId };
 }
 export function sourceState(record: SourceState): SourceState {
   requiredString(record.sourceId); requiredString(record.snapshotVersion);
   if (!Number.isSafeInteger(record.fetchedAt) || record.fetchedAt < 0) throw modelsError('invalid-config');
   return pick(record, ['sourceId', 'snapshotVersion', 'fetchedAt']);
 }
-export function syncState(record: ConnectionSyncState): ConnectionSyncState {
-  requiredString(record.connectionId);
+export function syncState(record: ProviderSyncState): ProviderSyncState {
+  requiredString(record.providerId);
   if (!['pending', 'ready', 'failed'].includes(record.state)) throw modelsError('invalid-config');
   for (const value of [record.targetSourceVersion, record.syncedSourceVersion]) if (value !== null) requiredString(value);
   if (record.error !== undefined) requiredString(record.error);
-  return pick(record, ['connectionId', 'state', 'targetSourceVersion', 'syncedSourceVersion', 'error']);
+  return pick(record, ['providerId', 'state', 'targetSourceVersion', 'syncedSourceVersion', 'error']);
+}
+export function legacySyncState({ connectionId, ...record }: LegacySyncState): LegacySyncState {
+  const { providerId, ...values } = syncState({ ...record, providerId: connectionId });
+  return { ...values, connectionId: providerId };
 }
 export function intentRecord(record: CredentialIntent): CredentialIntent {
   for (const value of [record.id, record.providerId, record.slotId, record.createdAt]) requiredString(value);
@@ -136,22 +183,22 @@ export function intentRecord(record: CredentialIntent): CredentialIntent {
 
 /** Shared whitelist/validation for persistence providers. */
 export function normalizeStoreChange(input: StoreChange): StoreChange {
-  if (input.deleteConnection) {
-    requiredString(input.deleteConnection.id);
-    if (!Number.isSafeInteger(input.deleteConnection.expectedRevision) || input.deleteConnection.expectedRevision < 1) throw modelsError('invalid-config');
+  if (input.deleteProviderSettings) {
+    requiredString(input.deleteProviderSettings.id);
+    if (!Number.isSafeInteger(input.deleteProviderSettings.expectedRevision) || input.deleteProviderSettings.expectedRevision < 1) throw modelsError('invalid-config');
   }
   for (const guard of input.syncGuards ?? []) {
-    requiredString(guard.connectionId);
+    requiredString(guard.providerId);
     if (guard.targetSourceVersion !== null) requiredString(guard.targetSourceVersion);
   }
   for (const id of input.removeIntentIds ?? []) requiredString(id);
   return structuredClone({
     providers: input.providers?.map(item => ({ record: providerRecord(item.record), expectedRevision: item.expectedRevision })),
     models: input.models?.map(item => ({ record: modelRecord(item.record), expectedRevision: item.expectedRevision })),
-    ...(input.connection ? { connection: { record: connectionRecord(input.connection.record), expectedRevision: input.connection.expectedRevision } } : {}),
-    ...(input.deleteConnection ? { deleteConnection: pick(input.deleteConnection, ['id', 'expectedRevision']) } : {}),
-    configurations: input.configurations?.map(item => ({ record: configurationRecord(item.record), expectedRevision: item.expectedRevision })),
-    sources: input.sources?.map(sourceState), syncStates: input.syncStates?.map(syncState), syncGuards: input.syncGuards?.map(guard => pick(guard, ['connectionId', 'targetSourceVersion'])),
+    ...(input.providerSettings ? { providerSettings: { record: providerSettingsRecord(input.providerSettings.record), expectedRevision: input.providerSettings.expectedRevision } } : {}),
+    ...(input.deleteProviderSettings ? { deleteProviderSettings: pick(input.deleteProviderSettings, ['id', 'expectedRevision']) } : {}),
+    modelSettings: input.modelSettings?.map(item => ({ record: modelSettingsRecord(item.record), expectedRevision: item.expectedRevision })),
+    sources: input.sources?.map(sourceState), syncStates: input.syncStates?.map(syncState), syncGuards: input.syncGuards?.map(guard => pick(guard, ['providerId', 'targetSourceVersion'])),
     addIntents: input.addIntents?.map(intentRecord), removeIntentIds: input.removeIntentIds,
   });
 }

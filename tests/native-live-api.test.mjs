@@ -88,14 +88,13 @@ async function host(directory, protocolId, config, secrets) {
       ctx.effect(() => () => registration.unregister(), 'release live native protocol')
     } })
     const settings = root.get('models.settings')
-    if (!settings.connections().length) {
+    if (!settings.configuredProviders().length) {
       const provider = await settings.createProvider({ name: 'Live smoke provider', connectionHints: { protocolIds: [protocolId] } })
-      const connection = await settings.createConnection({ id: 'live-connection', providerDefinitionId: provider.id, name: 'Live smoke connection', enabled: true,
+      await settings.createProviderSettings({ providerId: provider.id, name: 'Live smoke connection', enabled: true,
         protocolId, baseUrl: config.endpoint, auth: 'api-key', apiKey: config.key, timeoutMs: 60_000 })
-      const definition = await settings.createModel({ name: 'Live smoke model', providerId: provider.id, remoteModelId: config.model,
+      const definition = await settings.createModel({ id: 'live-model', name: 'Live smoke model', providerId: provider.id, remoteModelId: config.model,
         capabilities: config.capabilities, controls: { temperature: 'unknown' }, modalities: { input: config.capabilities.imageInput.support === 'supported' ? ['text', 'image'] : ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [protocolId] } })
-      await settings.createConfiguration({ id: 'live-model', name: 'Live smoke configuration', enabled: true, connectionId: connection.id,
-        modelDefinitionId: definition.id, capabilities: config.capabilities, baseline: true,
+      await settings.createModelSettings({ modelId: definition.id, name: 'Live smoke configuration', enabled: true, capabilities: config.capabilities,
         parameters: { protocolId, formatVersion: 1, value: config.parameters } })
     }
     await install(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))

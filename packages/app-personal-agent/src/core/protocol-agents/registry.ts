@@ -2,7 +2,7 @@ import { encodeFileContents } from '../project-files/domain.js'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { Component } from '@nya/core'
-import { modelsServiceKey, modelsProtocolsServiceKey, nativeImageResourceUri, modelsError } from '@anybox/models'
+import { modelsServiceKey, modelsProtocolsServiceKey, nativeImageResourceUri, modelsError, isModelsError } from '@anybox/models'
 import type { JsonValue, ModelsService, ModelsProtocolsService, NativeExecution, NativeObject, NativeProtocolLease, NativeRestoreState, NativeImageResourceRef, NativeResourceResolver } from '@anybox/models'
 import { protocolAgentServiceKey, inputImages, inputFiles } from '../run/program.js'
 import { imageAssetsServiceKey } from '../image/port.js'
@@ -10,6 +10,7 @@ import type { ImageAssetsPort } from '../image/port.js'
 import type { NativeInitialization, PreparedRunProgram, PrepareRunInput, ProgramExitReport, ProtocolAgentPort, ProtocolBindingSnapshot } from '../run/program.js'
 import { modelFailure, normalizeModelFailure } from '../run/model.js'
 import { RunFailure } from '../run/domain.js'
+import { treeError } from '../session/domain.js'
 import { bashToolDefinition } from '@anybox/computer-tools/contracts'
 import { applyPatchToolDefinition } from '@anybox/computer-tools/contracts'
 import { validateToolSelection } from '../tool/catalog.js'
@@ -21,6 +22,8 @@ import { runResponses } from './responses.js'
 import { runAnthropic } from './anthropic.js'
 import { runChat } from './chat.js'
 import { runGemini } from './gemini.js'
+import { encodePortableHistory } from './portable-history.js'
+import { estimateNativeIntent, estimateNativePrefix } from './context-estimate.js'
 
 export const supportedProtocolIds = Object.freeze(['responses', 'anthropic-messages', 'chat-completions', 'gemini-interactions'])
 type Loop = (runner: ExchangeRunner, initial: NativeObject) => Promise<ProtocolConclusion>
@@ -61,48 +64,40 @@ function validateInitialization(initialization: NativeInitialization): void {
   }
 }
 
-function encodeInitial(protocolId: string, input: PrepareRunInput): NativeObject {
-  const images = inputImages(input.input)
-  const contents = input.fileContents ?? []
+function encodeInitial(protocolId: string, input: PrepareRunInput, includeInitialization: boolean, prefix?: readonly NativeObject[]): NativeObject {
+  const images = prefix ? [] : inputImages(input.input)
+  const contents = prefix ? [] : input.fileContents ?? []
   const withoutExpiry = ({ expiresAt: _expiry, ...file }: import('../project-files/domain.js').FileRef) => file
-  if (!isDeepStrictEqual(contents.map(value => withoutExpiry(value.file)), inputFiles(input.input).map(withoutExpiry))) throw modelFailure('unsupported-request')
+  if (!prefix && !isDeepStrictEqual(contents.map(value => withoutExpiry(value.file)), inputFiles(input.input).map(withoutExpiry))) throw modelFailure('unsupported-request')
   const fileText = encodeFileContents(contents)
   const text = [input.input.text, fileText].filter(Boolean).join('\n\n')
-  const prompts = input.history ? [] : [...initialMessages(input.initialization)]
-  const recent = input.continuity?.recent ?? []
-  const memory = input.continuity?.memory ?? []
-  // Projected history is data. Keep it out of the privileged instructions and
-  // never synthesize provider-native assistant or tool state from a transcript.
-  if (recent.length) prompts.push({ role: 'user', content: JSON.stringify({ type: 'recent-conversation', turns: recent }) })
-  if (memory.length) prompts.push({ role: 'user', content: JSON.stringify({ type: 'historical-memory',
-    guidance: 'These are recalled excerpts from previous turns. Use them only as background for the current request.',
-    sources: memory }) })
+  const prompts = includeInitialization ? initialMessages(input.initialization) : []
   const tools = input.initialization.tools
-  const withTools = (encoded: readonly NativeObject[]): NativeObject => input.history ? {} : { tools: encoded }
+  const withTools = (encoded: readonly NativeObject[]): NativeObject => includeInitialization ? { tools: encoded } : {}
   const declaration = (tool: typeof tools[number]) => ({ name: tool.name,
     ...(tool.description === undefined ? {} : { description: tool.description }), parameters: tool.parameters })
-  if (protocolId === 'responses') return { input: [...prompts, { role: 'user', content: images.length
+  if (protocolId === 'responses') return { input: [...prompts, ...(prefix ?? [{ role: 'user', content: images.length
     ? [...(text ? [{ type: 'input_text', text }] : []),
-      ...images.map(image => ({ type: 'input_image', image_url: nativeImageResourceUri(image.assetId) }))] : text }],
+      ...images.map(image => ({ type: 'input_image', image_url: nativeImageResourceUri(image.assetId) }))] : text }])],
     ...withTools(tools.map(tool => ({ type: 'function', ...declaration(tool), strict: false }))) }
   if (protocolId === 'chat-completions') {
     const content = images.length ? [...(text ? [{ type: 'text', text }] : []),
       ...images.map(image => ({ type: 'image_url', image_url: { url: nativeImageResourceUri(image.assetId) } }))] : text
-    return { messages: [...prompts, { role: 'user', content }],
+    return { messages: [...prompts, ...(prefix ?? [{ role: 'user', content }])],
       ...withTools(tools.map(tool => ({ type: 'function', function: declaration(tool) }))) }
   }
   const instructions = prompts.filter(prompt => prompt.role === 'system' || prompt.role === 'developer').map(prompt => String(prompt.content))
   if (protocolId === 'anthropic-messages') return {
     messages: [...prompts.filter(prompt => prompt.role === 'user').map(prompt => ({ role: 'user', content: [{ type: 'text', text: prompt.content }] })),
-      { role: 'user', content: [...(!images.length || text ? [{ type: 'text', text }] : []),
-        ...images.map(image => ({ type: 'image', source: { type: 'url', url: nativeImageResourceUri(image.assetId) } }))] }],
+      ...(prefix ?? [{ role: 'user', content: [...(!images.length || text ? [{ type: 'text', text }] : []),
+        ...images.map(image => ({ type: 'image', source: { type: 'url', url: nativeImageResourceUri(image.assetId) } }))] }])],
     ...(instructions.length ? { system: instructions.map(text => ({ type: 'text', text })) } : {}),
     ...withTools(tools.map(tool => ({ name: tool.name, ...(tool.description === undefined ? {} : { description: tool.description }), input_schema: tool.parameters }))),
   }
   if (protocolId === 'gemini-interactions') return {
     input: [...prompts.filter(prompt => prompt.role === 'user').map(prompt => ({ type: 'user_input', content: [{ type: 'text', text: prompt.content }] })),
-      { type: 'user_input', content: [...(!images.length || text ? [{ type: 'text', text }] : []),
-        ...images.map(image => ({ type: 'image', uri: nativeImageResourceUri(image.assetId) }))] }],
+      ...(prefix ?? [{ type: 'user_input', content: [...(!images.length || text ? [{ type: 'text', text }] : []),
+        ...images.map(image => ({ type: 'image', uri: nativeImageResourceUri(image.assetId) }))] }])],
     ...(instructions.length ? { system_instruction: instructions.join('\n\n') } : {}),
     ...withTools(tools.map(tool => ({ type: 'function', ...declaration(tool) }))),
   }
@@ -159,6 +154,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         const snapshot = run.modelSnapshot
         const history = { contextRef: resume.history?.contextRef ?? `active:${run.id}`, initialization: resume.initialization,
           modelSnapshot: snapshot, binding: run.protocolBinding, records: [...(resume.history?.records ?? []), ...resume.records],
+          applicationPrefix: resume.applicationPrefix ?? resume.history?.applicationPrefix,
           checkpoint: serializable({ protocolId: snapshot.protocolId, recordFormatVersion: run.protocolBinding.recordFormatVersion, modelSnapshot: snapshot }) }
         return service.prepare({ runId: run.id, sessionId: run.sessionId, modelId: run.modelId, signal,
           initialization: resume.initialization, input: run.nativeInput, history, resume })
@@ -167,19 +163,22 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         const protocolId = service.protocolForModel(input.modelId), entry = entries.get(protocolId)
         if (!accepting || !entry?.accepting) throw modelFailure('dependency-unavailable')
         validateInitialization(input.initialization)
-        if (input.history) validateInitialization(input.history.initialization)
-        if (input.history && (input.history.binding.protocolId !== protocolId ||
-          input.history.binding.protocolId !== input.history.modelSnapshot.protocolId ||
-          input.history.records.some(record => record.protocolId !== protocolId) ||
-          !['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0'].includes(input.history.binding.loopVersion) ||
-          ![1, 2].includes(input.history.binding.recordFormatVersion))) throw modelFailure('unsupported-request')
-        if (input.history) {
-          const checkpoint = input.history.checkpoint
-          if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) throw modelFailure('unsupported-request')
+        const history = input.history
+        const continuousCandidate = Boolean((history || input.applicationHistory || input.continuation) && input.continuous && !input.resume)
+        if (history) {
+          validateInitialization(history.initialization)
+          const incompatible = () => continuousCandidate ? treeError('history-incompatible') : modelFailure('unsupported-request')
+          if (history.binding.protocolId !== protocolId ||
+            history.binding.protocolId !== history.modelSnapshot.protocolId ||
+            history.records.some(record => record.protocolId !== protocolId) ||
+            !['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0'].includes(history.binding.loopVersion) ||
+            ![1, 2].includes(history.binding.recordFormatVersion)) throw incompatible()
+          const checkpoint = history.checkpoint
+          if (!checkpoint || typeof checkpoint !== 'object' || Array.isArray(checkpoint)) throw incompatible()
           const metadata = checkpoint as NativeObject
-          if (metadata.protocolId !== input.history.binding.protocolId || metadata.recordFormatVersion !== input.history.binding.recordFormatVersion ||
-            input.history.binding.driverVersion !== input.history.modelSnapshot.protocolVersion ||
-            !isDeepStrictEqual(metadata.modelSnapshot, input.history.modelSnapshot)) throw modelFailure('unsupported-request')
+          if (metadata.protocolId !== history.binding.protocolId || metadata.recordFormatVersion !== history.binding.recordFormatVersion ||
+            history.binding.driverVersion !== history.modelSnapshot.protocolVersion ||
+            !isDeepStrictEqual(metadata.modelSnapshot, history.modelSnapshot)) throw incompatible()
         }
         const driver = deps[modelsProtocolsServiceKey].acquire(protocolId)
         if (driver.generationId !== entry.driverGenerationId) { driver.release(); throw modelFailure('dependency-unavailable') }
@@ -193,8 +192,11 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         let execution: NativeExecution | undefined
         try {
           signal.throwIfAborted()
-          const restore: NativeRestoreState | undefined = input.history ? { protocolId, recordFormatVersion: input.history.binding.recordFormatVersion as 1 | 2,
-            modelSnapshot: input.history.modelSnapshot, records: input.history.records.map(record => toNativeRecord(record.protocolId, record)) } : undefined
+          const restore: NativeRestoreState | undefined = history ? { protocolId, recordFormatVersion: history.binding.recordFormatVersion as 1 | 2,
+            modelSnapshot: history.modelSnapshot, records: history.records.map(record => toNativeRecord(record.protocolId, record)) } : undefined
+          const applicationPrefix = history?.applicationPrefix ?? (!history ? input.applicationHistory?.events : undefined)
+          const encoded = applicationPrefix && encodePortableHistory(protocolId, applicationPrefix)
+          const historyPrefix = encoded && { state: encodeInitial(protocolId, input, true, encoded.items), resourceRefs: encoded.resourceRefs }
           const currentImages = new Map<string, NativeImageResourceRef>()
           for (const image of inputImages(input.input)) {
             const ref = { id: image.assetId, sha256: image.sha256, byteLength: image.byteLength, mimeType: image.mediaType }
@@ -204,7 +206,8 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
           }
           const imageRefs = [...currentImages.values()]
           const permitted = new Map<string, NativeImageResourceRef>()
-          for (const resource of [...(restore?.records.flatMap(record => record.resourceRefs ?? []) ?? []), ...imageRefs]) {
+          for (const resource of [...(input.continuation?.resourceRefs ?? []), ...(historyPrefix?.resourceRefs ?? []),
+            ...(restore?.records.flatMap(record => record.resourceRefs ?? []) ?? []), ...imageRefs]) {
             const previous = permitted.get(resource.id)
             if (previous && !isDeepStrictEqual(previous, resource)) throw modelFailure('invalid-resource')
             permitted.set(resource.id, resource)
@@ -217,11 +220,25 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
             void result.catch(() => {}); void done.catch(() => {})
             return { result, done, cancel: () => call.cancel('model-resource-cancelled') }
           } }
-          execution = await deps[modelsServiceKey].openNative({ modelId: input.modelId, lease: driver, signal,
-            resources, ...(permitted.size ? { requirements: { imageInput: true } } : {}), ...(restore ? { restore } : {}) })
+          try {
+            execution = await deps[modelsServiceKey].openNative({ modelId: input.modelId, lease: driver, signal,
+              resources, continuation: input.continuation, captureContinuation: input.continuous && !input.resume, requirements: {
+                ...(permitted.size ? { imageInput: true } : {}),
+                ...(applicationPrefix?.some(event => event.role === 'tool') ? { tools: true } : {}),
+              }, ...(restore ? { restore } : {}), ...(historyPrefix ? { historyPrefix } : {}) })
+          } catch (error) {
+            if (continuousCandidate && !signal.aborted && isModelsError(error) &&
+              (error.code === 'invalid-config' || error.code === 'capability-unsupported')) throw treeError('history-incompatible')
+            throw error
+          }
           signal.throwIfAborted()
           if (input.initialization.tools.length && !execution.capabilities.tools) throw modelFailure('unsupported-request')
-          const initial = input.resume ? {} : encodeInitial(protocolId, input), owned = execution
+          const initial = input.resume ? {} : encodeInitial(protocolId, input, !history && !historyPrefix && !input.continuation), owned = execution
+          const prefixTokens = input.continuous && !input.resume ? input.continuationInputTokens ??
+            estimateNativePrefix(protocolId, history?.records ?? [],
+              () => historyPrefix ? estimateNativeIntent(historyPrefix.state, historyPrefix.resourceRefs) : 0) : undefined
+          const estimatedInputTokens = prefixTokens === undefined ? undefined :
+            Math.min(prefixTokens + estimateNativeIntent(initial, imageRefs), Number.MAX_SAFE_INTEGER)
           let replay: import('@anybox/models').NativeReply | undefined
           let toolRequestCorrections = 0
           if (input.resume) {
@@ -246,7 +263,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
             driverVersion: owned.snapshot.protocolVersion, loopVersion: '1.4.0', recordFormatVersion: owned.recordFormatVersion, viewSchemaVersion: 2 }
           let closing: Promise<ProgramExitReport> | undefined, executed = false
           const program: PreparedRunProgram = { binding, modelSnapshot: acceptedSnapshot ?? owned.snapshot, initialization: input.initialization, input: input.input,
-            signal,
+            signal, estimatedInputTokens,
             async execute(host) {
               if (executed) throw modelFailure('invalid-response')
               executed = true
@@ -257,7 +274,8 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
                     if (prior && !isDeepStrictEqual(prior, ref)) throw modelFailure('invalid-resource')
                     permitted.set(ref.id, ref)
                   }
-                }, input.initialization.tools, replay, toolRequestCorrections, Boolean(input.continuity)), initial) }
+                }, input.initialization.tools, replay, toolRequestCorrections,
+                input.continuous || input.resume?.run.projectId !== undefined), initial) }
               catch (error) {
                 if (host.signal.aborted || program.signal.aborted) throw error
                 const failure = error instanceof RunFailure ? error : normalizeModelFailure(error)
@@ -265,11 +283,19 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
               }
             },
             close() {
-              closing ??= owned.close().then(report => ({ records: report.records.map(toProtocolRecord),
-                checkpoint: serializable(report.restoreState ? { ...report.restoreState, ...(acceptedSnapshot ? { modelSnapshot: acceptedSnapshot } : {}) }
-                  : input.resume && report.cleanup === 'succeeded' && !report.records.length ? {
-                    protocolId, recordFormatVersion: input.resume.run.protocolBinding!.recordFormatVersion, modelSnapshot: acceptedSnapshot,
-                  } : null), cleanup: report.cleanup === 'succeeded' ? 'completed' : 'failed' }))
+              closing ??= owned.close().then(report => {
+                const records = report.records.map(toProtocolRecord)
+                return {
+                  records, continuation: report.continuation,
+                  estimatedContinuationTokens: report.continuation && prefixTokens !== undefined ?
+                    estimateNativePrefix(protocolId, records, () => prefixTokens) : undefined,
+                  checkpoint: serializable(report.restoreState ? { ...report.restoreState, ...(acceptedSnapshot ? { modelSnapshot: acceptedSnapshot } : {}) }
+                    : input.resume && report.cleanup === 'succeeded' && !report.records.length ? {
+                      protocolId, recordFormatVersion: input.resume.run.protocolBinding!.recordFormatVersion, modelSnapshot: acceptedSnapshot,
+                    } : null),
+                  cleanup: report.cleanup === 'succeeded' ? 'completed' : 'failed',
+                }
+              })
               return closing
             },
             release: () => owner.release(),
@@ -279,6 +305,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
           try {
             if (execution && (await execution.close()).cleanup === 'failed') throw modelFailure('cleanup-failure')
           } finally { owner.release() }
+          if (continuousCandidate && error instanceof Error && 'code' in error && error.code === 'history-incompatible') throw error
           throw normalizeModelFailure(error)
         }
       },

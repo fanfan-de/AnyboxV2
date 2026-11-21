@@ -107,7 +107,7 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
     selectSessionModel(sessionId, modelId) {
       const model = deps[modelsServiceKey].get(modelId)
       if (!model) throw modelsError('not-found')
-      return deps[sessionServiceKey].selectSessionModel(sessionId, modelId, model.parameters.protocolId)
+      return deps[sessionServiceKey].selectSessionModel(sessionId, modelId)
     },
     getSession: id => deps[sessionServiceKey].getSession(id),
     archiveSession: id => deps[sessionServiceKey].archiveSession(id),

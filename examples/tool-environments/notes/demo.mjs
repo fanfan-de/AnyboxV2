@@ -70,15 +70,15 @@ async function openExample(directory, environments) {
     const protocols = /** @type {import('@anybox/models').ModelsProtocolsService} */ (root.get('models.protocols'))
     protocols.register(model.protocol)
     const settings = /** @type {import('@anybox/models').ModelsSettingsService} */ (root.get('models.settings'))
-    if (!settings.connections().length) {
+    if (!settings.configuredProviders().length) {
       const capabilities = { ...unknownCapabilities(), tools: { support: /** @type {const} */ ('supported') }, streaming: { support: /** @type {const} */ ('unsupported') } }
       const provider = await settings.createProvider({ name: 'Offline notes example', connectionHints: { protocolIds: ['chat-completions'] } })
-      const connection = await settings.createConnection({ id: 'notes-demo-connection', providerDefinitionId: provider.id,
+      await settings.createProviderSettings({ providerId: provider.id,
         name: 'Offline', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://offline.invalid/v1', auth: 'none', timeoutMs: 1000 })
-      const definition = await settings.createModel({ providerId: provider.id, name: 'Offline fixture', remoteModelId: 'offline', capabilities,
+      const definition = await settings.createModel({ id: agent.modelId, providerId: provider.id, name: 'Offline fixture', remoteModelId: 'offline', capabilities,
         modalities: { input: ['text'], output: ['text'] }, controls: { temperature: 'unknown' }, limits: {}, connectionHints: { protocolIds: ['chat-completions'] } })
-      await settings.createConfiguration({ id: agent.modelId, name: 'Offline fixture', enabled: true, connectionId: connection.id,
-        modelDefinitionId: definition.id, capabilities, baseline: true, parameters: { protocolId: 'chat-completions', formatVersion: 1, value: {} } })
+      await settings.createModelSettings({ modelId: definition.id, name: 'Offline fixture', enabled: true,
+        capabilities, parameters: { protocolId: 'chat-completions', formatVersion: 1, value: {} } })
     }
     await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
     await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))

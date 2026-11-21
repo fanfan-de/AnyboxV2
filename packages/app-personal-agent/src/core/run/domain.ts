@@ -117,6 +117,7 @@ export interface Run {
   /** The caller's explicit selection; null means Session/Agent defaults were resolved. */
   readonly requestedModelId: string | null
   readonly modelSnapshot: LegacyExecutionSnapshot | NativeModelSnapshot | null
+  readonly estimatedInputTokens?: number
   readonly protocolBinding?: ProtocolBindingSnapshot
   readonly nativeInput?: NativeRunInput
   readonly initialization?: NativeInitialization

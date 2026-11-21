@@ -88,15 +88,17 @@ export function createResponsesProtocol(options: ProtocolOptions = {}): NativePr
       readText: readGeneratedText,
     },
     resourceIds: responsesImages.ids,
-    restore: records => {
+    supportsHistoryPrefix: true,
+    restore: (records, prefix) => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
-      return restoreRecords('responses', records, commit, [1, 2]);
+      const initial = prefix === undefined ? undefined : conversation({}, prefix, 'input', ['tools', 'instructions']);
+      return restoreRecords('responses', records, commit, [1, 2], initial);
     },
     prepare(input) {
       validateIntent(input.intent);
       if (responsesImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
-      requireLocalTools(input.intent.tools, input.capabilities.tools);
       const next = conversation(input.state, input.intent, 'input', ['tools', 'instructions']);
+      requireLocalTools(next.tools, input.capabilities.tools);
       const tools = mergeTools(next.tools, input.parameters.tools);
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(tool.parameters); }
       const streaming = input.responseMode === undefined ? input.capabilities.streaming : input.responseMode === 'stream';

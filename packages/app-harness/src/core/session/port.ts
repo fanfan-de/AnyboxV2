@@ -3,7 +3,7 @@ import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput, Co
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
 import type { RunEvent, RunExecution } from '../run/execution.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
-import type { ProtocolBindingSnapshot, NativeInitialization, NativeRunInput, NativeHistory, StoredProtocolRecord, ProtocolRecord, RunResumeRecord, RunResumePatch } from '../run/program.js'
+import type { ApplicationHistory, ProtocolBindingSnapshot, NativeInitialization, NativeRunInput, NativeHistory, StoredProtocolRecord, ProtocolRecord, RunResumeRecord, RunResumePatch, RunResumeState } from '../run/program.js'
 import type { ValidatedToolRequest, ToolObservation, RunFailureCategory } from '../run/domain.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { OwnedCall } from '../contracts.js'
@@ -32,7 +32,7 @@ export interface SessionPort {
   getAgentTools(agentId: string): Promise<AgentToolsSelection>
   setAgentTools(agentId: string, input: AgentToolsInput): Promise<AgentToolsSelection>
   createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
-  selectSessionModel(sessionId: string, modelId: string, protocolId?: string): Promise<Session>
+  selectSessionModel(sessionId: string, modelId: string): Promise<Session>
   archiveSession(id: string): Promise<Session>
   restoreSession(id: string): Promise<Session>
   listArchivedSessions(): Promise<readonly Session[]>
@@ -64,10 +64,13 @@ export interface SessionRunPort {
   loadRunContext(id: string): Promise<RunContext | undefined>
   loadNativeInitialization(sessionId: string): Promise<NativeInitialization | undefined>
   loadNativeHistory(sessionId: string, parentNodeId: string | null): Promise<NativeHistory | undefined>
+  loadApplicationHistory(sessionId: string, parentNodeId: string): Promise<ApplicationHistory>
+  getCompletedContextRef(sessionId: string, nodeId: string, runId?: string): Promise<string | undefined>
   loadRunResume(id: string): Promise<RunResumeRecord | undefined>
+  loadRunResumeState(id: string): Promise<RunResumeState | undefined>
   listRunResumes(): Promise<readonly RunResumeRecord[]>
   claimRunResume(id: string, expectedEpoch: number, at: string): Promise<RunResumeRecord>
-  saveRunResume(id: string, ownerEpoch: number, patch: RunResumePatch, at: string): Promise<RunResumeRecord>
+  saveRunResume(id: string, ownerEpoch: number, patch: RunResumePatch, at: string): Promise<void>
   getRunOperation(runId: string, id: string): Promise<SavedRunOperation | undefined>
   startOperation(runId: string, operation: RunOperationStart, at: string, ownerEpoch?: number): Promise<boolean>
   observeOperation(runId: string, operationId: string, observation: RunOperationObservation, at: string, ownerEpoch?: number): Promise<void>
@@ -88,6 +91,8 @@ export interface NativeRunRegistration {
   readonly initialization: NativeInitialization
   readonly input: NativeRunInput
   readonly parentContextRef: string | null
+  readonly applicationPrefix?: true
+  readonly estimatedInputTokens?: number
   /** Unit attachments the Run runs against; re-verified inside the acceptance transaction when present. */
   readonly units?: RunUnitBindings
 }

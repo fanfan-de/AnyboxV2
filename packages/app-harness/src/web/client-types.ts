@@ -53,6 +53,8 @@ export interface PendingSubmission {
   /** Missing on old pending inputs, which must be confirmed again. */
   readonly schemaVersion?: number
   readonly modelId?: string
+  /** Protocol used to prepare this input. Older entries inherit the Session's first protocol. */
+  readonly protocolId?: string
   readonly sessionId: string
   readonly input: string
   readonly images?: readonly ImageRef[]

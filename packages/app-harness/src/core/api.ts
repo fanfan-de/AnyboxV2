@@ -43,6 +43,7 @@ export interface RunView {
   readonly legacyModelSnapshot?: Readonly<{ profileId: string; configVersion: string }>
   readonly modelSnapshot: LegacyExecutionSnapshot | NativeModelSnapshot | null
   readonly protocolBinding?: { readonly protocolId: string; readonly viewSchemaVersion: number }
+  readonly estimatedInputTokens?: number
   readonly id: string
   readonly sessionId: string
   readonly input: string

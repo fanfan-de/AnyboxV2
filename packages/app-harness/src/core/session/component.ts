@@ -178,10 +178,10 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
             return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.modelId ?? null, agent.environmentIds)
           })
         },
-        selectSessionModel(sessionId, rawModelId, protocolId) {
+        selectSessionModel(sessionId, rawModelId) {
           return track(async () => {
             const modelId = nonEmpty(rawModelId, 'modelId')
-            return records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId, protocolId)
+            return records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId)
           })
         },
         archiveSession: id => track(() => records.archiveSession(nonEmpty(id, 'sessionId'))),
@@ -208,7 +208,10 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         registerRun: (id, input, now, prompts, model, native) => track(() => records.registerRun(id, input, now, prompts, model, native)),
         loadNativeInitialization: sessionId => track(() => records.loadNativeInitialization(sessionId)),
         loadNativeHistory: (sessionId, parentNodeId) => track(() => records.loadNativeHistory(sessionId, parentNodeId)),
+        loadApplicationHistory: (sessionId, parentNodeId) => track(() => records.loadApplicationHistory(sessionId, parentNodeId)),
+        getCompletedContextRef: (sessionId, nodeId, runId) => track(() => records.getCompletedContextRef(sessionId, nodeId, runId)),
         loadRunResume: id => track(() => records.loadRunResume(id)),
+        loadRunResumeState: id => track(() => records.loadRunResumeState(id)),
         listRunResumes: () => track(() => records.listRunResumes()),
         claimRunResume: (id, epoch, at) => track(() => records.claimRunResume(id, epoch, at)),
         saveRunResume: (id, epoch, patch, at) => track(() => records.saveRunResume(id, epoch, patch, at)),

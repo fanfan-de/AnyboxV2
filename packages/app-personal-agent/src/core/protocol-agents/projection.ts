@@ -101,10 +101,16 @@ const tokenCount = (value: unknown): number | undefined => Number.isSafeInteger(
 export function projectNativeUsage(protocolId: string, response: unknown): ProtocolTokenUsage | undefined {
   const usage = object(object(response).usage)
   let inputTokens: number | undefined, outputTokens: number | undefined
+  let cachedInputTokens: number | undefined, uncachedInputTokens: number | undefined
   if (protocolId === 'responses') {
     inputTokens = tokenCount(usage.input_tokens); outputTokens = tokenCount(usage.output_tokens)
   } else if (protocolId === 'chat-completions') {
     inputTokens = tokenCount(usage.prompt_tokens); outputTokens = tokenCount(usage.completion_tokens)
+    cachedInputTokens = tokenCount(usage.prompt_cache_hit_tokens) ?? tokenCount(object(usage.prompt_tokens_details).cached_tokens)
+    uncachedInputTokens = tokenCount(usage.prompt_cache_miss_tokens)
+    if (uncachedInputTokens === undefined && inputTokens !== undefined && cachedInputTokens !== undefined) {
+      uncachedInputTokens = tokenCount(inputTokens - cachedInputTokens)
+    }
   } else if (protocolId === 'gemini-interactions') {
     inputTokens = tokenCount(usage.total_input_tokens); outputTokens = tokenCount(usage.total_output_tokens)
   } else if (protocolId === 'anthropic-messages') {
@@ -113,9 +119,11 @@ export function projectNativeUsage(protocolId: string, response: unknown): Proto
     if (input !== undefined && read !== undefined && created !== undefined) inputTokens = tokenCount(input + read + created)
     outputTokens = tokenCount(usage.output_tokens)
   }
-  return inputTokens === undefined && outputTokens === undefined ? undefined : {
+  const counts = {
     ...(inputTokens === undefined ? {} : { inputTokens }), ...(outputTokens === undefined ? {} : { outputTokens }),
+    ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }), ...(uncachedInputTokens === undefined ? {} : { uncachedInputTokens }),
   }
+  return Object.keys(counts).length ? counts : undefined
 }
 export function projectNativeExchange(protocolId: string, response: unknown, diagnostic = false): Pick<ProtocolViewExchange, 'blocks' | 'nativeState' | 'usage'> {
   const usage = projectNativeUsage(protocolId, response)

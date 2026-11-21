@@ -106,15 +106,17 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
       readText: readGeneratedText,
     },
     resourceIds: geminiImages.ids,
-    restore: records => {
+    supportsHistoryPrefix: true,
+    restore: (records, prefix) => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
-      return restoreRecords(protocolId, records, commit, [1, 2]);
+      const initial = prefix === undefined ? undefined : conversation({}, prefix, 'input', ['system_instruction', 'tools']);
+      return restoreRecords(protocolId, records, commit, [1, 2], initial);
     },
     prepare(input) {
       validateIntent(input.intent);
       if (geminiImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
-      requireLocalTools(input.intent.tools, input.capabilities.tools);
       const next = conversation(input.state, input.intent, 'input', ['system_instruction', 'tools']);
+      requireLocalTools(next.tools, input.capabilities.tools);
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(tool.parameters); }
       return native({ ...input.parameters, ...next, model: input.remoteModelId, store: false, stream: input.responseMode === undefined ? input.capabilities.streaming : input.responseMode === 'stream' });
     },

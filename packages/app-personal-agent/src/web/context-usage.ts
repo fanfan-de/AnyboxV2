@@ -41,6 +41,11 @@ export function contextUsage(state: Pick<SessionSnapshot, 'session' | 'position'
     snapshot && snapshot.modelDefinitionVersionId === model?.modelDefinitionVersionId && positive(model?.limits?.context) ? model.limits.context : undefined
   const view = state.views.get(run.id)
   const usage = view?.exchanges.at(-1)?.usage
+  if (!usage && active(run) && count(run.estimatedInputTokens)) {
+    const estimated = number(run.estimatedInputTokens)
+    return { limit, tone: 'unknown', label: `本轮输入估计 ${estimated} tokens`,
+      detail: '这是首次请求的本地估算。收到模型用量后会更新。' }
+  }
   if (!usage) return unknown(active(run) ? '本次运行尚未返回用量统计；模型报告后更新。' : '模型未报告用量；无法计算当前分支的上下文占用。')
   const inputTokens = count(usage.inputTokens) ? usage.inputTokens : undefined
   const outputTokens = count(usage.outputTokens) ? usage.outputTokens : undefined
@@ -108,7 +113,7 @@ export function createContextUsageView(container: HTMLElement, id: string, signa
   }, { signal })
   globalThis.window?.addEventListener('resize', position, { signal })
   signal.addEventListener('abort', close, { once: true })
-  container.querySelector('.composer-model-row')!.prepend(root)
+  container.querySelector('.composer-footer')!.prepend(root)
   return { close, position, render(value) {
     root.dataset.tone = value.tone
     button.setAttribute('aria-label', value.label)

@@ -10,6 +10,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   isActive(): boolean
   selectDevice(id: string): boolean
   refreshArchive(): void
+  resetModelsView?(): void
   refreshAgents(): void
   leaveAgents?(): void
 }) {
@@ -24,15 +25,16 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   const scope = required<HTMLElement>('#personal-agent--settings-scope')
   const device = required<HTMLSelectElement>('#personal-agent--settings-device')
   const deviceLabel = required<HTMLLabelElement>('label[for="personal-agent--settings-device"]')
+  const defaultDeviceLabel = deviceLabel.textContent
+  const modelDeviceSlot = required<HTMLElement>('[data-models-device-slot]')
   const allDevices = required<HTMLElement>('#personal-agent--settings-all-devices')
   const buttons = [...dialog.querySelectorAll<HTMLButtonElement>('[data-settings-section]')]
   const panels = [...dialog.querySelectorAll<HTMLElement>('[data-settings-panel]')]
   const selected = options.selectedId ?? options.devices[0]?.id ?? ''
   const name = options.selectedName ?? options.devices.find(item => item.id === selected)?.name ?? '所选设备'
-  const descriptions: Record<SettingsSection, string> = {
+  const descriptions: Record<Exclude<SettingsSection, 'models'>, string> = {
     general: `设置${name}上所选 Agent 的默认模型。未手动指定模型时，后续运行使用此设置。`,
     agents: `在${name}上创建 Agent，或编辑已有 Agent 的资料、指令和默认模型。`,
-    models: `管理${name}上保存的模型连接和调用配置。`,
     prompts: `这里的 Prompt 供${name}上的 Agent 使用。`,
     tools: `为${name}上所选 Agent 的后续运行选择工具。`,
     units: `管理${name}上的 Agent 可使用的执行环境。`,
@@ -59,6 +61,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   const headingFor = (value: SettingsSection) => panelFor(value)?.querySelector<HTMLElement>('.settings-panel-heading')
   const selectSection = (value: SettingsSection) => {
     if (disposed || !panelFor(value)) return
+    if (section === 'models' && value !== 'models') options.resetModelsView?.()
     if (section === 'agents' && value !== 'agents') options.leaveAgents?.()
     blocked.hidden = true
     section = value
@@ -69,14 +72,17 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     for (const panel of panels) panel.hidden = panel.dataset.settingsPanel !== section
     const heading = headingFor(section)
     const title = heading?.querySelector<HTMLHeadingElement>('h3')
-    if (heading && title) {
+    modelDeviceSlot.hidden = section !== 'models'
+    deviceLabel.textContent = section === 'models' ? '设备' : defaultDeviceLabel
+    if (section === 'models') {
+      title?.classList.add('sr-only')
+      modelDeviceSlot.append(scope)
+    } else if (heading && title) {
       let row = heading.querySelector<HTMLElement>('.settings-title-row')
       if (!row) {
         row = document.createElement('div'); row.className = 'settings-title-row'
         const originalGroup = title.parentElement
         row.append(title); heading.prepend(row)
-        // Models groups its title and description in a div; keep both descriptions
-        // and action buttons while making the shared title row a direct child.
         if (originalGroup && originalGroup !== heading) {
           for (const child of [...originalGroup.children]) heading.insertBefore(child, originalGroup)
           originalGroup.remove()
@@ -85,8 +91,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
       row.append(scope)
       let description = heading.querySelector<HTMLElement>('.settings-scope-description')
       if (!description) {
-        // General and global panels already explain their scope; update that line
-        // instead of repeating it. Preserve Prompt's workflow and other specific help.
+        // Reuse the scope line in general and global panels.
         description = section === 'general' || section === 'connections' || section === 'archive' ? heading.querySelector<HTMLElement>('p') : null
         if (!description) { description = document.createElement('p'); heading.append(description) }
         description.className = `${description.className} settings-scope-description`.trim()
@@ -110,6 +115,9 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   for (const button of buttons) button.addEventListener('click', () => {
     selectSection(button.dataset.settingsSection as SettingsSection)
   }, { signal: lifetime.signal })
+  dialog.addEventListener('close', () => {
+    if (!dialog.open && section === 'models') options.resetModelsView?.()
+  }, { signal: lifetime.signal })
   dialog.addEventListener('input', () => { blocked.hidden = true }, { signal: lifetime.signal })
   dialog.addEventListener('click', event => {
     if ((event.target as HTMLElement | null)?.closest?.('.settings-panel button')) blocked.hidden = true
@@ -125,6 +133,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     if (disposed) return
     if (value) selectSection(value)
     if (options.isActive() && !dialog.open) {
+      if (section === 'models') options.resetModelsView?.()
       dialog.showModal()
       if (section === 'archive') options.refreshArchive()
     }

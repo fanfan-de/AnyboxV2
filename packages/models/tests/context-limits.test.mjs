@@ -3,19 +3,20 @@ import { test } from 'node:test'
 import { normalizeModelsDevCatalog } from '../dist/catalog-domain.js'
 import { exchange, fakeProtocol, fixture } from './helpers.mjs'
 
-const catalog = (context, time) => normalizeModelsDevCatalog({ provider: {
+const catalogModel = (id, context) => ({ id, name: id, tool_call: true, streaming: true,
+  modalities: { input: ['text'], output: ['text'] }, limit: { context, input: context - 1000, output: 1000 } })
+const catalog = (context, time, added = false) => normalizeModelsDevCatalog({ provider: {
   id: 'provider', name: 'Provider', api: 'https://example.invalid/v1', npm: '@ai-sdk/openai-compatible',
-  models: { model: { id: 'model', name: 'Model', tool_call: true, streaming: true,
-    modalities: { input: ['text'], output: ['text'] }, limit: { context, input: context - 1000, output: 1000 } } },
+  models: { model: catalogModel('model', context), ...(added ? { added: catalogModel('added', context) } : {}) },
 } }, 'context-limit-test', time)
 
 async function setup() {
   const f = await fixture({ protocols: [fakeProtocol('chat-completions')] })
   await f.sourceData.accept(catalog(32_000, 1))
   const provider = f.settings.providers()[0]
-  const connection = await f.settings.createConnection({ id: 'account', providerDefinitionId: provider.id,
+  const connection = await f.settings.createProviderSettings({ providerId: provider.id,
     name: 'Account', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'none', timeoutMs: 1000 })
-  return { ...f, connection, configuration: f.settings.configurations()[0] }
+  return { ...f, connection, configuration: f.settings.modelSettings()[0] }
 }
 
 test('runnable summaries and new executions retain the configuration-pinned definition limits after refresh', async () => {
@@ -24,21 +25,20 @@ test('runnable summaries and new executions retain the configuration-pinned defi
     const expected = { context: 32_000, input: 31_000, output: 1000 }
     const original = f.models.get(f.configuration.id)
     assert.deepEqual(original.limits, expected)
-    await f.sourceData.accept(catalog(128_000, 2))
-    assert.equal(f.settings.models()[0].limits.context, 128_000)
+    await f.sourceData.accept(catalog(128_000, 2, true))
+    assert.equal(f.settings.models().find(model => model.id === f.configuration.id).limits.context, 128_000)
     assert.deepEqual(f.models.get(f.configuration.id).limits, expected)
-    assert.equal(f.models.list()[0].modelDefinitionVersionId, original.modelDefinitionVersionId)
+    assert.equal(f.models.list().find(model => model.id === original.id).modelDefinitionVersionId, original.modelDefinitionVersionId)
     const execution = await f.open({ modelId: f.configuration.id })
     assert.deepEqual(execution.snapshot.limits, expected)
     assert.equal(execution.snapshot.modelDefinitionVersionId, original.modelDefinitionVersionId)
     assert.equal(Object.isFrozen(execution.snapshot.limits), true)
     await execution.close()
 
-    const input = Object.fromEntries(['name', 'enabled', 'modelDefinitionId', 'connectionId', 'capabilities', 'parameters'].map(key => [key, f.configuration[key]]))
-    const variant = await f.settings.createConfiguration({ ...input, id: 'new-configuration', baseline: false })
-    const next = await f.open({ modelId: variant.id })
+    const added = f.models.list().find(model => model.remoteModelId === 'added')
+    const next = await f.open({ modelId: added.id })
     assert.equal(next.snapshot.limits.context, 128_000)
-    assert.notEqual(next.snapshot.modelDefinitionVersionId, original.modelDefinitionVersionId)
+    assert.equal(next.snapshot.modelDefinitionVersionId, f.settings.models().find(model => model.id === added.modelDefinitionId).versionId)
     await next.close()
   } finally { await f.close() }
 })

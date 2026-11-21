@@ -1,4 +1,4 @@
-import type { DeclaredCapabilities, EffectiveCapabilities, JsonValue, ModelInput, ModelQuery, ProtocolConnection, ProtocolDescriptor, ProtocolOperation, ProviderConnectionInput, RunnableModelSummary } from './types.js';
+import type { DeclaredCapabilities, EffectiveCapabilities, JsonValue, ModelInput, ModelQuery, ProtocolConnection, ProtocolDescriptor, ProtocolOperation, ProviderSettingsInput, RunnableModelSummary } from './types.js';
 
 export type NativeObject = Readonly<Record<string, JsonValue>>;
 export type NativeResponseMode = 'stream' | 'complete';
@@ -76,11 +76,23 @@ export interface NativeRestoreMetadata {
 }
 /** The host resolves the immutable parent path before opening; never persist this expanded array per node. */
 export interface NativeRestoreState extends NativeRestoreMetadata { readonly records: readonly NativeRecordDraft[] }
+/** Trusted host history already encoded for the leased protocol. Rebuilt by the host when resuming. */
+export interface NativeHistoryPrefix {
+  readonly state: NativeObject;
+  readonly resourceRefs?: readonly NativeImageResourceRef[];
+}
+declare const nativeContinuationIdentity: unique symbol;
+/** Optional process-local continuation for the same registered driver and model scope. Persist native records for recovery. */
+export interface NativeContinuation {
+  readonly [nativeContinuationIdentity]: true;
+  readonly resourceRefs: readonly NativeImageResourceRef[];
+}
 export interface NativeReply<R extends NativeObject = NativeObject> { readonly exchangeId: string; readonly response: R; readonly records: readonly NativeRecordDraft[] }
 export interface NativeExitReport {
   /** Only records produced by this execution, not records supplied through restore. */
   readonly records: readonly NativeRecordDraft[];
   readonly restoreState?: NativeRestoreMetadata;
+  readonly continuation?: NativeContinuation;
   readonly cleanup: 'succeeded' | 'failed';
 }
 export interface NativeRequestRecipe<I extends NativeObject = NativeObject> {
@@ -117,6 +129,10 @@ export interface OpenNativeModelInput<I extends NativeObject = NativeObject, R e
   readonly modelId: string;
   readonly lease: NativeProtocolLease<I, R, E>;
   readonly restore?: NativeRestoreState;
+  readonly historyPrefix?: NativeHistoryPrefix;
+  /** Supply the exact token from a clean exit. Mutually exclusive with restore and historyPrefix. */
+  readonly continuation?: NativeContinuation;
+  readonly captureContinuation?: boolean;
   readonly requirements?: { readonly tools?: boolean; readonly streaming?: boolean; readonly reasoning?: boolean; readonly imageInput?: boolean };
   readonly resources?: NativeResourceResolver;
   readonly signal?: AbortSignal;
@@ -135,12 +151,13 @@ export interface NativeProtocol<I extends NativeObject = NativeObject, R extends
   canRestoreVersion?(version: string): boolean;
   /** Reads only recognized image positions, never arbitrary strings or JSON keys. */
   resourceIds?(intentOrRequest: NativeObject): readonly string[];
-  validateProvider(provider: ProviderConnectionInput): void;
+  validateProvider(provider: ProviderSettingsInput): void;
   validateParameters(parameters: NativeObject, declared: DeclaredCapabilities): void;
   effectiveCapabilities(declared: DeclaredCapabilities, parameters: NativeObject): EffectiveCapabilities;
   /** Produces explicit values for new configurations, respecting the model's declared capabilities. */
   initialParameters?(outputLimit?: number, declared?: DeclaredCapabilities): NativeObject;
-  restore(records: readonly NativeRecordDraft[]): NativeObject;
+  readonly supportsHistoryPrefix?: true;
+  restore(records: readonly NativeRecordDraft[], prefix?: NativeObject): NativeObject;
   prepare(input: { readonly state: NativeObject; readonly intent: I; readonly remoteModelId: string; readonly parameters: NativeObject; readonly capabilities: EffectiveCapabilities; readonly responseMode?: NativeResponseMode }): NativeObject;
   exchange(input: ProtocolConnection & { readonly request: NativeObject; readonly onEvent: (event: E) => void; readonly resources?: NativeResourceResolver; readonly resourceRefs?: readonly NativeImageResourceRef[] }): ProtocolOperation<R>;
   commit(input: { readonly state: NativeObject; readonly intent: I; readonly request: NativeObject; readonly response: R }): NativeObject;

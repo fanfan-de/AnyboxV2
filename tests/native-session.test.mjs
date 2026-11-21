@@ -90,27 +90,30 @@ test('Session titles bound Unicode input without changing the original Run', asy
   assert.equal((await f.sessions.getRun('long-title')).input, raw)
 })
 
-test('first native admission atomically binds a Session; failure does not release its protocol', async t => {
+test('first native admission fixes shared initialization while concurrent root Runs can use different APIs', async t => {
   const f = await host(t), a = modelSnapshot(), b = { ...modelSnapshot(), protocolId: 'responses', parameters: { protocolId: 'responses', formatVersion: 1, value: {} } }
   const results = await Promise.allSettled([a, b].map((snapshot, i) => {
     const request = input(f.session.id, `run-${i}`)
     return f.records.registerRun(request.input, request, 'now', [], snapshot, nativeRegistration(request, snapshot))
   }))
-  assert.equal(results.filter(result => result.status === 'fulfilled').length, 1)
-  assert.equal(results.filter(result => result.status === 'rejected')[0].reason.code, 'protocol-mismatch')
-  const [run] = await f.sessions.listRuns(f.session.id)
+  assert.equal(results.filter(result => result.status === 'fulfilled').length, 2)
+  const [run, other] = results.map(result => result.value.run)
+  assert.notEqual(run.protocolBinding.protocolId, other.protocolBinding.protocolId)
   const bound = await f.sessions.getSession(f.session.id)
-  assert.equal(bound.protocolId, run.protocolBinding.protocolId)
+  assert.ok([run.protocolBinding.protocolId, other.protocolBinding.protocolId].includes(bound.protocolId))
   await f.records.settleRun(run.id, { kind: 'failed', error: 'test failure', category: 'provider-failure' }, 'now')
   assert.equal((await f.sessions.getSession(f.session.id)).protocolId, bound.protocolId)
   const fixed = await f.records.loadNativeInitialization(f.session.id)
   assert.ok(fixed)
+  assert.equal((await f.db.read(reader => reader.all('SELECT * FROM harness_native_initializations'))).length, 1)
   const retry = input(f.session.id, 'retry')
   const altered = nativeRegistration(retry, run.modelSnapshot)
   altered.initialization = { ...fixed, tools: [{ name: 'changed', description: 'changed', parameters: {} }] }
   await assert.rejects(f.records.registerRun('retry', retry, 'now', [], run.modelSnapshot, altered), /history-incompatible/)
   assert.deepEqual(await f.records.loadNativeInitialization(f.session.id), fixed)
-  await assert.rejects(f.sessions.selectSessionModel(f.session.id, 'other', bound.protocolId === a.protocolId ? b.protocolId : a.protocolId), /protocol-mismatch/)
+  const selected = await f.sessions.selectSessionModel(f.session.id, 'other')
+  assert.equal(selected.modelId, 'other')
+  assert.equal(selected.protocolId, bound.protocolId)
 })
 
 test('native records are immutable, belong to one Run, and roll back with invalid result references', async t => {

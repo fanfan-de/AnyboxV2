@@ -1,51 +1,30 @@
 import assert from 'node:assert/strict'
-import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
-import { commitContinuousRoot, continuousBudget, planContinuousRun } from '../dist/core/session/continuous-history.js'
+import { estimateNativeIntent, estimateNativePrefix } from '../dist/core/protocol-agents/context-estimate.js'
+import { contextUsage } from '../dist/web/context-usage.js'
 
-test('continuous budget reserves space for configured output and honors the available model input limit', () => {
-  const model = { parameters: { value: { max_tokens: 64 } }, limits: { context: 1024, output: 128, input: 900 } }
-  assert.equal(continuousBudget(model, 644), 0)
-  assert.throws(() => continuousBudget(model, 645), { code: 'context-too-large' })
-  assert.equal(continuousBudget({ ...model, limits: { ...model.limits, input: 10_000 } }, 644), 60)
-  assert.equal(continuousBudget({ parameters: { value: {} } }, 1000), 4_888)
-  assert.equal(continuousBudget({ parameters: { value: {} }, limits: { context: 1024 } }, 100), 412)
+test('native input estimate uses the latest full input measurement and counts only replayed deltas', () => {
+  const chat = (message, input) => ({ kind: 'response', payload: { choices: [{ message }],
+    usage: { ...(input === undefined ? {} : { prompt_tokens: input }), completion_tokens: 10_000 } } })
+  const assistant = { role: 'assistant', content: 'Recorded.', reasoning_content: 'Native reasoning.' }
+  const earlier = chat(assistant, 20)
+  const initial = { kind: 'request', payload: { messages: [{ role: 'system', content: 'x'.repeat(12_000) }] } }
+  const latest = chat(assistant, 1_200)
+  const noBaseline = () => assert.fail('measured native history should not re-estimate the earlier prefix')
+  const replayTokens = estimateNativeIntent(assistant)
+  assert.equal(estimateNativePrefix('chat-completions', [earlier, initial, latest], noBaseline), 1_200 + replayTokens)
+  const next = { kind: 'request', payload: { messages: [{ role: 'user', content: 'Continue.' }] } }
+  const more = chat(assistant)
+  assert.equal(estimateNativePrefix('chat-completions', [earlier, initial, latest, next, more], noBaseline),
+    1_200 + replayTokens * 2 + estimateNativeIntent(next.payload))
+  assert.equal(estimateNativePrefix('chat-completions', [next, more], () => 50),
+    50 + replayTokens + estimateNativeIntent(next.payload))
 })
 
-test('continuous history evicts whole escaped rounds and bounds exact recall to its project and budget', t => {
-  const database = new DatabaseSync(':memory:')
-  t.after(() => database.close())
-  database.exec(`
-    CREATE TABLE harness_sessions (id TEXT PRIMARY KEY, project_id TEXT);
-    CREATE TABLE harness_runs (id TEXT PRIMARY KEY, project_id TEXT);
-    CREATE TABLE harness_nodes (seq INTEGER PRIMARY KEY, id TEXT, session_id TEXT, source_run_id TEXT, input TEXT, output TEXT);
-    CREATE TABLE harness_continuous_roots (seq INTEGER PRIMARY KEY, id TEXT, session_id TEXT, parent_id TEXT,
-      anchor_node_id TEXT, cutoff_seq INTEGER, evicted_node_ids_json TEXT);
-    CREATE VIRTUAL TABLE harness_continuous_search USING fts5(terms, session_id UNINDEXED, project_id UNINDEXED);
-    INSERT INTO harness_sessions VALUES ('session', 'alpha');
-    INSERT INTO harness_runs VALUES ('old-run', 'alpha'), ('latest-run', 'alpha');
-  `)
-  const insert = database.prepare('INSERT INTO harness_nodes VALUES (?, ?, ?, ?, ?, ?)')
-  const old = 'Archive detail. ' + '\\'.repeat(5_000)
-  const recent = { nodeId: 'recent', user: 'The current request\nkeeps quotes "intact".', assistant: 'Full answer.' }
-  insert.run(1, 'old', 'session', 'old-run', old, '旧回答。'.repeat(500))
-  insert.run(2, recent.nodeId, 'session', 'latest-run', recent.user, recent.assistant)
-  const db = {
-    get: (sql, values = []) => database.prepare(sql).get(...values),
-    all: (sql, values = []) => database.prepare(sql).all(...values),
-    execute: (sql, values = []) => database.prepare(sql).run(...values),
-  }
-  const input = { sessionId: 'session', projectId: 'alpha', parentNodeId: recent.nodeId, query: 'Completely unrelated', remainingTokens: 8_000 }
-  const plan = planContinuousRun(db, input, () => 'first-root')
-  assert.deepEqual(plan.context.recent, [recent])
-  assert.deepEqual(plan.context.memory, [])
-  assert.deepEqual(plan.root.evicted.map(turn => turn.nodeId), ['old'])
-  commitContinuousRoot(db, input.sessionId, plan)
-  const lookup = (query, projectId = 'alpha', remainingTokens = 8_000) =>
-    planContinuousRun(db, { ...input, query, projectId, remainingTokens }, () => 'unexpected-root').context.memory
-  assert.ok(lookup('[历史:old]')[0].user.startsWith('Archive detail. '))
-  assert.ok(lookup('[历史:old]')[0].assistant.endsWith('…'))
-  assert.deepEqual(lookup('[历史:missing]'), [])
-  assert.deepEqual(lookup('[历史:old]', 'beta'), [])
-  assert.deepEqual(lookup('[历史:old]', 'alpha', 65), [])
+test('the running context view uses the first-request estimate until the provider reports usage', () => {
+  const run = { id: 'run', status: 'running', modelId: 'model', history: { kind: 'tree', parentNodeId: null }, estimatedInputTokens: 1234 }
+  const state = { session: { modelId: 'model' }, position: { viewNodeId: null }, runs: [run], path: [], views: new Map() }
+  assert.match(contextUsage(state).label, /本轮输入估计 1,234 tokens/)
+  state.views.set(run.id, { exchanges: [{ usage: { inputTokens: 1200, outputTokens: 40 } }] })
+  assert.equal(contextUsage(state).inputTokens, 1200)
 })

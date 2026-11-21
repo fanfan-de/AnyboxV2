@@ -33,10 +33,10 @@ for (const item of cases) test(`${item.create().descriptor.id}: generateText sen
   const f = await fixture({ protocols: [protocol] })
   try {
     const { model } = await f.add({ defaults: protocol.descriptor.id === 'anthropic-messages' ? { maxOutputTokens: 4096 } : {}, capabilityDeclarations: capabilities({ webSearch: { support: 'supported' } }) })
-    const saved = JSON.stringify(f.store.configurationHistory(model.id))
+    const saved = JSON.stringify(f.store.modelSettingsHistory(model.id))
     for (const streaming of ['supported', 'unsupported']) {
-      if (streaming === 'unsupported') await f.settings.updateConfiguration(model.id, { capabilities: capabilities({ streaming: { support: streaming } }) }, model.revision)
-      const current = f.store.configuration(model.id)
+      if (streaming === 'unsupported') await f.settings.updateModelSettings(model.id, { capabilities: capabilities({ streaming: { support: streaming } }) }, model.revision)
+      const current = f.store.modelSettings(model.id)
       const input = `  ${streaming} input\n`, instruction = '  Exact instruction\n'
       const operation = f.models.generateText({ modelId: model.id, input, instruction })
       assert.deepEqual(await operation.result, { text: '  # Heading\n\nAnswer  ', modelId: model.id, modelRevision: current.revision, protocolId: protocol.descriptor.id })
@@ -44,7 +44,7 @@ for (const item of cases) test(`${item.create().descriptor.id}: generateText sen
       assert.equal(requests.at(-1).stream, false)
       item.verify(requests.at(-1), input, instruction)
       assert.equal(Object.hasOwn(requests.at(-1), 'tools'), false)
-      if (streaming === 'supported') assert.equal(JSON.stringify(f.store.configurationHistory(model.id)), saved)
+      if (streaming === 'supported') assert.equal(JSON.stringify(f.store.modelSettingsHistory(model.id)), saved)
     }
   } finally { await f.close() }
 })
@@ -211,18 +211,18 @@ test('generation network holds no configuration queue; captured keys and paramet
   const protocol = generationProtocol(), f = await fixture({ protocols: [protocol] })
   try {
     const { provider, model } = await f.add({ key: 'old-key', defaults: { temperature: 0.1 } })
-    const saved = JSON.stringify(f.store.configurationHistory(model.id))
+    const saved = JSON.stringify(f.store.modelSettingsHistory(model.id))
     protocol.next()
     const first = f.models.generateText({ modelId: model.id, input: 'first' })
     await tick()
     await f.settings.setApiKey(provider.id, 'new-key', provider.revision)
-    await f.settings.updateConfiguration(model.id, { parameters: { protocolId: 'test', formatVersion: 1, value: { temperature: 0.9 } } }, model.revision)
+    await f.settings.updateModelSettings(model.id, { parameters: { protocolId: 'test', formatVersion: 1, value: { temperature: 0.9 } } }, model.revision)
     const second = await f.models.generateText({ modelId: model.id, input: 'second' }).result
     assert.equal(second.modelRevision, 2)
     assert.deepEqual(protocol.calls.map(call => [call.input.credential, call.input.request.parameters.temperature, call.input.request.messages]), [
       ['old-key', 0.1, [{ role: 'user', content: 'first' }]], ['new-key', 0.9, [{ role: 'user', content: 'second' }]],
     ])
-    assert.equal(f.store.configurationHistory(model.id).length, JSON.parse(saved).length + 1)
+    assert.equal(f.store.modelSettingsHistory(model.id).length, JSON.parse(saved).length + 1)
     protocol.calls[0].succeed(); const result = await first.result
     assert.equal(result.modelRevision, 1); assert.deepEqual(Object.keys(result).sort(), ['modelId', 'modelRevision', 'protocolId', 'text'])
   } finally { await f.close() }

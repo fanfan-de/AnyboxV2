@@ -9,6 +9,7 @@ import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { runViewEvent } from '../packages/app-harness/dist/core/run/notifications.js'
 import { installManagedModels } from './helpers/managed-models.mjs'
+import { seedTestModel } from './helpers/configured-models.mjs'
 import { controlledModels, deferred } from './helpers/controlled-models.mjs'
 
 const tick = () => new Promise(resolve => setImmediate(resolve))
@@ -36,9 +37,9 @@ test('explicit Session selection persists and omitted-id idempotency keeps the o
   const directory = mkdtempSync(join(tmpdir(), 'anybox-model-selection-'))
   let f = await host(directory)
   try {
-    const settings = f.root.get('models.settings'), original = settings.configurations()[0]
-    const { id, revision, versionId, createdAt, updatedAt, modelDefinitionVersionId, remoteModelId, ...data } = original
-    await settings.createConfiguration({ ...data, baseline: false, id: 'alternate', name: 'Alternate', parameters: { protocolId: 'chat-completions', formatVersion: 1, value: { temperature: 0.8 } } })
+    const settings = f.root.get('models.settings'), original = settings.modelSettings()[0]
+    const provider = settings.configuredProviders().find(value => value.id === original.providerId)
+    await seedTestModel(settings, provider, { id: 'alternate', name: 'Alternate', capabilities: original.capabilities, parameters: { temperature: 0.8 } })
     const session = await f.harness.createSession(f.project.id, 'assistant')
     assert.equal(session.modelId, null)
     const input = { sessionId: session.id, parentNodeId: null, input: 'Hello', idempotencyKey: 'first' }
@@ -66,7 +67,7 @@ test('explicit Session selection persists and omitted-id idempotency keeps the o
     assert.equal(restored.modelId, 'default')
     assert.deepEqual(restored.modelSnapshot, run.modelSnapshot)
     assert.equal(restored.modelSnapshot.schemaVersion, 3)
-    assert.equal(restored.modelSnapshot.modelDefinitionId, original.modelDefinitionId)
+    assert.equal(restored.modelSnapshot.modelDefinitionId, original.id)
     assert.equal(f.transport.calls.length, 0)
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })

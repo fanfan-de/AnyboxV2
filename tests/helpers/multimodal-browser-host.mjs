@@ -26,14 +26,14 @@ try {
   const settings = host.root.get('models.settings'), sessions = []
   for (const protocolId of protocols) {
     const provider = await settings.createProvider({ name: protocolId, connectionHints: { protocolIds: [protocolId] } })
-    const connection = await settings.createConnection({ providerDefinitionId: provider.id, name: protocolId, enabled: true, protocolId,
+    await settings.createProviderSettings({ providerId: provider.id, name: protocolId, enabled: true, protocolId,
       baseUrl: `https://mock.invalid/${protocolId}`, auth: 'none', timeoutMs: 5000 })
     const capabilities = { tools: { support: 'unsupported' }, streaming: { support: 'unsupported' }, reasoning: { support: 'unsupported' }, imageInput: { support: 'supported' } }
     const definition = await settings.createModel({ providerId: provider.id, name: `${protocolId} 图片验收`, remoteModelId: 'vision-test', capabilities,
       controls: { temperature: 'unknown' }, modalities: { input: ['text', 'image'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [protocolId] } })
-    const configuration = await settings.createConfiguration({ connectionId: connection.id, modelDefinitionId: definition.id, name: `${protocolId} 图片验收`, enabled: true, baseline: true, capabilities,
+    const configuration = await settings.createModelSettings({ modelId: definition.id, name: `${protocolId} 图片验收`, enabled: true, capabilities,
       parameters: { protocolId, formatVersion: 1, value: protocolId === 'anthropic-messages' ? { max_tokens: 4096 } : {} } })
-    const session = await host.harness.createSession(host.project.id, 'assistant', configuration.id)
+    const session = await host.harness.createSession(host.project.id, 'assistant', configuration.runtimeModelId)
     sessions.push({ protocolId, sessionId: session.id })
   }
   const imagePath = join(host.directory, 'browser-red.png')

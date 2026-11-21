@@ -111,7 +111,7 @@ export function createAgentDirectoryComponent(inputs: RuntimeInputs, seeds: read
         return entry
       }
       const validateModel = (modelId: string | null) => {
-        if (modelId !== null && !models.configurations().some(model => model.id === modelId)) throw error(400, 'model-not-found')
+        if (modelId !== null && !models.modelSettings().some(model => model.runtimeModelId === modelId)) throw error(400, 'model-not-found')
       }
       const update = async (prior: AgentRecord, changes: Partial<Pick<AgentRecord, 'name' | 'description' | 'instructions' | 'modelId' | 'instructionVersionId'>> & { logoShader?: string | null }): Promise<AgentRecord> => {
         const { logoShader: oldLogo, ...previous } = prior

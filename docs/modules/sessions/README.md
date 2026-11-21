@@ -20,7 +20,7 @@ Projects 注入 [本地 SQLite](../infrastructure/local-sqlite.md)；Project Fil
 
 1. `openProject(absolutePath)` 将可用目录解析为 realpath，按规范路径返回稳定项目身份。
 2. `createSession(projectId, agentId, modelId?)` 验证项目和启动时 Agent 定义，在创建事务中按显式模型、该设备保存的 Agent 默认、启动后备值复制 modelId，并复制通过 `getAgentTools` / `setAgentTools` 管理的统一工具选择、版本和声明，创建 `native-local-v1` Session；未选定模型时允许 modelId 为 null。模型默认及 Agent 工具修改只影响新会话。
-3. 图片经 Session 导入，文件在发送时经 Session 准备不可变快照。Run 准备只读取快照；第一次接受事务固定 Session 协议、初始 instruction/context 和工具声明，同事务保留附件。Run 指定明确可空父节点；同父节点可同时启动多个 Run。
+3. 图片经 Session 导入，文件在发送时经 Session 准备不可变快照。首次接纳固定 instruction/context 和工具声明，同事务保留附件。每个 Run 固定本轮协议，指定明确可空父节点，同父节点可同时启动多个 Run。
 4. 操作 intent 在外部调用前保存，observation 在资源实际退出后保存。取消不抹去已经发生的工具事实。
 5. 成功结算事务创建不可变节点、原生上下文链节和结果引用；失败、取消与 interrupted 不创建可继续节点。恢复仅沿选中的成功父路径，界面当前节点不构成服务端全局 head。
 6. `archiveSession` 在无活动 Run 时幂等归档，`restoreSession` 恢复列表可见性；默认项目列表排除归档会话，跨项目查询使用 `listArchivedSessions`。归档不释放历史附件，也不解除旧会话只读规则。

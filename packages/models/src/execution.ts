@@ -1,19 +1,29 @@
 import { randomUUID } from 'node:crypto';
-import { assert, equalJson, immutable, json, keys } from './domain.js';
+import { assert, equalJson, immutable, json, keys, record } from './domain.js';
 import { modelsError, normalizeError } from './errors.js';
 import { nativeDiagnostic, sanitizeDiagnostic } from './diagnostics.js';
 import { abortLink, deferred, joinOperation } from './lifecycle.js';
 import { addResourceRefs, captureResourceRefs, captureResourceResolver, requireResourceSet, restoreResourceRefs } from './resources.js';
-import type { EffectiveCapabilities, ProtocolOperation, ProviderConnectionInput } from './types.js';
-import type { NativeExchangeOptions, NativeExecution, NativeExitReport, NativeModelSnapshot, NativeObject, NativeProtocol, NativeRecordDraft, NativeReply, NativeRestoreState, NativeResourceResolver } from './native-types.js';
+import type { EffectiveCapabilities, ProtocolOperation, ProviderSettingsInput } from './types.js';
+import type { NativeContinuation, NativeExchangeOptions, NativeExecution, NativeExitReport, NativeHistoryPrefix, NativeImageResourceRef, NativeModelSnapshot, NativeObject, NativeProtocol, NativeRecordDraft, NativeReply, NativeRestoreState, NativeResourceResolver } from './native-types.js';
+
+export interface MaterializedNativeContinuation {
+  readonly state: NativeObject;
+  readonly modelSnapshot: NativeModelSnapshot;
+  readonly resourceRefs: readonly NativeImageResourceRef[];
+  readonly previousRecordId: string;
+}
 
 export interface ExecutionResources {
   readonly protocol: NativeProtocol;
-  readonly provider: ProviderConnectionInput;
+  readonly provider: ProviderSettingsInput;
   readonly credential?: string;
   readonly snapshot: NativeModelSnapshot;
   readonly capabilities: EffectiveCapabilities;
   readonly restore?: NativeRestoreState;
+  readonly historyPrefix?: NativeHistoryPrefix;
+  readonly continuation?: MaterializedNativeContinuation;
+  readonly captureContinuation?: (continuation: MaterializedNativeContinuation) => NativeContinuation | undefined;
   readonly resources?: NativeResourceResolver;
   readonly controller: AbortController;
   readonly onRelease: (cleanupFailed?: boolean) => void;
@@ -24,16 +34,26 @@ export function createExecution(input: ExecutionResources): NativeExecution {
   const snapshot = immutable(input.snapshot), capabilities = immutable(input.capabilities);
   const recordFormatVersion = input.protocol.recordFormatVersion ?? 1;
   let resources = captureResourceResolver(input.resources);
-  const resourceRefs = restoreResourceRefs(input.restore?.records ?? []);
+  const resourceRefs = input.continuation
+    ? new Map(input.continuation.resourceRefs.map(ref => [ref.id, ref]))
+    : restoreResourceRefs(input.restore?.records ?? []);
   for (const record of input.restore?.records ?? []) if (record.kind === 'request') requireResourceSet(input.protocol.resourceIds?.(record.payload as NativeObject) ?? [], captureResourceRefs(record.resourceRefs));
-  let context = immutable(input.protocol.restore(input.restore?.records ?? []));
-  const restoredPreviousId = input.restore?.records.at(-1)?.id ?? null;
-  input = { ...input, restore: undefined, resources: undefined };
+  const prefix = input.historyPrefix;
+  if (prefix !== undefined) {
+    if (!input.protocol.supportsHistoryPrefix) throw modelsError('capability-unsupported');
+    keys(prefix, ['state', 'resourceRefs']); assert(record(prefix.state) && json(prefix.state));
+    const refs = captureResourceRefs(prefix.resourceRefs);
+    requireResourceSet(input.protocol.resourceIds?.(prefix.state) ?? [], refs);
+    if (refs.length && !capabilities.imageInput) throw modelsError('capability-unsupported');
+    addResourceRefs(resourceRefs, refs);
+  }
+  let context = input.continuation?.state ?? immutable(input.protocol.restore(input.restore?.records ?? [], prefix?.state));
+  let previousId = input.continuation?.previousRecordId ?? input.restore?.records.at(-1)?.id ?? null;
+  input = { ...input, restore: undefined, historyPrefix: undefined, continuation: undefined, resources: undefined };
   let state: 'open' | 'closing' | 'closed' = 'open';
   let active: ProtocolOperation<NativeReply> | undefined;
   let prepared = false, cleanupFailed = false, released = false, restorable = true;
   let closePromise: Promise<NativeExitReport> | undefined;
-  let previousId = restoredPreviousId;
   const records: NativeRecordDraft[] = [];
   const release = () => {
     if (released) return;
@@ -43,14 +63,22 @@ export function createExecution(input: ExecutionResources): NativeExecution {
   };
   const close = (): Promise<NativeExitReport> => {
     if (closePromise) return closePromise;
+    const canCapture = !active && !prepared && !input.controller.signal.aborted;
     state = 'closing'; prepared = false;
     const owned = active;
     closePromise = Promise.resolve().then(async () => {
-      if (owned) { try { await owned.done; } catch { cleanupFailed = true; } }
-      const report: NativeExitReport = immutable({ records,
-        ...(!cleanupFailed && restorable && records.at(-1)?.kind === 'response' ? { restoreState: { protocolId: snapshot.protocolId, recordFormatVersion, modelSnapshot: snapshot } } : {}),
-        cleanup: cleanupFailed ? 'failed' : 'succeeded' });
-      release(); return report;
+      try {
+        if (owned) { try { await owned.done; } catch { cleanupFailed = true; } }
+        const last = records.at(-1);
+        const canRestore = !cleanupFailed && restorable && last?.kind === 'response';
+        const report: NativeExitReport = immutable({ records,
+          ...(canRestore ? { restoreState: { protocolId: snapshot.protocolId, recordFormatVersion, modelSnapshot: snapshot } } : {}),
+          cleanup: cleanupFailed ? 'failed' : 'succeeded' });
+        const continuation = canCapture && canRestore ? input.captureContinuation?.(Object.freeze({
+          state: context, modelSnapshot: snapshot, resourceRefs: Object.freeze([...resourceRefs.values()]), previousRecordId: last.id,
+        })) : undefined;
+        return continuation ? Object.freeze({ ...report, continuation }) : report;
+      } finally { release(); }
     });
     input.controller.abort();
     return closePromise;
@@ -153,13 +181,26 @@ export function createExecution(input: ExecutionResources): NativeExecution {
     },
   } satisfies NativeExecution);
 }
+
+function validateHistoryScope(old: NativeModelSnapshot, snapshot: NativeModelSnapshot): void {
+  assert(old?.schemaVersion === 3);
+  for (const key of ['modelId', 'modelDefinitionId', 'providerDefinitionId', 'modelDefinitionVersionId', 'remoteModelId', 'providerId', 'protocolId', 'historyScopeEpoch'] as const) assert(old[key] === snapshot[key]);
+}
+
+/** Cached state belongs to the exact live registration. Cold restore supports additional compatibility transitions. */
+export function validateContinuation(continuation: MaterializedNativeContinuation, snapshot: NativeModelSnapshot): void {
+  const old = continuation.modelSnapshot;
+  validateHistoryScope(old, snapshot);
+  assert(old.registrationGenerationId === snapshot.registrationGenerationId && old.protocolVersion === snapshot.protocolVersion &&
+    equalJson(old.parameters, snapshot.parameters) && equalJson(old.capabilities, snapshot.capabilities));
+}
+
 /** Scope changes never rewrite native history or use a credential reference as identity. */
 export function validateRestore(restore: NativeRestoreState, snapshot: NativeModelSnapshot, protocol: NativeProtocol): void {
   keys(restore, ['protocolId', 'recordFormatVersion', 'modelSnapshot', 'records']);
   const format = protocol.recordFormatVersion ?? 1;
   assert(restore.protocolId === snapshot.protocolId && (restore.recordFormatVersion === format || format === 2 && restore.recordFormatVersion === 1) && Array.isArray(restore.records));
-  const old = restore.modelSnapshot; assert(old?.schemaVersion === 3);
-  for (const key of ['modelId', 'modelDefinitionId', 'providerDefinitionId', 'modelDefinitionVersionId', 'remoteModelId', 'providerId', 'protocolId', 'historyScopeEpoch'] as const) assert(old[key] === snapshot[key]);
+  const old = restore.modelSnapshot; validateHistoryScope(old, snapshot);
   assert(protocol.canRestoreVersion ? protocol.canRestoreVersion(old.protocolVersion) : old.protocolVersion === snapshot.protocolVersion);
   // Streaming changes transport delivery, not the archived native context.
   const { imageInput: oldImage, streaming: oldStreaming, ...oldCapabilities } = old.capabilities;

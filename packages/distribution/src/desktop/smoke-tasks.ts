@@ -14,7 +14,7 @@ import type { ProtocolViewSnapshot } from '@anybox/app-harness/core/view/types'
 export type SmokeApi = <T = unknown>(path: string, body?: object, headers?: Record<string, string>) => Promise<T>
 interface Entity { readonly id: string; readonly revision: number }
 interface RunResult { readonly id: string; readonly status: string; readonly error?: string }
-interface Target { readonly api: SmokeApi; readonly model: Entity; readonly modelConnection: Entity; readonly session: Entity }
+interface Target { readonly api: SmokeApi; readonly model: Entity; readonly providerSettings: Entity; readonly session: Entity }
 const check = (value: unknown, message: string) => { if (!value) throw new Error(message) }
 const pause = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
 async function eventually(test: () => boolean | Promise<boolean>, message: string) {
@@ -29,23 +29,23 @@ async function configureTarget(api: SmokeApi, projectPath: string, providerUrl: 
   const definition = await api<Entity>('/models/definitions', { providerId: provider.id, name: 'Offline desktop fixture',
     remoteModelId: 'desktop-smoke', capabilities, controls: { temperature: 'unknown' },
     modalities: { input: ['text', 'image'], output: ['text'] }, limits: {}, connectionHints: hints })
-  const modelConnection = await api<Entity>('/models/connections', { providerDefinitionId: provider.id, name: 'Loopback fixture',
+  const providerSettings = await api<Entity>('/models/provider-settings', { providerId: provider.id, name: 'Loopback fixture',
     enabled: true, protocolId: 'chat-completions', baseUrl: providerUrl, auth: 'api-key', timeoutMs: 120000,
     apiKey: 'desktop-smoke-fixture-key' })
-  const configurations = await api<readonly (Entity & { modelDefinitionId: string; baseline: boolean })[]>(`/models/configurations?connectionId=${modelConnection.id}`)
-  const model = configurations.find(value => value.modelDefinitionId === definition.id && value.baseline)
-  check(model, 'Offline fixture did not receive a baseline model')
+  const models = await api<readonly (Entity & { modelDefinitionId: string })[]>('/models')
+  const model = models.find(value => value.modelDefinitionId === definition.id)
+  check(model, 'Offline fixture did not receive model settings')
   const agents = await api<readonly Entity[]>('/agents')
   check(agents.length > 0, 'Smoke execution host has no Agent')
   await mkdir(projectPath, { recursive: true })
   const project = await api<Entity>('/projects', { path: projectPath })
   const session = await api<Entity>('/sessions', { projectId: project.id, agentId: agents[0]!.id, modelId: model!.id })
-  return { api, model: model!, modelConnection, session }
+  return { api, model: model!, providerSettings, session }
 }
 async function clearFixtureKey(target: Target) {
-  const connections = await target.api<readonly Entity[]>('/models/connections')
-  const current = connections.find(value => value.id === target.modelConnection.id)
-  if (current) await target.api(`/models/connections/${current.id}/key/delete`, { expectedRevision: current.revision })
+  const providers = await target.api<readonly Entity[]>('/models/provider-settings')
+  const current = providers.find(value => value.id === target.providerSettings.id)
+  if (current) await target.api(`/models/provider-settings/${current.id}/key/delete`, { expectedRevision: current.revision })
 }
 
 /** Real API, tools, native codec, streaming and shutdown verification against an offline model. */

@@ -2,7 +2,7 @@
 
 逐组件中文说明见 [Models 模块手册](../../docs/modules/models/README.md)，包含配置、Vault、目录和各原生驱动；本文保留独立包安装示例与公共契约。
 
-Reusable Nya module owning unified sourced Provider/Model definitions, account connections, runnable native configurations, credentials and protocol execution. Version 0.2 removes the unified message/result execution API. Requires Node.js 22.13+ and `@nya/core`. It has no dependency on Anybox Run, Session, tools or frontend code.
+Reusable Nya module owning unified sourced Provider/Model definitions, per-provider settings, runnable native configurations, credentials and protocol execution. Version 0.2 removes the unified message/result execution API. Requires Node.js 22.13+ and `@nya/core`. It has no dependency on Anybox Run, Session, tools or frontend code.
 
 组件依赖、资源归属、统一定义与执行配置的数据关系见 [Models 模块手册](../../docs/modules/models/README.md#依赖与资源)。
 
@@ -66,15 +66,15 @@ The components register these services:
 
 The store, vault, catalog source and catalog cache ports are replaceable Nya dependencies. These are trusted internal services, not frontend APIs. Nya service names are not access-control boundaries. All components live on the same application root. Model execution depends on local settings and installed protocols; it does not depend on catalog availability.
 
-## Unified definitions, connections and configurations
+## Unified definitions, provider settings and model settings
 
 | Record | Responsibility |
 |---|---|
 | `Provider` | Definition, documentation, connection hints, source and immutable versions |
 | `Model` | Provider definition, remote ID, capabilities, modalities, limits, costs, controls, source and versions |
-| `ProviderConnection` | Account name, actual endpoint, one fixed protocol, auth and enabled state; private store owns credential reference |
-| `ModelConfiguration` | Stable selection ID, connection/definition IDs, pinned definition version, capabilities, versioned native parameters and enabled state |
-| `RunnableModelSummary` | Configuration plus definition identity, source and derived local availability |
+| `ProviderSettings` | One local settings record per provider definition ID, with the endpoint, fixed protocol, auth, enabled state and a private credential reference |
+| `ModelSettings` | One local record per model definition ID with the pinned definition version, capabilities, versioned parameters, enabled state and preserved runtime ID |
+| `RunnableModelSummary` | Runtime selection ID, definition identity, settings, source and derived local availability |
 
 `SourceRef` is `{ kind: 'user' }` or an `external` identity containing `sourceId`, external `providerId`, optional external `modelId` and `sourceVersion`. External identities are scoped by source, never merged by name or hostname. Network/cache/bundled describes acquisition, not origin. A user Model can belong to an external Provider. Adding an account or Key does not change the definition source.
 
@@ -82,19 +82,19 @@ The primary setup path uses an existing definition:
 
 ```ts
 const provider = settings.providers({ sourceId: 'models.dev', search: 'OpenAI' })[0]
-const connection = await settings.createConnection({
-  id: 'work', providerDefinitionId: provider.id, name: 'Work account', enabled: true,
+await settings.createProviderSettings({
+  providerId: provider.id, name: provider.name, enabled: true,
   protocolId: 'responses', baseUrl: 'https://api.openai.com/v1',
   auth: 'api-key', timeoutMs: 120_000, apiKey: secretEnteredByUser,
 })
-const choices = models.list({ connectionId: connection.id, available: true })
-// All compatible text models have persistent baseline configurations.
+const choices = models.list({ providerId: provider.id, available: true })
+// Compatible text models have their settings initialized automatically.
 // No per-model save or network authorization probe is required.
 ```
 
-Each connection uses one protocol. Reconciliation runs after connection saves, Key changes, source ingestion, protocol registration and startup. It atomically adds missing baseline configurations, unique by `(connectionId, modelDefinitionId)`, and never overwrites saved names, enabled state, capability declarations or parameters. Protocol initial parameters become explicit saved values, including Anthropic's bounded `4096` output default and Gemini's `generation_config.thinking_summaries: "auto"` when reasoning support is explicitly declared. Unknown capabilities remain unknown; missing reasoning modes are not inferred. Existing configurations keep their parameters, including omitted summaries or explicit `"none"`; enable summaries through a normal configuration update for future executions. `connectionModels(id)` includes unavailable definitions and their reasons. A saved connection whose initialization failed returns `sync.state === 'failed'`; `retryConnection(id)` is idempotent and retains the Key. Synchronization states and source targets do not increment connection revisions.
+Each provider has one set of local settings and uses one protocol. Reconciliation runs after settings saves, Key changes, source ingestion, protocol registration and startup. It initializes one set of local settings per model definition. Previously saved names, enabled state, capability declarations and parameters stay in effect. Protocol initial parameters become explicit saved values, including Anthropic's bounded `4096` output default and Gemini's `generation_config.thinking_summaries: "auto"` when reasoning support is explicitly declared. Unknown capabilities remain unknown; missing reasoning modes are not inferred. Existing configurations keep their parameters, including omitted summaries or explicit `"none"`; enable summaries through a normal configuration update for future executions. `providerModels(id)` includes unavailable definitions and their reasons. A provider whose model initialization failed returns `sync.state === 'failed'`; `retryProviderSettings(id)` is idempotent and retains the Key. Synchronization states and source targets do not increment provider settings revisions.
 
-`settings.deleteConnection(id, expectedRevision)` uses the connection's configuration queue and CAS revision. It atomically removes the current connection, its baseline/variant configurations and synchronization state, while preserving definition data and immutable histories. Previously opened executions retain their captured configuration and credential; new opens fail with `not-found`. The transaction journals retired credential slots, then awaits vault cleanup; unavailable vault cleanup remains journaled for recovery. Deleted connection/configuration IDs cannot be reused, and source refresh cannot recreate deleted accounts.
+`settings.deleteProviderSettings(id, expectedRevision)` atomically removes the provider settings, associated model configurations and synchronization state. Definitions and immutable history remain. Previously opened executions retain their captured configuration and credential. The transaction journals retired credential slots, then awaits Vault cleanup. Re-adding the provider creates a new settings revision, a fresh native history scope and new runtime model IDs.
 
 Custom definitions use the same data pool:
 
@@ -102,26 +102,27 @@ Custom definitions use the same data pool:
 const customProvider = await settings.createProvider({
   name: 'Private endpoint', connectionHints: { protocolIds: ['responses'] },
 })
+await settings.createProviderSettings({
+  providerId: customProvider.id, name: customProvider.name, enabled: true,
+  protocolId: 'responses', baseUrl: addressEnteredByUser,
+  auth: 'api-key', timeoutMs: 120_000, apiKey: secretEnteredByUser,
+})
 const customModel = await settings.createModel({
   providerId: customProvider.id, remoteModelId: modelIdConfirmedByUser, name: 'My model',
   capabilities: unknownCapabilities(), controls: { temperature: 'unknown' },
   modalities: { input: ['text'], output: ['text'] }, limits: {},
   connectionHints: { protocolIds: ['responses'] },
 })
-const customConnection = await settings.createConnection({
-  providerDefinitionId: customProvider.id, name: 'Private account', enabled: true,
-  protocolId: 'responses', baseUrl: addressEnteredByUser,
-  auth: 'api-key', timeoutMs: 120_000, apiKey: secretEnteredByUser,
-})
-// Advanced variants use independent selection IDs.
-const variant = await settings.createConfiguration({
-  modelDefinitionId: customModel.id, connectionId: customConnection.id,
-  name: 'My preset', enabled: true, baseline: false,
+const saved = await settings.createModelSettings({
+  modelId: customModel.id, name: customModel.name, enabled: true,
   capabilities: customModel.capabilities, parameters: { protocolId: 'responses', formatVersion: 1, value: { temperature: 0.2 } },
 })
+await settings.updateModelSettings(customModel.id, {
+  parameters: { protocolId: 'responses', formatVersion: 1, value: { temperature: 0.4 } },
+}, saved.revision)
 ```
 
-User definition writes always produce `user` source records; source definitions are replaced through the trusted ingestion port. Configuration identity, connection, and fixed definition version stay stable across edits. Extra parameter variants have independent selection IDs and `baseline: false`.
+User definition writes always produce `user` source records; source definitions are replaced through the trusted ingestion port. Runtime selection identity, provider and pinned definition version stay stable across edits. An attempt to create a second set of model settings returns a conflict.
 
 `builtinProviderTemplates` supplies optional endpoint/protocol defaults and an explicit `sourceRef`. It is not a runtime brand registry. `resolveCatalogConnections` uses installed protocols and definition hints; SDK labels never dynamically import implementations. A registered extension may declare `descriptor.sourceMappings` for a known source/protocol mapping. Addresses exclude endpoint suffixes, query strings and URL credentials.
 
@@ -129,12 +130,12 @@ User definition writes always produce `user` source records; source definitions 
 |---|---|
 | Definition queries/history | `providers(query?)`, `models(query?)`, `providerHistory(id)`, `modelHistory(id)` |
 | User definitions | `createProvider`, `updateProvider`, `createModel`, `updateModel` |
-| Account connections/history | `connections()`, `connectionHistory(id)`, `createConnection`, `updateConnection` |
+| Provider settings and history | `configuredProviders()`, `providerSettingsHistory(id)`, `createProviderSettings`, `updateProviderSettings`, `deleteProviderSettings` |
 | Replace/delete Key | `setApiKey(id, key, expectedRevision)`, `deleteApiKey(id, expectedRevision)` |
-| Executable configurations/history | `configurations(connectionId?)`, `configurationHistory(id)`, `createConfiguration`, `updateConfiguration` |
-| Initialization and reasons | `retryConnection(id)`, `connectionModels(id)` |
+| Model settings and history | `modelSettings(providerId?)`, `modelSettingsHistory(id)`, `createModelSettings`, `updateModelSettings` |
+| Initialization and reasons | `retryProviderSettings(id)`, `providerModels(id)` |
 | Installed protocol forms | `protocols()` |
-| Explicit remote requests | `discoverModels(connectionId, signal?)`, `checkConnection(connectionId, signal?)` |
+| Explicit remote requests | `discoverModels(providerId, signal?)`, `checkProvider(providerId, signal?)` |
 
 User saves create immutable revisions; stale edits return `conflict`. Neutral configuration can be saved before a protocol is installed; synchronization stays pending and execution stays unavailable until registration validates the saved parameters. Discovery returns candidates without writing definitions/configurations. `available` means local configuration readiness and does not establish remote account authorization. Effective image input is enabled by the Responses, Anthropic Messages, Gemini Interactions and Chat drivers with an explicit `imageInput: supported` configuration. Native options remain explicit; omitted optional parameters use server defaults, while unsupported options are rejected. Configurations and Keys affect new executions only.
 
@@ -159,7 +160,7 @@ Streaming is enabled by default. A saved `streaming: 'unknown'` declaration allo
 
 Each exchange may select `responseMode: 'stream' | 'complete'` in `NativeExchangeOptions`, alongside `resourceRefs`. Omitting the mode keeps the effective-capability default. Explicit `stream` requires effective streaming support; `complete` sends a non-streaming request regardless of that capability. All four built-in drivers declare both modes in `descriptor.responseModes`; an extension that omits this declaration remains usable for default calls but rejects explicit modes with `capability-unsupported`. Invalid mode values return `invalid-config` before preparation produces a request record or network traffic. Callback presence never chooses the transport. Modes affect only that exchange, do not change the snapshot or saved parameters, and are excluded from request/recovery records. Chat sends `stream_options` only for streaming requests.
 
-For model exchanges, the connection's `timeoutMs` is an inactivity limit. Each `start()` begins a fresh wait, including resource reads and the time before the first native protocol event. Every received native event restarts that exchange's timer, even when no observer was supplied or an observer has detached. A stream may therefore run longer than `timeoutMs` while events continue to arrive. SSE comments and driver-ignored heartbeat events, such as Anthropic `ping`, do not extend the wait. Complete mode emits no incremental events, so its full response must arrive within the initial wait. The response timer stops when the driver's result settles; Models still waits for actual `done`, cleanup and context submission before exposing its public result. Timeout requests cancellation and waits for resource exit; it never substitutes a timer for cleanup. Connection discovery/check requests retain their separate total-time limit.
+For model exchanges, the provider's `timeoutMs` is an inactivity limit. Each `start()` begins a fresh wait, including resource reads and the time before the first native protocol event. Every received native event restarts that exchange's timer, even when no observer was supplied or an observer has detached. A stream may therefore run longer than `timeoutMs` while events continue to arrive. SSE comments and driver-ignored heartbeat events, such as Anthropic `ping`, do not extend the wait. Complete mode emits no incremental events, so its full response must arrive within the initial wait. The response timer stops when the driver's result settles; Models still waits for actual `done`, cleanup and context submission before exposing its public result. Timeout requests cancellation and waits for resource exit; it never substitutes a timer for cleanup. Connection discovery/check requests retain their separate total-time limit.
 
 ## Single text generation
 
@@ -175,7 +176,7 @@ await operation.done
 // operation.cancel() is also available.
 ```
 
-`generateText()` requires an explicit existing ModelConfiguration ID and non-whitespace `input`; an optional `instruction` must also be non-whitespace. Validation preserves the supplied text. Every call opens a fresh execution with its captured configuration, saved native parameters and credential, requests `complete`, extracts final text, then closes the execution and releases the protocol-generation lease before settling. The result contains only `text`, `modelId`, `modelRevision` and `protocolId`. It accepts no history, resources, tools or parameter overrides and does not persist temporary native history. Use-purpose prompts, purpose-specific model selection, titles and persistence belong to the host.
+`generateText()` requires an explicit existing runtime model ID and non-whitespace `input`; an optional `instruction` must also be non-whitespace. Validation preserves the supplied text. Every call opens a fresh execution with its captured configuration, saved native parameters and credential, requests `complete`, extracts final text, then closes the execution and releases the protocol-generation lease before settling. The result contains only `text`, `modelId`, `modelRevision` and `protocolId`. It accepts no history, resources, tools or parameter overrides and does not persist temporary native history. Use-purpose prompts, purpose-specific model selection, titles and persistence belong to the host.
 
 | Protocol | Instruction mapping | Final text and accepted completion |
 | --- | --- | --- |
@@ -188,7 +189,7 @@ Text blocks are joined in native order with newlines, preserving their text and 
 
 The internal generation orchestrator uses the same Models execution/credential lifecycle and protocol registry. Extensions must provide `textGeneration` pure functions `createIntent()`, `validateParameters()` and `readText()`, and declare `complete` in `responseModes`. Registration captures and freezes these methods with the protocol generation. There is no extra Nya component, configuration store, service registration or generation queue; executions for different Providers may proceed independently.
 
-An outer operation is registered in Models operations and the fixed protocol generation's pending set before the first async call. It remains owned through execution closure, lease release and abort-listener removal. Both success and failure of `result` wait for all cleanup. Ordinary generation failure, cancellation or timeout still fulfills `done` after successful cleanup. Cleanup failure rejects both with `cleanup-failure` and marks the existing runtime/generation cleanup state. `cancel()` and the input signal cancel idempotently; protocol unregister and Models/root close cancel and wait for the entire generation. Network work runs outside the connection configuration queue, so it cannot block Key edits or await itself through that queue.
+An outer operation is registered in Models operations and the fixed protocol generation's pending set before the first async call. It remains owned through execution closure, lease release and abort-listener removal. Both success and failure of `result` wait for all cleanup. Ordinary generation failure, cancellation or timeout still fulfills `done` after successful cleanup. Cleanup failure rejects both with `cleanup-failure` and marks the existing runtime/generation cleanup state. `cancel()` and the input signal cancel idempotently; protocol unregister and Models/root close cancel and wait for the entire generation. Network work runs outside the provider settings queue, so it cannot block Key edits or await itself through that queue.
 
 ## Source ingestion and public catalog
 
@@ -201,29 +202,29 @@ const directoryStatus = catalog.status()
 await catalog.refresh(signal)
 ```
 
-Catalog injects `models.source-data`, which is provided by the execution core alongside settings. The core itself injects only store/Vault, so existing execution remains independent of source/cache availability. `models.source-data.accept` accepts validated module `SourceSnapshot` schema 2, never raw upstream JSON; it commits all definitions, the source ledger and connection targets atomically, then waits per-connection reconciliation. Removed definitions are marked missing and retained with their versions; existing configurations continue executing pinned values.
+Catalog injects `models.source-data`, which is provided by the execution core alongside settings. The core itself injects only store/Vault, so existing execution remains independent of source/cache availability. `models.source-data.accept` accepts validated module `SourceSnapshot` schema 2, never raw upstream JSON; it commits all definitions, the source ledger and model synchronization targets atomically, then waits for reconciliation per provider. Removed definitions are marked missing and retained with their versions; existing configurations continue executing pinned values.
 
-Refresh waits for actual HTTP/reader exit, commits the independent cache, accepts shared definitions, then waits all admitted initialization jobs. A connection failure is reported separately from accepted source data. Cancellation stops fetch admission; after local commits are admitted, closure waits their completion through Nya dependency cleanup. Synchronization target guards prevent an earlier batch from marking a newer source version ready.
+Refresh waits for actual HTTP/reader exit, commits the independent cache, accepts shared definitions, then waits all admitted initialization jobs. A provider synchronization failure is reported separately from accepted source data. Cancellation stops fetch admission; after local commits are admitted, closure waits their completion through Nya dependency cleanup. Synchronization target guards prevent an earlier batch from marking a newer source version ready.
 
 The shared database's accepted ledger is authoritative at startup. Only newer cache/bundle data or matching content is admitted. Older data cannot downgrade it; differing content with equal timestamps preserves accepted data and clears ETag so a full response can confirm it. Validated schema 1 cache data has a read-only converter; all current writes use schema 2. Cache and source failures retain accepted data, with an observable memory fallback only for the public cache. The cache key includes the source endpoint and `reservedPaths` prevents aliasing other database files.
 
-Default scheduling remains 24 hours, retry after one hour, and a 30-second fetch timeout. ETag `304` updates check time without changing source data. `status()` reports origin (`bundled/cache/network/store`), version/time, staleness, persistence and connection synchronization outcomes. `autoRefresh: false` leaves explicit refresh available; concurrent requests return `busy`.
+Default scheduling remains 24 hours, retry after one hour, and a 30-second fetch timeout. ETag `304` updates check time without changing source data. `status()` reports origin (`bundled/cache/network/store`), version/time, staleness, persistence and provider synchronization outcomes. `autoRefresh: false` leaves explicit refresh available; concurrent requests return `busy`.
 
 Raw bundled JSON, provenance, SHA-256 validation and upstream MIT attribution remain. Only explicit `npm --prefix packages/models run catalog:update` downloads replacement assets; ordinary build/test does not fetch the source.
 
 ## Persistent upgrade
 
-`createModelsJsonStoreComponent({ path, legacyPath?, reservedPaths?, legacyParameterConverters? })` is the Anybox Harness configuration provider. It stores actual definitions, connections, configurations, immutable histories, source/synchronization ledgers and credential intents in a single non-secret JSON file. If JSON is absent, the optional legacy SQLite file is imported with IDs and full histories intact; the old file is retained. Existing JSON is authoritative, and invalid JSON never falls back to an older database. Keys remain in the system Vault.
+`createModelsJsonStoreComponent({ path, legacyPath?, reservedPaths?, legacyParameterConverters? })` is the Anybox Harness configuration provider. It stores actual definitions, provider settings, model configurations, immutable histories, source/synchronization ledgers and credential intents in a single non-secret JSON file. If JSON is absent, the optional legacy SQLite file is imported with IDs and full histories intact; the old file is retained. Existing JSON is authoritative, and invalid JSON never falls back to an older database. Keys remain in the system Vault.
 
-Edit current mutable fields only while the host is stopped; for capability corrections, change `configurations[].capabilities`. Keep stable identities, associations, revisions/version IDs/timestamps, credential references/epochs, history, tombstones and source ledgers intact. Startup validates changes against latest history and generates new immutable revisions automatically; endpoint/auth changes rotate the epoch. There is no live file watcher. A running store detects external file changes and refuses to overwrite them. Writes use an exclusive queue and atomic file replacement; closure waits admitted writes before releasing ownership. See the [JSON store manual](../../docs/modules/models/json-store.md) for schema, lock recovery and host operation.
+Edit current mutable fields only while the host is stopped; for capability corrections, change `modelSettings[].capabilities`. Keep stable identities, associations, revisions/version IDs/timestamps, credential references/epochs, history, tombstones and source ledgers intact. Startup validates changes against latest history and generates new immutable revisions automatically; endpoint/auth changes rotate the epoch. There is no live file watcher. A running store detects external file changes and refuses to overwrite them. Writes use an exclusive queue and atomic file replacement; closure waits admitted writes before releasing ownership. See the [JSON store manual](../../docs/modules/models/json-store.md) for schema, lock recovery and host operation.
 
 The SQLite provider remains an alternative for standalone hosts and a compatibility reader for JSON import.
 
-SQLite schema 3 migrates v1 through v2 and converts current v2 configuration parameters in an exclusive transaction. IDs, immutable version identities, pinned model definitions, enabled states, baseline identity and credential references are retained. Historical configuration/connection JSON is not rewritten; readers understand older records. No migration reads or copies a credential.
+SQLite schema 5 and JSON schema 3 use provider and model definition IDs as their settings identities. Upgrades preserve runtime model IDs, pinned definitions, revisions, credential references and the original native history scope. If a legacy provider has several current accounts, the upgrade reports the conflicting IDs and leaves the input unchanged. Use the previous version to retain the intended settings before upgrading. If a legacy model has several active settings, leave exactly one enabled in the previous version. Other model IDs stay in the immutable history. See the [upgrade details](../../docs/modules/models/json-store.md#sqlite-导入与兼容).
 
 The four built-in legacy converters map `maxOutputTokens` and old `protocol.*` fields to native field names without inserting defaults. An extension supplies its own pure converter through `createModelsStoreComponent({ path, legacyParameterConverters: { [protocolId]: converter } })`. Unknown or unsupported old settings remain readable as `formatVersion: 0` and unavailable for native execution; providing a converter at a later startup converts them transactionally. There is no old execution fallback or old-format configuration writer.
 
-Every connection has a non-secret `historyScopeEpoch`. Successful Key replacement/deletion and endpoint/auth changes rotate it in the same connection transaction. Failed writes, names, timeout changes and synchronization do not rotate it. The epoch is not a Key hash or Vault reference. Native restore requires matching configuration/definition and remote model identities, scope epoch, parameter JSON and execution capabilities. Streaming can change in either direction because it affects transport only; incremental intents, complete native responses and record codecs remain the same. Object key order and cosmetic renames do not change compatibility. No account identity is inferred from a connection ID or hostname.
+Each provider settings record has a non-secret `historyScopeEpoch`. Successful Key replacement/deletion and endpoint/auth changes rotate it in the same settings transaction. Failed writes, names, timeout changes and synchronization do not rotate it. The epoch is not a Key hash or Vault reference. Native restore requires matching configuration/definition and remote model identities, scope epoch, parameter JSON and execution capabilities. Streaming can change in either direction because it affects transport only; incremental intents, complete native responses and record codecs remain the same. Object key order and cosmetic renames do not change compatibility. No account identity is inferred from a connection ID or hostname.
 
 Native snapshots use `schemaVersion: 3`, carrying native parameters, effective capabilities, registration generation and history scope. The host keeps old Session snapshots read-only; Models never rewrites application history.
 
@@ -256,6 +257,10 @@ try {
 `close()` is idempotent, synchronously stops new operations, cancels active work and waits for exit. It returns `{ records, restoreState?, cleanup }` even on cleanup failure, then releases private credential/context references. Diagnostics cannot create a successful history node. Responses failed/cancelled terminals and Anthropic error events retain terminal identity, error type/code and received native blocks; provider error messages, authentication fields and captured credential values are excluded. Any failed exchange makes that execution’s record chain ineligible for restore, including after an explicit successful retry. A late result after failed `done` cannot alter the frozen report. JavaScript strings cannot be securely zeroed; references are released.
 
 For the next Run, the host resolves the selected immutable parent chain and supplies `restore: { ...parentMetadata, records: orderedRecords }` to `openNative`. Each protocol codec validates and reconstructs native state in memory. The host stores each Run's incremental records and small `restoreState` metadata, not the expanded historical array on every node. Native tool IDs, signatures, encrypted reasoning, root instructions and fixed tool declarations survive serialization and reopening. No text projection or browser stream cache is used for recovery.
+
+A trusted host can also supply `historyPrefix: { state, resourceRefs? }` to seed a driver that declares `supportsHistoryPrefix`. The host encodes the prefix in the selected protocol and rebuilds it for recovery. Models applies any compatible native restore records after that prefix, validates its image references, and records only new exchanges. All four built-in drivers support the prefix.
+
+Hosts that keep a process-local cache can request `captureContinuation: true` and receive an opaque continuation after clean execution closure. Keep it only for a successfully persisted host checkpoint. Pass it to a new `openNative` in place of `restore` and `historyPrefix`. Models verifies the current generation and configuration, reads the current credential, and uses the new execution's resource resolver. Persist the normal incremental records for recovery after a restart or cache miss.
 
 ## Image resources and recovery
 
@@ -313,7 +318,7 @@ Before writing a fresh vault slot, the configuration database commits a cleanup 
 
 [runtime.test.mjs](tests/runtime.test.mjs) covers inactivity timeout renewal, missing/detached observers and actual cleanup waits. [stream-failure-diagnostics.test.mjs](tests/stream-failure-diagnostics.test.mjs) covers the four drivers' partial failure records and credential redaction. The host regression tests in [native-protocol-agents.test.mjs](../../tests/native-protocol-agents.test.mjs) verify failed streaming content through HTTP reads and restart, without committing success or executing partial tool calls.
 
-[streaming-defaults.test.mjs](tests/streaming-defaults.test.mjs) covers missing catalog metadata through automatic baseline configuration and live native text events before completion, plus explicit JSON mode. [runtime.test.mjs](tests/runtime.test.mjs) covers driver opt-out, unchanged existing configurations and native restore across streaming mode changes.
+[streaming-defaults.test.mjs](tests/streaming-defaults.test.mjs) covers missing catalog metadata through automatic model settings initialization and live native text events before completion, plus explicit JSON mode. [runtime.test.mjs](tests/runtime.test.mjs) covers driver opt-out, unchanged existing configurations and native restore across streaming mode changes.
 
 [response-modes.test.mjs](tests/response-modes.test.mjs) verifies the four wire requests, explicit-mode admission, observer independence, exchange mode switching and 2.0.0/2.1.0/2.2.0 history. [text-generation.test.mjs](tests/text-generation.test.mjs), [Responses/Chat generation](tests/responses-chat-generation.test.mjs) and [Anthropic/Gemini generation](tests/anthropic-gemini-generation.test.mjs) use memory Store/Vault and fake transport to cover prompt mappings, output/error projection, configuration capture and actual-exit ownership without paid API calls. Public error matrices are in [Responses/Chat errors](tests/generation-responses-chat-errors.test.mjs) and [Anthropic/Gemini errors](tests/generation-anthropic-gemini-errors.test.mjs).
 

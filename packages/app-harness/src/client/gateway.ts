@@ -20,13 +20,13 @@ const paths: Record<string, readonly RegExp[]> = {
     new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/versions)?$`),
     new RegExp(`^/sessions/${id}(/runs(/by-key/${id})?|/nodes(/${id}(/path)?)?|/images/${id}/content|/project-files/(search|preview|snapshots/${id}))?$`),
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
-    new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|connections|configurations)(/${id}(/(history|models))?)?$`),
+    new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|provider-settings|settings)(/${id}(/(history|models))?)?$`),
     /^\/units\/(attachments|local-computer\/attachments)$/ ],
   POST: [ /^\/(projects|sessions|prompts|access\/tokens)$/, /^\/products\/[^/]+\/(open|stop|retry)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
     /^\/projects\/directories\/(browse|close|create)$/,
     new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/publish)?$`),
     new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew|tree/(open|page|close)))$`), new RegExp(`^/runs/${id}/cancel$`),
-    /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|connections|configurations)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`),
+    /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|provider-settings|settings)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`),
     // Owner-side unit attachment control; unit-side `/units/unit/*` is never proxied, units dial the harness server directly.
     /^\/units\/(attach-codes|local-computer\/attachments)$/, new RegExp(`^/units/(attachments|local-computer/attachments)/${id}/revoke$`) ],
 }

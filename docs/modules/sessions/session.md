@@ -39,7 +39,7 @@ Session 保存 id、projectId、agentId、可空 modelId、toolSelection、histo
 
 默认值属于执行设备的 harness server，会按 Agent ID 保存，适用于该设备上所有项目及浏览器/API 调用。`SessionDefaults` 返回 `{ agentId, modelId, fallbackModelId, effectiveModelId, revision }`：modelId 是可空的持久覆盖，fallbackModelId 来自启动时只读 AgentDefinition，effectiveModelId 为覆盖或后备值，二者都不存在时为 null。保存的是本机 Models 执行配置 ID，包含连接与参数预设身份，不是目录模型定义、名称或远端 ID。
 
-默认值只用于创建 Session，并与新会话写入同一事务读取和复制；不会在每次 Run 动态解析。修改默认、清除覆盖、切换其他会话的模型均不改已有 Session，选择本会话模型也不反向修改默认。协议仍在首次接受原生 Run 时固定，创建会话及设置默认都不提前绑定协议。Run 维持显式输入模型、Session 已保存模型、Agent 启动默认的既有优先级。
+默认值在创建 Session 的同一事务读取和复制。会话选模和新会话默认值各自保存。Run 按显式输入模型、Session 已保存模型、Agent 启动默认的顺序选模，协议归本次 Run。
 
 harness server API 及 HTTP 保存非空覆盖时检查 Models 配置存在且当前可用；Session 组件只拥有初始化数据和 CAS，不引入 Models 依赖。已保存模型后来停用、删除 Key 或删除连接时，保留引用和 revision，新会话仍复制原 ID，展示层报告不可用并允许用户重新选择，不能静默切换到后备、其他账号或目录第一项。覆盖和启动后备值均未设置时允许创建 modelId 为 null 的会话。
 
@@ -65,11 +65,14 @@ Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude 
 | `registerRun(id, input, now, prompts, model, native)` | 原子复核并接受 Run，返回 `{ run, created }`；`native.units` 存在时经单元附着组件 `requireApprovedIn` 复核并固定到 Run |
 | `loadNativeInitialization(sessionId)` | 读取首次接受后固定的 instruction/context 与工具声明 |
 | `loadNativeHistory(sessionId, parentNodeId)` | 校验所选成功路径，临时物化其原生记录、绑定、快照和 checkpoint |
+| `loadApplicationHistory(sessionId, parentNodeId)` | 从所选成功祖先链转换应用事件，并提供父上下文及各轮的非秘密模型快照 |
+| `getCompletedContextRef(sessionId, nodeId, runId?)` | 核对已提交成功节点，返回可作缓存键的不可变引用 |
 | `startOperation(runId, operation, at)` | running 接受正常操作；cancelling 仅接受显式 cleanup:true 且 kind:operation 的清理操作；保存 intent、初始记录及 started 事件，返回是否准入 |
 | `observeOperation(runId, operationId, observation, at)` | 允许 running/cancelling 的已开始操作提交结果、错误或清理失败事实 |
 | `loadRunContext(id)` | 返回已接受 Run 与项目 ID，不含运行期模型计划 |
 | `getRun(id)` / `getRunExecution(id)` | 读取 Run 和执行计数/阶段 |
 | `loadRunResume(id)` / `listRunResumes()` | 查询独立版本化恢复信封与可接管活动 Run |
+| `loadRunResumeState(id)` | 读取当前 Run 的恢复游标 |
 | `claimRunResume(id,expectedEpoch,at)` | 同事务 CAS 提升 owner，并调用 Operations.claimRunIn；旧 owner 写入被拒绝 |
 | `saveRunResume(id,ownerEpoch,patch,at)` | 同事务固定批次、游标、清理或结算提案；重复相同 patch 幂等 |
 | `getRunOperation(runId,id)` | 查询原意图与已提交观察，用于重启后复用原事实 |
@@ -86,15 +89,15 @@ run-state v10 新增独立版本化 RunResumeState，不复活旧 Run phase 写�
 
 ## 接受、分支与成功结算
 
-新 Session 使用 `native-local-v1`。registerRun 在事务内先检查已接受幂等键，再检查归档状态、Session 模式、schemaVersion 3 模型快照、模型/绑定协议、父节点路径以及精确的 parentContextRef，通过附件组件的 retainIn 保留引用，并由[单元附着](../units/unit-attachments.md)组件复核 Run 固定的 Models/Computer 附着引用仍为 approved 且 epoch 相同。首次接受原子固定 Session 协议和 initialization；后续根分支和后代必须使用同一初始化，竞争提交不同初始化会拒绝。即使首次 Run 最终失败，已经固定的协议也不撤销。
+新 Session 使用 `native-local-v1`。`registerRun` 在事务内先检查已接受幂等键，再复核归档状态、Run 的模型和协议绑定、精确的父上下文引用、固定初始化及单元附着。图片和文件引用通过附件组件的 `retainIn` 同事务保留。首次接纳固定逻辑初始化，后续根分支和后代沿用同一份指令和工具声明。Session 的 `protocolId` 记录首次接纳的协议，各 Run 的绑定可使用不同协议。
 
-父路径校验拒绝不存在、跨 Session、断链和循环节点。原生恢复还要求每个节点来自 completed 原生 Run，context 的 Session、协议、父引用、initialization 和记录版本一致。只在准备时拼接所选路径记录；数据库保存每个 Run 自己的增量请求/响应和不可变链节，避免每轮复制全部历史。
+父路径校验拒绝不存在、跨 Session、断链和循环节点。每个节点都来自已成功提交的原生 Run，并核对链节身份、绑定和记录版本。`loadApplicationHistory` 只转换指定节点的成功祖先。`loadNativeHistory` 在重组边界之前恢复应用前缀，随后重放原生记录。`getCompletedContextRef` 直接核对成功节点与上下文引用供缓存使用。`loadRunResumeState` 只读本 Run 游标，更新游标后无需构建完整恢复对象。
 
 每次 operation 先保存 intent 和 started，再保存 observation；取消不会删除已经发生的操作。成功结算要求没有仍为 started 的操作，必须有 checkpoint 和非空、不重复且属于本 Run 的结果记录引用。事务同时写入 Run 终态、记录、执行状态、终态事件、context 链节、完整节点、结果引用及 resultNodeId；任一步失败全部回滚。重复结算返回既有终态，不创建第二个节点。
 
 ## 表、通知与资源归属
 
-迁移继续使用历史 `run-state` 账本，当前版本 11（v11 在 harness_runs 增加 unit_bindings_json 保存接受时固定的单元附着引用，旧 Run 没有引用时按本机形态解释；v10 增加 harness_run_resumes 的 owner、Runtime 状态和协议游标；v6 增加原生记录 resource_refs_json，v7 增加 Session archived_at 和归档列表索引，v8 增加按 Agent 保存的新会话默认模型表，v9 增加 Agent 工具配置和不可变 Session 工具快照；旧 JSON 原样保留）。该组件拥有 `harness_run_resumes`、`harness_agent_tool_settings`、`harness_session_defaults`、`harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护；SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
+`run-state` v13 在 `harness_runs` 中保存不可变的 `application_prefix` 和 `estimated_input_tokens`。旧 Run 默认使用原生历史，输入估算缺省，无需改写旧 JSON。该组件拥有 `harness_run_resumes`、`harness_agent_tool_settings`、`harness_session_defaults`、`harness_sessions`、`harness_runs`、`harness_nodes`、`harness_run_events`、`harness_native_initializations`、`harness_native_records`、`harness_run_operations`、`harness_native_contexts`、`harness_native_results` 的领域规则。节点、原生记录和恢复链受不可变约束保护。SQLite 连接与排他锁归[存储组件](../infrastructure/local-sqlite.md)。
 
 每次 Run 变更提交后发送 `harness.run.changed`，载荷为 sessionId、runId、revision。监听失败只记录警告，不回滚已提交事实。原生记录可能含签名、加密续接和工具原生 ID，属于受信恢复面；浏览器必须使用白名单投影。Key、认证头、凭据引用和运行句柄不得写入历史。
 
@@ -106,7 +109,7 @@ Effect 先停止新调用，取消并等待图片及文件搜索/预览/准备/�
 
 打开记录实现时，保留带有效恢复状态的 response/cleanup/settling 活动 Run 供 Run 组件提升 owner 后接管。没有新恢复凭证的旧 Run、未保存模型响应的 model-pending 在事务内结算 interrupted，追加中断事件和 revision，不重发模型或未知工具，也不生成成功节点。已留下 worker scope 的 interrupted Run 由 Operations 独立协调耐久取消及真实排空。清理失败或状态写入故障不能被普通取消覆盖；失败、取消、interrupted 的原生诊断可读但不能作为继续节点。
 
-旧 `dialogue-v1` Session 保留查询，不导入或继续执行；历史 turns 迁移为不可变节点。旧模型快照与事件 JSON 保持原样；`bashCalls` 和 `bash-*` 只在读取时归一化为 toolCalls 与 tool-*，不保留旧写入路径。原生恢复不支持跨协议或任意账户/参数转换，具体兼容性由 Models execution 验证。
+旧 `dialogue-v1` Session 保留查询，历史 turns 迁移为不可变节点。旧模型快照和事件 JSON 保持原样。`bashCalls` 和 `bash-*` 只在读取时归一化。已接纳 Run 按其快照和 `application_prefix` 恢复。切换 API 或换 Key 的应用历史组包用于后续新 Run，转换边界见[会话树](../../session-conversation-tree.md)。
 
 ## 验证
 

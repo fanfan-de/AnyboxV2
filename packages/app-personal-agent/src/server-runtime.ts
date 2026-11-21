@@ -38,7 +38,7 @@ export function createHarnessServerRuntime(root: Context, config: HarnessServerC
       return admission ? admission.pauseIfIdle() : () => {}
     }), 'unregister Personal Agent stop protection')
     await installHarnessServerModels(root, config, options.models, installation.track, installation.serviceBindings)
-    const hasDefault = service<ModelsSettingsService>(modelsSettingsServiceKey)?.configurations().some(model => model.id === 'default') ?? false
+    const hasDefault = service<ModelsSettingsService>(modelsSettingsServiceKey)?.modelSettings().some(model => model.runtimeModelId === 'default') ?? false
     const serverCoreOptions: HarnessServerCoreOptions = { ...options, serviceBindings: integration.serviceBindings, localWorkerDirectory: options.localWorkerDirectory ?? `${config.harnessDatabasePath}.computer-worker`, initialProjects: options.projects ?? options.initialProjects,
       agentWorkspacesDirectory: options.agentWorkspacesDirectory ?? `${config.harnessDatabasePath}.workspaces`,
       agents: options.agents ?? definitions.map(agent => ({ ...agent, ...(hasDefault ? { modelId: 'default' } : {}) })) }

@@ -85,17 +85,17 @@ for (const protocolCase of protocols) for (const streamingCase of cases)
       assert.equal(source.models[0].capabilities.streaming.support, streamingCase.support)
       await f.sourceData.accept(source)
       const provider = f.settings.providers()[0]
-      const connection = await f.settings.createConnection({ id: 'account', providerDefinitionId: provider.id, name: 'Account',
+      const connection = await f.settings.createProviderSettings({ providerId: provider.id, name: 'Account',
         enabled: true, protocolId: protocolCase.id, baseUrl: 'https://provider.invalid/v1', auth: 'api-key',
         apiKey: 'private-streaming-test-key', timeoutMs: 1000 })
       assert.equal(connection.sync.state, 'ready')
-      const [baseline] = f.settings.configurations(connection.id)
-      assert.ok(baseline, 'saving a keyed connection creates its baseline')
-      assert.equal(baseline.baseline, true)
-      assert.equal(baseline.capabilities.streaming.support, streamingCase.support)
+      const [model] = f.settings.modelSettings(connection.id)
+      assert.ok(model, 'saving a keyed provider initializes its model settings')
+      assert.equal(model.runtimeModelId, model.id)
+      assert.equal(model.capabilities.streaming.support, streamingCase.support)
       assert.equal(f.settings.models()[0].capabilities.streaming.support, streamingCase.support)
 
-      execution = await f.open({ modelId: baseline.id })
+      execution = await f.open({ modelId: model.runtimeModelId })
       operation = execution.prepareExchange(protocolCase.intent).start(event => {
         observed.push(event)
         if (protocolCase.deltaText(event) === partial) firstDelta.resolve(event)
@@ -104,7 +104,7 @@ for (const protocolCase of protocols) for (const streamingCase of cases)
       void operation.result.then(() => { resultSettled = true }, () => { resultSettled = true })
       assert.equal((await requested.promise).stream, streamingCase.enabled)
       assert.equal(execution.snapshot.capabilities.streaming, streamingCase.enabled)
-      assert.equal(f.models.get(baseline.id).effectiveCapabilities.streaming, streamingCase.enabled)
+      assert.equal(f.models.get(model.runtimeModelId).effectiveCapabilities.streaming, streamingCase.enabled)
 
       if (streamingCase.enabled) {
         await Promise.race([firstDelta.promise, operation.result.then(() => assert.fail('result completed before a live text delta'))])

@@ -52,18 +52,18 @@ async function seedProvider(root, config, keyring, input = {}) {
   for (const component of [createModelsStoreComponent({ path: config.modelsDatabasePath }),
     createModelsVaultComponent({ namespace: config.credentialNamespace, openEntry: keyring.openEntry }), createModelsComponent(), createChatCompletionsProtocolComponent(), createResponsesProtocolComponent()]) await root.installComponent(component)
   const settings = root.get('models.settings')
-  const provider = { id: 'anybox-imported-default', name: 'Saved connection', enabled: true, protocolId: 'chat-completions',
+  const { id, ...provider } = { id: 'anybox-imported-default', name: 'Saved connection', enabled: true, protocolId: 'chat-completions',
     baseUrl: 'https://saved.invalid/v1', auth: 'api-key', timeoutMs: 30_000, ...input }
-  const definition = await settings.createProvider({ id: `${provider.id}-definition`, name: provider.name, connectionHints: { protocolIds: [provider.protocolId], baseUrl: provider.baseUrl } })
-  return settings.createConnection({ ...provider, providerDefinitionId: definition.id })
+  const definition = await settings.createProvider({ id, name: provider.name, connectionHints: { protocolIds: [provider.protocolId], baseUrl: provider.baseUrl } })
+  return settings.createProviderSettings({ ...provider, providerId: definition.id })
 }
 async function seedDefaultModel(root, connection) {
   const settings = root.get('models.settings')
-  const definition = await settings.createModel({ id: 'anybox-imported-model', providerId: connection.providerDefinitionId,
+  const definition = await settings.createModel({ id: 'default', providerId: connection.id,
     name: 'Saved model definition', remoteModelId: 'saved-remote-model', capabilities,
     controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [connection.protocolId] } })
-  return settings.createConfiguration({ id: 'default', connectionId: connection.id, modelDefinitionId: definition.id, name: 'My saved model',
-    enabled: true, baseline: true, capabilities, parameters: { protocolId: connection.protocolId, formatVersion: 1, value: { temperature: 0.3 } } })
+  return settings.createModelSettings({ modelId: definition.id, name: 'My saved model',
+    enabled: true, capabilities, parameters: { protocolId: connection.protocolId, formatVersion: 1, value: { temperature: 0.3 } } })
 }
 
 test('fresh Models startup loads the directory and protocols without connections, configurations or legacy credential access', async t => {
@@ -72,8 +72,8 @@ test('fresh Models startup loads the directory and protocols without connections
   keyring.values.set(oldKey, 'untouched-legacy-private-value')
   await installHarnessServerModels(root, f.config, { openEntry: keyring.openEntry })
   const settings = root.get('models.settings')
-  assert.deepEqual(settings.connections(), [])
-  assert.deepEqual(settings.configurations(), [])
+  assert.deepEqual(settings.configuredProviders(), [])
+  assert.deepEqual(settings.modelSettings(), [])
   assert.deepEqual(root.get('models').list(), [])
   assert.deepEqual(settings.protocols().map(protocol => protocol.id).sort(), ['anthropic-messages', 'chat-completions', 'gemini-interactions', 'responses'])
   assert.ok(settings.providers({ sourceId: 'models.dev' }).some(provider => provider.source.providerId === 'deepseek'))
@@ -86,8 +86,8 @@ test('fresh Models startup loads the directory and protocols without connections
   await root.fiber.dispose()
   const reopened = f.root()
   await installHarnessServerModels(reopened, f.config, { openEntry: keyring.openEntry })
-  assert.deepEqual(reopened.get('models.settings').connections(), [])
-  assert.deepEqual(reopened.get('models.settings').configurations(), [])
+  assert.deepEqual(reopened.get('models.settings').configuredProviders(), [])
+  assert.deepEqual(reopened.get('models.settings').modelSettings(), [])
   assert.deepEqual(keyring.operations, [])
   assert.doesNotMatch(await readFile(f.config.modelsConfigPath, 'utf8'), /untouched-legacy-private-value/)
 })
@@ -97,25 +97,25 @@ test('a models.dev DeepSeek connection is created explicitly and prepares catalo
   await installHarnessServerModels(root, f.config, { openEntry: keyring.openEntry })
   const settings = root.get('models.settings')
   const definition = settings.providers({ sourceId: 'models.dev' }).find(provider => provider.source.providerId === 'deepseek')
-  const connection = await settings.createConnection({ providerDefinitionId: definition.id, id: 'explicit-deepseek', name: 'DeepSeek', enabled: true,
+  const connection = await settings.createProviderSettings({ providerId: definition.id, name: 'DeepSeek', enabled: true,
     protocolId: 'chat-completions', baseUrl: 'https://api.deepseek.com', auth: 'api-key', timeoutMs: 30_000 })
   assert.equal(connection.credentialConfigured, false)
   assert.equal(connection.sync.state, 'pending')
-  assert.deepEqual(settings.configurations(), [])
+  assert.deepEqual(settings.modelSettings(), [])
   const saved = await settings.setApiKey(connection.id, 'explicit-deepseek-private-value', connection.revision)
   assert.equal(saved.credentialConfigured, true)
   assert.equal(saved.sync.state, 'ready')
-  const models = settings.configurations(connection.id)
+  const models = settings.modelSettings(connection.id)
   assert.ok(models.length > 0)
   for (const model of models) {
-    const source = settings.models({ providerId: definition.id }).find(value => value.id === model.modelDefinitionId).source
+    const source = settings.models({ providerId: definition.id }).find(value => value.id === model.id).source
     assert.equal(source.kind, 'external')
     assert.equal(source.sourceId, 'models.dev')
     assert.equal(source.providerId, 'deepseek')
-    assert.equal(model.baseline, true)
+    assert.equal(model.runtimeModelId, model.id)
   }
-  assert.equal(settings.connections().length, 1)
-  assert.equal(settings.configurations().some(model => model.id === 'default'), false)
+  assert.equal(settings.configuredProviders().length, 1)
+  assert.equal(settings.modelSettings().some(model => model.id === 'default'), false)
   const execution = await openNative(root, models[0].id)
   await execution.close()
   assert.doesNotMatch(await readFile(f.config.modelsConfigPath, 'utf8'), /explicit-deepseek-private-value/)
@@ -128,18 +128,18 @@ test('deleting the last explicit connection stays empty after restart without re
   await first.fiber.dispose()
   const second = f.root()
   await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
-  const settings = second.get('models.settings'), imported = settings.connections()[0]
-  await settings.deleteConnection(imported.id, imported.revision)
-  assert.deepEqual(settings.connections(), [])
-  assert.deepEqual(settings.configurations(), [])
+  const settings = second.get('models.settings'), imported = settings.configuredProviders()[0]
+  await settings.deleteProviderSettings(imported.id, imported.revision)
+  assert.deepEqual(settings.configuredProviders(), [])
+  assert.deepEqual(settings.modelSettings(), [])
   assert.equal(keyring.values.size, 0)
   await second.fiber.dispose()
   const third = f.root()
   await installHarnessServerModels(third, f.config, { openEntry: keyring.openEntry })
-  assert.deepEqual(third.get('models.settings').connections(), [])
+  assert.deepEqual(third.get('models.settings').configuredProviders(), [])
   assert.deepEqual(third.get('models').list(), [])
-  assert.equal(third.get('models.settings').connectionHistory(connection.id).length, 1)
-  assert.equal(third.get('models.settings').configurationHistory('default').length, 1)
+  assert.equal(third.get('models.settings').providerSettingsHistory(connection.id).length, 1)
+  assert.equal(third.get('models.settings').modelSettingsHistory('default').length, 1)
 })
 
 test('existing SQLite connection, Key and stable default configuration remain usable without being rewritten on startup', async t => {
@@ -151,11 +151,11 @@ test('existing SQLite connection, Key and stable default configuration remain us
   await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
   const settings = second.get('models.settings')
   await access(f.config.modelsDatabasePath)
-  assert.deepEqual(settings.connections(), [connection])
-  assert.deepEqual(settings.configurations(), [original])
+  assert.deepEqual(settings.configuredProviders(), [connection])
+  assert.deepEqual(settings.modelSettings(), [original])
   assert.equal(second.get('models').get('default').available, true)
   const execution = await openNative(second)
-  const visible = JSON.stringify([settings.connections(), settings.configurations(), settings.connectionHistory(connection.id), execution.snapshot])
+  const visible = JSON.stringify([settings.configuredProviders(), settings.modelSettings(), settings.providerSettingsHistory(connection.id), execution.snapshot])
   assert.doesNotMatch(visible, /already-copied-private-value|credentialRef/)
   await execution.close()
   assert.doesNotMatch(await readFile(f.config.modelsConfigPath, 'utf8'), /already-copied-private-value/)
@@ -169,29 +169,29 @@ test('editable JSON capability changes retain configuration identity, parameters
   await seed.fiber.dispose()
   const first = f.root()
   await installHarnessServerModels(first, f.config, { openEntry: keyring.openEntry })
-  const before = first.get('models.settings').configurations().find(model => model.id === 'default')
+  const before = first.get('models.settings').modelSettings().find(model => model.id === 'default')
   await first.fiber.dispose()
   const document = JSON.parse(await readFile(f.config.modelsConfigPath, 'utf8'))
-  const edited = document.configurations.find(model => model.id === 'default')
+  const edited = document.modelSettings.find(model => model.id === 'default')
   edited.capabilities.reasoning = { support: 'supported', efforts: ['low', 'high'] }
   await writeFile(f.config.modelsConfigPath, JSON.stringify(document, null, 2) + '\n')
   const second = f.root()
   await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
-  const after = second.get('models.settings').configurations().find(model => model.id === 'default')
+  const after = second.get('models.settings').modelSettings().find(model => model.id === 'default')
   assert.deepEqual(after.capabilities.reasoning, edited.capabilities.reasoning)
   assert.equal(after.revision, before.revision + 1)
   assert.deepEqual(after.parameters, before.parameters)
   assert.equal(after.modelDefinitionVersionId, before.modelDefinitionVersionId)
-  const history = second.get('models.settings').configurationHistory('default')
+  const history = second.get('models.settings').modelSettingsHistory('default')
   assert.deepEqual(history.at(-2), before)
   assert.deepEqual(history.at(-1), after)
-  assert.equal(second.get('models.settings').connections()[0].credentialConfigured, true)
+  assert.equal(second.get('models.settings').configuredProviders()[0].credentialConfigured, true)
   assert.equal(keyring.operations.filter(operation => operation.kind === 'write').length, 1)
   assert.doesNotMatch(await readFile(f.config.modelsConfigPath, 'utf8'), /private-json-test-key/)
   await second.fiber.dispose()
   const third = f.root()
   await installHarnessServerModels(third, f.config, { openEntry: keyring.openEntry })
-  assert.equal(third.get('models.settings').configurations().find(model => model.id === 'default').revision, after.revision)
+  assert.equal(third.get('models.settings').modelSettings().find(model => model.id === 'default').revision, after.revision)
 })
 
 for (const id of ['anybox-imported-default', 'user-managed']) test(`startup preserves the existing ${id} connection without inventing a missing model`, async t => {
@@ -201,31 +201,31 @@ for (const id of ['anybox-imported-default', 'user-managed']) test(`startup pres
   const second = f.root()
   await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
   const settings = second.get('models.settings')
-  assert.deepEqual(settings.connections(), [connection])
-  assert.deepEqual(settings.configurations(), [])
-  assert.equal(settings.models({ providerId: connection.providerDefinitionId }).length, 0)
+  assert.deepEqual(settings.configuredProviders(), [connection])
+  assert.deepEqual(settings.modelSettings(), [])
+  assert.equal(settings.models({ providerId: connection.id }).length, 0)
   assert.deepEqual([...keyring.values.values()], ['saved-partial-key'])
 })
 
-for (const hasKey of [false, true]) test(`a saved partial import with a model definition ${hasKey ? 'uses normal baseline synchronization' : 'and no Key remains incomplete'} without an invented default`, async t => {
+for (const hasKey of [false, true]) test(`a saved partial import with a model definition ${hasKey ? 'uses normal model synchronization' : 'and no Key remains incomplete'} without an invented default`, async t => {
   const f = await fixture(t), first = f.root(), keyring = memoryKeyring()
   const connection = await seedProvider(first, f.config, keyring, hasKey ? { apiKey: 'saved-partial-definition-key' } : {})
-  const definition = await first.get('models.settings').createModel({ id: 'anybox-imported-model', providerId: connection.providerDefinitionId,
+  const definition = await first.get('models.settings').createModel({ id: 'anybox-imported-model', providerId: connection.id,
     name: 'Saved partial definition', remoteModelId: 'saved-remote-model', capabilities,
     controls: { temperature: 'unknown' }, modalities: { input: ['text'], output: ['text'] }, limits: {}, connectionHints: { protocolIds: [connection.protocolId] } })
   await first.fiber.dispose()
   const second = f.root()
   await installHarnessServerModels(second, f.config, { openEntry: keyring.openEntry })
   const settings = second.get('models.settings')
-  const configurations = settings.configurations()
+  const configurations = settings.modelSettings()
   if (hasKey) {
     assert.equal(configurations.length, 1)
-    assert.equal(configurations[0].modelDefinitionId, definition.id)
+    assert.equal(configurations[0].id, definition.id)
     assert.equal(configurations[0].remoteModelId, definition.remoteModelId)
-    assert.equal(configurations[0].baseline, true)
+    assert.equal(configurations[0].runtimeModelId, definition.id)
     assert.notEqual(configurations[0].id, 'default')
   } else assert.deepEqual(configurations, [])
-  assert.deepEqual(settings.models({ providerId: connection.providerDefinitionId }), [definition])
-  assert.equal(settings.connections()[0].credentialConfigured, hasKey)
+  assert.deepEqual(settings.models({ providerId: connection.id }), [definition])
+  assert.equal(settings.configuredProviders()[0].credentialConfigured, hasKey)
   if (!hasKey) assert.deepEqual(keyring.operations, [])
 })

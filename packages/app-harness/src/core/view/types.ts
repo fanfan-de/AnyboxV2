@@ -54,6 +54,8 @@ export interface ProtocolViewInput {
 export interface ProtocolTokenUsage {
   readonly inputTokens?: number
   readonly outputTokens?: number
+  readonly cachedInputTokens?: number
+  readonly uncachedInputTokens?: number
 }
 export interface ProtocolViewExchange {
   readonly id: string

@@ -58,7 +58,7 @@ function sourceStore(initial) {
     validateCatalogSnapshot(candidate); commits.push({ candidate, options });
     const accepted = !current || candidate.fetchedAt > current.fetchedAt || candidate.snapshotVersion === current.snapshotVersion || options.confirmed && candidate.fetchedAt === current.fetchedAt;
     if (accepted) current = candidate;
-    return { accepted, source: { sourceId: current.sourceId, snapshotVersion: current.snapshotVersion, fetchedAt: current.fetchedAt }, connections: [] };
+    return { accepted, source: { sourceId: current.sourceId, snapshotVersion: current.snapshotVersion, fetchedAt: current.fetchedAt }, providers: [] };
   } };
 }
 async function fixture(options = {}) {
@@ -434,12 +434,12 @@ test('equal-time different cache content preserves accepted data and requires a 
   } finally { await f.close(); }
 });
 
-test('refresh waits for unified definitions and connection initialization after committing cache', async () => {
+test('refresh waits for unified definitions and provider initialization after committing cache', async () => {
   const base = sourceStore(), gate = deferred(), started = deferred(); let hold = false;
   const sourceData = { ...base, async accept(value, options) {
     if (hold) { started.resolve(); await gate.promise; }
     const committed = await base.accept(value, options);
-    return { ...committed, connections: [{ connectionId: 'connection', state: 'failed', targetSourceVersion: value.snapshotVersion, syncedSourceVersion: null, error: 'invalid-configuration' }] };
+    return { ...committed, providers: [{ providerId: 'provider', state: 'failed', targetSourceVersion: value.snapshotVersion, syncedSourceVersion: null, error: 'invalid-configuration' }] };
   } };
   const f = await fixture({ sourceData }); hold = true;
   const request = f.catalog.refresh(), state = observe(request); await started.promise;
@@ -447,7 +447,7 @@ test('refresh waits for unified definitions and connection initialization after 
   assert.equal(f.getModel('p', 'm').name, 'Model'); assert.equal(state.settled, false);
   const disposal = f.component.dispose(), disposing = observe(disposal); await tick(); assert.equal(disposing.settled, false);
   gate.resolve(); const result = await request; await disposal;
-  assert.equal(result.connections[0].state, 'failed'); assert.equal(f.getModel('p', 'm').name, 'Network');
+  assert.equal(result.providers[0].state, 'failed'); assert.equal(f.getModel('p', 'm').name, 'Network');
   assert.equal(result.error, undefined); await f.close();
 });
 

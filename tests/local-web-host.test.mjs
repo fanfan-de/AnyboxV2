@@ -55,7 +55,7 @@ test('local Web shares exactly one root while keeping storage, targets and appli
     assert.equal(host.execution.products.get('agent').state, 'running')
     const harnessModels = host.root.get('harness.models.settings')
     assert.ok(harnessModels)
-    assert.deepEqual(harnessModels.connections(), [])
+    assert.deepEqual(harnessModels.configuredProviders(), [])
     await seedHarnessModel(harnessModels)
     assert.equal(host.root.get('models.settings'), undefined)
     assert.equal((await host.client.products.open('personal-agent')).state, 'running')
@@ -65,14 +65,14 @@ test('local Web shares exactly one root while keeping storage, targets and appli
     const personalModels = host.root.get('personal-agent.models.settings'), personalDb = host.root.get('personal-agent.local-storage')
     assert.ok(personalModels)
     assert.notEqual(personalModels, harnessModels)
-    assert.equal(personalModels.connections().length, 0)
-    assert.ok(harnessModels.connections().length)
+    assert.equal(personalModels.configuredProviders().length, 0)
+    assert.ok(harnessModels.configuredProviders().length)
     const token = await host.root.get('host.access').issue('test HTTP identity')
-    const response = await fetch(host.execution.url + '/api/v1/models/connections', { headers: {
+    const response = await fetch(host.execution.url + '/api/v1/models/provider-settings', { headers: {
       Authorization: `Bearer ${token.token}`, 'X-Anybox-Instance-Id': host.execution.instance.instanceId,
     } })
     assert.equal(response.status, 200)
-    assert.equal((await response.json()).length, harnessModels.connections().length)
+    assert.equal((await response.json()).length, harnessModels.configuredProviders().length)
     assert.equal((await clientDb.read(r => r.all('SELECT * FROM schema_migrations WHERE domain=?', ['run-state']))).length, 0)
     assert.equal((await executionDb.read(r => r.all('SELECT * FROM schema_migrations WHERE domain=?', ['run-state']))).length, 1)
     assert.equal((await personalDb.read(r => r.all('SELECT * FROM schema_migrations WHERE domain=?', ['run-state']))).length, 1)
@@ -111,7 +111,7 @@ test('single-root shutdown cancels an accepted model call and persists its termi
     const api = host.execution.api
     await api.setAgentTools('assistant', { toolIds: [], expectedRevision: 0 })
     const project = await api.openProject(directory)
-    const session = await api.createSession(project.id, 'assistant', model.id)
+    const session = await api.createSession(project.id, 'assistant', model.runtimeModelId)
     run = await api.startRun({ sessionId: session.id, parentNodeId: null, input: 'wait', idempotencyKey: 'local-shutdown' })
     await started
     await assert.rejects(host.execution.products.disable('agent'), { code: 'product-busy' })

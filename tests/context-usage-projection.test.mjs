@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { boundProtocolView, projectNativeExchange, projectNativeUsage, projectProtocolRecords, reduceNativeExchange } from '../packages/app-harness/dist/core/protocol-agents/projection.js'
 import { decodeProtocolView, reduceProtocolView } from '../packages/app-harness/dist/core/view/decode.js'
+import { boundProtocolView as boundPersonalView, projectNativeUsage as projectPersonalUsage, projectProtocolRecords as projectPersonalRecords, reduceNativeExchange as reducePersonalExchange } from '../packages/app-personal-agent/dist/core/protocol-agents/projection.js'
+import { decodeProtocolView as decodePersonalView } from '../packages/app-personal-agent/dist/core/view/decode.js'
 
 const snapshot = (protocolId, exchanges, patch = {}) => ({ envelopeVersion: 1, viewSchemaVersion: 2, protocolId,
   sessionId: 'session', runId: 'run', viewRevision: 1, status: 'provisional', exchanges, ...patch })
@@ -17,7 +19,8 @@ for (const [protocolId, usage] of usageCases) test(`${protocolId} safely project
   const payload = { usage: { ...usage, credential: 'private-key', metadata: { signature: 'private-signature' } } }
   const record = { id: 'response', exchangeId: 'exchange', kind: 'response', formatVersion: 2, payload }
   const before = structuredClone(record), exchanges = projectProtocolRecords(protocolId, [record])
-  assert.deepEqual(exchanges[0].usage, { inputTokens: 120, outputTokens: 18 })
+  assert.deepEqual(exchanges[0].usage, { inputTokens: 120, outputTokens: 18,
+    ...(protocolId === 'chat-completions' ? { cachedInputTokens: 100, uncachedInputTokens: 20 } : {}) })
   assert.deepEqual(record, before, 'reading legacy native records never rewrites them')
   assert.deepEqual(boundProtocolView(exchanges)[0].usage, exchanges[0].usage)
   assert.deepEqual(decodeProtocolView(snapshot(protocolId, exchanges)).exchanges[0].usage, exchanges[0].usage)
@@ -88,4 +91,53 @@ test('browser view decoder whitelists usage counts, rejects invalid values and a
   for (const usage of [null, [], {}, { totalTokens: 10 }, { inputTokens: -1 }, { inputTokens: 1.5 }, { inputTokens: Infinity }, { inputTokens: NaN }, { inputTokens: '10' }, { outputTokens: Number.MAX_SAFE_INTEGER + 1 }]) {
     assert.equal(decodeProtocolView(frame(usage)), undefined)
   }
+})
+
+const cacheProjections = [
+  { product: 'Anybox Harness', project: projectNativeUsage, reduce: reduceNativeExchange, projectRecords: projectProtocolRecords,
+    bound: boundProtocolView, decode: decodeProtocolView },
+  { product: 'Personal Agent', project: projectPersonalUsage, reduce: reducePersonalExchange, projectRecords: projectPersonalRecords,
+    bound: boundPersonalView, decode: decodePersonalView },
+]
+for (const { product, project } of cacheProjections) test(`${product} projects explicit DeepSeek cache counts and falls back to generic Chat usage`, () => {
+  const chat = usage => project('chat-completions', { usage })
+  const totals = { prompt_tokens: 120, completion_tokens: 18 }
+  assert.deepEqual(chat({ ...totals, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 120,
+    prompt_tokens_details: { cached_tokens: 100 } }), { inputTokens: 120, outputTokens: 18, cachedInputTokens: 0, uncachedInputTokens: 120 })
+  assert.deepEqual(chat({ ...totals, prompt_tokens_details: { cached_tokens: 100 } }),
+    { inputTokens: 120, outputTokens: 18, cachedInputTokens: 100, uncachedInputTokens: 20 })
+  assert.deepEqual(chat({ ...totals, prompt_cache_hit_tokens: 120 }),
+    { inputTokens: 120, outputTokens: 18, cachedInputTokens: 120, uncachedInputTokens: 0 })
+  assert.deepEqual(chat({ ...totals, prompt_cache_miss_tokens: 18 }),
+    { inputTokens: 120, outputTokens: 18, uncachedInputTokens: 18 }, 'a reported miss alone does not imply a reported hit')
+  assert.deepEqual(chat({ prompt_cache_hit_tokens: 0 }), { cachedInputTokens: 0 }, 'no prompt total is available from which to derive a miss')
+  assert.equal(chat({ ...totals, prompt_tokens_details: { cached_tokens: 121 } }).uncachedInputTokens, undefined)
+  assert.deepEqual(chat({ ...totals, prompt_cache_hit_tokens: '0', prompt_cache_miss_tokens: -1 }),
+    { inputTokens: 120, outputTokens: 18 })
+  assert.deepEqual(chat(totals), { inputTokens: 120, outputTokens: 18 }, 'older records do not gain cache counts')
+})
+
+for (const { product, reduce, projectRecords, bound, decode } of cacheProjections) test(`${product} preserves sanitized per-exchange cache counts through live and committed views`, () => {
+  const protocolId = 'chat-completions'
+  const usage = { prompt_tokens: 768, completion_tokens: 12, prompt_cache_hit_tokens: 640, prompt_cache_miss_tokens: 128 }
+  const first = reduce(protocolId, { id: 'first', blocks: [] }, { choices: [], usage })
+  assert.deepEqual(first.usage, { inputTokens: 768, outputTokens: 12, cachedInputTokens: 640, uncachedInputTokens: 128 })
+  const second = reduce(protocolId, { id: 'second', blocks: [] }, { choices: [], usage: { prompt_tokens: 900, completion_tokens: 18 } })
+  assert.deepEqual(second.usage, { inputTokens: 900, outputTokens: 18 })
+
+  const records = [
+    { id: 'r1', exchangeId: 'first', kind: 'response', payload: { usage: { ...usage, credential: 'private-key' } } },
+    { id: 'r2', exchangeId: 'second', kind: 'response', payload: { usage: { prompt_tokens: 900, completion_tokens: 18 } } },
+  ]
+  const before = structuredClone(records)
+  const exchanges = projectRecords(protocolId, records)
+  const frame = snapshot(protocolId, bound(exchanges), { status: 'committed' })
+  const decoded = decode(frame)
+  assert.deepEqual(decoded?.exchanges.map(exchange => exchange.usage), [first.usage, second.usage])
+  assert.deepEqual(records, before)
+  assert.doesNotMatch(JSON.stringify(decoded), /private-key|prompt_cache_hit_tokens|prompt_cache_miss_tokens/)
+
+  const extra = snapshot(protocolId, [{ ...empty(), usage: { cachedInputTokens: 0, uncachedInputTokens: 4, credential: 'private-key' } }])
+  assert.deepEqual(decode(extra)?.exchanges[0].usage, { cachedInputTokens: 0, uncachedInputTokens: 4 })
+  assert.equal(decode(snapshot(protocolId, [{ ...empty(), usage: { cachedInputTokens: -1 } }])), undefined)
 })

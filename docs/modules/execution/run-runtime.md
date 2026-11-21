@@ -56,6 +56,8 @@ Effect 先停止接收，再取消并等待所有活跃 Run，清空临时视图
 
 ## 进程重启接续
 
+正常运行清理只读取当前 Run 的耐久恢复游标。成功结算后，Runtime 将可用的原生续接句柄交给 Run 的提交后回调，失败时下一轮从持久记录恢复。缓存由 Run 准入按父上下文管理。
+
 Run 接管 `run-state` v10 的独立 resume 状态，提升 runOwnerEpoch，并先在已使用 worker 安装栅栏，再准备程序。Runtime 的 response 阶段复用完整工具批次、operation ID 和已观察结果；Session 原子消费观察及累计输出统计，恢复时不会因已有统计值超过旧 128 KiB 门槛而终止。cleanup 阶段重查原 close-scope，settling 阶段重用已保存提案。协议 Loop 解释 opaque protocolCursor，先回放已保存原生响应，再固定下一增量请求；不恢复旧 Run phase 写入路径。
 
 protocolCursor 的可选 `toolRequestCorrections` 保存当前 Run 已使用的纯预检拒绝额度，缺省为零；它属于协议续轮账本，不是 worker 工具执行次数。重放最后耐久响应时复用已保存的额度，下一模型请求登记前的同一拒绝可确定性重建；不会在进程恢复或成功工具批次后重新获得三次额度。

@@ -88,14 +88,17 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}): Na
     },
     resourceIds: chatImages.ids,
     effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, options.thinking !== undefined && object(options.thinking).type === 'disabled' || options.reasoning_effort === 'none'), imageInput: declared.imageInput.support === 'supported' }),
-    restore: records => {
+    supportsHistoryPrefix: true,
+    restore: (records, prefix) => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
-      return restoreRecords(protocolId, records, commit, [1, 2]);
+      const initial = prefix === undefined ? undefined : conversation({}, prefix, 'messages', ['tools']);
+      return restoreRecords(protocolId, records, commit, [1, 2], initial);
     },
     prepare(input) {
-      validateIntent(input.intent); requireLocalTools(input.intent.tools, input.capabilities.tools);
+      validateIntent(input.intent);
       if (chatImages.ids(input.intent).length && !input.capabilities.imageInput) throw modelsError('capability-unsupported');
       const next = conversation(input.state, input.intent, 'messages', ['tools']);
+      requireLocalTools(next.tools, input.capabilities.tools);
       for (const value of next.tools === undefined ? [] : array(next.tools)) { const tool = object(value); if (tool.type !== 'function') throw modelsError('invalid-config'); object(object(tool.function).parameters); }
       const streaming = input.responseMode === undefined ? input.capabilities.streaming : input.responseMode === 'stream';
       return native({ ...input.parameters, ...next, model: input.remoteModelId, stream: streaming,

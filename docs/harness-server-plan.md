@@ -9,13 +9,13 @@ Computer 的全局 local/remote 形态已取消。本机 `local:computer` 与多
 
 ## 当前基线
 
-[通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderConnection 管连接和密钥引用，ModelConfiguration 管执行版本、能力与参数；配置和不可变历史写 SQLite，秘密只存系统凭据库。Responses、Anthropic Messages、标准 Chat Completions 和 Gemini Interactions 四种协议可同时安装，支持多连接并发、文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
+[通用 Models 模块](../packages/models/README.md)提供 `models`、`models.settings`、`models.protocols`，配置与业务分库。Provider/Model 管统一来源定义，ProviderSettings 按提供方 ID 管理唯一一套设置和密钥引用，ModelSettings 按模型定义保存执行版本、能力与参数；配置和不可变历史写入独占 JSON，秘密只存系统凭据库。Responses、Anthropic Messages、标准 Chat Completions 和 Gemini Interactions 四种协议可同时安装，支持多个提供方并发，以及文本、工具和流式事件。协议注册与注销按注册代隔离，取消后等待实际退出。旧应用 `llm` 及凭据包装已删除，仅保留旧数据和旧密钥的读取兼容。
 
 每个进程的组件直接安装在唯一 Nya 根；Authority 与 Runtime 同进程，工具执行采用独立 worker 根。Session 独占会话、Run、不可变节点、原生记录和恢复引用；Projects 管项目身份。Run 检查幂等、选模、指定父链和 Prompt，协议绑定准备固定驱动代的 PreparedRunProgram。RunRuntime 同步接管资源，管理意图/观察持久屏障、取消、退出与结算；协议独立 Loop 决定工具回填和续轮。旧 AgentLoop、统一消息和 `models.open()` 已删除。
 
 Computer 安装本机 worker 客户端、实例提供方、Computers、Workspaces 和 Computer Operations。Session 同事务接纳工具声明及独立 resume cursor；Operations 按需激活 worker 并准备 pinned-local binding，worker 固定路径执行、保存 receipt/result 和真实退出。实例 pin 与 reservation 持有到 scope 实际退出；纯模型和计划不激活 computer。Runtime 进程异常退出后接管原工具等待、清理和结算，接纳/消费去重及 owner 栅栏保护副作用和额度；未保存模型响应的 Run 仍 interrupted。远端托管工作区、模型 owner 与弹性提供方按[资源设计](./computer-resource-design.md)后续阶段实施。
 
-会话持久保存可空 modelId；新 native-local-v1 Session 首次接受 Run 原子固定协议，旧 dialogue-v1 只读。schemaVersion 3 快照包含定义身份、驱动代、原生参数与非秘密 historyScopeEpoch，不含凭据。根初始化与工具契约沿指定父链继承，每个新 Run 的当前 task-template 仅处理本次原始输入一次。恢复记录增量保存，跨 Run/重启重建本地原生上下文；失败、取消、清理失败没有可继续节点，有效工具等待游标可接续；无游标或模型响应未保存的异常中断结算 interrupted，不自动重放。
+会话持久保存可空 modelId。native-local-v1 Session 首次接受 Run 固定逻辑初始化，每次 Run 按自身协议沿指定父链续接。旧 dialogue-v1 只读。schemaVersion 3 快照包含定义身份、驱动代、原生参数与非秘密 historyScopeEpoch，不含凭据。根初始化与工具契约沿指定父链继承，每个新 Run 的当前 task-template 仅处理本次原始输入一次。恢复记录增量保存，跨 Run/重启重建本地原生上下文；失败、取消、清理失败没有可继续节点，有效工具等待游标可接续；无游标或模型响应未保存的异常中断结算 interrupted，不自动重放。
 
 本机 [Web 客户端](./web-client-design.md)通过统一 Provider/Model 目录选提供方、配置 Key 后自动准备适用模型，`models.settings` 提供连接与模型参数编辑、启停、Key 设置/替换/删除、能力和协议参数、发现、检查与历史。每个会话可以独立选模，提交和重试固定显式模型 ID。配置变更只影响新 execution，无需重启。首次使用空 Models 配置时只加载 models.dev 目录，不自动创建连接或默认模型；提供方与 Key 由用户在设置中显式添加。旧 `ANYBOX_LLM_*` 不再解析或导入，也不读取或复制旧模型凭据。已有 JSON/SQLite 配置读取兼容和已保存的连接、模型、Key 引用、历史保留；系统凭据不可用不会退回明文，也不阻止浏览非秘密配置。
 

@@ -42,7 +42,7 @@ test('business client disposal waits accepted writes without sending cancellatio
   let resolve, signal
   t.mock.method(globalThis, 'fetch', (_url, options) => { signal = options.signal; return new Promise(done => { resolve = done }) })
   const api = createHarnessClient([connection(a)], a, 'custom')
-  const writing = api.forConnection(a)('/models/connections', { name: 'saved' })
+  const writing = api.forConnection(a)('/models/provider-settings', { name: 'saved' })
   let disposed = false; const close = api.dispose().then(() => { disposed = true })
   await tick(); assert.equal(signal.aborted, false); assert.equal(disposed, false)
   resolve(Response.json({ id: 'connection' })); await writing; await close

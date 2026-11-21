@@ -32,19 +32,22 @@
       </aside>
     </main>
   </div>
-  <dialog id="personal-agent--settings-dialog" class="settings-dialog" aria-labelledby="personal-agent--settings-title">
-    <div class="settings-heading"><h2 id="personal-agent--settings-title">Personal Agent 设置</h2><button id="personal-agent--close-settings" class="close-settings" type="button" aria-label="关闭设置" title="关闭设置" autofocus><svg aria-hidden="true"><use href="#personal-agent--icon-close"/></svg></button></div>
+  <dialog id="personal-agent--settings-dialog" class="settings-dialog" aria-label="Personal Agent 设置">
     <div class="settings-workspace">
-      <nav class="settings-navigation" aria-label="设置分类">
-        <button type="button" data-settings-section="general" aria-controls="personal-agent--general-settings" aria-current="page"><span>常规</span></button>
-        <button type="button" data-settings-section="agents" aria-controls="personal-agent--agent-directory"><span>Agent 管理</span></button>
-        <button type="button" data-settings-section="connections" aria-controls="personal-agent--connections-settings"><span>管理连接</span></button>
-        <button type="button" data-settings-section="models" aria-controls="personal-agent--models-settings"><span>模型管理</span></button>
-        <button type="button" data-settings-section="tools" aria-controls="personal-agent--tools-settings"><span>Agent 工具</span></button>
-        <button type="button" data-settings-section="prompts" aria-controls="personal-agent--prompt-settings"><span>Prompt 管理</span></button>
-        <button type="button" data-settings-section="archive" aria-controls="personal-agent--archive-settings"><span>历史对话</span></button>
-        <button type="button" data-settings-section="units" aria-controls="personal-agent--units-settings"><span>执行环境</span></button>
-      </nav>
+      <button id="personal-agent--close-settings" class="close-settings" type="button" aria-label="关闭设置" title="关闭设置" autofocus><svg aria-hidden="true"><use href="#personal-agent--icon-close"/></svg></button>
+      <div class="settings-sidebar">
+        <nav class="settings-navigation" aria-label="设置分类">
+          <button type="button" data-settings-section="general" aria-controls="personal-agent--general-settings" aria-current="page"><span>常规</span></button>
+          <button type="button" data-settings-section="agents" aria-controls="personal-agent--agent-directory"><span>Agent 管理</span></button>
+          <button type="button" data-settings-section="connections" aria-controls="personal-agent--connections-settings"><span>管理连接</span></button>
+          <button type="button" data-settings-section="models" aria-controls="personal-agent--models-settings"><span>模型管理</span></button>
+          <button type="button" data-settings-section="tools" aria-controls="personal-agent--tools-settings"><span>Agent 工具</span></button>
+          <button type="button" data-settings-section="prompts" aria-controls="personal-agent--prompt-settings"><span>Prompt 管理</span></button>
+          <button type="button" data-settings-section="archive" aria-controls="personal-agent--archive-settings"><span>历史对话</span></button>
+          <button type="button" data-settings-section="units" aria-controls="personal-agent--units-settings"><span>执行环境</span></button>
+        </nav>
+        <div class="settings-models-device-slot" data-models-device-slot hidden></div>
+      </div>
       <div id="personal-agent--settings-content" class="settings-content">
         <div id="personal-agent--settings-scope" class="settings-scope"><label for="personal-agent--settings-device">正在设置：</label><select id="personal-agent--settings-device" aria-label="正在设置的设备"></select><span id="personal-agent--settings-all-devices" hidden>所有设备</span></div>
         <section id="personal-agent--connections-settings" class="settings-panel connections-settings" data-settings-panel="connections" aria-labelledby="personal-agent--connections-title" hidden></section>
@@ -94,7 +97,7 @@
               <div><label for="personal-agent--agent-instructions">指令</label><textarea id="personal-agent--agent-instructions" data-agent-instructions rows="7" maxlength="100000" required spellcheck="false"></textarea></div>
               <div>
                 <label for="personal-agent--agent-model">默认模型</label><select id="personal-agent--agent-model" data-agent-model aria-describedby="personal-agent--agent-model-hint"></select>
-                <p id="personal-agent--agent-model-hint" class="settings-hint" data-agent-model-hint>未手动指定模型时，Agent 使用此默认模型。</p>
+                <p id="personal-agent--agent-model-hint" class="settings-hint" data-agent-model-hint>Agent 的新运行使用此默认模型。</p>
               </div>
               <div class="settings-actions">
                 <button type="submit" data-save-agent>保存 Agent</button>

@@ -3,13 +3,12 @@ import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput, Co
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
 import type { RunEvent, RunExecution } from '../run/execution.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
-import type { ProtocolBindingSnapshot, NativeInitialization, NativeRunInput, NativeHistory, StoredProtocolRecord, ProtocolRecord, RunResumeRecord, RunResumePatch } from '../run/program.js'
+import type { ApplicationHistory, ProtocolBindingSnapshot, NativeInitialization, NativeRunInput, NativeHistory, StoredProtocolRecord, ProtocolRecord, RunResumeRecord, RunResumeState, RunResumePatch } from '../run/program.js'
 import type { ValidatedToolRequest, ToolObservation, RunFailureCategory } from '../run/domain.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { OwnedCall } from '../contracts.js'
 import type { ImageRef, ImageRenewal } from '../image/port.js'
 import type { RunUnitBindings } from '../unit/domain.js'
-import type { ContinuousContextSelection, ContinuousRunPlan, ContinuousRunQuery } from './continuous-history.js'
 
 export const sessionServiceKey = 'personal-agent.sessions'
 export const sessionRunServiceKey = 'personal-agent.session-runs'
@@ -54,7 +53,11 @@ export interface SessionPort {
 export interface RunContext {
   readonly run: Run
   readonly projectId: string
-  readonly continuity?: ContinuousContextSelection
+}
+
+export interface ContinuousNativeHistoryScope {
+  readonly projectId: string
+  readonly units?: RunUnitBindings
 }
 
 /** Trusted execution-facing operations on the same Session owner, not an access boundary. */
@@ -62,16 +65,18 @@ export interface SessionRunPort {
   readFileSnapshots(sessionId: string, ids: readonly string[], signal?: AbortSignal): OwnedCall<readonly FileContent[]>
   describeImages(sessionId: string, assetIds: readonly string[]): Promise<readonly ImageRef[]>
   findAcceptedRun(input: RunInput): Promise<Run | undefined>
-  planContinuousRun(input: ContinuousRunQuery): Promise<ContinuousRunPlan>
   registerRun(id: string, input: RunInput, now: string,
     prompts: readonly PromptSnapshot[], model: NativeModelSnapshot, native: NativeRunRegistration): Promise<{ readonly run: Run; readonly created: boolean }>
   loadRunContext(id: string): Promise<RunContext | undefined>
   loadNativeInitialization(sessionId: string): Promise<NativeInitialization | undefined>
-  loadNativeHistory(sessionId: string, parentNodeId: string | null): Promise<NativeHistory | undefined>
+  loadNativeHistory(sessionId: string, parentNodeId: string | null, scope?: ContinuousNativeHistoryScope): Promise<NativeHistory | undefined>
+  loadApplicationHistory(sessionId: string, parentNodeId: string, scope: ContinuousNativeHistoryScope): Promise<ApplicationHistory>
+  getCompletedContextRef(sessionId: string, nodeId: string, runId: string): Promise<string | undefined>
   loadRunResume(id: string): Promise<RunResumeRecord | undefined>
+  loadRunResumeState(id: string): Promise<RunResumeState | undefined>
   listRunResumes(): Promise<readonly RunResumeRecord[]>
   claimRunResume(id: string, expectedEpoch: number, at: string): Promise<RunResumeRecord>
-  saveRunResume(id: string, ownerEpoch: number, patch: RunResumePatch, at: string): Promise<RunResumeRecord>
+  saveRunResume(id: string, ownerEpoch: number, patch: RunResumePatch, at: string): Promise<void>
   getRunOperation(runId: string, id: string): Promise<SavedRunOperation | undefined>
   startOperation(runId: string, operation: RunOperationStart, at: string, ownerEpoch?: number): Promise<boolean>
   observeOperation(runId: string, operationId: string, observation: RunOperationObservation, at: string, ownerEpoch?: number): Promise<void>
@@ -92,7 +97,8 @@ export interface NativeRunRegistration {
   readonly initialization: NativeInitialization
   readonly input: NativeRunInput
   readonly parentContextRef: string | null
-  readonly continuity?: ContinuousRunPlan
+  readonly applicationPrefix?: true
+  readonly estimatedInputTokens?: number
   /** Unit attachments the Run runs against; re-verified inside the acceptance transaction when present. */
   readonly units?: RunUnitBindings
 }

@@ -9,7 +9,7 @@ export function deferred() {
 }
 export function ids() { let next = 0; return () => `id-${++next}` }
 export function modelSnapshot(modelId = 'default', version = 'v1', imageInput = false) {
-  return Object.freeze({ schemaVersion: 3, modelDefinitionId: `definition-${modelId}`, providerDefinitionId: 'test-provider-definition', modelDefinitionVersionId: 'definition-v1',
+  return Object.freeze({ schemaVersion: 3, modelDefinitionId: `definition-${modelId}`, providerDefinitionId: 'test-provider', modelDefinitionVersionId: 'definition-v1',
     modelId, modelRevision: 1, modelVersionId: `model-${version}`, providerId: 'test-provider', providerRevision: 1, providerVersionId: 'provider-v1',
     remoteModelId: 'test-remote', protocolId: 'chat-completions', protocolVersion: version, registrationGenerationId: `test-generation-${version}`,
     historyScopeEpoch: 'test-scope-v1', parameters: { protocolId: 'chat-completions', formatVersion: 1, value: {} },
@@ -22,8 +22,8 @@ export function controlledModels({ version = 'v1', modelIds = ['default'], call,
   const capabilities = Object.freeze({ tools: true, streaming: true, imageInput, webSearch: false, reasoning: { support: 'unknown' } })
   const declarations = { ...unknownCapabilities(), tools: { support: 'supported' }, streaming: { support: 'supported' }, ...(imageInput ? { imageInput: { support: 'supported' } } : {}) }
   const summaries = modelIds.map(id => ({ id, name: id, enabled: true, revision: 1, versionId: `model-${version}`, createdAt: 'now', updatedAt: 'now',
-    connectionId: 'test-provider', providerDefinitionId: 'test-provider-definition', modelDefinitionId: `definition-${id}`, modelDefinitionVersionId: 'definition-v1',
-    source: { kind: 'user' }, baseline: true, remoteModelId: 'test-remote', capabilities: declarations,
+    providerId: 'test-provider', modelDefinitionId: `definition-${id}`, modelDefinitionVersionId: 'definition-v1',
+    source: { kind: 'user' }, remoteModelId: 'test-remote', capabilities: declarations,
     parameters: { protocolId: 'chat-completions', formatVersion: 1, value: {} }, available: true, effectiveCapabilities: capabilities }))
   const record = input => {
     const result = deferred(), done = deferred(), cancelled = deferred()
@@ -95,7 +95,7 @@ export function controlledModels({ version = 'v1', modelIds = ['default'], call,
           input.signal?.addEventListener('abort', stop, { once: true }); controller.signal.addEventListener('abort', stop, { once: true })
           let execution
           execution = createExecution({ protocol: api.protocol(() => execution),
-            provider: { providerDefinitionId: 'test-provider-definition', name: 'Test', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'none', timeoutMs: 30000 },
+            provider: { name: 'Test', enabled: true, protocolId: 'chat-completions', baseUrl: 'https://example.invalid/v1', auth: 'none', timeoutMs: 30000 },
             snapshot, capabilities, restore: input.restore, controller: abort, onRelease(failed) {
               if (failed) cleanupFailed = true
               executions.delete(execution); input.signal?.removeEventListener('abort', stop); controller.signal.removeEventListener('abort', stop)

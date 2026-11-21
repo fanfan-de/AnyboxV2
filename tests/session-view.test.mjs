@@ -5,6 +5,9 @@ import { conversationTree } from '../packages/app-harness/dist/web/conversation-
 import { createConversationTreeView } from '../packages/app-harness/dist/web/conversation-tree-view.js'
 import { mapResourceIds, scopedId } from '../packages/app-harness/dist/web/harness-client.js'
 import { renderMarkdown } from '../packages/app-harness/dist/web/markdown.js'
+import { createSessionPanel as createPersonalSessionPanel } from '../packages/app-personal-agent/dist/web/session-view.js'
+import { createTrajectoryView } from '../packages/app-harness/dist/web/trajectory-view.js'
+import { createTrajectoryView as createPersonalTrajectoryView } from '../packages/app-personal-agent/dist/web/trajectory-view.js'
 
 // A local DOM surface keeps these tests about panel behavior without a browser dependency.
 function documentFixture() {
@@ -139,13 +142,13 @@ const traceRun = (id, status = 'completed', extra = {}) => ({ ...run(id, status)
 const modelStarted = (id, seconds) => ({ kind: 'operation-started', operationId: id, operationKind: 'model', at: traceAt(seconds) })
 const operationObserved = (id, seconds) => ({ kind: 'operation-observed', operationId: id, at: traceAt(seconds) })
 
-function fixture(t, { runs = [run('first')], position = {}, initialScroll = { dialogue: 0 }, path, models } = {}) {
+function fixture(t, { runs = [run('first')], position = {}, initialScroll = { dialogue: 0 }, path, models, personal = false } = {}) {
   const previous = globalThis.document, document = documentFixture(), calls = []
   globalThis.document = document
   const state = { session: { id: 'session', projectId: 'project', agentId: 'assistant', protocolId: 'chat-completions', historyMode: 'native-local-v1' },
     runs, position: { viewNodeId: 'node-first', ...position }, path: (path ?? [{ id: 'node-first', parentId: null, input: 'Thread input', output: 'Thread answer', sourceRunId: 'first' }]).map(node => ({ sessionId: 'session', parentId: null, ...node })),
     children: [], moreChildren: false, loading: false, busy: false, notice: '', draft: 'Unsent draft', images: [], files: [], events: new Map(), expanded: new Set(),
-    views: new Map([['first', projection('first', 'Thread answer')]]) }
+    views: new Map([['first', projection('first', 'Thread answer')]]), ...(personal ? { continuous: true } : {}) }
   let panel
   const changed = () => panel?.render()
   const controller = {
@@ -163,7 +166,9 @@ function fixture(t, { runs = [run('first')], position = {}, initialScroll = { di
     setDefaultModel(id) { calls.push(['default', id]); state.defaultModelId = id; changed(); return Promise.resolve() },
   }
   const mount = scroll => {
-    panel = createSessionPanel({ id: 'session', sessionId: 'session', projectId: 'project' }, 'Project', controller, () => {}, () => {}, scroll, models)
+    const pane = { id: 'session', sessionId: 'session', projectId: 'project' }
+    panel = personal ? createPersonalSessionPanel({ ...pane, continuous: true }, controller, () => {}, scroll, models)
+      : createSessionPanel(pane, 'Project', controller, () => {}, () => {}, scroll, models)
     document.body.append(panel.element); panel.render()
     return panel
   }
@@ -174,10 +179,27 @@ function fixture(t, { runs = [run('first')], position = {}, initialScroll = { di
 }
 
 const pickerCatalog = () => ({ snapshot: () => ({ models: [
-  { id: 'first', name: 'First', connectionId: 'provider', available: true, parameters: { protocolId: 'chat-completions' } },
-  { id: 'other-protocol', name: 'Other protocol', connectionId: 'provider', available: true, parameters: { protocolId: 'responses' } },
-  { id: 'second', name: 'Second', connectionId: 'provider', available: true, parameters: { protocolId: 'chat-completions' } },
+  { id: 'first', name: 'First', providerId: 'provider', available: true, parameters: { protocolId: 'chat-completions' } },
+  { id: 'unknown-protocol', name: 'Unknown protocol', providerId: 'provider', available: true, parameters: { protocolId: 'missing' } },
+  { id: 'other-protocol', name: 'Other protocol', providerId: 'provider', available: true, parameters: { protocolId: 'responses' } },
+  { id: 'second', name: 'Second', providerId: 'provider', available: true, parameters: { protocolId: 'chat-completions' } },
 ], providers: [{ id: 'provider', name: 'Provider' }], loading: false }) })
+
+test('Personal Agent Composer uses the reported default model without a model picker', t => {
+  const f = fixture(t, { models: pickerCatalog(), personal: true })
+  const composer = f.find('.composer'), send = f.find('.send-button'), hint = f.find('.composer-model-hint')
+  assert.equal(composer.querySelector('.composer-model'), null)
+  assert.ok(composer.querySelector('.context-usage-button'))
+  assert.equal(send.disabled, true)
+  assert.match(hint.textContent, /设置 → 常规/)
+
+  f.state.session.modelId = 'other-protocol'
+  f.panel.render()
+  assert.equal(hint.hidden, true)
+  assert.equal(send.disabled, false)
+  composer.dispatch('submit')
+  assert.deepEqual(f.calls.filter(call => ['submit', 'model', 'read-default', 'default'].includes(call[0])), [['submit']])
+})
 
 test('Composer single-click selects this Session and double-click sets a default through the same mounted option', t => {
   const f = fixture(t, { models: pickerCatalog() })
@@ -198,16 +220,17 @@ test('Composer single-click selects this Session and double-click sets a default
   assert.ok(f.document.activeElement === trigger, 'Escape restores focus even while the first selection is still saving')
 })
 
-test('Composer keyboard model selection skips incompatible options and supports setting a default', t => {
+test('Composer keyboard model selection skips unknown protocols and can set another supported protocol', t => {
   const f = fixture(t, { models: pickerCatalog() })
   f.find('.composer-model').dispatch('keydown', { key: 'ArrowDown' })
   const list = f.find('.model-picker-list')
   assert.equal(f.document.activeElement, list)
-  assert.equal(f.find('[data-model-id="other-protocol"]').disabled, true)
+  assert.equal(f.find('[data-model-id="unknown-protocol"]').disabled, true)
+  assert.equal(f.find('[data-model-id="other-protocol"]').disabled, false)
   list.dispatch('keydown', { key: 'ArrowDown' })
-  assert.equal(list.getAttribute('aria-activedescendant'), f.find('[data-model-id="second"]').id)
+  assert.equal(list.getAttribute('aria-activedescendant'), f.find('[data-model-id="other-protocol"]').id)
   list.dispatch('keydown', { key: 'Enter', shiftKey: true })
-  assert.deepEqual(f.calls.at(-1), ['default', 'second'])
+  assert.deepEqual(f.calls.at(-1), ['default', 'other-protocol'])
   list.dispatch('keydown', { key: 'Escape' })
   assert.equal(f.find('.composer-model').getAttribute('aria-expanded'), 'false')
   assert.equal(f.document.activeElement, f.find('.composer-model'))
@@ -928,6 +951,88 @@ test('legacy records show known content and distinguish missing history without 
   assert.doesNotMatch(f.find('.trajectory-group').textContent, /0 ms|NaN|undefined/)
   f.find('[data-duration]').click(); assert.match(f.find('.trajectory-timing-note').textContent, /暂无可用耗时记录/)
   f.find('.trajectory-row[data-role="assistant"]').click(); assert.match(f.find('.trajectory-inspector').textContent, /Answer legacy/)
+})
+
+const trajectories = [['Anybox Harness', createTrajectoryView], ['Personal Agent', createPersonalTrajectoryView]]
+for (const [product, mountTrajectory] of trajectories) test(`${product} indents context JSON and preserves its original tokens`, t => {
+  const previous = globalThis.document, document = documentFixture()
+  globalThis.document = document
+  const container = document.createElement('div')
+  document.body.append(container)
+  const noop = () => {}
+  const trajectory = mountTrajectory(container, { viewport: noop, search: noop, retry: noop, answer: noop, cancel: noop })
+  t.after(() => { trajectory.dispose(); if (previous === undefined) delete globalThis.document; else globalThis.document = previous })
+
+  const recent = { type: 'recent-conversation', turns: [
+    { nodeId: 'first-node', user: '第一行\n第二行', assistant: '介绍 **李白**\n\n- 静夜思\n- 将进酒\n\n<img src=x>' },
+    { nodeId: 'second-node', user: '继续介绍', assistant: '这是第二轮的答复' },
+  ] }
+  const generic = String.raw`[{"2":1e+02,"1":9007199254740993,"1":-0,"empty":{ },"text":"\u0041,]}\""},[ ],true]`
+  const formatted = String.raw`[
+  {
+    "2": 1e+02,
+    "1": 9007199254740993,
+    "1": -0,
+    "empty": {},
+    "text": "\u0041,]}\""
+  },
+  [],
+  true
+]`
+  const cropped = '{"type":"recent-conversation","turns":[{"nodeId":"clipped"'
+  const plain = '项目背景\n\n保持原有目录结构。'
+  const deep = `${'['.repeat(65)}0${']'.repeat(65)}`
+  const cases = [[JSON.stringify(recent), JSON.stringify(recent, null, 2)], [generic, formatted], [cropped, cropped], [plain, plain], [deep, deep]]
+  const inputs = cases.map(([text], index) => ({ id: `context-${index}`, role: 'context', text }))
+  trajectory.update({
+    runs: [traceRun('first')], loading: false,
+    events: new Map([['first', [modelStarted('exchange', 0), operationObserved('exchange', 1)]]]),
+    views: new Map([['first', { ...projection('first', ''), exchanges: [{ id: 'exchange', blocks: [], inputs }] }]]),
+  })
+
+  const rows = () => container.querySelectorAll('.trajectory-row[data-role="context"]')
+  const inspector = container.querySelector('.trajectory-inspector'), recentId = rows()[0].dataset.rowId
+  for (const [index, [, expected]] of cases.entries()) {
+    rows()[index].click()
+    assert.equal(inspector.querySelector('.trajectory-detail-heading strong').textContent, '上下文')
+    const content = inspector.querySelector('pre.trajectory-context-json')
+    assert.equal(content.textContent, expected)
+    assert.equal(content.querySelector('img, strong, .markdown-content'), null)
+  }
+
+  const search = container.querySelector('.trajectory-search input')
+  search.value = '将进酒'; search.dispatch('input')
+  assert.deepEqual(rows().map(row => row.dataset.rowId), [recentId])
+})
+
+for (const [product, mountTrajectory] of trajectories) test(`${product} shows cache counts for the selected model call only`, t => {
+  const previous = globalThis.document, document = documentFixture()
+  globalThis.document = document
+  const container = document.createElement('div')
+  document.body.append(container)
+  const noop = () => {}
+  const trajectory = mountTrajectory(container, { viewport: noop, search: noop, retry: noop, answer: noop, cancel: noop })
+  t.after(() => { trajectory.dispose(); if (previous === undefined) delete globalThis.document; else globalThis.document = previous })
+
+  const exchanges = [
+    { id: 'first', blocks: [], usage: { inputTokens: 1234, outputTokens: 45, cachedInputTokens: 0, uncachedInputTokens: 1234 } },
+    { id: 'second', blocks: [], usage: { cachedInputTokens: 1024 } },
+    { id: 'third', blocks: [], usage: { inputTokens: 5678, outputTokens: 30 } },
+  ]
+  trajectory.update({
+    runs: [traceRun('first')], loading: false,
+    events: new Map([['first', exchanges.flatMap(({ id }, index) => [modelStarted(id, index * 2), operationObserved(id, index * 2 + 1)])]]),
+    views: new Map([['first', { ...projection('first', ''), exchanges }]]),
+  })
+  const modelRows = () => container.querySelectorAll('.trajectory-row[data-role="assistant"]')
+  const cacheFields = () => container.querySelectorAll('.trajectory-detail-fields dt').filter(field => field.textContent === '输入缓存')
+  assert.equal(modelRows().length, 3)
+  modelRows()[0].click()
+  assert.deepEqual(cacheFields().map(field => field.nextElementSibling.textContent), ['命中 0 tokens · 未命中 1,234 tokens'])
+  modelRows()[1].click()
+  assert.deepEqual(cacheFields().map(field => field.nextElementSibling.textContent), ['命中 1,024 tokens'])
+  modelRows()[2].click()
+  assert.deepEqual(cacheFields(), [])
 })
 
 test('native trajectory summaries remain searchable while a missing structured inspector shows status and metadata', t => {

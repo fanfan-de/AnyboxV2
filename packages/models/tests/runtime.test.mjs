@@ -241,7 +241,7 @@ for (const firstSupport of ['supported', 'unsupported']) test(`native restore pr
     const report = await first.close(), restore = { ...report.restoreState, records: report.records }
     const history = JSON.stringify(restore)
     const nextSupport = firstSupport === 'supported' ? 'unsupported' : 'supported'
-    await f.settings.updateConfiguration(model.id, { capabilities: capabilities({ streaming: { support: nextSupport } }) }, model.revision)
+    await f.settings.updateModelSettings(model.id, { capabilities: capabilities({ streaming: { support: nextSupport } }) }, model.revision)
     const second = await f.open({ modelId: 'model', restore })
     assert.equal(second.capabilities.streaming, nextSupport === 'supported')
     await exchange(second, input('second')).result
@@ -265,7 +265,7 @@ test('existing unknown configurations keep their history when the protocol enabl
     assert.equal(first.capabilities.streaming, false)
     await exchange(first, input('first')).result
     const report = await first.close(), restore = { ...report.restoreState, records: report.records }
-    const savedConfiguration = JSON.stringify(f.store.configuration(model.id)), savedHistory = JSON.stringify(restore)
+    const savedConfiguration = JSON.stringify(f.store.modelSettings(model.id)), savedHistory = JSON.stringify(restore)
     await f.registrations[0].unregister()
     const upgraded = { ...legacy, effectiveCapabilities: declared => ({ ...legacy.effectiveCapabilities(declared), streaming: declared.streaming.support !== 'unsupported' }) }
     f.registrations.push(f.registry.register(upgraded))
@@ -273,7 +273,7 @@ test('existing unknown configurations keep their history when the protocol enabl
     await exchange(second, input('second')).result
     assert.equal(second.capabilities.streaming, true)
     assert.deepEqual(legacy.calls[1].input.request.messages.map(message => message.content), ['first', 'answer', 'second'])
-    assert.equal(JSON.stringify(f.store.configuration(model.id)), savedConfiguration)
+    assert.equal(JSON.stringify(f.store.modelSettings(model.id)), savedConfiguration)
     assert.equal(JSON.stringify(restore), savedHistory)
     await second.close()
   } finally { await f.close() }
@@ -292,25 +292,25 @@ test('restore rejects changed model, native parameters, malformed records and un
   const f = await fixture(); try {
     const { model } = await f.add(); const execution = await f.open({ modelId: 'model' }); await exchange(execution, input('one')).result; const report = await execution.close(); const restore = { ...report.restoreState, records: report.records }
     for (const changed of [{ ...restore, recordFormatVersion: 99 }, { ...restore, records: restore.records.slice(1) }, { ...restore, modelSnapshot: { ...restore.modelSnapshot, remoteModelId: 'other' } }]) await assert.rejects(f.open({ modelId: 'model', restore: changed }), code('invalid-config'))
-    await f.settings.updateConfiguration(model.id, { parameters: params('test', { temperature: 0.7 }) }, model.revision); await assert.rejects(f.open({ modelId: 'model', restore }), code('invalid-config'))
+    await f.settings.updateModelSettings(model.id, { parameters: params('test', { temperature: 0.7 }) }, model.revision); await assert.rejects(f.open({ modelId: 'model', restore }), code('invalid-config'))
   } finally { await f.close() }
 })
 
 test('key rotation and endpoint changes rotate history scope only after durable success', async () => {
   const f = await fixture(); try {
-    let { provider } = await f.add({ key: 'first' }); const initial = f.store.connection(provider.id).historyScopeEpoch
-    provider = await f.settings.updateConnection(provider.id, { name: 'renamed', timeoutMs: 999 }, provider.revision); assert.equal(f.store.connection(provider.id).historyScopeEpoch, initial)
-    f.vault.failWrite = new Error('failure'); await assert.rejects(f.settings.setApiKey(provider.id, 'failed-key', provider.revision), code('credential-unavailable')); assert.equal(f.store.connection(provider.id).historyScopeEpoch, initial); f.vault.failWrite = undefined
-    provider = await f.settings.setApiKey(provider.id, 'second', provider.revision); const keyEpoch = f.store.connection(provider.id).historyScopeEpoch; assert.notEqual(keyEpoch, initial)
-    provider = await f.settings.updateConnection(provider.id, { baseUrl: 'https://second.invalid/v1' }, provider.revision); assert.notEqual(f.store.connection(provider.id).historyScopeEpoch, keyEpoch)
-    const last = f.store.connection(provider.id).historyScopeEpoch; await f.settings.deleteApiKey(provider.id, provider.revision); assert.notEqual(f.store.connection(provider.id).historyScopeEpoch, last)
+    let { provider } = await f.add({ key: 'first' }); const initial = f.store.providerSettings(provider.id).historyScopeEpoch
+    provider = await f.settings.updateProviderSettings(provider.id, { name: 'renamed', timeoutMs: 999 }, provider.revision); assert.equal(f.store.providerSettings(provider.id).historyScopeEpoch, initial)
+    f.vault.failWrite = new Error('failure'); await assert.rejects(f.settings.setApiKey(provider.id, 'failed-key', provider.revision), code('credential-unavailable')); assert.equal(f.store.providerSettings(provider.id).historyScopeEpoch, initial); f.vault.failWrite = undefined
+    provider = await f.settings.setApiKey(provider.id, 'second', provider.revision); const keyEpoch = f.store.providerSettings(provider.id).historyScopeEpoch; assert.notEqual(keyEpoch, initial)
+    provider = await f.settings.updateProviderSettings(provider.id, { baseUrl: 'https://second.invalid/v1' }, provider.revision); assert.notEqual(f.store.providerSettings(provider.id).historyScopeEpoch, keyEpoch)
+    const last = f.store.providerSettings(provider.id).historyScopeEpoch; await f.settings.deleteApiKey(provider.id, provider.revision); assert.notEqual(f.store.providerSettings(provider.id).historyScopeEpoch, last)
   } finally { await f.close() }
 })
 
 test('configuration/key changes affect new executions and reject old native account-bound restore', async () => {
   const f = await fixture(); try {
     const { provider, model } = await f.add({ key: 'old', defaults: { temperature: 0.1 } }); const execution = await f.open({ modelId: 'model' })
-    await f.settings.setApiKey(provider.id, 'new', provider.revision); await f.settings.updateConfiguration(model.id, { parameters: params('test', { temperature: 0.9 }) }, model.revision)
+    await f.settings.setApiKey(provider.id, 'new', provider.revision); await f.settings.updateModelSettings(model.id, { parameters: params('test', { temperature: 0.9 }) }, model.revision)
     await exchange(execution, input('old')).result; const report = await execution.close(); assert.equal(f.protocols[0].calls[0].input.credential, 'old'); assert.equal(execution.snapshot.parameters.value.temperature, 0.1)
     await assert.rejects(f.open({ modelId: 'model', restore: { ...report.restoreState, records: report.records } }), code('invalid-config'))
     const next = await f.open({ modelId: 'model' }); await exchange(next, input('new')).result; assert.equal(f.protocols[0].calls[1].input.credential, 'new'); await next.close()
@@ -322,7 +322,7 @@ test('credential acquisition serializes edits but network does not hold the conf
     const { provider } = await f.add({ key: 'old' }); f.vault.holdReads = true; const opening = f.open({ modelId: 'model' }); await tick()
     const changing = f.settings.setApiKey(provider.id, 'new', provider.revision), state = tracked(changing); await tick(); assert.equal(state.settled, false)
     f.vault.holdReads = false; f.vault.reads[0].release.resolve(); const execution = await opening; await changing
-    f.protocols[0].next(); const call = exchange(execution, input('slow')); await tick(); await f.settings.updateConnection(provider.id, { name: 'while network runs' }, 2)
+    f.protocols[0].next(); const call = exchange(execution, input('slow')); await tick(); await f.settings.updateProviderSettings(provider.id, { name: 'while network runs' }, 2)
     assert.equal(f.protocols[0].calls[0].input.credential, 'old'); f.protocols[0].calls[0].succeed(); await call.result; await execution.close()
   } finally { await f.close() }
 })
@@ -336,7 +336,7 @@ test('lease release and revocation prevent admission; old unregister cannot eras
   } finally { await f.close() }
 })
 
-for (const method of ['discoverModels', 'checkConnection']) test(`protocol unregister joins ${method} while another protocol stays available`, async () => {
+for (const method of ['discoverModels', 'checkProvider']) test(`protocol unregister joins ${method} while another protocol stays available`, async () => {
   const f = await fixture({ protocols: [fakeProtocol('a'), fakeProtocol('b')] }); try {
     await f.add({ protocolId: 'a' }); await f.add({ protocolId: 'b', providerId: 'other', modelId: 'other-model' }); f.protocols[0].next(); const operation = f.settings[method]('provider'); await tick()
     const closing = f.registrations[0].unregister(), state = tracked(closing); await f.protocols[0].operations[0].aborted.promise; assert.equal(state.settled, false)
@@ -345,13 +345,13 @@ for (const method of ['discoverModels', 'checkConnection']) test(`protocol unreg
 })
 
 test('disabled configuration blocks new opens while captured execution stays usable', async () => {
-  const f = await fixture(); try { const { model } = await f.add(); const execution = await f.open({ modelId: 'model' }); await f.settings.updateConfiguration(model.id, { enabled: false }, model.revision); await assert.rejects(f.open({ modelId: 'model' }), code('unavailable')); await exchange(execution, input('existing')).result; await execution.close() } finally { await f.close() }
+  const f = await fixture(); try { const { model } = await f.add(); const execution = await f.open({ modelId: 'model' }); await f.settings.updateModelSettings(model.id, { enabled: false }, model.revision); await assert.rejects(f.open({ modelId: 'model' }), code('unavailable')); await exchange(execution, input('existing')).result; await execution.close() } finally { await f.close() }
 })
 
 test('optimistic writes preserve immutable histories and orphan Key intents recover', async () => {
   const f = await fixture(); try {
-    const { provider, model } = await f.add({ key: 'old' }); await f.settings.updateConfiguration(model.id, { name: 'new' }, model.revision); await assert.rejects(f.settings.updateConfiguration(model.id, { name: 'stale' }, model.revision), code('conflict'))
-    assert.deepEqual(f.settings.configurationHistory(model.id).map(value => value.name), ['model', 'new'])
+    const { provider, model } = await f.add({ key: 'old' }); await f.settings.updateModelSettings(model.id, { name: 'new' }, model.revision); await assert.rejects(f.settings.updateModelSettings(model.id, { name: 'stale' }, model.revision), code('conflict'))
+    assert.deepEqual(f.settings.modelSettingsHistory(model.id).map(value => value.name), ['model', 'new'])
     f.vault.failWrite = new Error('failure'); await assert.rejects(f.settings.setApiKey(provider.id, 'bad', provider.revision), code('credential-unavailable')); assert.deepEqual([...f.vault.secrets.values()], ['old']); assert.equal(f.store.intents().length, 0)
   } finally { await f.close() }
 })
@@ -366,9 +366,9 @@ test('component teardown joins held credential initialization and close is idemp
 test('restore ignores object key order and cosmetic names but rejects changed effective capabilities', async () => {
   const f = await fixture(); try {
     const { model } = await f.add({ defaults: { temperature: 0.1, max_tokens: 100 } }); const execution = await f.open({ modelId: 'model' }); await exchange(execution, input('one')).result; const report = await execution.close(), restore = { ...report.restoreState, records: report.records };
-    const renamed = await f.settings.updateConfiguration(model.id, { name: 'cosmetic', parameters: params('test', { max_tokens: 100, temperature: 0.1 }) }, model.revision);
+    const renamed = await f.settings.updateModelSettings(model.id, { name: 'cosmetic', parameters: params('test', { max_tokens: 100, temperature: 0.1 }) }, model.revision);
     const next = await f.open({ modelId: 'model', restore }); await next.close();
-    await f.settings.updateConfiguration(model.id, { capabilities: { ...model.capabilities, tools: { support: 'unsupported' } } }, renamed.revision);
+    await f.settings.updateModelSettings(model.id, { capabilities: { ...model.capabilities, tools: { support: 'unsupported' } } }, renamed.revision);
     await assert.rejects(f.open({ modelId: 'model', restore }), code('invalid-config'));
   } finally { await f.close() }
 });

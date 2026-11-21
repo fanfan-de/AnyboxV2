@@ -165,8 +165,8 @@ for (const c of cases) {
       ]) await assert.rejects(f.open({ modelId: 'model', resources: reader(), restore: invalid }))
       // A v1 image must still fail the codec even when its matching resource metadata is removed.
       assert.throws(() => p.restore(newer.records.map(({ resourceRefs, ...record }) => ({ ...record, recordFormatVersion: 1 }))))
-      const config = f.settings.configurations()[0]
-      await f.settings.updateConfiguration(config.id, { capabilities: { ...config.capabilities, imageInput: { support: 'unsupported' } } }, config.revision)
+      const config = f.settings.modelSettings()[0]
+      await f.settings.updateModelSettings(config.id, { capabilities: { ...config.capabilities, imageInput: { support: 'unsupported' } } }, config.revision)
       await assert.rejects(f.open({ modelId: 'model', resources: reader(), restore: chain }), { code: 'invalid-config' })
     } finally { await f.root.fiber.dispose() }
   })

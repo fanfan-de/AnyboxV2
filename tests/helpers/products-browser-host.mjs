@@ -49,7 +49,7 @@ try {
   await host.ready
   await host.products.open('agent')
   const model = await seedHarnessModel(host.root.get('models.settings'), { apiKey: 'disposable-controlled-model-key' })
-  await host.api.setSessionDefaults('assistant', model.id, 0)
+  await host.api.setSessionDefaults('assistant', model.runtimeModelId, 0)
   await host.products.disable('agent')
   client = await createClientHost({ path: join(directory, 'client.sqlite'), openEntry, applications: [harnessClientApplication({ localInstanceId: host.instance.instanceId, openEntry }), claudeAgentClientApplication({ localInstanceId: host.instance.instanceId, openEntry }), notesRegistration] })
   await client.products.open('agent')

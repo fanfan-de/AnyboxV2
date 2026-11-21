@@ -140,7 +140,7 @@ async function isolatedRuntime(provider, { runId = 'standalone-environment', leg
       observations.push({ id, observation: structuredClone(observation) })
     },
     async saveRunResume(_runId, _ownerEpoch, patch) { state = { ...state, ...patch } },
-    async loadRunResume() { return { state } },
+    async loadRunResumeState() { return state },
     async requestCancellation() { run = { ...run, status: 'cancelling' } },
     async settleRun(_runId, outcome) {
       run = { ...run, status: outcome.kind === 'completed' ? 'completed' : 'failed', output: outcome.output,

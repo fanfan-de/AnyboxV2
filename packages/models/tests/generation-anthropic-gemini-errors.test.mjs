@@ -46,7 +46,7 @@ for (const item of cases) test(`${item.id} generateText returns fixed errors for
   const f = await fixture({ protocols: [{ ...protocol, release() {} }] })
   try {
     await f.add({ defaults: item.defaults })
-    const before = f.store.configurationHistory('model')
+    const before = f.store.modelSettingsHistory('model')
     for (const [, code] of item.replies) {
       const operation = f.models.generateText({ modelId: 'model', input: 'question' })
       await assert.rejects(operation.result, error => error.code === code && !String(error).includes('private'))
@@ -54,7 +54,7 @@ for (const item of cases) test(`${item.id} generateText returns fixed errors for
     }
     assert.equal(requests.length, item.replies.length)
     assert.ok(requests.every(request => request.stream === false))
-    assert.deepEqual(f.store.configurationHistory('model'), before)
+    assert.deepEqual(f.store.modelSettingsHistory('model'), before)
   } finally { await f.close() }
 })
 
@@ -75,14 +75,14 @@ test('Anthropic generateText allows declared search support and preserves reason
     assert.equal(requests.length, 1)
     assert.deepEqual(requests[0].thinking, { type: 'enabled', budget_tokens: 1024 })
     assert.equal(requests[0].max_tokens, 4096)
-    const updated = await f.settings.updateConfiguration(model.id, { parameters: params('anthropic-messages', { ...parameters, tools: [{ type: 'web_search_20250305', name: 'web_search' }] }) }, model.revision)
-    const before = f.store.configurationHistory(model.id)
+    const updated = await f.settings.updateModelSettings(model.id, { parameters: params('anthropic-messages', { ...parameters, tools: [{ type: 'web_search_20250305', name: 'web_search' }] }) }, model.revision)
+    const before = f.store.modelSettingsHistory(model.id)
     const refused = f.models.generateText({ modelId: model.id, input: 'question' })
     await assert.rejects(refused.result, { code: 'capability-unsupported' })
     await refused.done
     assert.equal(requests.length, 1)
-    assert.deepEqual(f.settings.configurations().find(value => value.id === model.id).parameters, updated.parameters)
-    assert.deepEqual(f.store.configurationHistory(model.id), before)
+    assert.deepEqual(f.settings.modelSettings().find(value => value.id === model.id).parameters, updated.parameters)
+    assert.deepEqual(f.store.modelSettingsHistory(model.id), before)
   } finally { await f.close() }
 })
 
