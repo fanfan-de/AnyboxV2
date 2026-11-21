@@ -34,7 +34,7 @@ export async function installHarnessServerModels(root: Context, config: HarnessS
     createModelsJsonStoreComponent({ path: config.modelsConfigPath, legacyPath: config.modelsDatabasePath,
       reservedPaths: [config.harnessDatabasePath, config.modelsCatalogDatabasePath] }),
     createModelsVaultComponent({ namespace: config.credentialNamespace, openEntry: options.openEntry }),
-    createModelsComponent(),
+    createModelsComponent({ requireManagedTools: true }),
     createResponsesProtocolComponent({ fetch: options.fetch }),
     createChatCompletionsProtocolComponent({ fetch: options.fetch }),
     createAnthropicMessagesProtocolComponent({ fetch: options.fetch }),

@@ -12,10 +12,10 @@ export function nativeRegistration(input, snapshot = modelSnapshot(), prompts = 
     initialization: initialization ?? { schemaVersion: 1, prompts: prompts.filter(prompt => prompt.kind !== 'task-template'), tools: [], toolContractVersion: 'known-tools-v1' },
     input: { schemaVersion: 1, raw: input.input, text: input.input, template: null }, parentContextRef }
 }
-export async function registerNativeRun(records, id, input, now, prompts = [], snapshot = modelSnapshot(), suppliedInitialization) {
+export async function registerNativeRun(records, id, input, now, prompts = [], snapshot = modelSnapshot(), suppliedInitialization, authorization) {
   const history = await records.loadNativeHistory(input.sessionId, input.parentNodeId)
   const initialization = history?.initialization ?? await records.loadNativeInitialization(input.sessionId) ?? suppliedInitialization
-  return records.registerRun(id, input, now, prompts, snapshot, nativeRegistration(input, snapshot, prompts, history?.contextRef ?? null, initialization))
+  return records.registerRun(id, input, now, prompts, snapshot, { ...nativeRegistration(input, snapshot, prompts, history?.contextRef ?? null, initialization), ...authorization })
 }
 export const completedOutcome = (id, output, snapshot = modelSnapshot()) => ({ kind: 'completed', output, resultRecordIds: [`response:${id}`],
   records: [{ id: `request:${id}`, exchangeId: `exchange:${id}`, kind: 'request', formatVersion: 1, payload: { messages: [{ role: 'user', content: id }], tools: [] } },
@@ -29,12 +29,14 @@ export function sessionInitialization(session, prompts = [], tools = []) {
 }
 export async function prepareTestProgram(root, id, input) {
   const session = await root.get('harness.sessions').getSession(input.sessionId)
+  const access = { agentId: session.agentId, functions: [] }
   const program = await root.get('harness.protocol-agents').prepare({ runId: id, sessionId: input.sessionId, modelId: input.modelId ?? 'default',
     signal: new AbortController().signal, initialization: sessionInitialization(session),
     input: { schemaVersion: 1, raw: input.input, text: input.input, template: null } })
   try {
     const accepted = await root.get('harness.session-runs').registerRun(id, input, 'now', [], program.modelSnapshot,
-      { binding: program.binding, input: program.input, initialization: program.initialization, parentContextRef: null })
+      { binding: program.binding, input: program.input, initialization: program.initialization, parentContextRef: null,
+        access, selectionVersion: session.environmentSelection?.version })
     return { program, run: accepted.run }
   } catch (error) { try { await program.close() } finally { program.release() }; throw error }
 }

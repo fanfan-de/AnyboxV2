@@ -1,4 +1,5 @@
 import { Context } from '@nya/core'
+import { grantComputerTools } from './computer-grants.mjs'
 import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createLocalSqliteComponent } from '../../packages/storage-sqlite/dist/sqlite.js'
@@ -57,6 +58,7 @@ try {
         const project = await api.openProject(settings.projectDirectory, { computerAttachmentId: message.attachmentId })
         const selection = await api.getAgentTools('assistant')
         await api.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: selection.revision })
+        await grantComputerTools(root, api, [message.attachmentId], ['anybox.bash'])
         const session = await api.createSession(project.id, 'assistant')
         const run = await api.startRun({ sessionId: session.id, parentNodeId: null, idempotencyKey: 'original-run', input: 'Execute the original operation' })
         runId = run.id

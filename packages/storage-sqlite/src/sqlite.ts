@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { advanceFence, createFence, hasFence, verifyFence } from './layout-fence.js'
 import type { Component } from '@nya/core'
 import { localStorageError, localStorageServiceKey } from './port.js'
 import type {
@@ -81,16 +82,18 @@ function makeTransaction(db: DatabaseSync, signal?: AbortSignal): { tx: StorageT
   return { tx, invalidate() { active = false; scope.invalidate() } }
 }
 
-/** Provider-owned layout: the only use of user_version is the per-domain migration ledger. */
+/** The baseline layout has a per-domain migration ledger. Layout 2 adds a restore fence. */
 const layoutVersion = 1
 
-function initializeLayout(db: DatabaseSync): void {
+function initializeLayout(db: DatabaseSync, directory: string, fenced: boolean): void {
   let current: unknown
   let hasTables: boolean
   try {
     current = db.prepare('PRAGMA user_version').get()?.user_version
     hasTables = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").get() !== undefined
   } catch (error) { throw failure(error, 'open-failed') }
+  if (fenced !== (current === 2)) throw localStorageError('schema-version', 'database authority checkpoint or matching database missing')
+  if (fenced) return verifyFence(db, directory)
   if (current === layoutVersion) return
   if (current !== 0 || hasTables) throw localStorageError('schema-version', 'unsupported local database layout')
   let begun = false
@@ -110,7 +113,7 @@ function initializeLayout(db: DatabaseSync): void {
   }
 }
 
-function migrate(db: DatabaseSync, domain: string, migrations: readonly StorageMigration[]): void {
+function migrate(db: DatabaseSync, domain: string, migrations: readonly StorageMigration[], fenced: boolean): void {
   let current: unknown
   try {
     current = db.prepare('SELECT version FROM schema_migrations WHERE domain = ?').get(domain)?.version ?? 0
@@ -133,6 +136,7 @@ function migrate(db: DatabaseSync, domain: string, migrations: readonly StorageM
       }
       db.prepare(`INSERT INTO schema_migrations (domain, version) VALUES (?, ?)
         ON CONFLICT(domain) DO UPDATE SET version = excluded.version`).run(domain, migration.version)
+      if (fenced) advanceFence(db)
       db.exec('COMMIT')
     } catch {
       if (begun) {
@@ -164,7 +168,7 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
     apply(ctx) {
       const path = databasePath(file)
       const lockPath = `${path}.lock`
-      if (existsSync(lockPath)) throw localStorageError('occupied', `legacy database lock requires offline inspection: ${lockPath}`)
+      let fenced = hasFence(lockPath)
       let db!: DatabaseSync
       ctx.effect(() => {
         try {
@@ -177,14 +181,21 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
         }
         return () => { try { db.close() } catch { throw localStorageError('close-failed', 'cannot close local database') } }
       }, 'exclusive SQLite connection')
-      initializeLayout(db)
+      // Recheck after acquiring ownership in case a previous owner cut over during open.
+      fenced = hasFence(lockPath)
+      initializeLayout(db, lockPath, fenced)
 
       let accepting = true
+      let layoutFailure: Error | undefined
       let tail: Promise<void> = Promise.resolve()
       const schedule = <Result>(work: () => Result | Promise<Result>, signal?: AbortSignal): Promise<Result> => {
         if (!accepting) return Promise.reject(localStorageError('closed', 'local database is closing'))
         if (signal?.aborted) return Promise.reject(signal.reason)
-        const result = tail.then(() => { signal?.throwIfAborted(); return work() })
+        const result = tail.then(() => {
+          if (layoutFailure) throw layoutFailure
+          signal?.throwIfAborted()
+          return work()
+        })
         tail = result.then(() => {}, () => {})
         return result
       }
@@ -216,8 +227,10 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
               throw failure(error, 'operation-failed')
             }
             try {
+              const before = fenced ? db.prepare('SELECT total_changes() AS n').get()?.n : undefined
               const result = await work(scope.tx)
               signal?.throwIfAborted()
+              if (fenced && db.prepare('SELECT total_changes() AS n').get()?.n !== before) advanceFence(db)
               try { db.exec('COMMIT') } catch (error) { throw failure(error, 'operation-failed') }
               return result
             } catch (error) {
@@ -228,13 +241,27 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
             } finally { scope.invalidate() }
           }, signal)
         },
+        requireLayout(version) {
+          return schedule(() => {
+            if (version !== 2) throw localStorageError('schema-version', 'unsupported minimum database layout')
+            if (fenced) return
+            try {
+              createFence(db, lockPath)
+              fenced = true
+            } catch (error) {
+              accepting = false
+              layoutFailure = failure(error, 'open-failed')
+              throw layoutFailure
+            }
+          })
+        },
         migrate(domain, input) {
           let migrations: readonly StorageMigration[]
           try {
             if (typeof domain !== 'string' || !domain.trim()) throw new TypeError('a migration domain is required')
             migrations = sortedMigrations(input)
           } catch (error) { return Promise.reject(error) }
-          return schedule(() => migrate(db, domain, migrations))
+          return schedule(() => migrate(db, domain, migrations, fenced))
         },
       }
       ctx.provide(serviceKey, service)

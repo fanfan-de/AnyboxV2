@@ -1,3 +1,7 @@
+import { environmentManagerKey } from '../tool-environments/access.js'
+import type { ExecutionEnvironmentManager } from '@anybox/execution-environments'
+import type { FunctionBindings } from '@anybox/execution-environments/bindings'
+import { nativeSearchTool, type ProviderSettings } from '@anybox/models'
 import { projectFilesServiceKey } from '../project-files/port.js'
 import type { ProjectFilesPort } from '../project-files/port.js'
 import { fileError } from '../project-files/domain.js'
@@ -24,7 +28,9 @@ import type { UnitAttachmentsPort } from '../unit/port.js'
 import type { ToolEnvironmentCatalog } from '../tool-environments/port.js'
 
 /** One owner for every Session's conversation and execution records; execution resources stay in RunRuntime. */
-export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], environments?: ToolEnvironmentCatalog): Component.Object<void, {
+export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], environments?: ToolEnvironmentCatalog, bindings?: FunctionBindings,
+  configuredProviders: () => readonly ProviderSettings[] = () => []): Component.Object<void, {
+  [environmentManagerKey]: ExecutionEnvironmentManager
   [localStorageServiceKey]: LocalStoragePort
   [projectServiceKey]: ProjectPort
   [imageAssetsServiceKey]: ImageAssetsPort
@@ -34,14 +40,36 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
 }> {
   return {
     name: 'harness-sessions',
-    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey],
+    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey, ...(bindings ? [environmentManagerKey] : [])],
     async apply(ctx, _config, deps) {
       const projects = deps[projectServiceKey], images = deps[imageAssetsServiceKey], files = deps[projectFilesServiceKey]
+      const manager = bindings ? deps[environmentManagerKey] : undefined
       const records = await openSqliteSessionRecords(deps[localStorageServiceKey], inputs, async run => {
         const change = Object.freeze({ sessionId: run.sessionId, runId: run.id, revision: run.revision })
         try { await ctx.parallel(runChangedEvent, change) }
         catch { ctx.logger.warn('Run change notification failed after commit', change) }
-      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey], environments)
+      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey], environments, manager, bindings)
+      const functionsFor = (units: readonly import('../unit/port.js').UnitAttachment[]) => bindings?.available(units.flatMap(unit =>
+        unit.state === 'approved' && unit.unitKind === 'computer' && unit.unitId && unit.scope?.kind === 'computer' ?
+          [{ attachmentId: unit.attachmentId, unitId: unit.unitId, epoch: unit.epoch,
+            ...(unit.scope.tools === 'all' ? {} : { allowedToolIds: unit.scope.tools }) }] : [])) ?? []
+      const availableFunctions = async () => functionsFor(await deps[unitAttachmentsServiceKey].list())
+      if (manager) {
+        const attachments = deps[unitAttachmentsServiceKey]
+        const known = await attachments.list()
+        const projectsBeforeCutover = new Set((await projects.listProjects()).map(project => project.computerAttachmentId))
+        const seeds = await Promise.all(agents.map(async agent => ({
+          id: agent.id, environments: agent.environmentIds ?? ['computer'], selection: await records.getAgentTools(agent.id),
+        })))
+        await deps[localStorageServiceKey].transaction(tx => {
+          const offered = functionsFor(known.flatMap(({attachmentId}) => {
+            const unit = attachments.getIn(tx, attachmentId)
+            return unit && (unit.origin === 'local' || projectsBeforeCutover.has(attachmentId)) ? [unit] : []
+          }))
+          for (const seed of seeds) manager.seedIn(tx, seed.id, offered.filter(tool =>
+            seed.environments.includes(tool.environmentId) && (tool.environmentId !== 'computer' || seed.selection.toolIds.includes(tool.toolId))))
+        })
+      }
       let accepting = true
       const pending = new Set<Promise<unknown>>()
       const resourceCalls = new Set<OwnedCall<unknown>>()
@@ -163,6 +191,14 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new TypeError('expectedRevision must be a non-negative safe integer')
           return withFallback(await records.setSessionDefaults(agent.id, modelId, expectedRevision), agent)
         }),
+        getRunEnvironmentAccess: id => track(() => records.getRunEnvironmentAccess(id)),
+        environmentTools: agentId => track(async () => {
+          if (agentId !== undefined) requireAgent(agentId)
+          const search = configuredProviders().flatMap(provider => nativeSearchTool(provider) ?? [])
+          return [...await availableFunctions(), ...search]
+        }),
+        getAgentEnvironmentSelection: id => track(() => records.getAgentEnvironmentSelection(id, requireAgent(id).environmentIds ?? ['computer'])),
+        setAgentEnvironmentSelection: (id, input) => track(() => records.setAgentEnvironmentSelection(id, input, requireAgent(id).environmentIds ?? ['computer'])),
         getAgentTools: agentId => track(() => records.getAgentTools(requireAgent(agentId).id)),
         setAgentTools: (agentId, input) => track(() => {
           const agent = requireAgent(agentId)
@@ -206,6 +242,9 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         describeImages: (sessionId, assetIds) => track(() => images.describe(sessionId, assetIds)),
         findAcceptedRun: input => track(() => records.findAcceptedRun(input)),
         registerRun: (id, input, now, prompts, model, native) => track(() => records.registerRun(id, input, now, prompts, model, native)),
+        getRunEnvironmentAccess: id => track(() => records.getRunEnvironmentAccess(id)),
+        checkLegacyAccess: (...args) => track(() => records.checkLegacyAccess(...args)),
+        loadSessionAccess: id => track(() => records.loadSessionAccess(id)),
         loadNativeInitialization: sessionId => track(() => records.loadNativeInitialization(sessionId)),
         loadNativeHistory: (sessionId, parentNodeId) => track(() => records.loadNativeHistory(sessionId, parentNodeId)),
         loadApplicationHistory: (sessionId, parentNodeId) => track(() => records.loadApplicationHistory(sessionId, parentNodeId)),

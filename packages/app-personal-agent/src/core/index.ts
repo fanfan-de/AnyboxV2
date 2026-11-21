@@ -1,3 +1,6 @@
+import { createExecutionEnvironmentComponent } from '@anybox/execution-environments'
+import { createFunctionBindings } from '@anybox/execution-environments/bindings'
+import { environmentManagerKey } from './tool-environments/access.js'
 import { createProjectFilesComponent } from './project-files/component.js'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -120,6 +123,14 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   const inputs = runtimeInputs(options)
   const toolEnvironments = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry,
     ...(options.toolEnvironments ?? []).map(descriptor => ({ descriptor }))])
+  const functionBindings = createFunctionBindings(toolEnvironments.environments, randomUUID())
+  const reportedComputerContracts = (unit: import('./unit/port.js').UnitAttachment) => {
+    const connection = lookup<UnitTransportPort>(unitTransportServiceKey)?.connection(unit.attachmentId)
+    const observed = projectComputerEnvironments([unit], {platform: process.platform, architecture: process.arch},
+      new Map([[unit.attachmentId, connection ?? false]]), lookup<ComputerWorkerPort>(localComputerWorkerServiceKey)?.observedInfo?.())
+    const support = observed.environments[0]?.toolSupport
+    return support?.state === 'reported' ? new Map(support.manifest.tools.map(tool => [tool.toolId, tool.version + '@' + tool.definitionHash])) : undefined
+  }
   const configuredProtocols = lookup<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
   const protocolComponents = lookup(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
@@ -136,14 +147,15 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     if (!worker) return Promise.reject(projectUnavailableError())
     return worker.query({ attachmentId, query })
   }
-  return [...protocolComponents, ...attachmentComponents, ...workerComponents,
+  return [createExecutionEnvironmentComponent({ serviceKey: environmentManagerKey }), ...protocolComponents, ...attachmentComponents, ...workerComponents,
     createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects,
       agentWorkspacesDirectory: options.agentWorkspacesDirectory, computerQuery }),
     createProjectFilesComponent(inputs),
     createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
-    createSessionComponent(inputs, toolEnvironments),
-    createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding(toolEnvironments, options.toolEnvironments)),
-    createRunComponent(inputs, lifetime.isClosing, lifetime.signal, toolEnvironments)]
+    createSessionComponent(inputs, toolEnvironments, functionBindings,
+      () => lookup<ModelsSettingsService>(modelsSettingsServiceKey)?.configuredProviders?.() ?? []),
+    createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding(toolEnvironments, options.toolEnvironments), functionBindings),
+    createRunComponent(inputs, lifetime.isClosing, lifetime.signal, toolEnvironments, functionBindings, reportedComputerContracts)]
 }
 
 /** The facade resolves the current services and never owns the application root. */
@@ -217,6 +229,12 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     listUnitAttachments: () => currentUnits().list(),
     createUnitAttachCode: input => currentUnits().createAttachCode(input),
     revokeUnitAttachment: attachmentId => currentUnits().revoke(attachmentId),
+    getRunEnvironmentAccess: id => currentSessions().getRunEnvironmentAccess(id),
+    environmentTools: (...args) => currentSessions().environmentTools(...args),
+    getAgentEnvironmentSelection: (...args) => currentSessions().getAgentEnvironmentSelection(...args),
+    setAgentEnvironmentSelection: (...args) => currentSessions().setAgentEnvironmentSelection(...args),
+    readSessionEnvironments: (...args) => currentSessions().readSessionEnvironments(...args),
+    adoptSessionEnvironments: (...args) => currentSessions().adoptSessionEnvironments(...args),
     getAgentTools: agentId => currentSessions().getAgentTools(agentId),
     setAgentTools: (agentId, input) => currentSessions().setAgentTools(agentId, input),
     openProject: (path, openOptions) => currentProjects().openProject(path, openOptions),

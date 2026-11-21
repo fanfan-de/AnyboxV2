@@ -5,7 +5,7 @@ import { nativeDiagnostic, sanitizeDiagnostic } from './diagnostics.js';
 import { abortLink, deferred, joinOperation } from './lifecycle.js';
 import { addResourceRefs, captureResourceRefs, captureResourceResolver, requireResourceSet, restoreResourceRefs } from './resources.js';
 import type { EffectiveCapabilities, ProtocolOperation, ProviderSettingsInput } from './types.js';
-import type { NativeContinuation, NativeExchangeOptions, NativeExecution, NativeExitReport, NativeHistoryPrefix, NativeImageResourceRef, NativeModelSnapshot, NativeObject, NativeProtocol, NativeRecordDraft, NativeReply, NativeRestoreState, NativeResourceResolver } from './native-types.js';
+import type { NativeContinuation, NativeManagedSend, NativeExchangeOptions, NativeExecution, NativeExitReport, NativeHistoryPrefix, NativeImageResourceRef, NativeModelSnapshot, NativeObject, NativeProtocol, NativeRecordDraft, NativeReply, NativeRestoreState, NativeResourceResolver } from './native-types.js';
 
 export interface MaterializedNativeContinuation {
   readonly state: NativeObject;
@@ -16,6 +16,7 @@ export interface MaterializedNativeContinuation {
 
 export interface ExecutionResources {
   readonly protocol: NativeProtocol;
+  readonly managedSend?: (exchangeId: string) => NativeManagedSend;
   readonly provider: ProviderSettingsInput;
   readonly credential?: string;
   readonly snapshot: NativeModelSnapshot;
@@ -148,7 +149,7 @@ export function createExecution(input: ExecutionResources): NativeExecution {
               const allowed = new Map(requestRefs.map(ref => [ref.id, ref]));
               const reader = resources;
               const restricted: NativeResourceResolver | undefined = reader ? { read(ref, options) { const known = allowed.get(ref.id); assert(known && equalJson(known, ref)); return reader.read(known, options); } } : undefined;
-              const operation = input.protocol.exchange({ provider: input.provider, credential, signal: controller.signal, request: requestBody, onEvent: event, resources: restricted, resourceRefs: requestRefs });
+              const operation = input.protocol.exchange({ managedSend: input.managedSend?.(exchangeId), provider: input.provider, credential, signal: controller.signal, request: requestBody, onEvent: event, resources: restricted, resourceRefs: requestRefs });
               // Capture a diagnostic candidate even if transport cleanup subsequently fails.
               void operation.result.then(value => { stopTimeout(); candidate = immutable(value); }, error => { stopTimeout(); diagnostic = nativeDiagnostic(error); }).catch(() => {});
               candidate = immutable(await joinOperation(operation, controller.signal));
@@ -184,6 +185,9 @@ export function createExecution(input: ExecutionResources): NativeExecution {
 
 function validateHistoryScope(old: NativeModelSnapshot, snapshot: NativeModelSnapshot): void {
   assert(old?.schemaVersion === 3);
+  // Legacy function declarations are revalidated against the complete outbound body.
+  // A recorded managed binding, once present, must remain exact on native reuse.
+  if (old.managedToolFingerprint !== undefined) assert(old.managedToolFingerprint === snapshot.managedToolFingerprint);
   for (const key of ['modelId', 'modelDefinitionId', 'providerDefinitionId', 'modelDefinitionVersionId', 'remoteModelId', 'providerId', 'protocolId', 'historyScopeEpoch'] as const) assert(old[key] === snapshot[key]);
 }
 

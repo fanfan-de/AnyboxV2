@@ -34,6 +34,7 @@ export function isPatchResult(value: unknown): value is ApplyPatchResult {
 function genericTrace(call: ToolTrace, result: JsonValue): LibraryToolTrace {
   return { id: call.id, name: call.name, state: libraryState(call.name, result), result,
     arguments: isBashTrace(call) ? { command: call.command } : isApplyPatchTrace(call) ? { patch: call.patch } : call.arguments,
+    ...(call.environmentTool ? { environmentTool: call.environmentTool } : {}),
     ...(call.category === undefined ? {} : { category: call.category }),
     ...(call.eventIndex === undefined ? {} : { eventIndex: call.eventIndex }),
     ...(call.startedAt === undefined ? {} : { startedAt: call.startedAt }),
@@ -52,14 +53,15 @@ export function toolTrace(run: Pick<RunView, 'status'>, events: readonly RunEven
     } else if (event.kind === 'tool-started') {
       const call = latest(event.requestId, event.name)
       if (call?.state === 'queued') {
+        if (event.environmentTool) call.environmentTool = event.environmentTool
         call.state = 'running'
         call.startedAt = timestamp(event.at)
       }
       else if (call?.state !== 'running') calls.push('command' in event
-        ? { id: event.requestId, name: 'bash', command: event.command, state: 'running', eventIndex, startedAt: timestamp(event.at) }
+        ? { ...(event.environmentTool ? { environmentTool: event.environmentTool } : {}), id: event.requestId, name: 'bash', command: event.command, state: 'running', eventIndex, startedAt: timestamp(event.at) }
         : 'patch' in event
-          ? { id: event.requestId, name: 'apply_patch', patch: event.patch, patchTruncated: event.patchTruncated, state: 'running', eventIndex, startedAt: timestamp(event.at) }
-          : { id: event.requestId, name: event.name, arguments: event.arguments, state: 'running', eventIndex, startedAt: timestamp(event.at) })
+          ? { ...(event.environmentTool ? { environmentTool: event.environmentTool } : {}), id: event.requestId, name: 'apply_patch', patch: event.patch, patchTruncated: event.patchTruncated, state: 'running', eventIndex, startedAt: timestamp(event.at) }
+          : { ...(event.environmentTool ? { environmentTool: event.environmentTool } : {}), id: event.requestId, name: event.name, arguments: event.arguments, state: 'running', eventIndex, startedAt: timestamp(event.at) })
     } else if (event.kind === 'tool-observed') {
       const call = latest(event.requestId, event.name)
       if (!call || call.state !== 'running') continue

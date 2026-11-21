@@ -4,6 +4,8 @@
 
 ## 当前边界
 
+Personal Agent 和 Anybox Harness 分别在自己的执行端装配共享包 `@anybox/execution-environments`。函数工具来自受信的执行提供方，模型托管搜索绑定到确切的提供方与协议。保存偏好后，Run 仍须持有对应目标、工具版本及签发代次的授权。撤权会封闭新准入并等待原调用和 scope 退出。连接和凭据由两款应用及各自提供方保存。设置与历史兼容见[执行环境授权组件](modules/tools/execution-environments.md)。
+
 Anybox Harness 的工具由受信装配插入的环境提供。`AgentDefinition.environmentIds` 选择环境；纯描述保存环境与工具的身份、契约版本、模型描述和参数，执行提供方在本轮组件依赖就绪后绑定。Agent Loop 负责原生协议编码与推理；RunRuntime 负责耐久意图、取消传播、观察与结算。
 
 本能力不使用 MCP，不运行任意路径、远端 schema 或模型提供的插件代码。首期是程序化受信装配；Web 的既有工具选择仍管理 Computer 工具偏好。Browser、Database 等没有因本轮接入而新增生产实现。

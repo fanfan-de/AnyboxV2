@@ -33,8 +33,17 @@ export async function createTestHarnessServerCore(root, options, { legacyTools =
   // and library integration fixtures use the recommended mixed-source defaults.
   if (legacyTools) for (const agent of options.agents) {
     const selection = await installation.api.getAgentTools(agent.id)
-    if (selection.revision === 0) await installation.api.setAgentTools(agent.id,
-      { toolIds: ['anybox.bash', 'anybox.apply_patch'], expectedRevision: selection.revision })
+    if (selection.revision === 0) {
+      const ids = ['anybox.bash', 'anybox.apply_patch']
+      const authority = root.get('harness.execution-environments')
+      const grants = await authority.get(agent.id)
+      const tools = grants.grants.map(item => item.tool)
+      for (const tool of await installation.api.environmentTools(agent.id)) {
+        if (tool.environmentId === 'computer' && ids.includes(tool.toolId) && !tools.some(item => JSON.stringify(item) === JSON.stringify(tool))) tools.push(tool)
+      }
+      await authority.set({agentId:agent.id,expectedRevision:grants.revision,requestId:'fixture-legacy-tools:'+agent.id,tools})
+      await installation.api.setAgentTools(agent.id, { toolIds: ids, expectedRevision: selection.revision })
+    }
   }
   let closing
   const close = () => {

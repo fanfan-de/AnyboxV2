@@ -129,3 +129,14 @@ test('duration helpers reject invalid and backwards time without displaying NaN'
   assert.deepEqual([0, 12, 1000, 1250, 61_000, 3_600_000, NaN, Infinity, -1].map(formatTraceDuration),
     ['0 ms', '12 ms', '1 s', '1.3 s', '1 min 1 s', '1 h 0 min', '—', '—', '—'])
 })
+
+test('Run trace keeps the recorded function target and hosted-search scope on the proper operation', () => {
+  const environmentTool = { environmentId: 'computer', targetId: 'worker:fixed-epoch', toolId: 'anybox.bash', version: '1' }
+  const hostedSearch = { environmentId: 'model-search', targetId: 'provider:1', toolId: 'web_search', version: 'responses' }
+  const events = [{ ...modelStart('response', 0), hostedSearch },
+    { kind: 'model-tool-calls', calls: [{ id: 'command', name: 'bash', command: 'pwd', environmentTool }], at: at(1) },
+    { ...bash(2, 'command'), environmentTool }, bashResult(3, 'command'), observed('response', 4)]
+  const steps = runTrace(run(), events).steps
+  assert.deepEqual(steps.find(step => step.kind === 'model').hostedSearch, hostedSearch)
+  assert.deepEqual(steps.filter(step => step.kind === 'tool').map(step => step.call.environmentTool), [environmentTool])
+})

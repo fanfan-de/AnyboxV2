@@ -59,7 +59,7 @@ settingsDialog.addEventListener('close', () => { void models.refresh() })
 const hostApi = selected ? api.forConnection(selected.id) : undefined
 const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefined
 const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('agent--session-defaults'), agentSelect) : undefined
-const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('agent--tools-settings'), agentSelect) : undefined
+const toolsSettings = hostApi && selected ? setupToolsSettings(hostApi, messageFor, required('agent--tools-settings'), agentSelect, JSON.stringify(['agent', selected.instanceId])) : undefined
 const unitsSettings = hostApi ? setupUnitsSettings(hostApi, messageFor, required('agent--units-settings')) : undefined
 const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, required('agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('agent--prompt-settings'), JSON.stringify(['agent', selected.instanceId, 'prompts'])) : undefined
@@ -101,6 +101,7 @@ const settings = setupSettingsNavigation(root, {
   initialState: options.settingsState, isActive: options.isActive, selectDevice: options.selectDevice,
   refreshArchive: () => workspace.refreshArchive(),
   resetModelsView: () => modelsSettings?.resetView(),
+  refreshTools: () => toolsSettings?.refresh(),
 })
 const receiveAgents = (agents: readonly AgentView[]) => {
   if (closed) return

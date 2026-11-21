@@ -302,6 +302,9 @@ export function setupWorkspace(api: HarnessClient, messageFor: (error: unknown) 
   return {
     closeSidebar: () => sidebarLayout.closeDrawers(),
     refreshArchive: () => archivePanel.activate(),
+    continuousSessionId(agentId: string) {
+      return current?.ref.continuous && current.agentId && splitScopedId(current.agentId)?.id === agentId ? current.ref.sessionId : undefined
+    },
     refreshSession: () => current?.bundle.controller.notifyChange(),
     setActive(active: boolean) {
       applicationActive = active

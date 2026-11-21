@@ -10,6 +10,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   isActive(): boolean
   selectDevice(id: string): boolean
   refreshArchive(): void
+  refreshTools?(): void
   resetModelsView?(): void
 }) {
   const required = <T extends HTMLElement>(selector: string): T => {
@@ -33,7 +34,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   const descriptions: Record<Exclude<SettingsSection, 'models'>, string> = {
     general: `设置${name}上的 Agent 和新会话默认模型，只影响新建会话。`,
     prompts: `这里的 Prompt 供${name}上的 Agent 使用。`,
-    tools: `为${name}上的 Agent 选择工具，只影响新建会话。`,
+    tools: `为${name}上的 Agent 管理工具授权和偏好。工具偏好只影响新建会话，撤权会阻止新的调用。`,
     units: `管理${name}上的 Agent 可使用的执行环境。`,
     connections: '管理这台电脑和已连接的远端设备。',
     archive: '查看所有设备、所有项目的已归档会话。',
@@ -98,6 +99,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     device.hidden = deviceLabel.hidden = global
     allDevices.hidden = !global
     content.scrollTop = 0
+    if (section === 'tools') options.refreshTools?.()
     if (section === 'archive') options.refreshArchive()
   }
   const showBlocked = () => {
@@ -130,6 +132,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     if (options.isActive() && !dialog.open) {
       if (section === 'models') options.resetModelsView?.()
       dialog.showModal()
+      if (section === 'tools') options.refreshTools?.()
     }
   }
   selectSection(options.initialState?.section ?? 'general')

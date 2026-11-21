@@ -19,7 +19,7 @@ const echo = Object.freeze({ toolId: 'sample.echo', version: '1', definition: {
 } })
 
 function environment(events, options = {}) {
-  return { environmentId: 'sample', version: '1', tools: [echo],
+  return { environmentId: 'sample', resourceId: 'test-echo-service', version: '1', tools: [echo],
     ...(options.recovery === undefined ? {} : { recovery: options.recovery }), openScope(context) {
     events.push({ kind: 'open', scopeId: context.scopeId })
     let used = false
@@ -36,6 +36,15 @@ function environment(events, options = {}) {
   } }
 }
 
+async function echoAuthorization(f) {
+  const { agentId } = f.session
+  const { grants } = await f.root.get('harness.execution-environments').get(agentId)
+  const grant = grants.find(value => value.tool.environmentId === 'sample' && value.tool.toolId === echo.toolId)
+  assert.ok(grant, 'a trusted echo resource must have an explicit grant before direct Run registration')
+  return { access: { agentId, functions: [{ name: echo.definition.name, grant }] },
+    selectionVersion: f.session.environmentSelection.version }
+}
+
 /** Stop after durable tool admission, leaving the original native reply available for takeover. */
 async function admitUnobservedTool(f, runId, admitted) {
   const records = f.root.get('harness.session-runs'), protocols = f.root.get('harness.protocol-agents')
@@ -47,7 +56,7 @@ async function admitUnobservedTool(f, runId, admitted) {
   let operationId
   try {
     await records.registerRun(runId, input, 'now', [], program.modelSnapshot,
-      { binding: program.binding, initialization, input: program.input, parentContextRef: null })
+      { binding: program.binding, initialization, input: program.input, parentContextRef: null, ...await echoAuthorization(f) })
     const executing = program.execute({ signal: controller.signal, publish() {},
       async perform(descriptor, start) {
         await records.startOperation(runId, { id: descriptor.id, kind: descriptor.kind, intent: descriptor.intent, records: descriptor.records }, 'now', 1)
@@ -86,7 +95,8 @@ async function fixture(provider, environmentIds = ['sample']) {
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
   const harness = await createTestHarnessServerCore(root, {
-    agents: [{ id: 'assistant', instructions: 'Use only the tools supplied by your environments.', modelId: 'default', environmentIds }],
+    agents: ['assistant', 'reviewer'].map(id => ({ id, instructions: 'Use only the tools supplied by your environments.',
+      modelId: 'default', environmentIds })),
     toolEnvironments: [provider],
   }, { legacyTools: false })
   const project = await harness.openProject(directory), session = await harness.createSession(project.id, 'assistant')
@@ -359,6 +369,52 @@ test('cancelling a custom environment waits for the call and scope to actually e
   } finally { exited.resolve(); closed.resolve(); await f.close() }
 })
 
+test('revoking a tool while it runs waits for the real scope, preserves the other Agent and fences the old Session after regrant', { timeout: 15000 }, async () => {
+  const events = [], result = deferred(), exited = deferred(), closed = deferred()
+  const f = await fixture(environment(events, {
+    execute: () => ({ result: result.promise, done: exited.promise, cancel() { result.reject(new Error('revoked tool')) } }),
+    close: () => ({ result: Promise.resolve({ closed: true }), done: closed.promise, cancel() {} }),
+  }))
+  const manager = f.root.get('harness.execution-environments')
+  try {
+    const initial = await manager.get('assistant'), other = await manager.get('reviewer')
+    const [permission] = initial.grants
+    assert.equal(permission.tool.toolId, echo.toolId)
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'wait for echo', idempotencyKey: 'active' })
+    f.llm.calls[0].result.resolve({ toolCalls: [{ id: 'echo', name: 'sample_echo', arguments: { value: 'pending' } }] })
+    f.llm.calls[0].done.resolve()
+    await until(() => events.some(event => event.kind === 'execute'))
+    const revoke = { agentId: 'assistant', requestId: 'revoke-active', expectedRevision: initial.revision, tools: [] }
+    const changed = await manager.set(revoke)
+    assert.equal(changed.state, 'draining')
+    assert.ok(changed.affectedCount >= 2, 'both the call and its resource-owning Run scope need exit proof')
+    assert.deepEqual((await manager.get('assistant')).grants, [])
+    exited.resolve()
+    await until(() => events.some(event => event.kind === 'close'))
+    assert.equal((await manager.observe(revoke.requestId)).state, 'draining')
+    assert.deepEqual(await manager.get('reviewer'), other)
+    closed.resolve()
+    const finished = await f.harness.waitRun(run.id)
+    assert.notEqual(finished.status, 'completed')
+    assert.equal(finished.resultNodeId, undefined)
+    assert.equal(f.llm.calls.length, 1)
+    const observed = await manager.set(revoke)
+    assert.equal(observed.state, 'completed')
+    const selection = await f.harness.getAgentEnvironmentSelection('assistant')
+    assert.deepEqual(selection.environmentIds, ['sample'])
+    await manager.set({ agentId: 'assistant', requestId: 'new-grant', expectedRevision: changed.revision, tools: [permission.tool] })
+    assert.notEqual((await manager.get('assistant')).grants[0].generation, permission.generation)
+    await assert.rejects(f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'stale Session', idempotencyKey: 'stale' }),
+      error => error.code === 'environment-authorization-changed')
+    assert.equal(f.llm.calls.length, 1)
+    const session = await f.harness.createSession(f.session.projectId, 'reviewer')
+    const review = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'still authorized', idempotencyKey: 'review' })
+    assert.deepEqual(f.llm.calls[1].input.tools.map(tool => tool.name), [echo.definition.name])
+    f.llm.calls[1].result.resolve('reviewed'); f.llm.calls[1].done.resolve()
+    assert.equal((await f.harness.waitRun(review.id)).status, 'completed')
+  } finally { result.resolve({ result: 'cleanup' }); exited.resolve(); closed.resolve(); await f.close() }
+})
+
 test('custom environment cleanup failure preserves partial facts and prevents a successful node', { timeout: 15000 }, async () => {
   const events = [], partial = { remaining: 'resource-1' }
   const f = await fixture(environment(events, { close: () => {
@@ -391,7 +447,7 @@ test('a recovered success proposal cannot override a newly failed environment ex
     const records = f.root.get('harness.session-runs'), id = 'settling-environment-run'
     const input = { sessionId: f.session.id, parentNodeId: null, input: 'resume cleanup', idempotencyKey: id }
     const initialization = sessionInitialization(f.session, [], f.session.toolSelection.tools.map(tool => tool.definition))
-    const registration = nativeRegistration(input, modelSnapshot(), [], null, initialization)
+    const registration = { ...nativeRegistration(input, modelSnapshot(), [], null, initialization), ...await echoAuthorization(f) }
     await records.registerRun(id, input, 'now', [], modelSnapshot(), registration)
     const settlement = completedOutcome(id, 'saved success')
     await records.startOperation(id, { id: `exchange:${id}`, kind: 'model', intent: {}, records: [settlement.records[0]] }, 'now', 1)

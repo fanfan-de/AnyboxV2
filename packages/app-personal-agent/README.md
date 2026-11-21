@@ -1,5 +1,7 @@
 # Personal Agent
 
+0.2.1 在本应用的执行端保存 Agent 的环境授权。可以从「Agent 工具」设置函数工具、模型托管搜索以及连续对话后续运行使用的环境。「管理连接」继续管理本应用的设备连接和凭据。[执行环境](../../docs/modules/tools/execution-environments.md)
+
 `@anybox/app-personal-agent` 是 Anybox 的独立应用，稳定 ID 为 `personal-agent`。0.2 以 Anybox Harness 的原生会话和执行能力为起点。
 
 从仓库根启动 Personal Agent 的本机开发环境。

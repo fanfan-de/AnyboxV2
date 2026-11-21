@@ -21,7 +21,7 @@ const ownedBindings = Object.freeze(Object.fromEntries(ownedServices.map(key => 
 export function personalAgentServerApplication(config: HarnessServerConfig, options: HarnessServerRuntimeOptions = {}): ApplicationRegistration {
   return {
     definition: personalAgentDefinition,
-    capabilityRequirements: { required: { 'storage.sqlite': '^1.0.0' }, optional: { [directoryPickerCapabilityId]: '^1.0.0' } },
+    capabilityRequirements: { required: { 'storage.sqlite': '^1.1.0' }, optional: { [directoryPickerCapabilityId]: '^1.0.0' } },
     http: { service: harnessServerHttpServiceKey,
       capabilities: ['personal-agent.v1', 'projects.path', 'images', 'project-files', 'sse', 'units', 'computer-environments'],
       selfAuthenticated: ['/units/unit'] },

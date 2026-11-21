@@ -89,6 +89,7 @@ export function createChatCompletionsProtocol(options: ProtocolOptions = {}): Na
     resourceIds: chatImages.ids,
     effectiveCapabilities: (declared, options) => ({ ...effectiveCapabilities(declared, options.thinking !== undefined && object(options.thinking).type === 'disabled' || options.reasoning_effort === 'none'), imageInput: declared.imageInput.support === 'supported' }),
     supportsHistoryPrefix: true,
+    supportsManagedSend: true,
     restore: (records, prefix) => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
       const initial = prefix === undefined ? undefined : conversation({}, prefix, 'messages', ['tools']);

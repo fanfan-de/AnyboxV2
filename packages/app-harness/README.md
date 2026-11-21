@@ -1,5 +1,7 @@
 # Anybox Harness application package
 
+Version 0.1.7 adds per-Agent environment permissions for function tools and provider-hosted search. The execution server records the actual tool target and grant generation for each Run. Execution storage requires the layout-2 restore checkpoint and the host capability `storage.sqlite` 1.1.0. [Execution environments](../../docs/modules/tools/execution-environments.md)
+
 `@anybox/app-harness` owns the Anybox Harness client, harness server, independent Computer worker and browser resources. The application ID stays `agent`; the original package split preserves server API routes, service keys, database paths and state. Client connections now belong to each application, with private tables and credential namespaces and read-only import of former shared records.
 
 Version 0.1.6 adds the predevelopment `anybox-harness` HTTP/SSE client CLI, also registered as `anybox harness` in the static distribution. Its lightweight `cli/registration` metadata lazy-loads `cli/commands`; it never assembles the runtime or opens desktop databases. It owns private explicit target configuration and exposes target management, agents/models/projects, session list/show/create and run start/show/watch/cancel/find. See [CLI usage, architecture and validation limits](../../docs/cli.md). The existing `anybox-harness-server` daemon entry remains separate.

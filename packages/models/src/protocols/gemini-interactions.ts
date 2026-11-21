@@ -107,6 +107,7 @@ export function createGeminiInteractionsProtocol(options: ProtocolOptions = {}):
     },
     resourceIds: geminiImages.ids,
     supportsHistoryPrefix: true,
+    supportsManagedSend: true,
     restore: (records, prefix) => {
       for (const record of records) if (record.kind === 'request') validateIntent(native(record.payload), record.recordFormatVersion === 2);
       const initial = prefix === undefined ? undefined : conversation({}, prefix, 'input', ['system_instruction', 'tools']);

@@ -1,6 +1,7 @@
 import type { Api } from './client-types.js'
 import type { AgentToolsSelection } from '../core/session/domain.js'
 import type { listTools } from '../core/tool/catalog.js'
+import { mountEnvironmentAccess } from './vendor/environment-settings.js'
 import { createPageRequests } from './page-lifecycle.js'
 import { splitScopedId } from './harness-client.js'
 
@@ -100,9 +101,11 @@ export function createToolsSettingsClient(source: Api, messageFor: (error: unkno
   }
 }
 
-export function setupToolsSettings(source: Api, messageFor: (error: unknown) => string, container: HTMLElement) {
+export function setupToolsSettings(source: Api, messageFor: (error: unknown) => string, container: HTMLElement, storageKey: string, continuousSessionId: (agentId: string) => string | undefined) {
   const client = createToolsSettingsClient(source, messageFor), lifetime = new AbortController()
-  container.innerHTML = `<header class="settings-panel-heading"><h3 id="personal-agent--tools-title">Computer 工具</h3><p>选择 Computer 环境提供的工具，可跨来源组合。保存后用于后续运行。</p></header>
+  container.innerHTML = `<header class="settings-panel-heading"><h3 id="personal-agent--tools-title">Agent 工具</h3></header>
+    <div data-environment-access></div>
+    <h4>Computer 工具偏好</h4><p>选择希望提供给模型的工具。新会话和连续对话的下一次运行将读取此偏好。</p>
     <div class="tools-filters"><label>搜索工具<input type="search" data-tools-search placeholder="名称或功能"></label>
     <label>分类<select data-tools-category><option value="">全部分类</option><option value="command">命令</option><option value="files">文件</option><option value="search">搜索</option><option value="image">图片</option></select></label>
     <label>来源<select data-tools-source><option value="">全部来源</option></select></label></div>
@@ -110,6 +113,10 @@ export function setupToolsSettings(source: Api, messageFor: (error: unknown) => 
     <div class="settings-actions"><button type="button" data-tools-save disabled>保存工具</button><button type="button" class="secondary-button" data-tools-reload disabled>重新加载</button></div>
     <p data-tools-notice role="status" aria-live="polite" hidden></p>`
   const required = <T extends HTMLElement>(selector: string): T => container.querySelector<T>(selector)!
+  const environmentRequests = createPageRequests(source)
+  const access = mountEnvironmentAccess(required('[data-environment-access]'), {
+    api: environmentRequests.api, messageFor, storageKey, continuousSessionId,
+  })
   const search = required<HTMLInputElement>('[data-tools-search]'), filter = required<HTMLSelectElement>('[data-tools-source]'), category = required<HTMLSelectElement>('[data-tools-category]')
   const list = required<HTMLElement>('.tools-list'), summary = required<HTMLElement>('[data-tools-summary]'), notice = required<HTMLElement>('[data-tools-notice]')
   const save = required<HTMLButtonElement>('[data-tools-save]'), reload = required<HTMLButtonElement>('[data-tools-reload]')
@@ -148,8 +155,13 @@ export function setupToolsSettings(source: Api, messageFor: (error: unknown) => 
   save.addEventListener('click', () => { void client.save() }, { signal: lifetime.signal }); reload.addEventListener('click', () => { void client.reload() }, { signal: lifetime.signal })
   const unsubscribe = client.subscribe(render); render()
   return {
-    selectAgent(id: string) { client.selectAgent(splitScopedId(id)?.id ?? id) },
-    canLeave: client.canLeave,
-    async dispose() { lifetime.abort(); unsubscribe(); await client.dispose() },
+    refresh: access.refresh,
+    selectAgent(id: string, name?: string) {
+      const localId = splitScopedId(id)?.id ?? id
+      client.selectAgent(localId)
+      access.selectAgent(localId, name)
+    },
+    canLeave: () => client.canLeave() && access.canLeave(),
+    async dispose() { lifetime.abort(); unsubscribe(); access.dispose(); await Promise.all([environmentRequests.dispose(), client.dispose()]) },
   }
 }

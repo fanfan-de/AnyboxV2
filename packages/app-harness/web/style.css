@@ -454,6 +454,13 @@
 #agent--settings-dialog .settings-scope-description { grid-column: 1 / -1; }
 #agent--settings-dialog .settings-device-status { grid-column: 1 / -1; margin-top: 12px; }
 .settings-card { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+[data-environment-access] { display: grid; gap: 12px; }
+[data-environment-access] .settings-card { display: grid; gap: 10px; margin: 0; }
+[data-environment-access] button { justify-self: start; }
+[data-environment-access] details, .units-list details { min-width: 0; overflow-wrap: anywhere; }
+[data-environment-access] details > small { display: block; margin: 8px 0; color: var(--muted); }
+[data-environment-access] summary { cursor: pointer; }
+
 .computer-management { min-width: 0; padding: 16px 0; }
 .computer-management p, .computer-management strong { overflow-wrap: anywhere; }
 .computer-management textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 5px; padding: 9px 10px; }

@@ -1,8 +1,10 @@
+import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
 import type { RunEventView, RunView, ToolTrace } from './client-types.js'
 import { toolTrace } from './tool-trace.js'
 
 export type OperationTraceState = 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted' | 'recorded'
 export interface OperationTraceStep {
+  readonly hostedSearch?: EnvironmentTool
   readonly kind: 'model' | 'operation'
   readonly id: string
   readonly eventIndex: number
@@ -62,7 +64,7 @@ export function runTrace(run: RunView, events: readonly RunEventView[]): RunTrac
   for (const [eventIndex, event] of events.entries()) {
     if (event.kind === 'operation-started') {
       if (event.operationKind === 'model') modelCalls++
-      operations.push({ kind: event.operationKind, id: event.operationId, eventIndex, state: 'running',
+      operations.push({ ...(event.hostedSearch ? { hostedSearch: event.hostedSearch } : {}), kind: event.operationKind, id: event.operationId, eventIndex, state: 'running',
         startedAt: timestamp(event.at), legacy: false })
     } else if (event.kind === 'model-started') {
       modelCalls++

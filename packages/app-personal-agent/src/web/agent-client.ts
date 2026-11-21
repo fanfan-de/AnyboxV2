@@ -62,7 +62,12 @@ settingsDialog.addEventListener('close', () => { void models.refresh(); workspac
 const hostApi = selected ? api.forConnection(selected.id) : undefined
 const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefined
 const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('personal-agent--session-defaults')) : undefined
-const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('personal-agent--tools-settings')) : undefined
+const toolsSettings = hostApi && selected ? setupToolsSettings(hostApi, messageFor, required('personal-agent--tools-settings'),
+  JSON.stringify(['personal-agent', selected.instanceId]), agentId => {
+    const sessionId = workspace.continuousSessionId(agentId)
+    const ref = sessionId ? splitScopedId(sessionId) : undefined
+    return ref?.instanceId === selected.instanceId ? ref.id : undefined
+  }) : undefined
 const unitsSettings = hostApi ? setupUnitsSettings(hostApi, messageFor, required('personal-agent--units-settings')) : undefined
 const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, required('personal-agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('personal-agent--prompt-settings'), JSON.stringify([selected.instanceId, 'prompts'])) : undefined
@@ -127,6 +132,7 @@ const settings = setupSettingsNavigation(root, {
   initialState: options.settingsState, isActive: options.isActive, selectDevice: options.selectDevice,
   refreshArchive: () => workspace.refreshArchive(),
   resetModelsView: () => modelsSettings?.resetView(),
+  refreshTools: () => toolsSettings?.refresh(),
   refreshAgents: () => { agentDirectory?.refresh(); refreshAgentList() },
   leaveAgents: () => agentDirectory?.pauseLogo(),
 })
@@ -134,7 +140,7 @@ function updateActiveAgent(id: string): void {
   activeAgentId = id
   for (const [key, { button }] of agentButtons) button.setAttribute('aria-pressed', String(key === id))
   sessionDefaults?.selectAgent(id)
-  toolsSettings?.selectAgent(id)
+  toolsSettings?.selectAgent(id, agentFor(id)?.name)
 }
 function activateAgent(id: string): void {
   if (id !== activeAgentId && !canLeave()) return

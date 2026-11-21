@@ -66,7 +66,7 @@ async function openExample(directory, environments) {
     await root.installComponent(createModelsVaultComponent({ namespace: 'anybox-notes-example', openEntry() {
       throw new Error('this offline example must not open system credentials')
     } }))
-    await root.installComponent(createModelsComponent())
+    await root.installComponent(createModelsComponent({ requireManagedTools: true }))
     const protocols = /** @type {import('@anybox/models').ModelsProtocolsService} */ (root.get('models.protocols'))
     protocols.register(model.protocol)
     const settings = /** @type {import('@anybox/models').ModelsSettingsService} */ (root.get('models.settings'))
@@ -124,6 +124,11 @@ export async function runNotesDemo() {
     const notes = createNotesEnvironment(await loadExampleNotes())
     const after = await openExample(directory, [notes])
     try {
+      // The original installation intentionally granted this Agent no tools.
+      const manager = /** @type {import('@anybox/execution-environments').ExecutionEnvironmentManager} */ (after.root.get('harness.execution-environments'))
+      const original = await manager.get(agent.id)
+      const tools = (await after.api.environmentTools(agent.id)).filter(tool => tool.environmentId === 'notes')
+      await manager.set({ agentId: agent.id, expectedRevision: original.revision, requestId: 'grant-example-notes', tools })
       const project = await after.api.openProject(workspace)
       const fresh = await after.api.createSession(project.id, agent.id)
       const newSession = await run(after, fresh.id, 'with-notes')

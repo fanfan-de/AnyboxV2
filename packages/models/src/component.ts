@@ -1,4 +1,5 @@
-import type { NativeContinuation, NativeExecution, NativeObject, NativeParameters, NativeProtocol, NativeProtocolLease, OpenNativeModelInput } from './native-types.js';
+import type { NativeContinuation, NativeExecution, NativeManagedTools, NativeObject, NativeParameters, NativeProtocol, NativeProtocolLease, OpenNativeModelInput } from './native-types.js';
+import { bindManagedTools, captureManagedTools } from './managed-tools.js';
 import { randomUUID } from 'node:crypto';
 import { setImmediate as yieldToHost } from 'node:timers/promises';
 import type { Component } from '@nya/core';
@@ -26,11 +27,11 @@ interface Generation {
 type Dependencies = { 'models.store': ModelsStore; 'models.vault': ModelsVault };
 
 /** Installs orchestration only; storage, vault, and protocols remain replaceable Nya dependencies. */
-export function createModelsComponent(): Component.Object<void, Dependencies> {
+export function createModelsComponent(options: { readonly requireManagedTools?: boolean } = {}): Component.Object<void, Dependencies> {
   return {
     name: 'models', inject: [modelsStoreServiceKey, modelsVaultServiceKey],
     async apply(ctx, _config, deps) {
-      const runtime = createRuntime(deps['models.store'], deps['models.vault']);
+      const runtime = createRuntime(deps['models.store'], deps['models.vault'], options.requireManagedTools === true);
       ctx.effect(() => () => runtime.close(), 'stop model admissions and join owned resources');
       await runtime.recover();
       ctx.provide(modelsServiceKey, runtime.models);
@@ -46,7 +47,7 @@ function nativeParameters(model: Pick<ModelSettingsInput, 'parameters'>, protoco
   return immutable(model.parameters);
 }
 
-function createRuntime(store: ModelsStore, vault: ModelsVault) {
+function createRuntime(store: ModelsStore, vault: ModelsVault, requireManagedTools: boolean) {
   let accepting = true;
   let closing: Promise<void> | undefined;
   let cleanupFailed = false;
@@ -200,7 +201,10 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
         const generation = getGeneration(providerSettings.protocolId), adapter = generation.protocol.textGeneration;
         if (!adapter || !generation.protocol.descriptor.responseModes?.includes('complete')) throw modelsError('capability-unsupported');
         const held = acquire(generation);
-        return { adapter, lease: held, open: signal => models.openNative({ modelId: captured.modelId, lease: held, signal }),
+        const textOnly: NativeManagedTools | undefined = requireManagedTools ? {
+          functions: [], runSend: (_id, start, signal) => joinOperation(start(signal), signal),
+        } : undefined;
+        return { adapter, lease: held, open: signal => models.openNative({ modelId: captured.modelId, lease: held, signal, managedTools: textOnly }),
           track(operation) {
             operations.add(operation); generation.pending.add(operation);
             return failed => {
@@ -212,7 +216,9 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       });
     },
     async openNative<I extends NativeObject, R extends NativeObject, E extends NativeObject>(input: OpenNativeModelInput<I, R, E>): Promise<NativeExecution<I, R, E>> {
-      requireOpen(); keys(input, ['modelId', 'lease', 'restore', 'historyPrefix', 'continuation', 'captureContinuation', 'requirements', 'resources', 'signal']); identifier(input.modelId); validateSignal(input.signal);
+      requireOpen(); keys(input, ['modelId', 'lease', 'restore', 'historyPrefix', 'continuation', 'captureContinuation', 'requirements', 'resources', 'signal', 'managedTools']); identifier(input.modelId); validateSignal(input.signal);
+      if (requireManagedTools && !input.managedTools) throw modelsError('capability-unsupported');
+      const policy = input.managedTools && captureManagedTools(input.managedTools);
       const continuationToken = input.continuation, shouldCapture = input.captureContinuation;
       assert(continuationToken === undefined || (input.restore === undefined && input.historyPrefix === undefined));
       assert(shouldCapture === undefined || typeof shouldCapture === 'boolean');
@@ -235,14 +241,19 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
           generation.protocol.validateProvider(providerSettingsInput(provider));
           const parameters = nativeParameters(model, provider.protocolId), capabilities = effective(generation, model, parameters), requirements = captured.requirements;
           const limits = definitionLimits(model);
-          const snapshot = immutable({ schemaVersion: 3 as const, modelDefinitionId: model.id, providerDefinitionId: provider.id, modelDefinitionVersionId: model.modelDefinitionVersionId, modelId: model.runtimeModelId, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.restoreScopeId, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, registrationGenerationId: generation.id, historyScopeEpoch: provider.historyScopeEpoch, parameters, capabilities, ...(limits ? { limits } : {}) });
+          if (policy && !generation.protocol.supportsManagedSend) throw modelsError('capability-unsupported');
+          const managed = policy && bindManagedTools(policy, provider, parameters.value);
+          const effectiveParameters = managed ? { ...parameters, value: managed.parameters } : parameters;
+          const snapshot = immutable({ schemaVersion: 3 as const, ...(managed ? { managedToolFingerprint: managed.fingerprint } : {}), modelDefinitionId: model.id, providerDefinitionId: provider.id, modelDefinitionVersionId: model.modelDefinitionVersionId, modelId: model.runtimeModelId, modelRevision: model.revision, modelVersionId: model.versionId, providerId: provider.restoreScopeId, providerRevision: provider.revision, providerVersionId: provider.versionId, remoteModelId: model.remoteModelId, protocolId: provider.protocolId, protocolVersion: generation.protocol.descriptor.version, registrationGenerationId: generation.id, historyScopeEpoch: provider.historyScopeEpoch, parameters: effectiveParameters, capabilities, ...(limits ? { limits } : {}) });
           if (continuation) validateContinuation(continuation, snapshot);
           if (requirements.tools && !capabilities.tools || requirements.streaming && !capabilities.streaming || requirements.reasoning && capabilities.reasoning.support !== 'supported' || requirements.imageInput && !capabilities.imageInput) throw modelsError('capability-unsupported');
           if (captured.restore) validateRestore(captured.restore, snapshot, generation.protocol);
           const credential = await readCredential(provider, owned.controller.signal);
           throwAborted(owned.controller.signal);
           if (!accepting || !generation.accepting || held.released) throw modelsError('closed');
-          const execution = createExecution({ protocol: generation.protocol, provider: immutable(providerSettingsInput(provider)), credential, snapshot, capabilities, resources, restore: captured.restore, historyPrefix: captured.historyPrefix, continuation, controller: owned.controller,
+          const execution = createExecution({
+            managedSend: managed ? id => managed.send(id, () => store.providerSettings(providerId)?.versionId === provider.versionId) : undefined,
+            protocol: generation.protocol, provider: immutable(providerSettingsInput(provider)), credential, snapshot, capabilities, resources, restore: captured.restore, historyPrefix: captured.historyPrefix, continuation, controller: owned.controller,
             captureContinuation: shouldCapture ? material => captureContinuation(generation, material) : undefined,
             onRelease: failed => { generation.executions.delete(execution); owned.unlink(); if (failed) { generation.cleanupFailed = true; cleanupFailed = true; } } });
           generation.executions.add(execution); transferred = true; return execution as NativeExecution<I, R, E>;
@@ -554,7 +565,7 @@ function createRuntime(store: ModelsStore, vault: ModelsVault) {
       assert(adapter === undefined || adapter && typeof adapter.createIntent === 'function' && typeof adapter.validateParameters === 'function' && typeof adapter.readText === 'function');
       if (generations.has(protocol.descriptor.id)) throw modelsError('conflict');
       const stable: NativeProtocol = Object.freeze({
-        descriptor: immutable(protocol.descriptor), validateProvider: protocol.validateProvider.bind(protocol),
+        descriptor: immutable(protocol.descriptor), supportsManagedSend: protocol.supportsManagedSend, validateProvider: protocol.validateProvider.bind(protocol),
         textGeneration: adapter ? Object.freeze({ createIntent: adapter.createIntent.bind(adapter), validateParameters: adapter.validateParameters.bind(adapter), readText: adapter.readText.bind(adapter) }) as NativeProtocol['textGeneration'] : undefined,
         recordFormatVersion: protocol.recordFormatVersion, canRestoreVersion: protocol.canRestoreVersion?.bind(protocol), resourceIds: protocol.resourceIds?.bind(protocol),
         validateParameters: protocol.validateParameters.bind(protocol), effectiveCapabilities: protocol.effectiveCapabilities.bind(protocol),

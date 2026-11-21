@@ -1,6 +1,6 @@
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '@anybox/storage-sqlite/sqlite'
-import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
+import { localStorageCapabilityVersion, localStorageServiceKey } from '@anybox/storage-sqlite/port'
 import { createApplicationApiComponent, hostHttpServiceKey } from './component.js'
 import type { ApplicationHttpServer } from './http-server.js'
 import { createHostAccessComponent, hostAccessServiceKey } from './access.js'
@@ -34,7 +34,7 @@ export async function createExecutionHost(options: ExecutionHostOptions) {
   const install = (component: Parameters<Context['installComponent']>[0]) => { const fiber = root.installComponent(component, undefined, { bindings }); installed.push(fiber); return fiber }
   const catalog = createApplicationCatalog(options.applications)
   const runtime = createApplicationRuntimes(root, catalog, [
-    { id: 'storage.sqlite', version: '1.0.0', services: [localStorageServiceKey], resident: true,
+    { id: 'storage.sqlite', version: localStorageCapabilityVersion, services: [localStorageServiceKey], resident: true,
       create: () => createLocalSqliteComponent(options.databasePath) },
     ...(options.providers ?? []),
   ], bindings)

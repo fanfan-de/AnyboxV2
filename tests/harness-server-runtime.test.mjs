@@ -42,7 +42,7 @@ test('harness server owns its full installation and reopening preserves data in 
   for (const key of ['models', 'models.catalog', 'harness.prompts', 'harness.sessions', 'harness.computers', 'harness.workspaces', 'harness.computer-operations', 'computer.worker', 'harness.http']) assert.ok(root.get(key), key)
   for (const key of ['tools.bash', 'tools.apply-patch', 'tools.processes', 'tools.files']) assert.equal(root.get(key), undefined, `${key} is owned by the independent worker`)
   const components = createHarnessServerAgentComponents(root, { agents }, { isClosing: () => false })
-  assert.deepEqual(components.find(component => component.name === 'harness-run-runtime').inject, ['harness.session-runs', 'harness.computer-operations'])
+  assert.deepEqual(components.find(component => component.name === 'harness-run-runtime').inject, ['harness.session-runs', 'harness.execution-environments', 'harness.computer-operations'])
   assert.ok(components.find(component => component.name === 'harness-computer-operations').inject.includes('computer.worker'))
   assert.equal(components.some(component => component.inject?.some(key => key.startsWith('tools.'))), false, 'Authority execution depends on durable operations, not worker tool services')
   assert.equal(existsSync(workerDirectory), false, 'opening Authority installs the proxy without activating a worker')

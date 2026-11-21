@@ -1,5 +1,6 @@
 // @ts-check
 import { validateToolArguments } from '@anybox/tool-api'
+import { createHash } from 'node:crypto'
 
 /** @typedef {{readonly id: string, readonly title: string, readonly content: string}} Note */
 /** @typedef {import('@anybox/tool-api').JsonValue} JsonValue */
@@ -43,6 +44,7 @@ export function createNotesEnvironment(documents) {
   }
   return {
     environmentId: 'notes', version: '1', tools,
+    resourceId: createHash('sha256').update(JSON.stringify([...notes.values()])).digest('hex'),
     // No recovery flag: recomputing a read is not original-operation lookup.
     openScope(context) {
       let closed = false

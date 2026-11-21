@@ -8,7 +8,7 @@ import { dirname, join, resolve, relative, sep } from 'node:path'
 const sharedPackages = Object.freeze(['@nya/core', '@anybox/application-api', '@anybox/storage-sqlite'])
 // The builder consumes the same explicitly declared dependency as the host contract validator.
 const { satisfies } = createRequire(new URL('../packages/host/package.json', import.meta.url))('semver')
-const localPackages = new Set(['@anybox/host', '@anybox/application-api', '@anybox/storage-sqlite', '@anybox/directory-picker', '@anybox/models', '@anybox/api-key-manager', '@anybox/tool-api', '@anybox/computer-tools', '@anybox/app-harness', '@anybox/app-claude-agent', '@anybox/app-personal-agent', '@nya/core'])
+const localPackages = new Set(['@anybox/host', '@anybox/application-api', '@anybox/storage-sqlite', '@anybox/directory-picker', '@anybox/models', '@anybox/api-key-manager', '@anybox/tool-api', '@anybox/execution-environments', '@anybox/computer-tools', '@anybox/app-harness', '@anybox/app-claude-agent', '@anybox/app-personal-agent', '@nya/core'])
 const excludedClaudeBinary = name => name.startsWith('@anthropic-ai/claude-agent-sdk-')
 const safeRelative = value => typeof value === 'string' && value.length > 0 && !value.includes('\\') && !value.startsWith('/') && !value.split('/').some(part => !part || part === '.' || part === '..')
 const jsonBytes = value => Buffer.from(JSON.stringify(value, null, 2) + '\n')
@@ -204,6 +204,7 @@ export async function stageApplicationPackage(root, directory, appName, { target
   await writeFile(join(payload, 'assets.json'), jsonBytes({ schemaVersion: 1, assets }))
   await writeFile(join(payload, 'data-compatibility.json'), jsonBytes({ schemaVersion: 1, appId: recipe.appId,
     owner: 'application', uninstall: 'preserve', preparation: 'No business resources, migrations, credentials or network are opened during package preparation.',
+    ...(['app-personal-agent', 'app-harness'].includes(appName) ? { executionStorage: 'Opening the Agent execution target upgrades its SQLite store to layout 2. Keep the database and sibling .lock/authority.sqlite checkpoint together. Older writers cannot reopen this store.' } : {}),
     existingData: appName === 'app-personal-agent'
       ? 'Existing Personal Agent Models data and Vault references are reused. Legacy workspace tables are preserved. Native session and run data use a separate execution store.'
       : 'Existing application-owned paths, identities and migration ledgers remain unchanged.' }))

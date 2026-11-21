@@ -1,6 +1,8 @@
 # Agent 执行环境管理设计
 
-**状态为提案，供产品与架构评审。** 用户已明确的目标是让提供给 Agent 的每个工具都有执行环境归属，并由专门模块管理。本文以 Personal Agent 和 Anybox Harness 为首批消费者。下文的模块边界、产品默认值和迁移策略均为设计建议。
+Personal Agent 与 Anybox Harness 在各自执行端采用共享环境管理组件。本文保留设计时的取舍与验收标准。实际接口、状态与恢复边界见[执行环境授权组件](modules/tools/execution-environments.md)。
+
+实现对搜索目标采用保守的身份规则。提供方配置产生新版本（含 Key 轮换）后，要重新授权该目标。普通会话已固定工具声明且无法证明原绑定时，历史仍可查看，新建会话可以使用当前授权。存储升级与备份要求见[执行库兼容规则](modules/infrastructure/local-sqlite.md)。
 
 ## 用户配置的是什么
 

@@ -5,6 +5,7 @@ import { createToolSelection } from '../tool/catalog.js'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 import type { ToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 export interface Session {
+  readonly environmentSelection?: import('@anybox/execution-environments/bindings').EnvironmentSelection
   readonly id: string
   readonly title: string | null
   readonly projectId: string

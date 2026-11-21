@@ -1,5 +1,6 @@
 /** Contracts shared by storage consumers. No SQLite driver types cross this boundary. */
 export const localStorageServiceKey = 'local-storage'
+export const localStorageCapabilityVersion = '1.1.0'
 
 export type StorageValue = string | number | bigint | Uint8Array | null
 export type StorageRow = Readonly<Record<string, StorageValue>>
@@ -21,6 +22,8 @@ export interface LocalStoragePort {
   read<Result>(work: (reader: StorageReader) => Result | Promise<Result>, signal?: AbortSignal): Promise<Result>
   /** One transaction spans all tables used by work; rejection rolls it back. */
   transaction<Result>(work: (tx: StorageTransaction) => Result | Promise<Result>, signal?: AbortSignal): Promise<Result>
+  /** Durably raise the minimum compatible database layout under the exclusive writer. */
+  requireLayout?(version: 2): Promise<void>
   /** Applies a domain's missing migrations in order; each one commits with its recorded version. */
   migrate(domain: string, migrations: readonly StorageMigration[]): Promise<void>
 }

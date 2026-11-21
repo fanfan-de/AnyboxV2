@@ -57,3 +57,14 @@ for (const file of bundled.outputFiles) await writeFile(file.path, file.contents
 await writeFile(join(dirname(output), 'markdown-parser.LICENSE.txt'), `Third-party licenses for markdown-parser.js\n\n${licenses.map(license => license.text).join('\n\n========================================\n\n')}\n`)
 
 await buildProviderLogos(dirname(output), 'agent')
+
+await build({
+  absWorkingDir: root,
+  entryPoints: ['@anybox/execution-environments/settings-view'],
+  outfile: join(dirname(output), 'environment-settings.js'),
+  bundle: true,
+  platform: 'browser',
+  format: 'esm',
+  target: 'es2022',
+  charset: 'utf8',
+})

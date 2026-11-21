@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs'
+import { gunzipSync } from 'node:zlib'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import sharp from 'sharp'
@@ -11,6 +12,7 @@ import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqli
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 import { createTestHarnessServerCore } from './helpers/harness-server-core.mjs'
+import { grantComputerTools } from './helpers/computer-grants.mjs'
 import { nodeCommand } from './helpers/native-shell.mjs'
 
 const factories = { responses: createResponsesProtocol, 'chat-completions': createChatCompletionsProtocol,
@@ -150,7 +152,7 @@ for (const protocol of Object.keys(factories)) test(`${protocol}: the fourth rej
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
-for (const protocol of Object.keys(factories)) test(`${protocol}: retired planning tools reject new calls but historical Session snapshots still execute and reload`, { timeout: 15_000 }, async () => {
+for (const protocol of Object.keys(factories)) test(`${protocol}: retired planning observations survive migration while old selections cannot authorize a new call`, { timeout: 15_000 }, async () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-retired-tools-')))
   const calls = [
     call('old-plan', 'codex_update_plan', { plan: [{ step: 'Inspect', status: 'in_progress' }], explanation: 'Continue the original Session' }),
@@ -176,27 +178,57 @@ for (const protocol of Object.keys(factories)) test(`${protocol}: retired planni
       (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       ['historical-session', f.project.id, 'assistant', 'now', 'default', 'native-local-v1', JSON.stringify(toolSelection)]))
     const historical = await f.harness.getSession('historical-session')
-    state.responses.push(response(protocol, calls), request => {
+    const offered = await f.harness.environmentTools('assistant')
+    assert.ok(toolSelection.tools.every(tool => !offered.some(candidate => candidate.toolId === tool.toolId)))
+    state.responses.push(request => {
+      for (const tool of calls) assert.doesNotMatch(JSON.stringify(request.tools ?? []), new RegExp(tool.name))
+      return response(protocol, calls)
+    }, request => {
       const results = nativeToolResults(protocol, request).slice(-calls.length)
-      assert.deepEqual(results.map(result => result.id), calls.map(call => call.id))
-      assert.deepEqual(results.map(result => result.value), [
+      assert.deepEqual(results.map(item => item.id), calls.map(call => call.id))
+      for (const item of results) {
+        assert.equal(item.value.error.executed, false)
+        assert.equal(item.value.error.reason, 'unknown-tool')
+      }
+      return response(protocol, [], 'Continue with current permissions')
+    })
+    const withoutPermission = await start(f, historical)
+    assert.equal(withoutPermission.status, 'completed', JSON.stringify(withoutPermission))
+    assert.deepEqual((await f.harness.getRunEvents(withoutPermission.id)).filter(event => event.kind === 'tool-started'), [])
+    assert.deepEqual((await f.harness.getSession(historical.id)).toolSelection, toolSelection)
+
+    // Real databases captured after checkpoint b3f68c3 executed all three retired contracts in its native loop.
+    const restored = realpathSync(mkdtempSync(join(tmpdir(), 'anybox-retired-history-')))
+    let legacy
+    try {
+      writeFileSync(join(restored, 'state.sqlite'), gunzipSync(readFileSync(new URL('./fixtures/retired-native-plans/' + protocol + '.sqlite.gz', import.meta.url))))
+      legacy = await open(restored, protocol, state)
+      const session = await legacy.harness.getSession('historical-session')
+      assert.deepEqual(session.toolSelection, toolSelection)
+      const [run] = await legacy.harness.listRuns(session.id)
+      assert.equal(run.output, 'Original tools completed')
+      const expected = [
         { status: 'updated', plan: calls[0].arguments.plan, explanation: calls[0].arguments.explanation },
         { status: 'updated', todos: calls[1].arguments.todos },
         { status: 'updated', todos: calls[2].arguments.todos },
-      ])
-      return response(protocol, [], 'Original tools completed')
-    })
-    const finished = await start(f, historical)
-    assert.equal(finished.status, 'completed', JSON.stringify(finished))
-    assert.deepEqual((await f.harness.getRunEvents(finished.id)).filter(event => event.kind === 'tool-observed').map(event => event.name), calls.map(call => call.name))
-    const records = await f.harness.getRunRecords(finished.id)
-    await f.close(); f = await open(directory, protocol, state)
-    state.responses.push(response(protocol, [], 'Historical Session continued'))
-    const continued = await start(f, historical, finished.resultNodeId, 'after-restart')
-    assert.equal(continued.status, 'completed', JSON.stringify(continued))
-    assert.deepEqual((await f.harness.getSession(historical.id)).toolSelection, toolSelection)
-    assert.deepEqual(await f.harness.getRunRecords(finished.id), records)
-    assert.deepEqual((await f.harness.getRunEvents(finished.id)).filter(event => event.kind === 'tool-observed').map(event => event.name), calls.map(call => call.name))
+      ]
+      const events = await legacy.harness.getRunEvents(run.id)
+      const observed = events.filter(event => event.kind === 'tool-observed')
+      assert.deepEqual(observed.map(event => event.name), calls.map(call => call.name))
+      assert.deepEqual(observed.map(event => event.result), expected)
+      const records = await legacy.harness.getRunRecords(run.id)
+      assert.ok(records.length)
+      const history = await legacy.root.get('harness.session-runs').loadNativeHistory(session.id, run.resultNodeId)
+      assert.ok(history.initialization.tools.some(tool => tool.name === 'codex_update_plan'))
+      assert.equal((await legacy.root.get('harness.execution-environments').get('assistant')).grants
+        .some(grant => toolSelection.tools.some(tool => tool.toolId === grant.tool.toolId)), false)
+      const sends = state.requests.length
+      await legacy.close()
+      legacy = await open(restored, protocol, state)
+      assert.deepEqual(await legacy.harness.getRunRecords(run.id), records)
+      assert.deepEqual(await legacy.harness.getRunEvents(run.id), events)
+      assert.equal(state.requests.length, sends, 'loading legacy evidence never dispatches work')
+    } finally { await legacy?.close(); rmSync(restored, { recursive: true, force: true }) }
   } finally { await f.close(); rmSync(directory, { recursive: true, force: true }) }
 })
 
@@ -298,6 +330,7 @@ for (const protocol of Object.keys(factories)) for (const imageInput of [true, f
     const png = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#336699' } }).png().toBuffer()
     writeFileSync(join(directory, 'image.png'), png)
     const toolIds = ['codex.exec_command', 'codex.write_stdin', 'claude-code.Write', 'deepseek-harness.read', 'codex.view_image']
+    await grantComputerTools(f.root, f.harness, ['local:computer'], toolIds)
     await f.harness.setAgentTools('assistant', { toolIds, expectedRevision: 0 })
     const session = await f.harness.createSession(f.project.id, 'assistant')
     state.responses.push(response(protocol, [

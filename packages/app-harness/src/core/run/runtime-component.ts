@@ -1,3 +1,7 @@
+import { authorizeFunction, createRunScopeAuthority } from '@anybox/execution-environments/run-authority'
+import { environmentManagerKey } from '../tool-environments/access.js'
+import { environmentToolKey, type ExecutionEnvironmentManager } from '@anybox/execution-environments'
+import { assertRunGrants, validateDeclaredNames, type FunctionBindings, type RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
 import type { Component } from '@nya/core'
 import type { JsonValue } from '@anybox/models'
 import type { OwnedCall, RuntimeInputs } from '../contracts.js'
@@ -18,6 +22,7 @@ export type RunCancelReason = 'user-requested' | 'owner-disposed' | 'dependency-
 export interface RunRuntimePort {
   /** Ownership is acquired synchronously. A synchronous refusal acquires nothing. */
   start(input: {
+    readonly access?: RunEnvironmentAccess
     readonly runId: string
     readonly program: PreparedRunProgram
     readonly resume?: RunResumeRecord
@@ -62,12 +67,13 @@ function toolObservation(request: ValidatedToolRequest, value: unknown): ToolObs
   return { name: request.name, result: value as JsonValue }
 }
 /** Owns Run resource trees and durable operation barriers, without interpreting protocol state. */
-export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolEnvironmentRuntimeBinding): Component.Object<void, {
+export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolEnvironmentRuntimeBinding, bindings?: FunctionBindings): Component.Object<void, {
   [sessionRunServiceKey]: SessionRunPort
 } & Readonly<Record<string, unknown>>> {
   return {
-    name: 'harness-run-runtime', inject: [...new Set([sessionRunServiceKey, ...(binding?.inject ?? [])])],
+    name: 'harness-run-runtime', inject: [...new Set([sessionRunServiceKey, ...(bindings ? [environmentManagerKey] : []), ...(binding?.inject ?? [])])],
     apply(ctx, _config, deps) {
+      const manager = bindings ? deps[environmentManagerKey] as ExecutionEnvironmentManager : undefined
       const records = deps[sessionRunServiceKey]
       const registry = binding?.bind(deps) ?? createToolEnvironmentCatalog([]).bind([])
       const active = new Map<string, ActiveRun>()
@@ -87,7 +93,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
       }, 'cancel and join Run resource owners')
 
       const service: RunRuntimePort = {
-        start({ runId, program, resume, publishContinuation }) {
+        start({ runId, program, resume, access, publishContinuation }) {
           const existing = active.get(runId) ?? rejected.get(runId)
           if (existing) {
             if (existing.program !== program) throw modelFailure('model-unavailable')
@@ -116,11 +122,37 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
           let environmentRun: ToolEnvironmentRun | undefined
           let environmentCancellation: Promise<void> | undefined
           let environmentClosing: Promise<void> | undefined
-          const scope = () => environmentRun ??= registry.openRun(program.initialization.schemaVersion === 3
-            ? program.initialization.toolEnvironments : legacyToolEnvironmentSnapshot(program.initialization),
-          { runId, runOwnerEpoch: ownerEpoch, signal: controller.signal, resuming: resume !== undefined })
-          const executeTool = (request: ValidatedToolRequest, operationId: string, resuming = false): OwnedCall<ToolObservation> =>
-            scope().execute(request, operationId, resuming)
+          let scopeExitProven = false
+          let originalAccess: RunEnvironmentAccess | undefined
+          const scope = () => {
+            if (environmentRun) return environmentRun
+            const original = program.initialization.schemaVersion === 3 ? program.initialization.toolEnvironments : legacyToolEnvironmentSnapshot(program.initialization)
+            const names = new Set(originalAccess?.functions.map(f => f.name))
+            const snapshot = manager ? { ...original, environments: original.environments.flatMap(environment => {
+              const tools = environment.tools.filter(tool => names.has(tool.definition.name))
+              return tools.length ? [{ ...environment, tools }] : []
+            }) } : original
+            return environmentRun = registry.openRun(snapshot, { runId, runOwnerEpoch: ownerEpoch, signal: controller.signal, resuming: resume !== undefined })
+          }
+          let scopeAuthority: ReturnType<typeof createRunScopeAuthority> | undefined
+          const checkTarget = () => {
+            if (!manager || !bindings) return
+            if (!originalAccess || !run) throw new RunFailure('tool-unavailable')
+            validateDeclaredNames(originalAccess, program.initialization.tools)
+            const snapshot = program.initialization.schemaVersion === 3 ? program.initialization.toolEnvironments : legacyToolEnvironmentSnapshot(program.initialization)
+            const routes = bindings.routes(snapshot.environments, originalAccess.functions.map(f => f.name), run.units?.computer)
+            for (const [index, route] of routes.entries()) {
+              if (environmentToolKey(route.tool) !== environmentToolKey(originalAccess.functions[index]!.grant.tool)) throw new RunFailure('tool-unavailable')
+            }
+          }
+          const executeTool = (request: ValidatedToolRequest, operationId: string, resuming = false): OwnedCall<ToolObservation> => {
+            if (!manager) return scope().execute(request, operationId, resuming)
+            checkTarget()
+            const route = originalAccess!.functions.find(item => item.name === request.name)
+            if (!route) throw new RunFailure('invalid-tool-request')
+            return authorizeFunction(manager, originalAccess!, route.grant, runId, operationId, resuming, controller.signal,
+              () => scope().execute(request, operationId, resuming))
+          }
           const markCleanup = (category: RunFailureCategory) => {
             if (!cleanupCategory) { cleanupCategory = category; failures.push(modelFailure('cleanup-failure')) }
           }
@@ -206,6 +238,13 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
             async executeTools(requests, scheduling = 'serial', batchId) {
               if (scheduling !== 'serial') throw new RunFailure('invalid-tool-request')
               const batch = validateToolBatch(requests, program.initialization.tools), output: ToolObservation[] = []
+              if (manager) {
+                checkTarget()
+                if (!originalAccess) throw new RunFailure('tool-unavailable')
+                assertRunGrants(await manager.get(originalAccess.agentId), originalAccess)
+              }
+              await scopeAuthority?.acquire()
+              ensureRunning()
               // Own a local scope before an intent can commit, so cancellation before dispatch releases its reservation.
               scope()
               const ids = batch.map((_request, index) => batchId ? `${runId}:tool:${batchId}:${index}` : inputs.newId())
@@ -242,14 +281,25 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
             projectId = context.projectId
             let outcome: RunOutcome
             try {
+              if (manager) {
+                originalAccess = await persist(() => records.getRunEnvironmentAccess(runId))
+                if (originalAccess) scopeAuthority = createRunScopeAuthority(manager, originalAccess, runId, revoked,
+                  originalAccess.functions.every(({grant}) => bindings?.recoverable(grant.tool.environmentId)))
+              }
               if (resume) {
-                try { scope() } catch (error) { markCleanup('tool-cleanup-failure'); throw error }
+                try { checkTarget(); scope() } catch (error) { markCleanup('tool-cleanup-failure'); throw error }
               }
               if (run.status === 'cancelling') { reason ??= 'user-requested'; controller.abort() }
               ensureRunning()
               if (run.contextVersion !== 'native-local-v1' || (!resume && run.protocolBinding?.generationId !== program.binding.generationId) || run.protocolBinding?.protocolId !== program.binding.protocolId ||
                 run.modelSnapshot?.schemaVersion !== 3 || JSON.stringify(run.modelSnapshot) !== JSON.stringify(program.modelSnapshot)) throw modelFailure('model-unavailable')
               if (resume?.state.settlement && resume.state.stage === 'settling') return finish(resume.state.settlement)
+              if (!resume?.state.conclusion) {
+                if (manager && !originalAccess) throw modelFailure('dependency-unavailable')
+                checkTarget()
+                if (resume) await scopeAuthority?.acquire(true)
+                ensureRunning()
+              }
               const conclusion = resume?.state.conclusion && ['cleanup','settling'].includes(resume.state.stage) ? resume.state.conclusion : await program.execute(host)
               await persist(() => records.saveRunResume(runId, ownerEpoch, {stage: 'cleanup', conclusion}, inputs.now()))
               if (conclusion.kind === 'completed' && (typeof conclusion.output !== 'string' || Buffer.byteLength(conclusion.output, 'utf8') > runLimits.finalBytes)) throw new RunFailure('limit-exceeded')
@@ -268,6 +318,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
           })
             .finally(async () => {
               await closeProgram()
+              await scopeAuthority?.closed(!cleanupCategory && scopeExitProven)
               program.signal.removeEventListener('abort', revoked)
               program.release()
               views.delete(runId)
@@ -294,7 +345,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
                 const prior = await records.getRunOperation(runId,id)
                 if (!prior?.start.tool || prior.observation || stateFailed) continue
                 let observed: Observed<ToolObservation>
-                try { observed = await observe(environmentRun.execute(prior.start.tool, id, true)) }
+                try { observed = await observe(manager ? executeTool(prior.start.tool, id, true) : environmentRun.execute(prior.start.tool, id, true)) }
                 catch (error) { observed = { kind: 'error', error } }
                 if (observed.kind === 'cleanup-failed') markCleanup('tool-cleanup-failure')
                 const fact: RunOperationObservation = observed.kind === 'value' ? {kind:'value',tool:observed.value}
@@ -319,6 +370,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
                 const call = environmentRun!.close()
                 const closed = await observe(call)
                 if (closed.kind !== 'value') markCleanup('tool-cleanup-failure')
+                if (resume && closed.kind === 'value' && !cleanupCategory) await scopeAuthority?.reconcileClose()
                 // An acknowledged observation is immutable. A fresh exit failure still
                 // fails this settlement even when an old successful receipt is retained.
                 if (cleanup.prior?.observation && cleanup.prior.observation.kind !== 'value') markCleanup('tool-cleanup-failure')
@@ -332,6 +384,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
               await environmentClosing
             }
             const report = await closeProgram()
+            scopeExitProven = !cleanupCategory
             await cancellation.catch(() => { stateFailed = true })
             let outcome: RunOutcome = proposed
             if (cleanupCategory) outcome = { kind: 'cleanup-failed', category: cleanupCategory, error: 'Run resources could not be released' }

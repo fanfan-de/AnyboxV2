@@ -47,7 +47,7 @@ async function host(directory, protocolId, state, { search = false, images = fal
   await root.installComponent(createModelsVaultComponent({ namespace: 'native-app-test', openEntry(_namespace, id) {
     return { async getPassword() { return state.secrets.get(id) }, async setPassword(value) { state.secrets.set(id, value) }, async deleteCredential() { return state.secrets.delete(id) } }
   } }))
-  await root.installComponent(createModelsComponent())
+  await root.installComponent(createModelsComponent({ requireManagedTools: true }))
   const transport = id => async (url, init) => {
     const body = JSON.parse(init.body)
     state.requests.push(body)
@@ -81,6 +81,18 @@ async function host(directory, protocolId, state, { search = false, images = fal
   await root.installComponent(createLocalSqliteComponent(join(directory, 'sessions.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: (join(directory, 'sessions.sqlite')) + ".images" }))
   const harness = await createTestHarnessServerCore(root, { agents: [{ id: 'assistant', instructions: 'Root instructions', modelId: 'default' }] })
+  if (search) {
+    const authority = root.get('harness.execution-environments')
+    const current = await authority.get('assistant')
+    const searchTools = (await harness.environmentTools('assistant')).filter(tool => tool.environmentId === 'model-search')
+    assert.equal(searchTools.length, 1)
+    await authority.set({ agentId: 'assistant', expectedRevision: current.revision, requestId: 'fixture-search',
+      tools: [...current.grants.map(grant => grant.tool), ...searchTools] })
+    const selection = await harness.getAgentEnvironmentSelection('assistant')
+    await harness.setAgentEnvironmentSelection('assistant', {
+      expectedVersion: selection.version, environmentIds: [...selection.environmentIds, 'model-search'],
+    })
+  }
   if (legacy) {
     const registry = root.get('harness.protocol-agents'), prepare = registry.prepare.bind(registry)
     registry.prepare = async input => {

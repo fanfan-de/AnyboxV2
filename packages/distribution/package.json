@@ -25,9 +25,9 @@
   "dependencies": {
     "@anybox/host": "0.1.0",
     "@anybox/application-api": "0.1.0",
-    "@anybox/app-harness": "0.1.6",
+    "@anybox/app-harness": "0.1.7",
     "@anybox/app-claude-agent": "0.1.11",
-    "@anybox/app-personal-agent": "0.2.0",
+    "@anybox/app-personal-agent": "0.2.1",
     "@anybox/storage-sqlite": "0.1.0",
     "@anybox/directory-picker": "0.1.0",
     "@anybox/api-key-manager": "0.1.0",

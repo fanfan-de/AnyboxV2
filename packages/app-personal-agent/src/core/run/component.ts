@@ -1,3 +1,7 @@
+import { environmentManagerKey, planToolAccess, managedModelTools } from '../tool-environments/access.js'
+import { assertRunGrants, type FunctionBindings } from '@anybox/execution-environments/bindings'
+import { environmentError, type ExecutionEnvironmentManager } from '@anybox/execution-environments'
+import { modelsSettingsServiceKey, nativeSearchTool, type ModelsSettingsService } from '@anybox/models'
 import type { FileContent } from '../project-files/domain.js'
 import { isDeepStrictEqual } from 'node:util'
 import type { Component } from '@nya/core'
@@ -66,7 +70,10 @@ const maxCachedBytes = 16 * 1024 * 1024
 const emptyHistoryUsage: HistoryUsage = Object.freeze({ bytes: 0, images: 0, imageBytes: 0 })
 
 /** Admission owns a prepared program until the Runtime synchronously accepts it. */
-export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentCatalog): Component.Object<void, {
+export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing: () => boolean = () => false, closingSignal?: AbortSignal, environments?: ToolEnvironmentCatalog, bindings?: FunctionBindings,
+  reportedComputerContracts?: (unit: import('../unit/port.js').UnitAttachment) => ReadonlyMap<string, string> | undefined): Component.Object<void, {
+  [environmentManagerKey]: ExecutionEnvironmentManager
+  [modelsSettingsServiceKey]: ModelsSettingsService
   [agentDirectoryServiceKey]: AgentDirectoryPort
   [sessionServiceKey]: SessionPort
   [sessionRunServiceKey]: SessionRunPort
@@ -80,8 +87,9 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
 }> {
   return {
     name: 'personal-agent-runs',
-    inject: [agentDirectoryServiceKey, sessionServiceKey, sessionRunServiceKey, agentPromptServiceKey, modelsServiceKey, protocolAgentServiceKey, runRuntimeServiceKey, projectServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey],
+    inject: [agentDirectoryServiceKey, sessionServiceKey, sessionRunServiceKey, agentPromptServiceKey, modelsServiceKey, protocolAgentServiceKey, runRuntimeServiceKey, projectServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey, ...(bindings ? [environmentManagerKey, modelsSettingsServiceKey] : [])],
     apply(ctx, _config, deps) {
+      const manager = bindings ? deps[environmentManagerKey] : undefined
       const sessions = deps[sessionServiceKey], records = deps[sessionRunServiceKey], prompts = deps[agentPromptServiceKey], agents = deps[agentDirectoryServiceKey]
       const models = deps[modelsServiceKey], protocols = deps[protocolAgentServiceKey], runtime = deps[runRuntimeServiceKey], projects = deps[projectServiceKey]
       const attachments = deps[unitAttachmentsServiceKey]
@@ -133,9 +141,14 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
             program = { binding, modelSnapshot: snapshot, initialization: resumed.initialization, input, signal: controller.signal,
               async execute() { throw modelFailure('dependency-unavailable') },
               async close() { return { records: [], checkpoint, cleanup: 'completed' } }, release() {} }
-          } else program = await protocols.prepareResume({resume: resumed, signal: controller.signal})
+          } else {
+            if (manager && !resumed.access) throw environmentError('environment-target-unavailable', 409)
+            if (manager && resumed.access) assertRunGrants(await manager.get(resumed.access.agentId), resumed.access)
+            program = await protocols.prepareResume({resume: resumed, signal: controller.signal,
+              managedTools: manager && resumed.access ? managedModelTools(manager, id, resumed.access, resumed.initialization) : undefined})
+          }
           if (!program) throw modelFailure('model-unavailable')
-          const started = runtime.start({runId:id, program, resume:resumed}); transferred = true
+          const started = runtime.start({runId:id, program, resume:resumed, access:resumed.access}); transferred = true
           void runtime.wait(id).finally(() => owned.delete(id)).catch(() => {})
           return await started
         } catch (error) {
@@ -248,19 +261,38 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
                 environments.validate(session.toolEnvironments)
               } else validateToolSelection(session.toolSelection)
             } catch { throw treeError('history-incompatible') }
-            const computerAttachment = fixedInitialization || !hasComputer ? undefined : await attachments.get(project.computerAttachmentId)
+            const computerAttachment = !hasComputer ? undefined : await attachments.get(project.computerAttachmentId)
             const computerCapabilities = computerAttachment?.capabilities
             const toolPlatform = project.computerAttachmentId === localAttachmentId('computer') ? process.platform
               : computerCapabilities && typeof computerCapabilities === 'object' && 'platform' in computerCapabilities && typeof computerCapabilities.platform === 'string' ? computerCapabilities.platform : 'unknown'
             // Only the generic command tool has a platform-dependent default shell.
             // Fixed Bash contracts and tool-free Sessions need no extra instructions.
             const needsShellEnvironment = hasComputer && model.effectiveCapabilities?.tools === true && session.toolSelection.tools.some(tool => tool.toolId === 'codex.exec_command')
-            const initialization: NativeInitialization = fixedInitialization ?? Object.freeze({
+            const requestedInitialization: NativeInitialization = fixedInitialization ?? Object.freeze({
               ...(session.toolEnvironments ? { schemaVersion: 3 as const, toolContractVersion: 'tool-environments-v1' as const, toolEnvironments: session.toolEnvironments }
                 : { schemaVersion: 2 as const, toolContractVersion: 'tool-library-v1' as const }),
               prompts: Object.freeze([...prompts.resolveInitialPrompts(session.agentId), ...(needsShellEnvironment ? [toolEnvironmentPrompt(toolPlatform, project.path)] : [])]),
               tools: Object.freeze(model.effectiveCapabilities?.tools === true ? session.toolSelection.tools.map(tool => tool.definition) : []),
               toolSelection: session.toolSelection })
+            const availableModel = models.get(modelId)
+            const parameters = availableModel?.parameters?.value
+            const provider = session.environmentSelection?.environmentIds.includes('model-search') &&
+              session.environmentSelection.toolIdsByEnvironment?.['model-search']?.includes('web_search') !== false && availableModel?.effectiveCapabilities?.webSearch &&
+              Array.isArray(parameters?.tools) && parameters.tools.length > 0 ?
+              deps[modelsSettingsServiceKey]?.configuredProviders?.().find(value => value.id === availableModel.providerId) : undefined
+            const reported = computerAttachment && reportedComputerContracts?.(computerAttachment)
+            const allowed = computerAttachment?.scope?.kind === 'computer' ? computerAttachment.scope.tools : []
+            const grants = manager && await manager.get(session.agentId)
+            const approved = grants && bindings ? planToolAccess(bindings, grants, requestedInitialization, units?.computer,
+              provider ? nativeSearchTool(provider) : undefined, Boolean(fixedInitialization), tool => tool.environmentId !== 'computer' ||
+                (allowed === 'all' || allowed.includes(tool.toolId)) && (!reported || reported.get(tool.toolId) === tool.version)) : undefined
+            const initialization = approved?.initialization ?? requestedInitialization
+            const access = approved?.access
+            if (fixedInitialization && access) {
+              const prior = await records.loadSessionAccess(session.id)
+              const compatible = prior ? isDeepStrictEqual(prior, access) : await records.checkLegacyAccess(session.id, access, units, fixedInitialization)
+              if (!compatible) throw environmentError('environment-authorization-changed', 409)
+            }
             const template = prompts.resolveTaskTemplate(session.agentId) ?? null
             const images = (input.images?.length ? await records.describeImages(session.id, input.images.map(image => image.assetId)) : [])
               .map(({ expiresAt: _expiresAt, ...image }) => Object.freeze(image))
@@ -282,7 +314,7 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
               candidate.modelId === modelId && candidate.protocolId === protocolId &&
               isDeepStrictEqual(candidate.units, units) && isDeepStrictEqual(candidate.initialization, initialization) ? candidate : undefined
             const id = inputs.newId()
-            const preparation = { runId: id, sessionId: session.id, modelId, signal: controller.signal,
+            const preparation = { managedTools: manager && access ? managedModelTools(manager, id, access, initialization) : undefined, runId: id, sessionId: session.id, modelId, signal: controller.signal,
               initialization, input: nativeInput, fileContents, continuous: session.continuous === true }
             const prepareFromRecords = async () => {
               if (historyScope && parentNodeId !== null) {
@@ -330,7 +362,7 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
               if (priorUsage && !historyImagesFit(priorUsage, images)) throw modelFailure('request-too-large')
               const handoff = Promise.resolve().then(async () => {
                 const accepted = await records.registerRun(id, input, inputs.now(), [...initialization.prompts, ...(template ? [template] : [])], program.modelSnapshot,
-                  { binding: program.binding, initialization: program.initialization, input: program.input,
+                  { access, selectionVersion: session.environmentSelection?.version, grantRevision: grants?.revision, binding: program.binding, initialization: program.initialization, input: program.input,
                     parentContextRef: cached?.contextRef ?? history?.contextRef ?? applicationHistory?.contextRef ?? null,
                     ...(applicationHistory ? { applicationPrefix: true } : {}), estimatedInputTokens: program.estimatedInputTokens, units })
                 if (!accepted.created) return accepted.run
@@ -343,7 +375,7 @@ export function createRunComponent(inputs: RuntimeInputs, isHarnessServerClosing
                   }
                   let started: Promise<Run>
                   try {
-                    started = runtime.start({ runId: id, program, ...(priorUsage ? {
+                    started = runtime.start({ runId: id, program, access, ...(priorUsage ? {
                       async publishContinuation(settled, report) {
                         const nodeId = settled.resultNodeId, { continuation, estimatedContinuationTokens } = report
                         if (!accepting || !nodeId || !continuation || estimatedContinuationTokens === undefined) return

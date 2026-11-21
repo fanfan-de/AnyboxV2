@@ -1,6 +1,6 @@
 # Agent Note: 设计 Agent 执行环境管理模块
 
-Status: proposed
+Status: implemented
 
 ## 问题
 
@@ -26,6 +26,7 @@ Status: proposed
 
 ## 关联
 
+- 用户随后要求在独立分支实施此设计。[实施记录与实际验收](2026-11-22-implement-execution-environment-management.md)
 - [Agent 执行环境管理设计](../../../../docs/agent-execution-environments-design.md)
 - [前项：工具环境描述与绑定](../../implemented/architecture/2026-11-15-tool-environment-boundaries.md)
 - [前项：项目绑定 Computer 环境](../../implemented/feature/2026-11-11-project-computer-environments.md)

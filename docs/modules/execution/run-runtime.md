@@ -4,6 +4,8 @@
 
 RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制、临时展示和清理等待。它通过应用自有的 `RunHost` 操作契约执行协议程序，不解释原生响应或协议停止原因。
 
+正式装配同时注入本应用的[执行环境授权组件](../tools/execution-environments.md)。RunRuntime 读取已接纳 Run 的固定工具绑定，对照原目标核验函数分派，并让撤权可以取消仍持有进程等资源的 scope。Models 在每次请求真正发送前校验最终声明。Session 观察、业务结果及资源退出分别记实。
+
 ## 实现与装配
 
 - 源码：[组件](../../../packages/app-harness/src/core/run/runtime-component.ts)、[RunHost / PreparedRunProgram](../../../packages/app-harness/src/core/run/program.ts)、[OwnedCall](../../../packages/app-harness/src/core/contracts.ts)、[工具校验和限制](../../../packages/app-harness/src/core/run/domain.ts)。

@@ -1,3 +1,8 @@
+import { environmentManagerKey } from '../core/tool-environments/access.js'
+import { createEnvironmentManagement, targetKey } from '@anybox/execution-environments/management'
+import type { ExecutionEnvironmentManager } from '@anybox/execution-environments'
+import { computerToolTarget } from '@anybox/execution-environments/bindings'
+import { computerToolEnvironmentVersion } from '../core/tool-environments/computer.js'
 import type { ProductActivityPort } from '@anybox/application-api/contracts'
 import { failure } from '@anybox/application-api/node'
 import type { Component, Context } from '@nya/core'
@@ -6,7 +11,7 @@ import type { RunPort } from '../core/run/component.js'
 import { sessionServiceKey } from '../core/session/port.js'
 import type { SessionPort } from '../core/session/port.js'
 import { createHarnessServerHttpHandler } from './handler.js'
-import { modelsError, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey } from '@anybox/models'
+import { nativeSearchTool, modelsError, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey } from '@anybox/models'
 import type { ModelsService, ModelsSettingsService, ModelsCatalogService } from '@anybox/models'
 import { harnessServerProviderTemplates } from '../server-models.js'
 import { projectServiceKey } from '../core/project/component.js'
@@ -31,9 +36,11 @@ import { localComputerWorkerControlServiceKey, localComputerWorkerServiceKey } f
 import type { ComputerWorkerPort, LocalComputerWorkerControl } from '../core/computer/worker-port.js'
 
 export const harnessServerHttpServiceKey = 'harness.http'
+
 const localActorId = 'local-web-user'
 
 type CommandDependencies = {
+  [environmentManagerKey]: ExecutionEnvironmentManager
   [sessionServiceKey]: SessionPort
   [runServiceKey]: RunPort
   [modelsServiceKey]: ModelsService
@@ -52,6 +59,26 @@ type CommandDependencies = {
 function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: CommandDependencies, instanceId: () => string | null): HarnessServerApiCommands {
   return {
     listAgents: () => agentIds,
+    environmentManagement: createEnvironmentManagement({
+      agents: () => agentIds,
+      grants: () => deps[environmentManagerKey],
+      tools: id => deps[sessionServiceKey].environmentTools(id),
+      preference: id => deps[sessionServiceKey].getAgentEnvironmentSelection(id),
+      setPreference: (id, input) => deps[sessionServiceKey].setAgentEnvironmentSelection(id, input),
+      async names(tools) {
+        const names = new Map<string, string>()
+        for (const unit of await deps[unitAttachmentsServiceKey].list()) {
+          if (unit.unitKind !== 'computer' || !unit.unitId) continue
+          const target = computerToolTarget({ attachmentId: unit.attachmentId, unitId: unit.unitId, epoch: unit.epoch }, computerToolEnvironmentVersion)
+          names.set(targetKey('computer', target), unit.origin === 'local' ? '执行端本机' : unit.unitId)
+        }
+        if (tools.some(tool => tool.environmentId === 'model-search')) for (const provider of deps[modelsSettingsServiceKey].configuredProviders()) {
+          const tool = nativeSearchTool(provider)
+          if (tool) names.set(targetKey(tool.environmentId, tool.targetId), `${provider.name} · ${provider.protocolId}`)
+        }
+        return names
+      },
+    }),
     listTools,
     instanceId,
     async listComputerEnvironments() {
@@ -148,6 +175,7 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
       }
     },
     listRuns: (id, query) => deps[sessionServiceKey].listRuns(id, query),
+    getRunEnvironmentAccess: id => deps[sessionServiceKey].getRunEnvironmentAccess(id),
     getRunEvents: (id, afterSeq) => deps[sessionServiceKey].getRunEvents(id, afterSeq),
     cancelRun: id => deps[runServiceKey].cancelRun(id),
     get modelsSettings() { return deps[modelsSettingsServiceKey] },
@@ -191,7 +219,7 @@ export function createHarnessServerHttpComponent(root: Context, agents: readonly
   const currentCommands = (hooks: HarnessServerHttpIntegration, serviceName: (name: string) => string): HarnessServerApiCommands => {
     const snapshots = new Map<string, unknown>()
     const services = {} as CommandDependencies
-    for (const key of [sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
+    for (const key of [environmentManagerKey, sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
       projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey, localComputerWorkerServiceKey] as const) {
       snapshots.set(key, key === directoryPickerServiceKey && hooks.directoryPicker !== undefined ? hooks.directoryPicker : root.get(serviceName(key)))
       Object.defineProperty(services, key, { get() {

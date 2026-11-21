@@ -10,6 +10,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   isActive(): boolean
   selectDevice(id: string): boolean
   refreshArchive(): void
+  refreshTools?(): void
   resetModelsView?(): void
   refreshAgents(): void
   leaveAgents?(): void
@@ -36,7 +37,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     general: `设置${name}上所选 Agent 的默认模型。未手动指定模型时，后续运行使用此设置。`,
     agents: `在${name}上创建 Agent，或编辑已有 Agent 的资料、指令和默认模型。`,
     prompts: `这里的 Prompt 供${name}上的 Agent 使用。`,
-    tools: `为${name}上所选 Agent 的后续运行选择工具。`,
+    tools: `为${name}上所选 Agent 管理工具授权与偏好。撤权会阻止新的调用。`,
     units: `管理${name}上的 Agent 可使用的执行环境。`,
     connections: '管理这台电脑和已连接的远端设备。',
     archive: '查看已连接设备上的旧版对话及已归档记录。',
@@ -102,6 +103,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     device.hidden = deviceLabel.hidden = global
     allDevices.hidden = !global
     content.scrollTop = 0
+    if (section === 'tools') options.refreshTools?.()
     if (section === 'archive') options.refreshArchive()
     if (section === 'agents') options.refreshAgents()
   }
@@ -135,6 +137,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     if (options.isActive() && !dialog.open) {
       if (section === 'models') options.resetModelsView?.()
       dialog.showModal()
+      if (section === 'tools') options.refreshTools?.()
       if (section === 'archive') options.refreshArchive()
     }
   }

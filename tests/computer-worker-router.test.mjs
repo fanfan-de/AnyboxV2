@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { grantComputerTools } from './helpers/computer-grants.mjs'
 import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -251,6 +252,7 @@ test('remote project bindings survive reassembly while the local environment rem
   const api = core.api
   const selection = await api.getAgentTools('assistant')
   await api.setAgentTools('assistant', { toolIds: ['anybox.bash', 'anybox.apply_patch'], expectedRevision: selection.revision })
+  await grantComputerTools(root, api, [attached.attachmentId], ['anybox.bash', 'anybox.apply_patch'])
   assert.deepEqual(await root.get(computerWorkerServiceKey).query({ attachmentId: attached.attachmentId, query: { kind: 'stat', path: projectDirectory } }), { kind: 'stat', directory: true, canonical: projectDirectory })
   const localProject = await api.openProject(projectDirectory)
   assert.equal(localProject.computerAttachmentId, 'local:computer', 'new projects default to this harness server environment')
@@ -375,6 +377,7 @@ test('the default local environment coexists with multiple remote environments a
   const api = core.api
   const selection = await api.getAgentTools('assistant')
   await api.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: selection.revision })
+  await grantComputerTools(root, api, ['local:computer', attached.attachmentId], ['anybox.bash'])
   // Projects bind to a Computer attachment; the same path on different units is two projects, and the unit's ceiling applies to remote ones.
   const local = await api.openProject(localProject)
   assert.equal(local.computerAttachmentId, 'local:computer')
@@ -403,6 +406,14 @@ test('the default local environment coexists with multiple remote environments a
   assert.equal(remoteRun.status, 'completed', JSON.stringify(remoteRun.error ?? null)); assert.equal(remoteRun.units.computer.attachmentId, attached.attachmentId)
   assert.equal(await readFile(join(remoteProject, 'where.txt'), 'utf8'), 'remote')
   const remote2 = await api.openProject(remoteProject2, { computerAttachmentId: attached2.attachmentId })
+  const ungranted = await api.createSession(remote2.id, 'assistant')
+  script = [{ id: 'unauthorized-second', name: 'bash', arguments: { command: 'touch never.txt' } }]
+  const denied = await api.waitRun((await api.startRun({ sessionId: ungranted.id, parentNodeId: null, input: 'go', idempotencyKey: 'ungranted-remote-2' })).id)
+  assert.equal(denied.status, 'completed', 'the model can finish the text turn after its unselected call was rejected')
+  assert.equal((await api.getRunEvents(denied.id)).some(event => event.kind === 'tool-observed'), false)
+  assert.deepEqual((await api.getRunEnvironmentAccess(denied.id)).functions, [])
+  assert.equal(existsSync(join(remoteProject2, 'never.txt')), false)
+  await grantComputerTools(root, api, [attached2.attachmentId], ['anybox.bash'])
   const remoteSession2 = await api.createSession(remote2.id, 'assistant')
   script = [{ id: 'call-remote-2', name: 'bash', arguments: { command: 'printf second > where.txt' } }]
   const remoteRun2 = await api.waitRun((await api.startRun({ sessionId: remoteSession2.id, parentNodeId: null, input: 'go', idempotencyKey: 'remote-2' })).id)

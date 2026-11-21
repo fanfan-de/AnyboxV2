@@ -62,7 +62,7 @@ Anybox 是 NyaCore 应用的宿主产品，Anybox Harness 是其中的 Agent 产
 | [节点程序设计（2026-10-15）](./anybox-node-program-design.md) | Computer、Models 与后续单元控制面的未采纳草案；发行及桌面关系以已确定的统一发行与独立运行角色约定为准，额外节点应用、拨入与 Models 拆分等提议仍未采纳 |
 | [工具库设计](./tools-library-design.md) | 来源工具混选、不可变会话快照、Run 进程清理和原生工具图片 |
 | [环境提供工具](./tool-environments.md) | 独立工具包、受信环境插入、仅新会话生效、通用 Agent 执行和原操作恢复边界 |
-| [Agent 执行环境管理设计（提案）](./agent-execution-environments-design.md) | 两款应用如何统一管理工具的环境归属、Agent 授权、函数调用与托管搜索，以及撤权和历史兼容 |
+| [Agent 执行环境管理设计](./agent-execution-environments-design.md) | 两款应用如何统一管理工具的环境归属、Agent 授权、函数调用与托管搜索，以及撤权和历史兼容 |
 | [多模态图片输入设计](./multimodal-image-input-design.md) | 四种原生协议图片输入的端到端链路、历史升级兼容与验收 |
 | [项目目录选择](./project-directory-picker.md) | 多实例目录浏览、固定连接、分页清理和旧版兼容 |
 | [项目文件引用](./project-file-references-design.md) | @ 搜索、发送快照、原子保留、幂等提交与历史恢复 |

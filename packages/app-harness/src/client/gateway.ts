@@ -16,15 +16,15 @@ export const clientGatewayServiceKey = 'client.gateway'
 export interface HarnessGateway { handle(request: IncomingMessage, response: ServerResponse, url: URL, context: ApplicationHttpContext): Promise<void>; close(): Promise<void> }
 const id = '[^/]+'
 const paths: Record<string, readonly RegExp[]> = {
-  GET: [ /^\/(instance|agents|projects|models|prompts|tools|computer-environments|access\/tokens|changes)$/, /^\/products(?:\/[^/]+)?$/, new RegExp(`^/projects/${id}/sessions$`),
-    new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/versions)?$`),
+  GET: [ /^\/(instance|agents|projects|models|prompts|tools|tool-environments|computer-environments|access\/tokens|changes)$/, /^\/products(?:\/[^/]+)?$/, new RegExp(`^/projects/${id}/sessions$`),
+    new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/agents/${id}/environment-access(/changes/${id})?$`), new RegExp(`^/prompts/${id}(/versions)?$`),
     new RegExp(`^/sessions/${id}(/runs(/by-key/${id})?|/nodes(/${id}(/path)?)?|/images/${id}/content|/project-files/(search|preview|snapshots/${id}))?$`),
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
     new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|provider-settings|settings)(/${id}(/(history|models))?)?$`),
     /^\/units\/(attachments|local-computer\/attachments)$/ ],
   POST: [ /^\/(projects|sessions|prompts|access\/tokens)$/, /^\/products\/[^/]+\/(open|stop|retry)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
     /^\/projects\/directories\/(browse|close|create)$/,
-    new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/prompts/${id}(/publish)?$`),
+    new RegExp(`^/agents/${id}/(prompts|session-defaults|tools)$`), new RegExp(`^/agents/${id}/environment-access/(grants|preferences)$`), new RegExp(`^/prompts/${id}(/publish)?$`),
     new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew|tree/(open|page|close)))$`), new RegExp(`^/runs/${id}/cancel$`),
     /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|provider-settings|settings)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`),
     // Owner-side unit attachment control; unit-side `/units/unit/*` is never proxied, units dial the harness server directly.

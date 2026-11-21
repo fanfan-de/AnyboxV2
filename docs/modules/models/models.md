@@ -80,6 +80,12 @@ Anybox Harness 的模型设置只读展示配置的工具、流式、图片、�
 
 `captureContinuation: true` 允许成功关闭的 execution 返回一个当前 Models 实例和驱动代次专有的内存句柄。其上下文、最后响应记录 ID 和资源引用可用于新 execution。宿主在业务持久结算成功后才可把它绑定到成功节点。传入 `continuation` 时单独开启 execution，核对当前恢复身份、原生参数和能力，读取本轮凭据。句柄失效时可按持久记录恢复。句柄不包含凭据、资源 reader 或取消句柄，生命周期限当前进程。
 
+### Agent 执行端的工具授权
+
+Personal Agent 和 Anybox Harness 使用 `createModelsComponent({ requireManagedTools: true })`。调用 `openNative` 时传入本轮允许的函数、可选搜索目标和逐请求准入回调。Models 根据提供方配置 ID、不可变版本与协议生成搜索目标。设置或 Key 产生新版本后，需要在 Agent 的环境权限里重新确认搜索。模型能力与原生参数仍是搜索可用的前提。
+
+四种内置驱动在图片读取完成后、调用 HTTP 之前核对最终的协议工具数组。回调覆盖响应流及其退出，受管请求固定原始服务地址并拒绝重定向。首次发送、工具续轮、Anthropic 暂停续轮和恢复均经过该检查。空清单会从有效参数中去掉模型预置搜索。单次纯文本生成同样校验空工具清单。已保存的受管绑定指纹参与原生历史与内存续接判断。协议回执能证明本地请求已结束，供应商内部已执行的搜索可能只在完成响应中可见。[实际 HTTP 回归](../../../packages/models/tests/managed-tools.test.mjs)
+
 ## 单次纯文本生成
 
 `generateText({ modelId, instruction?, input, signal? })` 同步返回 `ProtocolOperation<GenerateTextResult>`；验证与业务失败通过 result 拒绝，使用固定 ModelsError.code。modelId 必须指向显式配置，不自动选模或替换；input 与提供时的 instruction 必须是非空白字符串，校验不改写文本。

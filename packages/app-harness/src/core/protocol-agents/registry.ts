@@ -166,7 +166,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         if (!model) throw modelFailure('model-unavailable')
         return model.parameters.protocolId
       },
-      prepareResume({ resume, signal }) {
+      prepareResume({ resume, signal, managedTools }) {
         const run = resume.run
         if (!run.protocolBinding || run.modelSnapshot?.schemaVersion !== 3 || !run.nativeInput || !run.modelId ||
           resume.state.protocolCursor === undefined || resume.state.stage === 'model-pending') throw modelFailure('unsupported-request')
@@ -176,7 +176,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
           applicationPrefix: resume.applicationPrefix ?? resume.history?.applicationPrefix,
           checkpoint: serializable({ protocolId: snapshot.protocolId, recordFormatVersion: run.protocolBinding.recordFormatVersion, modelSnapshot: snapshot }) }
         return service.prepare({ runId: run.id, sessionId: run.sessionId, modelId: run.modelId, signal,
-          initialization: resume.initialization, input: run.nativeInput, history, resume })
+          initialization: resume.initialization, input: run.nativeInput, history, resume, managedTools })
       },
       async prepare(input) {
         const protocolId = service.protocolForModel(input.modelId), entry = entries.get(protocolId)
@@ -240,7 +240,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
             return { result, done, cancel: () => call.cancel('model-resource-cancelled') }
           } }
           try {
-            execution = await deps[modelsServiceKey].openNative({ modelId: input.modelId, lease: driver, signal,
+            execution = await deps[modelsServiceKey].openNative({ managedTools: input.managedTools, modelId: input.modelId, lease: driver, signal,
               resources, continuation: input.continuation, captureContinuation: newRun, requirements: {
                 ...(permitted.size ? { imageInput: true } : {}),
                 ...(applicationPrefix?.some(event => event.role === 'tool') ? { tools: true } : {}),

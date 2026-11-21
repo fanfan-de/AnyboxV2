@@ -34,6 +34,8 @@ export interface ToolEnvironmentScope {
 
 /** Pure capability declaration; describing an environment never acquires execution resources. */
 export interface ToolEnvironmentDescriptor {
+  /** Stable backing resource identity. Providers omitting it are scoped to their runtime generation. */
+  readonly resourceId?: string
   readonly environmentId: string
   readonly version: string
   readonly tools: readonly ToolDescriptor[]

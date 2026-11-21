@@ -1,3 +1,4 @@
+import type { EnvironmentInventoryTarget } from '@anybox/execution-environments/management'
 import type { Api } from './client-types.js'
 import type { UnitAttachment, UnitScope } from '../core/unit/domain.js'
 import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
@@ -160,6 +161,7 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
 export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => string, panel: HTMLElement): UnitsSettingsView {
   const requests = createPageRequests(source), api = requests.api
   let attachments: readonly UnitAttachment[] = [], environments: readonly ComputerEnvironment[] = [], notice = '', code = '', disposed = false, busy = false
+  let targets: readonly EnvironmentInventoryTarget[] = [], catalogNotice = '', refreshEpoch = 0
   let disposal: Promise<void> | undefined
   panel.replaceChildren()
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] => {
@@ -169,7 +171,7 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
     return node
   }
   const heading = el('header', undefined, 'settings-panel-heading'), title = el('h3', '执行环境'); title.id = 'agent--units-title'
-  heading.append(title, el('p', '本机为默认执行环境，也可以添加多个远端环境。新建项目时选择环境，项目会保持该绑定。附着码只显示一次，由远端设备在其“管理连接”里消费。'))
+  heading.append(title, el('p', '本机指所选 Agent 服务所在的执行设备。也可添加远端环境。新建项目时选择环境，项目会保持该绑定。附着码只显示一次，由远端设备在其“管理连接”里消费。'))
   const refreshButton = el('button', '刷新执行环境'); refreshButton.type = 'button'; heading.append(refreshButton)
   const list = el('div', undefined, 'units-list'), status = el('p', undefined, 'notice'); status.hidden = true
   const form = el('form', undefined, 'settings-card'), formTitle = el('h3', '生成 Computer 附着码')
@@ -178,7 +180,8 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
   const issueButton = el('button', '生成附着码', 'primary-button'); issueButton.type = 'submit'
   const once = el('p', undefined, 'token-once'); once.hidden = true
   form.append(formTitle, projectsLabel, toolsLabel, issueButton, once)
-  panel.append(heading, status, list, form)
+  const catalog = el('div', undefined, 'units-list')
+  panel.append(heading, status, list, catalog, form)
   const setNotice = (message: string) => { notice = message; status.textContent = message; status.hidden = !message }
   const render = () => {
     if (disposed) return
@@ -189,6 +192,11 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
       const label = el('strong', environmentLabel(environment)); label.title = `${environment.environmentId}${environment.unitId ? ` · ${environment.unitId}` : ''}`
       const details = el('details'); details.append(el('summary', '身份与权限'), el('p', environment.environmentId))
       if (attachment) details.append(el('p', describeAttachment(attachment)))
+      const support = environment.toolSupport
+      details.append(el('p', support?.state === 'reported'
+        ? 'Worker 最近报告的工具：' + (support.manifest.tools.map(tool => tool.toolId).join('、') || '无')
+        : '尚未收到可用的 Worker 工具报告。'))
+      details.append(el('p', '命令以执行设备的系统账户运行。项目目录限制用于工具准入，不提供操作系统级文件隔离。'))
       row.append(label, el('p', environmentStateLabel(environment)), details)
       if (environment.origin === 'remote' && environment.state !== 'revoked') {
         const revoke = el('button', '撤销附着'); revoke.type = 'button'
@@ -198,6 +206,19 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
       return row
     }))
     if (!environments.length) list.append(el('p', notice ? '无法读取执行环境，请重试。' : '尚无执行环境。'))
+    catalog.replaceChildren(el('h4', '可授予 Agent 的工具'))
+    if (catalogNotice) catalog.append(el('p', catalogNotice))
+    else if (!targets.length) catalog.append(el('p', '尚无可授权的工具目标。'))
+    for (const target of targets) {
+      const details = el('details', undefined, 'settings-card')
+      details.append(el('summary', target.name + ' · ' + target.environmentId), el('p', target.targetId),
+        el('p', target.tools.map(tool => tool.toolId).join('、')))
+      if (target.agents.length) for (const agent of target.agents) {
+        details.append(el('p', (agent.name || agent.id) + ' 已获授权：' + agent.toolIds.join('、')))
+      }
+      else details.append(el('p', '尚无 Agent 获得此目标的工具授权。'))
+      catalog.append(details)
+    }
   }
   const guarded = async <T>(work: () => Promise<T>): Promise<T> => {
     if (busy) throw Object.assign(new Error('busy'), { status: 409, code: 'product-busy' })
@@ -208,14 +229,21 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
   const view: UnitsSettingsView = {
     canLeave: () => !busy && !requests.writing,
     async refresh() {
+      const epoch = ++refreshEpoch
       try {
-        const values = await Promise.all([api<readonly UnitAttachment[]>('/units/attachments'), api<ComputerEnvironments>('/computer-environments')])
-        if (disposed) return
+        const [values, projection] = await Promise.all([
+          Promise.all([api<readonly UnitAttachment[]>('/units/attachments'), api<ComputerEnvironments>('/computer-environments')]),
+          api<readonly EnvironmentInventoryTarget[]>('/tool-environments').then(
+            entries => ({ entries, notice: '' }), error => ({ entries: [], notice: messageFor(error) })),
+        ])
+        if (disposed || epoch !== refreshEpoch) return
+        targets = projection.entries
+        catalogNotice = projection.notice
         if (!Array.isArray(values[1]?.environments)) throw Object.assign(new Error('computer-environments-unavailable'), { code: 'computer-environments-unavailable' })
         attachments = values[0].filter(value => value.unitKind === 'computer'); environments = values[1].environments; setNotice('')
       }
-      catch (error) { if (!disposed) setNotice(messageFor(error)) }
-      render()
+      catch (error) { if (!disposed && epoch === refreshEpoch) setNotice(messageFor(error)) }
+      if (epoch === refreshEpoch) render()
     },
     issue: input => guarded(async () => {
       const issued = await api<{ attachment: UnitAttachment; code: string }>('/units/attach-codes', { unitKind: 'computer', scope: computerScope(input.projects, input.tools) })

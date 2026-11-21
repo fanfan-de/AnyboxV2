@@ -23,6 +23,7 @@ import { computerDeclarationDigest } from '../packages/app-harness/dist/core/com
 import { workerBootOf } from '../packages/app-harness/dist/core/computer/worker-port.js'
 import { createFixtureApplicationApiComponent } from './helpers/application-api.mjs'
 import { controlledModels } from './helpers/controlled-models.mjs'
+import { grantComputerTools } from './helpers/computer-grants.mjs'
 
 const childFixture = fileURLToPath(new URL('./helpers/unit-harness-process.mjs', import.meta.url))
 const unitFixture = fileURLToPath(new URL('./helpers/unit-worker-process.mjs', import.meta.url))
@@ -49,8 +50,9 @@ async function until(check, message, limit = 60_000) {
 }
 const exists = path => existsSync(path)
 /** The script a controlled model follows: one tool call per queued entry, then "done" after the tool result. */
-function scriptedModels(script) {
+function scriptedModels(script, modelInputs) {
   return controlledModels({ call(input) {
+    modelInputs.push(input)
     const result = (async () => {
       const last = input.messages.at(-1)
       if (last?.role === 'tool') { const value = JSON.parse(last.content); return { status: 'completed', text: value.stdout ?? 'done', toolCalls: [] } }
@@ -68,7 +70,7 @@ async function harnessWithUnit(t, { dialoutFetch, expectCleanupFailure = false, 
   const projectDirectory = join(directory, 'project'); await mkdir(projectDirectory)
   const root = new Context(), script = []
   const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Execute tools with their declared contracts.' }]
-  const models = scriptedModels(script)
+  const modelInputs = [], models = scriptedModels(script, modelInputs)
   await root.installComponent(createLocalSqliteComponent(join(directory, 'harness.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
   await root.installComponent(models.component())
@@ -81,7 +83,7 @@ async function harnessWithUnit(t, { dialoutFetch, expectCleanupFailure = false, 
   const dialout = { pollWaitMs: 300, getWaitMs: 200, requestTimeoutMs: 5_000, ...(dialoutFetch ? { fetch: dialoutFetch } : {}) }
   const keyringFile = join(directory, 'unit-keyring.json')
   const openUnit = () => unitProcess ? openUnitProcess(unitDirectory, keyringFile, dialout) : openComputerWorker(unitDirectory, { openEntry, dialout })
-  const f = { root, core, api: core.api, web, directory, projectDirectory, script, memory, unitDirectory,
+  const f = { root, core, api: core.api, web, directory, projectDirectory, script, modelInputs, memory, unitDirectory,
     unit: await openUnit(), control: connectLocalComputerWorker({ directory: unitDirectory }),
     async reopenUnit() { await f.control.closeObserver(); await f.unit.close(); f.unit = await openUnit(); f.control = connectLocalComputerWorker({ directory: unitDirectory }); return f.unit },
     /** Unclean unit exit loses its durable cleanup receipt even when the native supervisor cleans the process tree. */
@@ -109,6 +111,7 @@ async function harnessWithUnit(t, { dialoutFetch, expectCleanupFailure = false, 
   await until(() => f.connected(), 'unit polls')
   const selection = await core.api.getAgentTools('assistant')
   await core.api.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: selection.revision })
+  await grantComputerTools(root, core.api, [f.attached.attachmentId], ['anybox.bash'])
   f.project = await core.api.openProject(projectDirectory, { computerAttachmentId: f.attached.attachmentId })
   f.session = await core.api.createSession(f.project.id, 'assistant')
   return f
@@ -186,7 +189,7 @@ test('revoking an attachment while a command runs rejects new declarations, canc
   assert.ok((await f.pins(run.id)).some(pin => pin.released_at === null), 'pins stay until a unit proves the scope exited')
 })
 
-test('SIGKILL of the unit keeps the dead boot\'s pin as a fact, retires its instance and serves later Runs on a new generation', { timeout: 180_000 }, async t => {
+test('SIGKILL of the unit retains the original unconfirmed exit and a newly authorized attachment can execute', { timeout: 180_000 }, async t => {
   const f = await harnessWithUnit(t, { unitProcess: true, expectCleanupFailure: true })
   // Native process cleanup cannot replace the durable scope receipt lost with the worker.
   f.script.push({ id: 'call', name: 'bash', arguments: { command: longCommand('once', 20) } })
@@ -205,15 +208,32 @@ test('SIGKILL of the unit keeps the dead boot\'s pin as a fact, retires its inst
   const [operation] = await f.operations(run.id)
   assert.equal(operation.state, 'outcome-unknown')
   assert.ok((await f.pins(run.id)).every(pin => pin.released_at === null), 'an unknown exit never releases the pin')
-  // The same worker answered with a new boot, so the pinned instance is provably dead: later Runs get a new generation.
-  f.script.push({ id: 'again', name: 'bash', arguments: { command: 'printf back > back.txt' } })
+  // This model double can request a function without a live HTTP send. The dispatch guard must still reject it.
+  const before = f.modelInputs.length
+  f.script.push({ id: 'original-binding', name: 'bash', arguments: { command: 'touch forbidden-after-restart.txt' } })
   const again = await f.api.waitRun((await f.api.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'again', idempotencyKey: 'after-unclean-restart' })).id)
-  assert.equal(again.status, 'completed', JSON.stringify({ error: again.error ?? null, operations: await f.operations(again.id), events: await f.api.getRunEvents(again.id), instances: await f.instances() }))
+  assert.equal(again.status, 'failed')
+  assert.equal(f.modelInputs.length, before + 1)
+  assert.equal(f.script.length, 0, 'the model requested the actual function on the original attachment')
+  assert.deepEqual(await f.operations(again.id), [])
+  assert.equal(exists(join(f.projectDirectory, 'forbidden-after-restart.txt')), false)
+  await f.api.revokeUnitAttachment(f.attached.attachmentId)
+  await until(async () => (await f.control.control.listAttachments()).find(row => row.attachmentId === f.attached.attachmentId)?.state === 'revoked', 'worker closes the old attachment')
+  const { code } = await f.api.createUnitAttachCode({ unitKind: 'computer', scope: fullScope('computer') })
+  const replacement = await f.control.control.consumeAttachCode({ harnessUrl: f.web.url, code, ceiling: fullScope('computer') })
+  assert.notEqual(replacement.attachmentId, f.attached.attachmentId)
+  await until(() => f.root.get(unitTransportServiceKey).connection(replacement.attachmentId)?.connected, 'freshly paired attachment polls')
+  await grantComputerTools(f.root, f.api, [replacement.attachmentId], ['anybox.bash'])
+  const project = await f.api.openProject(f.projectDirectory, { computerAttachmentId: replacement.attachmentId })
+  const session = await f.api.createSession(project.id, 'assistant')
+  f.script.push({ id: 'rebound', name: 'bash', arguments: { command: 'printf back > back.txt' } })
+  const fresh = await f.api.waitRun((await f.api.startRun({ sessionId: session.id, parentNodeId: null, input: 'again', idempotencyKey: 'fresh-binding' })).id)
+  assert.equal(fresh.status, 'completed', JSON.stringify(fresh.error))
+  assert.equal(fresh.units.computer.attachmentId, replacement.attachmentId)
   assert.equal(await readFile(join(f.projectDirectory, 'back.txt'), 'utf8'), 'back')
   const instances = await f.instances()
-  assert.deepEqual(instances.map(row => [row.instance_generation, row.status]), [[1, 'retired'], [2, 'ready']])
-  assert.equal(workerBootOf(instances[1].provider_ref), f.unit.endpoint.bootId)
-  assert.ok((await f.pins(run.id)).every(pin => pin.released_at === null), 'retiring the dead instance keeps its pin unreleased')
+  assert.ok(instances.some(instance => workerBootOf(instance.provider_ref) === f.unit.endpoint.bootId && instance.status === 'ready'))
+  assert.ok((await f.pins(run.id)).every(pin => pin.released_at === null), 'the new attachment cannot release the old pin')
 })
 
 test('SIGKILL of the harness server leaves the unit running; the replacement process reclaims the Run and consumes the original result once', { timeout: 180_000 }, async t => {
@@ -276,16 +296,16 @@ test('an empty approved tool scope rejects a new tool before the worker receives
   assert.deepEqual(f.attached.scope.tools, [])
   f.script.push({ id: 'blocked', name: 'bash', arguments: { command: 'printf forbidden > forbidden.txt' } })
   const run = await f.api.waitRun((await f.api.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'go', idempotencyKey: 'blocked-tool' })).id)
-  assert.equal(run.status, 'failed')
-  assert.equal(run.errorCategory, 'tool-unavailable')
+  assert.deepEqual((await f.api.getRunEnvironmentAccess(run.id)).functions, [])
+  assert.equal(run.status, 'completed', 'the model can complete its text turn after receiving a rejected call')
+  assert.equal(f.modelInputs.length, 2)
+  const rejected = JSON.parse(f.modelInputs[1].messages.at(-1).content).error
+  assert.equal(rejected.reason, 'unknown-tool')
+  assert.equal(rejected.executed, false)
+  assert.deepEqual(rejected.availableTools, [])
   assert.equal(exists(join(f.projectDirectory, 'forbidden.txt')), false)
-  const [operation] = await f.operations(run.id)
-  assert.equal(operation.worker_receipt, null)
-  assert.equal(await f.control.get({ attachmentId: f.attached.attachmentId, runId: run.id, runOwnerEpoch: 1, operationId: operation.operation_id }).catch(error => {
-    if (error.code === 'worker-owner-rejected') return undefined
-    throw error
-  }), undefined, 'no remote Run ownership or tool declaration was dispatched')
-  assert.ok((await f.pins(run.id)).every(pin => pin.released_at !== null))
+  assert.deepEqual(await f.operations(run.id), [], 'no Computer operation was admitted')
+  assert.deepEqual(await f.pins(run.id), [], 'no worker instance was acquired')
 })
 
 test('the approved project scope limits remote queries even when the device ceiling is broader', { timeout: 30_000 }, async t => {

@@ -1,3 +1,4 @@
+import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
 /** Public, serializable transport projections. No execution handles or private recovery records. */
 import type { FileRef } from './project-files/domain.js'
 import type { Model, Provider, NativeModelSnapshot, ProviderTemplate } from '@anybox/models'
@@ -58,10 +59,11 @@ export interface RunView {
   readonly error?: string
   readonly errorCategory?: string
 }
-export type ToolCallView =
+export type ToolCallView = { readonly environmentTool?: EnvironmentTool } & (
   | { readonly id: string; readonly name: 'bash'; readonly command: string }
   | { readonly id: string; readonly name: 'apply_patch'; readonly patch: string; readonly patchTruncated: boolean }
   | { readonly id: string; readonly name: string; readonly arguments: Readonly<Record<string, import('@anybox/models').JsonValue>> }
+)
 export type LibraryToolName = `codex_${string}` | `claude_code_${string}` | `deepseek_harness_${string}`
 export interface ProcessExitView {
   readonly sessionId: number
@@ -74,7 +76,7 @@ export interface ProcessExitView {
   readonly error?: string
 }
 export type RunEventView = { readonly seq: number; readonly at: string } & (
-  | { readonly kind: 'operation-started'; readonly operationId: string; readonly operationKind: 'model' | 'operation' }
+  | { readonly kind: 'operation-started'; readonly operationId: string; readonly operationKind: 'model' | 'operation'; readonly hostedSearch?: EnvironmentTool }
   | { readonly kind: 'operation-observed'; readonly operationId: string; readonly processes?: readonly ProcessExitView[] }
   | { readonly kind: 'operation-failed'; readonly operationId: string; readonly category: string; readonly processes?: readonly ProcessExitView[] }
   | { readonly kind: 'model-started' | 'terminal' | 'interrupted' }

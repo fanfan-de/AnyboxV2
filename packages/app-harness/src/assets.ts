@@ -29,6 +29,7 @@ export const harnessAssets: readonly ApplicationAsset[] = [
   { path: '/applications/harness/web/markdown.js', file: fileURLToPath(new URL('./web/markdown.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/vendor/markdown-parser.js', file: fileURLToPath(new URL('./web/vendor/markdown-parser.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/vendor/provider-logos.js', file: fileURLToPath(new URL('./web/vendor/provider-logos.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
+  { path: '/applications/harness/web/vendor/environment-settings.js', file: fileURLToPath(new URL('./web/vendor/environment-settings.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/protocols/view.js', file: fileURLToPath(new URL('./web/protocols/view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: '/applications/harness/web/protocols/modules.js', file: fileURLToPath(new URL('./web/protocols/modules.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   ...['primitives', 'responses', 'anthropic', 'chat', 'gemini'].map(name => ({

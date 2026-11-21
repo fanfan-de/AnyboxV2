@@ -246,7 +246,10 @@ test('a stale unit attachment epoch settles an accepted Run on recovery instead 
     const records = f.root.get(sessionRunServiceKey), units = f.root.get('harness.unit-attachments')
     const bindings = { schemaVersion: 1, models: (await units.local('models')).binding, computer: (await units.local('computer')).binding }
     const input = { sessionId: session.id, parentNodeId: null, input: 'resume', idempotencyKey: 'resume' }
-    await records.registerRun('resume', input, 'now', [], modelSnapshot(), { ...nativeRegistration(input, modelSnapshot(), [], null, sessionInitialization(session)), units: bindings })
+    await records.registerRun('resume', input, 'now', [], modelSnapshot(), {
+      ...nativeRegistration(input, modelSnapshot(), [], null, sessionInitialization(session)), units: bindings,
+      access: { agentId: session.agentId, functions: [] }, selectionVersion: session.environmentSelection.version,
+    })
     const request = { id: 'resume:request', exchangeId: 'resume:exchange', kind: 'request', formatVersion: 1, payload: { messages: [{ role: 'user', content: 'resume' }] } }
     const response = { id: 'resume:response', exchangeId: 'resume:exchange', kind: 'response', formatVersion: 1,
       payload: { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'saved response' } }] } }
