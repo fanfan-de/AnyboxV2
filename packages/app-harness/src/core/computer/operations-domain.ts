@@ -7,8 +7,25 @@ import { unitComputerProviderId } from './port.js'
 import type { ComputerSpecification } from './port.js'
 export { unitComputerProviderId }
 
-export interface ComputerDeclaration {
+export interface ComputerWorkspaceScope {
+  readonly parentRunId: string
+  readonly bindingId: string
+  readonly attachmentId: string
+  readonly unitId: string
+  readonly unitEpoch: number
+}
+
+/** Legacy workers see the original Run identity. Each bound workspace has its own wire identity. */
+export function computerWorkspaceScopeId(scope: ComputerWorkspaceScope): string {
+  return 'workspace:' + createHash('sha256').update(canonical(scope)).digest('hex')
+}
+
+export type ComputerDeclaration = ({
   readonly schemaVersion: 1
+} | {
+  readonly schemaVersion: 2
+  readonly workspaceScope: ComputerWorkspaceScope
+}) & {
   readonly operationId: string
   readonly runId: string
   readonly sessionId: string
@@ -56,10 +73,11 @@ function canonical(value: unknown): string {
   }
   throw new TypeError('computer declaration must contain JSON values')
 }
-/** Authorization and placement are deliberately outside this immutable declaration. */
+/** Owner epochs and actual placement are separate from the immutable request and its selected workspace. */
 export function computerDeclarationDigest(declaration: ComputerDeclaration): string {
   const { schemaVersion, operationId, runId, sessionId, projectId, tool, request, workspaceId, workspaceRevision, computerId, spec } = declaration
   return createHash('sha256').update(canonical({ schemaVersion, operationId, runId, sessionId, projectId,
+    ...(schemaVersion === 2 ? { workspaceScope: declaration.workspaceScope } : {}),
     tool, request, workspaceId, workspaceRevision, computerId, spec })).digest('hex')
 }
 export function operationError(code: 'computer-operation-conflict' | 'computer-operation-unavailable' | 'computer-operation-missing' | 'computer-operation-owner' | 'computer-operation-cleanup'): Error {

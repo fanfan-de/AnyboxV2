@@ -91,6 +91,7 @@ export function connectLocalComputerWorker(options: ComputerWorkerOptions): Comp
           const toolManifest = copyToolReport(info.toolManifest)
           const runtime = runtimeHealth(info.runtime)
           observedInfo = Object.freeze({ workerId: info.workerId, bootId: info.bootId, platform: info.platform, architecture: info.architecture,
+            ...(info.workspaceScopeVersion === 1 ? { workspaceScopeVersion: 1 } : {}),
             ...(typeof info.buildId === 'string' && /^[a-f0-9]{64}$/.test(info.buildId) ? { buildId: info.buildId } : {}),
             ...(runtime === undefined ? {} : { runtime }),
             ...(toolManifest === undefined ? {} : { toolManifest }) })

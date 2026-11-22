@@ -2,7 +2,7 @@ import type { ToolEnvironment } from '@anybox/tool-api'
 import type { StorageReader } from '@anybox/storage-sqlite/port'
 import { createFunctionBindings } from './bindings.js'
 import { createToolEnvironmentCatalog } from './catalog.js'
-import type { TargetedToolEnvironment, TargetedToolEnvironmentTarget, ToolEnvironmentCatalogEntry, ToolEnvironmentRuntimeBinding } from './catalog-port.js'
+import type { ContextualToolEnvironment, TargetedToolEnvironment, TargetedToolEnvironmentTarget, ToolEnvironmentCatalogEntry, ToolEnvironmentRuntimeBinding } from './catalog-port.js'
 
 type Dependencies = Readonly<Record<string, unknown>>
 
@@ -18,7 +18,7 @@ export type ToolRegistration = {
 } & ({
   readonly kind: 'static'
   readonly contextualTarget?: boolean
-  readonly runtime: RuntimeProvider<ToolEnvironment>
+  readonly runtime: RuntimeProvider<ContextualToolEnvironment>
 } | {
   readonly kind: 'targeted'
   readonly inject?: readonly string[]
@@ -75,11 +75,11 @@ export function createToolRegistry(generation: string, configure: (registry: Too
   const trustedConfigurationEnvironmentIds: ReadonlySet<string> = new Set(providers.flatMap(provider =>
     provider.trustedConfiguration ? [provider.catalog.descriptor.environmentId] : []))
   const catalogFor = (deps: Dependencies) => createToolEnvironmentCatalog(providers.map(provider =>
-    provider.kind === 'targeted' ? { ...provider.catalog, targets: reader => provider.targets(deps, reader) } : provider.catalog))
+    provider.kind === 'targeted' ? { ...provider.catalog, targets: reader => provider.targets(deps, reader) } : { ...provider.catalog, contextualTarget: provider.contextualTarget }))
   const runtime: ToolEnvironmentRuntimeBinding = Object.freeze({
     inject: Object.freeze([...new Set([...providers.flatMap(provider => provider.runtime.inject ?? []), ...inject])]),
     bind(deps: Dependencies) {
-      const staticProviders: ToolEnvironment[] = []
+      const staticProviders: ContextualToolEnvironment[] = []
       const targetedProviders: TargetedToolEnvironment[] = []
       for (const provider of providers) {
         if (provider.kind === 'targeted') targetedProviders.push(provider.runtime.bind(deps))

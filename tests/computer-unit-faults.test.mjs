@@ -236,14 +236,16 @@ test('SIGKILL of the unit retains the original unconfirmed exit and a newly auth
   assert.ok((await f.pins(run.id)).every(pin => pin.released_at === null), 'the new attachment cannot release the old pin')
 })
 
-async function recoverAfterHarnessCrash(t, { withNotes = false, pauseAfterComputer = false } = {}) {
+async function recoverAfterHarnessCrash(t, { withNotes = false, pauseAfterComputer = false, twoWorkspaces = false } = {}) {
   const directory = await realpath(await mkdtemp(join(tmpdir(), 'anybox-unit-faults-restart-')))
   const projectDirectory = join(directory, 'project'); await mkdir(projectDirectory)
+  const mainProjectDirectory = twoWorkspaces ? join(directory, 'main-project') : undefined
+  if (mainProjectDirectory) await mkdir(mainProjectDirectory)
   const port = await new Promise((resolve, reject) => { const server = createServer(); server.once('error', reject); server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolve(port)) }) })
   const processes = []
   const command = longCommand('once', 0, pauseAfterComputer ? undefined : "while [ ! -f release.flag ]; do sleep 0.05; done; printf 'original-result'")
   const start = settings => {
-    const child = spawn(process.execPath, [childFixture, JSON.stringify({ directory, projectDirectory, port, command, withNotes, ...settings })], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
+    const child = spawn(process.execPath, [childFixture, JSON.stringify({ directory, mainProjectDirectory, projectDirectory, port, command, withNotes, ...settings })], { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
     const messages = [], pending = new Map(); let nextId = 0, diagnostics = ''
     for (const stream of [child.stdout, child.stderr]) stream.on('data', bytes => { diagnostics = (diagnostics + bytes.toString()).slice(-32_768) })
     child.on('message', message => {
@@ -258,16 +260,18 @@ async function recoverAfterHarnessCrash(t, { withNotes = false, pauseAfterComput
     processes.push(handle); return handle
   }
   const { memory, openEntry } = memoryEntries()
-  let unit, control
+  let unit, control, localUnit
   t.after(async () => {
     for (const handle of processes) await handle.kill()
     await control?.closeObserver(); await unit?.close().catch(() => {})
+    await localUnit?.close()
     await rm(directory, { recursive: true, force: true })
   })
   const first = start({ mode: 'begin', pauseAfterComputer })
   const ready = await first.event('ready')
   const issued = await (await fetch(`${ready.url}/api/v1/apps/agent/units/attach-codes`, { method: 'POST', headers: { authorization: `Bearer ${ready.token}`, 'x-anybox-instance-id': ready.instanceId, 'content-type': 'application/json' }, body: JSON.stringify({ unitKind: 'computer', scope: fullScope('computer') }) })).json()
   unit = await openComputerWorker(join(directory, 'unit-worker'), { openEntry, dialout: { pollWaitMs: 300, getWaitMs: 200, requestTimeoutMs: 5_000 } })
+  if (twoWorkspaces) localUnit = await openComputerWorker(join(directory, 'local-worker'), { openEntry })
   control = connectLocalComputerWorker({ directory: join(directory, 'unit-worker') })
   const attached = await control.control.consumeAttachCode({ harnessUrl: ready.url, code: issued.code, ceiling: fullScope('computer') })
   await until(async () => (await control.control.listAttachments())[0]?.connection === 'connected', 'unit polls the first process')
@@ -276,13 +280,20 @@ async function recoverAfterHarnessCrash(t, { withNotes = false, pauseAfterComput
   if (pauseAfterComputer) await first.event('model-pending')
   const accepted = await until(async () => {
     const value = await first.request('report')
-    const operation = value.operations[0]
+    if (twoWorkspaces && (value.operations.length !== 2 || value.operations[0].state !== 'succeeded')) return
+    const operation = value.operations.at(-1)
     if (!operation?.worker_receipt) return undefined
     if (pauseAfterComputer) return operation.state === 'succeeded' && value.resume?.state.stage === 'model-pending' ? value : undefined
     return ['starting', 'running'].includes(operation.state) ? value : undefined
   }, 'the first process holds the expected Computer receipt')
   const notesScopes = join(directory, 'notes-scopes.log')
   const openedNotesBeforeCrash = exists(notesScopes)
+  if (twoWorkspaces) {
+    assert.equal(await readFile(join(mainProjectDirectory, 'effect.log'), 'utf8'), 'main-once\n')
+    assert.equal(await readFile(join(projectDirectory, 'effect.log'), 'utf8'), 'once\n')
+    assert.equal(new Set(accepted.operations.map(operation => operation.run_id)).size, 2)
+    assert.deepEqual(accepted.scopeAdmissions.map(scope => scope.state), ['sent', 'sent'])
+  }
   await first.kill()
   assert.equal(first.child.signalCode, 'SIGKILL')
   if (!pauseAfterComputer) await writeFile(join(projectDirectory, 'release.flag'), 'release')
@@ -295,16 +306,31 @@ async function recoverAfterHarnessCrash(t, { withNotes = false, pauseAfterComput
   }, 'recovery closes the worker scope and retires its authority admission', 15_000) : await second.request('wait')
   assert.equal(report.run.status, pauseAfterComputer ? 'interrupted' : 'completed', JSON.stringify(report.run.error ?? null))
   if (!pauseAfterComputer) assert.equal(report.run.output, 'original-result')
-  assert.equal(report.execution.toolCalls, 1); assert.equal(report.execution.modelCalls, 2)
-  assert.equal(report.events.filter(event => event.kind === 'tool-observed').length, 1)
+  const toolCount = twoWorkspaces ? 2 : 1
+  assert.equal(report.execution.toolCalls, toolCount); assert.equal(report.execution.modelCalls, 2)
+  assert.equal(report.events.filter(event => event.kind === 'tool-observed').length, toolCount)
   assert.equal(report.nodes.nodes.length, pauseAfterComputer ? 0 : 1)
-  assert.equal(report.operations[0].worker_receipt, accepted.operations[0].worker_receipt, 'the replacement process retained the original receipt')
-  assert.equal(report.operations[0].state, 'succeeded')
+  const identities = report => report.operations.map(operation => [operation.run_id, operation.operation_id, operation.worker_receipt])
+  assert.deepEqual(identities(report), identities(accepted), 'the replacement process retained every original worker operation and receipt')
+  assert.ok(report.operations.every(operation => operation.state === 'succeeded'))
   assert.ok(report.pins.every(pin => pin.released_at !== null))
   assert.equal(await readFile(join(projectDirectory, 'effect.log'), 'utf8'), 'once\n', 'the command ran exactly once across the restart')
   const modelCalls = (await readFile(join(directory, 'model-calls.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
   assert.equal(modelCalls.length, 2)
   assert.equal(memory.size, 1, 'the unit kept its credential and reconnected to the same instance')
+  if (twoWorkspaces) {
+    assert.equal(report.run.id, started.runId)
+    const bindings = report.run.units.workspaces
+    assert.deepEqual(bindings.map(binding => binding.unit.attachmentId), ['local:computer', attached.attachmentId])
+    assert.deepEqual(report.scopes.map(scope => scope.workspace_binding_id), bindings.map(binding => binding.id))
+    assert.ok(report.scopes.every(scope => scope.parent_run_id === started.runId && scope.owner_epoch > 1 && scope.closed && scope.close_receipt))
+    assert.equal(report.pins.length, 2)
+    assert.deepEqual(report.scopeAdmissions.map(scope => scope.state), ['exited', 'exited'])
+    assert.deepEqual(report.scopeAdmissions.map(scope => scope.operation), accepted.scopeAdmissions.map(scope => scope.operation))
+    assert.deepEqual(modelCalls[0].tools.sort(), ['main__bash', 'workspace2__bash'])
+    assert.deepEqual(modelCalls.map(call => call.processId), [ready.processId, restarted.processId])
+    assert.equal(await readFile(join(mainProjectDirectory, 'effect.log'), 'utf8'), 'main-once\n')
+  }
   if (withNotes) {
     const computer = accepted.access.functions.find(({ name }) => name === 'bash').grant.tool
     assert.deepEqual(accepted.access.functions.map(({ name }) => name).sort(), ['bash', 'notes_read', 'notes_search'])
@@ -327,6 +353,9 @@ async function recoverAfterHarnessCrash(t, { withNotes = false, pauseAfterComput
 
 test('SIGKILL of the harness server leaves the unit running; the replacement process reclaims the Run and consumes the original result once',
   { timeout: 180_000 }, t => recoverAfterHarnessCrash(t))
+
+test('SIGKILL after two workspaces wrote files recovers both original scopes and settles their parent Run once',
+  { timeout: 180_000 }, t => recoverAfterHarnessCrash(t, { twoWorkspaces: true }))
 
 test('SIGKILL with unused Notes declared only reclaims the Computer scope and permits later Computer work',
   { timeout: 180_000 }, t => recoverAfterHarnessCrash(t, { withNotes: true }))

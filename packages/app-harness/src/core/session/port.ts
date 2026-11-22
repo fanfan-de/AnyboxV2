@@ -39,7 +39,7 @@ export interface SessionPort {
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SessionDefaults>
   getAgentTools(agentId: string): Promise<AgentToolsSelection>
   setAgentTools(agentId: string, input: AgentToolsInput): Promise<AgentToolsSelection>
-  createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
+  createSession(projectId: string, agentId: string, modelId?: string, workspaces?: import('./domain.js').SessionWorkspaceSelection): Promise<Session>
   selectSessionModel(sessionId: string, modelId: string): Promise<Session>
   archiveSession(id: string): Promise<Session>
   restoreSession(id: string): Promise<Session>

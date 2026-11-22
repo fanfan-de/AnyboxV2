@@ -21,18 +21,20 @@ export interface ComputerOperationsPort {
     readonly runOwnerEpoch?: number
     /** The Run's fixed Computer attachment; a remote attachment places the declaration on that unit's logical computer. */
     readonly unit?: RunUnitBinding
+    readonly workspaceBindingId?: string
+    readonly workspaceBindingRevision?: number
   }): ComputerOperation
   observeIn(tx: StorageTransaction, operationId: string, observation: JsonValue): void
   claimRunIn(tx: StorageTransaction, runId: string, runOwnerEpoch: number): void
   requestCancelIn(tx: StorageTransaction, runId: string): void
   get(operationId: string): Promise<ComputerOperation | undefined>
-  hasRunResources(runId: string): Promise<boolean>
+  hasRunResources(runId: string, workspaceBindingId?: string): Promise<boolean>
   /** Install the claimed owner fence at an already-used worker before continuing a Run. */
   authorizeRun(runId: string, runOwnerEpoch: number, signal: AbortSignal): Promise<void>
   /** Reconcile durable cancellation for terminal Runs; does not reopen Session history. */
   recoverCancelledRuns(excludeRunIds: readonly string[]): Promise<void>
   /** Synchronous ownership only: opening a scope does not activate or prepare resources. Runs without a fixed unit reference use the local attachment. */
-  openRun(input: { readonly runId: string; readonly runOwnerEpoch?: number; readonly imageInput?: boolean; readonly unit?: RunUnitBinding }): ComputerRunScope
+  openRun(input: { readonly runId: string; readonly runOwnerEpoch?: number; readonly imageInput?: boolean; readonly unit?: RunUnitBinding; readonly workspaceBindingId?: string }): ComputerRunScope
 }
 export interface ComputerOperationsOptions {
   readonly computerId?: string

@@ -14,6 +14,7 @@ export type UnitAttachmentView = UnitAttachment
 
 export interface AgentView { readonly id: string; readonly harnessName?: string }
 export interface SessionView {
+  readonly workspaceBindings?: readonly import('./session/domain.js').SessionWorkspaceBinding[]
   readonly id: string
   readonly title: string | null
   readonly projectId: string
@@ -28,6 +29,7 @@ export interface SessionView {
 }
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 export interface ProjectView {
+  readonly workspaceCount?: number
   readonly instanceId?: string
   readonly harnessName?: string
   readonly id: string
@@ -59,13 +61,15 @@ export interface RunView {
   readonly error?: string
   readonly errorCategory?: string
 }
-export type ToolCallView = { readonly environmentTool?: EnvironmentTool } & (
+export interface ToolWorkspaceView { readonly name: string; readonly path: string; readonly originalName: string }
+export type ToolCallView = { readonly environmentTool?: EnvironmentTool; readonly workspace?: ToolWorkspaceView } & (
   | { readonly id: string; readonly name: 'bash'; readonly command: string }
   | { readonly id: string; readonly name: 'apply_patch'; readonly patch: string; readonly patchTruncated: boolean }
   | { readonly id: string; readonly name: string; readonly arguments: Readonly<Record<string, import('@anybox/models').JsonValue>> }
 )
 export type LibraryToolName = `codex_${string}` | `claude_code_${string}` | `deepseek_harness_${string}`
 export interface ProcessExitView {
+  readonly targetId?: string
   readonly sessionId: number
   readonly exitCode: number | null
   readonly signal: string | null

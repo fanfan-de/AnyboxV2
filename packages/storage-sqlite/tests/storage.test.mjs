@@ -359,3 +359,38 @@ test('an incomplete layout cutover blocks writes that were already queued', asyn
     assert.equal(ran, false)
   } finally { await context.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) }
 })
+
+for (const previous of [1, 2]) test(`layout ${previous} upgrades atomically to 3 and preserves the writer requirement on reopen`, async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-layout3-')), file = join(directory, 'state.sqlite')
+  let owner = await open(file)
+  t.after(async () => { await owner.context.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) })
+  if (previous === 2) await owner.store.requireLayout(2)
+  await owner.store.transaction(tx => tx.execute("INSERT INTO notes VALUES ('a', 'preserved')"))
+  await owner.context.fiber.dispose()
+  copyFileSync(file, join(directory, 'previous.sqlite'))
+
+  owner = await open(file)
+  assert.equal(await owner.store.minimumWriterCapability('notes'), undefined)
+  await owner.store.requireLayout(3, 'notes')
+  const checkpoint = () => owner.store.read(r => r.get('SELECT revision,token FROM storage_layout_fence'))
+  const first = await checkpoint()
+  await owner.store.requireLayout(3, 'notes')
+  assert.deepEqual(await checkpoint(), first, 'identical requirements do not advance the checkpoint')
+  await assert.rejects(owner.store.requireLayout(2), { code: 'schema-version' })
+  assert.equal(await owner.store.minimumWriterCapability('other'), undefined)
+  await owner.store.requireLayout(3, 'second')
+  assert.ok((await checkpoint()).revision > first.revision, 'an additional writer registration advances the checkpoint')
+  await owner.context.fiber.dispose()
+
+  owner = await open(file)
+  assert.equal(await owner.store.minimumWriterCapability('notes'), '1.2.0')
+  assert.equal(await owner.store.minimumWriterCapability('second'), '1.2.0')
+  assert.equal(await owner.store.read(r => r.get('SELECT body FROM notes').body), 'preserved')
+  assert.deepEqual(await owner.store.read(r => [r.get('PRAGMA main.user_version').user_version, r.get('PRAGMA authority.user_version').user_version]), [3, 3])
+  await owner.context.fiber.dispose()
+
+  copyFileSync(join(directory, 'previous.sqlite'), file)
+  const root = new Context()
+  try { await assert.rejects(async () => { await root.installComponent(createLocalSqliteComponent(file)) }, { code: 'schema-version' }) }
+  finally { await root.fiber.dispose() }
+})

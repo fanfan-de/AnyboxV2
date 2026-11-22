@@ -56,14 +56,15 @@ function parseScopeOperation(value: unknown): readonly [string, 'scope'] | reado
   return identity.length === 2 ? [runId, 'scope'] : [runId, 'scope', checkedId(identity[2]), checkedId(identity[3], 4096)]
 }
 
-export async function openExecutionEnvironmentManager(db: LocalStoragePort): Promise<ExecutionEnvironmentManager & { close(): Promise<void> }> {
+export async function openExecutionEnvironmentManager(db: LocalStoragePort,
+  storage: { layout: 2 | 3; applicationId?: string } = { layout: 2 }): Promise<ExecutionEnvironmentManager & { close(): Promise<void> }> {
   if (owners.has(db)) throw environmentError('environment-owner-active', 409)
   owners.add(db)
   const owner = randomUUID()
   try {
-    // Previous executables reject layout 2 before consuming any migrated grants.
+    // Establish the consumer's writer generation before claiming or recovering admissions.
     if (!db.requireLayout) throw environmentError('environment-layout-unsupported', 503)
-    await db.requireLayout(2)
+    await db.requireLayout(storage.layout, storage.applicationId)
     await db.migrate('execution-environments', migrations)
     await db.transaction(tx => {
       tx.execute('INSERT INTO environment_authority VALUES(1,?) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner', [owner])
@@ -363,10 +364,10 @@ export async function openExecutionEnvironmentManager(db: LocalStoragePort): Pro
   return { get, readIn, seedIn, set, observe, pendingChanges, run, runModel, runScope, resumeScope, outstandingScopes, outstandingTargetScopeRunIds, reconcile, close }
 }
 
-export function createExecutionEnvironmentComponent(options: {serviceKey: string}): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
+export function createExecutionEnvironmentComponent(options: {serviceKey: string; storage?: { layout: 2 | 3; applicationId?: string }}): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {
   const key = checkedId(options.serviceKey)
   return { name: key, inject: [localStorageServiceKey], async apply(ctx, _config, deps) {
-    const service = await openExecutionEnvironmentManager(deps[localStorageServiceKey])
+    const service = await openExecutionEnvironmentManager(deps[localStorageServiceKey], options.storage)
     ctx.effect(() => () => service.close(), 'cancel and join environment admissions')
     ctx.provide(key, service)
   } }

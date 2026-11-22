@@ -23,17 +23,28 @@ function object(value: JsonValue | undefined): Readonly<Record<string, JsonValue
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, JsonValue>> : undefined
 }
 
-/** Read old Computer receipts and the Computer member of a uniform environment report. */
+export function computerCleanupTargets(value: JsonValue | undefined): readonly {
+  readonly targetId?: string; readonly receipt: Readonly<Record<string, JsonValue>>
+}[] {
+  const report = object(value)
+  if (!report) return []
+  if (!Array.isArray(report.environments)) return Array.isArray(report.processes) ? [{ receipt: report }] : []
+  return report.environments.flatMap(item => {
+    const entry = object(item)
+    const receipt = entry?.environmentId === 'computer' && object(entry.result)
+    return receipt && Array.isArray(receipt.processes) ? [{ receipt, ...(typeof entry.targetId === 'string' ? { targetId: entry.targetId } : {}) }] : []
+  })
+}
+
+export function computerCleanupReceipts(value: JsonValue | undefined): readonly Readonly<Record<string, JsonValue>>[] {
+  return computerCleanupTargets(value).map(target => target.receipt)
+}
+
+/** The historical single-Computer receipt is only meaningful for an unambiguous target. */
 export function computerCleanupReceipt(value: JsonValue | undefined): Readonly<Record<string, JsonValue>> | undefined {
   const report = object(value)
-  if (!report) return undefined
-  if (Array.isArray(report.environments)) {
-    const computers = report.environments.map(object).filter(entry => entry?.environmentId === 'computer')
-    if (computers.length !== 1) return undefined
-    const receipt = object(computers[0]!.result)
-    return receipt && Array.isArray(receipt.processes) ? receipt : undefined
-  }
-  return Array.isArray(report.processes) ? report : undefined
+  if (Array.isArray(report?.environments) && report.environments.filter(item => object(item)?.environmentId === 'computer').length !== 1) return undefined
+  return computerCleanupReceipts(value)[0]
 }
 
 export interface EnvironmentCleanupOperation {

@@ -166,6 +166,9 @@ test('Personal Agent uses an isolated native execution and retains earlier Perso
   assert.equal((await execution('/products/agent/open', {}, 404)).error.code, 'not-found')
   assert.equal(host.execution.products.get('agent').state, 'disabled')
   assert.equal((await host.execution.products.open('agent')).state, 'running')
+  const layout = store => store.read(reader => reader.get('PRAGMA user_version').user_version)
+  assert.equal(await layout(host.root.get('host.execution.storage')), 3)
+  assert.equal(await layout(host.root.get('personal-agent.local-storage')), 2)
 
   const accessPath = '/agents/assistant/environment-access'
   const harnessBase = clientApi + '/apps/agent/connections/' + encodeURIComponent(harnessConnection.id) + '/v1'

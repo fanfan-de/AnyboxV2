@@ -23,3 +23,5 @@ Personal Agent 和 Anybox Harness 分别在所属执行端装配本包。每份�
 npm run build
 node --test packages/execution-environments/tests/*.test.mjs
 ```
+
+静态契约由应用按工作区固定目标时，可注册 `contextualTarget` 并实现 `openBoundScope(targetId, context)` 和 `restoreBoundScope(targetId, context)`。v3 快照为各个工作区保存模型别名、原函数名、toolId 和确切目标。授权摘要使用提供方的原定义，模型调用与回填保留会话别名。每个目标按需取得并单独关闭 scope。v1/v2 快照保留创建时的唯一名称与身份规则。见[分派与恢复测试](tests/targets.test.mjs)。

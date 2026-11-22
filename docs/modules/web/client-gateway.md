@@ -34,7 +34,7 @@ Effect 停止接收请求，取消网络、上传和流读取并等待实际关�
 
 ## 项目目录树代理
 
-白名单显式接纳会话文件树的 `tree/open`、`tree/page` 和 `tree/close` POST 路径，复用固定连接版本与 instanceId 的请求绑定。游标 ID 不决定设备，不跨连接或应用重试；取消网络观察仍等待实际退出。浏览器按活动 thread 读取所属项目，不受左侧设备选择影响。详情见[三栏工作区](../../harness-three-column-workspace.md)。
+白名单显式接纳会话文件树的 `tree/open`、`tree/page` 和 `tree/close` POST 路径，复用固定连接版本与 instanceId 的请求绑定。游标 ID 不决定设备，不跨连接或应用重试；取消网络观察仍等待实际退出。浏览器按活动 thread 读取所属项目，不受设置中所选设备影响。详情见[三栏工作区](../../harness-three-column-workspace.md)。
 
 ## 独立 Computer 管理
 

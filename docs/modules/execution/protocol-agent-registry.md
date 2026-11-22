@@ -35,7 +35,7 @@ prepare 先验证历史的协议、Loop 版本、记录格式和工具契约；c
 
 首次执行按协议编码固定 Prompt、当前输入与工具声明；有父历史时只编码新增输入，工具和原生上下文由恢复状态提供。program 的 `execute(host)` 最多调用一次，通过 `createExchangeRunner` 运行协议 Loop。共享管道只负责准备交换、把请求和结果交给 host.perform、串行工具及安全展示，不决定停止语义。
 
-工具调用先经过纯名称/参数批次预检。原生调用 ID 必须合法、唯一且在长度上限内；在此基础上，未知或未选择的调用名、已选择工具的参数 schema 错误会作为可修正反馈交回模型，继续由各协议编码下一轮工具结果，而不立即终止 Run。反馈保持每个原始 ID；整批中已经合法的同伴调用也返回 `batch-rejected`，整批不产生工具资源、工具操作声明或业务副作用。调用名精确匹配本 Session 固定声明，不增设别名、模糊匹配或静默改名。
+工具调用先经过纯名称/参数批次预检。原生调用 ID 必须合法、唯一且在长度上限内；在此基础上，未知或未选择的调用名、已选择工具的参数 schema 错误会作为可修正反馈交回模型，继续由各协议编码下一轮工具结果，而不立即终止 Run。反馈保持每个原始 ID；整批中已经合法的同伴调用也返回 `batch-rejected`，整批不产生工具资源、工具操作声明或业务副作用。调用名精确匹配本 Session 固定声明。多工作区会话在声明中保存每台 Computer 的模型别名，例如 `main__codex_exec_command`。四种协议的工具调用、结果配对和跨 API 历史都沿用该别名。原契约负责参数校验，分派器依据受信映射选择工作区。
 
 反馈 JSON 为 `{error:{code:'invalid-tool-request',reason,message,executed:false,availableTools,schema?}}`。reason 是 `unknown-tool`、`invalid-arguments` 或同批同伴的 `batch-rejected`；message 使用固定说明，availableTools 是实际声明的精确调用名，已选择工具的参数错误附相应 schema。Responses/Chat/Gemini 按原生工具结果结构传回 JSON，Anthropic 同时设置 `is_error:true`。缺失、重复、过长或损坏 ID、损坏原生响应/参数 JSON 仍为致命错误；存储、工具执行、超时、取消及清理故障不转换为预检反馈，也不自动重试副作用。
 

@@ -1,7 +1,7 @@
 import type { Context } from '@nya/core'
 import { modelsSettingsServiceKey } from '@anybox/models'
 import type { ModelsSettingsService } from '@anybox/models'
-import { createHarnessServerAgentComponents, createHarnessServerPromptComponents, validateComputerEnvironmentOptions } from './core/index.js'
+import { createHarnessServerAgentComponents, createHarnessServerPromptComponents, requireHarnessStorage, validateComputerEnvironmentOptions } from './core/index.js'
 import type { HarnessServerCoreOptions } from './core/index.js'
 import type { AgentDefinition } from './core/agent/domain.js'
 import { createImageAssetsComponent } from './core/image/component.js'
@@ -29,6 +29,7 @@ export function createHarnessServerRuntime(root: Context, config: HarnessServerC
   validateComputerEnvironmentOptions(options)
   const definitions = options.agents ?? [{ id: 'assistant', instructions: 'You are a helpful assistant.' }]
   return createApplicationRuntime(root, async installation => {
+    await requireHarnessStorage(root, installation.serviceBindings)
     if (integration.registerStopGuard) installation.effect(() => integration.registerStopGuard!(() => {
       const admission = root.get<RunAdmissionPort>(runAdmissionServiceKey)
       return admission ? admission.pauseIfIdle() : () => {}

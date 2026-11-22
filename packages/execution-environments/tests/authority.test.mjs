@@ -261,3 +261,19 @@ for (const kind of ['model', 'hosted', 'provider']) {
     await assert.rejects(manager.set(change(grants.map(g => g.tool),2,'new-grant')), {code:'environment-cleanup-pending'})
   })
 }
+
+test('an older layout-2 manager cannot replace the owner of a layout-3 authority or reconcile its admissions', async t => {
+  const root = new Context(), file = temporary(t)
+  await root.installComponent(createLocalSqliteComponent(file))
+  t.after(() => root.fiber.dispose())
+  const store = root.get('local-storage')
+  const current = await openExecutionEnvironmentManager(store, { layout: 3, applicationId: 'writer' })
+  await current.close()
+  const recorded = () => store.read(reader => ({
+    owner: reader.get('SELECT owner FROM environment_authority').owner,
+    revision: reader.get('SELECT revision FROM storage_layout_fence').revision,
+  }))
+  const before = await recorded()
+  await assert.rejects(openExecutionEnvironmentManager(store), { code: 'schema-version' })
+  assert.deepEqual(await recorded(), before)
+})

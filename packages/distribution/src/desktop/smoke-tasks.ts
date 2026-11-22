@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import sharp from 'sharp'
 import { createDesktopWorker } from '@anybox/host/desktop/worker'
+import { connectLocalComputerWorker } from '@anybox/app-harness/core/computer/worker-client'
 import type { DesktopWorkerReady } from './paths.js'
 import { desktopPaths } from './paths.js'
 import { createSmokeProvider } from './smoke-provider.js'
@@ -56,9 +57,12 @@ export async function runDesktopTaskSmoke(options: DesktopSmokeOptions, request:
   const remotePaths = desktopPaths(remoteHome)
   await mkdir(remotePaths.data, { recursive: true })
   const remote = createDesktopWorker('execution', remotePaths.data, () => {}, new URL('../entrypoints/desktop-execution.js', import.meta.url))
+  const computerWorker = connectLocalComputerWorker({ directory: paths.harness + '.computer-worker' })
+  let stopFixtureWorker = false
   let localTarget: Target | undefined, remoteTarget: Target | undefined
   const api: SmokeApi = (path, body) => request(base + path, body, binding)
   try {
+    stopFixtureWorker = (await computerWorker.status()).state === 'stopped'
     stage('offline model, binary image, and SSE')
     const projectPath = await mkdtemp(join(options.userData, 'smoke-project-'))
     localTarget = await configureTarget(api, projectPath, provider.url)
@@ -107,9 +111,11 @@ export async function runDesktopTaskSmoke(options: DesktopSmokeOptions, request:
     const completed = await api<{ done: boolean; run: RunResult }>(`/runs/${toolRun.id}/wait?timeoutMs=25000`)
     check(completed.done && completed.run.status === 'completed', 'Offline Bash/Apply Patch Run did not complete: ' + (completed.run.error ?? completed.run.status))
     check(await readFile(join(projectPath, 'smoke-result.txt'), 'utf8') === 'desktop-patch-proof\n', 'Apply Patch did not commit the expected file')
-    const events = await api<readonly { kind: string; name?: string; stdout?: string }[]>(`/runs/${toolRun.id}/events`)
-    check(events.some(event => event.kind === 'tool-observed' && event.name === 'bash' && event.stdout === 'desktop-bash-proof'), 'Bash observation did not preserve real output')
-    check(events.some(event => event.kind === 'tool-observed' && event.name === 'apply_patch'), 'Apply Patch observation missing')
+    const events = await api<readonly { kind: string; name?: string; result?: { status?: string; exit_code?: number; output?: string } }[]>(`/runs/${toolRun.id}/events`)
+    check(events.some(event => event.kind === 'tool-observed' && event.name === 'codex_apply_patch' && event.result?.status === 'applied'),
+      'Apply Patch did not return a successful observation')
+    check(events.some(event => event.kind === 'tool-observed' && event.name === 'codex_exec_command' && event.result?.exit_code === 0 &&
+      event.result.output === 'desktop-patch-proof\ndesktop-bash-proof'), 'The command did not read back the file written by Apply Patch')
     const savedRun = await api<{ files: readonly { snapshotId: string }[] }>(`/runs/${toolRun.id}`)
     check(savedRun.files.length === 1 && savedRun.files[0]!.snapshotId === files[0]!.snapshotId, 'Run did not retain its project file reference')
     const view = await api<ProtocolViewSnapshot>(`/runs/${toolRun.id}/view`)
@@ -180,7 +186,14 @@ export async function runDesktopTaskSmoke(options: DesktopSmokeOptions, request:
     try { localStatus = db.prepare('SELECT status FROM harness_runs WHERE id=?').get(localHeld.id)?.status }
     finally { db.close() }
     check(localStatus === 'cancelled', 'Local Run was not durably cancelled before desktop exit')
-    for (const path of [paths.harness, paths.client, paths.catalog, paths.models, paths.images]) {
+    // The Harness checkpoint is durable. Prove the actual SQLite owners exited by acquiring their OS locks.
+    for (const path of [paths.harness, join(paths.harness + '.lock', 'authority.sqlite'), paths.client, paths.catalog]) {
+      await access(path)
+      const probe = new DatabaseSync(path)
+      try { probe.exec('PRAGMA busy_timeout=0; PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE; ROLLBACK') }
+      finally { probe.close() }
+    }
+    for (const path of [paths.models, paths.images]) {
       try { await access(path + '.lock'); throw new Error('Desktop lock remains after shutdown') }
       catch (error) { if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') throw error }
     }
@@ -193,6 +206,8 @@ export async function runDesktopTaskSmoke(options: DesktopSmokeOptions, request:
     if (localTarget && !options.execution?.ended) await clearFixtureKey(localTarget).catch(() => {})
     if (remoteTarget && !remote.ended && !options.client.ended) await clearFixtureKey(remoteTarget).catch(() => {})
     const errors: unknown[] = []
+    try { if (stopFixtureWorker) await computerWorker.shutdown() } catch (error) { errors.push(error) }
+    try { await computerWorker.closeObserver() } catch (error) { errors.push(error) }
     try { await remote.close() } catch (error) { errors.push(error) }
     try { await provider.close() } catch (error) { errors.push(error) }
     if (remote.ended) try { await rm(remoteHome, { recursive: true, force: true }) } catch (error) { errors.push(error) }

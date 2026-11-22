@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util'
 import type { ToolDescriptor, ToolEnvironmentDescriptor } from '@anybox/tool-api'
 import type { StorageReader } from '@anybox/storage-sqlite/port'
 import type { TargetedToolEnvironmentTarget, ToolEnvironmentCatalog } from './catalog-port.js'
+import { originalToolDescriptor } from './snapshot.js'
 import type { ToolEnvironmentSelection, ToolEnvironmentSnapshotTool } from './snapshot.js'
 import { environmentError, environmentToolKey, exactGrantKey, targetKey, validateEnvironmentGrants } from './contracts.js'
 import type { AgentGrants, EnvironmentGrant, EnvironmentTool } from './contracts.js'
@@ -150,9 +151,15 @@ export function createFunctionBindings(catalog: readonly ToolEnvironmentDescript
         if (!selected.length) continue
         const environment = catalog.find(entry => entry.environmentId === selection.environmentId && entry.version === selection.version)
         if (!environment) throw environmentError('environment-target-unavailable', 409)
-        const current = selected.some(tool => tool.targetId !== undefined) ? targets(selection.environmentId, reader) : []
+        const current = selected.some(tool => tool.targetId !== undefined && tool.workspaceBindingId === undefined) ? targets(selection.environmentId, reader) : []
         for (const tool of selected) {
-          if (tool.targetId !== undefined) {
+          if (tool.workspaceBindingId !== undefined) {
+            const bound = contextualTargets?.get(targetKey(selection.environmentId, tool.workspaceBindingId))
+            const original = originalToolDescriptor(tool)
+            if (!contextual.has(selection.environmentId) || !bound || bound !== tool.targetId ||
+              !environment.tools.some(candidate => isDeepStrictEqual(candidate, original))) throw environmentError('environment-target-unavailable', 409)
+            byName.set(tool.definition.name, functionKey(environment, bound, original))
+          } else if (tool.targetId !== undefined) {
             byName.set(tool.definition.name, targetedTool(environment, tool, current))
           } else {
             const targetId = contextual.has(environment.environmentId) ? contextualTargets?.get(environment.environmentId) : staticTarget(environment)
@@ -170,7 +177,7 @@ export function createFunctionBindings(catalog: readonly ToolEnvironmentDescript
     assertCurrentTargetedAccess(snapshot: readonly ToolEnvironmentSelection[], access: RunEnvironmentAccess, reader?: StorageReader): void {
       const grants = new Map(access.functions.map(route => [route.name, route.grant.tool] as const))
       for (const selection of snapshot) {
-        const selected = selection.tools.filter(tool => tool.targetId !== undefined && grants.has(tool.definition.name))
+        const selected = selection.tools.filter(tool => tool.targetId !== undefined && tool.workspaceBindingId === undefined && grants.has(tool.definition.name))
         if (!selected.length) continue
         const environment = catalog.find(entry => entry.environmentId === selection.environmentId && entry.version === selection.version)
         const current = targets(selection.environmentId, reader)

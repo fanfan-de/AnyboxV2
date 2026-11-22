@@ -46,7 +46,14 @@ export interface TargetedToolEnvironment {
 }
 
 /** Pure selection and history policy owned by the environment's trusted adapter. */
+export interface ContextualToolEnvironment extends ToolEnvironment {
+  /** Open a selected application-owned target of a statically declared tool set. */
+  openBoundScope?(targetId: string, context: ToolEnvironmentScopeContext): ToolEnvironmentScope
+  restoreBoundScope?(targetId: string, context: ToolEnvironmentScopeContext): ToolEnvironmentScope
+}
+
 export interface ToolEnvironmentCatalogEntry {
+  readonly contextualTarget?: boolean
   readonly descriptor: ToolEnvironmentDescriptor
   readonly targets?: (reader?: StorageReader) => readonly TargetedToolEnvironmentTarget[]
   readonly historyTools?: readonly ToolDescriptor[]
@@ -58,7 +65,7 @@ export interface ToolEnvironmentCatalog {
   targets(environmentId: string, reader?: StorageReader): readonly TargetedToolEnvironmentTarget[]
   snapshot(environmentIds: readonly string[], toolIdsByEnvironment?: ToolPreferences, toolIdsByTarget?: ToolPreferencesByTarget, reader?: StorageReader): ToolEnvironmentSnapshot
   validate(snapshot: ToolEnvironmentSnapshot, reader?: StorageReader): ToolEnvironmentSnapshot
-  bind(providers: readonly ToolEnvironment[], targetedProviders?: readonly TargetedToolEnvironment[]): ToolEnvironmentRegistry
+  bind(providers: readonly ContextualToolEnvironment[], targetedProviders?: readonly TargetedToolEnvironment[]): ToolEnvironmentRegistry
   readonly environments: readonly ToolEnvironmentDescriptor[]
 }
 

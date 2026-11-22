@@ -1,4 +1,8 @@
 import type { ApiError } from './client-types.js'
+export function runFailureHint(category?: string): string | undefined {
+  if (category === 'computer-worker-upgrade-required') return '请在该工作区所属设备上升级并重启 Computer worker，然后重新发起运行。'
+}
+
 function apiError(error: unknown): error is ApiError {
   return error instanceof Error && 'status' in error && 'code' in error
 }
@@ -6,6 +10,14 @@ function apiError(error: unknown): error is ApiError {
 export function messageFor(error: unknown): string {
   if (!apiError(error)) return error instanceof Error && error.message === 'instance-unavailable' ? '请添加或恢复对应的 harness server 连接。' : '无法连接执行设备，请检查连接状态后重试。'
   const connectionErrors: Record<string, string> = {
+    'project-workspace-unavailable': '这个工作区已移除或绑定已变更，请重新选择。',
+    'project-workspace-duplicate': '这台电脑已在项目中，请选择其他电脑。',
+    'project-workspace-invalid': '请检查工作区名称、电脑和目录后重试。',
+    'project-workspace-request-conflict': '此请求已用于其他工作区操作，请重新打开项目设置。',
+    'workspace-tools-unavailable': '所选工作区缺少可用工具。请在「Agent 工具」中为此 Agent 授权，再创建会话。',
+    'workspace-model-tools-required': '请为多工作区会话选择支持工具调用的模型，再发起首次运行。',
+    'project-workspace-conflict': '项目工作区已变更，请按最新列表重新选择。',
+    'project-workspace-in-use': '有运行正在使用这个工作区，请在运行结束后移除。',
     'product-busy': 'Anybox Harness 仍有正在执行的工作，请等待完成后重试。',
     'product-unavailable': 'Anybox Harness 尚未打开或暂不可用，请查看应用状态。',
     'product-not-found': '未找到这个应用，请刷新应用列表。',

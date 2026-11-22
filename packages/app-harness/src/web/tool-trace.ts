@@ -13,10 +13,12 @@ const builtinPresentations = new Set([
   'deepseek_harness_bash', 'deepseek_harness_read', 'deepseek_harness_read_image', 'deepseek_harness_write', 'deepseek_harness_edit', 'deepseek_harness_glob', 'deepseek_harness_grep', 'deepseek_harness_todo_write',
 ])
 
-function libraryState(name: string, result: JsonValue): ToolTrace['state'] {
+function libraryState(name: string, result: JsonValue, originalName?: string): ToolTrace['state'] {
   // Arbitrary environment JSON is business data. Its successful observation is authoritative.
-  if (!builtinPresentations.has(name)) return 'completed'
   const value = resultObject(result)
+  if (originalName === 'bash' && typeof value.exitCode === 'number') return value.exitCode === 0 ? 'completed' : 'failed'
+  if (originalName === 'apply_patch' && isPatchResult(result)) return result.status
+  if (!builtinPresentations.has(originalName ?? name)) return 'completed'
   if (value.status === 'applied' || value.status === 'partial' || value.status === 'rejected' || value.status === 'cancelled') return value.status
   if (value.status === 'error' || value.error || value.timed_out === true || typeof value.exit_code === 'number' && value.exit_code !== 0 || value.signal) return 'failed'
   return 'completed'
@@ -32,8 +34,9 @@ export function isPatchResult(value: unknown): value is ApplyPatchResult {
 }
 
 function genericTrace(call: ToolTrace, result: JsonValue): LibraryToolTrace {
-  return { id: call.id, name: call.name, state: libraryState(call.name, result), result,
+  return { id: call.id, name: call.name, state: libraryState(call.name, result, call.workspace?.originalName), result,
     arguments: isBashTrace(call) ? { command: call.command } : isApplyPatchTrace(call) ? { patch: call.patch } : call.arguments,
+    ...(call.workspace ? { workspace: call.workspace } : {}),
     ...(call.environmentTool ? { environmentTool: call.environmentTool } : {}),
     ...(call.category === undefined ? {} : { category: call.category }),
     ...(call.eventIndex === undefined ? {} : { eventIndex: call.eventIndex }),
@@ -53,15 +56,18 @@ export function toolTrace(run: Pick<RunView, 'status'>, events: readonly RunEven
     } else if (event.kind === 'tool-started') {
       const call = latest(event.requestId, event.name)
       if (call?.state === 'queued') {
+        if (event.workspace) call.workspace = event.workspace
         if (event.environmentTool) call.environmentTool = event.environmentTool
         call.state = 'running'
         call.startedAt = timestamp(event.at)
       }
-      else if (call?.state !== 'running') calls.push('command' in event
-        ? { ...(event.environmentTool ? { environmentTool: event.environmentTool } : {}), id: event.requestId, name: 'bash', command: event.command, state: 'running', eventIndex, startedAt: timestamp(event.at) }
-        : 'patch' in event
-          ? { ...(event.environmentTool ? { environmentTool: event.environmentTool } : {}), id: event.requestId, name: 'apply_patch', patch: event.patch, patchTruncated: event.patchTruncated, state: 'running', eventIndex, startedAt: timestamp(event.at) }
-          : { ...(event.environmentTool ? { environmentTool: event.environmentTool } : {}), id: event.requestId, name: event.name, arguments: event.arguments, state: 'running', eventIndex, startedAt: timestamp(event.at) })
+      else if (call?.state !== 'running') {
+        const started = { id: event.requestId, state: 'running' as const, eventIndex, startedAt: timestamp(event.at),
+          ...(event.workspace ? { workspace: event.workspace } : {}), ...(event.environmentTool ? { environmentTool: event.environmentTool } : {}) }
+        calls.push('command' in event ? { ...started, name: 'bash', command: event.command } : 'patch' in event
+          ? { ...started, name: 'apply_patch', patch: event.patch, patchTruncated: event.patchTruncated }
+          : { ...started, name: event.name, arguments: event.arguments })
+      }
     } else if (event.kind === 'tool-observed') {
       const call = latest(event.requestId, event.name)
       if (!call || call.state !== 'running') continue
@@ -78,7 +84,7 @@ export function toolTrace(run: Pick<RunView, 'status'>, events: readonly RunEven
         call.result = event.result
       } else if (isLibraryToolTrace(call) && 'result' in event) {
         const result = event.result as unknown as JsonValue
-        call.state = libraryState(call.name, result); call.result = result; call.images = 'images' in event ? event.images : undefined
+        call.state = libraryState(call.name, result, call.workspace?.originalName); call.result = result; call.images = 'images' in event ? event.images : undefined
       } else if ('result' in event) {
         const generic = genericTrace(call, event.result as unknown as JsonValue)
         if ('images' in event) generic.images = event.images
@@ -103,10 +109,11 @@ export function toolTrace(run: Pick<RunView, 'status'>, events: readonly RunEven
     } else if ((event.kind === 'operation-observed' || event.kind === 'operation-failed') && event.processes) {
       for (const closed of event.processes) {
         for (const call of calls) {
-          if (!isLibraryToolTrace(call)) continue
-          if (call.name !== 'codex_exec_command' && call.name !== 'codex_write_stdin') continue
+          if (!isLibraryToolTrace(call) || closed.targetId && closed.targetId !== call.environmentTool?.targetId) continue
+          const name = call.workspace?.originalName ?? call.name
+          if (name !== 'codex_exec_command' && name !== 'codex_write_stdin') continue
           const value = resultObject(call.result)
-          const sessionId = call.name === 'codex_write_stdin' ? call.arguments.session_id : value.session_id
+          const sessionId = name === 'codex_write_stdin' ? call.arguments.session_id : value.session_id
           if (sessionId !== closed.sessionId) continue
           call.result = { ...value, output: [typeof value.output === 'string' ? value.output : '', closed.output].filter(Boolean).join(''),
             exit_code: closed.exitCode, signal: closed.signal, truncated: value.truncated === true || closed.truncated,

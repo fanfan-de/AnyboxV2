@@ -1,3 +1,5 @@
+import { originalToolDescriptor } from '@anybox/execution-environments/catalog'
+import { originalComputerNames } from './domain.js'
 import { authorizeFunction, createRunScopeAuthority, createRunTargetScopeAuthority } from '@anybox/execution-environments/run-authority'
 import type { ToolScopeTarget } from '@anybox/execution-environments/catalog'
 import { environmentManagerKey } from '../tool-environments/access.js'
@@ -112,9 +114,10 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
         const selection = toolSnapshot(initialization).environments.find(environment => environment.environmentId === target.environmentId)
         if (selection?.tools.some(tool => tool.targetId !== undefined)) {
           const exact = routes.every(({ name, grant }) => selection.tools.some(tool => {
-            const { targetId, ...descriptor } = tool
+            const { targetId } = tool
             return targetId === target.targetId && tool.definition.name === name &&
-              environmentToolKey(functionKey(selection, targetId, descriptor)) === environmentToolKey(grant.tool)
+              (tool.workspaceBindingId === undefined || resolveTargets(units).get(targetKey(selection.environmentId, tool.workspaceBindingId)) === targetId) &&
+              environmentToolKey(functionKey(selection, targetId, originalToolDescriptor(tool))) === environmentToolKey(grant.tool)
           }))
           if (!exact) throw new RunFailure('tool-unavailable')
         } else verifyRoutes(initialization, units, routes)
@@ -269,7 +272,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
               if (prior.observation.kind === 'value') return (prior.observation.tool ?? prior.observation.result) as T
               if (prior.observation.kind === 'cleanup-failed') { markCleanup(operation.kind === 'tool' ? 'tool-cleanup-failure' : 'cleanup-failure'); throw modelFailure('cleanup-failure') }
               const category = prior.observation.errorCategory
-              if (category && ['invalid-tool-request','limit-exceeded','tool-unavailable','tool-timeout','tool-cancelled','tool-cleanup-failure','state-write-failure'].includes(category)) throw new RunFailure(category as ConstructorParameters<typeof RunFailure>[0])
+              if (category && ['invalid-tool-request','limit-exceeded','tool-unavailable','computer-worker-upgrade-required','tool-timeout','tool-cancelled','tool-cleanup-failure','state-write-failure'].includes(category)) throw new RunFailure(category as ConstructorParameters<typeof RunFailure>[0])
               throw modelFailure(category as Parameters<typeof modelFailure>[0] ?? 'dependency-unavailable')
             }
             if (operation.tool && !prior) {
@@ -339,7 +342,7 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
             },
             async executeTools(requests, scheduling = 'serial', batchId) {
               if (scheduling !== 'serial') throw new RunFailure('invalid-tool-request')
-              const batch = validateToolBatch(requests, program.initialization.tools), output: ToolObservation[] = []
+              const batch = validateToolBatch(requests, program.initialization.tools, originalComputerNames(program.initialization)), output: ToolObservation[] = []
               if (manager) {
                 checkTargets()
                 if (!originalAccess) throw new RunFailure('tool-unavailable')
@@ -348,9 +351,14 @@ export function createRunRuntimeComponent(inputs: RuntimeInputs, binding?: ToolE
               ensureRunning()
               const ids = batch.map((_request, index) => batchId ? `${runId}:tool:${batchId}:${index}` : inputs.newId())
               if (batchId) await persist(() => records.saveRunResume(runId, ownerEpoch, { batch: { id: batchId, requests: batch, operationIds: ids } }, inputs.now()))
+              const snapshot = program.initialization.schemaVersion === 3 && program.initialization.toolEnvironments
+              const scoped = snapshot && snapshot.schemaVersion === 3 ? snapshot.environments.flatMap(environment => environment.tools) : []
               for (const [index, request] of batch.entries()) {
+                const bound = scoped.find(tool => tool.definition.name === request.name && tool.workspaceBindingId !== undefined)
                 const operation: RunOperationStart = { id: ids[index]!, kind: 'tool', tool: request,
-                  intent: { name: request.name, requestId: request.id, arguments: request.arguments } }
+                  intent: { name: request.name, requestId: request.id, arguments: request.arguments,
+                    ...(bound?.workspaceBindingId && bound.originalName && bound.targetId ? { workspaceBindingId: bound.workspaceBindingId,
+                      originalName: bound.originalName, toolId: bound.toolId, targetId: bound.targetId } : {}) } }
                 acceptedTools.add(operation.id)
                 const value = await track(perform<ToolObservation>(operation, resuming => executeTool(request, operation.id, resuming),
                   value => ({ kind: 'value', tool: value })))

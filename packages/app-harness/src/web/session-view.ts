@@ -73,6 +73,7 @@ export function createSessionPanel(pane: Pane, projectName: string, controller: 
       <div class="empty-branches" aria-label="选择已有对话分支" hidden></div>
     </div>
     <form class="composer">
+      <small class="composer-workspaces" hidden></small>
       <div class="composer-images" aria-label="待发送图片" aria-live="polite" hidden></div>
       <textarea rows="2" placeholder="随心输入" aria-label="消息"></textarea>
       <input class="image-picker" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
@@ -314,6 +315,10 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
     render() {
       panel.captureScroll()
       const state = controller.snapshot()
+      const workspaceLabel = get<HTMLElement>('.composer-workspaces'), bindings = state.session?.workspaceBindings ?? []
+      workspaceLabel.hidden = bindings.length < 2
+      workspaceLabel.textContent = bindings.length > 1 ? bindings.map(item => item.name).join(' · ') : ''
+      workspaceLabel.title = bindings.map(item => `${item.name} · ${item.path}`).join('\n')
       usageView.render(contextUsage(state, models?.snapshot().models))
       const tree = conversationTree(state)
       visibleMode = state.position.viewMode === 'runs' ? 'runs' : 'dialogue'

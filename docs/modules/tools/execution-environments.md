@@ -4,7 +4,7 @@
 
 ## 装配与资源
 
-两款应用的执行端各在已有 Nya 根中安装 `createExecutionEnvironmentComponent({ serviceKey })`。组件名和服务名均使用调用方传入的私有键，`inject` 声明 `local-storage`，由应用绑定到自己的执行 SQLite。组件启动先请求存储布局 2，再应用 `execution-environments` 迁移、取得本代所有权并清查前代准入。代码入口在[共享包](../../../packages/execution-environments/src/index.ts)，表结构见[授权账本](../../../packages/execution-environments/src/storage.ts)。
+两款应用的执行端各在已有 Nya 根中安装 `createExecutionEnvironmentComponent({ serviceKey })`。组件名和服务名均使用调用方传入的私有键，`inject` 声明 `local-storage`，由应用绑定到自己的执行 SQLite。组件启动先核对应用要求的存储布局（Anybox Harness 为 3，Personal Agent 为 2），再应用 `execution-environments` 迁移、取得本代所有权并清查前代准入。代码入口在[共享包](../../../packages/execution-environments/src/index.ts)，表结构见[授权账本](../../../packages/execution-environments/src/storage.ts)。
 
 模块持有 Agent 的授权修订、变更请求、准入和退出证据。Session 继续保存业务调用意图、完整工具观察及结果。工具产生的子进程、文件、附着凭据、模型请求及其远端结果归相应提供方。每个服务实例使用随机代次，修改时在同一事务校验当前代次。独占数据库所有权负责跨进程互斥。组件关闭停止新调用、取消受管工作，并等待已取得的资源句柄实际完成。
 
@@ -44,6 +44,8 @@
 ## 设置与 HTTP
 
 “执行环境”回答工具在哪里运行。第一段列出所选执行设备可用于文件和命令的 Computer，并在详情里展示附着权限和最近一次 worker 工具报告。第二段列出可授权的工具环境及已授权的 Agent。跨设备操作有两个入口。“接入另一台电脑”为所选执行设备生成附着码，“客户端电脑”管理提供本机工具的 worker 及其对外连接。 [Computer worker 独立管理](../../computer-worker-management.md)
+
+Anybox Harness 的「项目电脑」显示各台电脑的系统和连接状态，展开可查看目录范围、工具范围和 worker 的最近报告。「工具来源」汇总每个目标的工具数及已获授权的 Agent 数。展开后，表格逐项列出工具 ID 和获准使用它的 Agent。「技术标识」提供完整的环境与目标身份。工具来源的目录计数与 worker 的实际报告分别展示。
 
 “Agent 工具”按目标授予或撤销具体工具，还可单独保存环境及工具偏好，并管理 MCP 连接。保存偏好后，普通项目会话从新建时生效。Personal Agent 连续对话的下一次运行读取已采用目标范围内的工具偏好，采用新的环境或 MCP 目标集合须点击“应用已保存的环境到后续运行”。
 

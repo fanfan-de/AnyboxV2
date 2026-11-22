@@ -278,3 +278,66 @@ test('scope restoration can close an original target after discovery changed wit
   assert.deepEqual(restored, [first.targetId])
   assert.deepEqual(exits, [[target, true]])
 })
+
+test('a contextual provider dispatches and restores the same tool ID in distinct pinned scopes', async () => {
+  const source = { toolId: 'shell.read', version: '1', definition: { name: 'read', parameters: { type: 'object', additionalProperties: false } } }
+  const descriptor = { environmentId: 'shell', version: '1', recovery: 'observe-existing', tools: [source] }
+  const ids = ['work-a', 'work-b'], targets = ['grant-a', 'grant-b'], names = ['main__read', 'workspace2__read']
+  const opened = []
+  function scope(kind, target) {
+    opened.push([kind, target])
+    return {
+      execute(request) {
+        assert.equal(request.toolId, source.toolId)
+        return { result: Promise.resolve({ result: target }), done: Promise.resolve(), cancel() {} }
+      },
+      hasResources: () => true,
+      async cancel() {},
+      close: () => ({ result: Promise.resolve({ target }), done: Promise.resolve(), cancel() {} }),
+    }
+  }
+  const provider = { ...descriptor, openScope() { assert.fail('an aliased call must resolve its exact workspace') },
+    openBoundScope: target => scope('open', target), restoreBoundScope: target => scope('restore', target) }
+  const registry = createToolRegistry('boot', tools => tools.register({ kind: 'static', contextualTarget: true,
+    catalog: { descriptor }, runtime: { bind: () => provider } }))
+  const aliases = names.map((name, index) => ({ ...source, originalName: source.definition.name,
+    targetId: targets[index], workspaceBindingId: ids[index], definition: { ...source.definition, name } }))
+  const snapshot = { schemaVersion: 3, environments: [{ environmentId: 'shell', version: '1', tools: aliases }] }
+  const { catalog, bindings } = registry.describe({})
+  assert.deepEqual(catalog.validate(snapshot), snapshot)
+  assert.throws(() => parseToolEnvironmentSnapshot({ ...snapshot, schemaVersion: 2 }))
+  const pinned = new Map(ids.map((id, index) => [targetKey('shell', id), targets[index]]))
+  const routes = bindings.routes(snapshot.environments, names, pinned)
+  const offered = bindings.available(new Map([['shell', targets.map(targetId => ({ targetId }))]]))
+  assert.deepEqual(routes.map(route => route.tool), offered, 'grant digests use the unaliased contract')
+  const swapped = new Map(pinned).set(targetKey('shell', ids[0]), targets[1])
+  assert.throws(() => bindings.routes(snapshot.environments, names, swapped), { code: 'environment-target-unavailable' })
+  const duplicate = structuredClone(snapshot)
+  duplicate.environments[0].tools[1].definition.name = names[0]
+  assert.throws(() => catalog.validate(duplicate))
+  const altered = structuredClone(snapshot)
+  altered.environments[0].tools[0].originalName = 'write'
+  assert.throws(() => catalog.validate(altered))
+  const bound = registry.runtime.bind({})
+  for (const resuming of [false, true]) {
+    const run = bound.openRun(snapshot, { runId: 'r', runOwnerEpoch: resuming ? 2 : 1, lazyScopes: true,
+      signal: new AbortController().signal, resuming })
+    for (const [index, route] of routes.entries()) {
+      if (resuming) {
+        assert.throws(() => run.execute({ name: route.name, arguments: {} }, 'op-' + index, true, route.tool),
+          { category: 'outcome-unknown' })
+        run.restoreTarget(route.tool)
+      }
+      assert.throws(() => run.execute({ name: names[1-index], arguments: {} }, 'wrong-target', resuming, route.tool))
+      const call = run.execute({ name: route.name, arguments: {} }, 'op-' + index, resuming, route.tool)
+      assert.deepEqual(await call.result, { name: route.name, result: targets[index] })
+      await call.done
+    }
+    const exits = []
+    const closed = run.close((target, proven) => exits.push([target.targetId, proven]))
+    assert.deepEqual((await closed.result).environments.map(entry => entry.targetId), targets)
+    await closed.done
+    assert.deepEqual(exits, targets.map(target => [target, true]))
+  }
+  assert.deepEqual(opened, [['open', targets[0]], ['open', targets[1]], ['restore', targets[0]], ['restore', targets[1]]])
+})

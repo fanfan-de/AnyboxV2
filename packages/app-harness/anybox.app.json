@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "lifecycleVersion": 1,
   "appId": "agent",
-  "version": "0.1.11",
+  "version": "0.1.14",
   "publisher": "anybox",
   "displayName": "Anybox Harness",
   "applicationApi": "^0.1.0",
@@ -19,7 +19,7 @@
   },
   "capabilityRequirements": {
     "client": { "required": { "storage.sqlite": "^1.0.0" }, "optional": { "system.directory-picker": "^1.0.0" } },
-    "execution": { "required": { "storage.sqlite": "^1.1.0" }, "optional": { "system.directory-picker": "^1.0.0" } }
+    "execution": { "required": { "storage.sqlite": "^1.2.0" }, "optional": { "system.directory-picker": "^1.0.0" } }
   },
   "dataCompatibility": "generated"
 }

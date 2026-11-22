@@ -217,7 +217,7 @@ export function createUnitAttachmentsComponent(inputs: RuntimeInputs, options: U
       verify: bindings => track(() => {
         const fixed = validateRunUnitBindings(bindings)
         return db.read(reader => {
-          for (const binding of [fixed.models, fixed.computer]) {
+          for (const binding of [fixed.models, ...(fixed.workspaces?.map(workspace => workspace.unit) ?? [fixed.computer])]) {
             if (!bindingMatches(binding, readAttachment(reader, binding.attachmentId))) throw unitError('unit-attachment-mismatch')
           }
         })

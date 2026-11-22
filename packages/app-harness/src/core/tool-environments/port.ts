@@ -1,7 +1,7 @@
 import type { FunctionBindingTarget, FunctionBindings } from '@anybox/execution-environments/bindings'
 import type { ToolEnvironmentCatalog } from '@anybox/execution-environments/catalog'
 import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
-import type { Project } from '../project/component.js'
+import type { Project, ProjectWorkspace } from '../project/component.js'
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { Session } from '../session/domain.js'
 import type { RunUnitBindings, UnitAttachment, UnitAttachmentsPort } from '../unit/port.js'
@@ -21,6 +21,7 @@ export type RunToolTargets = (units: RunUnitBindings | undefined) => ReadonlyMap
 
 export type PrepareRunToolEnvironment = (input: {
   readonly project: Project
+  readonly workspaces?: readonly ProjectWorkspace[]
   readonly session: Pick<Session, 'toolEnvironments' | 'toolSelection'>
   readonly modelSupportsTools: boolean
 }, attachments: Pick<UnitAttachmentsPort, 'local' | 'binding' | 'get'>) => Promise<{

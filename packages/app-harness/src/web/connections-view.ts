@@ -8,12 +8,6 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   const owned = createPageRequests((path, body, signal) => requestJSON(path, body, signal))
   const targets: ReturnType<typeof createPageRequests>[] = []
   const control = owned.api
-  const select = root.querySelector('#agent--harness-select') as HTMLSelectElement
-  select.replaceChildren(...api.connections.map(connection => {
-    const option = document.createElement('option'); option.value = connection.id; option.textContent = connection.name; return option
-  }))
-  if (selectedId) select.value = selectedId
-  select.disabled = !api.connections.length
   const selectConnection = (connection: HarnessConnection) => {
     try { sessionStorage.setItem('anybox.client.selected', connection.id) } catch { /* Optional selection. */ }
     changed(connection)
@@ -21,7 +15,6 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   const requestConnection = (id: string): boolean => {
     const currentId = selectedId ?? api.connections[0]?.id ?? ''
     const connection = api.connections.find(item => item.id === id)
-    select.value = currentId
     if (lifetime.signal.aborted || !connection) return false
     if (id === currentId) return true
     if (!canLeave()) return false
@@ -29,11 +22,9 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
       open(); status('请先保存或放弃尚未保存的连接修改，等待进行中的操作完成后再切换设备。')
       return false
     }
-    select.value = connection.id
     selectConnection(connection)
     return true
   }
-  select.addEventListener('change', () => { requestConnection(select.value) }, { signal: lifetime.signal })
   const settingsDialog = root.querySelector<HTMLDialogElement>('#agent--settings-dialog')!
   const panel = root.querySelector<HTMLElement>('#agent--connections-settings')!
   panel.innerHTML = `<header class="settings-panel-heading"><h3 id="agent--connections-title">管理连接</h3>

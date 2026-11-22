@@ -58,12 +58,14 @@ export interface WorkerInfo {
   readonly runtime?: WorkerRuntimeHealth
   /** Older workers omit this read-only report; it is not an execution or authorization guarantee. */
   readonly toolManifest?: ComputerToolManifest
+  /** This boot understands per-workspace declarations and validates their worker scope identity. */
+  readonly workspaceScopeVersion?: 1
 }
 /** A passive client retains bounded wire data; only the harness server validates the trusted tool catalog. */
 export type ObservedWorkerInfo = Omit<WorkerInfo, 'toolManifest'> & { readonly toolManifest?: JsonValue }
 /** Promises confirm durable worker facts; losing a caller never cancels accepted execution. */
 export interface ComputerWorkerPort {
-  info(): Promise<WorkerInfo>
+  info(attachmentId?: string): Promise<WorkerInfo>
   /** Last authenticated info observation only; never connects to or starts a worker. */
   observedInfo?(): ObservedWorkerInfo | undefined
   claimRun(input: WorkerAuthorization): Promise<void>

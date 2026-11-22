@@ -13,6 +13,7 @@ import type { Component, Fiber } from '@nya/core'
 import { modelsServiceKey, modelsSettingsServiceKey, modelsError } from '@anybox/models'
 import type { ModelsService, ModelsSettingsService } from '@anybox/models'
 import type { RuntimeInputs } from './contracts.js'
+import { localStorageError, localStorageServiceKey, type LocalStoragePort } from '@anybox/storage-sqlite/port'
 import { validateAgents } from './agent/domain.js'
 import type { AgentDefinition } from './agent/domain.js'
 import { agentPromptServiceKey, createAgentPromptComponent } from './agent/prompt-binding-component.js'
@@ -81,7 +82,7 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly canManageAgent?: (actorId: string, agentId: string) => boolean
 }
 
-export interface HarnessServerApi extends RunPort, Omit<SessionPort, 'targetedTools'>, Omit<ProjectPort, 'requireAvailable' | 'getIn'>,
+export interface HarnessServerApi extends RunPort, Omit<SessionPort, 'targetedTools'>, Omit<ProjectPort, 'requireAvailable' | 'getIn' | 'workspacesIn' | 'selectWorkspacesIn' | 'resolveWorkspacesIn' | 'resolveWorkspaces' | 'requireWorkspaceAvailable' | 'retainWorkspacesIn' | 'releaseWorkspacesIn'>,
   Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly Readonly<{ id: string }>[]
@@ -104,6 +105,15 @@ function requireActive(fiber: Fiber): void {
 export interface HarnessServerLifetime {
   isClosing(): boolean
   readonly signal?: AbortSignal
+}
+
+const harnessWriter = { layout: 3, applicationId: 'agent' } as const
+export async function requireHarnessStorage(root: Context, bindings?: Readonly<Record<string, string>>) {
+  const storageKey = bindings?.[localStorageServiceKey] ?? localStorageServiceKey
+  const storage = root.get<LocalStoragePort>(storageKey)
+  if (!storage) throw new Error(`waiting for ${storageKey}`)
+  if (!storage.requireLayout) throw localStorageError('schema-version', 'Harness requires database layout 3')
+  await storage.requireLayout(harnessWriter.layout, harnessWriter.applicationId)
 }
 
 function runtimeInputs(options: HarnessServerCoreOptions): RuntimeInputs {
@@ -159,8 +169,8 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     if (!worker) return Promise.reject(projectUnavailableError())
     return worker.query({ attachmentId, query })
   }
-  return [createExecutionEnvironmentComponent({ serviceKey: environmentManagerKey }), createMcpEnvironmentComponent({ serviceKey: mcpEnvironmentServiceKey }), ...protocolComponents, ...attachmentComponents, ...workerComponents,
-    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery }),
+  return [createExecutionEnvironmentComponent({ serviceKey: environmentManagerKey, storage: harnessWriter }), createMcpEnvironmentComponent({ serviceKey: mcpEnvironmentServiceKey }), ...protocolComponents, ...attachmentComponents, ...workerComponents,
+    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery, enableWorkspaceAttachments: true }),
     createProjectFilesComponent(inputs),
     createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
     createSessionComponent(inputs, agents, toolEnvironments,
@@ -254,15 +264,19 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     closeDirectoryBrowse: (...args) => currentProjects().closeDirectoryBrowse(...args),
     onDirectoryBrowseRetired: listener => currentProjects().onDirectoryBrowseRetired(listener),
     listProjects: () => currentProjects().listProjects(),
+    listProjectWorkspaces: id => currentProjects().listProjectWorkspaces(id),
+    addProjectWorkspace: (id, input) => currentProjects().addProjectWorkspace(id, input),
+    renameProjectWorkspace: (id, workspace, input) => currentProjects().renameProjectWorkspace(id, workspace, input),
+    removeProjectWorkspace: (id, workspace, input) => currentProjects().removeProjectWorkspace(id, workspace, input),
     getProject: id => currentProjects().getProject(id),
     getSessionDefaults: agentId => currentSessions().getSessionDefaults(agentId),
     setSessionDefaults: (agentId, modelId, expectedRevision) => {
       if (modelId !== null) validateSelectedModel(modelId, true)
       return currentSessions().setSessionDefaults(agentId, modelId, expectedRevision)
     },
-    createSession: (projectId, agentId, modelId) => {
+    createSession: (projectId, agentId, modelId, workspaces) => {
       if (modelId !== undefined) validateSelectedModel(modelId)
-      return currentSessions().createSession(projectId, agentId, modelId)
+      return currentSessions().createSession(projectId, agentId, modelId, workspaces)
     },
     selectSessionModel: (sessionId, modelId) => {
       validateSelectedModel(modelId)
@@ -331,6 +345,7 @@ export async function installHarnessServerCore(context: Context, options: Harnes
   }
   const lifetime: HarnessServerLifetime = { isClosing: () => closing, signal: abort.signal }
   try {
+    await requireHarnessStorage(context, options.serviceBindings)
     // Prompt providers are available before their Agent consumers start.
     for (const component of [...createHarnessServerPromptComponents(options), ...createHarnessServerAgentComponents(context, options, lifetime)]) {
       const fiber = context.installComponent(component, undefined, { bindings: options.serviceBindings })

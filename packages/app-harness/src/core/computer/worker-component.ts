@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { realpath, stat } from 'node:fs/promises'
+import { isDeepStrictEqual } from 'node:util'
+import { getToolById } from '@anybox/computer-tools/contracts'
 import { createDirectoryIdentityCheck } from '../platform/path-identity.js'
 import { readProjectFile, searchProjectFiles } from '../project-files/filesystem.js'
 import { listProjectDirectory } from '../project-files/tree-access.js'
@@ -8,11 +10,12 @@ import { fileTreeLimits } from '../project-files/domain.js'
 import { ceilingPermitsRoot, queryRoot, validateComputerQuery } from './query-domain.js'
 import type { ComputerQueryResult } from './query-domain.js'
 import type { UnitScope } from '../unit/domain.js'
+import { localComputerUnitId } from '../unit/domain.js'
 import type { Component } from '@nya/core'
-import { createComputerToolManifest } from './tool-support.js'
+import { computerToolExecutor, createComputerToolManifest } from './tool-support.js'
 import type { JsonValue } from '@anybox/models'
 import type { OwnedCall } from '../contracts.js'
-import { computerDeclarationDigest } from './operations-domain.js'
+import { computerDeclarationDigest, computerWorkspaceScopeId } from './operations-domain.js'
 import type { ProcessRef } from './operations-domain.js'
 import { validateToolBatch } from '../run/domain.js'
 import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
@@ -41,6 +44,10 @@ const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
   // Runs accepted before attachments existed belong to the loopback harness server.
   tx.execute(`ALTER TABLE computer_worker_runs ADD COLUMN attachment_id TEXT NOT NULL DEFAULT '${localWorkerAttachmentId}'`)
   tx.execute('CREATE INDEX computer_worker_runs_attachment ON computer_worker_runs(attachment_id, closed)')
+} }, { version: 3, up(tx) {
+  // Existing wire run IDs stay intact, including their deduplicated cancellation and close receipts.
+  tx.execute('ALTER TABLE computer_worker_runs ADD COLUMN parent_run_id TEXT')
+  tx.execute('ALTER TABLE computer_worker_runs ADD COLUMN workspace_binding_id TEXT')
 } }]
 const terminal = (state: string) => ['succeeded', 'failed', 'cancelled', 'outcome-unknown'].includes(state)
 const json = (value: unknown): JsonValue => JSON.parse(JSON.stringify(value)) as JsonValue
@@ -147,6 +154,15 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
       const execute = async (submission: WorkerSubmission) => {
         let call: OwnedCall<unknown> | undefined
         let resultValue: unknown, actualExitFailed = false
+        const processReference = (observation: unknown): ProcessRef | undefined => {
+          const request = submission.declaration?.request
+          if (!request || !submission.binding || request.name !== 'codex_exec_command' &&
+            (submission.declaration?.schemaVersion !== 2 || computerToolExecutor(request.name) !== 'processes' || request.name === 'codex_write_stdin')) return
+          const sessionId = (observation as { result?: { session_id?: number } } | undefined)?.result?.session_id
+          if (typeof sessionId !== 'number' || !Number.isSafeInteger(sessionId) || sessionId < 1) return
+          return { processId: `${identity.bootId}:${submission.runId}:${sessionId}`, runId: submission.runId, sessionId,
+            computerInstanceId: submission.binding.computerInstanceId, instanceGeneration: submission.binding.instanceGeneration }
+        }
         try {
           const started = await db.transaction(tx => {
             const original = read(tx, submission.operationId)
@@ -188,11 +204,16 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
             const row = await db.read(reader => reader.get('SELECT * FROM computer_worker_runs WHERE run_id = ?', [submission.runId]))
             const current = scopes.get(submission.runId)
             if (row?.uncertain) {
-              if (current) await joined(current.execution.close())
+              if (current) {
+                call = current.execution.close()
+                void call.result.then(value => { resultValue = value }, () => {})
+                await joined(call)
+              }
               throw workerError('worker-scope-unknown')
             }
             call = row?.cleanup_json ? { result: Promise.resolve(JSON.parse(String(row.cleanup_json)) as JsonValue), done: Promise.resolve(), cancel() {} } : current?.execution.close() ?? { result: Promise.resolve({ processes: [] }), done: Promise.resolve(), cancel() {} }
             active.set(submission.operationId, call)
+            void call.result.then(value => { resultValue = value }, () => {})
             const observation = json(await joined(call))
             await db.transaction(tx => {
               tx.execute('UPDATE computer_worker_runs SET closed = 1, has_processes = 0, cleanup_json = ? WHERE run_id = ?', [JSON.stringify(observation), submission.runId])
@@ -214,12 +235,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
           void call.done.catch(() => { actualExitFailed = true })
           await db.transaction(tx => tx.execute("UPDATE computer_worker_operations SET state = 'running' WHERE operation_id = ?", [submission.operationId]))
           const observation = json(await joined(call))
-          const value = observation as unknown as { result?: { session_id?: unknown }; images?: readonly WorkerImage['ref'][] }
-          let processRef: ProcessRef | undefined
-          if (request.name === 'codex_exec_command' && Number.isSafeInteger(value.result?.session_id)) {
-            processRef = { processId: `${identity.bootId}:${submission.runId}:${String(value.result!.session_id)}`, runId: submission.runId,
-              sessionId: Number(value.result!.session_id), computerInstanceId: submission.binding!.computerInstanceId, instanceGeneration: submission.binding!.instanceGeneration }
-          }
+          const value = observation as unknown as { images?: readonly WorkerImage['ref'][] }
           let images: WorkerImage[] | undefined
           if (value.images?.length) {
             const retained = await db.transaction(tx => deps[imageAssetsServiceKey].retainIn(tx, submission.declaration!.sessionId, `worker-operation:${submission.operationId}`, value.images!))
@@ -229,7 +245,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
               images.push({ ref, base64: Buffer.from(bytes).toString('base64') })
             }
           }
-          await finish(submission.operationId, 'succeeded', observation, undefined, processRef, images)
+          await finish(submission.operationId, 'succeeded', observation, undefined, processReference(observation), images)
         } catch (error) {
           if (call) {
             call.cancel('worker-execution-failed'); void call.result.catch(() => {})
@@ -239,7 +255,8 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
           const failedCleanup = actualExitFailed || category === 'cleanup-failure'
           if (failedCleanup) await db.transaction(tx => tx.execute('UPDATE computer_worker_runs SET uncertain = 1 WHERE run_id = ?', [submission.runId]))
           const failure = failedCleanup ? Object.assign(new Error('worker tool cleanup failed'), { name: 'WorkerCleanupError', category: 'cleanup-failure' }) : error
-          await finish(submission.operationId, category === 'cancelled' && !failedCleanup ? 'cancelled' : error instanceof Error && 'code' in error && error.code === 'worker-scope-unknown' ? 'outcome-unknown' : 'failed', resultValue === undefined ? undefined : json(resultValue), failure)
+          await finish(submission.operationId, category === 'cancelled' && !failedCleanup ? 'cancelled' : error instanceof Error && 'code' in error && error.code === 'worker-scope-unknown' ? 'outcome-unknown' : 'failed', resultValue === undefined ? undefined : json(resultValue), failure,
+            submission.declaration?.schemaVersion === 2 ? processReference(resultValue) : undefined)
         } finally { active.delete(submission.operationId) }
       }
       const schedule = (submission: WorkerSubmission) => {
@@ -285,7 +302,7 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
       const unsubscribe = attachments.onChanged((attachment, change) => attachment.state === 'revoked' || change === 'permissions' ? revokeRuns(attachment.attachmentId) : undefined)
       ctx.effect(() => () => unsubscribe(), 'stop observing attachment revocations')
       const service: ComputerWorkerPort = {
-        info: async () => ({ ...identity, platform: process.platform, architecture: process.arch, toolManifest,
+        info: async () => ({ ...identity, platform: process.platform, architecture: process.arch, toolManifest, workspaceScopeVersion: 1,
           ...(workerBuildId === undefined ? {} : { buildId: workerBuildId }), runtime: workerRuntimeHealth() }),
         claimRun(input) {
           assertOpen(); auth(input)
@@ -321,6 +338,19 @@ export function createComputerWorkerExecutorComponent(identity: { readonly worke
               validateToolBatch([declaration.request], [declaration.tool.definition])
               // New work checks both grants against this worker's actual directory identity. Existing receipts return above.
               const attachment = attachments.requireApprovedIn(tx, input.attachmentId)
+              if (declaration.schemaVersion === 2) {
+                const scope = declaration.workspaceScope
+                if (!scope) throw workerError('worker-invalid')
+                text(scope.parentRunId); text(scope.bindingId); text(scope.unitId)
+                const tool = getToolById(declaration.tool.toolId)
+                if (!tool || tool.version !== declaration.tool.version || !isDeepStrictEqual(tool.definition, declaration.tool.definition) ||
+                  !computerToolExecutor(tool.definition.name)) throw workerError('worker-scope-rejected')
+                if (scope.attachmentId !== input.attachmentId || scope.unitEpoch !== attachment.epoch ||
+                  scope.unitId !== (input.attachmentId === localWorkerAttachmentId ? localComputerUnitId : identity.workerId) ||
+                  computerWorkspaceScopeId(scope) !== input.runId) throw workerError('worker-binding-conflict')
+                if (run.binding_json !== null && (run.parent_run_id !== scope.parentRunId || run.workspace_binding_id !== scope.bindingId)) throw workerError('worker-binding-conflict')
+                tx.execute('UPDATE computer_worker_runs SET parent_run_id=?,workspace_binding_id=? WHERE run_id=?', [scope.parentRunId, scope.bindingId, input.runId])
+              } else if (declaration.schemaVersion !== 1 || run.parent_run_id !== null) throw workerError('worker-binding-conflict')
               const granted = [attachment.ceiling, attachment.scope]
               if (granted.some(scope => scope.kind !== 'computer' || !ceilingPermits({ ...scope, projects: 'all' }, { path: binding.path, toolId: declaration.tool.toolId }))) throw workerError('worker-scope-rejected')
               let canonical: string

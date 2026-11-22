@@ -1,10 +1,13 @@
 import { nativeSearchTool } from '@anybox/models'
 import { checkedAgentToolPreferences, planToolAccess } from '../tool-environments/access.js'
 import type { FunctionBindings } from '@anybox/execution-environments/bindings'
-import { assertRunGrants, checkedTargetToolPreferences, checkedEnvironmentIds, parseRunAccess } from '@anybox/execution-environments/bindings'
+import { functionKey, assertRunGrants, checkedTargetToolPreferences, checkedEnvironmentIds, parseRunAccess } from '@anybox/execution-environments/bindings'
 import type { EnvironmentSelection } from '@anybox/execution-environments/bindings'
 import type { ExecutionEnvironmentManager } from '@anybox/execution-environments'
 import { environmentError } from '@anybox/execution-environments/contracts'
+import type { ProjectPort } from '../project/component.js'
+import { computerOperationBinding, bindComputerWorkspaces, computerToolEnvironmentDescriptor, computerToolTarget } from '../tool-environments/computer.js'
+import type { SessionWorkspaceSelection, SessionWorkspaceBinding } from './domain.js'
 import type { ProjectFilesPort } from '../project-files/port.js'
 import { validateFileBatch } from '../project-files/domain.js'
 import type { FileRef } from '../project-files/domain.js'
@@ -12,7 +15,7 @@ import type { ComputerOperationsPort } from '../computer/operations-port.js'
 import type { UnitAttachmentsPort } from '../unit/port.js'
 import { validateRunUnitBindings } from '../unit/domain.js'
 import { needsComputer } from '../computer/operations-domain.js'
-import { validateToolBatch, toolOutputBytes } from '../run/domain.js'
+import { validateToolBatch, originalComputerNames, toolOutputBytes } from '../run/domain.js'
 /** SQLite implementation owned by the Session component; no runtime model plans or Nya services. */
 import type { RuntimeInputs } from '../contracts.js'
 import { isDeepStrictEqual } from 'node:util'
@@ -34,16 +37,16 @@ import type { RunEventData } from '../run/execution.js'
 import type { SessionPort, SessionRunPort } from './port.js'
 import { portableHistory } from './portable-history.js'
 import type { PortableHistoryEvent } from './portable-history.js'
-import { environmentForTool, parseToolEnvironmentSnapshot } from '../tool-environments/domain.js'
+import { parseToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 import type { RunToolTargets, ToolEnvironmentCatalog } from '../tool-environments/port.js'
-import { canBindLegacyComputerAccess, computerCleanupReceipt } from '../tool-environments/history.js'
+import { canBindLegacyComputerAccess, computerCleanupReceipts } from '../tool-environments/history.js'
 
 type SavedSessionDefaults = Pick<SessionDefaults, 'agentId' | 'modelId' | 'revision'>
 type SessionRecords = Omit<SessionPort, 'targetedTools' | 'environmentTools' | 'getAgentEnvironmentSelection' | 'setAgentEnvironmentSelection' | 'createSession' | 'getSessionDefaults' | 'setSessionDefaults' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> & Omit<SessionRunPort, 'describeImages' | 'readFileSnapshots'> & {
   getAgentEnvironmentSelection(id: string, fallback: readonly string[]): Promise<EnvironmentSelection>
   setAgentEnvironmentSelection(id: string, input: import('@anybox/execution-environments/bindings').SelectionInput, fallback: readonly string[]): Promise<EnvironmentSelection>
-  createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string, fallbackModelId?: string | null, environmentIds?: readonly string[]): Promise<Session>
+  createSession(id: string, projectId: string, agentId: string, now: string, modelId?: string, fallbackModelId?: string | null, environmentIds?: readonly string[], workspaces?: SessionWorkspaceSelection): Promise<Session>
   getSessionDefaults(agentId: string): Promise<SavedSessionDefaults>
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SavedSessionDefaults>
 }
@@ -272,6 +275,13 @@ const migrations: readonly StorageMigration[] = [{
     tx.execute('CREATE TABLE harness_session_environments (session_id TEXT NOT NULL REFERENCES harness_sessions(id), version INTEGER NOT NULL, ids_json TEXT NOT NULL, PRIMARY KEY(session_id,version))')
     tx.execute('CREATE TABLE harness_run_environment_access (run_id TEXT PRIMARY KEY REFERENCES harness_runs(id), access_json TEXT NOT NULL, format_version INTEGER NOT NULL CHECK(format_version=1), selection_version INTEGER NOT NULL, grant_revision INTEGER NOT NULL)')
   },
+}, {
+  version: 15,
+  up(tx) {
+    tx.execute('ALTER TABLE harness_sessions ADD COLUMN workspace_bindings_json TEXT')
+    tx.execute(`CREATE TRIGGER harness_sessions_workspace_bindings_immutable BEFORE UPDATE OF workspace_bindings_json ON harness_sessions
+      BEGIN SELECT RAISE(ABORT, 'Session workspace selection is immutable'); END`)
+  },
 }]
 
 function environmentSelection(reader: StorageReader, id: string, fallback: readonly string[], session = false): EnvironmentSelection {
@@ -341,13 +351,16 @@ function cleanupOutputBytes(intent: JsonValue, result?: JsonValue): number {
   if (!intent || typeof intent !== 'object' || Array.isArray(intent) ||
     !['tool-process-cleanup', 'computer-scope-cleanup', 'tool-environment-cleanup'].includes(String((intent as Record<string, JsonValue>).kind)) ||
     !result || typeof result !== 'object' || Array.isArray(result)) return 0
-  const receipt = computerCleanupReceipt(result)
-  const processes = receipt && typeof receipt === 'object' && !Array.isArray(receipt) ? (receipt as Readonly<Record<string, JsonValue>>).processes : undefined
-  return Array.isArray(processes) ? processes.reduce((total, process) => {
-    if (!process || typeof process !== 'object' || Array.isArray(process)) return total
-    const output = (process as Record<string, JsonValue>).output
-    return total + (typeof output === 'string' ? Buffer.byteLength(output, 'utf8') : 0)
-  }, 0) : 0
+  let bytes = 0
+  for (const receipt of computerCleanupReceipts(result)) {
+    if (!Array.isArray(receipt.processes)) continue
+    for (const process of receipt.processes) {
+      if (!process || typeof process !== 'object' || Array.isArray(process)) continue
+      const output = (process as Record<string, JsonValue>).output
+      if (typeof output === 'string') bytes += Buffer.byteLength(output, 'utf8')
+    }
+  }
+  return bytes
 }
 
 function readAgentTools(reader: StorageReader, agentId: string): AgentToolsSelection {
@@ -552,8 +565,10 @@ function sessionTitle(reader: StorageReader, sessionId: string, historyMode: Ses
 }
 
 function sessionFromRow(row: StorageRow, reader: StorageReader): Session {
+  const workspaceBindings = optional(row, 'workspace_bindings_json')
   const id = required(row, 'id'), historyMode = required(row, 'history_mode') as Session['historyMode']
   return Object.freeze({
+    ...(workspaceBindings ? { workspaceBindings: JSON.parse(workspaceBindings) as SessionWorkspaceBinding[] } : {}),
     id, title: sessionTitle(reader, id, historyMode), projectId: required(row, 'project_id'),
     archivedAt: optional(row, 'archived_at') ?? null,
     agentId: required(row, 'agent_id'), modelId: optional(row, 'model_id') ?? null, createdAt: required(row, 'created_at'),
@@ -720,6 +735,7 @@ export async function openSqliteSessionRecords(
   files: ProjectFilesPort,
   computers: ComputerOperationsPort,
   attachments: UnitAttachmentsPort,
+  projects: ProjectPort,
   environments?: ToolEnvironmentCatalog,
   manager?: ExecutionEnvironmentManager,
   bindings?: FunctionBindings,
@@ -738,6 +754,7 @@ export async function openSqliteSessionRecords(
       const next = advanceExecution(prior, event)
       // The model exchange cannot resume, but any independent computer scope still requires cancellation and exit.
       if (runUsesComputer(tx, id)) computers.requestCancelIn(tx, id)
+      projects.releaseWorkspacesIn(tx, id)
       tx.execute("UPDATE harness_runs SET status = 'interrupted', updated_at = ?, execution_json = ?, revision = revision + 1 WHERE id = ?",
         [at, JSON.stringify(next), id])
       tx.execute('INSERT INTO harness_run_events (run_id, seq, at, payload_json) VALUES (?, ?, ?, ?)',
@@ -785,7 +802,7 @@ export async function openSqliteSessionRecords(
         return Object.freeze({ agentId, modelId, revision })
       })
     },
-    createSession(id, projectId, agentId, now, requestedModelId, fallbackModelId = null, environmentIds) {
+    createSession(id, projectId, agentId, now, requestedModelId, fallbackModelId = null, environmentIds, selection) {
       return db.transaction(tx => {
         if (!tx.get('SELECT id FROM harness_projects WHERE id = ?', [projectId])) {
           throw new Error(`unknown project ${projectId}`)
@@ -794,15 +811,35 @@ export async function openSqliteSessionRecords(
         if (environmentIds !== undefined && !environments) throw new TypeError('tool environment registry is unavailable')
         const computerToolIds = readAgentTools(tx, agentId).toolIds
         const preference = environmentSelection(tx, agentId, environmentIds ?? ['computer'])
-        const toolEnvironments = environments?.snapshot(preference.environmentIds.filter(id => id !== 'model-search'), { ...preference.toolIdsByEnvironment, computer: computerToolIds }, preference.toolIdsByTarget, tx)
+        const selected = selection === undefined ? undefined : projects.selectWorkspacesIn(tx, projectId, selection.workspaceIds, selection.projectWorkspaceRevision)
+        const workspaceBindings = selected?.map(({ id, revision, name, path }) => ({ id, revision, name, path }))
+        const template = environments?.snapshot(preference.environmentIds.filter(id => id !== 'model-search'), { ...preference.toolIdsByEnvironment, computer: computerToolIds }, preference.toolIdsByTarget, tx)
+        const toolEnvironments = template && selected && selected.length > 1
+          ? bindComputerWorkspaces(template, selected, id => attachments.getIn(tx, id)) : template
+        if (selected && selected.length > 1) {
+          const grants = manager?.readIn(tx, agentId).grants ?? []
+          const declared = toolEnvironments?.environments.find(environment => environment.environmentId === 'computer')?.tools ?? []
+          for (const workspace of selected) {
+            const allowed = declared.filter(tool => {
+              const raw = getToolById(tool.toolId)
+              if (tool.workspaceBindingId !== workspace.id || !tool.targetId || !raw) return false
+              const key = functionKey(computerToolEnvironmentDescriptor, tool.targetId, raw)
+              return grants.some(({ tool }) => tool.environmentId === key.environmentId && tool.targetId === key.targetId &&
+                tool.toolId === key.toolId && tool.version === key.version)
+            })
+            if (!allowed.some(tool => (getToolById(tool.toolId)?.dependencies ?? []).every(id => allowed.some(entry => entry.toolId === id)))) {
+              throw environmentError('workspace-tools-unavailable', 409)
+            }
+          }
+        }
         const toolSelection: ToolSelectionSnapshot = toolEnvironments
           ? Object.freeze({ schemaVersion: 1, tools: Object.freeze(toolEnvironments.environments.flatMap(environment => environment.tools)) })
           : createToolSelection(computerToolIds)
         const session = createSession(id, projectId, agentId, now, modelId, toolSelection, toolEnvironments)
-        tx.execute("INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json, tool_environments_json) VALUES (?, ?, ?, ?, ?, 'native-local-v1', ?, ?)",
-          [id, projectId, agentId, now, modelId, serialize(toolSelection), toolEnvironments ? serialize(toolEnvironments) : null])
+        tx.execute("INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json, tool_environments_json, workspace_bindings_json) VALUES (?, ?, ?, ?, ?, 'native-local-v1', ?, ?, ?)",
+          [id, projectId, agentId, now, modelId, serialize(toolSelection), toolEnvironments ? serialize(toolEnvironments) : null, workspaceBindings ? serialize(workspaceBindings) : null])
         tx.execute('INSERT INTO harness_session_environments VALUES(?,0,?)', [id,JSON.stringify(preference)])
-        return Object.freeze({ ...session, environmentSelection: { ...preference, version: 0 } })
+        return Object.freeze({ ...session, ...(workspaceBindings ? { workspaceBindings } : {}), environmentSelection: { ...preference, version: 0 } })
       })
     },
     selectSessionModel(sessionId, modelId) {
@@ -931,7 +968,24 @@ export async function openSqliteSessionRecords(
         if (inputFiles(native.input).some(file => file.projectId !== session.projectId)) throw treeError('invalid-history')
         if (inputFiles(native.input).length) files.retainIn(tx, input.sessionId, `run-input:${id}`, inputFiles(native.input))
         const units = native.units === undefined ? undefined : validateRunUnitBindings(native.units)
-        if (units) { attachments.requireApprovedIn(tx, units.models); attachments.requireApprovedIn(tx, units.computer) }
+        const scopes = new Map<string, readonly string[] | 'all'>()
+        if (units) {
+          attachments.requireApprovedIn(tx, units.models)
+          const entries = units.workspaces ?? [{ unit: units.computer }]
+          for (const { unit } of entries) {
+            const scope = attachments.requireApprovedIn(tx, unit).scope
+            if (scope?.kind === 'computer') scopes.set(computerToolTarget(unit), scope.tools)
+          }
+        }
+        if ((session.workspaceBindings?.length ?? 0) > 1) {
+          if (!units?.workspaces || !session.workspaceBindings) throw treeError('history-incompatible')
+          const selected = projects.resolveWorkspacesIn(tx, session.projectId, session.workspaceBindings)
+          if (selected.length !== units.workspaces.length || selected.some(binding => {
+            const fixed = units.workspaces!.find(item => item.id === binding.id)
+            return !fixed || binding.revision !== fixed.revision || binding.computerAttachmentId !== fixed.unit.attachmentId || binding.path !== fixed.path
+          })) throw treeError('history-incompatible')
+          projects.retainWorkspacesIn(tx, id, session.projectId, session.workspaceBindings)
+        } else if (units?.workspaces) throw treeError('history-incompatible')
         const execution = { ...initialRunExecution, phase: 'active' }
         tx.execute('UPDATE harness_sessions SET protocol_id = ? WHERE id = ? AND protocol_id IS NULL', [binding.protocolId, input.sessionId])
         tx.execute(`INSERT INTO harness_runs (
@@ -953,9 +1007,10 @@ export async function openSqliteSessionRecords(
           assertRunGrants(current, native.access)
           if (!bindings) throw environmentError('environment-target-unavailable', 409)
           const hosted = native.access.search ? nativeSearchTool({id:model.providerId,versionId:model.providerVersionId,protocolId:model.protocolId}) : undefined
-          const scope = units && attachments.requireApprovedIn(tx, units.computer).scope
-          const resolved = planToolAccess(bindings, current, native.initialization, runTargets?.(units), hosted, true, tool =>
-            tool.environmentId !== 'computer' || scope?.kind === 'computer' && (scope.tools === 'all' || scope.tools.includes(tool.toolId)), tx)
+          const resolved = planToolAccess(bindings, current, native.initialization, runTargets?.(units), hosted, true, tool => {
+            const allowed = scopes.get(tool.targetId)
+            return tool.environmentId !== 'computer' || allowed === 'all' || allowed?.includes(tool.toolId) === true
+          }, tx)
           if (!isDeepStrictEqual(resolved.access, native.access) ||
             native.access.search && (!session.environmentSelection?.environmentIds.includes('model-search') ||
               session.environmentSelection.toolIdsByEnvironment?.['model-search']?.includes('web_search') === false)) throw environmentError('environment-authorization-changed', 409)
@@ -1069,14 +1124,14 @@ export async function openSqliteSessionRecords(
           const initializationRow = tx.get('SELECT payload_json FROM harness_native_initializations WHERE id = (SELECT initialization_id FROM harness_runs WHERE id = ?)', [runId])
           if (!initializationRow) throw treeError('invalid-history')
           const initialization = JSON.parse(required(initializationRow, 'payload_json')) as NativeInitialization
-          validateToolBatch([operation.tool], initialization.tools)
-          const selection = initialization.schemaVersion !== 1 ? initialization.toolSelection : legacyToolSelection
-          const tool = selection.tools.find(tool => tool.definition.name === operation.tool!.name)
-          if (!tool) throw treeError('invalid-history')
-          const session = tx.get('SELECT project_id FROM harness_sessions WHERE id = ?', [run.sessionId])!
-          if (needsComputer(operation.tool) && (initialization.schemaVersion !== 3 || environmentForTool(initialization.toolEnvironments, operation.tool.name)?.environmentId === 'computer')) computers.acceptIn(tx, { operationId: operation.id, runId, sessionId: run.sessionId,
-            projectId: required(session, 'project_id'), request: operation.tool, tool, runOwnerEpoch: resume?.runOwnerEpoch ?? 1,
-            ...(run.units ? { unit: run.units.computer } : {}) })
+          validateToolBatch([operation.tool], initialization.tools, originalComputerNames(initialization))
+          const bound = computerOperationBinding(initialization, operation.tool.name, run.units)
+          if (bound && needsComputer({ name: bound.tool.definition.name })) {
+            const session = tx.get('SELECT project_id FROM harness_sessions WHERE id = ?', [run.sessionId])!
+            const request = { ...operation.tool, name: bound.tool.definition.name }
+            computers.acceptIn(tx, { ...bound, operationId: operation.id, runId, sessionId: run.sessionId,
+              projectId: required(session, 'project_id'), request, runOwnerEpoch: resume?.runOwnerEpoch ?? 1 })
+          }
         }
         tx.execute('INSERT INTO harness_run_operations (run_id, id, kind, intent_json, tool_json, status) VALUES (?, ?, ?, ?, ?, ?)',
           [runId, operation.id, operation.kind, serialize(operation.intent), operation.tool ? serialize(operation.tool) : null, 'started'])
@@ -1109,7 +1164,9 @@ export async function openSqliteSessionRecords(
         if (runUsesComputer(tx, runId)) computers.observeIn(tx, operationId, JSON.parse(serialize(observation)) as JsonValue)
         if (observation.checkpoint !== undefined) tx.execute('UPDATE harness_runs SET protocol_checkpoint_json = ? WHERE id = ?', [serialize(observation.checkpoint), runId])
         if (resume) {
-          const bytes = (observation.tool ? toolOutputBytes(observation.tool) : 0) + cleanupOutputBytes(JSON.parse(required(operation, 'intent_json')) as JsonValue, observation.result)
+          const intent = JSON.parse(required(operation, 'intent_json'))
+          const originalName = typeof intent?.originalName === 'string' ? intent.originalName : observation.tool?.name
+          const bytes = (observation.tool && originalName ? toolOutputBytes({ ...observation.tool, name: originalName }) : 0) + cleanupOutputBytes(intent, observation.result)
           updateResume(tx, runId, resume, { totalToolOutputBytes: resume.totalToolOutputBytes + bytes,
             ...(observation.protocolCursor === undefined ? {} : { stage: 'response', protocolCursor: observation.protocolCursor }) })
         }
@@ -1193,6 +1250,7 @@ export async function openSqliteSessionRecords(
         if (!run) throw new Error(`unknown run ${id}`)
         const next = settleRun(run, outcome, now)
         if (next === run) return run
+        if (run.units?.workspaces) projects.releaseWorkspacesIn(tx, id)
         insertRecords(tx, run, outcome.records)
         if (next.status === 'completed') {
           if (run.contextVersion !== 'native-local-v1' || outcome.kind !== 'completed' || !outcome.resultRecordIds?.length || outcome.checkpoint === undefined ||

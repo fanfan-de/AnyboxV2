@@ -120,3 +120,13 @@ test('patch summaries count actual changes and pending operations and prioritize
   assert.equal(success.statusLabel, '已应用'); assert.match(success.preview, /2 个文件/); assert.equal(success.success, true)
   for (const status of ['rejected', 'cancelled']) assert.equal(summarizeToolRequest(request('apply_patch'), patch(status, { result: { status, changes: [], pending: [] } })).attention, true)
 })
+
+test('workspace calls show the device label and preserve the original command preview and exit status', () => {
+  const name = 'workspace2__codex_exec_command'
+  const fact = { id: 'deploy', name, state: 'failed', arguments: { cmd: 'release' }, result: { exit_code: 2 },
+    workspace: { name: '预发布', path: '/srv/shop', originalName: 'codex_exec_command' } }
+  const view = summarizeToolRequest(request(name, '{"cmd":"release"}'), fact, 'ready', 'failed')
+  assert.match(view.title, /^预发布 · /)
+  assert.equal(view.preview, 'release')
+  assert.equal(view.statusLabel, '非零退出')
+})

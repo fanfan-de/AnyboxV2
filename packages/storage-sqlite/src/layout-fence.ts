@@ -30,14 +30,26 @@ function attach(db: DatabaseSync, directory: string) {
   }
 }
 
-export function verifyFence(db: DatabaseSync, directory: string) {
+export function verifyFence(db: DatabaseSync, directory: string, layout: 2 | 3) {
   try {
     attach(db, directory)
+    // The original layout-2 checkpoint has the default SQLite user_version of zero.
+    if (db.prepare('PRAGMA authority.user_version').get()?.user_version !== (layout === 3 ? 3 : 0)) throw mismatch()
+    if (layout === 3) db.prepare('SELECT application_id, minimum_capability FROM storage_layout_writers LIMIT 0').all()
     if (!db.prepare('SELECT 1 FROM main.storage_layout_fence m JOIN authority.storage_layout_fence a ON a.slot=m.slot AND a.identity=m.identity AND a.revision=m.revision AND a.token=m.token WHERE m.slot=1 AND m.revision>=0').get()) throw mismatch()
   } catch { throw mismatch() }
 }
 
-export function createFence(db: DatabaseSync, directory: string) {
+function initializeWriterRequirements(db: DatabaseSync, applicationId?: string) {
+  db.exec('CREATE TABLE storage_layout_writers (application_id TEXT PRIMARY KEY, minimum_capability TEXT NOT NULL)')
+  if (applicationId) recordWriter(db, applicationId)
+}
+
+export function recordWriter(db: DatabaseSync, applicationId: string) {
+  db.prepare('INSERT INTO storage_layout_writers VALUES (?, ?)').run(applicationId, '1.2.0')
+}
+
+export function createFence(db: DatabaseSync, directory: string, layout: 2 | 3, applicationId?: string) {
   // Pre-cutover binaries refuse to open the database whenever this path exists.
   // Keep incomplete checkpoints for offline inspection after a crash.
   mkdirSync(directory, { mode: 0o700 })
@@ -50,7 +62,23 @@ export function createFence(db: DatabaseSync, directory: string) {
       db.exec('CREATE TABLE ' + schema + '.' + table + ' ' + columns)
       db.prepare('INSERT INTO ' + schema + '.' + table + ' VALUES (1, ?, 0, ?)').run(identity, token)
     }
-    db.exec('PRAGMA main.user_version=2; COMMIT')
+    if (layout === 3) {
+      initializeWriterRequirements(db, applicationId)
+      db.exec('PRAGMA authority.user_version=3')
+    }
+    db.exec('PRAGMA main.user_version=' + layout + '; COMMIT')
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
+  }
+}
+
+export function upgradeFence(db: DatabaseSync, applicationId?: string) {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    initializeWriterRequirements(db, applicationId)
+    advanceFence(db)
+    db.exec('PRAGMA main.user_version=3; PRAGMA authority.user_version=3; COMMIT')
   } catch (error) {
     db.exec('ROLLBACK')
     throw error

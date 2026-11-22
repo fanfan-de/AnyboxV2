@@ -1,3 +1,4 @@
+import { originalComputerNames } from '../run/domain.js'
 import { encodeFileContents } from '../project-files/domain.js'
 import { randomUUID } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
@@ -299,7 +300,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
                     if (prior && !isDeepStrictEqual(prior, ref)) throw modelFailure('invalid-resource')
                     permitted.set(ref.id, ref)
                   }
-                }, input.initialization.tools, replay, toolRequestCorrections), initial) }
+                }, input.initialization.tools, replay, toolRequestCorrections, originalComputerNames(input.initialization)), initial) }
               catch (error) {
                 if (host.signal.aborted || program.signal.aborted) throw error
                 const failure = error instanceof RunFailure ? error : normalizeModelFailure(error)

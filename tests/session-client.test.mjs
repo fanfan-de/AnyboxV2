@@ -548,12 +548,14 @@ test('followed success advances the conversation in the background without chang
 })
 
 test('failed, cancelled and interrupted runs keep the records view and report failure without creating a node', async () => {
-  for (const [status, message] of [['failed', /本次运行失败：provider failed/], ['cancelled', /本次运行已取消/], ['interrupted', /本次运行意外中断/]]) {
+  for (const [status, message, category] of [['failed', /本次运行失败：provider failed/],
+    ['failed', /工作区所属设备上升级并重启 Computer worker/, 'computer-worker-upgrade-required'],
+    ['cancelled', /本次运行已取消/], ['interrupted', /本次运行意外中断/]]) {
     const f = fixture(), a = f.make('a'); await f.load(a)
     a.setDraft('one'); await a.submit()
     const run = a.snapshot().runs[0]
     a.setViewMode('runs')
-    if (status === 'failed') f.rows.get(run.id).error = 'provider failed'
+    if (status === 'failed') Object.assign(f.rows.get(run.id), { error: 'provider failed', errorCategory: category })
     f.finish(run.id, status); await a.refresh()
     assert.equal(a.snapshot().runs[0].status, status)
     assert.equal(a.snapshot().runs[0].resultNodeId, undefined)

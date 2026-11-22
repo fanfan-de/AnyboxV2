@@ -51,7 +51,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
         const change = Object.freeze({ sessionId: run.sessionId, runId: run.id, revision: run.revision })
         try { await ctx.parallel(runChangedEvent, change) }
         catch { ctx.logger.warn('Run change notification failed after commit', change) }
-      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey], environments, manager, bindings, assembly?.runTargets)
+      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey], projects, environments, manager, bindings, assembly?.runTargets)
       const functionsFor = (units: readonly import('../unit/port.js').UnitAttachment[]) =>
         bindings?.available(assembly?.inventoryTargets(units)) ?? []
       const availableFunctions = async () => functionsFor(await deps[unitAttachmentsServiceKey].list())
@@ -209,12 +209,12 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
           const selection = createToolSelection(input.toolIds)
           return records.setAgentTools(agent.id, { toolIds: selection.tools.map(tool => tool.toolId), expectedRevision: input.expectedRevision })
         }),
-        createSession(projectId, agentId, requestedModelId) {
+        createSession(projectId, agentId, requestedModelId, workspaces) {
           return track(async () => {
             const agent = requireAgent(agentId)
             const modelId = requestedModelId === undefined ? undefined : nonEmpty(requestedModelId, 'modelId')
             await projects.requireAvailable(nonEmpty(projectId, 'projectId'))
-            return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.modelId ?? null, agent.environmentIds)
+            return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.modelId ?? null, agent.environmentIds, workspaces)
           })
         },
         selectSessionModel(sessionId, rawModelId) {

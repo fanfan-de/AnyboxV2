@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { advanceFence, createFence, hasFence, verifyFence } from './layout-fence.js'
+import { advanceFence, createFence, hasFence, recordWriter, upgradeFence, verifyFence } from './layout-fence.js'
 import type { Component } from '@nya/core'
 import { localStorageError, localStorageServiceKey } from './port.js'
 import type {
@@ -82,27 +82,25 @@ function makeTransaction(db: DatabaseSync, signal?: AbortSignal): { tx: StorageT
   return { tx, invalidate() { active = false; scope.invalidate() } }
 }
 
-/** The baseline layout has a per-domain migration ledger. Layout 2 adds a restore fence. */
-const layoutVersion = 1
-
-function initializeLayout(db: DatabaseSync, directory: string, fenced: boolean): void {
+function initializeLayout(db: DatabaseSync, directory: string, fenced: boolean): 1 | 2 | 3 {
   let current: unknown
   let hasTables: boolean
   try {
     current = db.prepare('PRAGMA user_version').get()?.user_version
     hasTables = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").get() !== undefined
   } catch (error) { throw failure(error, 'open-failed') }
-  if (fenced !== (current === 2)) throw localStorageError('schema-version', 'database authority checkpoint or matching database missing')
-  if (fenced) return verifyFence(db, directory)
-  if (current === layoutVersion) return
+  if (fenced !== (current === 2 || current === 3)) throw localStorageError('schema-version', 'database authority checkpoint or matching database missing')
+  if (current === 2 || current === 3) { verifyFence(db, directory, current); return current }
+  if (current === 1) return 1
   if (current !== 0 || hasTables) throw localStorageError('schema-version', 'unsupported local database layout')
   let begun = false
   try {
     db.exec('BEGIN IMMEDIATE')
     begun = true
     db.exec('CREATE TABLE schema_migrations (domain TEXT PRIMARY KEY, version INTEGER NOT NULL)')
-    db.exec(`PRAGMA user_version = ${layoutVersion}`)
+    db.exec('PRAGMA user_version = 1')
     db.exec('COMMIT')
+    return 1
   } catch (error) {
     if (begun) {
       try { db.exec('ROLLBACK') } catch {
@@ -183,7 +181,7 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
       }, 'exclusive SQLite connection')
       // Recheck after acquiring ownership in case a previous owner cut over during open.
       fenced = hasFence(lockPath)
-      initializeLayout(db, lockPath, fenced)
+      let layout = initializeLayout(db, lockPath, fenced)
 
       let accepting = true
       let layoutFailure: Error | undefined
@@ -241,12 +239,22 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
             } finally { scope.invalidate() }
           }, signal)
         },
-        requireLayout(version) {
+        requireLayout(version, applicationId) {
           return schedule(() => {
-            if (version !== 2) throw localStorageError('schema-version', 'unsupported minimum database layout')
-            if (fenced) return
+            if ((version !== 2 && version !== 3) || version < layout) throw localStorageError('schema-version', 'database layout is incompatible with this writer')
+            if (applicationId !== undefined && (version !== 3 || typeof applicationId !== 'string' || !applicationId.trim())) throw new TypeError('a layout 3 application identifier is required')
             try {
-              createFence(db, lockPath)
+              if (layout === version) {
+                if (applicationId && !db.prepare('SELECT 1 FROM storage_layout_writers WHERE application_id=?').get(applicationId)) {
+                  db.exec('BEGIN IMMEDIATE')
+                  try { recordWriter(db, applicationId); advanceFence(db); db.exec('COMMIT') }
+                  catch (error) { db.exec('ROLLBACK'); throw error }
+                }
+                return
+              }
+              if (fenced) upgradeFence(db, applicationId)
+              else createFence(db, lockPath, version, applicationId)
+              layout = version
               fenced = true
             } catch (error) {
               accepting = false
@@ -254,6 +262,11 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
               throw layoutFailure
             }
           })
+        },
+        minimumWriterCapability(applicationId) {
+          return schedule(() => layout === 3
+            ? db.prepare('SELECT minimum_capability FROM storage_layout_writers WHERE application_id=?').get(applicationId)?.minimum_capability as string | undefined
+            : undefined)
         },
         migrate(domain, input) {
           let migrations: readonly StorageMigration[]

@@ -31,7 +31,7 @@ test('removed project-wide Computer defaults are rejected instead of silently re
   assert.throws(() => createProjectComponent({ newId: randomUUID, now: () => 'now' }, { defaultComputerAttachmentId: 'remote' }), /defaultComputerAttachmentId is no longer supported/)
 })
 
-test('the projects v2 migration rebuilds a populated table that sessions reference and keeps every project bound to the local worker', async t => {
+test('projects migrate populated v1 session references into unchanged primary workspaces on the local worker', async t => {
   const directory = await fs.mkdtemp(join(tmpdir(), 'anybox-projects-migration-'))
   const root = new Context()
   t.after(async () => { try { await root.fiber.dispose() } finally { await fs.rm(directory, { recursive: true, force: true }) } })
@@ -50,7 +50,9 @@ test('the projects v2 migration rebuilds a populated table that sessions referen
   const projects = root.get('harness.projects')
   assert.ok(projects, 'the migration succeeded with referencing rows present')
   assert.deepEqual((await projects.listProjects()).map(p => [p.id, p.path, p.computerAttachmentId, p.available]), [['p1', '/one', 'local:computer', false], ['p2', '/two', 'local:computer', false]])
-  assert.equal(await db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'projects'").version), 2)
+  assert.equal(await db.read(reader => reader.get("SELECT version FROM schema_migrations WHERE domain = 'projects'").version), 3)
+  const primary = (await projects.listProjectWorkspaces('p1')).workspaces
+  assert.deepEqual(primary.map(member => [member.id, member.computerAttachmentId, member.path]), [['p1', 'local:computer', '/one']])
   assert.deepEqual(await db.read(reader => reader.all('PRAGMA foreign_key_check')), [])
   assert.equal(await db.read(reader => reader.get('SELECT count(*) AS n FROM harness_sessions_fixture s JOIN harness_projects p ON p.id = s.project_id').n), 3)
   const opened = await projects.openProject(directory)

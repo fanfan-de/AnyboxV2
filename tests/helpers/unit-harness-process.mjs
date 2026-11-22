@@ -12,7 +12,7 @@ import { installHarnessServerCore } from '../../packages/app-harness/dist/core/i
 import { createFixtureApplicationApiComponent } from './application-api.mjs'
 import { controlledModels } from './controlled-models.mjs'
 
-// A real harness server process whose Computer unit lives in the parent test process and dials in over HTTP.
+// A real harness server process whose local/remote workers can outlive it in the parent test process.
 // The parent SIGKILLs this process mid-Run and starts a replacement on the same database and port.
 const settings = JSON.parse(process.argv[2])
 const root = new Context()
@@ -38,6 +38,10 @@ const models = controlledModels({ call(input) {
       return new Promise(() => {})
     }
     if (last?.role === 'tool') { const value = JSON.parse(last.content); return { status: 'completed', text: value.stdout ?? JSON.stringify(value), toolCalls: [] } }
+    if (settings.mainProjectDirectory) return { status: 'completed', text: '', toolCalls: [
+      { id: 'original-main', name: 'main__bash', arguments: { command: "printf 'main-once\\n' >> effect.log; printf main-result" } },
+      { id: 'original-remote', name: 'workspace2__bash', arguments: { command: settings.command } },
+    ] }
     const later = last?.content === laterInput
     return { status: 'completed', text: '', toolCalls: [{ id: later ? 'later-call' : 'original-call', name: 'bash',
       arguments: { command: later ? "printf 'later\\n' >> effect.log; printf 'later-result'" : settings.command } }] }
@@ -52,7 +56,7 @@ try {
   await root.installComponent(models.component())
   await root.installComponent(createHostAccessComponent('fault harness'))
   const access = root.get(hostAccessServiceKey)
-  core = await installHarnessServerCore(root, { agents, toolEnvironments, localWorkerDirectory: join(settings.directory, 'never-started-local-worker'), computerTransport: { claimTimeoutMs: 3_000 } })
+  core = await installHarnessServerCore(root, { agents, toolEnvironments, localWorkerDirectory: join(settings.directory, 'local-worker'), computerTransport: { claimTimeoutMs: 3_000 } })
   const httpFiber = root.installComponent(createFixtureApplicationApiComponent(root, core.api.listAgents(), settings.port, { authenticated: true })); await httpFiber
   const web = root.get(hostHttpServiceKey), api = core.api, sessions = root.get('harness.sessions'), records = root.get('harness.session-runs')
   let runId = settings.runId
@@ -66,9 +70,11 @@ try {
     return { run, execution: runId ? await records.getRunExecution(runId) : undefined, resume: runId ? await records.loadRunResume(runId) : undefined,
       access: runId ? await api.getRunEnvironmentAccess(runId) : undefined,
       events: runId ? await sessions.getRunEvents(runId) : [], nodes: run ? await sessions.listNodes(run.sessionId, null) : undefined,
-      operations: runId ? await db.read(reader => reader.all('SELECT * FROM harness_computer_operations WHERE run_id = ?', [runId])) : [],
-      scopes: runId ? await db.read(reader => reader.all('SELECT * FROM harness_computer_scopes WHERE run_id = ?', [runId])) : [],
-      pins: runId ? await db.read(reader => reader.all('SELECT * FROM harness_computer_pins WHERE owner_id = ?', [runId])) : [],
+      operations: runId ? await db.read(reader => reader.all(`SELECT * FROM harness_computer_operations WHERE run_id IN
+        (SELECT run_id FROM harness_computer_scopes WHERE parent_run_id = ?) ORDER BY rowid`, [runId])) : [],
+      scopes: runId ? await db.read(reader => reader.all('SELECT * FROM harness_computer_scopes WHERE parent_run_id = ? ORDER BY rowid', [runId])) : [],
+      pins: runId ? await db.read(reader => reader.all(`SELECT * FROM harness_computer_pins WHERE owner_id IN
+        (SELECT run_id FROM harness_computer_scopes WHERE parent_run_id = ?)`, [runId])) : [],
       scopeAdmissions: runId ? await db.read(reader => reader.all("SELECT operation_id, state FROM environment_admissions WHERE resource_kind = 'run-scope'")
         .map(row => ({ operation: JSON.parse(row.operation_id), state: row.state })).filter(row => row.operation[0] === runId)) : [],
       attachments: await root.get('harness.unit-attachments').list(), processId: process.pid }
@@ -77,11 +83,19 @@ try {
     const id = message.id
     try {
       if (message.command === 'start') {
-        const project = await api.openProject(settings.projectDirectory, { computerAttachmentId: message.attachmentId })
+        const project = settings.mainProjectDirectory ? await api.openProject(settings.mainProjectDirectory)
+          : await api.openProject(settings.projectDirectory, { computerAttachmentId: message.attachmentId })
         const selection = await api.getAgentTools('assistant')
         await api.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: selection.revision })
-        await grantComputerTools(root, api, [message.attachmentId], ['anybox.bash'])
-        const session = await api.createSession(project.id, 'assistant')
+        await grantComputerTools(root, api, [project.computerAttachmentId, message.attachmentId], ['anybox.bash'])
+        let workspaceSelection
+        if (settings.mainProjectDirectory) {
+          const current = await api.listProjectWorkspaces(project.id)
+          const configured = await api.addProjectWorkspace(project.id, { name: 'Staging', path: settings.projectDirectory,
+            computerAttachmentId: message.attachmentId, requestId: 'staging', expectedRevision: current.revision })
+          workspaceSelection = { workspaceIds: configured.workspaces.map(workspace => workspace.id), projectWorkspaceRevision: configured.revision }
+        }
+        const session = await api.createSession(project.id, 'assistant', undefined, workspaceSelection)
         const run = await api.startRun({ sessionId: session.id, parentNodeId: null, idempotencyKey: 'original-run', input: 'Execute the original operation' })
         runId = run.id
         reply({ id, value: { runId, sessionId: session.id, projectId: project.id } })

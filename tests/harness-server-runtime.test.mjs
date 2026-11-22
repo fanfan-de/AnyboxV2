@@ -189,3 +189,22 @@ test('host admission closes a pending assembly and joins its rollback before ret
   assert.equal(cleaned, true); assert.equal(root.get('app'), undefined); assert.equal(root.get('late'), undefined)
   await assert.rejects(runtime.open()); await root.fiber.dispose()
 })
+
+test('the Harness runtime and standalone core gate the bound writer before installing any domain or Models owner', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-harness-writer-')), root = new Context()
+  t.after(async () => { await root.fiber.dispose(); await rm(directory, { recursive: true, force: true }) })
+  const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
+  const calls = [], serviceBindings = { 'local-storage': 'test.execution-storage' }
+  root.provide('test.execution-storage', {
+    async requireLayout(layout, applicationId) { calls.push([layout, applicationId]); throw Object.assign(new Error('older writer'), { code: 'schema-version' }) },
+    migrate() { throw Error('migration before writer check') },
+    transaction() { throw Error('owner claim before writer check') },
+  })
+  const runtime = createHarnessServerRuntime(root, config, { agents }, { serviceBindings })
+  await assert.rejects(runtime.open(), { code: 'schema-version' })
+  await assert.rejects(installHarnessServerCore(root, { agents, serviceBindings }), { code: 'schema-version' })
+  assert.deepEqual(calls, [[3, 'agent'], [3, 'agent']])
+  assert.equal(root.get('models'), undefined)
+  assert.equal(existsSync(config.modelsConfigPath), false)
+  assert.equal(root.get('harness.execution-environments'), undefined)
+})

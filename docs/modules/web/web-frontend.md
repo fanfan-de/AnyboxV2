@@ -20,7 +20,7 @@ close 同步停止 HTTP 准入、发送关闭信号并取消未完成请求体�
 
 宿主 shell 在普通关闭、首次 setActive 失败和挂载中关闭时都等待界面 dispose 实际结束，成功前保留 mounted；失败保留同一清理 Promise 与句柄，禁止重挂载和后台控制，并继续参与 canClose、beforeunload 及版本生效检查。页面 SSE 断线只冻结交互，不注销仍存活的界面；重连、ACK 和显式退出均绑定当前 document 的内存登记凭据，全部界面清理成功后才发送 keepalive 退出证明。受控 reload 等退出确认后重载；强制关页中断清理则保留退出未知，不能凭新页面或超时自动清除。协议、恢复边界与回归入口见[页面生命周期协调](../package-management/activation.md#全部页面的关闭保护)及 `tests/application-shell.test.mjs`。
 
-浏览器入口归各应用静态资源。Anybox Harness 只挂载项目与会话工作区，侧栏底部将一处紧凑设备选择器与设置图标放在同一行，连接、模型、Prompt 与执行环境在工作区设置的分类面板中管理。“管理连接”提供目标连接与 Agent 启停。“执行环境”提供所选 harness server 的 Computer 环境列表和一次性附着码，也提供独立于所选连接的“管理本机 Computer worker”。此布局不改变宿主监听器、HTTP 分派和应用启停契约，具体展示与恢复见[Web 客户端设计](../../web-client-design.md)和[宿主设计](../../products-v1.md)。
+浏览器入口归各应用静态资源。Anybox Harness 只挂载项目与会话工作区，侧栏底部的设置按钮打开分类面板，用户可在其中切换执行设备，管理连接、模型、Prompt 与执行环境。“管理连接”提供目标连接与 Agent 启停。“执行环境”提供所选 harness server 的 Computer 环境列表和一次性附着码，也提供独立于所选连接的“管理本机 Computer worker”。此布局不改变宿主监听器、HTTP 分派和应用启停契约，具体展示与恢复见[Web 客户端设计](../../web-client-design.md)和[宿主设计](../../products-v1.md)。
 
 Composer 模型列表支持单击切换当前会话、双击同时设为该执行设备与 Agent 的新会话默认模型，不增加独立按钮。单击后保留列表以接收双击，点击外部或 Escape 收起；键盘方向键导航，Enter 选择，Shift+Enter 同时设为默认。打开列表读取当前默认值并显示“默认”标记；双击等待当前会话选模确认后，读取最新默认修订并只提交一次 CAS 写入，失败、冲突或未知结果均不自动重试。沿用 Models 可用性与 Session 协议限制、设备作用域和既有请求清理；内部 `model-picker.ts` 持有可撤销监听与 top layer 列表，面板隐藏、切到轨迹或销毁时关闭，不新增 Nya 组件。
 

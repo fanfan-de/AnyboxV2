@@ -10,7 +10,11 @@ test('the independent Harness package keeps application identity and resolves ev
   assert.equal(new Set(harnessAssets.map(asset => asset.path)).size, harnessAssets.length)
   await Promise.all(harnessAssets.map(asset => access(asset.file)))
   const template = harnessAssets.find(asset => asset.path === '/apps/agent/template.html')
-  assert.match(await readFile(template.file, 'utf8'), /agent-product-template/)
+  const html = await readFile(template.file, 'utf8')
+  assert.match(html, /agent-product-template/)
+  assert.doesNotMatch(html, /id="agent--harness-select"/)
+  assert.match(html, /id="agent--open-settings"/)
+  assert.match(html, /id="agent--settings-device"/)
 })
 
 test('source packaging preserves existing configured data and credential locations', () => {

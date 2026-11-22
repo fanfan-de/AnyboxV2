@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createClientHost } from '../packages/host/dist/client.js'
+import { createExecutionHost } from '../packages/host/dist/execution.js'
 import { testApplication } from './helpers/test-application.mjs'
 
 async function fixture(t) {
@@ -100,4 +101,34 @@ test('loss of a required capability closes new HTTP admission while optional con
   assert.equal(host.products.get('required').capabilities[0].status, 'failed')
   assert.equal((await fetch(host.url + '/api/client/v1/apps/required/value')).status, 503)
   assert.equal((await fetch(host.url + '/api/client/v1/apps/optional/value')).status, 200)
+})
+
+test('a shared execution store rejects a downgraded writer before its runtime factory and still restores other applications', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-writer-floor-'))
+  const databasePath = join(directory, 'execution.sqlite')
+  let factories = 0, host
+  const writer = range => ({ ...testApplication('writer', { created: () => factories++ }),
+    capabilityRequirements: { required: { 'storage.sqlite': range } } })
+  const peer = { ...testApplication('peer'), capabilityRequirements: { required: { 'storage.sqlite': '^1.0.0' } } }
+  t.after(async () => { await host?.close(); await rm(directory, { recursive: true, force: true }) })
+  host = await createExecutionHost({ databasePath, port: 0, applications: [writer('^1.2.0'), peer] })
+  const store = host.root.get('local-storage')
+  await store.requireLayout(3, 'writer')
+  await host.products.open('writer'); await host.products.open('peer')
+  assert.equal(factories, 1)
+  await host.close()
+
+  host = await createExecutionHost({ databasePath, port: 0, applications: [writer('^1.1.0'), peer] })
+  await host.ready
+  assert.equal(factories, 1, 'a newer shared provider cannot make an older application a compatible writer')
+  const blocked = host.products.get('writer')
+  assert.equal(blocked.state, 'blocked')
+  assert.equal(blocked.capabilities.find(item => item.id === 'storage.sqlite').status, 'incompatible')
+  assert.equal(host.products.get('peer').state, 'running')
+  await host.close()
+
+  host = await createExecutionHost({ databasePath, port: 0, applications: [writer('^1.2.0'), peer] })
+  await host.ready
+  assert.equal(host.products.get('writer').state, 'running')
+  assert.equal(factories, 2)
 })

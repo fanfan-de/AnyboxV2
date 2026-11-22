@@ -99,14 +99,6 @@ export async function mountHarnessPage(root: HTMLElement, options: { context: Ap
           if (child?.canLeave() === false) { child.showSettingsBlocked(); return false }
           return true
         }, refreshConnections, options.context.apiBase, () => refreshConnections())
-        const select = content.querySelector<HTMLSelectElement>('#agent--harness-select')!
-        for (const option of select.options) {
-          const item = connections.find(value => value.id === option.value)!
-          const isLocal = item.instanceId === local.instanceId
-          option.textContent = deviceName(item)
-          option.title = `${isLocal ? '本地' : '远程'} · ${deviceName(item)}`
-        }
-        select.title = `当前设备：${select.selectedOptions[0]?.title ?? '未选择'}`
         api = createHarnessClient(active, selectedId)
         if (active.some(item => item.instanceId === local.instanceId)) await migrateLegacyState(sessionStorage, local.instanceId!, async (id, project) => {
           const localConnection = active.find(item => item.instanceId === local.instanceId)!

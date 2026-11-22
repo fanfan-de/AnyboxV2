@@ -1,3 +1,7 @@
+import { createToolEnvironmentCatalog } from '@anybox/execution-environments/catalog'
+import { bindComputerWorkspaces, computerToolEnvironmentCatalogEntry } from '../packages/app-harness/dist/core/tool-environments/computer.js'
+import { portableHistory } from '../packages/app-harness/dist/core/session/portable-history.js'
+import { encodePortableHistory } from '../packages/app-harness/dist/core/protocol-agents/portable-history.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -27,19 +31,19 @@ function answer(protocolId, text) {
   if (protocolId === 'gemini-interactions') return { id: `interaction-${text}`, status: 'completed', steps: [{ type: 'model_output', content: [{ type: 'text', text }] }] }
   return { choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: text } }] }
 }
-function toolResponse(protocolId) {
+function toolResponse(protocolId, name = 'bash', id = 'call-1') {
   const args = { command: 'printf native-tool-result' }
   if (protocolId === 'responses') return { status: 'completed', output: [
     { type: 'reasoning', id: 'reasoning-1', encrypted_content: 'private-encrypted-continuation', summary: [{ type: 'summary_text', text: 'Thinking' }] },
-    { type: 'function_call', id: 'item-1', call_id: 'call-1', name: 'bash', arguments: JSON.stringify(args), status: 'completed' }] }
+    { type: 'function_call', id: 'item-1', call_id: id, name, arguments: JSON.stringify(args), status: 'completed' }] }
   if (protocolId === 'anthropic-messages') return { type: 'message', role: 'assistant', stop_reason: 'tool_use', content: [
     { type: 'thinking', thinking: 'Thinking', signature: 'private-thinking-signature' },
-    { type: 'redacted_thinking', data: 'private-redacted-content' }, { type: 'tool_use', id: 'call-1', name: 'bash', input: args }] }
+    { type: 'redacted_thinking', data: 'private-redacted-content' }, { type: 'tool_use', id, name, input: args }] }
   if (protocolId === 'gemini-interactions') return { status: 'requires_action', steps: [
     { type: 'thought', signature: 'private-thought-signature', summary: [{ type: 'text', text: 'Thinking' }] },
-    { type: 'function_call', id: 'call-1', name: 'bash', arguments: args }] }
+    { type: 'function_call', id, name, arguments: args }] }
   return { choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: 'Thinking',
-    tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'bash', arguments: JSON.stringify(args) } }] } }] }
+    tool_calls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] }
 }
 async function host(directory, protocolId, state, { search = false, images = false, legacy = false, streaming = false, timeoutMs = 5000, http = false, additionalProtocols = [] } = {}) {
   const root = new Context()
@@ -735,4 +739,62 @@ for (const cancel of [false, true]) test(`project files remain retained after ${
     assert.equal(content.file.expiresAt, undefined); assert.equal(content.text, 'literal {{input}}')
     assert.deepEqual((await f.harness.listNodes(session.id, null)).nodes, [])
   } finally { release(); await f.close(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+
+test('four native protocols retain the selected workspace alias through calls, results and portable history', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-workspace-aliases-'))
+  const protocols = Object.keys(factories), state = { secrets: new Map(), requests: [], responses: [] }
+  const f = await host(directory, protocols[0], state, { additionalProtocols: protocols.slice(1) })
+  t.after(async () => { try { await f.close() } finally { rmSync(directory, { recursive: true, force: true }) } })
+  const catalog = createToolEnvironmentCatalog([{ ...computerToolEnvironmentCatalogEntry, contextualTarget: true }])
+  const base = catalog.snapshot(['computer'], { computer: ['anybox.bash'] })
+  const workspaces = [{ id: 'a', primary: true, computerAttachmentId: 'attachment-a' }, { id: 'b', primary: false, computerAttachmentId: 'attachment-b' }]
+  const toolEnvironments = bindComputerWorkspaces(base, workspaces, id => ({ attachmentId: id, unitId: id + '-worker', epoch: 1,
+    state: 'approved', unitKind: 'computer', scope: { kind: 'computer', tools: 'all' } }))
+  const selected = toolEnvironments.environments[0].tools, tools = selected.map(entry => entry.definition)
+  const initialization = { schemaVersion: 3, toolContractVersion: 'tool-environments-v1', tools, prompts: [],
+    toolSelection: { schemaVersion: 1, tools: selected }, toolEnvironments }
+  const aliases = ['main__bash', 'workspace2__bash']
+  for (const [index, protocolId] of protocols.entries()) {
+    const controller = new AbortController(), runId = 'workspace-' + protocolId
+    state.responses.push(toolResponse(protocolId, aliases[0], 'a'), toolResponse(protocolId, aliases[1], 'b'), answer(protocolId, 'done'))
+    const requestIndex = state.requests.length
+    const program = await f.root.get('harness.protocol-agents').prepare({ sessionId: 'two-workspaces', runId, modelId: index === 0 ? 'default' : protocolId,
+      initialization, input: { schemaVersion: 1, raw: 'inspect both', text: 'inspect both', template: null }, signal: controller.signal,
+      managedTools: { functions: tools, async runSend(_exchangeId, start, signal) {
+        const transport = start(signal)
+        try { return await transport.result } finally { await transport.done }
+      } } })
+    const observations = [], records = []
+    try {
+      const result = await program.execute({ signal: controller.signal, publish() {},
+        async perform(descriptor, start) {
+          const call = start()
+          const value = await call.result
+          await call.done
+          records.push(...descriptor.observe(value).records.map(record => ({ ...record, runId, protocolId })))
+          return value
+        },
+        async executeTools(requests) {
+          return requests.map(request => {
+            observations.push(request.name)
+            return { name: request.name, result: 'observed ' + request.name }
+          })
+        },
+      })
+      assert.equal(result.kind, 'completed', JSON.stringify({ protocolId, result, observations, sent: state.requests.length - requestIndex }))
+      assert.deepEqual(observations, aliases)
+      assert.deepEqual(state.requests[requestIndex].tools.map(tool => tool.function?.name ?? tool.name), aliases)
+      const history = portableHistory(records)
+      assert.deepEqual(history.filter(event => event.role === 'tool').map(event => event.name), aliases)
+      for (const target of protocols) {
+        const encoded = JSON.stringify(encodePortableHistory(target, history).items)
+        for (const alias of aliases) {
+          assert.ok(encoded.includes('"name":"' + alias + '"'))
+          assert.ok(encoded.includes('observed ' + alias))
+        }
+      }
+    } finally { try { await program.close() } finally { program.release() } }
+  }
 })

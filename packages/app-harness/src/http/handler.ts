@@ -12,11 +12,13 @@ import type { SessionPort } from '../core/session/port.js'
 import { validateFileSelections, validateSnapshotIds, validateFileTreePath, validId } from '../core/project-files/domain.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { OwnedCall } from '../core/contracts.js'
-import { computerCleanupReceipt } from '../core/tool-environments/history.js'
+import { computerCleanupTargets } from '../core/tool-environments/history.js'
 import type { ImageRef } from '../core/image/port.js'
 import { imageLimits } from '../core/image/limits.js'
 import type { Run } from '../core/run/domain.js'
 import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput } from '../core/session/domain.js'
+import { computerToolTarget } from '@anybox/computer-tools/environment'
+import { getToolById } from '../core/tool/catalog.js'
 import type { listTools } from '../core/tool/catalog.js'
 import type { RunInput, RunQuery } from '../core/run/domain.js'
 import type { ConversationNode, NodePage, NodeQuery } from '../core/session/domain.js'
@@ -26,7 +28,7 @@ import { isModelsError } from '@anybox/models'
 import { isModelFailure } from '../core/run/model.js'
 import type { ModelsSettingsService, ModelsCatalogService, RunnableModelSummary, ProviderTemplate } from '@anybox/models'
 import { isProjectUnavailableError } from '../core/project/component.js'
-import type { Project } from '../core/project/component.js'
+import type { Project, ProjectPort } from '../core/project/component.js'
 import type { DirectoryBrowseOptions, DirectoryBrowseOpened, DirectoryCreated, DirectoryPage } from '../core/project/directories.js'
 import { DirectoryPickerFailure } from '@anybox/directory-picker'
 import { openRunChangeStream } from './run-change-stream.js'
@@ -59,8 +61,12 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   onDirectoryBrowseRetired(listener: (browseId: string) => void): () => void
   pickProject(signal: AbortSignal): Promise<Project | null>
   openProject?(path: string, options?: { readonly computerAttachmentId?: string }): Promise<Project>
+  listProjectWorkspaces: ProjectPort['listProjectWorkspaces']
+  addProjectWorkspace: ProjectPort['addProjectWorkspace']
+  renameProjectWorkspace: ProjectPort['renameProjectWorkspace']
+  removeProjectWorkspace: ProjectPort['removeProjectWorkspace']
   listProjects(): Promise<readonly Project[]>
-  createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
+  createSession(projectId: string, agentId: string, modelId?: string, workspaces?: import('../core/session/domain.js').SessionWorkspaceSelection): Promise<Session>
   getSessionDefaults(agentId: string): Promise<SessionDefaults>
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SessionDefaults>
   getAgentTools(agentId: string): Promise<AgentToolsSelection>
@@ -205,6 +211,7 @@ function sessionView(session: Session): SessionView {
   return {
     id: session.id, title: session.title, projectId: session.projectId, agentId: session.agentId, createdAt: session.createdAt,
     modelId: session.modelId, archivedAt: session.archivedAt, toolSelection: session.toolSelection,
+    ...(session.workspaceBindings ? { workspaceBindings: session.workspaceBindings } : {}),
     ...(session.toolEnvironments ? { toolEnvironments: session.toolEnvironments } : {}),
     protocolId: session.protocolId, historyMode: session.historyMode,
   }
@@ -251,29 +258,44 @@ function outputSummary(value: string): { readonly text: string; readonly truncat
   return { text: value, truncated: false }
 }
 
-function toolCallView(call: ValidatedToolRequest, access?: RunEnvironmentAccess): object {
+function toolCallView(call: ValidatedToolRequest, access?: RunEnvironmentAccess, units?: Run['units']): object {
   const grant = access?.functions.find(route => route.name === call.name)?.grant
-  const binding = grant ? { environmentTool: grant.tool } : {}
+  const member = grant?.tool.environmentId === 'computer' ? units?.workspaces?.find(item => computerToolTarget(item.unit) === grant.tool.targetId) : undefined
+  const originalName = member && grant && getToolById(grant.tool.toolId)?.definition.name
+  const binding = grant ? { environmentTool: grant.tool, ...(member && originalName ? {
+    workspace: { name: member.name, path: member.path, originalName },
+  } : {}) } : {}
   if (call.name === 'bash' && typeof call.arguments.command === 'string') return { ...binding, id: call.id, name: call.name, command: call.arguments.command }
+  if (originalName === 'apply_patch' && typeof call.arguments.patch === 'string') {
+    const patch = outputSummary(call.arguments.patch)
+    return { ...binding, id: call.id, name: call.name, arguments: { patch: patch.text }, patchTruncated: patch.truncated }
+  }
   if (call.name !== 'apply_patch' || typeof call.arguments.patch !== 'string') return { ...binding, id: call.id, name: call.name, arguments: call.arguments }
   const patch = outputSummary(call.arguments.patch)
   return { ...binding, id: call.id, name: call.name, patch: patch.text, patchTruncated: patch.truncated }
 }
 
-function runEventView(event: RunEvent, access?: RunEnvironmentAccess): object {
+function runEventView(event: RunEvent, access?: RunEnvironmentAccess, units?: Run['units']): object {
   const base = { seq: event.seq, at: event.at, kind: event.kind }
   switch (event.kind) {
     case 'operation-started': return { ...base, operationId: event.operationId, operationKind: event.operationKind,
       ...(event.operationKind === 'model' && access?.search ? { hostedSearch: access.search.tool } : {}) }
-    case 'operation-observed': return { ...base, operationId: event.operationId, ...processExitProjection(event.result) }
-    case 'operation-failed': return { ...base, operationId: event.operationId, category: event.category, ...processExitProjection(event.result) }
+    case 'operation-observed': return { ...base, operationId: event.operationId, ...processExitProjection(event.result, Boolean(units?.workspaces)) }
+    case 'operation-failed': return { ...base, operationId: event.operationId, category: event.category, ...processExitProjection(event.result, Boolean(units?.workspaces)) }
     case 'model-started': return base
-    case 'model-tool-calls': return { ...base, calls: event.calls.map(call => toolCallView(call, access)) }
-    case 'tool-started': return { ...base, ...toolCallView(event.call, access), requestId: event.call.id }
+    case 'model-tool-calls': return { ...base, calls: event.calls.map(call => toolCallView(call, access, units)) }
+    case 'tool-started': return { ...base, ...toolCallView(event.call, access, units), requestId: event.call.id }
     case 'tool-observed': {
       if (event.name === 'apply_patch') return { ...base, name: event.name, requestId: event.requestId, result: event.result }
       const result = event.result && typeof event.result === 'object' && !Array.isArray(event.result)
         ? event.result as Readonly<Record<string, JsonValue>> : undefined
+      const bashAlias = units?.workspaces && access?.functions.some(route => route.name === event.name &&
+        route.grant.tool.environmentId === 'computer' && route.grant.tool.toolId === 'anybox.bash')
+      if (bashAlias && typeof result?.stdout === 'string' && typeof result.stderr === 'string') {
+        const stdout = outputSummary(result.stdout), stderr = outputSummary(result.stderr)
+        return { ...base, name: event.name, requestId: event.requestId, result: { exitCode: result.exitCode, signal: result.signal,
+          stdout: stdout.text, stderr: stderr.text, truncated: result.truncated === true || stdout.truncated || stderr.truncated } }
+      }
       if (event.name !== 'bash' || typeof result?.stdout !== 'string' || typeof result.stderr !== 'string') return { ...base, name: event.name, requestId: event.requestId, result: event.result,
         ...('images' in event && event.images?.length ? { images: event.images } : {}) }
       const stdout = outputSummary(result.stdout)
@@ -290,22 +312,21 @@ function runEventView(event: RunEvent, access?: RunEnvironmentAccess): object {
   }
 }
 
-function processExitProjection(value: import('@anybox/models').JsonValue | undefined): { readonly processes?: readonly ProcessExitView[] } {
-  value = computerCleanupReceipt(value)
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  const result = value as Readonly<Record<string, import('@anybox/models').JsonValue>>
-  if (!Array.isArray(result.processes)) return {}
+function processExitProjection(value: import('@anybox/models').JsonValue | undefined, includeTargets: boolean): { readonly processes?: readonly ProcessExitView[] } {
   const processes: ProcessExitView[] = []
-  for (const raw of result.processes.slice(0, 64)) {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
-    const item = raw as Readonly<Record<string, import('@anybox/models').JsonValue>>
-    if (typeof item.session_id !== 'number' || !Number.isSafeInteger(item.session_id) || item.session_id < 1 ||
-      (item.exit_code !== null && (typeof item.exit_code !== 'number' || !Number.isSafeInteger(item.exit_code))) ||
-      (item.signal !== null && typeof item.signal !== 'string') || typeof item.output !== 'string') continue
-    const output = outputSummary(item.output)
-    processes.push({ sessionId: item.session_id, exitCode: item.exit_code, signal: item.signal, output: output.text,
-      truncated: item.truncated === true || output.truncated, terminated: item.terminated === true, timedOut: item.timed_out === true,
-      ...(typeof item.error === 'string' ? { error: outputSummary(item.error).text } : {}) })
+  for (const { targetId, receipt } of computerCleanupTargets(value)) {
+    if (!Array.isArray(receipt.processes)) continue
+    for (const raw of receipt.processes.slice(0, 64)) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
+      const item = raw as Readonly<Record<string, import('@anybox/models').JsonValue>>
+      if (typeof item.session_id !== 'number' || !Number.isSafeInteger(item.session_id) || item.session_id < 1 ||
+        (item.exit_code !== null && (typeof item.exit_code !== 'number' || !Number.isSafeInteger(item.exit_code))) ||
+        (item.signal !== null && typeof item.signal !== 'string') || typeof item.output !== 'string') continue
+      const output = outputSummary(item.output)
+      processes.push({ ...(includeTargets && targetId ? { targetId } : {}), sessionId: item.session_id, exitCode: item.exit_code, signal: item.signal, output: output.text,
+        truncated: item.truncated === true || output.truncated, terminated: item.terminated === true, timedOut: item.timed_out === true,
+        ...(typeof item.error === 'string' ? { error: outputSummary(item.error).text } : {}) })
+    }
   }
   return processes.length ? { processes } : {}
 }
@@ -571,6 +592,27 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
           signal => joinImageCall(browse.create(body.name as string, signal), signal, 'directory'), directoryRequests, directoryOwner)
         json(response, 201, result); return
       }
+      const projectWorkspaces = /^\/api\/v1\/projects\/([^/]+)\/workspaces$/.exec(path)
+      if (projectWorkspaces && method === 'GET') {
+        json(response, 200, await commands.listProjectWorkspaces(decodeURIComponent(projectWorkspaces[1]))); return
+      }
+      if (projectWorkspaces && method === 'POST') {
+        const body = await requestObject(request, ['requestId', 'expectedRevision', 'name', 'path', 'computerAttachmentId'])
+        json(response, 200, await commands.addProjectWorkspace(decodeURIComponent(projectWorkspaces[1]), {
+          requestId: body.requestId as string, expectedRevision: body.expectedRevision as number,
+          name: body.name as string, path: body.path as string, computerAttachmentId: body.computerAttachmentId as string,
+        })); return
+      }
+      const editWorkspace = /^\/api\/v1\/projects\/([^/]+)\/workspaces\/([^/]+)\/(rename|remove)$/.exec(path)
+      if (editWorkspace && method === 'POST') {
+        const rename = editWorkspace[3] === 'rename'
+        const body = await requestObject(request, rename ? ['requestId','expectedRevision','name'] : ['requestId','expectedRevision'])
+        const project = decodeURIComponent(editWorkspace[1]), member = decodeURIComponent(editWorkspace[2])
+        const input = { requestId: body.requestId as string, expectedRevision: body.expectedRevision as number }
+        const result = rename ? await commands.renameProjectWorkspace(project, member, { ...input, name: body.name as string })
+          : await commands.removeProjectWorkspace(project, member, input)
+        json(response, 200, result); return
+      }
       if (method === 'POST' && path === '/api/v1/projects') {
         const body = await requestObject(request, ['path', 'computerAttachmentId'])
         if (!commands.openProject) throw failure(503, 'service-unavailable')
@@ -794,8 +836,14 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         json(response, 200, sessionView(session)); return
       }
       if (method === 'POST' && path === '/api/v1/sessions') {
-        const body = await requestObject(request, ['projectId', 'agentId', 'modelId'])
-        json(response, 200, sessionView(await commands.createSession(body.projectId as string, body.agentId as string, body.modelId as string | undefined)))
+        const body = await requestObject(request, ['projectId', 'agentId', 'modelId', 'workspaceIds', 'projectWorkspaceRevision'])
+        if ((body.workspaceIds !== undefined || body.projectWorkspaceRevision !== undefined) && (!Array.isArray(body.workspaceIds) ||
+          body.workspaceIds.some(id => typeof id !== 'string' || !id) || typeof body.projectWorkspaceRevision !== 'number' ||
+          !Number.isSafeInteger(body.projectWorkspaceRevision) || body.projectWorkspaceRevision < 1)) throw failure(400, 'project-workspace-invalid')
+        const workspaces = body.workspaceIds === undefined && body.projectWorkspaceRevision === undefined ? undefined : {
+          workspaceIds: body.workspaceIds as string[], projectWorkspaceRevision: body.projectWorkspaceRevision as number,
+        }
+        json(response, 200, sessionView(await commands.createSession(body.projectId as string, body.agentId as string, body.modelId as string | undefined, workspaces)))
         return
       }
       const sessionModelMatch = /^\/api\/v1\/sessions\/([^/]+)\/model$/.exec(path)
@@ -992,7 +1040,9 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         const events = await commands.getRunEvents(id, integerQuery(url, 'afterSeq', 0, 0, Number.MAX_SAFE_INTEGER))
         if (!events) throw failure(404, 'not-found')
         const access = events.length ? await commands.getRunEnvironmentAccess?.(id) : undefined
-        json(response, 200, events.map(event => runEventView(event, access)))
+        const hasComputer = access?.functions.some(route => route.grant.tool.environmentId === 'computer')
+        const units = hasComputer ? (await commands.getRun(id))?.units : undefined
+        json(response, 200, events.map(event => runEventView(event, access, units)))
         return
       }
       const waitMatch = /^\/api\/v1\/runs\/([^/]+)\/wait$/.exec(path)
@@ -1051,7 +1101,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
     handle,
     capabilities: () => {
       const current = options.currentCommands?.() ?? commands
-      return [...(current.environmentManagement ? ['agent-environment-access.v1'] : []), ...(current.mcpConnections ? ['mcp-environment.v1'] : []), ...(current.listComputerEnvironments ? ['computer-environments'] : []), ...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
+      return [...(typeof current.listProjectWorkspaces === 'function' ? ['projects.workspaces.v1'] : []), ...(current.environmentManagement ? ['agent-environment-access.v1'] : []), ...(current.mcpConnections ? ['mcp-environment.v1'] : []), ...(current.listComputerEnvironments ? ['computer-environments'] : []), ...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
         ...(current.directoryCreationSupported?.() ? ['projects.create-directory'] : []),
         ...(current.localDirectorySelectionSupported?.() === true ? ['projects.local-directories'] : [])]
     },

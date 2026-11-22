@@ -2,7 +2,7 @@ import type { EnvironmentInventoryTarget } from '@anybox/execution-environments/
 import type { Api } from './client-types.js'
 import type { UnitAttachment, UnitScope } from '../core/unit/domain.js'
 import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
-import { environmentLabel, environmentStateLabel } from './project-directory-client.js'
+import { renderEnvironmentDevice, renderEnvironmentTarget } from './environment-inventory-view.js'
 import { createPageRequests } from './page-lifecycle.js'
 import type { LocalComputerWorkerStatus } from '../core/computer/worker-port.js'
 
@@ -24,14 +24,6 @@ export function parseGrantList(value: string): readonly string[] {
 export function computerScope(projects: readonly string[], tools: readonly string[]): UnitScope {
   return { kind: 'computer', projects: projects.length ? projects : 'all', tools: tools.length ? tools : 'all' }
 }
-const stateLabels: Record<UnitAttachment['state'], string> = { pending: '等待单元消费附着码', approved: '已批准', revoked: '已撤销' }
-export function describeAttachment(attachment: UnitAttachment): string {
-  const scope = attachment.scope ?? attachment.requestedScope
-  const grants = scope.kind === 'computer' ? `目录 ${scope.projects === 'all' ? '不限' : scope.projects.join('、')} · 工具 ${scope.tools === 'all' ? '不限' : scope.tools.join('、')}`
-    : `${scope.access === 'manage' ? '管理' : '执行'} · 模型配置 ${scope.configurations === 'all' ? '不限' : scope.configurations.join('、')}`
-  return `${attachment.unitKind === 'computer' ? 'Computer' : 'Models'} · ${attachment.origin === 'local' ? '本机' : attachment.unitId ?? '未知单元'} · ${stateLabels[attachment.state]} · epoch ${attachment.epoch} · ${grants}`
-}
-
 /** A worker attachment as the device's own worker reports it, with the dial-out connection state. */
 export interface LocalAttachmentView {
   readonly attachmentId: string; readonly harnessUrl: string; readonly instanceId: string; readonly state: 'approved' | 'revoked'
@@ -228,14 +220,14 @@ export function setupUnitsSettings(source: Api | undefined, messageFor: (error: 
   }
   const heading = el('header', undefined, 'settings-panel-heading'), title = el('h3', '执行环境'); title.id = 'agent--units-title'
   const titleRow = el('div', undefined, 'settings-title-row'); titleRow.append(title)
-  heading.append(titleRow, el('p', '执行环境决定 Agent 的工具在哪里运行。'))
+  heading.append(titleRow)
   panel.append(heading)
 
   const computerSection = el('section', undefined, 'execution-environment-section')
   const computerHeading = el('div', undefined, 'execution-environment-toolbar')
   const refreshButton = el('button', '刷新', 'secondary-button'); refreshButton.type = 'button'
   refreshButton.setAttribute('aria-label', '刷新执行环境')
-  computerHeading.append(el('h4', '文件与命令在哪台电脑上运行'))
+  computerHeading.append(el('h4', '项目电脑'))
   if (api) computerHeading.append(refreshButton)
   computerSection.append(computerHeading)
   const list = el('div', undefined, 'units-list'), status = el('p', undefined, 'notice'); status.hidden = true
@@ -250,9 +242,9 @@ export function setupUnitsSettings(source: Api | undefined, messageFor: (error: 
   const catalog = el('div', undefined, 'units-list')
   panel.append(computerSection)
   if (api) {
-    computerSection.append(el('p', '「本机」指所选执行设备所在的电脑。每个项目在创建时选择一台电脑。', 'settings-hint'), status, list, issueDetails)
+    computerSection.append(el('p', '创建项目时选择主工作区所在的电脑。可在侧栏的「项目工作区」里添加其他已接入的电脑。「本机」指当前所选的执行设备。', 'settings-hint'), status, list, issueDetails)
     const catalogSection = el('section', undefined, 'execution-environment-section')
-    catalogSection.append(el('h4', '由哪些环境提供工具'), el('p', '在「Agent 工具」中管理每个 Agent 的授权和偏好。', 'settings-hint'), catalog)
+    catalogSection.append(el('h4', '工具来源'), el('p', '在「Agent 工具」中更改授权和使用偏好。', 'settings-hint'), catalog)
     panel.append(catalogSection)
   } else {
     computerSection.append(el('p', '尚无可用的执行设备。可在「管理连接」中检查连接并启动 Agent。', 'settings-hint'))
@@ -268,43 +260,28 @@ export function setupUnitsSettings(source: Api | undefined, messageFor: (error: 
   const setNotice = (message: string) => { notice = message; status.textContent = message; status.hidden = !message }
   const render = () => {
     if (disposed) return
+    const expandedDevices = new Set(Array.from(list.children)
+      .filter((row): row is HTMLDetailsElement => (row as HTMLDetailsElement).open)
+      .map(row => row.dataset.attachmentId))
     list.replaceChildren(...environments.map(environment => {
       const attachment = attachments.find(value => value.attachmentId === environment.environmentId)
-      const row = el('section', undefined, 'settings-card unit-row')
-      row.dataset.attachmentId = environment.environmentId
-      const label = el('strong', environmentLabel(environment)); label.title = `${environment.environmentId}${environment.unitId ? ` · ${environment.unitId}` : ''}`
-      const badge = el('span', environmentStateLabel(environment), 'execution-environment-status'); badge.dataset.state = environment.connectionState
-      const rowHeading = el('div', undefined, 'execution-environment-row-heading'); rowHeading.append(label, badge)
-      const details = el('details', undefined, 'execution-environment-disclosure'); details.append(el('summary', '身份与权限'), el('p', environment.environmentId))
-      if (attachment) details.append(el('p', describeAttachment(attachment)))
-      const support = environment.toolSupport
-      details.append(el('p', support?.state === 'reported'
-        ? 'Worker 最近报告的工具：' + (support.manifest.tools.map(tool => tool.toolId).join('、') || '无')
-        : '尚未收到可用的 Worker 工具报告。'))
-      details.append(el('p', '命令以执行设备的系统账户运行。项目目录限制用于工具准入，不提供操作系统级文件隔离。'))
-      row.append(rowHeading, details)
-      if (environment.origin === 'remote' && environment.state !== 'revoked') {
-        const revoke = el('button', '撤销附着', 'secondary-button'); revoke.type = 'button'
-        revoke.addEventListener('click', () => { void view.revoke(environment.environmentId).catch(() => {}) })
-        details.append(revoke)
-      }
+      const row = renderEnvironmentDevice(environment, attachment, () => { void view.revoke(environment.environmentId).catch(() => {}) })
+      row.open = expandedDevices.has(environment.environmentId)
       return row
     }))
     if (!environments.length) list.append(el('p', notice ? '无法读取执行环境，请重试。' : '尚无执行环境。'))
-    catalog.replaceChildren()
+    const expandedTargets = new Set(Array.from(catalog.children)
+      .filter((row): row is HTMLDetailsElement => (row as HTMLDetailsElement).open)
+      .map(row => row.dataset.targetKey))
+    const sources = targets.map(target => {
+      const row = renderEnvironmentTarget(target)
+      row.dataset.targetKey = JSON.stringify([target.environmentId, target.targetId])
+      row.open = expandedTargets.has(row.dataset.targetKey)
+      return row
+    })
+    catalog.replaceChildren(...sources)
     if (catalogNotice) catalog.append(el('p', catalogNotice))
     else if (!targets.length) catalog.append(el('p', '尚无可授权的工具目标。'))
-    for (const target of targets) {
-      const details = el('details', undefined, 'settings-card execution-environment-disclosure')
-      const name = target.environmentId === 'mcp' ? `MCP · ${target.name}` : target.name
-      details.append(el('summary', name), el('p', `${target.environmentId} · ${target.targetId}`),
-        el('p', target.tools.map(tool => tool.toolId).join('、')))
-      if (target.agents.length) for (const agent of target.agents) {
-        details.append(el('p', (agent.name || agent.id) + ' 已获授权：' + agent.toolIds.join('、')))
-      }
-      else details.append(el('p', '尚无 Agent 获得此目标的工具授权。'))
-      catalog.append(details)
-    }
   }
   const guarded = async <T>(work: (targetApi: Api) => Promise<T>): Promise<T> => {
     if (!api) throw Object.assign(new Error('instance-unavailable'), { code: 'instance-unavailable' })

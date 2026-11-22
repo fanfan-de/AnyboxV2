@@ -156,3 +156,13 @@ test('explicit Bash remains Bash on all native platforms', async () => {
     assert.match(value.stdout, /^\d+你好$/)
   } finally { await f.close() }
 })
+
+test('multi-workspace prompts describe explicit version handoff once on the primary Computer', () => {
+  const primary = toolEnvironmentPrompt('darwin', '/src', { name: '开发机', prefix: 'main__', primary: true })
+  const staging = toolEnvironmentPrompt('linux', '/srv', { name: '服务器', prefix: 'workspace2__' })
+  assert.match(primary.content, /tested commit or artifact digest/)
+  assert.match(primary.content, /query the original release request/)
+  assert.match(staging.content, /workspace2__/)
+  assert.doesNotMatch(staging.content, /tested commit/)
+  assert.notEqual(primary.documentId, staging.documentId)
+})

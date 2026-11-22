@@ -40,6 +40,8 @@ D1.5 的受信 `setClosedTargets?(ids)` 只在已持有并排空 freezeControls 
 
 ## 能力选择与本代装配
 
+执行宿主在启动某个应用前查询共享 SQLite 已为该应用登记的最低写入能力。注册声明的最低 `storage.sqlite` 版本不足时，该应用进入 `blocked`，能力诊断为 `incompatible`。检查在获取能力租约和创建 runtime 之前完成，同库其他应用分别检查自己的记录。[存储布局与回退保护](../infrastructure/local-sqlite.md#迁移与兼容规则)
+
 `packages/host/src/applications/providers.ts` 的管理器归现有宿主运行时所有，是普通的选择/租约辅助函数，不是新 Nya 组件，不另建 Context，也不手工复制组件依赖图。`ApplicationCapabilityProvider` 由公开 application-api/nya 提供，声明 id、version、services、supported、resident 和惰性 create({ signal })。信号取消初始化时，提供方必须取消并等待实际初始化退出；资源仍经 Effect 清理。
 
 打开先解析 required/optional 的 SemVer 范围。存在不满足的 required 时保留 blocked，且不执行应用工厂或初始化任何新提供方；optional 不可用则降级。能力和服务名上的并发锁保护共享提供方，选兼容最高版本，有消费者后固定版本；不兼容的使用者或服务名冲突报告 conflict，不替换在用资源。应用工厂每个干净运行代重新构造，取得冻结的版本元数据，按该选择声明条件 inject，实际服务从 deps 读取。

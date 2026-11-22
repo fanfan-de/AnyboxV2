@@ -47,6 +47,8 @@ Computer 适配在本轮依赖快照内创建，惰性打开原观察 scope；Op
 
 协议 program 发布展示 v2 的有界完整快照，Runtime 不解释其原生内容类型、停止状态或诊断。模型工具请求保留其来源 exchange；本地工具事实仍只写入 `tool-started`、`tool-observed`、`tool-failed` 事件。前端按 Run、来源模型 exchange、请求 ID、名称和事件位置关联事实，不发布额外 `tools-N` 临时 exchange，也不以请求快照推断工具完成。取消和清理失败时，已经保存的真实工具结果及部分补丁事实继续可查询。
 
+多工作区会话按模型实际发出的别名查回原工具、工作区绑定和确切目标，并把这几项随操作意图持久保存。Runtime 只为实际使用的目标取得作用域。恢复先定位各自曾经打开的作用域，仍使用原操作 ID。各台 Computer 分别提供取消、关闭和实际退出回执，任一目标退出仍未证实时保留失败事实。模型回填和对话历史使用当时的别名。相关用例覆盖[目标分派与恢复](../../../packages/execution-environments/tests/targets.test.mjs)和[四种原生协议往返](../../../tests/native-protocol-agents.test.mjs)。
+
 ## 结算、取消与关闭
 
 启动后先读取 Session 保存的 Run 和项目归属，验证原生上下文模式、绑定代与完整模型快照和 program 一致。执行结束时中止新操作，取消仍在途句柄，等待每个 `done` 和所有受管 Promise。已打开环境用 `<runId>:tool-environment-scope-close` 和 `intent.kind=tool-environment-cleanup` 保存关闭操作。`environments` 中每项保留 `environmentId`、`result`，多目标 scope 还包含 `targetId`。关闭观察提交后，各目标按自己的实际退出证明解除授权占用。Computer 适配终止并等待进程组，释放实例与工作区引用并报告剩余输出。随后执行 `program.close()`，等待取消状态写入，再请求 Session 原子结算。正常模型完成也关闭 scope。存储失败后仍继续清理。最终 `program.release()` 在清理和持久结算之后释放绑定租约。

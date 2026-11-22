@@ -63,7 +63,7 @@ export interface ExchangeRunner {
 export function createExchangeRunner(execution: NativeExecution, host: RunHost, identity: { sessionId: string; runId: string },
   initialResources: readonly NativeImageResourceRef[] = [], prompts?: readonly PromptSnapshot[],
   acceptResources?: (refs: readonly NativeImageResourceRef[]) => void, allowedTools?: readonly ToolDefinition[], replay?: NativeReply,
-  toolRequestCorrections = 0): ExchangeRunner {
+  toolRequestCorrections = 0, aliases?: ReadonlyMap<string, string>): ExchangeRunner {
   let initial = replay === undefined, replayReply = replay, latestExchangeId: string | undefined
   let nextResources: readonly NativeImageResourceRef[] = []
   let exchanges: readonly ProtocolViewExchange[] = []
@@ -122,7 +122,7 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
         return false
       })) throw new RunFailure('invalid-tool-request')
       let validated: readonly ValidatedToolRequest[]
-      try { validated = validateToolBatch(calls, allowedTools) }
+      try { validated = validateToolBatch(calls, allowedTools, aliases) }
       catch (error) {
         if (!(error instanceof RunFailure) || error.category !== 'invalid-tool-request') throw error
         host.signal.throwIfAborted()
@@ -134,7 +134,7 @@ export function createExchangeRunner(execution: NativeExecution, host: RunHost, 
           const selected = allowedTools?.find(tool => tool.name === call.name)
           let reason: 'unknown-tool' | 'invalid-arguments' | 'batch-rejected' = 'unknown-tool'
           if (selected) {
-            try { validateToolBatch([call], allowedTools); reason = 'batch-rejected' }
+            try { validateToolBatch([call], allowedTools, aliases); reason = 'batch-rejected' }
             catch (error) {
               if (!(error instanceof RunFailure) || error.category !== 'invalid-tool-request') throw error
               reason = 'invalid-arguments'

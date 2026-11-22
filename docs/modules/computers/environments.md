@@ -2,7 +2,7 @@
 
 [返回 Computer 模块](README.md) · [Projects](../sessions/projects.md) · [目录选择](../../project-directory-picker.md) · [部署](../../harness-server-deployment.md)
 
-Computer 表示工具、进程与文件资源所在的执行环境。本机与多个远端环境可以同时存在；本机是相对于当前 harness server 所在设备而言，与浏览器或客户端所在设备无关。新项目的默认环境固定为 `local:computer`，不提供全局 local/remote 二选一或默认远端配置。每个项目绑定一个环境，每次 Run 固定该绑定；多个 Run 可以分别使用不同环境并行执行。
+Computer 表示工具、进程与文件资源所在的执行环境。本机与多个远端环境可以同时存在；本机是相对于当前 harness server 所在设备而言，与浏览器或客户端所在设备无关。新项目的默认环境固定为 `local:computer`，不提供全局 local/remote 二选一或默认远端配置。项目创建时选取主工作区，还可接入其他已批准电脑上的工作区。在新会话勾选额外工作区后，同一个 Run 可以按工具声明访问各自的 Computer。侧栏文件树继续读取主工作区。
 
 文件读写、搜索、命令与图片读取是 Computer 提供的能力，项目目录是该环境中的 Workspace；Bash、文件夹或单个工具不分别建立环境。内部仍按文件、进程与补丁等资源拆分组件，共用环境身份及执行归属。
 

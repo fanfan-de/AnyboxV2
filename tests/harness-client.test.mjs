@@ -9,6 +9,29 @@ const a = '11111111-1111-4111-8111-111111111111', b = '22222222-2222-4222-8222-2
 const connections = [{ id: 'a', name: 'Laptop', instanceId: a, revision: 1 }, { id: 'b', name: 'Server', instanceId: b, revision: 1 }]
 const store = () => { const map = new Map(); return { getItem: key => map.get(key) ?? null, setItem: (key, value) => map.set(key, value) } }
 
+test('project workspace selection and session creation stay on the project’s Harness', async t => {
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, body: options.body && JSON.parse(options.body) })
+    return Response.json(url.endsWith('/workspaces')
+      ? { revision: 3, workspaces: [{ id: 'staging', projectId: 'shop', computerAttachmentId: 'attachment-b' }] }
+      : { id: 'session', projectId: 'shop', workspaceBindings: [{ id: 'staging', revision: 1 }] })
+  })
+  const api = createHarnessClient(connections, 'a')
+  t.after(() => api.dispose())
+  const projectId = scopedId(b, 'shop'), agentId = scopedId(b, 'assistant')
+  const state = await api(`/projects/${encodeURIComponent(projectId)}/workspaces`)
+  assert.equal(calls[0].url, '/api/connections/b/v1/projects/shop/workspaces')
+  assert.deepEqual(state.workspaces[0], { id: scopedId(b, 'staging'), projectId, computerAttachmentId: 'attachment-b' })
+  const input = { projectId, agentId, workspaceIds: state.workspaces.map(workspace => workspace.id), projectWorkspaceRevision: state.revision }
+  const session = await api('/sessions', input)
+  assert.deepEqual(calls[1], { url: '/api/connections/b/v1/sessions',
+    body: { projectId: 'shop', agentId: 'assistant', workspaceIds: ['staging'], projectWorkspaceRevision: 3 } })
+  assert.deepEqual(session.workspaceBindings, [{ id: scopedId(b, 'staging'), revision: 1 }])
+  await assert.rejects(api('/sessions', { ...input, workspaceIds: [scopedId(a, 'staging')] }), { code: 'cross-instance-input' })
+  assert.equal(calls.length, 2)
+})
+
 test('session default model IDs remain scoped to their execution device while fixed settings clients use local IDs', async t => {
   const calls = []
   t.mock.method(globalThis, 'fetch', async (url, options) => {

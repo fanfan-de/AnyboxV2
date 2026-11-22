@@ -9,6 +9,7 @@ export type { DirectoryPage } from '../core/project/directories.js'
 export type ToolTraceState = 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'interrupted' |
   ApplyPatchResult['status']
 interface ToolTraceBase {
+  workspace?: import('../core/api.js').ToolWorkspaceView
   environmentTool?: EnvironmentTool
   readonly id: string
   state: ToolTraceState

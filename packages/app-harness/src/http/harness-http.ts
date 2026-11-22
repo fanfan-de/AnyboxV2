@@ -123,11 +123,15 @@ function createCommands(agentIds: readonly Readonly<{ id: string }>[], deps: Com
       if (!path || signal.aborted) return null
       return deps[projectServiceKey].openProject(path)
     },
+    listProjectWorkspaces: id => deps[projectServiceKey].listProjectWorkspaces(id),
+    addProjectWorkspace: (id, input) => deps[projectServiceKey].addProjectWorkspace(id, input),
+    renameProjectWorkspace: (id, member, input) => deps[projectServiceKey].renameProjectWorkspace(id, member, input),
+    removeProjectWorkspace: (id, member, input) => deps[projectServiceKey].removeProjectWorkspace(id, member, input),
     openProject: (path, options) => deps[projectServiceKey].openProject(path, options),
     listProjects: () => deps[projectServiceKey].listProjects(),
-    createSession(projectId, agentId, modelId) {
+    createSession(projectId, agentId, modelId, workspaces) {
       if (modelId !== undefined && !deps[modelsServiceKey].get(modelId)) throw modelsError('not-found')
-      return deps[sessionServiceKey].createSession(projectId, agentId, modelId)
+      return deps[sessionServiceKey].createSession(projectId, agentId, modelId, workspaces)
     },
     getSessionDefaults: agentId => deps[sessionServiceKey].getSessionDefaults(agentId),
     setSessionDefaults(agentId, modelId, expectedRevision) {

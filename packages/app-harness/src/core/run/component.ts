@@ -13,7 +13,7 @@ import { agentPromptServiceKey } from '../agent/prompt-binding-component.js'
 import type { AgentPromptPort } from '../agent/prompt-binding-component.js'
 import { modelFailure, normalizeModelFailure } from './model.js'
 import { getToolByName, validateToolSelection } from '../tool/catalog.js'
-import { createComputerRunPreparation } from '../tool-environments/computer.js'
+import { computerToolTarget, createComputerRunPreparation } from '../tool-environments/computer.js'
 import { projectServiceKey } from '../project/component.js'
 import type { ProjectPort } from '../project/component.js'
 import { validateRunInput, sameRunInput } from './domain.js'
@@ -259,7 +259,11 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
               } else validateToolSelection(session.toolSelection)
             } catch { throw treeError('history-incompatible') }
             const modelSupportsTools = models.get(modelId)?.effectiveCapabilities?.tools === true
-            const { units, supports, prompts: toolPrompts } = await prepareRun({ project, session, modelSupportsTools }, attachments)
+            const workspaces = session.workspaceBindings && await projects.resolveWorkspaces(project.id, session.workspaceBindings)
+            if (!fixedInitialization && workspaces && workspaces.length > 1 && !modelSupportsTools) {
+              throw environmentError('workspace-model-tools-required', 409)
+            }
+            const { units, supports, prompts: toolPrompts } = await prepareRun({ project, session, modelSupportsTools, workspaces }, attachments)
             const requestedInitialization: NativeInitialization = fixedInitialization ?? Object.freeze({
               ...(session.toolEnvironments ? { schemaVersion: 3 as const, toolContractVersion: 'tool-environments-v1' as const, toolEnvironments: session.toolEnvironments }
                 : { schemaVersion: 2 as const, toolContractVersion: 'tool-library-v1' as const }),
@@ -277,6 +281,10 @@ export function createRunComponent(inputs: RuntimeInputs, agents: readonly Agent
               provider ? nativeSearchTool(provider) : undefined, Boolean(fixedInitialization), supports) : undefined
             const initialization = approved?.initialization ?? requestedInitialization
             const access = approved?.access
+            if (!fixedInitialization && units?.workspaces) {
+              const available = new Set(access?.functions.filter(route => route.grant.tool.environmentId === 'computer').map(route => route.grant.tool.targetId))
+              if (units.workspaces.some(workspace => !available.has(computerToolTarget(workspace.unit)))) throw environmentError('workspace-tools-unavailable', 409)
+            }
             if (fixedInitialization && access) {
               const prior = await records.loadSessionAccess(session.id)
               const compatible = prior ? isDeepStrictEqual(prior, access) : await records.checkLegacyAccess(session.id, access, units, fixedInitialization)

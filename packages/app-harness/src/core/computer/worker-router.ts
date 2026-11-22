@@ -17,7 +17,7 @@ export interface WorkerRouterOptions {
   readonly claimTimeoutMs?: number
   readonly replyTimeoutMs?: number
 }
-interface UnitInfo { readonly workerId: string; readonly bootId: string; readonly platform: string; readonly architecture: string }
+type UnitInfo = Awaited<ReturnType<ComputerWorkerPort['info']>>
 type RouterDependencies = { [unitTransportServiceKey]: UnitTransportPort; [unitAttachmentsServiceKey]: UnitAttachmentsPort; [localComputerWorkerServiceKey]: ComputerWorkerPort }
 const terminal = (state: string) => ['succeeded', 'failed', 'cancelled', 'outcome-unknown'].includes(state)
 const localAttachment = localAttachmentId('computer')
@@ -79,7 +79,7 @@ export function createWorkerRouterComponent(options: WorkerRouterOptions = {}): 
       else known.set(operation.operationId, { state: operation.state, receipt: operation.receipt })
     }
     const worker: ComputerWorkerPort = {
-      info: () => local.info(),
+      info: (attachmentId = localAttachment) => attachmentId === localAttachment ? local.info() : info(attachmentId),
       async claimRun(input) {
         const attachmentId = attachmentOf(input)
         if (attachmentId === localAttachment) return local.claimRun(input)

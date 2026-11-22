@@ -140,3 +140,7 @@ NativeRunInput v3 保存文件引用及顺序，v1/v2 读取时 files=[]，旧 J
 归档不改历史、协议绑定、节点、原生记录、图片和文件快照。图片导入/文件准备在准入时拒绝归档会话，已开始的草稿操作继续按原生命周期退出；历史查询、附件读取和草稿续期保持可用。归档/恢复通过现有 track 操作管理，组件关闭等待已接受写入。
 
 [会话树测试](../../../tests/conversation-tree.test.mjs) 覆盖幂等、并发裁决、取消实际退出、准备清理和重启；[Session 生命周期测试](../../../tests/session.test.mjs) 覆盖归档写入关闭等待；[迁移测试](../../../tests/conversation-migration.test.mjs) 验证旧数据保持只读。
+
+### 项目工作区选择
+
+Anybox Harness 的 run-state v15 保存会话创建时选定的工作区 ID、修订、名称与路径。创建会话可一起提交 `workspaceIds` 和 `projectWorkspaceRevision`，服务端在同一事务中校验项目修订、工作区归属与可用工具授权。主工作区总会纳入，旧客户端省略这两个字段时沿用原有单机行为。多工作区的工具声明在会话内固定，项目成员调整后从新会话选择。接受 Run 的事务再次核验绑定和授权，并为使用中的附加工作区登记占用。终态解除项目配置的占用，尚待核实的 worker 操作保留其耐久身份和原路径。[项目工作区与发布示例](../../harness-project-multiple-computers-design.md)
