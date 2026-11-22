@@ -19,7 +19,7 @@ createComputerOperationsComponent(inputs, options?) 安装 Authority 根的 harn
 | get(id) | 查询声明、状态、binding、原始结果、worker receipt、ProcessRef 和消费标记 |
 | hasRunResources(runId) | 查询持久 scope 归属，不以内存 Map 推断退出 |
 | authorizeRun(runId,epoch,signal) | 恢复准备之前，在已经使用的 worker 安装新 owner 栅栏 |
-| recoverCancelledRuns(excludeRunIds) | 协调终态 Run 的耐久取消及清理，不重新打开历史执行 |
+| recoverCancelledRuns(excludeRunIds) | 协调终态 Run 的耐久取消及清理，排除 RunRuntime 已接手的目标作用域 |
 | openRun({runId,runOwnerEpoch?,imageInput?,unit?}) | 同步建立本代观察 scope，不激活实例；`unit` 是 Run 固定的 Computer 附着引用，缺省按本机附着 `local:computer` 解释 |
 
 scope 提供 execute(id)、cancel()、close()。cancel 先提交持久取消，再协调实际退出；即使协议恢复失败也可终止原 worker scope。资源类型由 Computer 自己管理，不向通用环境注册表暴露 hasProcesses() 探测。OwnedCall.done 证明本地观察退出；worker 实际退出另由耐久事实证明。整批工具先按接受时声明校验；Session 接纳时再次复核 ID、版本及 definition。模型 operation 和旧会话兼容的计划工具不创建 computer 声明。
@@ -35,6 +35,8 @@ scope 提供 execute(id)、cancel()、close()。cancel 先提交持久取消，�
 5. Session 消费同事务保存 observation、资源、observed 和额度。提交后才交协议 Loop；重复领取不执行、不新增事件或额度。
 
 binding 和 pins 持有到 worker scope 真正关闭，包含 Codex 提前返回后的长进程。cancel/close-scope 使用稳定控制 ID/摘要，丢确认重查原 receipt。关闭成功保存后同事务释放 reservation/pin；未知执行和清理失败保留引用，禁止成功节点。
+
+Computer 环境适配器用该组件的原 scope 及 worker 回执核对目标退出。此证明用于释放精确 Computer 目标的工具授权占用，其他环境的持有情况由各自提供方核对。 [RunRuntime](../execution/run-runtime.md)
 
 scope 关闭失败但已保存原清理观察时，result 保留部分输出/退出事实，done 仍拒绝。Authority 保存原 close receipt/result，维持 closed=false，不释放 pins；Runtime 把真实事实归档为 cleanup-failed，不能用局部结果证明整个 scope 安全退出。
 

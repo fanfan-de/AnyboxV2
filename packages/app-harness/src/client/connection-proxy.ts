@@ -37,6 +37,7 @@ export interface ConnectionForwardOptions {
 }
 // Application control joins component startup/cleanup before replying; it can exceed an ordinary proxy request.
 const controlPath = /^\/products\/[^/]+\/(?:open|stop|retry)$/
+const mcpControlPath = /^\/apps\/agent\/mcp-connections\/[^/]+\/(?:refresh|disable)$/
 /**
  * Forwards one request to `<endpoint>/api/v1<path>` under the connection's own credentials and expected instance.
  * Browser authentication and proxy identity headers never reach the execution host; redirects and write retries are refused.
@@ -58,8 +59,9 @@ export async function forwardConnectionRequest(connections: ConnectionsPort, con
     const upstream = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, { method: request.method, headers, signal })
     let upload: Promise<unknown> = Promise.resolve(), download: Promise<unknown> = Promise.resolve(), error: unknown
     const control = controlPath.test(path)
-    const handshake = setTimeout(() => upstream.destroy(new Error('connection timeout')), control ? 120000 : 15000)
-    upstream.setTimeout(control ? 120000 : 35000, () => upstream.destroy(new Error('upstream timeout')))
+    const mcpControl = mcpControlPath.test(path)
+    const handshake = setTimeout(() => upstream.destroy(new Error('connection timeout')), control ? 120000 : mcpControl ? 45000 : 15000)
+    upstream.setTimeout(control ? 120000 : mcpControl ? 45000 : 35000, () => upstream.destroy(new Error('upstream timeout')))
     upstream.on('error', failure => { error = failure })
     upstream.on('response', incoming => {
       clearTimeout(handshake)

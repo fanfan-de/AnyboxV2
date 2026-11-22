@@ -1,11 +1,13 @@
 import { isDeepStrictEqual } from 'node:util'
 import { validateToolArguments, validateToolDescriptors } from '@anybox/tool-api'
-import type { JsonValue, ToolCall, ToolDescriptor, ToolEnvironment, ToolEnvironmentDescriptor, ToolEnvironmentResult, ToolEnvironmentScope } from '@anybox/tool-api'
+import type { JsonValue, ToolCall, ToolDescriptor, ToolEnvironment, ToolEnvironmentDescriptor, ToolEnvironmentResult, ToolEnvironmentScope, ToolEnvironmentScopeContext } from '@anybox/tool-api'
+import type { StorageReader } from '@anybox/storage-sqlite/port'
 import type { ToolObservation } from './catalog-port.js'
 import type { ToolRequest as ValidatedToolRequest } from '@anybox/tool-api'
+import { checkedId, targetKey } from './contracts.js'
 import { environmentForTool, parseToolEnvironmentSnapshot } from './snapshot.js'
-import type { ToolEnvironmentSnapshot } from './snapshot.js'
-import type { ToolEnvironmentCatalog, ToolEnvironmentCatalogEntry, ToolEnvironmentRegistry, ToolEnvironmentRun, ToolEnvironmentRunContext } from './catalog-port.js'
+import type { ToolEnvironmentSnapshot, ToolEnvironmentSnapshotTool } from './snapshot.js'
+import type { TargetedToolEnvironmentTarget, ToolEnvironmentCatalog, ToolEnvironmentCatalogEntry, ToolEnvironmentRegistry, ToolEnvironmentRun, ToolEnvironmentRunContext, ToolScopeTarget } from './catalog-port.js'
 
 function failure(category: 'invalid-request' | 'cancelled' | 'cleanup-failure' | 'unavailable' | 'outcome-unknown'): Error {
   return Object.assign(new Error(`tool environment ${category}`), { name: 'ToolEnvironmentError', category })
@@ -27,49 +29,122 @@ function observation(name: string, value: ToolEnvironmentResult): ToolObservatio
   return structuredClone(result)
 }
 
-function openRun(environments: ReadonlyMap<string, ToolEnvironment>, snapshot: ToolEnvironmentSnapshot, context: ToolEnvironmentRunContext): ToolEnvironmentRun {
-  const scopes = new Map<string, ToolEnvironmentScope>()
-  const calls = new Map<string, { readonly request: ValidatedToolRequest; readonly call: ToolCall<ToolObservation> }>()
+interface BoundEnvironment {
+  readonly targeted: boolean
+  readonly recovery?: 'observe-existing'
+  openScope(targetId: string | undefined, context: ToolEnvironmentScopeContext): ToolEnvironmentScope
+  restoreScope?(targetId: string | undefined, context: ToolEnvironmentScopeContext): ToolEnvironmentScope
+}
+
+interface RunScope {
+  readonly environmentId: string
+  readonly targetId?: string
+  readonly active: Set<ToolCall<unknown>>
+  readonly restored: boolean
+  scope?: ToolEnvironmentScope
+  exitFailed: boolean
+}
+
+function openRun(environments: ReadonlyMap<string, BoundEnvironment>, snapshot: ToolEnvironmentSnapshot, context: ToolEnvironmentRunContext,
+  unavailable?: Error, validateTarget?: (target: ToolScopeTarget, restoring: boolean) => void): ToolEnvironmentRun {
+  const scopes = new Map<string, RunScope>()
+  const staticTargets = new Map<string, string>()
+  const calls = new Map<string, { readonly request: ValidatedToolRequest; readonly target?: ToolScopeTarget; readonly call: ToolCall<ToolObservation> }>()
   const active = new Set<ToolCall<unknown>>()
   let accepting = true, cancelling: Promise<void> | undefined, closing: ToolCall<JsonValue> | undefined
-  let initializationFailure: unknown
-  const scopeFor = (environmentId: string) => {
-    let scope = scopes.get(environmentId)
-    if (!scope) {
-      scope = environments.get(environmentId)!.openScope({ scopeId: context.runId, ownerEpoch: context.runOwnerEpoch, signal: context.signal })
-      scopes.set(environmentId, scope)
+  let initializationFailure: unknown = unavailable
+  const scopeFor = (environmentId: string, targetId?: string, restoring = false) => {
+    const key = targetKey(environmentId, targetId ?? '')
+    const existing = scopes.get(key)
+    if (existing) {
+      if (!existing.scope || restoring && !existing.restored) throw failure('unavailable')
+      return { entry: existing, scope: existing.scope }
     }
-    return scope
+    const environment = environments.get(environmentId)
+    if (!environment || restoring && !environment.restoreScope) throw failure('unavailable')
+    const entry: RunScope = { environmentId, ...(targetId === undefined ? {} : { targetId }), active: new Set(),
+      restored: restoring, exitFailed: false }
+    scopes.set(key, entry)
+    const scopeContext = { scopeId: context.runId, ownerEpoch: context.runOwnerEpoch, signal: context.signal }
+    const scope = restoring ? environment.restoreScope?.(targetId, scopeContext) : environment.openScope(targetId, scopeContext)
+    if (!scope) throw failure('unavailable')
+    entry.scope = scope
+    return { entry, scope }
   }
-  // A reopened scope also owns recovery/close of resources retained by an earlier Runtime.
-  // A provider cannot start tool work merely because the lightweight scope was opened.
-  for (const environment of snapshot.environments) {
-    try { scopeFor(environment.environmentId) } catch (error) { initializationFailure ??= error }
+  if (!context.lazyScopes) {
+    // Historical aggregate ownership reopens every selected scope for cleanup.
+    for (const environment of snapshot.environments) {
+      const targets = environments.get(environment.environmentId)?.targeted ? new Set(environment.tools.map(tool => tool.targetId)) : [undefined]
+      for (const targetId of targets) {
+        try { scopeFor(environment.environmentId, targetId) } catch (error) { initializationFailure ??= error }
+      }
+    }
   }
+  const validateExactScope = (target: ToolScopeTarget, restoring: boolean) => {
+    if (!context.lazyScopes || restoring && !context.resuming) throw failure('invalid-request')
+    if (closing || !restoring && (!accepting || context.signal.aborted)) throw failure('cancelled')
+    validateTarget?.(target, restoring)
+    if (!environments.get(target.environmentId)?.targeted) {
+      const prior = staticTargets.get(target.environmentId)
+      if (prior !== undefined && prior !== target.targetId) throw failure('unavailable')
+      staticTargets.set(target.environmentId, target.targetId)
+    }
+  }
+  const exactScope = (target: ToolScopeTarget, restoring: boolean) => {
+    validateExactScope(target, restoring)
+    return scopeFor(target.environmentId, target.targetId, restoring)
+  }
+
   const service: ToolEnvironmentRun = {
-    execute(request, operationId, resuming = false) {
+    execute(request, operationId, resuming = false, target) {
       if (initializationFailure) throw initializationFailure
       if ((!accepting || context.signal.aborted) && !resuming || closing) throw failure('cancelled')
-      const prior = calls.get(operationId)
-      if (prior) {
-        if (!isDeepStrictEqual(prior.request, request)) throw failure('invalid-request')
-        return prior.call
-      }
       const selection = environmentForTool(snapshot, request.name)
       const tool = selection?.tools.find(tool => tool.definition.name === request.name)
-      const environment = selection && environments.get(selection.environmentId)
-      if (!tool || !environment) throw failure('unavailable')
+      if (!selection || !tool) throw failure('unavailable')
+      const environment = environments.get(selection.environmentId)
+      if (!environment) throw failure('unavailable')
+      if (context.lazyScopes && (!target || target.environmentId !== selection.environmentId ||
+        tool.targetId !== undefined && tool.targetId !== target.targetId)) throw failure('unavailable')
+      const prior = calls.get(operationId)
+      if (prior) {
+        if (!isDeepStrictEqual(prior.request, request) || !isDeepStrictEqual(prior.target, target)) throw failure('invalid-request')
+        return prior.call
+      }
       if (resuming && environment.recovery !== 'observe-existing') throw failure('outcome-unknown')
       validateToolArguments(tool.definition, request.arguments)
-      const owned = scopeFor(environment.environmentId).execute({ operationId, toolId: tool.toolId, version: tool.version, arguments: request.arguments, resuming })
+      let scoped: ReturnType<typeof scopeFor>
+      if (context.lazyScopes) {
+        // Original-operation lookup may observe a restored scope, but it cannot create a replacement.
+        if (resuming) {
+          const entry = scopes.get(targetKey(target!.environmentId, target!.targetId))
+          if (!entry?.scope) throw failure('outcome-unknown')
+          scoped = { entry, scope: entry.scope }
+        } else {
+          scoped = exactScope(target!, false)
+        }
+      } else scoped = scopeFor(selection.environmentId, tool.targetId)
+      let owned: ToolCall<ToolEnvironmentResult>
+      try { owned = scoped.scope.execute({ operationId, toolId: tool.toolId, version: tool.version, arguments: request.arguments, resuming }) }
+      catch (error) { scoped.entry.exitFailed = true; throw error }
       const call: ToolCall<ToolObservation> = { result: owned.result.then(value => observation(request.name, value)),
         done: owned.done, cancel: reason => owned.cancel(reason) }
       active.add(call)
-      void call.done.finally(() => active.delete(call)).catch(() => {})
+      scoped.entry.active.add(call)
+      void call.done.catch(() => { scoped.entry.exitFailed = true }).finally(() => {
+        active.delete(call)
+        scoped.entry.active.delete(call)
+      })
       void call.result.catch(() => {})
-      calls.set(operationId, { request: structuredClone(request), call })
+      calls.set(operationId, { request: structuredClone(request), ...(target ? { target: { ...target } } : {}), call })
       return call
     },
+    openTarget(target) {
+      try { validateExactScope(target, false) } catch { return false }
+      scopeFor(target.environmentId, target.targetId)
+      return true
+    },
+    restoreTarget(target) { exactScope(target, true) },
     hasResources: () => scopes.size > 0,
     cancel() {
       accepting = false
@@ -78,7 +153,7 @@ function openRun(environments: ReadonlyMap<string, ToolEnvironment>, snapshot: T
         const pending = [...active]
         for (const call of pending) try { call.cancel('run-cancelled') } catch (error) { failures.push(error) }
         const [outcomes, exits] = await Promise.all([
-          Promise.allSettled([...scopes.values()].map(scope => Promise.resolve().then(() => scope.cancel('run-cancelled')))),
+          Promise.allSettled([...scopes.values()].map(({ scope }) => Promise.resolve().then(() => scope?.cancel('run-cancelled')))),
           Promise.allSettled(pending.map(call => call.done)),
         ])
         for (const result of [...outcomes, ...exits]) if (result.status === 'rejected') failures.push(result.reason)
@@ -86,22 +161,34 @@ function openRun(environments: ReadonlyMap<string, ToolEnvironment>, snapshot: T
       })()
       return cancelling
     },
-    close() {
+    close(onTargetExit) {
       if (closing) return closing
       accepting = false
-      const closures = [...scopes.entries()].map(([environmentId, scope]) => {
-        try { return { environmentId, call: scope.close() } }
-        catch (error) { const result = Promise.reject<JsonValue>(error); void result.catch(() => {}); return { environmentId, call: { result, done: result.then(() => undefined), cancel() {} } } }
+      const closures = [...scopes.entries()].map(([key, entry]) => {
+        const { scope, environmentId, targetId } = entry
+        const identity = { environmentId, ...(targetId !== undefined && (context.lazyScopes ? environments.get(environmentId)?.targeted : true) ? { targetId } : {}) }
+        try {
+          if (!scope) throw failure('cleanup-failure')
+          return { key, entry, identity, call: scope.close() }
+        } catch (error) {
+          const result = Promise.reject<JsonValue>(error)
+          return { key, entry, identity, call: { result, done: result.then(() => undefined), cancel() {} } }
+        }
       })
       const available = new Map<string, JsonValue>()
       let resultFailures = 0
-      const results = Promise.allSettled(closures.map(({ environmentId, call }) => call.result.then(value => {
+      const results = Promise.allSettled(closures.map(({ key, call }) => call.result.then(value => {
         if (!resultValue(value)) throw failure('cleanup-failure')
-        available.set(environmentId, structuredClone(value))
+        available.set(key, structuredClone(value))
       }).catch(error => { resultFailures++; throw error })))
-      const exits = Promise.allSettled([...closures.map(({ call }) => call.done), ...[...active].map(call => call.done)])
+      const exits = Promise.allSettled(closures.map(async ({ call, entry }) => {
+        const outcomes = await Promise.allSettled([call.done, ...[...entry.active].map(activeCall => activeCall.done)])
+        const proven = !entry.exitFailed && outcomes.every(outcome => outcome.status === 'fulfilled')
+        if (context.lazyScopes && entry.targetId !== undefined) await onTargetExit?.({ environmentId: entry.environmentId, targetId: entry.targetId }, proven)
+        if (!proven) throw failure('cleanup-failure')
+      }))
       const report = (failedExit = false): JsonValue => {
-        const values = closures.flatMap(({ environmentId }) => available.has(environmentId) ? [{ environmentId, result: available.get(environmentId)! }] : [])
+        const values = closures.flatMap(({ key, identity }) => available.has(key) ? [{ ...identity, result: available.get(key)! }] : [])
         if (!values.length && (resultFailures || initializationFailure || failedExit)) throw failure('cleanup-failure')
         return { environments: values }
       }
@@ -127,7 +214,28 @@ function openRun(environments: ReadonlyMap<string, ToolEnvironment>, snapshot: T
 interface CatalogRegistration {
   readonly descriptor: ToolEnvironmentDescriptor
   readonly historyTools: readonly ToolDescriptor[]
+  readonly targets?: ToolEnvironmentCatalogEntry['targets']
   readonly validateSelection?: (tools: readonly ToolDescriptor[]) => void
+}
+
+function readTargets(source: NonNullable<ToolEnvironmentCatalogEntry['targets']>, reader?: StorageReader): readonly TargetedToolEnvironmentTarget[] {
+  const targets = source(reader)
+  if (!Array.isArray(targets)) throw new TypeError('invalid tool environment targets')
+  const ids = new Set<string>(), selectionIds = new Set<string>()
+  for (const target of targets) {
+    const targetId = checkedId(target?.targetId, 256), selectionId = checkedId(target?.selectionId, 256)
+    if (target.name !== undefined) checkedId(target.name, 256)
+    if (ids.has(targetId) || selectionIds.has(selectionId)) throw new TypeError('duplicate tool environment target')
+    ids.add(targetId)
+    selectionIds.add(selectionId)
+    validateToolDescriptors(target.tools)
+  }
+  return targets
+}
+
+function availableDescriptor(tool: ToolEnvironmentSnapshotTool, targets: readonly TargetedToolEnvironmentTarget[]): boolean {
+  const { targetId, ...descriptor } = tool
+  return targets.some(target => target.targetId === targetId && target.tools.some(current => isDeepStrictEqual(current, descriptor)))
 }
 
 /** Pure declarations and selection policies; constructing a catalog never opens execution scopes. */
@@ -140,6 +248,7 @@ export function createToolEnvironmentCatalog(entries: readonly ToolEnvironmentCa
     // Current declarations must be executable. Historical declarations remain
     // structural, so retired schemas stay readable without becoming selectable.
     validateToolDescriptors(declaration.tools)
+    if (entry.targets !== undefined && (typeof entry.targets !== 'function' || declaration.tools.length || declaration.resourceId !== undefined || declaration.recovery !== undefined || entry.historyTools !== undefined)) throw new TypeError('invalid targeted tool environment')
     const selection = parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: [{ environmentId: declaration.environmentId, version: declaration.version, tools: declaration.tools }] }).environments[0]!
     if (registrations.has(selection.environmentId)) throw new TypeError('duplicate tool environment')
     const historyTools = entry.historyTools === undefined ? Object.freeze([]) : parseToolEnvironmentSnapshot({ schemaVersion: 1,
@@ -147,17 +256,32 @@ export function createToolEnvironmentCatalog(entries: readonly ToolEnvironmentCa
     if (selection.environmentId === 'model-search') throw new TypeError('reserved hosted tool environment')
     if (declaration.resourceId !== undefined && (typeof declaration.resourceId !== 'string' || !declaration.resourceId.trim() || declaration.resourceId.length > 1024)) throw new TypeError('invalid environment resource identity')
     const descriptor: ToolEnvironmentDescriptor = Object.freeze({ ...selection, ...(declaration.resourceId ? { resourceId: declaration.resourceId } : {}), ...(declaration.recovery ? { recovery: declaration.recovery } : {}) })
-    registrations.set(selection.environmentId, { descriptor, historyTools,
+    registrations.set(selection.environmentId, { descriptor, historyTools, ...(entry.targets ? { targets: entry.targets } : {}),
       ...(entry.validateSelection ? { validateSelection: entry.validateSelection } : {}) })
   }
   const catalog: ToolEnvironmentCatalog = {
     environments: Object.freeze([...registrations.values()].map(({ descriptor }) => descriptor)),
-    snapshot(ids, toolIdsByEnvironment) {
+    isTargeted: environmentId => registrations.get(environmentId)?.targets !== undefined,
+    targets(environmentId, reader) {
+      const targets = registrations.get(environmentId)?.targets
+      return targets ? readTargets(targets, reader) : []
+    },
+    snapshot(ids, toolIdsByEnvironment, toolIdsByTarget, reader) {
       if (!Array.isArray(ids) || new Set(ids).size !== ids.length) throw new TypeError('invalid tool environment selection')
-      return parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: ids.map(environmentId => {
+      const schemaVersion = ids.some(id => registrations.get(id)?.targets) ? 2 : 1
+      return parseToolEnvironmentSnapshot({ schemaVersion, environments: ids.map(environmentId => {
         const registration = registrations.get(environmentId)
         if (!registration) throw new TypeError('unavailable tool environment')
         const { descriptor } = registration
+        if (registration.targets) {
+          const tools = catalog.targets(environmentId, reader).flatMap(target => {
+            const key = targetKey(environmentId, target.selectionId)
+            const selected = new Set(toolIdsByTarget && Object.hasOwn(toolIdsByTarget, key) ? toolIdsByTarget[key] : [])
+            return target.tools.filter(tool => selected.has(tool.toolId)).map(tool => ({ ...tool, targetId: target.targetId }))
+          })
+          registration.validateSelection?.(tools)
+          return { environmentId, version: descriptor.version, tools }
+        }
         const selectedIds = toolIdsByEnvironment && Object.hasOwn(toolIdsByEnvironment, environmentId) ? toolIdsByEnvironment[environmentId] : undefined
         let tools = descriptor.tools
         if (selectedIds !== undefined) {
@@ -170,29 +294,88 @@ export function createToolEnvironmentCatalog(entries: readonly ToolEnvironmentCa
         return { environmentId, version: descriptor.version, tools }
       }) })
     },
-    validate(value) {
+    validate(value, reader) {
       const snapshot = parseToolEnvironmentSnapshot(value)
       for (const selection of snapshot.environments) {
         const registration = registrations.get(selection.environmentId)
-        if (!registration || registration.descriptor.version !== selection.version || selection.tools.some(tool =>
-          ![...registration.descriptor.tools, ...registration.historyTools].some(current => isDeepStrictEqual(current, tool)))) throw new TypeError('tool environment snapshot unavailable')
+        if (!registration || registration.descriptor.version !== selection.version) throw new TypeError('tool environment snapshot unavailable')
+        const targets = registration.targets && catalog.targets(selection.environmentId, reader)
+        const available = targets ? selection.tools.every(tool => availableDescriptor(tool, targets)) : selection.tools.every(tool =>
+          [...registration.descriptor.tools, ...registration.historyTools].some(current => isDeepStrictEqual(current, tool)))
+        if (!available) throw new TypeError('tool environment snapshot unavailable')
         registration.validateSelection?.(selection.tools)
       }
       return snapshot
     },
-    bind(providers) {
-      if (!Array.isArray(providers)) throw new TypeError('invalid tool environment providers')
-      const bound = new Map<string, ToolEnvironment>()
+    bind(providers, targetedProviders = []) {
+      if (!Array.isArray(providers) || !Array.isArray(targetedProviders)) throw new TypeError('invalid tool environment providers')
+      const bound = new Map<string, BoundEnvironment>()
       for (const provider of providers) {
         if (!provider || typeof provider.openScope !== 'function') throw new TypeError('invalid executable tool environment')
         const registration = registrations.get(provider.environmentId)
         const descriptor = registration?.descriptor
-        if (!descriptor || bound.has(provider.environmentId) || provider.version !== descriptor.version || provider.resourceId !== descriptor.resourceId || provider.recovery !== descriptor.recovery || !isDeepStrictEqual(provider.tools, descriptor.tools)) throw new TypeError('tool environment binding conflict')
-        bound.set(provider.environmentId, Object.freeze({ ...descriptor, openScope: provider.openScope.bind(provider) }))
+        if (!descriptor || registration.targets || bound.has(provider.environmentId) || provider.version !== descriptor.version || provider.resourceId !== descriptor.resourceId || provider.recovery !== descriptor.recovery || !isDeepStrictEqual(provider.tools, descriptor.tools)) throw new TypeError('tool environment binding conflict')
+        const open = provider.openScope.bind(provider)
+        // Existing observe-existing providers returned their original scope through openScope.
+        const restore = provider.restoreScope?.bind(provider) ?? (descriptor.recovery === 'observe-existing' ? open : undefined)
+        bound.set(provider.environmentId, { targeted: false, recovery: descriptor.recovery, openScope: (_targetId, context) => open(context),
+          ...(restore ? { restoreScope: (_targetId, context) => restore(context) } : {}) })
+      }
+      for (const provider of targetedProviders) {
+        if (!provider || typeof provider.openTargetScope !== 'function' || typeof provider.targets !== 'function') throw new TypeError('invalid targeted tool environment provider')
+        const registration = registrations.get(provider.environmentId)
+        if (!registration?.targets || bound.has(provider.environmentId) || provider.version !== registration.descriptor.version ||
+          provider.recovery !== undefined && provider.recovery !== 'observe-existing') throw new TypeError('tool environment binding conflict')
+        const open = provider.openTargetScope.bind(provider)
+        const restore = provider.restoreTargetScope?.bind(provider)
+        bound.set(provider.environmentId, { targeted: true, recovery: provider.recovery, openScope(targetId, context) {
+          if (targetId === undefined) throw failure('unavailable')
+          return open(targetId, context)
+        }, ...(restore ? { restoreScope(targetId, context) {
+          if (targetId === undefined) throw failure('unavailable')
+          return restore(targetId, context)
+        } } : {}) })
       }
       if (bound.size !== registrations.size) throw new TypeError('missing executable tool environment')
-      return Object.freeze({ openRun(snapshot: ToolEnvironmentSnapshot, context: ToolEnvironmentRunContext) {
-        return openRun(bound, catalog.validate(snapshot), context)
+      return Object.freeze({ openRun(value: ToolEnvironmentSnapshot, context: ToolEnvironmentRunContext) {
+        if (context.lazyScopes) {
+          const snapshot = parseToolEnvironmentSnapshot(value)
+          return openRun(bound, snapshot, context, undefined, ({ environmentId, targetId }, restoring) => {
+            const selection = snapshot.environments.find(environment => environment.environmentId === environmentId)
+            const registration = registrations.get(environmentId)
+            if (!selection || !registration || registration.descriptor.version !== selection.version) throw failure('unavailable')
+            const tools = registration.targets ? selection.tools.filter(tool => tool.targetId === targetId) : selection.tools
+            if (!tools.length) throw failure('unavailable')
+            // An exit observer needs the original identity. Current tool discovery may have changed.
+            if (!restoring) catalog.validate({ ...snapshot, environments: [{ ...selection, tools }] })
+          })
+        }
+        if (!context.resuming || value.schemaVersion !== 2) return openRun(bound, catalog.validate(value), context)
+        const snapshot = parseToolEnvironmentSnapshot(value)
+        let unavailable: Error | undefined
+        const environments = snapshot.environments.flatMap(selection => {
+          const registration = registrations.get(selection.environmentId)
+          if (!registration?.targets) {
+            if (selection.tools.every(tool => tool.targetId === undefined)) {
+              return catalog.validate({ ...snapshot, environments: [selection] }).environments
+            }
+            unavailable ??= failure('unavailable')
+            return []
+          }
+          let targets: readonly TargetedToolEnvironmentTarget[] = []
+          try {
+            if (registration.descriptor.version === selection.version) {
+              registration.validateSelection?.(selection.tools)
+              targets = catalog.targets(selection.environmentId)
+            }
+          } catch { /* This target cannot be verified, but other scopes can still close. */ }
+          const missing = new Set(selection.tools.filter(tool => !availableDescriptor(tool, targets)).map(tool => tool.targetId))
+          if (!missing.size) return selection
+          unavailable ??= failure('unavailable')
+          return { ...selection, tools: selection.tools.filter(tool => !missing.has(tool.targetId)) }
+        })
+        // Cleanup must still reach intact scopes even if another target is no longer observable.
+        return openRun(bound, { ...snapshot, environments }, context, unavailable)
       } })
     },
   }
@@ -207,4 +390,6 @@ export function createToolEnvironmentRegistry(providers: readonly ToolEnvironmen
 }
 
 export * from './snapshot.js'
+export { createToolRegistry } from './tool-registry.js'
+export type { ToolRegistrar, ToolRegistration } from './tool-registry.js'
 export type * from './catalog-port.js'

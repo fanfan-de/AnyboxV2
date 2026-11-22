@@ -31,3 +31,4 @@ Anybox Harness 0.1.7 和 Personal Agent 0.2.1 的执行角色要求宿主的 `st
 - [设计稿](../../../../docs/agent-execution-environments-design.md)
 - [执行环境手册](../../../../docs/modules/tools/execution-environments.md)
 - [前项设计记录](2026-11-22-agent-execution-environment-management.md)
+- [后续：按实际工具目标确认退出与恢复](../bug-fix/2026-11-22-tool-environment-target-exit-proof.md)

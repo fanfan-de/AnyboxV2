@@ -1,6 +1,6 @@
+import { createTargetedToolManagement } from '@anybox/execution-environments/management'
 import { environmentManagerKey } from '../tool-environments/access.js'
 import type { ExecutionEnvironmentManager } from '@anybox/execution-environments'
-import type { FunctionBindings } from '@anybox/execution-environments/bindings'
 import { nativeSearchTool, type ProviderSettings } from '@anybox/models'
 import { projectFilesServiceKey } from '../project-files/port.js'
 import type { ProjectFilesPort } from '../project-files/port.js'
@@ -25,10 +25,10 @@ import { computerOperationsServiceKey } from '../computer/operations-port.js'
 import type { ComputerOperationsPort } from '../computer/operations-port.js'
 import { unitAttachmentsServiceKey } from '../unit/port.js'
 import type { UnitAttachmentsPort } from '../unit/port.js'
-import type { ToolEnvironmentCatalog } from '../tool-environments/port.js'
+import type { ToolEnvironmentAssembly, ToolEnvironmentCatalog } from '../tool-environments/port.js'
 
 /** One owner for every Session's conversation and execution records; execution resources stay in RunRuntime. */
-export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], environments?: ToolEnvironmentCatalog, bindings?: FunctionBindings,
+export function createSessionComponent(inputs: RuntimeInputs, agents: readonly AgentDefinition[], environmentSource?: ToolEnvironmentCatalog | ToolEnvironmentAssembly,
   configuredProviders: () => readonly ProviderSettings[] = () => []): Component.Object<void, {
   [environmentManagerKey]: ExecutionEnvironmentManager
   [localStorageServiceKey]: LocalStoragePort
@@ -37,24 +37,25 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
   [projectFilesServiceKey]: ProjectFilesPort
   [computerOperationsServiceKey]: ComputerOperationsPort
   [unitAttachmentsServiceKey]: UnitAttachmentsPort
-}> {
+} & Readonly<Record<string, unknown>>> {
+  const assembly = environmentSource && 'describe' in environmentSource ? environmentSource : undefined
+  const fixedCatalog = environmentSource && 'snapshot' in environmentSource ? environmentSource : undefined
   return {
     name: 'harness-sessions',
-    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey, ...(bindings ? [environmentManagerKey] : [])],
+    inject: [localStorageServiceKey, projectServiceKey, imageAssetsServiceKey, projectFilesServiceKey, computerOperationsServiceKey, unitAttachmentsServiceKey, ...(assembly ? [environmentManagerKey, ...assembly.inject] : [])],
     async apply(ctx, _config, deps) {
+      const { catalog: environments = fixedCatalog, bindings } = assembly?.describe(deps) ?? {}
       const projects = deps[projectServiceKey], images = deps[imageAssetsServiceKey], files = deps[projectFilesServiceKey]
       const manager = bindings ? deps[environmentManagerKey] : undefined
       const records = await openSqliteSessionRecords(deps[localStorageServiceKey], inputs, async run => {
         const change = Object.freeze({ sessionId: run.sessionId, runId: run.id, revision: run.revision })
         try { await ctx.parallel(runChangedEvent, change) }
         catch { ctx.logger.warn('Run change notification failed after commit', change) }
-      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey], environments, manager, bindings)
-      const functionsFor = (units: readonly import('../unit/port.js').UnitAttachment[]) => bindings?.available(units.flatMap(unit =>
-        unit.state === 'approved' && unit.unitKind === 'computer' && unit.unitId && unit.scope?.kind === 'computer' ?
-          [{ attachmentId: unit.attachmentId, unitId: unit.unitId, epoch: unit.epoch,
-            ...(unit.scope.tools === 'all' ? {} : { allowedToolIds: unit.scope.tools }) }] : [])) ?? []
+      }, images, files, deps[computerOperationsServiceKey], deps[unitAttachmentsServiceKey], environments, manager, bindings, assembly?.runTargets)
+      const functionsFor = (units: readonly import('../unit/port.js').UnitAttachment[]) =>
+        bindings?.available(assembly?.inventoryTargets(units)) ?? []
       const availableFunctions = async () => functionsFor(await deps[unitAttachmentsServiceKey].list())
-      if (manager) {
+      if (manager && assembly) {
         const attachments = deps[unitAttachmentsServiceKey]
         const known = await attachments.list()
         const projectsBeforeCutover = new Set((await projects.listProjects()).map(project => project.computerAttachmentId))
@@ -67,7 +68,8 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
             return unit && (unit.origin === 'local' || projectsBeforeCutover.has(attachmentId)) ? [unit] : []
           }))
           for (const seed of seeds) manager.seedIn(tx, seed.id, offered.filter(tool =>
-            seed.environments.includes(tool.environmentId) && (tool.environmentId !== 'computer' || seed.selection.toolIds.includes(tool.toolId))))
+            assembly.trustedConfigurationEnvironmentIds.has(tool.environmentId) && seed.environments.includes(tool.environmentId) &&
+            (tool.environmentId !== 'computer' || seed.selection.toolIds.includes(tool.toolId))))
         })
       }
       let accepting = true
@@ -146,6 +148,7 @@ export function createSessionComponent(inputs: RuntimeInputs, agents: readonly A
       }, 'join session record operations')
 
       const sessions: SessionPort = {
+        targetedTools: createTargetedToolManagement(environments),
         openProjectFileTree: (id, path, owner, signal) => resourceCall(id, signal, async (signal, session) => {
           const call = files.openTree(id, session.projectId, path, owner, signal)
           return { ...call, result: call.result.then(page => {

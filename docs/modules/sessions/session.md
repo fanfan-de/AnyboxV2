@@ -47,13 +47,13 @@ harness server API 及 HTTP 保存非空覆盖时检查 Models 配置存在且�
 
 ## Agent 工具与会话固定
 
-Harness 的 run-state v14 和 Personal Agent 的 v20 为环境偏好、会话选择版本和 Run 的实际授权绑定增加独立记录。接受 Run 的事务再次核对 Agent、目标、工具契约、授权代次及选择版本。历史声明供查看，实际可执行范围取决于当前精确授权。普通会话维持首次声明。Personal Agent 连续会话可显式采纳新环境，已接受 Run 仍引用原绑定。[环境授权与恢复](../tools/execution-environments.md)
+Harness 的 run-state v14 和 Personal Agent 的 v20 为环境偏好、会话选择版本和 Run 的实际授权绑定增加独立记录。接受 Run 的事务再次核对 Agent、目标、工具契约、授权代次及选择版本。历史声明供查看，实际可执行范围取决于当前精确授权。普通会话维持首次声明。Personal Agent 连续会话可显式采纳新环境与 MCP 连接目标，已接受 Run 仍引用原绑定。 [环境授权与恢复](../tools/execution-environments.md) · [MCP 标识](../tools/mcp-environment.md)
 
 正式装配从 `AgentDefinition.environmentIds` 选择[工具环境](../../tool-environments.md)，缺省使用 Computer，显式空数组不提供工具。创建事务保存不可变的 `toolEnvironments` 与工具完整定义；环境配置变更只影响新会话。已有 Computer 工具偏好经显式适配转为该环境的筛选，成对工具依赖由 Computer 目录项校验；通用目录只校验身份、版本、完整定义和唯一绑定，不按 `computer` 字符串套用业务规则。其他环境的工具不受 Computer 来源目录限制。`run-state` v12 增加不可变 `tool_environments_json`，旧行保留 null 并继续使用原 Computer 兼容路径。
 
 Agent 工具选择使用统一工具库的稳定 toolId，可跨 Codex、Claude Code、DeepSeek Harness 来源组合；来源标签只描述出处，不选择模型协议或执行器。保存先验证已知工具及明确依赖，再通过独立 revision 提交，冲突返回 `agent-tools-conflict`。默认配置仅在尚无保存记录时使用；保存 `[]` 与默认配置有不同语义。
 
-创建 Session 的同一业务库事务读取 Agent 的最新选择，并保存 `ToolSelectionSnapshot { schemaVersion: 1, tools: [{ toolId, version, definition }] }`。后续修改 Agent、模型或来源展示不会改变已有会话工具；Session 没有改工具入口，数据库禁止更新 tool_selection_json。工具运行资源归对应执行组件，配置和快照不保存运行句柄。
+创建普通 Session 的同一业务库事务读取 Agent 的最新选择，保存工具选择及环境快照。环境快照 v2 为多目标工具保存具体 `targetId`，v1 环境继续读取。数据库禁止改写普通 Session 的 `tool_selection_json` 和 `tool_environments_json`。工具运行资源归对应执行组件，配置和快照只保存契约与身份。
 
 新环境会话的首次 Run 使用原生 initialization v3，同时保存环境与工具快照；接受事务复核二者等于 Session 事实并再次验证当前环境契约。其后所有根、分支和重新生成复用同一 initialization。无工具能力模型继续纯文本调用。没有环境快照的旧会话保留 initialization v1/v2 与原有工具选择，历史记录 JSON 原样保留。退役工具仅能由目录项显式 `historyTools` 接纳已有完整快照，不进入新选择。非 Computer 工具只保存通用操作意图与观察，不建立 Computer 声明或 scope。
 

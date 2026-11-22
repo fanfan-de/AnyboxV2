@@ -116,6 +116,7 @@ export async function mountHarnessPage(root: HTMLElement, options: { context: Ap
         child = mountAgentPage(content, api, {
           selectedId, selectedName: connection ? deviceName(connection) : undefined, selectedInstanceId: connection?.instanceId, isActive: options.isActive,
           devices: connections.map(item => ({ id: item.id, name: deviceName(item) })), settingsState,
+          localApi: (path, body, signal) => requestJSON(`${options.context.apiBase}${path}`, body, signal),
           selectDevice: id => connectionUI?.selectConnection(id) ?? false, route: {
           read: () => route().inner,
           subscribe: listener => options.context.route.subscribe(listener),

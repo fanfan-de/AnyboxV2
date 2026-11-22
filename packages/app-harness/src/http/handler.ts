@@ -1,6 +1,7 @@
 import type { RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
 import { grantUpdate, preferenceUpdate } from '@anybox/execution-environments/management'
 import type { EnvironmentManagement, EnvironmentSelection, SelectionUpdate } from '@anybox/execution-environments/management'
+import type { McpEnvironmentPort } from '@anybox/mcp-environment'
 import type { ActivityLease, ProductActivityPort } from '@anybox/application-api/contracts'
 import type { ApplicationHttpPort, ApplicationHttpContext } from '@anybox/application-api/node'
 import type { SessionView, RunView, ProcessExitView } from '../core/api.js'
@@ -45,6 +46,7 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> {
   listAgents(): readonly { readonly id: string }[]
   environmentManagement: EnvironmentManagement
+  mcpConnections?: Pick<McpEnvironmentPort, 'connections' | 'createConnection' | 'refreshConnection' | 'disableConnection'>
   listTools(): ReturnType<typeof listTools>
   directoryPickerSupported(): boolean
   localDirectorySelectionSupported?(): boolean
@@ -632,6 +634,27 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         json(response, 200, commands.listAgents())
         return
       }
+      if (path === '/api/v1/mcp-connections' && commands.mcpConnections) {
+        if (method === 'GET') {
+          json(response, 200, commands.mcpConnections.connections()); return
+        }
+        if (method === 'POST') {
+          const input = await requestObject(request, ['name', 'transport', 'endpoint', 'command', 'args', 'cwd'])
+          if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+          const created = commands.mcpConnections.createConnection(input)
+          context.retainUntil(created)
+          json(response, 201, await created); return
+        }
+      }
+      const mcpConnection = /^\/api\/v1\/mcp-connections\/([^/]+)\/(refresh|disable)$/.exec(path)
+      if (method === 'POST' && mcpConnection && commands.mcpConnections) {
+        await requestObject(request, [])
+        if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+        const id = decodeURIComponent(mcpConnection[1])
+        const changed = mcpConnection[2] === 'refresh' ? commands.mcpConnections.refreshConnection(id) : commands.mcpConnections.disableConnection(id)
+        context.retainUntil(changed)
+        json(response, 200, await changed); return
+      }
       if (method === 'GET' && path === '/api/v1/tool-environments') {
         json(response, 200, await commands.environmentManagement.targets()); return
       }
@@ -650,7 +673,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
           json(response, 200, await commands.environmentManagement.setGrants(agentId, input)); return
         }
         if (method === 'POST' && action === 'preferences') {
-          const input = preferenceUpdate(await requestObject(request, ['expectedVersion', 'environmentIds', 'toolIdsByEnvironment'], 1_048_576))
+          const input = preferenceUpdate(await requestObject(request, ['expectedVersion', 'environmentIds', 'toolIdsByEnvironment', 'toolIdsByTarget'], 1_048_576))
           if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
           json(response, 200, await commands.environmentManagement.setPreference(agentId, input)); return
         }
@@ -1028,7 +1051,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
     handle,
     capabilities: () => {
       const current = options.currentCommands?.() ?? commands
-      return [...(current.environmentManagement ? ['agent-environment-access.v1'] : []), ...(current.listComputerEnvironments ? ['computer-environments'] : []), ...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
+      return [...(current.environmentManagement ? ['agent-environment-access.v1'] : []), ...(current.mcpConnections ? ['mcp-environment.v1'] : []), ...(current.listComputerEnvironments ? ['computer-environments'] : []), ...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
         ...(current.directoryCreationSupported?.() ? ['projects.create-directory'] : []),
         ...(current.localDirectorySelectionSupported?.() === true ? ['projects.local-directories'] : [])]
     },

@@ -1,7 +1,7 @@
 import { nativeSearchTool } from '@anybox/models'
-import { planToolAccess } from '../tool-environments/access.js'
+import { checkedAgentToolPreferences, planToolAccess } from '../tool-environments/access.js'
 import type { FunctionBindings } from '@anybox/execution-environments/bindings'
-import { canBindLegacyComputerAccess, assertRunGrants, checkedToolPreferences, checkedEnvironmentIds, parseRunAccess } from '@anybox/execution-environments/bindings'
+import { assertRunGrants, checkedTargetToolPreferences, checkedEnvironmentIds, parseRunAccess } from '@anybox/execution-environments/bindings'
 import type { EnvironmentSelection } from '@anybox/execution-environments/bindings'
 import type { ExecutionEnvironmentManager } from '@anybox/execution-environments'
 import { environmentError } from '@anybox/execution-environments/contracts'
@@ -35,11 +35,11 @@ import type { SessionPort, SessionRunPort } from './port.js'
 import { portableHistory } from './portable-history.js'
 import type { PortableHistoryEvent } from './portable-history.js'
 import { environmentForTool, parseToolEnvironmentSnapshot } from '../tool-environments/domain.js'
-import type { ToolEnvironmentCatalog } from '../tool-environments/port.js'
-import { computerCleanupReceipt } from '../tool-environments/history.js'
+import type { RunToolTargets, ToolEnvironmentCatalog } from '../tool-environments/port.js'
+import { canBindLegacyComputerAccess, computerCleanupReceipt } from '../tool-environments/history.js'
 
 type SavedSessionDefaults = Pick<SessionDefaults, 'agentId' | 'modelId' | 'revision'>
-type SessionRecords = Omit<SessionPort, 'environmentTools' | 'getAgentEnvironmentSelection' | 'setAgentEnvironmentSelection' | 'createSession' | 'getSessionDefaults' | 'setSessionDefaults' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
+type SessionRecords = Omit<SessionPort, 'targetedTools' | 'environmentTools' | 'getAgentEnvironmentSelection' | 'setAgentEnvironmentSelection' | 'createSession' | 'getSessionDefaults' | 'setSessionDefaults' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> & Omit<SessionRunPort, 'describeImages' | 'readFileSnapshots'> & {
   getAgentEnvironmentSelection(id: string, fallback: readonly string[]): Promise<EnvironmentSelection>
   setAgentEnvironmentSelection(id: string, input: import('@anybox/execution-environments/bindings').SelectionInput, fallback: readonly string[]): Promise<EnvironmentSelection>
@@ -723,6 +723,7 @@ export async function openSqliteSessionRecords(
   environments?: ToolEnvironmentCatalog,
   manager?: ExecutionEnvironmentManager,
   bindings?: FunctionBindings,
+  runTargets?: RunToolTargets,
 ): Promise<SessionRecords> {
   await db.migrate('run-state', migrations)
   // Only a committed protocol response authorizes tool-stage takeover. A pending model request cannot be replayed.
@@ -751,8 +752,11 @@ export async function openSqliteSessionRecords(
       if (previous.version !== input.expectedVersion) throw environmentError('environment-revision-conflict', 409)
       const ids = checkedEnvironmentIds(input.environmentIds, ['model-search', ...(environments?.environments.map(e => e.environmentId) ?? [])])
       const toolIdsByEnvironment = input.toolIdsByEnvironment === undefined ? previous.toolIdsByEnvironment :
-        checkedToolPreferences(input.toolIdsByEnvironment, environments?.environments ?? [])
-      const selection = { environmentIds: ids, ...(toolIdsByEnvironment ? { toolIdsByEnvironment } : {}) }
+        checkedAgentToolPreferences(input.toolIdsByEnvironment, environments?.environments ?? [])
+      const toolIdsByTarget = input.toolIdsByTarget === undefined ? previous.toolIdsByTarget :
+        checkedTargetToolPreferences(input.toolIdsByTarget, environments, tx, previous.toolIdsByTarget)
+      const selection = { environmentIds: ids, ...(toolIdsByEnvironment ? { toolIdsByEnvironment } : {}),
+        ...(toolIdsByTarget ? { toolIdsByTarget } : {}) }
       tx.execute('INSERT INTO harness_environment_preferences VALUES(?,?,?) ON CONFLICT(agent_id) DO UPDATE SET version=excluded.version,ids_json=excluded.ids_json',
         [id, previous.version + 1, JSON.stringify(selection)])
       return { ...selection, version: previous.version + 1 }
@@ -790,7 +794,7 @@ export async function openSqliteSessionRecords(
         if (environmentIds !== undefined && !environments) throw new TypeError('tool environment registry is unavailable')
         const computerToolIds = readAgentTools(tx, agentId).toolIds
         const preference = environmentSelection(tx, agentId, environmentIds ?? ['computer'])
-        const toolEnvironments = environments?.snapshot(preference.environmentIds.filter(id => id !== 'model-search'), { ...preference.toolIdsByEnvironment, computer: computerToolIds })
+        const toolEnvironments = environments?.snapshot(preference.environmentIds.filter(id => id !== 'model-search'), { ...preference.toolIdsByEnvironment, computer: computerToolIds }, preference.toolIdsByTarget, tx)
         const toolSelection: ToolSelectionSnapshot = toolEnvironments
           ? Object.freeze({ schemaVersion: 1, tools: Object.freeze(toolEnvironments.environments.flatMap(environment => environment.tools)) })
           : createToolSelection(computerToolIds)
@@ -950,8 +954,8 @@ export async function openSqliteSessionRecords(
           if (!bindings) throw environmentError('environment-target-unavailable', 409)
           const hosted = native.access.search ? nativeSearchTool({id:model.providerId,versionId:model.providerVersionId,protocolId:model.protocolId}) : undefined
           const scope = units && attachments.requireApprovedIn(tx, units.computer).scope
-          const resolved = planToolAccess(bindings, current, native.initialization, units?.computer, hosted, true, tool =>
-            tool.environmentId !== 'computer' || scope?.kind === 'computer' && (scope.tools === 'all' || scope.tools.includes(tool.toolId)))
+          const resolved = planToolAccess(bindings, current, native.initialization, runTargets?.(units), hosted, true, tool =>
+            tool.environmentId !== 'computer' || scope?.kind === 'computer' && (scope.tools === 'all' || scope.tools.includes(tool.toolId)), tx)
           if (!isDeepStrictEqual(resolved.access, native.access) ||
             native.access.search && (!session.environmentSelection?.environmentIds.includes('model-search') ||
               session.environmentSelection.toolIdsByEnvironment?.['model-search']?.includes('web_search') === false)) throw environmentError('environment-authorization-changed', 409)

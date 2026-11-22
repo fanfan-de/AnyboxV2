@@ -18,7 +18,7 @@ node examples/tool-environments/notes/demo.mjs
 ## 接入的两个步骤
 
 1. 实现环境，见 [`environment.mjs`](environment.mjs)。声明稳定环境 ID/版本、工具 ID/版本、模型可见的名称/描述/参数，并用 `openScope()` 提供执行、取消与清理。执行入口只处理工具请求，不认识 Agent、Session 或 Models。
-2. 在组合根插入实例，并选择 Agent 可用的环境。下面使用已有 `root` 与 Agent 配置；完整启动装配见 [`demo.mjs`](demo.mjs)。
+2. 在组合根注册提供方，并选择 Agent 可用的环境。下面使用已有 `root` 与 Agent 配置，完整启动装配见 [`demo.mjs`](demo.mjs)。
 
 ```js
 import { installHarnessServerCore } from '@anybox/app-harness/core/index'
@@ -27,7 +27,7 @@ import { createNotesEnvironment } from './environment.mjs'
 const notes = createNotesEnvironment(documents)
 await installHarnessServerCore(root, {
   agents: [{ ...existingAgent, environmentIds: ['notes'] }],
-  toolEnvironments: [notes],
+  registerTools: tools => tools.register(notes),
 })
 ```
 

@@ -42,8 +42,11 @@ function validateInitialization(initialization: NativeInitialization): void {
     try {
       const snapshot = parseToolEnvironmentSnapshot(initialization.toolEnvironments)
       const selection = { schemaVersion: 1, tools: snapshot.environments.flatMap(environment => environment.tools) }
-      if (!isDeepStrictEqual(selection, initialization.toolSelection) || initialization.tools.length &&
-        !isDeepStrictEqual(initialization.tools, selection.tools.map(tool => tool.definition))) throw modelFailure('unsupported-request')
+      // Run admission can narrow the Session's declarations to the tools it could authorize.
+      const names = new Set(initialization.tools.map(tool => tool.name))
+      const declared = selection.tools.filter(tool => names.has(tool.definition.name)).map(tool => tool.definition)
+      if (!isDeepStrictEqual(selection, initialization.toolSelection) ||
+        !isDeepStrictEqual(initialization.tools, declared)) throw modelFailure('unsupported-request')
     } catch { throw modelFailure('unsupported-request') }
     return
   }

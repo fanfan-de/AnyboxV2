@@ -31,12 +31,11 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   const panels = [...dialog.querySelectorAll<HTMLElement>('[data-settings-panel]')]
   const selected = options.selectedId ?? options.devices[0]?.id ?? ''
   const name = options.selectedName ?? options.devices.find(item => item.id === selected)?.name ?? '所选设备'
-  const descriptions: Record<Exclude<SettingsSection, 'models'>, string> = {
+  const descriptions: Record<Exclude<SettingsSection, 'models' | 'units'>, string> = {
     general: `设置${name}上的 Agent 和新会话默认模型，只影响新建会话。`,
     prompts: `这里的 Prompt 供${name}上的 Agent 使用。`,
     tools: `为${name}上的 Agent 管理工具授权和偏好。工具偏好只影响新建会话，撤权会阻止新的调用。`,
-    units: `管理${name}上的 Agent 可使用的执行环境。`,
-    connections: '管理这台电脑和已连接的远端设备。',
+    connections: '连接执行设备并管理访问凭据。项目、模型配置和会话保存在对应设备上。',
     archive: '查看所有设备、所有项目的已归档会话。',
   }
   device.replaceChildren(...options.devices.map(item => {
@@ -70,7 +69,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
     const heading = headingFor(section)
     const title = heading?.querySelector<HTMLHeadingElement>('h3')
     modelDeviceSlot.hidden = section !== 'models'
-    deviceLabel.textContent = section === 'models' ? '设备' : defaultDeviceLabel
+    deviceLabel.textContent = section === 'models' ? '设备' : section === 'units' ? '执行设备' : defaultDeviceLabel
     if (section === 'models') {
       title?.classList.add('sr-only')
       modelDeviceSlot.append(scope)
@@ -86,14 +85,16 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
         }
       }
       row.append(scope)
-      let description = heading.querySelector<HTMLElement>('.settings-scope-description')
-      if (!description) {
-        // Reuse the scope line in general and global panels.
-        description = section === 'general' || section === 'connections' || section === 'archive' ? heading.querySelector<HTMLElement>('p') : null
-        if (!description) { description = document.createElement('p'); heading.append(description) }
-        description.className = `${description.className} settings-scope-description`.trim()
+      if (section !== 'units') {
+        let description = heading.querySelector<HTMLElement>('.settings-scope-description')
+        if (!description) {
+          // Reuse an existing scope line where the heading supplies one.
+          description = section === 'general' || section === 'connections' || section === 'archive' ? heading.querySelector<HTMLElement>('p') : null
+          if (!description) { description = document.createElement('p'); heading.append(description) }
+          description.className = `${description.className} settings-scope-description`.trim()
+        }
+        description.textContent = descriptions[section]
       }
-      description.textContent = descriptions[section]
     }
     const global = section === 'connections' || section === 'archive'
     device.hidden = deviceLabel.hidden = global

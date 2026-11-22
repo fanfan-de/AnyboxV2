@@ -1,7 +1,9 @@
 import { Context } from '@nya/core'
 import { grantComputerTools } from './computer-grants.mjs'
+import { appendFileSync } from 'node:fs'
 import { appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createNotesEnvironment } from '../../examples/tool-environments/notes/environment.mjs'
 import { createLocalSqliteComponent } from '../../packages/storage-sqlite/dist/sqlite.js'
 import { createHostAccessComponent, hostAccessServiceKey } from '../../packages/host/dist/access.js'
 import { hostHttpServiceKey } from '../../packages/host/dist/component.js'
@@ -15,13 +17,30 @@ import { controlledModels } from './controlled-models.mjs'
 const settings = JSON.parse(process.argv[2])
 const root = new Context()
 const reply = message => process.send?.(message)
-const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Execute tools with their declared contracts.' }]
+const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Execute tools with their declared contracts.',
+  ...(settings.withNotes ? { environmentIds: ['computer', 'notes'] } : {}) }]
+const notes = settings.withNotes ? createNotesEnvironment([{ id: 'example', title: 'Example', content: 'A fixture note.' }]) : undefined
+const toolEnvironments = notes ? [{
+  ...notes,
+  openScope(context) {
+    appendFileSync(join(settings.directory, 'notes-scopes.log'), `${context.scopeId}\n`)
+    return notes.openScope(context)
+  },
+}] : []
+const laterInput = 'Execute the later operation'
 const models = controlledModels({ call(input) {
   const result = (async () => {
-    await appendFile(join(settings.directory, 'model-calls.jsonl'), `${JSON.stringify({ messages: input.messages.length, processId: process.pid })}\n`)
+    await appendFile(join(settings.directory, 'model-calls.jsonl'), `${JSON.stringify({ messages: input.messages.length, processId: process.pid,
+      tools: input.tools.map(tool => tool.name) })}\n`)
     const last = input.messages.at(-1)
+    if (last?.role === 'tool' && settings.pauseAfterComputer) {
+      reply({ event: 'model-pending' })
+      return new Promise(() => {})
+    }
     if (last?.role === 'tool') { const value = JSON.parse(last.content); return { status: 'completed', text: value.stdout ?? JSON.stringify(value), toolCalls: [] } }
-    return { status: 'completed', text: '', toolCalls: [{ id: 'original-call', name: 'bash', arguments: { command: settings.command } }] }
+    const later = last?.content === laterInput
+    return { status: 'completed', text: '', toolCalls: [{ id: later ? 'later-call' : 'original-call', name: 'bash',
+      arguments: { command: later ? "printf 'later\\n' >> effect.log; printf 'later-result'" : settings.command } }] }
   })()
   void result.catch(() => {})
   return { result, done: Promise.resolve(), cancel() {} }
@@ -33,7 +52,7 @@ try {
   await root.installComponent(models.component())
   await root.installComponent(createHostAccessComponent('fault harness'))
   const access = root.get(hostAccessServiceKey)
-  core = await installHarnessServerCore(root, { agents, localWorkerDirectory: join(settings.directory, 'never-started-local-worker'), computerTransport: { claimTimeoutMs: 3_000 } })
+  core = await installHarnessServerCore(root, { agents, toolEnvironments, localWorkerDirectory: join(settings.directory, 'never-started-local-worker'), computerTransport: { claimTimeoutMs: 3_000 } })
   const httpFiber = root.installComponent(createFixtureApplicationApiComponent(root, core.api.listAgents(), settings.port, { authenticated: true })); await httpFiber
   const web = root.get(hostHttpServiceKey), api = core.api, sessions = root.get('harness.sessions'), records = root.get('harness.session-runs')
   let runId = settings.runId
@@ -45,10 +64,13 @@ try {
     const run = runId ? await sessions.getRun(runId) : undefined
     const db = root.get('local-storage')
     return { run, execution: runId ? await records.getRunExecution(runId) : undefined, resume: runId ? await records.loadRunResume(runId) : undefined,
+      access: runId ? await api.getRunEnvironmentAccess(runId) : undefined,
       events: runId ? await sessions.getRunEvents(runId) : [], nodes: run ? await sessions.listNodes(run.sessionId, null) : undefined,
       operations: runId ? await db.read(reader => reader.all('SELECT * FROM harness_computer_operations WHERE run_id = ?', [runId])) : [],
       scopes: runId ? await db.read(reader => reader.all('SELECT * FROM harness_computer_scopes WHERE run_id = ?', [runId])) : [],
       pins: runId ? await db.read(reader => reader.all('SELECT * FROM harness_computer_pins WHERE owner_id = ?', [runId])) : [],
+      scopeAdmissions: runId ? await db.read(reader => reader.all("SELECT operation_id, state FROM environment_admissions WHERE resource_kind = 'run-scope'")
+        .map(row => ({ operation: JSON.parse(row.operation_id), state: row.state })).filter(row => row.operation[0] === runId)) : [],
       attachments: await root.get('harness.unit-attachments').list(), processId: process.pid }
   }
   process.on('message', async message => {
@@ -63,6 +85,11 @@ try {
         const run = await api.startRun({ sessionId: session.id, parentNodeId: null, idempotencyKey: 'original-run', input: 'Execute the original operation' })
         runId = run.id
         reply({ id, value: { runId, sessionId: session.id, projectId: project.id } })
+      } else if (message.command === 'start-later') {
+        const session = await api.createSession(message.projectId, 'assistant')
+        const run = await api.startRun({ sessionId: session.id, parentNodeId: null, idempotencyKey: 'later-run', input: laterInput })
+        runId = run.id
+        reply({ id, value: runId })
       } else if (message.command === 'wait') { await api.waitRun(runId); reply({ id, value: await report() }) }
       else if (message.command === 'report') reply({ id, value: await report() })
       else if (message.command === 'cancel') reply({ id, value: await api.cancelRun(runId) })

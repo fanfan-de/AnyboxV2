@@ -3,8 +3,6 @@ import { createPageRequests } from './page-lifecycle.js'
 import type { HarnessConnection, HarnessClient } from './harness-client.js'
 import type { ProductView } from '@anybox/application-api/contracts'
 import type { LocalPairingStatus } from '../client/connections.js'
-import { setupLocalAttachments } from './units-client.js'
-import type { LocalAttachmentsView } from './units-client.js'
 export function setupConnections(root: HTMLElement, api: HarnessClient, selectedId: string | undefined, messageFor: (error: unknown) => string, canLeave: () => boolean, changed: (connection?: HarnessConnection) => void, apiBase: string, targetChanged: () => void) {
   const lifetime = new AbortController()
   const owned = createPageRequests((path, body, signal) => requestJSON(path, body, signal))
@@ -39,10 +37,9 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   const settingsDialog = root.querySelector<HTMLDialogElement>('#agent--settings-dialog')!
   const panel = root.querySelector<HTMLElement>('#agent--connections-settings')!
   panel.innerHTML = `<header class="settings-panel-heading"><h3 id="agent--connections-title">管理连接</h3>
-    <p>连接自己的执行设备。项目、模型配置和会话保存在对应设备上。</p></header>
+    <p>连接执行设备并管理访问凭据。项目、模型配置和会话保存在对应设备上。</p></header>
     <section data-local class="settings-card" hidden><p data-local-status role="status"></p><button type="button" data-local-retry>重试本机连接</button></section>
-    <section class="settings-card"><button type="button" data-computer>管理本机 Computer worker</button></section>
-    <div data-list></div><section data-tokens class="settings-card" hidden></section><section data-attachments class="computer-management" hidden></section><p data-status class="notice" role="status" hidden></p>
+    <div data-list></div><section data-tokens class="settings-card" hidden></section><p data-status class="notice" role="status" hidden></p>
     <form data-form class="settings-card"><h3 data-heading>添加连接</h3>
     <label>名称<input name="name" required maxlength="200" autocomplete="off"></label>
     <label>服务地址<input name="endpoint" required type="url" placeholder="https://harness.example.com" autocomplete="off"></label>
@@ -53,16 +50,7 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   const form = panel.querySelector<HTMLFormElement>('[data-form]')!
   const field = (name: string) => form.elements.namedItem(name) as HTMLInputElement
   let editing: HarnessConnection | undefined, busy = false, suspended = false
-  let attachmentsView: LocalAttachmentsView | undefined
-  const attachmentExits = new Set<Promise<void>>()
-  const closeAttachments = () => {
-    const previous = attachmentsView; attachmentsView = undefined
-    if (!previous) return Promise.resolve()
-    const exit = previous.dispose(); attachmentExits.add(exit)
-    void exit.finally(() => attachmentExits.delete(exit)).catch(() => {})
-    return exit
-  }
-  const canLeaveConnection = () => !busy && (attachmentsView?.canLeave() ?? true) && !field('token').value && field('name').value === (editing?.name ?? '') && field('endpoint').value === (editing?.endpoint ?? '')
+  const canLeaveConnection = () => !busy && !field('token').value && field('name').value === (editing?.name ?? '') && field('endpoint').value === (editing?.endpoint ?? '')
   const status = (message: string) => { notice.textContent = message; notice.hidden = !message }
   const action = async (work: () => Promise<void>) => {
     if (busy) return; busy = true
@@ -108,12 +96,6 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
     })
   }, { signal: lifetime.signal })
   void refreshLocal()
-  panel.querySelector('[data-computer]')!.addEventListener('click', () => void action(async () => {
-    const section = panel.querySelector<HTMLElement>('[data-attachments]')!
-    await closeAttachments()
-    section.hidden = false
-    attachmentsView = setupLocalAttachments((path, body, signal) => control(`${apiBase}${path}`, body, signal), messageFor, section, '本机')
-  }))
   for (const connection of api.connections) {
     const row = document.createElement('section'); row.className = 'settings-card connection-row'
     const title = document.createElement('strong'), address = document.createElement('p'), result = document.createElement('p')
@@ -197,9 +179,6 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   })
   settingsDialog.addEventListener('close', () => {
     if (!suspended) { field('token').value = ''; panel.querySelector('[data-tokens]')!.replaceChildren() }
-    // Attach codes are secrets typed into this form; closing the dialog drops them with the panel.
-    const section = panel.querySelector<HTMLElement>('[data-attachments]')
-    if (section) { section.hidden = true; void closeAttachments() }
   }, { signal: lifetime.signal })
   const open = () => {
     suspended = false
@@ -209,8 +188,7 @@ export function setupConnections(root: HTMLElement, api: HarnessClient, selected
   return { open, selectConnection: requestConnection, setActive(active: boolean) { suspended = !active; clearTimeout(localTimer); localTimer = undefined; if (active) void refreshLocal() },
     canLeave: canLeaveConnection, async dispose() {
       lifetime.abort(); clearTimeout(localTimer)
-      const closingAttachments = closeAttachments()
-      await Promise.all([owned.dispose(), closingAttachments, ...attachmentExits, ...targets.map(target => target.dispose())])
+      await Promise.all([owned.dispose(), ...targets.map(target => target.dispose())])
       panel.replaceChildren()
     } }
 }

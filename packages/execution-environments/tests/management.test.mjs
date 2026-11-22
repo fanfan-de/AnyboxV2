@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { createEnvironmentManagement, grantUpdate, preferenceUpdate, targetKey } from '../dist/management.js'
+import { createEnvironmentManagement, createTargetedToolManagement, environmentTargets, grantUpdate, preferenceUpdate, selectionUpdate, targetKey } from '../dist/management.js'
+import { createToolEnvironmentCatalog } from '../dist/catalog.js'
+import { checkedTargetToolPreferences, functionKey } from '../dist/bindings.js'
 
 const computer = { environmentId: 'computer', targetId: 'device-a:1', toolId: 'read', version: '1' }
 const replaced = { ...computer, targetId: 'device-a:2' }
@@ -63,4 +65,53 @@ test('preference filters preserve absent, all and explicit empty selections', ()
     assert.throws(() => preferenceUpdate({ ...base, toolIdsByEnvironment: value }), { status: 400 })
   }
   assert.throws(() => grantUpdate({ requestId: 'same', expectedRevision: 0, tools: [hosted, hosted] }), { status: 400 })
+})
+
+test('targeted preferences keep same-name tools attached to independent stable connection identities', () => {
+  const work = { environmentId: 'mcp', targetId: 'work:2', toolId: 'search', version: '2' }
+  const personal = { ...work, targetId: 'personal:1' }
+  const workKey = targetKey('mcp', 'work'), personalKey = targetKey('mcp', 'personal')
+  const labels = new Map([[targetKey('mcp', work.targetId), 'Work'], [targetKey('mcp', personal.targetId), 'Personal']])
+  const selectionIds = new Map([[targetKey('mcp', work.targetId), 'work'], [targetKey('mcp', personal.targetId), 'personal']])
+  assert.deepEqual(environmentTargets([work, personal], labels, selectionIds).map(target => [target.name, target.targetId, target.selectionId]), [
+    ['Work', 'work:2', 'work'], ['Personal', 'personal:1', 'personal'],
+  ])
+  const input = { environmentIds: ['mcp'], expectedVersion: 1, toolIdsByTarget: { [workKey]: ['search'], [personalKey]: [] } }
+  assert.deepEqual(selectionUpdate(input), input)
+  assert.deepEqual(preferenceUpdate(input), input)
+  for (const invalid of [null, { work: ['search'] }, { '["mcp", "work"]': ['search'] }, { [workKey]: ['search', 'search'] }]) {
+    assert.throws(() => preferenceUpdate({ ...input, toolIdsByTarget: invalid }), { status: 400 })
+  }
+})
+
+test('editing preferences can preserve a previously selected tool after its connection becomes unavailable', () => {
+  const workKey = targetKey('mcp', 'work'), personalKey = targetKey('mcp', 'personal')
+  const catalog = { environments: [{ environmentId: 'mcp' }], targets: () => [{ selectionId: 'personal', tools: [{ toolId: 'search' }] }] }
+  const saved = { [workKey]: ['read'] }
+  const modified = { ...saved, [personalKey]: ['search'] }
+  assert.deepEqual(checkedTargetToolPreferences(modified, catalog, undefined, saved), modified)
+  assert.deepEqual(checkedTargetToolPreferences({ [personalKey]: ['search'] }, catalog, undefined, saved), { [personalKey]: ['search'] })
+  assert.throws(() => checkedTargetToolPreferences(modified, catalog), { status: 400 })
+  assert.throws(() => checkedTargetToolPreferences({ [workKey]: ['read', 'search'] }, catalog, undefined, saved), { status: 400 })
+})
+
+test('targeted provider choices and new grants use the registered directory, including an empty transaction view', async () => {
+  const descriptor = { environmentId: 'library', version: '1', tools: [] }
+  const tool = { toolId: 'library.read', version: '1', definition: { name: 'library_read', parameters: { type: 'object' } } }
+  const target = { targetId: 'docs:1', selectionId: 'docs', name: 'Documents', tools: [tool] }
+  let live = [target]
+  const catalog = createToolEnvironmentCatalog([{ descriptor, targets: reader => reader?.targets ?? live }])
+  const management = createTargetedToolManagement(catalog)
+  assert.deepEqual(management.choices().get(targetKey('library', 'docs:1')), { selectionId: 'docs', name: 'Documents' })
+  const offered = functionKey(descriptor, target.targetId, tool)
+  management.validateNewGrants({ targets: [target] }, [offered, hosted])
+  assert.throws(() => management.validateNewGrants({ targets: [] }, [offered]),
+    { status: 403, code: 'environment-tool-unavailable' })
+  assert.throws(() => management.validateNewGrants({ targets: [{ ...target, tools: [{ ...tool, version: '2' }] }] }, [offered]),
+    { status: 403, code: 'environment-tool-unavailable' })
+  const inventory = createEnvironmentManagement({
+    agents: () => [], tools: async () => [offered], targetedTools: management,
+    async names() { live = []; return new Map() },
+  })
+  assert.deepEqual(await inventory.targets(), [])
 })

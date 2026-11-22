@@ -1,8 +1,9 @@
 import { environmentManagerKey } from '../core/tool-environments/access.js'
 import { createEnvironmentManagement, targetKey } from '@anybox/execution-environments/management'
 import type { ExecutionEnvironmentManager } from '@anybox/execution-environments'
-import { computerToolTarget } from '@anybox/execution-environments/bindings'
-import { computerToolEnvironmentVersion } from '../core/tool-environments/computer.js'
+import { mcpEnvironmentServiceKey } from '../core/tool-environments/mcp.js'
+import type { McpEnvironmentPort } from '@anybox/mcp-environment'
+import { computerToolTarget } from '../core/tool-environments/computer.js'
 import type { ProductActivityPort } from '@anybox/application-api/contracts'
 import { failure } from '@anybox/application-api/node'
 import type { Component, Context } from '@nya/core'
@@ -44,6 +45,7 @@ const localActorId = 'local-web-user'
 
 type CommandDependencies = {
   [environmentManagerKey]: ExecutionEnvironmentManager
+  [mcpEnvironmentServiceKey]?: McpEnvironmentPort
   [sessionServiceKey]: SessionPort
   [runServiceKey]: RunPort
   [modelsServiceKey]: ModelsService
@@ -61,7 +63,9 @@ type CommandDependencies = {
 }
 
 function createCommands(deps: CommandDependencies, instanceId: () => string | null): HarnessServerApiCommands {
+  const mcp = deps[mcpEnvironmentServiceKey]
   return {
+    mcpConnections: mcp,
     listAgents: () => deps[agentDirectoryServiceKey].list(),
     getAgent(id) {
       const agent = deps[agentDirectoryServiceKey].get(id)
@@ -70,6 +74,9 @@ function createCommands(deps: CommandDependencies, instanceId: () => string | nu
     createAgent: async input => agentDetail(await deps[agentDirectoryServiceKey].create(input)),
     updateAgent: async (id, input) => agentDetail(await deps[agentDirectoryServiceKey].update(id, input)),
     environmentManagement: createEnvironmentManagement({
+      mcpManagement: mcp !== undefined,
+      mcpStdio: mcp?.stdioSupported(),
+      get targetedTools() { return deps[sessionServiceKey].targetedTools },
       agents: () => deps[agentDirectoryServiceKey].list(),
       grants: () => deps[environmentManagerKey],
       tools: id => deps[sessionServiceKey].environmentTools(id),
@@ -79,7 +86,7 @@ function createCommands(deps: CommandDependencies, instanceId: () => string | nu
         const names = new Map<string, string>()
         for (const unit of await deps[unitAttachmentsServiceKey].list()) {
           if (unit.unitKind !== 'computer' || !unit.unitId) continue
-          const target = computerToolTarget({ attachmentId: unit.attachmentId, unitId: unit.unitId, epoch: unit.epoch }, computerToolEnvironmentVersion)
+          const target = computerToolTarget({ attachmentId: unit.attachmentId, unitId: unit.unitId, epoch: unit.epoch })
           names.set(targetKey('computer', target), unit.origin === 'local' ? '执行端本机' : unit.unitId)
         }
         if (tools.some(tool => tool.environmentId === 'model-search')) for (const provider of deps[modelsSettingsServiceKey].configuredProviders()) {
@@ -231,12 +238,12 @@ export function createHarnessServerHttpComponent(root: Context,
   const currentCommands = (hooks: HarnessServerHttpIntegration, serviceName: (name: string) => string): HarnessServerApiCommands => {
     const snapshots = new Map<string, unknown>()
     const services = {} as CommandDependencies
-    for (const key of [environmentManagerKey, sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
+    for (const key of [environmentManagerKey, mcpEnvironmentServiceKey, sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
       projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, agentDirectoryServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey, localComputerWorkerServiceKey] as const) {
       snapshots.set(key, key === directoryPickerServiceKey && hooks.directoryPicker !== undefined ? hooks.directoryPicker : root.get(serviceName(key)))
       Object.defineProperty(services, key, { get() {
         const service = snapshots.get(key)
-        if (!service && key !== directoryPickerServiceKey && key !== localComputerWorkerServiceKey) throw failure(503, 'service-unavailable')
+        if (!service && key !== directoryPickerServiceKey && key !== localComputerWorkerServiceKey && key !== mcpEnvironmentServiceKey) throw failure(503, 'service-unavailable')
         return service
       } })
     }

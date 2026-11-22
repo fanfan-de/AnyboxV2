@@ -169,3 +169,5 @@ export function validateToolDescriptors(values: unknown): readonly ToolDescripto
   })
 }
 export type * from './environment.js'
+export { defineTool } from './define-tool.js'
+export type { DefineToolOptions, ToolExecutionContext } from './define-tool.js'

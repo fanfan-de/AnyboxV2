@@ -87,7 +87,10 @@ async function openExample(directory, environments) {
     // prompt, model drivers, native loops and RunRuntime are shared unchanged.
     const installation = await installHarnessServerCore(root, {
       agents: [{ ...agent, environmentIds: environments.map(environment => environment.environmentId) }],
-      toolEnvironments: environments, localWorkerDirectory: join(directory, 'unused-computer-worker'),
+      registerTools(tools) {
+        for (const environment of environments) tools.register(environment)
+      },
+      localWorkerDirectory: join(directory, 'unused-computer-worker'),
     })
     return { root, api: installation.api, model, async close() {
       try { await installation.close() } finally { await root.fiber.dispose() }

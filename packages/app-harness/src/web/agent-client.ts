@@ -7,7 +7,7 @@ import { setupSessionDefaults } from './session-defaults-client.js'
 import { setupToolsSettings } from './tools-client.js'
 import { setupUnitsSettings } from './units-client.js'
 import { messageFor } from './client-errors.js'
-import type { AgentView } from './client-types.js'
+import type { AgentView, Api } from './client-types.js'
 import type { MountedPage } from './page-lifecycle.js'
 import { setupSettingsNavigation } from './settings-client.js'
 import type { SettingsSection, SettingsViewState } from './settings-client.js'
@@ -20,6 +20,7 @@ export interface AgentMountedPage extends MountedPage {
 export function mountAgentPage(root: HTMLElement, api: HarnessClient, options: {
   selectedId?: string; selectedName?: string; selectedInstanceId?: string; layoutKey?: string; isActive(): boolean;
   devices: readonly { id: string; name: string }[]; settingsState?: SettingsViewState; selectDevice(id: string): boolean;
+  localApi: Api;
   route: { read(): string; write(hash: string, push: boolean): void; subscribe(listener: () => void): () => void };
 }): AgentMountedPage {
   let closed = false
@@ -60,7 +61,8 @@ const hostApi = selected ? api.forConnection(selected.id) : undefined
 const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefined
 const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('agent--session-defaults'), agentSelect) : undefined
 const toolsSettings = hostApi && selected ? setupToolsSettings(hostApi, messageFor, required('agent--tools-settings'), agentSelect, JSON.stringify(['agent', selected.instanceId])) : undefined
-const unitsSettings = hostApi ? setupUnitsSettings(hostApi, messageFor, required('agent--units-settings')) : undefined
+const unitsSettings = setupUnitsSettings(hostApi, messageFor, required('agent--units-settings'), options.localApi)
+settingsDialog.addEventListener('close', () => { void unitsSettings.close() }, { signal: lifetime.signal })
 const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, required('agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('agent--prompt-settings'), JSON.stringify(['agent', selected.instanceId, 'prompts'])) : undefined
 if (!selected) {
@@ -69,7 +71,6 @@ if (!selected) {
     ['agent--models-settings', 'agent--models-settings-title', '模型管理', '模型与配置'],
     ['agent--prompt-settings', 'agent--prompt-title', 'Prompt 管理', 'Prompt'],
     ['agent--tools-settings', 'agent--tools-title', 'Agent 工具', '工具'],
-    ['agent--units-settings', 'agent--units-title', '执行环境', '执行环境'],
   ] as const) {
     const panel = required<HTMLElement>(id)
     panel.replaceChildren()
@@ -87,7 +88,7 @@ function canLeave(): boolean {
   if (toolsSettings && !toolsSettings.canLeave()) { revealSettings('tools'); return false }
   if (modelsSettings && !modelsSettings.canLeave()) { revealSettings('models'); return false }
   if (promptSettings && !promptSettings.canLeave()) { revealSettings('prompts'); return false }
-  if (unitsSettings && !unitsSettings.canLeave()) { revealSettings('units'); return false }
+  if (!unitsSettings.canLeave()) { revealSettings('units'); return false }
   return true
 }
 let knownAgents: readonly AgentView[] = []
@@ -137,7 +138,7 @@ return {
   canLeave,
   async dispose() {
     closed = true; lifetime.abort(); settings.dispose(); settingsDialog.close(); unsubscribeAgents(); const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
-    await Promise.all([workspaceExit, modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings?.dispose()])
+    await Promise.all([workspaceExit, modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings.dispose()])
     await api.dispose()
   },
 }

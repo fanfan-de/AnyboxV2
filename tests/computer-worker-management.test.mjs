@@ -8,9 +8,6 @@ import { fileURLToPath } from 'node:url'
 import { Context } from '@nya/core'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { createWorkerAttachmentsComponent } from '../packages/app-harness/dist/core/computer/worker-attachments.js'
-import { createWorkerDialoutComponent } from '../packages/app-harness/dist/core/computer/worker-dialout.js'
-import { createComputerWorkerExecutorComponent } from '../packages/app-harness/dist/core/computer/worker-component.js'
-import { createComputerWorkerHttpServer } from '../packages/app-harness/dist/core/computer/worker-server.js'
 import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
 import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
@@ -21,7 +18,12 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 const ceiling = { kind: 'computer', projects: 'all', tools: 'all' }
 
 // Real worker ledger, executor, dialout and loopback adapter. Only OS tools and the remote HTTP peer are substitutes.
-async function fixture(t) {
+async function fixture(t, appId = 'agent') {
+  const product = appId === 'agent' ? 'harness' : 'personal-agent'
+  const [{ createWorkerAttachmentsComponent }, { createWorkerDialoutComponent }, { createComputerWorkerExecutorComponent },
+    { createComputerWorkerHttpServer }, { connectLocalComputerWorker }] = await Promise.all(
+    ['worker-attachments', 'worker-dialout', 'worker-component', 'worker-server', 'worker-client']
+      .map(name => import(`../packages/app-${product}/dist/core/computer/${name}.js`)))
   const directory = await mkdtemp(join(tmpdir(), 'anybox-worker-management-')), workerDirectory = join(directory, 'worker')
   await mkdir(workerDirectory)
   const root = new Context(), credentials = new Map(), calls = [], remoteCalls = []
@@ -34,7 +36,7 @@ async function fixture(t) {
       calls.push(call)
       return { result: result.promise, done: done.promise, cancel() { cancelled.resolve(); result.resolve({ output: 'cancelled', exitCode: null }) } }
     } })
-    ctx.provide('tools.apply-patch', {}); ctx.provide('tools.processes', {}); ctx.provide('tools.files', {}); ctx.provide('harness.image-assets', {})
+    ctx.provide('tools.apply-patch', {}); ctx.provide('tools.processes', {}); ctx.provide('tools.files', {}); ctx.provide(`${product}.image-assets`, {})
   } })
   await root.installComponent(createWorkerAttachmentsComponent({ openEntry: (service, id) => ({
     getPassword: async () => credentials.get(`${service}:${id}`), setPassword: async value => credentials.set(`${service}:${id}`, value), deleteCredential: async () => credentials.delete(`${service}:${id}`),
@@ -79,21 +81,29 @@ async function until(check) {
   throw new Error('condition did not become true')
 }
 
-test('a client with no local harness server attaches, reads status, edits permissions and revokes through the independent worker', { timeout: 15000 }, async t => {
-  const f = await fixture(t)
-  const host = await createClientHost({ path: join(f.directory, 'client.sqlite'), port: 0, computer: { directory: f.workerDirectory } })
+for (const appId of ['agent', 'personal-agent']) test(`${appId} manages an independent local worker without choosing an execution connection`, { timeout: 15000 }, async t => {
+  const f = await fixture(t, appId)
+  const computer = { directory: f.workerDirectory }
+  const host = await createClientHost({ path: join(f.directory, 'client.sqlite'), port: 0, computer, personalAgent: { computer } })
   t.after(() => host.close())
+  const base = `${host.url}/api/client/v1/apps/${appId}`
   const request = async (path, body) => {
-    const response = await fetch(`${host.url}/api/client/v1/apps/agent/computer${path}`, { ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }), headers: { Origin: host.url, 'content-type': 'application/json' } })
+    const response = await fetch(`${base}/computer${path}`, { ...(body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) }), headers: { Origin: host.url, 'content-type': 'application/json' } })
     const value = await response.json(); assert.equal(response.status, 200, JSON.stringify(value)); return value
   }
-  await fetch(`${host.url}/api/client/v1/products/agent/open`, { method: 'POST', headers: { Origin: host.url, 'content-type': 'application/json' }, body: '{}' })
+  const opened = await fetch(`${host.url}/api/client/v1/products/${appId}/open`, { method: 'POST', headers: { Origin: host.url, 'content-type': 'application/json' }, body: '{}' })
+  assert.equal(opened.status, 200)
+  const connections = await fetch(`${base}/connections`)
+  assert.equal(connections.status, 200)
+  assert.deepEqual(await connections.json(), [], 'local Computer needs no saved or selected execution connection')
   assert.equal((await request('/status')).state, 'running')
   const attached = await request('/attachments', { harnessUrl: 'https://remote.example', code: 'one-time-code', ceiling })
   assert.equal(attached.attachmentId, 'remote-attachment'); assert.equal(f.credentials.size, 1)
   await until(async () => (await request('/status')).attachments[0].connection === 'connected')
   assert.equal(host.root.get('host.access'), undefined)
-  for (const service of ['models', 'harness.runs', 'computer.worker']) assert.equal(host.root.get(service), undefined)
+  for (const service of ['models', 'harness.runs', 'personal-agent.runs', 'computer.worker', 'personal-agent.computer.worker']) {
+    assert.equal(host.root.get(service), undefined)
+  }
   const status = await request('/status')
   assert.ok(!JSON.stringify(status).includes('secret')); assert.ok(!JSON.stringify(attached).includes('one-time-code'))
   await request('/attachments/remote-attachment/permissions', { ceiling: { kind: 'computer', projects: [f.directory], tools: [] } })

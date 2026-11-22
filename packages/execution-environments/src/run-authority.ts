@@ -1,7 +1,8 @@
 import type { ToolCall } from '@anybox/tool-api'
+import type { ToolScopeTarget } from './catalog-port.js'
 import type { ExecutionEnvironmentManager } from './index.js'
 import type { EnvironmentGrant } from './contracts.js'
-import { environmentError, exactGrantKey } from './contracts.js'
+import { environmentError, exactGrantKey, targetKey } from './contracts.js'
 import { runGrants, type RunEnvironmentAccess } from './bindings.js'
 
 /** Only an original provider observation can retire a durable uncertain tool admission. */
@@ -76,6 +77,106 @@ export function createRunScopeAuthority(manager: ExecutionEnvironmentManager, ac
       const keys = new Set(grants.map(exactGrantKey))
       await manager.reconcile(access.agentId, operation,
         async previous => previous.length === keys.size && previous.every(grant => keys.has(exactGrantKey(grant))))
+    },
+  }
+}
+
+interface TargetAdmission {
+  readonly target: ToolScopeTarget
+  readonly operationId: string
+  readonly grants: EnvironmentGrant[]
+  original: boolean
+  opening?: Promise<void>
+  admission?: Promise<void>
+  settle?: (proven: boolean) => void
+  closing?: Promise<void>
+}
+
+/** A target joins the Run's resource ledger only when its scope is acquired. */
+export function createRunTargetScopeAuthority(manager: ExecutionEnvironmentManager, access: RunEnvironmentAccess,
+  runId: string, cancel: () => void) {
+  const admissions = new Map<string, TargetAdmission>()
+  const legacyId = JSON.stringify([runId, 'scope'])
+  for (const { grant } of access.functions) {
+    const { environmentId, targetId } = grant.tool
+    const key = targetKey(environmentId, targetId)
+    let admission = admissions.get(key)
+    if (!admission) {
+      admission = { target: { environmentId, targetId }, operationId: JSON.stringify([runId, 'scope', environmentId, targetId]),
+        grants: [], original: false }
+      admissions.set(key, admission)
+    }
+    admission.grants.push(grant)
+  }
+
+  const lookup = ({ environmentId, targetId }: ToolScopeTarget) => {
+    const admission = admissions.get(targetKey(environmentId, targetId))
+    if (!admission) throw environmentError('environment-target-unavailable', 409)
+    return admission
+  }
+
+  const open = (admission: TargetAdmission, adopt: boolean, signal?: AbortSignal) => {
+    if (admission.closing) throw environmentError('environment-scope-unavailable', 409)
+    if (admission.opening) return admission.opening
+    let attached!: () => void
+    const ready = new Promise<void>(resolve => { attached = resolve })
+    const start = (admitted: AbortSignal) => {
+      const release = new Promise<void>((resolve, reject) => {
+        admission.settle = proven => {
+          if (proven) resolve()
+          else reject(environmentError('environment-exit-unknown', 409))
+        }
+      })
+      admitted.addEventListener('abort', cancel, { once: true })
+      const done = release.finally(() => admitted.removeEventListener('abort', cancel))
+      attached()
+      return { result: done, done }
+    }
+    const claim = adopt ? manager.resumeScope : manager.runScope
+    admission.admission = claim(access.agentId, admission.grants, admission.operationId, start, signal)
+    admission.opening = Promise.race([ready, admission.admission])
+    return admission.opening
+  }
+
+  const close = (admission: TargetAdmission, proven: boolean) => admission.closing ??= (async () => {
+    // If close races with acquisition, wait for its decision before releasing its receipt.
+    await admission.opening?.catch(() => {})
+    if (admission.settle) {
+      admission.settle(proven)
+      if (proven) await admission.admission
+      else await admission.admission?.catch(() => {})
+    } else if (proven && admission.original) {
+      const keys = new Set(admission.grants.map(exactGrantKey))
+      const reconciled = await manager.reconcile(access.agentId, admission.operationId,
+        async previous => previous.length === keys.size && previous.every(grant => keys.has(exactGrantKey(grant))))
+      if (!reconciled) throw environmentError('environment-exit-unknown', 409)
+    }
+  })()
+
+  return {
+    async lifecycles() {
+      const all = [...admissions.values()]
+      const outstanding = await manager.outstandingScopes(access.agentId, [legacyId, ...all.map(value => value.operationId)])
+      const targets = all.filter(admission => outstanding.has(admission.operationId))
+      for (const admission of targets) admission.original = true
+      return { legacy: outstanding.has(legacyId), targets: targets.map(({ target }) => target) }
+    },
+    acquire(target: ToolScopeTarget, signal?: AbortSignal): Promise<void> {
+      const admission = lookup(target)
+      if (admission.original && !admission.opening) throw environmentError('environment-scope-unavailable', 409)
+      return open(admission, false, signal)
+    },
+    adopt(target: ToolScopeTarget, signal?: AbortSignal): Promise<void> {
+      const admission = lookup(target)
+      if (!admission.original) throw environmentError('environment-no-original-scope', 409)
+      return open(admission, true, signal)
+    },
+    closed(target: ToolScopeTarget, proven: boolean): Promise<void> {
+      return close(lookup(target), proven)
+    },
+    async finishPending() {
+      await Promise.all([...admissions.values()].filter(admission => admission.opening && !admission.closing)
+        .map(admission => close(admission, false)))
     },
   }
 }

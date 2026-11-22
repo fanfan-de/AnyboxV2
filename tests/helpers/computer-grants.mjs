@@ -1,6 +1,5 @@
 import { environmentToolKey } from '@anybox/execution-environments/contracts'
-import { computerToolTarget } from '@anybox/execution-environments/bindings'
-import { computerToolEnvironmentVersion } from '../../packages/app-harness/dist/core/tool-environments/computer.js'
+import { computerToolTarget } from '../../packages/app-harness/dist/core/tool-environments/computer.js'
 
 /** Fixtures use the same explicit, target-bound grants as an operator adding a Computer after startup. */
 export async function grantComputerTools(root, api, attachmentIds, toolIds, agentId = 'assistant') {
@@ -9,7 +8,7 @@ export async function grantComputerTools(root, api, attachmentIds, toolIds, agen
   const tools = new Map(current.grants.map(({ tool }) => [environmentToolKey(tool), tool]))
   const attachments = await api.listUnitAttachments()
   const targets = new Set(attachments.filter(attachment => attachmentIds.includes(attachment.attachmentId))
-    .map(attachment => computerToolTarget(attachment, computerToolEnvironmentVersion)))
+    .map(computerToolTarget))
   for (const tool of await api.environmentTools(agentId)) {
     if (tool.environmentId === 'computer' && targets.has(tool.targetId) && toolIds.includes(tool.toolId)) {
       tools.set(environmentToolKey(tool), tool)

@@ -1,28 +1,38 @@
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { ToolDescriptor, ToolEnvironmentDescriptor } from '@anybox/tool-api'
-import { environmentError, environmentToolKey, exactGrantKey, validateEnvironmentGrants } from './contracts.js'
+import type { StorageReader } from '@anybox/storage-sqlite/port'
+import type { TargetedToolEnvironmentTarget, ToolEnvironmentCatalog } from './catalog-port.js'
+import type { ToolEnvironmentSelection, ToolEnvironmentSnapshotTool } from './snapshot.js'
+import { environmentError, environmentToolKey, exactGrantKey, targetKey, validateEnvironmentGrants } from './contracts.js'
 import type { AgentGrants, EnvironmentGrant, EnvironmentTool } from './contracts.js'
 
-export interface ComputerBinding {
-  readonly attachmentId: string
-  readonly unitId: string
+export { targetKey } from './contracts.js'
+
+export interface FunctionBindingTarget {
+  readonly targetId: string
   readonly allowedToolIds?: readonly string[]
-  readonly epoch: number
 }
 
 export type ToolPreferences = Readonly<Record<string, readonly string[]>>
-export interface EnvironmentSelection { readonly toolIdsByEnvironment?: ToolPreferences; readonly environmentIds: readonly string[]; readonly version: number }
-export interface SelectionInput { readonly toolIdsByEnvironment?: ToolPreferences; readonly environmentIds: readonly string[]; readonly expectedVersion: number }
+export type ToolPreferencesByTarget = Readonly<Record<string, readonly string[]>>
+export interface EnvironmentSelection {
+  readonly toolIdsByEnvironment?: ToolPreferences
+  readonly toolIdsByTarget?: ToolPreferencesByTarget
+  readonly environmentIds: readonly string[]
+  readonly version: number
+}
+export interface SelectionInput {
+  readonly toolIdsByEnvironment?: ToolPreferences
+  readonly toolIdsByTarget?: ToolPreferencesByTarget
+  readonly environmentIds: readonly string[]
+  readonly expectedVersion: number
+}
 export interface AdoptionInput extends SelectionInput { readonly expectedGrantRevision: number }
 export interface RunEnvironmentAccess {
   readonly agentId: string
   readonly functions: readonly { readonly name: string; readonly grant: EnvironmentGrant }[]
   readonly search?: EnvironmentGrant
-}
-
-export function computerToolTarget(binding: ComputerBinding, environmentVersion: string): string {
-  return JSON.stringify([binding.attachmentId, binding.unitId, binding.epoch, environmentVersion])
 }
 
 export function functionKey(environment: ToolEnvironmentDescriptor, targetId: string, tool: ToolDescriptor): EnvironmentTool {
@@ -41,12 +51,6 @@ export function assertRunGrants(current: AgentGrants, access: RunEnvironmentAcce
   if (current.agentId !== access.agentId || !runGrants(access).every(grant => available.has(exactGrantKey(grant)))) {
     throw environmentError('environment-authorization-changed', 409)
   }
-}
-
-// Legacy Runs have no grant generations. Only their original Computer and grants imported at cutover can prove their authority.
-export function canBindLegacyComputerAccess(access: RunEnvironmentAccess, originalTargetProven: boolean): boolean {
-  return !access.search && (access.functions.length === 0 || originalTargetProven && access.functions.every(({grant}) =>
-    grant.tool.environmentId === 'computer' && grant.generation === 1 && grant.source === 'trusted-configuration'))
 }
 
 export function parseRunAccess(json: string): RunEnvironmentAccess {
@@ -81,15 +85,27 @@ export function checkedEnvironmentIds(values: unknown, offered: readonly string[
   return Object.freeze([...values])
 }
 
-export function checkedToolPreferences(input: unknown, catalog: readonly ToolEnvironmentDescriptor[]): ToolPreferences {
+export function checkedToolPreferences(input: unknown, allowed: ReadonlyMap<string, readonly string[]>): ToolPreferences {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw environmentError('invalid-environment-input', 400)
-  const allowed = new Map(catalog.filter(e => e.environmentId !== 'computer').map(e => [e.environmentId, e.tools.map(t => t.toolId)]))
-  allowed.set('model-search', ['web_search'])
   return Object.freeze(Object.fromEntries(Object.entries(input).map(([id, tools]) => {
     const offered = allowed.get(id)
     if (!offered || !Array.isArray(tools) || tools.length > offered.length || new Set(tools).size !== tools.length ||
       tools.some(tool => typeof tool !== 'string' || !offered.includes(tool))) throw environmentError('invalid-environment-input', 400)
     return [id, Object.freeze([...tools])]
+  })))
+}
+
+export function checkedTargetToolPreferences(input: unknown, catalog: ToolEnvironmentCatalog | undefined, reader?: StorageReader,
+  previous?: ToolPreferencesByTarget): ToolPreferencesByTarget {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw environmentError('invalid-environment-input', 400)
+  const allowed = new Map(catalog?.environments.flatMap(environment => catalog.targets(environment.environmentId, reader).map(target =>
+    [targetKey(environment.environmentId, target.selectionId), target.tools.map(tool => tool.toolId)] as const)))
+  return Object.freeze(Object.fromEntries(Object.entries(input).map(([key, tools]) => {
+    const offered = allowed.get(key), saved = previous && Object.hasOwn(previous, key) ? previous[key] : undefined
+    const retained = new Set([...(offered ?? []), ...(saved ?? [])])
+    if ((!offered && !saved) || !Array.isArray(tools) || tools.length > retained.size || new Set(tools).size !== tools.length ||
+      tools.some(tool => typeof tool !== 'string' || !retained.has(tool))) throw environmentError('invalid-environment-input', 400)
+    return [key, Object.freeze([...tools])]
   })))
 }
 
@@ -99,31 +115,50 @@ export function validateDeclaredNames(access: RunEnvironmentAccess, tools: reado
   }
 }
 
-/** Each attached Computer is a distinct environment instance. Other optional providers pin a trusted resource identity. */
-export function createFunctionBindings(catalog: readonly ToolEnvironmentDescriptor[], generation: string) {
-  const target = (environment: ToolEnvironmentDescriptor, computer?: ComputerBinding) => {
-    if (environment.environmentId === 'computer') {
-      if (!computer) throw environmentError('environment-target-unavailable', 409)
-      return computerToolTarget(computer, environment.version)
-    }
-    return JSON.stringify([environment.environmentId, environment.version, environment.resourceId ?? generation])
+/** Static providers pin a trusted resource identity. The app supplies targets for context-bound providers. */
+export function createFunctionBindings(catalog: readonly ToolEnvironmentDescriptor[], generation: string,
+  targets: ToolEnvironmentCatalog['targets'] = () => [], contextualEnvironmentIds: readonly string[] = []) {
+  const contextual = new Set(contextualEnvironmentIds)
+  const staticTarget = (environment: ToolEnvironmentDescriptor) =>
+    JSON.stringify([environment.environmentId, environment.version, environment.resourceId ?? generation])
+  const targetedTool = (environment: ToolEnvironmentDescriptor, tool: ToolEnvironmentSnapshotTool, current: readonly TargetedToolEnvironmentTarget[]) => {
+    const { targetId, ...descriptor } = tool
+    if (!targetId || !current.some(target => target.targetId === targetId &&
+      target.tools.some(candidate => isDeepStrictEqual(candidate, descriptor)))) throw environmentError('environment-target-unavailable', 409)
+    return functionKey(environment, targetId, descriptor)
   }
   return {
     recoverable(environmentId: string): boolean {
       return catalog.find(environment => environment.environmentId === environmentId)?.recovery === 'observe-existing'
     },
-    available(computers: readonly ComputerBinding[]): readonly EnvironmentTool[] {
-      return catalog.flatMap(environment => (environment.environmentId === 'computer' ? computers : [undefined])
-        .flatMap(binding => environment.tools.filter(tool => !binding?.allowedToolIds || binding.allowedToolIds.includes(tool.toolId)).map(tool => functionKey(environment, target(environment, binding), tool))))
+    available(contextualTargets?: ReadonlyMap<string, readonly FunctionBindingTarget[]>, reader?: StorageReader): readonly EnvironmentTool[] {
+      return catalog.flatMap(environment => {
+        const inventory: readonly FunctionBindingTarget[] = contextual.has(environment.environmentId)
+          ? contextualTargets?.get(environment.environmentId) ?? []
+          : [{ targetId: staticTarget(environment) }]
+        return [
+          ...targets(environment.environmentId, reader).flatMap(target => target.tools.map(tool => functionKey(environment, target.targetId, tool))),
+          ...inventory.flatMap(({ targetId, allowedToolIds }) => environment.tools
+            .filter(tool => !allowedToolIds || allowedToolIds.includes(tool.toolId)).map(tool => functionKey(environment, targetId, tool))),
+        ]
+      })
     },
-    routes(snapshot: readonly ToolEnvironmentDescriptor[], names: readonly string[], computer?: ComputerBinding) {
+    routes(snapshot: readonly ToolEnvironmentSelection[], names: readonly string[], contextualTargets?: ReadonlyMap<string, string>, reader?: StorageReader) {
       const byName = new Map<string, EnvironmentTool>()
       for (const selection of snapshot) {
+        const selected = selection.tools.filter(tool => names.includes(tool.definition.name))
+        if (!selected.length) continue
         const environment = catalog.find(entry => entry.environmentId === selection.environmentId && entry.version === selection.version)
         if (!environment) throw environmentError('environment-target-unavailable', 409)
-        for (const tool of selection.tools) {
-          if (!names.includes(tool.definition.name)) continue
-          byName.set(tool.definition.name, functionKey(environment, target(environment, computer), tool))
+        const current = selected.some(tool => tool.targetId !== undefined) ? targets(selection.environmentId, reader) : []
+        for (const tool of selected) {
+          if (tool.targetId !== undefined) {
+            byName.set(tool.definition.name, targetedTool(environment, tool, current))
+          } else {
+            const targetId = contextual.has(environment.environmentId) ? contextualTargets?.get(environment.environmentId) : staticTarget(environment)
+            if (!targetId) throw environmentError('environment-target-unavailable', 409)
+            byName.set(tool.definition.name, functionKey(environment, targetId, tool))
+          }
         }
       }
       return names.map(name => {
@@ -131,6 +166,20 @@ export function createFunctionBindings(catalog: readonly ToolEnvironmentDescript
         if (!tool) throw environmentError('environment-function-unavailable', 409)
         return { name, tool }
       })
+    },
+    assertCurrentTargetedAccess(snapshot: readonly ToolEnvironmentSelection[], access: RunEnvironmentAccess, reader?: StorageReader): void {
+      const grants = new Map(access.functions.map(route => [route.name, route.grant.tool] as const))
+      for (const selection of snapshot) {
+        const selected = selection.tools.filter(tool => tool.targetId !== undefined && grants.has(tool.definition.name))
+        if (!selected.length) continue
+        const environment = catalog.find(entry => entry.environmentId === selection.environmentId && entry.version === selection.version)
+        const current = targets(selection.environmentId, reader)
+        for (const tool of selected) {
+          if (!environment || environmentToolKey(grants.get(tool.definition.name)!) !== environmentToolKey(targetedTool(environment, tool, current))) {
+            throw environmentError('environment-authorization-changed', 409)
+          }
+        }
+      }
     },
   }
 }

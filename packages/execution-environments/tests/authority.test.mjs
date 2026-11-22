@@ -8,6 +8,7 @@ import test from 'node:test'
 import { Context, FiberState } from '@nya/core'
 import { createLocalSqliteComponent } from '@anybox/storage-sqlite/sqlite'
 import { openExecutionEnvironmentManager } from '../dist/index.js'
+import { createRunTargetScopeAuthority } from '../dist/run-authority.js'
 
 const read = { environmentId: 'computer', targetId: 'attachment-a:epoch-1', toolId: 'files.read', version: '1' }
 const search = { environmentId: 'notes', targetId: 'corpus-1', toolId: 'notes.search', version: '1' }
@@ -33,7 +34,7 @@ async function open(t, file, adapt = value => value) {
   try { manager = await openExecutionEnvironmentManager(adapt(store)) }
   catch (error) { await root.fiber.dispose(); throw error }
   t.after(async () => { await manager.close(); await root.fiber.dispose() })
-  return { store, manager }
+  return { store, manager, root }
 }
 
 test('idempotent operator grants keep exact generations across additive edits and isolate agents and target identities', async t => {
@@ -195,6 +196,51 @@ test('only the original resource-owning Run scope can be reattached; a late obse
   realExit.resolve()
   await resumed
   assert.equal((await manager.observe('withdraw-scope')).state, 'completed')
+})
+
+test('only acquired target scopes hold grants and a revoked target can prove exit independently', async t => {
+  const { manager } = await open(t, temporary(t))
+  await manager.set(change([read, search], 0, 'grant'))
+  const { grants } = await manager.get('agent')
+  const access = { agentId: 'agent', functions: grants.map(grant => ({ name: grant.tool.toolId, grant })) }
+  let cancelled = false
+  const scopes = createRunTargetScopeAuthority(manager, access, 'mixed-run', () => { cancelled = true })
+  assert.deepEqual(await scopes.lifecycles(), { legacy: false, targets: [] })
+  await scopes.acquire(read)
+  assert.deepEqual(await scopes.lifecycles(), { legacy: false, targets: [{ environmentId: read.environmentId, targetId: read.targetId }] })
+  assert.deepEqual(await manager.outstandingTargetScopeRunIds(), ['mixed-run'])
+  assert.equal((await manager.set(change([search], 1, 'revoke-computer'))).state, 'draining')
+  assert.equal(cancelled, true)
+  await scopes.finishPending()
+  assert.equal((await manager.observe('revoke-computer')).state, 'exit-unknown')
+  const cleanup = createRunTargetScopeAuthority(manager, access, 'mixed-run', () => {})
+  await cleanup.lifecycles()
+  await assert.rejects(cleanup.adopt(read), { code: 'environment-authorization-changed' })
+  assert.equal(await manager.run('agent', grants.filter(grant => grant.tool.environmentId === search.environmentId), 'unrelated-tool', instant), 'ok')
+  await cleanup.closed(read, true)
+  assert.equal((await manager.observe('revoke-computer')).state, 'completed')
+  assert.deepEqual(await manager.outstandingTargetScopeRunIds(), [])
+})
+
+test('a later authority can reuse an exited target scope but cannot reuse a previous tool operation', async t => {
+  const file = temporary(t)
+  const original = await open(t, file)
+  await original.manager.set(change([read], 0, 'grant'))
+  const { grants } = await original.manager.get('agent')
+  const access = { agentId: 'agent', functions: grants.map(grant => ({ name: grant.tool.toolId, grant })) }
+  const firstScope = createRunTargetScopeAuthority(original.manager, access, 'continued-run', () => {})
+  await firstScope.acquire(read)
+  assert.equal(await original.manager.run('agent', grants, 'original-tool', instant), 'ok')
+  await firstScope.closed(read, true)
+  await original.manager.close()
+  await original.root.fiber.dispose()
+  const { manager } = await open(t, file)
+  const nextScope = createRunTargetScopeAuthority(manager, access, 'continued-run', () => {})
+  await nextScope.acquire(read)
+  try {
+    await assert.rejects(manager.run('agent', grants, 'original-tool', instant), { code: 'environment-operation-already-admitted' })
+    assert.equal(await manager.run('agent', grants, 'next-tool', instant), 'ok')
+  } finally { await nextScope.closed(read, true) }
 })
 
 for (const kind of ['model', 'hosted', 'provider']) {

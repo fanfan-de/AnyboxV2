@@ -16,6 +16,8 @@ export const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
 } }, { version: 2, up(tx) {
   tx.execute("ALTER TABLE environment_admissions ADD COLUMN resource_kind TEXT NOT NULL DEFAULT 'provider'")
   tx.execute('CREATE INDEX environment_changes_by_agent ON environment_grant_changes(agent_id,revision)')
+} }, { version: 3, up(tx) {
+  tx.execute("CREATE INDEX environment_outstanding_scopes ON environment_admissions(operation_id) WHERE resource_kind='run-scope' AND state<>'exited'")
 } }]
 
 export function assertOwner(reader: StorageReader, owner: string): void {

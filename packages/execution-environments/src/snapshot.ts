@@ -1,13 +1,18 @@
 import type { ToolDefinition, ToolDescriptor } from '@anybox/tool-api'
 
+export interface ToolEnvironmentSnapshotTool extends ToolDescriptor {
+  /** Present for a tool selected from an exact target of a multi-target environment. */
+  readonly targetId?: string
+}
+
 export interface ToolEnvironmentSelection {
   readonly environmentId: string
   readonly version: string
-  readonly tools: readonly ToolDescriptor[]
+  readonly tools: readonly ToolEnvironmentSnapshotTool[]
 }
 
 export interface ToolEnvironmentSnapshot {
-  readonly schemaVersion: 1
+  readonly schemaVersion: 1 | 2
   readonly environments: readonly ToolEnvironmentSelection[]
 }
 
@@ -38,14 +43,16 @@ function freeze<T>(value: T): T {
 
 /** Structural history reader; availability and exact registered definitions are checked separately. */
 export function parseToolEnvironmentSnapshot(value: unknown): ToolEnvironmentSnapshot {
-  if (!record(value) || !keys(value, ['schemaVersion', 'environments']) || value.schemaVersion !== 1 || !Array.isArray(value.environments) || value.environments.length > 32) throw new TypeError('invalid tool environment snapshot')
+  if (!record(value) || !keys(value, ['schemaVersion', 'environments']) || (value.schemaVersion !== 1 && value.schemaVersion !== 2) || !Array.isArray(value.environments) || value.environments.length > 32) throw new TypeError('invalid tool environment snapshot')
+  const toolKeys = value.schemaVersion === 1 ? ['toolId', 'version', 'definition'] : ['toolId', 'version', 'definition', 'targetId']
   const ids = new Set<string>(), toolIds = new Set<string>(), names = new Set<string>()
   let count = 0
   for (const environment of value.environments) {
     if (!record(environment) || !keys(environment, ['environmentId', 'version', 'tools']) || !identity(environment.environmentId) || !identity(environment.version) || ids.has(environment.environmentId) || !Array.isArray(environment.tools)) throw new TypeError('invalid tool environment snapshot')
     ids.add(environment.environmentId)
     for (const tool of environment.tools) {
-      if (++count > 256 || !record(tool) || !keys(tool, ['toolId', 'version', 'definition']) || !identity(tool.toolId) || !identity(tool.version) || !definition(tool.definition) || toolIds.has(tool.toolId) || names.has(tool.definition.name)) throw new TypeError('invalid tool environment tools')
+      if (++count > 256 || !record(tool) || !keys(tool, toolKeys) || !identity(tool.toolId) || !identity(tool.version) || !definition(tool.definition) || toolIds.has(tool.toolId) || names.has(tool.definition.name) ||
+        (Object.hasOwn(tool, 'targetId') && !identity(tool.targetId))) throw new TypeError('invalid tool environment tools')
       toolIds.add(tool.toolId); names.add(tool.definition.name)
     }
   }

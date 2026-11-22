@@ -1,5 +1,9 @@
 import { createExecutionEnvironmentComponent } from '@anybox/execution-environments'
-import { createFunctionBindings } from '@anybox/execution-environments/bindings'
+import { createToolRegistry } from '@anybox/execution-environments/catalog'
+import type { ToolRegistrar } from '@anybox/execution-environments/catalog'
+import { createMcpEnvironmentComponent, createMcpToolRegistration } from '@anybox/mcp-environment'
+import { mcpEnvironmentServiceKey } from './tool-environments/mcp.js'
+import type { ToolEnvironmentAssembly } from './tool-environments/port.js'
 import { environmentManagerKey } from './tool-environments/access.js'
 import { createProjectFilesComponent } from './project-files/component.js'
 import { randomUUID } from 'node:crypto'
@@ -46,8 +50,7 @@ import { unitAttachmentsServiceKey } from './unit/port.js'
 import type { AttachCodeInput, UnitAttachment, UnitAttachmentsPort } from './unit/port.js'
 import { localComputerUnitId, localModelsUnitId } from './unit/domain.js'
 import type { ToolEnvironment } from '@anybox/tool-api'
-import { createToolEnvironmentCatalog } from './tool-environments/registry.js'
-import { computerToolEnvironmentCatalogEntry, createComputerToolEnvironmentBinding } from './tool-environments/computer.js'
+import { computerInventoryTargets, computerRunTargets, computerToolRegistration, createComputerRunPreparation } from './tool-environments/computer.js'
 
 /** Reject the removed selector for JavaScript consumers before any component or storage is installed. */
 export function validateComputerEnvironmentOptions(options: object): void {
@@ -61,7 +64,9 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   /** Explicit bindings for a trusted same-root role composition. */
   readonly serviceBindings?: Readonly<Record<string, string>>
   readonly agents: readonly AgentDefinition[]
-  /** Trusted capability providers selected by each Agent's environmentIds; Sessions freeze their exact declarations. */
+  /** Register trusted providers when the application assembles its Tool Registry. */
+  readonly registerTools?: (tools: ToolRegistrar) => void
+  /** Existing standalone providers, registered into the same Tool Registry. */
   readonly toolEnvironments?: readonly ToolEnvironment[]
   /** Stable private directory shared with the independent worker, never a Session path. */
   readonly localWorkerDirectory?: string
@@ -79,7 +84,7 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly canManageAgent?: (actorId: string, agentId: string) => boolean
 }
 
-export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable' | 'getIn' | 'openAgentWorkspace'>,
+export interface HarnessServerApi extends RunPort, Omit<SessionPort, 'targetedTools'>, Omit<ProjectPort, 'requireAvailable' | 'getIn' | 'openAgentWorkspace'>,
   Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly AgentSummary[]
@@ -121,10 +126,21 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   validateComputerEnvironmentOptions(options)
   const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
   const inputs = runtimeInputs(options)
-  const toolEnvironments = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry,
-    ...(options.toolEnvironments ?? []).map(descriptor => ({ descriptor }))])
-  const functionBindings = createFunctionBindings(toolEnvironments.environments, randomUUID())
-  const reportedComputerContracts = (unit: import('./unit/port.js').UnitAttachment) => {
+  const tools = createToolRegistry(randomUUID(), registry => {
+    registry.register(computerToolRegistration)
+    for (const provider of options.toolEnvironments ?? []) registry.register(provider)
+    registry.register(createMcpToolRegistration(mcpEnvironmentServiceKey))
+    return options.registerTools?.(registry)
+  })
+  const toolEnvironments: ToolEnvironmentAssembly = {
+    inject: tools.inject,
+    trustedConfigurationEnvironmentIds: tools.trustedConfigurationEnvironmentIds,
+    describe: tools.describe,
+    prepareRun: createComputerRunPreparation(reportedComputerContracts),
+    runTargets: computerRunTargets,
+    inventoryTargets: computerInventoryTargets,
+  }
+  function reportedComputerContracts(unit: UnitAttachment) {
     const connection = lookup<UnitTransportPort>(unitTransportServiceKey)?.connection(unit.attachmentId)
     const observed = projectComputerEnvironments([unit], {platform: process.platform, architecture: process.arch},
       new Map([[unit.attachmentId, connection ?? false]]), lookup<ComputerWorkerPort>(localComputerWorkerServiceKey)?.observedInfo?.())
@@ -147,15 +163,15 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     if (!worker) return Promise.reject(projectUnavailableError())
     return worker.query({ attachmentId, query })
   }
-  return [createExecutionEnvironmentComponent({ serviceKey: environmentManagerKey }), ...protocolComponents, ...attachmentComponents, ...workerComponents,
+  return [createExecutionEnvironmentComponent({ serviceKey: environmentManagerKey }), createMcpEnvironmentComponent({ serviceKey: mcpEnvironmentServiceKey }), ...protocolComponents, ...attachmentComponents, ...workerComponents,
     createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects,
       agentWorkspacesDirectory: options.agentWorkspacesDirectory, computerQuery }),
     createProjectFilesComponent(inputs),
     createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
-    createSessionComponent(inputs, toolEnvironments, functionBindings,
+    createSessionComponent(inputs, toolEnvironments,
       () => lookup<ModelsSettingsService>(modelsSettingsServiceKey)?.configuredProviders?.() ?? []),
-    createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding(toolEnvironments, options.toolEnvironments), functionBindings),
-    createRunComponent(inputs, lifetime.isClosing, lifetime.signal, toolEnvironments, functionBindings, reportedComputerContracts)]
+    createRunRuntimeComponent(inputs, tools.runtime, deps => tools.describe(deps).bindings, toolEnvironments.runTargets),
+    createRunComponent(inputs, lifetime.isClosing, lifetime.signal, toolEnvironments)]
 }
 
 /** The facade resolves the current services and never owns the application root. */

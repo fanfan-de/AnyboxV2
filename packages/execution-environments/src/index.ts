@@ -18,7 +18,7 @@ export interface ExecutionEnvironmentManager {
   get(agentId: string): Promise<AgentGrants>
   readIn(reader: StorageReader, agentId: string): AgentGrants
   seedIn(tx: StorageTransaction, agentId: string, tools: readonly EnvironmentTool[]): AgentGrants
-  set(input: SetGrantsInput): Promise<GrantChange>
+  set(input: SetGrantsInput, validateAdded?: (reader: StorageReader, tools: readonly EnvironmentTool[]) => void): Promise<GrantChange>
   observe(requestId: string): Promise<GrantChange | undefined>
   pendingChanges(agentId: string): Promise<readonly GrantChange[]>
   run<T>(agentId: string, required: readonly EnvironmentGrant[], operationId: string, start: (signal: AbortSignal) => EnvironmentWork<T>, signal?: AbortSignal): Promise<T>
@@ -28,6 +28,10 @@ export interface ExecutionEnvironmentManager {
   runScope<T>(agentId: string, required: readonly EnvironmentGrant[], operationId: string, start: (signal: AbortSignal) => EnvironmentWork<T>, signal?: AbortSignal): Promise<T>
   /** Reattach cancellation and exit observation to a previous owner's exact Run scope. Never dispatch a tool through this callback. */
   resumeScope<T>(agentId: string, required: readonly EnvironmentGrant[], operationId: string, attach: (signal: AbortSignal) => EnvironmentWork<T>, signal?: AbortSignal): Promise<T>
+  /** Look up admitted scopes from the Run's pinned targets. This never claims or closes an admission. */
+  outstandingScopes(agentId: string, operationIds: readonly string[]): Promise<ReadonlySet<string>>
+  /** List Runs with target-scoped work requiring actual exit observation. */
+  outstandingTargetScopeRunIds(): Promise<readonly string[]>
   /** Trusted provider reconciliation only. A missing operation or interrupted observation is not proof of exit. */
   reconcile(agentId: string, operationId: string, proveExit: (grants: readonly EnvironmentGrant[], signal: AbortSignal) => Promise<boolean>): Promise<boolean>
 }
@@ -40,6 +44,17 @@ interface ActiveWork {
 }
 
 const owners = new WeakSet<LocalStoragePort>()
+const scopeOperationLimit = 32_768
+
+function parseScopeOperation(value: unknown): readonly [string, 'scope'] | readonly [string, 'scope', string, string] {
+  const operation = checkedId(value, scopeOperationLimit)
+  let identity: unknown
+  try { identity = JSON.parse(operation) } catch { /* rejected below */ }
+  if (!Array.isArray(identity) || (identity.length !== 2 && identity.length !== 4) || identity[1] !== 'scope' ||
+    JSON.stringify(identity) !== operation) throw environmentError('environment-invalid-scope', 409)
+  const runId = checkedId(identity[0], 1024)
+  return identity.length === 2 ? [runId, 'scope'] : [runId, 'scope', checkedId(identity[2]), checkedId(identity[3], 4096)]
+}
 
 export async function openExecutionEnvironmentManager(db: LocalStoragePort): Promise<ExecutionEnvironmentManager & { close(): Promise<void> }> {
   if (owners.has(db)) throw environmentError('environment-owner-active', 409)
@@ -122,7 +137,7 @@ export async function openExecutionEnvironmentManager(db: LocalStoragePort): Pro
       }
     }
   }
-  const set = async (input: SetGrantsInput): Promise<GrantChange> => {
+  const set: ExecutionEnvironmentManager['set'] = async (input, validateAdded) => {
     const agentId = checkedId(input.agentId), requestId = checkedId(input.requestId)
     const expectedRevision = input.expectedRevision
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || expectedRevision >= Number.MAX_SAFE_INTEGER) throw environmentError('invalid-environment-input', 400)
@@ -145,6 +160,7 @@ export async function openExecutionEnvironmentManager(db: LocalStoragePort): Pro
           if (previous.revision !== expectedRevision) throw environmentError('environment-revision-conflict', 409)
           const revision = expectedRevision + 1
           const known = new Map(previous.grants.map(grant => [environmentToolKey(grant.tool),grant]))
+          validateAdded?.(tx, tools.filter(tool => !known.has(environmentToolKey(tool))))
           const grants = tools.map(tool => {
             const key = environmentToolKey(tool)
             const existing = known.get(key)
@@ -175,15 +191,14 @@ export async function openExecutionEnvironmentManager(db: LocalStoragePort): Pro
 
   const admit = async <T>(kind: 'provider' | 'model' | 'scope' | 'resume-scope', agent: string, required: readonly EnvironmentGrant[], operation: string,
     start: (signal: AbortSignal) => EnvironmentWork<T>, signal?: AbortSignal): Promise<T> => {
-    const agentId = checkedId(agent), operationId = checkedId(operation, 1024)
+    const agentId = checkedId(agent)
     const resuming = kind === 'resume-scope'
-    if (resuming || kind === 'scope') {
-      let identity: unknown
-      try { identity = JSON.parse(operationId) } catch { /* rejected below */ }
-      if (!Array.isArray(identity) || identity.length !== 2 || typeof identity[0] !== 'string' ||
-        !identity[0].length || identity[1] !== 'scope' || JSON.stringify(identity) !== operationId) throw environmentError('environment-invalid-scope', 409)
-    }
+    const isScope = resuming || kind === 'scope'
+    const operationId = checkedId(operation, isScope ? scopeOperationLimit : 1024)
+    const identity = isScope ? parseScopeOperation(operationId) : undefined
     const grants = validateEnvironmentGrants(required)
+    if (identity?.length === 4 && (!grants.length || grants.some(({ tool }) =>
+      tool.environmentId !== identity[2] || tool.targetId !== identity[3]))) throw environmentError('environment-invalid-scope', 409)
     const launched = await queue(async () => {
       signal?.throwIfAborted()
       await db.transaction(tx => {
@@ -201,13 +216,18 @@ export async function openExecutionEnvironmentManager(db: LocalStoragePort): Pro
           tx.execute("UPDATE environment_admissions SET state='sent', owner=? WHERE agent_id=? AND operation_id=?", [owner,agentId,operationId])
           return
         }
-        if (prior) throw environmentError('environment-operation-already-admitted', 409)
+        // A successor may use the same target after an earlier scope has proven exit.
+        // Tool/model operations stay single-use, including across a scope's restart.
+        if (prior && (identity?.length !== 4 || prior.resource_kind !== 'run-scope' || prior.state !== 'exited' || prior.owner === owner ||
+          tx.get('SELECT 1 FROM environment_change_operations a JOIN environment_grant_changes c ON c.request_id=a.request_id WHERE c.agent_id=? AND a.operation_id=? LIMIT 1',
+            [agentId, operationId]))) throw environmentError('environment-operation-already-admitted', 409)
         for (const grant of grants) {
           if (hasUnknown(tx, agentId, environmentToolKey(grant.tool))) throw environmentError('environment-exit-unknown', 409)
         }
         const transport = kind === 'model' && !grants.some(grant => grant.tool.environmentId === 'model-search')
         const resource = kind === 'scope' ? 'run-scope' : transport ? 'model-transport' : 'provider'
-        tx.execute(`INSERT INTO environment_admissions(agent_id,operation_id,owner,state,resource_kind)
+        if (prior) tx.execute("UPDATE environment_admissions SET owner=?,state='reserved' WHERE agent_id=? AND operation_id=?", [owner,agentId,operationId])
+        else tx.execute(`INSERT INTO environment_admissions(agent_id,operation_id,owner,state,resource_kind)
           VALUES(?,?,?,'reserved',?)`, [agentId,operationId,owner,resource])
         for (const grant of grants) tx.execute('INSERT INTO environment_admission_tools VALUES(?,?,?,?)',
           [agentId,operationId,environmentToolKey(grant.tool),grant.generation])
@@ -258,9 +278,32 @@ export async function openExecutionEnvironmentManager(db: LocalStoragePort): Pro
   const runModel: ExecutionEnvironmentManager['runModel'] = (...args) => admit('model', ...args)
   const runScope: ExecutionEnvironmentManager['runScope'] = (...args) => admit('scope', ...args)
   const resumeScope: ExecutionEnvironmentManager['resumeScope'] = (...args) => admit('resume-scope', ...args)
+  const outstandingScopes: ExecutionEnvironmentManager['outstandingScopes'] = (agent, operations) => {
+    const agentId = checkedId(agent)
+    const ids = [...new Set(operations)]
+    for (const id of ids) parseScopeOperation(id)
+    return db.read(reader => {
+      mustBeOpen()
+      assertOwner(reader, owner)
+      return new Set(ids.filter(operationId => {
+        const row = reader.get('SELECT state,resource_kind FROM environment_admissions WHERE agent_id=? AND operation_id=?', [agentId,operationId])
+        if (row && row.resource_kind !== 'run-scope') throw environmentError('environment-invalid-scope', 409)
+        return row !== undefined && row.state !== 'exited'
+      }))
+    })
+  }
+  const outstandingTargetScopeRunIds = () => db.read(reader => {
+    mustBeOpen()
+    assertOwner(reader, owner)
+    const rows = reader.all("SELECT operation_id FROM environment_admissions WHERE resource_kind='run-scope' AND state<>'exited'")
+    return [...new Set(rows.flatMap(row => {
+      const identity = parseScopeOperation(row.operation_id)
+      return identity.length === 4 ? [identity[0]] : []
+    }))]
+  })
 
   const reconcileOriginal = async (agent: string, operation: string, proveExit: (grants: readonly EnvironmentGrant[], signal: AbortSignal) => Promise<boolean>): Promise<boolean> => {
-    const agentId = checkedId(agent), operationId = checkedId(operation, 1024)
+    const agentId = checkedId(agent), operationId = checkedId(operation, scopeOperationLimit)
     const original = await db.read(reader => {
       mustBeOpen()
       assertOwner(reader, owner)
@@ -317,7 +360,7 @@ export async function openExecutionEnvironmentManager(db: LocalStoragePort): Pro
     })()
     return closing
   }
-  return { get, readIn, seedIn, set, observe, pendingChanges, run, runModel, runScope, resumeScope, reconcile, close }
+  return { get, readIn, seedIn, set, observe, pendingChanges, run, runModel, runScope, resumeScope, outstandingScopes, outstandingTargetScopeRunIds, reconcile, close }
 }
 
 export function createExecutionEnvironmentComponent(options: {serviceKey: string}): Component.Object<void, { [localStorageServiceKey]: LocalStoragePort }> {

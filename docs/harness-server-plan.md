@@ -167,7 +167,9 @@ Computer 契约新增不经操作账本的只读查询面 `query({ attachmentId,
 
 ## 可组合单元 U1 第 5 步：Web 附着入口（2026-10-14）
 
-新增浏览器模块 `units-client.ts`：设置弹窗增加“单元附着”分类（`setupUnitsSettings`，使用所选设备的固定 Api）列出该 harness server 的附着并生成一次性 Computer 附着码、撤销远端附着；“管理连接”每台设备增加“附着到远端 harness server”入口（`setupLocalAttachments`，经该设备的 `/units/local-computer/attachments` 由其本机执行器消费附着码，设定目录/工具上限，列出连接状态并可撤销）。附着码只显示一次，关闭设置弹窗丢弃输入。客户端网关白名单只接纳拥有者侧 `/units/attachments`、`/units/attach-codes`、`/units/attachments/:id/revoke` 与 `/units/local-computer/attachments[/:id/revoke]`，单元侧路由不经网关。错误映射增加 `unit-*` 与 `worker-attach*` 提示。项目绑定到远端附着尚未进入 Web，仍经 `POST /projects` 的 `computerAttachmentId`。
+当时的实现如下。新增浏览器模块 `units-client.ts`：设置弹窗增加“单元附着”分类（`setupUnitsSettings`，使用所选设备的固定 Api）列出该 harness server 的附着并生成一次性 Computer 附着码、撤销远端附着；“管理连接”每台设备增加“附着到远端 harness server”入口（`setupLocalAttachments`，经该设备的 `/units/local-computer/attachments` 由其本机执行器消费附着码，设定目录/工具上限，列出连接状态并可撤销）。附着码只显示一次，关闭设置弹窗丢弃输入。客户端网关白名单只接纳拥有者侧 `/units/attachments`、`/units/attach-codes`、`/units/attachments/:id/revoke` 与 `/units/local-computer/attachments[/:id/revoke]`，单元侧路由不经网关。错误映射增加 `unit-*` 与 `worker-attach*` 提示。项目绑定到远端附着尚未进入 Web，仍经 `POST /projects` 的 `computerAttachmentId`。
+
+当前流程见 [Computer worker 独立管理](computer-worker-management.md)和 [Computer 环境](modules/computers/environments.md#web-流程)。
 
 验收入口：`tests/units-client.test.mjs`（纯规则、设置面板列出/生成/撤销与错误提示、连接管理附着入口消费与撤销、网关白名单）。第 4、5 步合并一次 macOS / Node.js 24.16.0 `npm run check`：类型检查与构建通过，1331 项测试中 1318 项通过、12 项按原门控跳过、1 项失败（本机环境既有的 worker 图片用例）。
 

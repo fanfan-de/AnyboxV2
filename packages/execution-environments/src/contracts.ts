@@ -59,6 +59,10 @@ export function environmentToolKey(tool: EnvironmentTool): string {
   return JSON.stringify([tool.environmentId, tool.targetId, tool.toolId, tool.version])
 }
 
+export function targetKey(environmentId: string, targetId: string): string {
+  return JSON.stringify([environmentId, targetId])
+}
+
 export function checkedTools(values: readonly EnvironmentTool[]): readonly EnvironmentTool[] {
   if (!Array.isArray(values) || values.length > 1024) throw environmentError('invalid-environment-input', 400)
   const byKey = new Map<string, EnvironmentTool>()

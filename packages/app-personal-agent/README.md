@@ -1,6 +1,8 @@
 # Personal Agent
 
-0.2.1 在本应用的执行端保存 Agent 的环境授权。可以从「Agent 工具」设置函数工具、模型托管搜索以及连续对话后续运行使用的环境。「管理连接」继续管理本应用的设备连接和凭据。[执行环境](../../docs/modules/tools/execution-environments.md)
+0.2.4 将本机 Computer worker 管理移到「执行环境」。尚未选择执行服务时也可管理本机 worker。 [独立管理](../../docs/computer-worker-management.md)
+
+0.2.3 为「Agent 工具」的 [MCP 多连接环境](../../docs/modules/tools/mcp-environment.md) 增加 stdio，与 Streamable HTTP 一起支持逐工具授权。执行端管理本地 stdio 进程并等待退出。已有连续对话可显式采用新的 MCP 目标，影响后续 Run。[执行环境](../../docs/modules/tools/execution-environments.md)
 
 `@anybox/app-personal-agent` 是 Anybox 的独立应用，稳定 ID 为 `personal-agent`。0.2 以 Anybox Harness 的原生会话和执行能力为起点。
 

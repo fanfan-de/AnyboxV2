@@ -10,7 +10,11 @@
 
 ## 身份与接口
 
-每项权限包含环境契约 ID、具体目标 ID、工具 ID 和工具契约版本。目标和版本的导出规则见[运行绑定](../../../packages/execution-environments/src/bindings.ts)。同一 Agent 一次授权变更产生新的修订号，增加权限时保留既有条目的签发代次。撤销后再次授予同一工具会产生新代次，旧 Run 的绑定仍指向原代次。
+每项权限包含环境契约 ID、具体目标 ID、工具 ID 和工具契约版本。应用适配器解析目标，通用[运行绑定](../../../packages/execution-environments/src/bindings.ts)固定工具身份及版本。同一 Agent 一次授权变更产生新的修订号，增加权限时保留既有条目的签发代次。撤销后再次授予同一工具会产生新代次，旧 Run 的绑定仍指向原代次。
+
+带目标的工具注册为目录、分派和管理接口提供同一份目标查询。提交新授权时在事务内重新检查目标和工具契约。目标变空、移除或换版时拒绝对应的新授权，管理者仍可撤销已保存的旧授权。
+
+[MCP 执行环境](mcp-environment.md)在相同环境 ID 下枚举多个连接目标，沿用这套确切授权。连接 ID 用于偏好，目标 ID 包含配置代次并随工具版本一起固定到会话和 Run。工具发现提供授权候选，由业务入口在新授权事务中复核。停用或目录刷新会关闭旧目标或旧工具的新分派，历史授权仍可查看并撤销。
 
 - `get(agentId)` 只读当前授权。Session 在自身事务中使用 `readIn(reader, agentId)` 固定或核对授权。`seedIn(tx, agentId, tools)` 仅在受信初始配置尚未登记时写入，显式空集也会形成第一版记录。来源区分执行端管理者签发和受信配置。
 - `set({ agentId, expectedRevision, requestId, tools })` 以 CAS 替换完整列表，由调用方把新增候选限制在已委托范围。同 ID、同参数的重试查回原操作。同 ID 不同内容或过时修订返回冲突。
@@ -18,7 +22,9 @@
 - `run(agentId, grants, operationId, start, signal)` 在当前权限与固定授权代次吻合时取得准入。`start(signal)` 同步返回操作的 `result` 和 `done`，应直接覆盖每次真实分派或网络发送。结果和退出均已结算后才完成。提供方应让 `done` 覆盖此项准入的实际资源范围。
 - Models 在每次实际出站时使用独立的 `runModel`。仅声明函数的发送占用模型传输资源；一次托管搜索还可能在供应商处执行。进程中断后两种发送都按原 ID 保留为退出未确认。仅声明函数的旧请求无法执行函数，原授权仍有效时允许新的独立函数工作。撤权回执仍计入这个未确认的请求，缺少退出证明时无法重新签发相同授权。
 - `reconcile(agentId, operationId, proveExit)` 供受信恢复适配器核对原提供方上的确切操作。未找到操作、查不到原目标或缺少退出证明时返回未确认。公网管理接口仅允许观察，证明由原资源所有者提供。
-- `runScope` 登记 Run 的资源 scope。`resumeScope(agentId, grants, operationId, attach, signal)` 允许新所有者重新接管同一 Run 的取消和退出观察。它要求原所有者登记的 scope、原工具与授权代次、当前仍有效的授权。恢复时无需等自己的旧 scope 先结束，实际工具调用和下一次模型发送仍分别经过准入。接管前开始的旧观察无法覆盖已接管的记录。
+- `runScope` 在首次派发前登记确切目标的资源作用域，身份为 `[runId, "scope", environmentId, targetId]`。`resumeScope(agentId, grants, operationId, attach, signal)` 在原目标与原签发代次一致且授权仍有效时接管该目标。已撤权的原目标由提供方提交退出证明后通过 `reconcile` 清理。单次工具调用与模型发送仍分别准入，接管前的旧观察无法覆盖已接管的记录。
+
+授权账本 v3 为未退出的作用域提供恢复索引，沿用原有授权和操作记录。旧 `[runId, "scope"]` 聚合记录继续按原身份保守恢复。新作用域只占用实际使用目标的绑定。一个目标退出未确认时，其他目标可凭各自的证据清除占用。旧写入者会拒绝打开已升级授权账本的执行库。
 
 ## 撤权与发送的先后关系
 
@@ -37,7 +43,9 @@
 
 ## 设置与 HTTP
 
-在“管理连接”选定执行端后，“执行环境”列出该应用可委托的目标、工具和已获得授权的 Agent。Computer 另列执行设备、附着权限和最近一次 worker 工具报告。“Agent 工具”按目标授予或撤销具体工具，还可单独保存选用哪些环境、其中哪些工具。保存偏好后，普通项目会话从新建时生效。Personal Agent 连续对话的下一次运行读取环境内工具偏好，采用新的环境集合须点击“应用已保存的环境到后续运行”。
+“执行环境”回答工具在哪里运行。第一段列出所选执行设备可用于文件和命令的 Computer，并在详情里展示附着权限和最近一次 worker 工具报告。第二段列出可授权的工具环境及已授权的 Agent。跨设备操作有两个入口。“接入另一台电脑”为所选执行设备生成附着码，“客户端电脑”管理提供本机工具的 worker 及其对外连接。 [Computer worker 独立管理](../../computer-worker-management.md)
+
+“Agent 工具”按目标授予或撤销具体工具，还可单独保存环境及工具偏好，并管理 MCP 连接。保存偏好后，普通项目会话从新建时生效。Personal Agent 连续对话的下一次运行读取已采用目标范围内的工具偏好，采用新的环境或 MCP 目标集合须点击“应用已保存的环境到后续运行”。
 
 以下路径相对于当前应用执行端的 `/api/v1`。经过客户端网关时，沿用该连接的应用、实例和修订绑定。
 
@@ -47,13 +55,15 @@
 | `GET /agents/:id/environment-access` | 读取目标、授权及修订、偏好及版本，以及仍在等待退出证明的变更。 |
 | `POST /agents/:id/environment-access/grants` | 提交 `expectedRevision`、唯一 `requestId` 和完整 `tools` 数组。新增项必须取自该 Agent 的目标清单。保留继续授权的条目，省略要撤销的条目。空数组撤销全部。 |
 | `GET /agents/:id/environment-access/changes/:requestId` | 查询原变更的状态和受影响、等待退出、退出未知的操作数。提交响应丢失时按原请求 ID 查询。 |
-| `POST /agents/:id/environment-access/preferences` | 提交 `expectedVersion`、`environmentIds` 和可选的 `toolIdsByEnvironment`。Computer 的工具偏好仍由 `/agents/:id/tools` 保存。 |
+| `POST /agents/:id/environment-access/preferences` | 提交 `expectedVersion`、`environmentIds`，以及可选的 `toolIdsByEnvironment` 或 `toolIdsByTarget`。Computer 的工具偏好仍由 `/agents/:id/tools` 保存。 |
 | `GET /sessions/:id/environments` | Personal Agent 读取会话当前采用的环境及版本。 |
-| `POST /sessions/:id/environments` | Personal Agent 为连续对话提交 `environmentIds`、`expectedVersion` 和 `expectedGrantRevision`，只影响随后接纳的运行。 |
+| `POST /sessions/:id/environments` | Personal Agent 为连续对话提交 `environmentIds`、可选的 `toolIdsByTarget`、`expectedVersion` 和 `expectedGrantRevision`，只影响随后接纳的运行。 |
 
 例如，给原本没有工具的 Agent 启用某个提供方的托管搜索，先读取 Agent 的 `environment-access`，从目标清单中取出该提供方确切的 `web_search` 条目。将其加入原授权列表，连同当前授权修订和新请求 ID 提交到 `/grants`。再将 `model-search` 加入 `environmentIds` 并保存到 `/preferences`。需要在已有连续对话中使用时，读取该会话的环境版本，再用刚保存的授权修订显式采用新的集合。运行时还会检查实际模型的提供方、协议、搜索能力和参数。历史工具详情显示当时固定的环境与目标。
 
 偏好示例采用 `{"expectedVersion":0,"environmentIds":["notes"],"toolIdsByEnvironment":{"notes":["notes.read"]}}`，表示选用资料库的读取工具。给 `notes` 传空数组表示该环境内不选工具。从显式提交的映射移除 `notes` 表示恢复选用其中全部获准工具。省略整个映射会保留已有工具偏好。授权始终单独提交。 [管理投影](../../../packages/execution-environments/src/management.ts) · [界面与恢复测试](../../../packages/execution-environments/tests/settings-view.test.mjs)
+
+MCP 偏好改用 `toolIdsByTarget`。每个键是 `JSON.stringify(["mcp", selectionId])`，对应一个连接下显式选中的工具 ID 数组。省略整个映射保留原有目标偏好。添加连接，发现工具及授权的步骤见 [MCP 执行环境](mcp-environment.md#使用)。
 
 ## 验证
 

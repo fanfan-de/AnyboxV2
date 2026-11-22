@@ -1,3 +1,4 @@
+import type { TargetedToolManagement } from '@anybox/execution-environments/management'
 import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
 import type { EnvironmentSelection, SelectionInput, AdoptionInput, RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
 import type { FileSelection, FileContent, FileRef, FileSearch, FilePreview, FileRenewal, FileTreePage } from '../project-files/domain.js'
@@ -17,6 +18,7 @@ export const sessionRunServiceKey = 'harness.session-runs'
 
 /** Public session facts. Run commands and in-flight resources belong to the execution components. */
 export interface SessionPort {
+  readonly targetedTools: TargetedToolManagement
   getRunEnvironmentAccess(runId: string): Promise<RunEnvironmentAccess | undefined>
   environmentTools(agentId?: string): Promise<readonly EnvironmentTool[]>
   getAgentEnvironmentSelection(agentId: string): Promise<EnvironmentSelection>

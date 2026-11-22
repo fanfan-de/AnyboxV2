@@ -23,7 +23,7 @@ Anybox Harness 的[原生 Computer 支持](../native-platform-support.md)由既�
 | [units/](./units/README.md) | 可部署单元的附着账本、本机自动附着、Run 固定的附着引用与单元拨出传输 | 2 |
 | [images/](./images/README.md) | 图片导入、不可变字节、草稿续期与事务保留 | 1 |
 | [prompts/](./prompts/README.md) | 可复用 Prompt 内容与 Agent 的版本选择 | 2 |
-| [tools/](./tools/README.md) | 独立工具包、环境契约、执行环境授权、进程会话、文件变更、搜索与图片能力适配 | 6 |
+| [tools/](./tools/README.md) | 独立工具包、环境契约、执行环境授权、MCP 连接、进程会话、文件变更、搜索与图片能力适配 | 7 |
 | [infrastructure/](./infrastructure/README.md) | 业务数据库与可替换存储端口 | 1 |
 | [web/](./web/README.md) | 执行 API、宿主及 Harness 独立访问管理和监听、客户端外壳与连接库、Anybox Harness 网关、目录选择 | 10 |
 | [diagnostics/](./diagnostics/README.md) | 资源归属探针 | 1 |
@@ -75,6 +75,7 @@ Anybox Harness 的[原生 Computer 支持](../native-platform-support.md)由既�
 | Prompt | [Prompt](./prompts/prompts.md) | `harness-prompts` | `harness.prompts` |
 | Prompt | [Agent Prompt](./prompts/agent-prompts.md) | `harness-agent-prompts` | `harness.agent-prompts` |
 | 工具 | [执行环境授权](./tools/execution-environments.md) | 各应用的执行环境组件 | `harness.execution-environments` 或 `personal-agent.execution-environments` |
+| 工具 | [MCP 执行环境](./tools/mcp-environment.md) | 各应用的 MCP 执行环境组件 | `harness.mcp-environment` 或 `personal-agent.mcp-environment` |
 | 工具 | [Bash](./tools/bash.md) | `bash-tool` | `tools.bash` |
 | 工具 | [Apply Patch](./tools/apply-patch.md) | `apply-patch-tool` | `tools.apply-patch` |
 | 工具 | [进程工具](./tools/processes.md) | `process-tools` | `tools.processes` |

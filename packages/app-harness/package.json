@@ -1,6 +1,6 @@
 {
   "name": "@anybox/app-harness",
-  "version": "0.1.7",
+  "version": "0.1.11",
   "private": true,
   "type": "module",
   "engines": {
@@ -43,7 +43,8 @@
     "mdast-util-gfm": "3.1.0",
     "micromark-extension-gfm": "3.0.0",
     "sharp": "0.35.5",
-    "@anybox/execution-environments": "0.1.0"
+    "@anybox/execution-environments": "0.1.0",
+    "@anybox/mcp-environment": "0.2.0"
   },
   "devDependencies": {
     "@types/mdast": "4.0.4",

@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import type { ApplicationAsset } from '@anybox/application-api/node'
-export const personalAgentAssetPrefix = '/apps/personal-agent/0.2.1'
+export const personalAgentAssetPrefix = '/apps/personal-agent/0.2.5'
 export const personalAgentWebEntry = `${personalAgentAssetPrefix}/web/harness-app.js`
 export const personalAgentAssets: readonly ApplicationAsset[] = [
   { path: `${personalAgentAssetPrefix}/web/client-types.js`, file: fileURLToPath(new URL('./web/client-types.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },

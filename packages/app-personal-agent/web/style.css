@@ -437,9 +437,31 @@
 [data-environment-access] details > small { display: block; margin: 8px 0; color: var(--muted); }
 [data-environment-access] summary { cursor: pointer; }
 
-.computer-management { min-width: 0; padding: 16px 0; }
+.execution-environment-section { min-width: 0; }
+.execution-environment-section + .execution-environment-section { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 20px; }
+.execution-environment-toolbar, .execution-environment-row-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 12px; min-width: 0; }
+.execution-environment-section .units-list { display: grid; gap: 6px; }
+.execution-environment-section > .units-list, .execution-environment-section > p + .secondary-button { margin-top: 10px; }
+.execution-environment-section .units-list > .settings-card { margin: 0; padding: 10px 12px; overflow-wrap: anywhere; }
+.execution-environment-row-heading > strong { min-width: 0; }
+.execution-environment-status { font-size: 12px; color: var(--secondary); }
+.execution-environment-status[data-state="connected"], .execution-environment-status[data-state="running"] { color: var(--status-ready); }
+.execution-environment-status[data-state="offline"], .execution-environment-status[data-state="restart-required"], .execution-environment-status[data-state="unavailable"] { color: var(--status-warning); }
+.computer-management .execution-environment-row-heading h5 { margin: 0; font-size: 12px; }
+.execution-environment-row-heading > .execution-environment-status { white-space: nowrap; }
+.execution-environment-section summary { cursor: pointer; min-width: 0; overflow-wrap: anywhere; }
+.execution-environment-section .unit-row > details { margin-top: 4px; padding: 0; color: var(--secondary); font-size: 12px; }
+.execution-environment-section .unit-row > details > summary { font-weight: 400; }
+.execution-environment-disclosure { margin-top: 10px; padding: 8px 0; }
+.execution-environment-disclosure > summary { width: fit-content; max-width: 100%; font-weight: 600; }
+.execution-environment-form:not([hidden]) { display: grid; gap: 10px; margin-top: 10px; }
+#personal-agent--settings-dialog .execution-environment-form > label { margin: 0; }
+#personal-agent--settings-dialog .execution-environment-form > p { margin: 0; }
+.execution-environment-form > button { justify-self: start; }
+.execution-environment-form textarea, .computer-management textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 5px; padding: 9px 10px; }
+.computer-management { min-width: 0; margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
 .computer-management p, .computer-management strong { overflow-wrap: anywhere; }
-.computer-management textarea { box-sizing: border-box; width: 100%; min-width: 0; resize: vertical; color: var(--text); background: var(--panel); border: 1px solid var(--line-strong); border-radius: 5px; padding: 9px 10px; }
+.computer-management .settings-actions, #personal-agent--settings-dialog .computer-management .execution-environment-status { margin: 0; }
 #personal-agent--settings-dialog .computer-grant-toggle { display: flex; align-items: center; gap: 8px; }
 #personal-agent--settings-dialog .computer-grant-toggle input { width: auto; flex: 0 0 auto; margin: 0; }
 #personal-agent--settings-dialog h4 { margin: 0; font-size: 13px; font-weight: 600; }
