@@ -14,7 +14,7 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 - 注入 [本地存储](../infrastructure/local-sqlite.md) 的 `local-storage`；提供 `harness.projects: ProjectPort`。远端查询经组合根传入的 `computerQuery` 按调用解析当前 [Worker 路由](../computers/worker-router.md)，避免与 worker 根工具的 Projects 依赖形成循环。
 - 新项目未显式指定 `computerAttachmentId` 时始终绑定 `local:computer`，即 harness server 所在设备；本机与多个远端执行环境并存，不提供全局默认远端配置。既有项目与 Run 的绑定不变。
 - `localDirectorySelectionSupported` 表示本机环境允许受信目录选择；浏览和创建能力仍由本机目录提供方决定。Web 在选中本机环境时使用这些能力，选中远端时只提交该环境的绝对路径，不把本机浏览结果登记为远端目录。
-- `apply` 等待 `migrate('projects', migrations)` 后注册服务；当前迁移版本为 2。
+- `apply` 等待 `migrate('projects', migrations)` 后注册服务；当前迁移版本为 3。
 
 ## 数据与接口
 
@@ -28,6 +28,14 @@ Projects 为执行设备目录建立稳定项目身份，查询目录当前是�
 | `getIn(reader,id)` | 受信同步事务参与接口，仅返回稳定项目元数据，available=false；不检查目录、不激活计算资源 |
 | `requireAvailable(id)` | 不存在抛 unknown project；不可用抛 `ProjectUnavailableError`，code 为 project-unavailable |
 
+### 项目工作区成员
+
+`GET /api/v1/projects/:id/workspaces` 返回 `revision` 和 `workspaces`。每个成员含 `id`、`projectId`、`name`、`primary`、`computerAttachmentId`、规范 `path` 和稳定的绑定 `revision`。列表只读配置；实时连通性由 `/computer-environments` 提供。项目列表另有 `workspaceCount`。Projects v3 将原项目 ID、原电脑和原路径保留为主成员，旧远端项目继续指向原远端。
+
+在同一地址 POST `requestId`、`expectedRevision`、`computerAttachmentId`、`path` 和 `name` 可添加成员。远程目录先经目标 Computer 检查，提交时在同一事务中核对项目配置修订和已批准附着的代次。当前每个项目的每个附着只可存在一个有效成员。`POST …/workspaces/:memberId/rename` 另传 `name`；`POST …/workspaces/:memberId/remove` 退役附加成员。操作都以原 `requestId` 与相同输入查询或重试，相同请求返回当时提交的完整快照；复用 ID 却改变输入返回 `project-workspace-request-conflict`。修订过期需重新读取，主成员不可移除。
+
+`selectWorkspacesIn` 在 Session 的事务中按预期修订选择成员并纳入主成员，单次选择最多包含 32 个工作区。`resolveWorkspacesIn` 核对既有绑定身份与版本。改名只提高项目配置修订，旧引用继续使用原目录。Run 受理时通过 `retainWorkspacesIn` 保存附加成员的使用，终结时通过 `releaseWorkspacesIn` 释放；已被保留的成员返回 `project-workspace-in-use`。退役后的记录和先前的使用回执仍可供读取，重新加入会得到新成员 ID。工作区配置表、编辑回执和 Run 使用记录均由 Projects 拥有。[成员实现](../../../packages/app-harness/src/core/project/members.ts) · [迁移及并发测试](../../../tests/project-workspaces.test.mjs)
+
 浏览服务还提供 `directoryBrowsingSupported`、`openDirectoryBrowse(owner,input,signal?)`、`readDirectoryPage(owner,browseId,page,signal?)` 与 `closeDirectoryBrowse(owner,browseId)`。`directoryCreationSupported` 声明子目录创建能力，`createDirectory(owner,browseId,name,signal?)` 在同一 owner 的已加载浏览目录下创建一个子目录，返回 `OwnedCall<{path:string}>`。open/page 同样返回 OwnedCall，close 幂等并等待实际退出；owner 由受信宿主提供。`onDirectoryBrowseRetired(listener)` 在实际清理后通知宿主移除认证归属跟踪，并返回取消订阅函数。预留、浏览和创建不登记项目，所有 DTO 见[公开协议](../../project-directory-picker.md#api-v1-与公开-dto)。
 
 harness server API 提供登记、查询与浏览接口；`getIn` 只供受信组件事务使用，不进入 HTTP 或公开门面。`requireAvailable` 供 Session、Run、Workspaces 准备及未指定固定路径的工具兼容调用使用。
@@ -38,7 +46,7 @@ openProject 首先 realpath 解析目录别名，并确认目标是目录；文�
 
 `harness_projects` 表由本组件的 projects 迁移域拥有，v2 增加 `computer_attachment_id` 并把唯一键改为 (path, computer_attachment_id)，旧项目迁入时绑定 `local:computer`。会话表以外键引用项目且存储强制外键，因此 v2 在事务内以 `PRAGMA defer_foreign_keys = ON` 重建同名表：先复制到临时表、删除原表、建新表并按原 ID 回填，提交时延迟检查通过；空表测试不覆盖这一点，[目录测试](../../../tests/project-directories.test.mjs)用带会话引用的 v1 账本验证。SQLite 连接归存储组件。本组件不打开额外连接，不建立每项目数据库或 Nya Context。目录失效只影响 available 和新操作准入，不删除项目记录及其 Session 历史。
 
-[Workspaces](../computers/workspaces.md) 按需读取 Projects.getIn，为旧项目建立独立 pinned-local 身份；只有计算工具执行前才通过 requireAvailable 准备 binding。Projects 不依赖 Workspaces、Computers 或 Operations，项目登记和会话创建不会因此激活 computer。本阶段仍保留本机绝对路径与共享目录语义，不承诺项目目录跨机器迁移。
+[Workspaces](../computers/workspaces.md) 按需读取 Projects.getIn，为各项目成员建立独立 pinned-local 身份。主成员通过 requireAvailable，附加成员通过 requireWorkspaceAvailable 核对目录。Projects 不依赖 Workspaces、Computers 或 Operations，项目登记和会话创建不会因此激活 computer。本阶段仍保留本机绝对路径与共享目录语义，不承诺项目目录跨机器迁移。
 
 ## 取消、清理与限制
 

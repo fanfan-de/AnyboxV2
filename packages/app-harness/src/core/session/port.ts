@@ -1,3 +1,6 @@
+import type { TargetedToolManagement } from '@anybox/execution-environments/management'
+import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
+import type { EnvironmentSelection, SelectionInput, AdoptionInput, RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
 import type { FileSelection, FileContent, FileRef, FileSearch, FilePreview, FileRenewal, FileTreePage } from '../project-files/domain.js'
 import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput, ConversationNode, NodePage, NodeQuery } from './domain.js'
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
@@ -15,6 +18,11 @@ export const sessionRunServiceKey = 'harness.session-runs'
 
 /** Public session facts. Run commands and in-flight resources belong to the execution components. */
 export interface SessionPort {
+  readonly targetedTools: TargetedToolManagement
+  getRunEnvironmentAccess(runId: string): Promise<RunEnvironmentAccess | undefined>
+  environmentTools(agentId?: string): Promise<readonly EnvironmentTool[]>
+  getAgentEnvironmentSelection(agentId: string): Promise<EnvironmentSelection>
+  setAgentEnvironmentSelection(agentId: string, input: SelectionInput): Promise<EnvironmentSelection>
   openProjectFileTree(sessionId: string, path: string, owner: string, signal?: AbortSignal): OwnedCall<FileTreePage>
   readProjectFileTreePage(sessionId: string, owner: string, cursorId: string, page: number, signal?: AbortSignal): OwnedCall<FileTreePage>
   closeProjectFileTree(sessionId: string, owner: string, cursorId: string): Promise<void>
@@ -31,7 +39,7 @@ export interface SessionPort {
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SessionDefaults>
   getAgentTools(agentId: string): Promise<AgentToolsSelection>
   setAgentTools(agentId: string, input: AgentToolsInput): Promise<AgentToolsSelection>
-  createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
+  createSession(projectId: string, agentId: string, modelId?: string, workspaces?: import('./domain.js').SessionWorkspaceSelection): Promise<Session>
   selectSessionModel(sessionId: string, modelId: string): Promise<Session>
   archiveSession(id: string): Promise<Session>
   restoreSession(id: string): Promise<Session>
@@ -62,6 +70,9 @@ export interface SessionRunPort {
   registerRun(id: string, input: RunInput, now: string,
     prompts: readonly PromptSnapshot[], model: NativeModelSnapshot, native: NativeRunRegistration): Promise<{ readonly run: Run; readonly created: boolean }>
   loadRunContext(id: string): Promise<RunContext | undefined>
+  getRunEnvironmentAccess(runId: string): Promise<RunEnvironmentAccess | undefined>
+  checkLegacyAccess(sessionId: string, access: RunEnvironmentAccess, units: RunUnitBindings | undefined, initialization: NativeInitialization): Promise<boolean>
+  loadSessionAccess(id: string): Promise<RunEnvironmentAccess | undefined>
   loadNativeInitialization(sessionId: string): Promise<NativeInitialization | undefined>
   loadNativeHistory(sessionId: string, parentNodeId: string | null): Promise<NativeHistory | undefined>
   loadApplicationHistory(sessionId: string, parentNodeId: string): Promise<ApplicationHistory>
@@ -87,6 +98,9 @@ export interface SavedRunOperation {
 }
 
 export interface NativeRunRegistration {
+  readonly access?: RunEnvironmentAccess
+  readonly selectionVersion?: number
+  readonly grantRevision?: number
   readonly binding: ProtocolBindingSnapshot
   readonly initialization: NativeInitialization
   readonly input: NativeRunInput

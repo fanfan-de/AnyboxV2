@@ -1,7 +1,7 @@
 import { Context } from '@nya/core'
 import { dirname } from 'node:path'
 import { createLocalSqliteComponent } from '@anybox/storage-sqlite/sqlite'
-import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
+import { localStorageCapabilityVersion, localStorageServiceKey } from '@anybox/storage-sqlite/port'
 import { createClientShellComponent, clientShellServiceKey } from './client-http.js'
 import type { ClientShell } from './client-http.js'
 import { createApplicationCatalog, createApplicationRuntimes } from './applications/registration.js'
@@ -140,7 +140,7 @@ export async function createClientHost(options: ClientHostOptions) {
     }
     const selectedCapabilities = loaded?.snapshot.capabilities
     runtime = createApplicationRuntimes(root, catalog, [
-      { id: 'storage.sqlite', version: '1.0.0', services: [localStorageServiceKey], resident: true,
+      { id: 'storage.sqlite', version: localStorageCapabilityVersion, services: [localStorageServiceKey], resident: true,
         create: () => createLocalSqliteComponent(options.path) },
       ...(options.providers ?? []).filter(provider => !selectedCapabilities || selectedCapabilities.some(selected => selected.id === provider.id && selected.version === provider.version)),
     ])

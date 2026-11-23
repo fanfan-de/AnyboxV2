@@ -42,8 +42,11 @@ function validateInitialization(initialization: NativeInitialization): void {
     try {
       const snapshot = parseToolEnvironmentSnapshot(initialization.toolEnvironments)
       const selection = { schemaVersion: 1, tools: snapshot.environments.flatMap(environment => environment.tools) }
-      if (!isDeepStrictEqual(selection, initialization.toolSelection) || initialization.tools.length &&
-        !isDeepStrictEqual(initialization.tools, selection.tools.map(tool => tool.definition))) throw modelFailure('unsupported-request')
+      // Run admission can narrow the Session's declarations to the tools it could authorize.
+      const names = new Set(initialization.tools.map(tool => tool.name))
+      const declared = selection.tools.filter(tool => names.has(tool.definition.name)).map(tool => tool.definition)
+      if (!isDeepStrictEqual(selection, initialization.toolSelection) ||
+        !isDeepStrictEqual(initialization.tools, declared)) throw modelFailure('unsupported-request')
     } catch { throw modelFailure('unsupported-request') }
     return
   }
@@ -147,7 +150,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
         if (!model) throw modelFailure('model-unavailable')
         return model.parameters.protocolId
       },
-      prepareResume({ resume, signal }) {
+      prepareResume({ resume, signal, managedTools }) {
         const run = resume.run
         if (!run.protocolBinding || run.modelSnapshot?.schemaVersion !== 3 || !run.nativeInput || !run.modelId ||
           resume.state.protocolCursor === undefined || resume.state.stage === 'model-pending') throw modelFailure('unsupported-request')
@@ -157,7 +160,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
           applicationPrefix: resume.applicationPrefix ?? resume.history?.applicationPrefix,
           checkpoint: serializable({ protocolId: snapshot.protocolId, recordFormatVersion: run.protocolBinding.recordFormatVersion, modelSnapshot: snapshot }) }
         return service.prepare({ runId: run.id, sessionId: run.sessionId, modelId: run.modelId, signal,
-          initialization: resume.initialization, input: run.nativeInput, history, resume })
+          initialization: resume.initialization, input: run.nativeInput, history, resume, managedTools })
       },
       async prepare(input) {
         const protocolId = service.protocolForModel(input.modelId), entry = entries.get(protocolId)
@@ -221,7 +224,7 @@ export function createProtocolAgentsComponent(): Component.Object<void, {
             return { result, done, cancel: () => call.cancel('model-resource-cancelled') }
           } }
           try {
-            execution = await deps[modelsServiceKey].openNative({ modelId: input.modelId, lease: driver, signal,
+            execution = await deps[modelsServiceKey].openNative({ managedTools: input.managedTools, modelId: input.modelId, lease: driver, signal,
               resources, continuation: input.continuation, captureContinuation: input.continuous && !input.resume, requirements: {
                 ...(permitted.size ? { imageInput: true } : {}),
                 ...(applicationPrefix?.some(event => event.role === 'tool') ? { tools: true } : {}),

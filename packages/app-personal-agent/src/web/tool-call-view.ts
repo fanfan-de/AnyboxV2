@@ -257,6 +257,7 @@ export function mountToolCallDetails(initial: ToolTrace, sessionId?: string,
     bar.append(name, copy); section.append(bar, content); element.append(section)
     fields.set(key, { element: section, content, copy, value: '' })
   }
+  field('environment', '执行环境与目标', 'pre', 'tool-output', true)
   field('command', '命令', 'code', 'tool-command')
   const result = document.createElement('p'); result.className = 'tool-result'; element.append(result)
   field('patch', '补丁'); field('stdout', 'stdout'); field('stderr', 'stderr')
@@ -282,6 +283,8 @@ export function mountToolCallDetails(initial: ToolTrace, sessionId?: string,
   const update = (call: ToolTrace) => {
     if (disposed) return
     label.textContent = toolDisplayName(call.name); status.textContent = toolTraceStatus(call)
+    const tool = call.environmentTool
+    set('environment', tool && [tool.environmentId, tool.targetId, tool.toolId, tool.version].join('\n'))
     const library = isLibraryToolTrace(call)
     const value = library ? record(call.result) : undefined
     if (options.showArguments !== false) set('arguments', library ? JSON.stringify(call.arguments, null, 2) : undefined)

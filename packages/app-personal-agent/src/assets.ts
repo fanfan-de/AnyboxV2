@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import type { ApplicationAsset } from '@anybox/application-api/node'
-export const personalAgentAssetPrefix = '/apps/personal-agent/0.2.0'
+export const personalAgentAssetPrefix = '/apps/personal-agent/0.2.5'
 export const personalAgentWebEntry = `${personalAgentAssetPrefix}/web/harness-app.js`
 export const personalAgentAssets: readonly ApplicationAsset[] = [
   { path: `${personalAgentAssetPrefix}/web/client-types.js`, file: fileURLToPath(new URL('./web/client-types.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
@@ -32,6 +32,7 @@ export const personalAgentAssets: readonly ApplicationAsset[] = [
   { path: `${personalAgentAssetPrefix}/web/markdown.js`, file: fileURLToPath(new URL('./web/markdown.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/vendor/markdown-parser.js`, file: fileURLToPath(new URL('./web/vendor/markdown-parser.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/vendor/provider-logos.js`, file: fileURLToPath(new URL('./web/vendor/provider-logos.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
+  { path: `${personalAgentAssetPrefix}/web/vendor/environment-settings.js`, file: fileURLToPath(new URL('./web/vendor/environment-settings.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/protocols/view.js`, file: fileURLToPath(new URL('./web/protocols/view.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/protocols/modules.js`, file: fileURLToPath(new URL('./web/protocols/modules.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   ...['primitives', 'responses', 'anthropic', 'chat', 'gemini'].map(name => ({

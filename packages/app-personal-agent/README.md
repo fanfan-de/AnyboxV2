@@ -1,5 +1,9 @@
 # Personal Agent
 
+0.2.4 将本机 Computer worker 管理移到「执行环境」。尚未选择执行服务时也可管理本机 worker。 [独立管理](../../docs/computer-worker-management.md)
+
+0.2.3 为「Agent 工具」的 [MCP 多连接环境](../../docs/modules/tools/mcp-environment.md) 增加 stdio，与 Streamable HTTP 一起支持逐工具授权。执行端管理本地 stdio 进程并等待退出。已有连续对话可显式采用新的 MCP 目标，影响后续 Run。[执行环境](../../docs/modules/tools/execution-environments.md)
+
 `@anybox/app-personal-agent` 是 Anybox 的独立应用，稳定 ID 为 `personal-agent`。0.2 以 Anybox Harness 的原生会话和执行能力为起点。
 
 从仓库根启动 Personal Agent 的本机开发环境。

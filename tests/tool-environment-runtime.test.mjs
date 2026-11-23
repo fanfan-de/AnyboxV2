@@ -4,6 +4,8 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@nya/core'
+import { environmentToolKey } from '@anybox/execution-environments'
+import { defineTool } from '@anybox/tool-api'
 import { createLocalSqliteComponent } from '../packages/storage-sqlite/dist/sqlite.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import { createRunRuntimeComponent } from '../packages/app-harness/dist/core/run/runtime-component.js'
@@ -19,8 +21,7 @@ const echo = Object.freeze({ toolId: 'sample.echo', version: '1', definition: {
 } })
 
 function environment(events, options = {}) {
-  return { environmentId: 'sample', version: '1', tools: [echo],
-    ...(options.recovery === undefined ? {} : { recovery: options.recovery }), openScope(context) {
+  const openScope = context => {
     events.push({ kind: 'open', scopeId: context.scopeId })
     let used = false
     return {
@@ -33,7 +34,30 @@ function environment(events, options = {}) {
       async cancel() { events.push({ kind: 'cancel' }); await options.cancel?.() },
       close() { events.push({ kind: 'close', aborted: context.signal.aborted }); return options.close?.() ?? immediate({ closed: true }) },
     }
-  } }
+  }
+  return { environmentId: 'sample', resourceId: 'test-echo-service', version: '1', tools: [echo], openScope,
+    ...(options.recovery === undefined ? {} : { recovery: options.recovery }), ...(options.restorable ? { restoreScope: openScope } : {}) }
+}
+
+async function echoAuthorization(f) {
+  const { agentId } = f.session
+  const { grants } = await f.root.get('harness.execution-environments').get(agentId)
+  const grant = grants.find(value => value.tool.environmentId === 'sample' && value.tool.toolId === echo.toolId)
+  assert.ok(grant, 'a trusted echo resource must have an explicit grant before direct Run registration')
+  return { access: { agentId, functions: [{ name: echo.definition.name, grant }] },
+    selectionVersion: f.session.environmentSelection.version }
+}
+
+async function recordPriorScope(f, runId) {
+  const { access } = await echoAuthorization(f)
+  const { grant } = access.functions[0]
+  const { environmentId, targetId } = grant.tool
+  const operationId = JSON.stringify([runId, 'scope', environmentId, targetId])
+  // Model the durable receipt held by the previous process after losing its resources locally.
+  await f.root.get('local-storage').transaction(tx => {
+    tx.execute("INSERT INTO environment_admissions VALUES (?, ?, 'prior-runtime', 'unknown', 'run-scope')", [access.agentId, operationId])
+    tx.execute('INSERT INTO environment_admission_tools VALUES (?, ?, ?, ?)', [access.agentId, operationId, environmentToolKey(grant.tool), grant.generation])
+  })
 }
 
 /** Stop after durable tool admission, leaving the original native reply available for takeover. */
@@ -47,7 +71,7 @@ async function admitUnobservedTool(f, runId, admitted) {
   let operationId
   try {
     await records.registerRun(runId, input, 'now', [], program.modelSnapshot,
-      { binding: program.binding, initialization, input: program.input, parentContextRef: null })
+      { binding: program.binding, initialization, input: program.input, parentContextRef: null, ...await echoAuthorization(f) })
     const executing = program.execute({ signal: controller.signal, publish() {},
       async perform(descriptor, start) {
         await records.startOperation(runId, { id: descriptor.id, kind: descriptor.kind, intent: descriptor.intent, records: descriptor.records }, 'now', 1)
@@ -86,8 +110,9 @@ async function fixture(provider, environmentIds = ['sample']) {
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   await root.installComponent(createImageAssetsComponent({ directory: join(directory, 'images') }))
   const harness = await createTestHarnessServerCore(root, {
-    agents: [{ id: 'assistant', instructions: 'Use only the tools supplied by your environments.', modelId: 'default', environmentIds }],
-    toolEnvironments: [provider],
+    agents: ['assistant', 'reviewer'].map(id => ({ id, instructions: 'Use only the tools supplied by your environments.',
+      modelId: 'default', environmentIds })),
+    registerTools: tools => tools.register(provider),
   }, { legacyTools: false })
   const project = await harness.openProject(directory), session = await harness.createSession(project.id, 'assistant')
   return { directory, root, llm, harness, session,
@@ -249,6 +274,28 @@ test('an inserted non-Computer environment determines tools and runs through the
   } finally { await f.close() }
 })
 
+test('a standalone tool registers by schema and executes through an authorized native Run', { timeout: 15000 }, async () => {
+  const calls = []
+  const tool = defineTool({ ...echo, resourceId: 'test-standalone-echo', execute(args, context) {
+    calls.push({ args, operationId: context.operationId })
+    return args.value
+  } })
+  const f = await fixture(tool, [echo.toolId])
+  try {
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'Echo', idempotencyKey: 'standalone' })
+    assert.deepEqual(f.llm.calls[0].input.tools, [echo.definition])
+    f.llm.calls[0].result.resolve({ toolCalls: [{ id: 'standalone-call', name: echo.definition.name, arguments: { value: 'echoed' } }] })
+    f.llm.calls[0].done.resolve()
+    await until(() => f.llm.calls.length === 2)
+    assert.equal(JSON.parse(f.llm.calls[1].input.messages.find(message => message.role === 'tool').content), 'echoed')
+    f.llm.calls[1].result.resolve('complete'); f.llm.calls[1].done.resolve()
+    assert.equal((await f.harness.waitRun(run.id)).status, 'completed')
+    assert.equal(calls.length, 1)
+    assert.ok(calls[0].operationId.startsWith(`${run.id}:tool:`))
+    assert.equal(calls[0].args.value, 'echoed')
+  } finally { await f.close() }
+})
+
 test('Runtime resumes an admitted custom operation by observing its original receipt without replaying its side effect', { timeout: 15000 }, async () => {
   const events = [], receipts = new Map()
   let executeCount = 0
@@ -266,6 +313,7 @@ test('Runtime resumes an admitted custom operation by observing its original rec
       executeCount++
       receipts.set(operationId, 'original durable result')
     })
+    await recordPriorScope(f, runId)
     assert.equal(saved.resume.state.runOwnerEpoch, 2)
     const program = await saved.protocols.prepareResume({ resume: saved.resume, signal: new AbortController().signal })
     const runtime = f.root.get('harness.run-runtime'), starting = runtime.start({ runId, program, resume: saved.resume })
@@ -359,6 +407,52 @@ test('cancelling a custom environment waits for the call and scope to actually e
   } finally { exited.resolve(); closed.resolve(); await f.close() }
 })
 
+test('revoking a tool while it runs waits for the real scope, preserves the other Agent and fences the old Session after regrant', { timeout: 15000 }, async () => {
+  const events = [], result = deferred(), exited = deferred(), closed = deferred()
+  const f = await fixture(environment(events, {
+    execute: () => ({ result: result.promise, done: exited.promise, cancel() { result.reject(new Error('revoked tool')) } }),
+    close: () => ({ result: Promise.resolve({ closed: true }), done: closed.promise, cancel() {} }),
+  }))
+  const manager = f.root.get('harness.execution-environments')
+  try {
+    const initial = await manager.get('assistant'), other = await manager.get('reviewer')
+    const [permission] = initial.grants
+    assert.equal(permission.tool.toolId, echo.toolId)
+    const run = await f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'wait for echo', idempotencyKey: 'active' })
+    f.llm.calls[0].result.resolve({ toolCalls: [{ id: 'echo', name: 'sample_echo', arguments: { value: 'pending' } }] })
+    f.llm.calls[0].done.resolve()
+    await until(() => events.some(event => event.kind === 'execute'))
+    const revoke = { agentId: 'assistant', requestId: 'revoke-active', expectedRevision: initial.revision, tools: [] }
+    const changed = await manager.set(revoke)
+    assert.equal(changed.state, 'draining')
+    assert.ok(changed.affectedCount >= 2, 'both the call and its resource-owning Run scope need exit proof')
+    assert.deepEqual((await manager.get('assistant')).grants, [])
+    exited.resolve()
+    await until(() => events.some(event => event.kind === 'close'))
+    assert.equal((await manager.observe(revoke.requestId)).state, 'draining')
+    assert.deepEqual(await manager.get('reviewer'), other)
+    closed.resolve()
+    const finished = await f.harness.waitRun(run.id)
+    assert.notEqual(finished.status, 'completed')
+    assert.equal(finished.resultNodeId, undefined)
+    assert.equal(f.llm.calls.length, 1)
+    const observed = await manager.set(revoke)
+    assert.equal(observed.state, 'completed')
+    const selection = await f.harness.getAgentEnvironmentSelection('assistant')
+    assert.deepEqual(selection.environmentIds, ['sample'])
+    await manager.set({ agentId: 'assistant', requestId: 'new-grant', expectedRevision: changed.revision, tools: [permission.tool] })
+    assert.notEqual((await manager.get('assistant')).grants[0].generation, permission.generation)
+    await assert.rejects(f.harness.startRun({ sessionId: f.session.id, parentNodeId: null, input: 'stale Session', idempotencyKey: 'stale' }),
+      error => error.code === 'environment-authorization-changed')
+    assert.equal(f.llm.calls.length, 1)
+    const session = await f.harness.createSession(f.session.projectId, 'reviewer')
+    const review = await f.harness.startRun({ sessionId: session.id, parentNodeId: null, input: 'still authorized', idempotencyKey: 'review' })
+    assert.deepEqual(f.llm.calls[1].input.tools.map(tool => tool.name), [echo.definition.name])
+    f.llm.calls[1].result.resolve('reviewed'); f.llm.calls[1].done.resolve()
+    assert.equal((await f.harness.waitRun(review.id)).status, 'completed')
+  } finally { result.resolve({ result: 'cleanup' }); exited.resolve(); closed.resolve(); await f.close() }
+})
+
 test('custom environment cleanup failure preserves partial facts and prevents a successful node', { timeout: 15000 }, async () => {
   const events = [], partial = { remaining: 'resource-1' }
   const f = await fixture(environment(events, { close: () => {
@@ -382,7 +476,7 @@ test('custom environment cleanup failure preserves partial facts and prevents a 
 })
 
 test('a recovered success proposal cannot override a newly failed environment exit', { timeout: 15000 }, async () => {
-  const events = [], f = await fixture(environment(events, { close: () => {
+  const events = [], f = await fixture(environment(events, { restorable: true, close: () => {
     const done = Promise.reject(new Error('old environment exit is unknown')); void done.catch(() => {})
     return { result: Promise.resolve({ remaining: true }), done, cancel() {} }
   } }))
@@ -391,13 +485,14 @@ test('a recovered success proposal cannot override a newly failed environment ex
     const records = f.root.get('harness.session-runs'), id = 'settling-environment-run'
     const input = { sessionId: f.session.id, parentNodeId: null, input: 'resume cleanup', idempotencyKey: id }
     const initialization = sessionInitialization(f.session, [], f.session.toolSelection.tools.map(tool => tool.definition))
-    const registration = nativeRegistration(input, modelSnapshot(), [], null, initialization)
+    const registration = { ...nativeRegistration(input, modelSnapshot(), [], null, initialization), ...await echoAuthorization(f) }
     await records.registerRun(id, input, 'now', [], modelSnapshot(), registration)
     const settlement = completedOutcome(id, 'saved success')
     await records.startOperation(id, { id: `exchange:${id}`, kind: 'model', intent: {}, records: [settlement.records[0]] }, 'now', 1)
     await records.observeOperation(id, `exchange:${id}`, { kind: 'value', records: settlement.records,
       protocolCursor: { schemaVersion: 1, protocolId: 'chat-completions', exchangeId: `exchange:${id}` } }, 'now', 1)
     await records.saveRunResume(id, 1, { stage: 'settling', settlement }, 'now')
+    await recordPriorScope(f, id)
     const resume = await records.claimRunResume(id, 1, 'takeover')
     const program = { initialization, binding: registration.binding, modelSnapshot: modelSnapshot(), input: registration.input,
       signal: new AbortController().signal,

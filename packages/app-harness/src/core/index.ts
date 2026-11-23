@@ -1,3 +1,10 @@
+import { createExecutionEnvironmentComponent } from '@anybox/execution-environments'
+import { createToolRegistry } from '@anybox/execution-environments/catalog'
+import type { ToolRegistrar } from '@anybox/execution-environments/catalog'
+import { createMcpEnvironmentComponent, createMcpToolRegistration } from '@anybox/mcp-environment'
+import { mcpEnvironmentServiceKey } from './tool-environments/mcp.js'
+import type { ToolEnvironmentAssembly } from './tool-environments/port.js'
+import { environmentManagerKey } from './tool-environments/access.js'
 import { createProjectFilesComponent } from './project-files/component.js'
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -6,6 +13,7 @@ import type { Component, Fiber } from '@nya/core'
 import { modelsServiceKey, modelsSettingsServiceKey, modelsError } from '@anybox/models'
 import type { ModelsService, ModelsSettingsService } from '@anybox/models'
 import type { RuntimeInputs } from './contracts.js'
+import { localStorageError, localStorageServiceKey, type LocalStoragePort } from '@anybox/storage-sqlite/port'
 import { validateAgents } from './agent/domain.js'
 import type { AgentDefinition } from './agent/domain.js'
 import { agentPromptServiceKey, createAgentPromptComponent } from './agent/prompt-binding-component.js'
@@ -41,8 +49,7 @@ import { unitAttachmentsServiceKey } from './unit/port.js'
 import type { AttachCodeInput, UnitAttachment, UnitAttachmentsPort } from './unit/port.js'
 import { localComputerUnitId, localModelsUnitId } from './unit/domain.js'
 import type { ToolEnvironment } from '@anybox/tool-api'
-import { createToolEnvironmentCatalog } from './tool-environments/registry.js'
-import { computerToolEnvironmentCatalogEntry, createComputerToolEnvironmentBinding } from './tool-environments/computer.js'
+import { computerInventoryTargets, computerRunTargets, computerToolRegistration, createComputerRunPreparation } from './tool-environments/computer.js'
 
 /** Reject the removed selector for JavaScript consumers before any component or storage is installed. */
 export function validateComputerEnvironmentOptions(options: object): void {
@@ -56,7 +63,9 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   /** Explicit bindings for a trusted same-root role composition. */
   readonly serviceBindings?: Readonly<Record<string, string>>
   readonly agents: readonly AgentDefinition[]
-  /** Trusted capability providers selected by each Agent's environmentIds; Sessions freeze their exact declarations. */
+  /** Register trusted providers when the application assembles its Tool Registry. */
+  readonly registerTools?: (tools: ToolRegistrar) => void
+  /** Existing standalone providers, registered into the same Tool Registry. */
   readonly toolEnvironments?: readonly ToolEnvironment[]
   /** Stable private directory shared with the independent worker, never a Session path. */
   readonly localWorkerDirectory?: string
@@ -73,7 +82,7 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly canManageAgent?: (actorId: string, agentId: string) => boolean
 }
 
-export interface HarnessServerApi extends RunPort, SessionPort, Omit<ProjectPort, 'requireAvailable' | 'getIn'>,
+export interface HarnessServerApi extends RunPort, Omit<SessionPort, 'targetedTools'>, Omit<ProjectPort, 'requireAvailable' | 'getIn' | 'workspacesIn' | 'selectWorkspacesIn' | 'resolveWorkspacesIn' | 'resolveWorkspaces' | 'requireWorkspaceAvailable' | 'retainWorkspacesIn' | 'releaseWorkspacesIn'>,
   Omit<PromptPort, 'getPublishedVersion'>,
   Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
   listAgents(): readonly Readonly<{ id: string }>[]
@@ -98,6 +107,15 @@ export interface HarnessServerLifetime {
   readonly signal?: AbortSignal
 }
 
+const harnessWriter = { layout: 3, applicationId: 'agent' } as const
+export async function requireHarnessStorage(root: Context, bindings?: Readonly<Record<string, string>>) {
+  const storageKey = bindings?.[localStorageServiceKey] ?? localStorageServiceKey
+  const storage = root.get<LocalStoragePort>(storageKey)
+  if (!storage) throw new Error(`waiting for ${storageKey}`)
+  if (!storage.requireLayout) throw localStorageError('schema-version', 'Harness requires database layout 3')
+  await storage.requireLayout(harnessWriter.layout, harnessWriter.applicationId)
+}
+
 function runtimeInputs(options: HarnessServerCoreOptions): RuntimeInputs {
   return { now: options.now ?? (() => new Date().toISOString()), newId: options.newId ?? randomUUID }
 }
@@ -114,8 +132,27 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
   validateComputerEnvironmentOptions(options)
   const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
   const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
-  const toolEnvironments = createToolEnvironmentCatalog([computerToolEnvironmentCatalogEntry,
-    ...(options.toolEnvironments ?? []).map(descriptor => ({ descriptor }))])
+  const tools = createToolRegistry(randomUUID(), registry => {
+    registry.register(computerToolRegistration)
+    for (const provider of options.toolEnvironments ?? []) registry.register(provider)
+    registry.register(createMcpToolRegistration(mcpEnvironmentServiceKey))
+    return options.registerTools?.(registry)
+  })
+  const toolEnvironments: ToolEnvironmentAssembly = {
+    inject: tools.inject,
+    trustedConfigurationEnvironmentIds: tools.trustedConfigurationEnvironmentIds,
+    describe: tools.describe,
+    prepareRun: createComputerRunPreparation(reportedComputerContracts),
+    runTargets: computerRunTargets,
+    inventoryTargets: computerInventoryTargets,
+  }
+  function reportedComputerContracts(unit: UnitAttachment) {
+    const connection = lookup<UnitTransportPort>(unitTransportServiceKey)?.connection(unit.attachmentId)
+    const observed = projectComputerEnvironments([unit], {platform: process.platform, architecture: process.arch},
+      new Map([[unit.attachmentId, connection ?? false]]), lookup<ComputerWorkerPort>(localComputerWorkerServiceKey)?.observedInfo?.())
+    const support = observed.environments[0]?.toolSupport
+    return support?.state === 'reported' ? new Map(support.manifest.tools.map(tool => [tool.toolId, tool.version + '@' + tool.definitionHash])) : undefined
+  }
   const configuredProtocols = lookup<ModelsSettingsService>(modelsSettingsServiceKey)?.protocols().map(value => value.id) ?? []
   const protocolComponents = lookup(protocolAgentServiceKey) ? [] : [createProtocolAgentsComponent(),
     ...supportedProtocolIds.filter(id => configuredProtocols.includes(id)).map(createProtocolAgentBindingComponent)]
@@ -132,12 +169,13 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     if (!worker) return Promise.reject(projectUnavailableError())
     return worker.query({ attachmentId, query })
   }
-  return [...protocolComponents, ...attachmentComponents, ...workerComponents,
-    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery }),
+  return [createExecutionEnvironmentComponent({ serviceKey: environmentManagerKey, storage: harnessWriter }), createMcpEnvironmentComponent({ serviceKey: mcpEnvironmentServiceKey }), ...protocolComponents, ...attachmentComponents, ...workerComponents,
+    createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects, computerQuery, enableWorkspaceAttachments: true }),
     createProjectFilesComponent(inputs),
     createComputersComponent(inputs), createWorkspacesComponent(inputs), createComputerOperationsComponent(inputs),
-    createSessionComponent(inputs, agents, toolEnvironments),
-    createRunRuntimeComponent(inputs, createComputerToolEnvironmentBinding(toolEnvironments, options.toolEnvironments)),
+    createSessionComponent(inputs, agents, toolEnvironments,
+      () => lookup<ModelsSettingsService>(modelsSettingsServiceKey)?.configuredProviders?.() ?? []),
+    createRunRuntimeComponent(inputs, tools.runtime, deps => tools.describe(deps).bindings, toolEnvironments.runTargets),
     createRunComponent(inputs, agents, lifetime.isClosing, lifetime.signal, toolEnvironments)]
 }
 
@@ -210,6 +248,10 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     listUnitAttachments: () => currentUnits().list(),
     createUnitAttachCode: input => currentUnits().createAttachCode(input),
     revokeUnitAttachment: attachmentId => currentUnits().revoke(attachmentId),
+    getRunEnvironmentAccess: id => currentSessions().getRunEnvironmentAccess(id),
+    environmentTools: (...args) => currentSessions().environmentTools(...args),
+    getAgentEnvironmentSelection: (...args) => currentSessions().getAgentEnvironmentSelection(...args),
+    setAgentEnvironmentSelection: (...args) => currentSessions().setAgentEnvironmentSelection(...args),
     getAgentTools: agentId => currentSessions().getAgentTools(agentId),
     setAgentTools: (agentId, input) => currentSessions().setAgentTools(agentId, input),
     openProject: (path, openOptions) => currentProjects().openProject(path, openOptions),
@@ -222,15 +264,19 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     closeDirectoryBrowse: (...args) => currentProjects().closeDirectoryBrowse(...args),
     onDirectoryBrowseRetired: listener => currentProjects().onDirectoryBrowseRetired(listener),
     listProjects: () => currentProjects().listProjects(),
+    listProjectWorkspaces: id => currentProjects().listProjectWorkspaces(id),
+    addProjectWorkspace: (id, input) => currentProjects().addProjectWorkspace(id, input),
+    renameProjectWorkspace: (id, workspace, input) => currentProjects().renameProjectWorkspace(id, workspace, input),
+    removeProjectWorkspace: (id, workspace, input) => currentProjects().removeProjectWorkspace(id, workspace, input),
     getProject: id => currentProjects().getProject(id),
     getSessionDefaults: agentId => currentSessions().getSessionDefaults(agentId),
     setSessionDefaults: (agentId, modelId, expectedRevision) => {
       if (modelId !== null) validateSelectedModel(modelId, true)
       return currentSessions().setSessionDefaults(agentId, modelId, expectedRevision)
     },
-    createSession: (projectId, agentId, modelId) => {
+    createSession: (projectId, agentId, modelId, workspaces) => {
       if (modelId !== undefined) validateSelectedModel(modelId)
-      return currentSessions().createSession(projectId, agentId, modelId)
+      return currentSessions().createSession(projectId, agentId, modelId, workspaces)
     },
     selectSessionModel: (sessionId, modelId) => {
       validateSelectedModel(modelId)
@@ -299,6 +345,7 @@ export async function installHarnessServerCore(context: Context, options: Harnes
   }
   const lifetime: HarnessServerLifetime = { isClosing: () => closing, signal: abort.signal }
   try {
+    await requireHarnessStorage(context, options.serviceBindings)
     // Prompt providers are available before their Agent consumers start.
     for (const component of [...createHarnessServerPromptComponents(options), ...createHarnessServerAgentComponents(context, options, lifetime)]) {
       const fiber = context.installComponent(component, undefined, { bindings: options.serviceBindings })

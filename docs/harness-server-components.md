@@ -43,6 +43,8 @@ Anybox 宿主与 Anybox Harness 应用的当前目录和依赖方向见 [目录�
 | 文件工具 | `tools.files`；注入 projects/image-assets/apply-patch | 读取 handle、搜索进程、图片导入和共享文本提交；取消并等待 |
 | Prompt | `harness.prompts`；注入 local-storage | 草稿、不可变发布版本及已接纳写入 |
 | Agent Prompt | `harness.agent-prompts`；注入 prompts/local-storage | Agent 绑定及 Prompt 快照解析 |
+| [执行环境授权](modules/tools/execution-environments.md) | `harness.execution-environments`；注入 local-storage | Agent 逐工具授权、已接纳调用、退出回执与撤权排空 |
+| [MCP 执行环境](modules/tools/mcp-environment.md) | `harness.mcp-environment`，注入 local-storage | 私有 Streamable HTTP 和 stdio 连接、经验证的工具目录、受管本地进程及退出记录 |
 | Session | `harness.sessions`、`harness.session-runs`；注入 local-storage/projects/image-assets/project-files/computer-operations/unit-attachments | 新会话默认值、Agent 工具配置及会话不可变选择、归档状态、Run、节点、原生记录与事务；计算工具意图/观察同事务参与，接受事务复核单元附着引用；等已接受写入与通知 |
 | 协议应用注册 | `harness.protocol-agents`；注入 models/models.settings/models.protocols/image-assets | 固定驱动与 Loop 组合、准备中的资源、Run 租约；撤销后等 program 释放 |
 | 单协议应用绑定 | 注入 protocol-agents/models.protocols | 该驱动代租约；完整安装后发布准入，卸载只撤销本代 |
@@ -77,7 +79,7 @@ Models JSON 配置文件、旧配置导入源、目录缓存与业务数据库�
 
 ## 协议应用绑定与独立 Loop
 
-`packages/app-harness/src/core/protocol-agents/registry.ts` 将具体驱动代、Loop、输入编码、历史策略和展示投影闭包绑定为 `PreparedRunProgram`。公共 Run 只准备并交接 program；Runtime 只调用 `execute(host)` 和 `close()`，不解释停止原因。初始化声明来自 Session 的受信静态工具选择，不存在运行期插件注册。新 NativeInitialization v2 / tool-library-v1 复制创建会话时的快照；旧 v1 / known-tools-v1 保持原样。每次 Run 固定当前 executor 依赖代与协议代，不把运行句柄写入历史。
+`packages/app-harness/src/core/protocol-agents/registry.ts` 将具体驱动代、Loop、输入编码、历史策略和展示投影闭包绑定为 `PreparedRunProgram`。公共 Run 准备并交接 program，Runtime 通过 `execute(host)` 和 `close()` 驱动。初始化声明来自 Session 固定的受信工具选择，MCP 工具来自所属应用经认证的管理流程。NativeInitialization v3 保存环境及工具快照，旧 v1/v2 保留原有读取兼容。每次 Run 固定当前执行依赖、协议代以及确切授权绑定。
 
 | 协议 | 原生历史与 Loop 决策 | 参数与专属能力 |
 | --- | --- | --- |

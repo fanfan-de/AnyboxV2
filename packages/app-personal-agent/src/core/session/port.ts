@@ -1,3 +1,6 @@
+import type { TargetedToolManagement } from '@anybox/execution-environments/management'
+import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
+import type { EnvironmentSelection, SelectionInput, AdoptionInput, RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
 import type { FileSelection, FileContent, FileRef, FileSearch, FilePreview, FileRenewal, FileTreePage } from '../project-files/domain.js'
 import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput, ConversationNode, NodePage, NodeQuery } from './domain.js'
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
@@ -15,6 +18,13 @@ export const sessionRunServiceKey = 'personal-agent.session-runs'
 
 /** Public session facts. Run commands and in-flight resources belong to the execution components. */
 export interface SessionPort {
+  readonly targetedTools: TargetedToolManagement
+  getRunEnvironmentAccess(runId: string): Promise<RunEnvironmentAccess | undefined>
+  environmentTools(agentId?: string): Promise<readonly EnvironmentTool[]>
+  getAgentEnvironmentSelection(agentId: string): Promise<EnvironmentSelection>
+  setAgentEnvironmentSelection(agentId: string, input: SelectionInput): Promise<EnvironmentSelection>
+  readSessionEnvironments(sessionId: string): Promise<EnvironmentSelection>
+  adoptSessionEnvironments(sessionId: string, input: AdoptionInput): Promise<EnvironmentSelection>
   openProjectFileTree(sessionId: string, path: string, owner: string, signal?: AbortSignal, projectId?: string): OwnedCall<FileTreePage>
   readProjectFileTreePage(sessionId: string, owner: string, cursorId: string, page: number, signal?: AbortSignal): OwnedCall<FileTreePage>
   closeProjectFileTree(sessionId: string, owner: string, cursorId: string): Promise<void>
@@ -68,6 +78,9 @@ export interface SessionRunPort {
   registerRun(id: string, input: RunInput, now: string,
     prompts: readonly PromptSnapshot[], model: NativeModelSnapshot, native: NativeRunRegistration): Promise<{ readonly run: Run; readonly created: boolean }>
   loadRunContext(id: string): Promise<RunContext | undefined>
+  getRunEnvironmentAccess(runId: string): Promise<RunEnvironmentAccess | undefined>
+  checkLegacyAccess(sessionId: string, access: RunEnvironmentAccess, units: RunUnitBindings | undefined, initialization: NativeInitialization): Promise<boolean>
+  loadSessionAccess(id: string): Promise<RunEnvironmentAccess | undefined>
   loadNativeInitialization(sessionId: string): Promise<NativeInitialization | undefined>
   loadNativeHistory(sessionId: string, parentNodeId: string | null, scope?: ContinuousNativeHistoryScope): Promise<NativeHistory | undefined>
   loadApplicationHistory(sessionId: string, parentNodeId: string, scope: ContinuousNativeHistoryScope): Promise<ApplicationHistory>
@@ -93,6 +106,9 @@ export interface SavedRunOperation {
 }
 
 export interface NativeRunRegistration {
+  readonly access?: RunEnvironmentAccess
+  readonly selectionVersion?: number
+  readonly grantRevision?: number
   readonly binding: ProtocolBindingSnapshot
   readonly initialization: NativeInitialization
   readonly input: NativeRunInput

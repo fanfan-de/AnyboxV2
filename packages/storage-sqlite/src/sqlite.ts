@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, realpathSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { advanceFence, createFence, hasFence, recordWriter, upgradeFence, verifyFence } from './layout-fence.js'
 import type { Component } from '@nya/core'
 import { localStorageError, localStorageServiceKey } from './port.js'
 import type {
@@ -81,25 +82,25 @@ function makeTransaction(db: DatabaseSync, signal?: AbortSignal): { tx: StorageT
   return { tx, invalidate() { active = false; scope.invalidate() } }
 }
 
-/** Provider-owned layout: the only use of user_version is the per-domain migration ledger. */
-const layoutVersion = 1
-
-function initializeLayout(db: DatabaseSync): void {
+function initializeLayout(db: DatabaseSync, directory: string, fenced: boolean): 1 | 2 | 3 {
   let current: unknown
   let hasTables: boolean
   try {
     current = db.prepare('PRAGMA user_version').get()?.user_version
     hasTables = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").get() !== undefined
   } catch (error) { throw failure(error, 'open-failed') }
-  if (current === layoutVersion) return
+  if (fenced !== (current === 2 || current === 3)) throw localStorageError('schema-version', 'database authority checkpoint or matching database missing')
+  if (current === 2 || current === 3) { verifyFence(db, directory, current); return current }
+  if (current === 1) return 1
   if (current !== 0 || hasTables) throw localStorageError('schema-version', 'unsupported local database layout')
   let begun = false
   try {
     db.exec('BEGIN IMMEDIATE')
     begun = true
     db.exec('CREATE TABLE schema_migrations (domain TEXT PRIMARY KEY, version INTEGER NOT NULL)')
-    db.exec(`PRAGMA user_version = ${layoutVersion}`)
+    db.exec('PRAGMA user_version = 1')
     db.exec('COMMIT')
+    return 1
   } catch (error) {
     if (begun) {
       try { db.exec('ROLLBACK') } catch {
@@ -110,7 +111,7 @@ function initializeLayout(db: DatabaseSync): void {
   }
 }
 
-function migrate(db: DatabaseSync, domain: string, migrations: readonly StorageMigration[]): void {
+function migrate(db: DatabaseSync, domain: string, migrations: readonly StorageMigration[], fenced: boolean): void {
   let current: unknown
   try {
     current = db.prepare('SELECT version FROM schema_migrations WHERE domain = ?').get(domain)?.version ?? 0
@@ -133,6 +134,7 @@ function migrate(db: DatabaseSync, domain: string, migrations: readonly StorageM
       }
       db.prepare(`INSERT INTO schema_migrations (domain, version) VALUES (?, ?)
         ON CONFLICT(domain) DO UPDATE SET version = excluded.version`).run(domain, migration.version)
+      if (fenced) advanceFence(db)
       db.exec('COMMIT')
     } catch {
       if (begun) {
@@ -164,7 +166,7 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
     apply(ctx) {
       const path = databasePath(file)
       const lockPath = `${path}.lock`
-      if (existsSync(lockPath)) throw localStorageError('occupied', `legacy database lock requires offline inspection: ${lockPath}`)
+      let fenced = hasFence(lockPath)
       let db!: DatabaseSync
       ctx.effect(() => {
         try {
@@ -177,14 +179,21 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
         }
         return () => { try { db.close() } catch { throw localStorageError('close-failed', 'cannot close local database') } }
       }, 'exclusive SQLite connection')
-      initializeLayout(db)
+      // Recheck after acquiring ownership in case a previous owner cut over during open.
+      fenced = hasFence(lockPath)
+      let layout = initializeLayout(db, lockPath, fenced)
 
       let accepting = true
+      let layoutFailure: Error | undefined
       let tail: Promise<void> = Promise.resolve()
       const schedule = <Result>(work: () => Result | Promise<Result>, signal?: AbortSignal): Promise<Result> => {
         if (!accepting) return Promise.reject(localStorageError('closed', 'local database is closing'))
         if (signal?.aborted) return Promise.reject(signal.reason)
-        const result = tail.then(() => { signal?.throwIfAborted(); return work() })
+        const result = tail.then(() => {
+          if (layoutFailure) throw layoutFailure
+          signal?.throwIfAborted()
+          return work()
+        })
         tail = result.then(() => {}, () => {})
         return result
       }
@@ -216,8 +225,10 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
               throw failure(error, 'operation-failed')
             }
             try {
+              const before = fenced ? db.prepare('SELECT total_changes() AS n').get()?.n : undefined
               const result = await work(scope.tx)
               signal?.throwIfAborted()
+              if (fenced && db.prepare('SELECT total_changes() AS n').get()?.n !== before) advanceFence(db)
               try { db.exec('COMMIT') } catch (error) { throw failure(error, 'operation-failed') }
               return result
             } catch (error) {
@@ -228,13 +239,42 @@ export function createLocalSqliteComponent(file: string, options: LocalSqliteOpt
             } finally { scope.invalidate() }
           }, signal)
         },
+        requireLayout(version, applicationId) {
+          return schedule(() => {
+            if ((version !== 2 && version !== 3) || version < layout) throw localStorageError('schema-version', 'database layout is incompatible with this writer')
+            if (applicationId !== undefined && (version !== 3 || typeof applicationId !== 'string' || !applicationId.trim())) throw new TypeError('a layout 3 application identifier is required')
+            try {
+              if (layout === version) {
+                if (applicationId && !db.prepare('SELECT 1 FROM storage_layout_writers WHERE application_id=?').get(applicationId)) {
+                  db.exec('BEGIN IMMEDIATE')
+                  try { recordWriter(db, applicationId); advanceFence(db); db.exec('COMMIT') }
+                  catch (error) { db.exec('ROLLBACK'); throw error }
+                }
+                return
+              }
+              if (fenced) upgradeFence(db, applicationId)
+              else createFence(db, lockPath, version, applicationId)
+              layout = version
+              fenced = true
+            } catch (error) {
+              accepting = false
+              layoutFailure = failure(error, 'open-failed')
+              throw layoutFailure
+            }
+          })
+        },
+        minimumWriterCapability(applicationId) {
+          return schedule(() => layout === 3
+            ? db.prepare('SELECT minimum_capability FROM storage_layout_writers WHERE application_id=?').get(applicationId)?.minimum_capability as string | undefined
+            : undefined)
+        },
         migrate(domain, input) {
           let migrations: readonly StorageMigration[]
           try {
             if (typeof domain !== 'string' || !domain.trim()) throw new TypeError('a migration domain is required')
             migrations = sortedMigrations(input)
           } catch (error) { return Promise.reject(error) }
-          return schedule(() => migrate(db, domain, migrations))
+          return schedule(() => migrate(db, domain, migrations, fenced))
         },
       }
       ctx.provide(serviceKey, service)

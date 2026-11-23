@@ -6,7 +6,7 @@ import type { HarnessServerAccessPort } from './server-access.js'
 import { createHarnessServerRuntime } from './server-runtime.js'
 import type { HarnessServerRuntimeOptions } from './server-runtime.js'
 import type { HarnessServerConfig } from './server-config.js'
-import { createHarnessServerApi } from './core/index.js'
+import { createHarnessServerApi, requireHarnessStorage } from './core/index.js'
 import { createHarnessServerListenerComponent, harnessServerListenerServiceKey } from './http/server.js'
 import type { HarnessServerListener } from './http/server.js'
 
@@ -46,6 +46,7 @@ export async function createStandaloneHarnessServer(config: HarnessServerConfig,
   })()
   try {
     await root.installComponent(createLocalSqliteComponent(config.harnessDatabasePath))
+    await requireHarnessStorage(root)
     await root.installComponent(createHarnessServerAccessComponent(options.name))
     access = root.get<HarnessServerAccessPort>(harnessServerAccessServiceKey)!
     // Install transport before business resources so root LIFO cleanup cancels Runs

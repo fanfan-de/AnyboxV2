@@ -4,7 +4,21 @@ import type { ImageRef } from '../image/port.js'
 import { createToolSelection } from '../tool/catalog.js'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 import type { ToolEnvironmentSnapshot } from '../tool-environments/domain.js'
+export interface SessionWorkspaceSelection {
+  readonly workspaceIds: readonly string[]
+  readonly projectWorkspaceRevision: number
+}
+
+export interface SessionWorkspaceBinding {
+  readonly id: string
+  readonly revision: number
+  readonly name: string
+  readonly path: string
+}
+
 export interface Session {
+  readonly workspaceBindings?: readonly SessionWorkspaceBinding[]
+  readonly environmentSelection?: import('@anybox/execution-environments/bindings').EnvironmentSelection
   readonly id: string
   readonly title: string | null
   readonly projectId: string

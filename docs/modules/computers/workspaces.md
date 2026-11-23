@@ -4,7 +4,7 @@
 
 ## 职责、工厂和依赖
 
-`createWorkspacesComponent(options?)` 安装根上的 `harness-workspaces`，提供 `harness.workspaces: WorkspacesPort`。组件 inject 本轮 `harness.projects` 和 `local-storage`，拥有项目到稳定工作区的映射、逻辑 scope reservation 及确切执行 binding。Projects 不反向依赖它；本阶段没有产物提供方或独立准备组件。
+`createWorkspacesComponent(options?)` 安装根上的 `harness-workspaces`，提供 `harness.workspaces: WorkspacesPort`。组件 inject 本轮 `harness.projects` 和 `local-storage`，拥有项目成员到稳定工作区的映射、逻辑 scope reservation 及确切执行 binding。Projects 不反向依赖它；本阶段没有产物提供方或独立准备组件。
 
 源码：[组件](../../../packages/app-harness/src/core/workspace/component.ts)、[端口](../../../packages/app-harness/src/core/workspace/port.ts)、[领域值与校验](../../../packages/app-harness/src/core/workspace/domain.ts)。调用者为 [Computer Operations](computer-operations.md)；项目身份仍归 [Projects](../sessions/projects.md)。
 
@@ -14,21 +14,21 @@
 
 | 方法 | 当前行为 |
 | --- | --- |
-| `get(workspaceId)` / `getForProject(projectId)` | 查询已经保存的工作区，不激活实例、不检查目录 |
+| `get(workspaceId)` / `getForProject(projectId)` | 按工作区 ID、或按项目查找主工作区，均仅读取账本 |
 | `getBinding(reservationId)` | 读取固定 binding，保留已释放 scope 的历史事实 |
-| `reserveIn(tx,{reservationId,scopeId,projectId})` | 同步读取 Projects 的稳定身份，惰性建立 pinned-local 映射及 reservation；不准备文件 |
-| `prepare({reservationId,instance},signal?)` | 在事务外按项目绑定检查原项目目录，返回本组件代内的准备凭证与确切实例信息 |
+| `reserveIn(tx,{reservationId,scopeId,projectId,projectWorkspaceId?,projectWorkspaceRevision?,computerAttachmentId?})` | 同步读取 Projects 的稳定身份，惰性建立 pinned-local 映射及 reservation；不准备文件 |
+| `prepare({reservationId,instance},signal?)` | 在事务外按项目绑定检查原项目成员目录，返回本组件代内的准备凭证与确切实例信息 |
 | `bindIn(tx,{reservationId,prepared})` | 原子提交准备凭证对应的 binding；同一事实幂等，冲突或伪造凭证拒绝 |
 | `requireBindingIn(reader,ref)` | 同步复核 scope 尚未释放、实例 ID/代次与 workspace epoch，不重新解析项目路径 |
 | `releaseIn(tx,reservationId,scopeId)` | 所属 scope 幂等释放 reservation；调用者须已等待实际 scope 退出 |
 
 旧项目无需重写或导入；首次计算工具接纳时按原 projectId 创建稳定 workspaceId。当前 mode 只有 pinned-local，revision 固定为 0，workspaceEpoch 初始为 1。workspace 身份是独立 ID，绝对路径只用于绑定环境内的映射和 binding；账本可保存 POSIX 或 Windows 绝对路径，实际文件系统校验由目标环境负责。
 
-prepare 通过 Projects.requireAvailable 确认原目录，接受 ready 的本机或远端实例，将 computerId、computerInstanceId、instanceGeneration、workspaceEpoch、revision、path 和 preparedAt 固定在 binding。已绑定 scope 不允许通过再次 prepare 偷换实例或路径。同一项目的不同 Run 可共享原目录，保持原有并发语义；尚未实现 portable-managed 的排他写租约。
+prepare 通过 Projects.requireAvailable 或 requireWorkspaceAvailable 确认相应成员原目录，接受 ready 的本机或远端实例，将 computerId、computerInstanceId、instanceGeneration、workspaceEpoch、revision、path 和 preparedAt 固定在 binding。已绑定 scope 不允许通过再次 prepare 偷换实例或路径。同一项目的不同 Run 可共享原目录，保持原有并发语义；尚未实现 portable-managed 的排他写租约。
 
 ## 持久化与事务归属
 
-组件在 apply 登记 `workspaces` 迁移域 v1，拥有 `harness_workspaces`、`harness_workspace_reservations` 和 `harness_workspace_bindings`。Projects 的表通过其 `getIn` 查询，不由 Workspaces 直接读写。存储组件继续独占唯一业务 SQLite 连接。
+组件在 apply 登记 `workspaces` 迁移域 v2，拥有 `harness_workspaces`、`harness_workspace_reservations` 和 `harness_workspace_bindings`。迁移保留每个旧工作区、reservation 和 binding 的既有 ID，唯一映射键扩展为项目与成员 ID。旧调用省略成员 ID 时继续使用主目录。新工具分派在 reserve、bind、requireBinding 检查原项目成员，成员退役后仍可按 reservation 查询原 binding 和释放资源。Projects 的表通过其 `getIn`、`workspacesIn` 查询，不由 Workspaces 直接读写。存储组件继续独占唯一业务 SQLite 连接。
 
 reserveIn 与工具意图、待执行声明及逻辑 computer 需求在同一业务事务提交。准备在事务外进行；首次 bindIn 与 Computers.pinIn 在同事务固定实例与工作区归属。scope 长进程还在运行时引用不会释放；Computer Operations 观察 scope 实际退出后，同事务 releaseIn 与 releasePinIn。同步端口不等待网络、目录检查或进程退出。
 

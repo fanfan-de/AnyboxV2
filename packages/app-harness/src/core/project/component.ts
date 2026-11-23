@@ -9,6 +9,11 @@ import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
 import type { LocalStoragePort, StorageMigration, StorageRow, StorageReader } from '@anybox/storage-sqlite/port'
 import type { ComputerQuery, ComputerQueryResult } from '../computer/query-domain.js'
 import { localAttachmentId, validateUnitId } from '../unit/domain.js'
+import { unitAttachmentsServiceKey } from '../unit/port.js'
+import type { UnitAttachmentsPort } from '../unit/port.js'
+import { createProjectMembership, projectMembersMigration } from './members.js'
+import type { ProjectWorkspacePort, ProjectWorkspace } from './members.js'
+export type { ProjectWorkspace, ProjectWorkspaces, WorkspaceRef, AddWorkspace, EditWorkspaces } from './members.js'
 
 export const projectServiceKey = 'harness.projects'
 const localComputerAttachment = localAttachmentId('computer')
@@ -20,6 +25,7 @@ export interface Project {
   readonly name: string
   readonly createdAt: string
   readonly available: boolean
+  readonly workspaceCount?: number
   /** The Computer attachment that serves this project's tools and reads; `local:computer` for this harness server's own worker. */
   readonly computerAttachmentId: string
 }
@@ -39,7 +45,8 @@ export function isProjectUnavailableError(error: unknown): error is ProjectUnava
   return error instanceof Error && 'code' in error && error.code === 'project-unavailable'
 }
 
-export interface ProjectPort {
+export interface ProjectPort extends ProjectWorkspacePort {
+  requireWorkspaceAvailable(projectId: string, workspaceId: string): Promise<ProjectWorkspace>
   /** Stable metadata in a caller's business transaction; never checks the filesystem. */
   getIn(reader: StorageReader, id: string): Project | undefined
   /** Host directory UI selects paths only for this harness server's local execution environment. */
@@ -58,6 +65,7 @@ export interface ProjectPort {
 }
 
 export interface ProjectOptions {
+  readonly enableWorkspaceAttachments?: boolean
   /** A host supplies its own operating-system user's home, never a browser's home. */
   readonly directoryHome?: string
   /** Internal provider and clocks can be replaced for lifecycle verification. */
@@ -95,14 +103,18 @@ const migrations: readonly StorageMigration[] = [{
       SELECT id, path, '${localComputerAttachment}', name, created_at FROM harness_projects_rebuild`)
     tx.execute('DROP TABLE harness_projects_rebuild')
   },
-}]
+}, projectMembersMigration]
+
+const selectProjects = `SELECT p.*, (SELECT count(*) FROM harness_project_workspaces w
+  WHERE w.project_id = p.id AND w.retired = 0) AS workspace_count FROM harness_projects p`
 
 function stored(row: StorageRow): Project {
   const { id, path, name, created_at: createdAt, computer_attachment_id: computerAttachmentId } = row
   if (typeof id !== 'string' || typeof path !== 'string' || typeof name !== 'string' || typeof createdAt !== 'string' || typeof computerAttachmentId !== 'string') {
     throw new Error('invalid stored project')
   }
-  return Object.freeze({ id, path, name, createdAt, available: false, computerAttachmentId })
+  return Object.freeze({ id, path, name, createdAt, available: false, computerAttachmentId,
+    ...(typeof row.workspace_count === 'number' ? { workspaceCount: row.workspace_count } : {}) })
 }
 
 type ComputerQueryEntry = NonNullable<ProjectOptions['computerQuery']>
@@ -121,6 +133,7 @@ async function availability(project: Project, computerQuery: ComputerQueryEntry)
 /** Project identity and directory availability; conversation state belongs to the state provider. */
 export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOptions = {}): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
+  [unitAttachmentsServiceKey]?: UnitAttachmentsPort
 }> {
   if ('defaultComputerAttachmentId' in options && options.defaultComputerAttachmentId !== undefined) {
     throw new TypeError('defaultComputerAttachmentId is no longer supported; select computerAttachmentId when opening each project. The default is the local execution environment.')
@@ -128,7 +141,7 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
   const computerQuery: ComputerQueryEntry = options.computerQuery ?? (() => Promise.reject(projectUnavailableError()))
   return {
     name: 'harness-projects',
-    inject: [localStorageServiceKey],
+    inject: [localStorageServiceKey, ...(options.enableWorkspaceAttachments ? [unitAttachmentsServiceKey] : [])],
     async apply(ctx, _config, deps) {
       const db = deps[localStorageServiceKey]
       await db.migrate('projects', migrations)
@@ -148,11 +161,42 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
         return result
       }
       const get = (id: string) => db.read(reader => reader.get(
-        'SELECT * FROM harness_projects WHERE id = ?', [id]))
+        `${selectProjects} WHERE p.id = ?`, [id]))
+      const canonicalPath = async (path: string, binding: string) => {
+        if (typeof path !== 'string' || !path.trim() || path.length > 4096 || path.includes('\0')) {
+          throw new TypeError('an absolute project directory is required')
+        }
+        let canonical: string
+        if (binding === localComputerAttachment) {
+          if (!isAbsolute(path)) throw new TypeError('an absolute project directory is required')
+          try {
+            canonical = await realpath(path)
+            if (!(await stat(canonical)).isDirectory()) throw projectUnavailableError()
+          } catch { throw projectUnavailableError() }
+        } else {
+          // The directory lives on the bound unit; its own read-only query surface resolves and checks it under the attachment ceiling.
+          if (!posix.isAbsolute(path) && !win32.isAbsolute(path)) throw new TypeError('an absolute project directory is required')
+          let result: ComputerQueryResult
+          try { result = await computerQuery(binding, { kind: 'stat', path }) } catch { throw projectUnavailableError() }
+          if (result.kind !== 'stat' || !result.directory || result.canonical === null) throw projectUnavailableError()
+          canonical = result.canonical
+        }
+        return canonical
+      }
+      const membership = createProjectMembership(db, inputs, deps[unitAttachmentsServiceKey], canonicalPath, track)
       const service: ProjectPort = {
+        ...membership,
+        requireWorkspaceAvailable(projectId, workspaceId) {
+          return track(async () => {
+            const state = await db.read(reader => membership.workspacesIn(reader, projectId))
+            const selected = state.workspaces.find(value => value.id === workspaceId)
+            if (!selected || await canonicalPath(selected.path, selected.computerAttachmentId) !== selected.path) throw projectUnavailableError()
+            return selected
+          })
+        },
         getIn(reader, id) {
           if (!accepting) throw new Error('project service is closing')
-          const row = reader.get('SELECT * FROM harness_projects WHERE id = ?', [id])
+          const row = reader.get(`${selectProjects} WHERE p.id = ?`, [id])
           return row ? stored(row) : undefined
         },
         localDirectorySelectionSupported: true,
@@ -165,32 +209,15 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
         onDirectoryBrowseRetired: listener => directories.onRetired(listener),
         openProject(path, openOptions = {}) {
           return track(async () => {
-            if (typeof path !== 'string' || !path.trim() || path.length > 4096 || path.includes('\0')) {
-              throw new TypeError('an absolute project directory is required')
-            }
             const binding = openOptions.computerAttachmentId === undefined ? localComputerAttachment : validateUnitId(openOptions.computerAttachmentId)
-            let canonical: string
-            if (binding === localComputerAttachment) {
-              if (!isAbsolute(path)) throw new TypeError('an absolute project directory is required')
-              try {
-                canonical = await realpath(path)
-                if (!(await stat(canonical)).isDirectory()) throw projectUnavailableError()
-              } catch { throw projectUnavailableError() }
-            } else {
-              // The directory lives on the bound unit; its own read-only query surface resolves and checks it under the attachment ceiling.
-              if (!posix.isAbsolute(path) && !win32.isAbsolute(path)) throw new TypeError('an absolute project directory is required')
-              let result: ComputerQueryResult
-              try { result = await computerQuery(binding, { kind: 'stat', path }) } catch { throw projectUnavailableError() }
-              if (result.kind !== 'stat' || !result.directory || result.canonical === null) throw projectUnavailableError()
-              canonical = result.canonical
-            }
+            const canonical = await canonicalPath(path, binding)
             const row = await db.transaction(tx => {
-              const prior = tx.get('SELECT * FROM harness_projects WHERE path = ? AND computer_attachment_id = ?', [canonical, binding])
+              const prior = tx.get(`${selectProjects} WHERE p.path = ? AND p.computer_attachment_id = ?`, [canonical, binding])
               if (prior) return prior
               const id = inputs.newId()
               tx.execute('INSERT INTO harness_projects (id, path, computer_attachment_id, name, created_at) VALUES (?, ?, ?, ?, ?)',
                 [id, canonical, binding, (posix.isAbsolute(canonical) ? posix.basename(canonical) : win32.basename(canonical)) || canonical, inputs.now()])
-              return tx.get('SELECT * FROM harness_projects WHERE id = ?', [id])!
+              return tx.get(`${selectProjects} WHERE p.id = ?`, [id])!
             })
             return Object.freeze({ ...stored(row), available: true })
           })
@@ -198,7 +225,7 @@ export function createProjectComponent(inputs: RuntimeInputs, options: ProjectOp
         listProjects() {
           return track(async () => {
             const rows = await db.read(reader => reader.all(
-              'SELECT * FROM harness_projects ORDER BY created_at, id'))
+              `${selectProjects} ORDER BY p.created_at, p.id`))
             return Object.freeze(await Promise.all(rows.map(row => availability(stored(row), computerQuery))))
           })
         },

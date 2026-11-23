@@ -1,0 +1,59 @@
+{
+  "name": "@anybox/execution-environments",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/contracts.d.ts",
+      "import": "./dist/contracts.js"
+    },
+    "./bindings": {
+      "types": "./dist/bindings.d.ts",
+      "import": "./dist/bindings.js"
+    },
+    "./management": {
+      "types": "./dist/management.d.ts",
+      "import": "./dist/management.js"
+    },
+    "./settings-view": {
+      "types": "./dist/settings-view.d.ts",
+      "import": "./dist/settings-view.js"
+    },
+    "./catalog": {
+      "types": "./dist/catalog.d.ts",
+      "import": "./dist/catalog.js"
+    },
+    "./run-policy": {
+      "types": "./dist/run-policy.d.ts",
+      "import": "./dist/run-policy.js"
+    },
+    "./run-authority": {
+      "types": "./dist/run-authority.d.ts",
+      "import": "./dist/run-authority.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@nya/core": "^0.1.0-rc.1"
+  },
+  "dependencies": {
+    "@anybox/storage-sqlite": "0.1.0",
+    "@anybox/tool-api": "0.1.0"
+  }
+}

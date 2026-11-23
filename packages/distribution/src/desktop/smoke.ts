@@ -50,7 +50,7 @@ export async function runDesktopSmoke(options: DesktopSmokeOptions) {
     const end = Date.now() + 15000
     while (!await window.webContents.executeJavaScript(`(() => {
       const workspace = document.querySelector('.harness-app'), manager = document.getElementById('application-manager');
-      return !!workspace?.querySelector('#agent--harness-select') && workspace.getClientRects().length > 0 && !workspace.closest('[inert]') && !manager?.matches(':popover-open');
+      return !!workspace?.querySelector('#agent--open-settings') && workspace.getClientRects().length > 0 && !workspace.closest('[inert]') && !manager?.matches(':popover-open');
     })()`)) {
       if (Date.now() > end) throw new Error('Shared Harness workspace did not mount')
       await window.webContents.executeJavaScript(`document.getElementById('app-shortcut-agent')?.click()`)

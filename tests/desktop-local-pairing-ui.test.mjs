@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { setupConnections } from '../packages/app-harness/dist/web/connections-view.js'
+import { setupConnections as setupPersonalConnections } from '../packages/app-personal-agent/dist/web/connections-view.js'
 
 class Element extends EventTarget {
   hidden = false
@@ -17,14 +18,17 @@ class Element extends EventTarget {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve))
 function viewFixture(t, connections = [], options = {}) {
-  const root = new Element(), panel = new Element(), form = new Element(), dialog = new Element(), select = new Element()
+  const appId = options.appId ?? 'agent'
+  const apiBase = appId === 'agent' ? '/api/client/v1' : '/api/client/v1/apps/personal-agent'
+  const setup = appId === 'agent' ? setupConnections : setupPersonalConnections
+  const root = new Element(), panel = new Element(), form = new Element(), dialog = new Element()
   const fields = new Map(['name', 'endpoint', 'token'].map(name => [name, new Element()]))
   form.elements = { namedItem: name => fields.get(name) }
   for (const name of ['list', 'status', 'local', 'local-status', 'local-retry', 'new', 'heading', 'tokens', 'computer', 'attachments']) panel.nodes.set(`[data-${name}]`, new Element())
   panel.nodes.set('[data-form]', form)
-  root.nodes.set('#agent--harness-select', select); root.nodes.set('#agent--settings-dialog', dialog); root.nodes.set('#agent--connections-settings', panel)
+  root.nodes.set(`#${appId}--settings-dialog`, dialog); root.nodes.set(`#${appId}--connections-settings`, panel)
   const connectionSection = new Element(), openSettings = new Element()
-  root.nodes.set('[data-settings-section="connections"]', connectionSection); root.nodes.set('#agent--open-settings', openSettings)
+  root.nodes.set('[data-settings-section="connections"]', connectionSection); root.nodes.set(`#${appId}--open-settings`, openSettings)
   let selectedSection
   connectionSection.addEventListener('click', () => { selectedSection = 'connections' })
   openSettings.addEventListener('click', () => { dialog.open = true })
@@ -34,15 +38,24 @@ function viewFixture(t, connections = [], options = {}) {
   globalThis.document = { createElement: () => new Element() }
   globalThis.sessionStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) }
   globalThis.fetch = async (url, options) => {
-    if (url === '/api/client/v1/local/retry') { assert.equal(options.method, 'POST'); retries++; return Response.json(state) }
-    assert.equal(url, '/api/client/v1/local'); reads++
+    if (url === `${apiBase}/local/retry`) { assert.equal(options.method, 'POST'); retries++; return Response.json(state) }
+    assert.equal(url, `${apiBase}/local`); reads++
     return Response.json({ status: state })
   }
   const api = { connections, forConnection: id => async (path, body) => { targetRequests.push({ id, path, body }); return path === '/instance' ? { capabilities: [] } : {} } }
-  const view = setupConnections(root, api, options.selectedId, () => 'error', options.canLeave ?? (() => true), connection => { changes++; changedConnections.push(connection) }, '/api/client/v1', () => {})
+  const view = setup(root, api, options.selectedId, () => 'error', options.canLeave ?? (() => true), connection => { changes++; changedConnections.push(connection) }, apiBase, () => {})
   t.after(async () => { await view.dispose(); globalThis.document = previousDocument; globalThis.fetch = previousFetch; if (previousStorage === undefined) delete globalThis.sessionStorage; else globalThis.sessionStorage = previousStorage })
-  return { view, fields, panel, select, dialog, changedConnections, targetRequests, values, setState(value) { state = value }, get selectedSection() { return selectedSection }, get reads() { return reads }, get changes() { return changes }, get retries() { return retries } }
+  return { view, fields, panel, dialog, changedConnections, targetRequests, values, setState(value) { state = value }, get selectedSection() { return selectedSection }, get reads() { return reads }, get changes() { return changes }, get retries() { return retries } }
 }
+
+for (const appId of ['agent', 'personal-agent']) test(`${appId} connection settings do not expose a second local Computer manager`, async t => {
+  const f = viewFixture(t, [], { appId })
+  f.setState(undefined)
+  await flush()
+  f.view.open()
+  assert.match(f.panel.innerHTML, /管理连接/)
+  assert.doesNotMatch(f.panel.innerHTML, /管理本机 Computer worker|\bdata-computer\b|\bdata-attachments\b/)
+})
 
 test('pending-to-ready bootstrap keeps observing while unsaved input prevents rebuilding, then refreshes safely', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
@@ -103,31 +116,31 @@ const devices = [
   { id: 'remote', name: 'Remote', endpoint: 'https://remote.example', instanceId: 'remote-instance', revision: 1 },
 ]
 
-test('settings and sidebar use the same guarded selection without starting the new device', async t => {
+test('settings switches devices after the workspace permits leaving without starting the new device', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   let allowed = false
   const f = viewFixture(t, devices, { selectedId: 'local', canLeave: () => allowed })
   f.setState(undefined); await flush()
   assert.equal(f.view.selectConnection('remote'), false)
-  assert.equal(f.select.value, 'local'); assert.equal(f.changes, 0)
+  assert.equal(f.changes, 0)
   assert.equal(f.values.has('anybox.client.selected'), false)
   allowed = true
-  f.select.value = 'remote'; f.select.dispatchEvent(new Event('change'))
-  assert.equal(f.select.value, 'remote')
+  assert.equal(f.view.selectConnection('remote'), true)
   assert.deepEqual(f.changedConnections, [devices[1]])
   assert.equal(f.values.get('anybox.client.selected'), 'remote')
   assert.ok(f.targetRequests.every(request => request.body === undefined), 'device selection only observes target state')
   assert.equal(f.retries, 0)
 })
 
-test('a hidden connection draft blocks the shared settings selector and reveals its form', async t => {
+test('a hidden connection draft blocks device selection in settings and reveals its form', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const f = viewFixture(t, devices, { selectedId: 'local' })
   f.setState(undefined); await flush()
   assert.equal(f.dialog.open, undefined)
   f.fields.get('name').value = 'Unsaved connection'
   assert.equal(f.view.selectConnection('remote'), false)
-  assert.equal(f.select.value, 'local'); assert.equal(f.changes, 0)
+  assert.equal(f.changes, 0)
+  assert.equal(f.values.has('anybox.client.selected'), false)
   assert.equal(f.selectedSection, 'connections'); assert.equal(f.dialog.open, true)
   assert.match(f.panel.nodes.get('[data-status]').textContent, /保存或放弃尚未保存的连接修改/)
   f.fields.get('name').value = ''
@@ -144,7 +157,6 @@ test('unchanged, unknown and disposed device selections cannot trigger replaceme
   assert.equal(f.changes, 0)
   await f.view.dispose()
   assert.equal(f.view.selectConnection('remote'), false)
-  f.select.value = 'remote'; f.select.dispatchEvent(new Event('change'))
   assert.equal(f.changes, 0)
   assert.equal(f.values.has('anybox.client.selected'), false)
   assert.ok(f.targetRequests.every(request => request.body === undefined))

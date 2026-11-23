@@ -16,6 +16,7 @@ import type { SessionPanel, SessionScrollPosition } from './session-view.js'
 import { closePane, emptyWorkspace, fitRatios, fits, openSession, panes, parseRoute, ratioBounds,
   resizeSplit, restoreWorkspace, sessionHash, splitSession, separatorSize, waitForProjectSnapshot } from './workspace-layout.js'
 import type { Edge, LayoutNode, Pane, SessionRef, Size, Split, Workspace } from './workspace-layout.js'
+import { projectWorkspaceDialogs } from './project-workspaces.js'
 import { createSidebarStateStore } from './sidebar-layout.js'
 import { setupSidebarLayout } from './sidebar-client.js'
 import { createFileSidebar, restoreFileSidebarSessionState } from './file-sidebar.js'
@@ -80,6 +81,11 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
   let dragCleanup: (() => void) | undefined, suppressClick = false
   const bundles = new Map<string, { controller: SessionController; view?: SessionPanel; scroll: SessionScrollPosition }>()
   const multi = api as Partial<HarnessClient>
+  const workspaceDialogs = projectWorkspaceDialogs(root, api, messageFor, (projectId, count) => {
+    if (disposed || !projects.some(project => project.id === projectId && project.workspaceCount !== count)) return
+    projects = projects.map(project => project.id === projectId ? { ...project, workspaceCount: count } : project)
+    renderNavigation()
+  })
   const changes = multi.changes ? multi.changes({
     refresh(id) { bundles.get(id)?.controller.notifyChange() },
     view(snapshot) { bundles.get(snapshot.sessionId)?.controller.protocolView(snapshot) },
@@ -523,6 +529,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
         group.setAttribute('aria-label', item.name)
         group.innerHTML = `<div class="project-row">
           <button class="project-button" type="button"><span class="project-copy"><span class="project-name"></span><small></small></span></button>
+          <button class="project-settings icon-button" type="button" aria-haspopup="dialog"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-settings"/></svg></button>
           <button class="project-create icon-button" type="button"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#agent--icon-plus"/></svg></button>
         </div><div class="project-sessions navigation-list"></div>`
         group.querySelector('.project-button')!.setAttribute('aria-controls', `agent--project-sessions-${item.id}`)
@@ -543,11 +550,14 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       group.querySelector('.project-create')!.setAttribute('aria-label', `在 ${item.name} 中新建会话`)
       group.querySelector<HTMLButtonElement>('.project-create')!.title = `在 ${item.name} 中新建会话`
       group.querySelector('.project-sessions')!.setAttribute('aria-label', `${item.name} 的会话`)
+      const settings = group.querySelector<HTMLButtonElement>('.project-settings')!
+      settings.dataset.manageWorkspaces = item.id; settings.hidden = item.workspaceCount === undefined
+      settings.title = `${item.name} · 项目工作区`; settings.setAttribute('aria-label', settings.title)
       button.dataset.projectId = item.id
       button.title = `${projectEnvironmentLabel(item)}${item.computerAttachmentId ? ` · ${item.computerAttachmentId}` : ''} · ${item.path}`
       button.classList.toggle('unavailable', !item.available)
       button.querySelector('.project-name')!.textContent = item.name
-      button.querySelector('small')!.textContent = `${projectEnvironmentLabel(item)}${item.available ? '' : ' · 目录不可访问'}`
+      button.querySelector('small')!.textContent = `${(item.workspaceCount ?? 0) > 1 ? item.workspaceCount + ' 个工作区' : projectEnvironmentLabel(item)}${item.available ? '' : ' · 目录不可访问'}`
       updateProjectExpansion(item.id)
     }
     if (!visible.length) {
@@ -609,6 +619,13 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     const data = button.dataset
     if (data.sessionMenu && data.projectId) {
       sessionMenu.toggle(button, { projectId: data.projectId, sessionId: data.sessionMenu })
+    } else if (data.manageWorkspaces) {
+      const project = projects.find(item => item.id === data.manageWorkspaces)
+      if (!project) return
+      const instance = project.instanceId ?? splitScopedId(project.id)?.instanceId
+      const connection = multi.connections?.find(item => item.instanceId === instance)
+      const target = connection && multi.directoryTarget?.(connection.id)
+      if (target) void workspaceDialogs.manage(project, signal => target.environments(signal))
     } else if (data.createProjectSession) {
       createSession(data.createProjectSession)
     } else if (data.retryProject) {
@@ -729,11 +746,14 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     selectProject(chosen.id)
     creating = true
     refreshControls()
-    void api<SessionView>('/sessions', { projectId: chosen.id, agentId }).then(created => {
+    void (async () => {
+      const selection = chosen.workspaceCount === undefined ? undefined : await workspaceDialogs.choose(chosen, listeners.signal)
+      if (selection === null || disposed || !applicationActive) return
+      const created = await api<SessionView>('/sessions', { projectId: chosen.id, agentId, ...selection })
       if (disposed) return
       open({ projectId: created.projectId, sessionId: created.id })
       void sessionIndex.load(created.projectId)
-    }).catch(error => { if (!disposed) showNotice(messageFor(error)) }).finally(() => { creating = false; if (!disposed) refreshControls() })
+    })().catch(error => { if (!disposed) showNotice(messageFor(error)) }).finally(() => { creating = false; if (!disposed) refreshControls() })
   }
   const projectPicker = setupProjectDirectoryPicker(messageFor, opened => {
     if (disposed) return
@@ -822,7 +842,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
       applicationActive = active
       sidebarLayout.setActive(active)
       fileSidebar.setVisible(active && !document.hidden && sidebarLayout.rightVisible())
-      if (!active) { sessionMenu.close(); void projectPicker.close(); dragCleanup?.(); resizeCleanup?.(); for (const bundle of bundles.values()) bundle.view?.closeContextUsage(); return }
+      if (!active) { workspaceDialogs.close(); sessionMenu.close(); void projectPicker.close(); dragCleanup?.(); resizeCleanup?.(); for (const bundle of bundles.values()) bundle.view?.closeContextUsage(); return }
       if (disposed) return
       renderLayout()
       for (const bundle of bundles.values()) void bundle.controller.refresh()
@@ -831,6 +851,7 @@ export function setupWorkspace(api: Api, messageFor: (error: unknown) => string,
     dispose() {
       unsubscribeRoute?.()
       disposed = true
+      workspaceDialogs.close()
       sessionMenu.dispose()
       unsubscribeSidebar()
       sidebarLayout.dispose()

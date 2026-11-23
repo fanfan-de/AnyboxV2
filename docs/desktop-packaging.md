@@ -21,6 +21,8 @@ npm run desktop:dev
 
 `desktop:dev` 先运行共享构建，再编译 macOS 目录面板适配器并启动 Electron。桌面构建机需要 Xcode Command Line Tools 和本地 Node C API 头文件；适配器使用 Node-API 和系统 Cocoa，不下载编译依赖。普通 `npm run build`、Web/Node 命令与 `npm run check` 不编译它，不要求 Xcode。
 
+从源码启动桌面版时，本机 Computer worker 默认使用启动开发脚本的 Node。需要指定另一套 Node 时可设置 `ANYBOX_DEVELOPMENT_NODE_EXECUTABLE` 为可执行文件的绝对路径。已打包桌面版使用随包运行时。
+
 ```sh
 npm run check
 ANYBOX_KEYRING_TESTS=1 npm run desktop:smoke

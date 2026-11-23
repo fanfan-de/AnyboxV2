@@ -138,11 +138,11 @@ export function fakeProtocol(id = 'test', version = '1') {
   }
 }
 
-export async function fixture({ store = memoryStore(), vault = memoryVault(), protocols = [fakeProtocol()] } = {}) {
+export async function fixture({ store = memoryStore(), vault = memoryVault(), protocols = [fakeProtocol()], requireManagedTools = false } = {}) {
   const root = new Context()
   const ports = root.installComponent({ name: 'test-models-ports', apply(ctx) { ctx.provide('models.store', store); ctx.provide('models.vault', vault) } })
   await ports
-  const component = root.installComponent(createModelsComponent())
+  const component = root.installComponent(createModelsComponent({ requireManagedTools }))
   await component
   assert.equal(component.state, FiberState.ACTIVE)
   const models = root.get('models'), settings = root.get('models.settings'), registry = root.get('models.protocols')

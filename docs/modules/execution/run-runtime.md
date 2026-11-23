@@ -4,10 +4,12 @@
 
 RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制、临时展示和清理等待。它通过应用自有的 `RunHost` 操作契约执行协议程序，不解释原生响应或协议停止原因。
 
+正式装配同时注入本应用的[执行环境授权组件](../tools/execution-environments.md)。RunRuntime 读取已接纳 Run 的固定工具绑定，对照原目标核验函数分派，并让撤权可以取消仍持有进程等资源的 scope。首次派发只为实际使用的目标建立 scope。Models 在每次请求真正发送前校验最终声明和准确的多目标绑定。Session 观察、业务结果及资源退出分别记实。
+
 ## 实现与装配
 
 - 源码：[组件](../../../packages/app-harness/src/core/run/runtime-component.ts)、[RunHost / PreparedRunProgram](../../../packages/app-harness/src/core/run/program.ts)、[OwnedCall](../../../packages/app-harness/src/core/contracts.ts)、[工具校验和限制](../../../packages/app-harness/src/core/run/domain.ts)。
-- 工厂：`createRunRuntimeComponent(inputs, binding?)`；组件名：`harness-run-runtime`；配置类型：`void`；`inputs` 提供 `now()` 和 `newId()`。受信 `binding` 声明执行提供方所需的 `inject` 并通过 `bind(deps)` 取得本轮执行注册表；组合根将同一纯环境目录提供给 Session 和 Run，Session 不持有执行闭包。
+- 工厂 `createRunRuntimeComponent(inputs, binding?, bindingSource?, resolveTargets?)`。组件名 `harness-run-runtime`，配置类型 `void`。`inputs` 提供 `now()` 和 `newId()`。组合根的同一份[工具注册](../../tool-environments.md#插入与选择)为 Session 和 Run 提供纯目录，为 Runtime 生成执行依赖与 `bind(deps)`。适配器为项目绑定的环境解析确切目标。
 - 提供 `harness.run-runtime: RunRuntimePort`。
 - 始终注入 [Session](../sessions/session.md) 的 `harness.session-runs`；其他依赖由 `binding.inject` 声明。正式 Computer 绑定加入 [Computer Operations](../computers/computer-operations.md) 的 `harness.computer-operations`，纯自定义环境可以在未安装 Computer Operations 时执行和结算。四种 Computer 工具服务只由独立 worker 执行器持有，Runtime 不持有 OS 进程。
 
@@ -19,6 +21,7 @@ RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制�
 | `cancel(runId, reason)` | 请求取消；reason 为 `user-requested`、`owner-disposed` 或 `dependency-unavailable` |
 | `wait(runId, signal?)` | 等待该 Run 的结束和清理；无活跃所有者时读取持久记录 |
 | `getView(runId)` | 返回临时视图的结构化克隆，避免调用者修改内部状态 |
+| `recoverStoppedScopes(excludeRunIds, signal?)` | 启动时接手终态 Run 已登记的目标清理，返回接手的 Run ID 和清理等待入口，信号可通知恢复观察端结束 |
 
 同 ID、同 program 的重复 `start` 复用已有 Promise；同 ID、不同 program 被拒绝。Runtime 区分 `started` 与 `finished`：第一次实际启动操作后可以返回 started；尚未启动即失败时由 finished 决定返回值。调用方通过 `wait` 等待完成。
 
@@ -30,11 +33,11 @@ RunRuntime 独占每个已接管 Run 的 program、在途操作、取消控制�
 
 状态写入失败立即关闭新操作准入并中止内部 signal。取消后仍提交已经发生的真实 observation，包括 Apply Patch 部分变更。若 `done` 提前失败，即使 `result` 永不返回也能识别清理失败；如果已有工具结果，还会尽量保留它。
 
-工具从受信静态目录按 program 固定声明进行分派，涵盖三个来源的命令、文件读写、搜索和图片契约，以及保留的 Bash/Apply Patch；计划/待办契约仅兼容已有 Session 的冻结声明，不进入新选择。整个批次的名称、ID 与来源参数 schema 必须先验证通过，随后按模型给出的顺序串行执行。调用 ID 必须非空、唯一且不超过 256 字符；未声明的工具在任何副作用前拒绝。旧 Bash/Apply Patch 参数仍必须恰有对应的一个字段。没有动态工具注册中心，也不把模型给出的近似工具名当作别名执行。
+工具按 program 固定声明分派，来源包括内置 Computer、自定义环境和 MCP 连接。计划及待办契约仅用于已有 Session 的冻结声明。先整批验证名称、ID 与来源参数 schema，再按模型给出的顺序串行执行。调用 ID 必须非空、唯一且不超过 256 字符，工具名称必须精确命中当轮声明。旧 Bash/Apply Patch 参数仍必须恰有对应的一个字段。
 
 协议共享管道在调用 Runtime 之前对整批做纯预检：合法 ID 关联的未知工具名或 schema 错误返回结构化 `invalid-tool-request` 反馈供模型修正，合法同伴返回 `batch-rejected`，整批均未执行。每个 Run 累计最多三批拒绝反馈，第四批终止；额度通过已有 protocolCursor 随模型响应保存并在恢复时继承。Runtime 仍在接受工具前重新验证完整批次，不能把执行、存储或清理异常当作可修正预检结果。损坏或无法唯一关联的 ID、损坏原生 JSON 仍终止运行。补丁文本语法错误属于已经执行的工具结果，沿既有往返路径允许模型修正，不计入纯预检拒绝额度。完整边界见[协议 Agent 注册表](protocol-agent-registry.md#准备与执行)。
 
-Runtime 先保存完整恢复批次与 operation ID，再按 Session 固定的[环境快照](../../tool-environments.md)路由。纯环境目录校验精确声明，`bind` 生成本代执行注册表；缺失、重复、版本或定义不符的提供方不能执行。Runtime 不导入具体 Bash、Process 或 Patch 错误类型，也不从环境 ID 推断工具目录规则或进程语义。Computer 工具的 Session 意图、声明及资源需求仍在同一业务事务同步接纳到 Computer Operations；其他环境仅登记自己的 Session 操作，不生成 Computer 声明。目录、注册表与历史适配是内部提供方，不另建 Nya 组件。
+Runtime 先保存完整恢复批次与 operation ID，再按 Session 固定的[环境快照](../../tool-environments.md)路由。新目标在持久工具意图前登记作用域准入。纯环境目录校验精确声明，`bind` 生成本代执行注册表。各应用组合根将确切目标的解析委托给环境适配器。Computer 工具的 Session 意图、声明及资源需求在同一业务事务同步接纳到 Computer Operations。目录、注册表与历史适配复用现有应用组件。
 
 Computer 适配在本轮依赖快照内创建，惰性打开原观察 scope；Operations 按需准备确切实例和工作区 binding，再提交独立 worker。Computer 工具使用固定 workspacePath，长进程存活期间 scope 保留实例 pin 和工作区 reservation。模型和旧会话兼容计划工具不激活 computer。worker 保存接纳凭证、原结果与实际退出，确认丢失重查同 ID/摘要，不重复派发副作用。
 
@@ -44,9 +47,11 @@ Computer 适配在本轮依赖快照内创建，惰性打开原观察 scope；Op
 
 协议 program 发布展示 v2 的有界完整快照，Runtime 不解释其原生内容类型、停止状态或诊断。模型工具请求保留其来源 exchange；本地工具事实仍只写入 `tool-started`、`tool-observed`、`tool-failed` 事件。前端按 Run、来源模型 exchange、请求 ID、名称和事件位置关联事实，不发布额外 `tools-N` 临时 exchange，也不以请求快照推断工具完成。取消和清理失败时，已经保存的真实工具结果及部分补丁事实继续可查询。
 
+多工作区会话按模型实际发出的别名查回原工具、工作区绑定和确切目标，并把这几项随操作意图持久保存。Runtime 只为实际使用的目标取得作用域。恢复先定位各自曾经打开的作用域，仍使用原操作 ID。各台 Computer 分别提供取消、关闭和实际退出回执，任一目标退出仍未证实时保留失败事实。模型回填和对话历史使用当时的别名。相关用例覆盖[目标分派与恢复](../../../packages/execution-environments/tests/targets.test.mjs)和[四种原生协议往返](../../../tests/native-protocol-agents.test.mjs)。
+
 ## 结算、取消与关闭
 
-启动后先读取 Session 保存的 Run 和项目归属，验证原生上下文模式、绑定代与完整模型快照和 program 一致。执行结束时中止新操作，取消仍在途句柄，等待每个 `done` 和所有受管 Promise。已打开环境统一使用 `<runId>:tool-environment-scope-close`、`intent.kind=tool-environment-cleanup` 保存关闭操作，结果恒为 `{ environments: [{ environmentId, result }] }`；不探测环境是否持有进程。各环境自行关闭全部保留资源，Computer 适配终止并等待进程组、释放实例与工作区引用并报告剩余输出。之后 `program.close()`，等待取消状态写入，再请求 Session 原子结算。正常模型完成同样关闭 scope，但不设置用户取消原因；存储失败也必须继续清理。最终 `program.release()` 在清理和持久结算之后释放绑定租约。
+启动后先读取 Session 保存的 Run 和项目归属，验证原生上下文模式、绑定代与完整模型快照和 program 一致。执行结束时中止新操作，取消仍在途句柄，等待每个 `done` 和所有受管 Promise。已打开环境用 `<runId>:tool-environment-scope-close` 和 `intent.kind=tool-environment-cleanup` 保存关闭操作。`environments` 中每项保留 `environmentId`、`result`，多目标 scope 还包含 `targetId`。关闭观察提交后，各目标按自己的实际退出证明解除授权占用。Computer 适配终止并等待进程组，释放实例与工作区引用并报告剩余输出。随后执行 `program.close()`，等待取消状态写入，再请求 Session 原子结算。正常模型完成也关闭 scope。存储失败后仍继续清理。最终 `program.release()` 在清理和持久结算之后释放绑定租约。
 
 历史读取适配集中处理旧 `computer-scope-close` ID、`tool-process-cleanup` / `computer-scope-cleanup` 意图及未包裹的 Computer 回执。恢复复用已存在操作与不可变观察，不新建替代身份，也不将新格式回写到旧观察；仍须等待本次实际退出。即使历史回执已经成功，恢复中新发生的 `done` 失败也必须保留为清理失败。
 
@@ -62,7 +67,7 @@ Run 接管 `run-state` v10 的独立 resume 状态，提升 runOwnerEpoch，并�
 
 protocolCursor 的可选 `toolRequestCorrections` 保存当前 Run 已使用的纯预检拒绝额度，缺省为零；它属于协议续轮账本，不是 worker 工具执行次数。重放最后耐久响应时复用已保存的额度，下一模型请求登记前的同一拒绝可确定性重建；不会在进程恢复或成功工具批次后重新获得三次额度。
 
-此阶段承诺 Runtime 进程 SIGKILL/异常退出后、worker 存活且模型响应已保存的接续。显式卸载组件、依赖撤销或整套应用正常关闭仍取消并等待所属 Run；idle worker 作为独立设备服务保持运行。model-pending 且响应未保存的 Run 结算 interrupted，不重发模型；若之前留有 Codex 长进程，仍独立取消并排空其 scope。账户/参数恢复不兼容也先排空原资源才结算失败。worker 自身故障的未知执行拒绝成功清理与节点创建。
+Runtime 进程 SIGKILL 后，worker 存活且模型响应已保存时可接续。恢复根据耐久记录打开实际使用过的目标，各自核对退出证明。继续运行还须核对固定声明与授权。`model-pending` 且响应未保存的 Run 结算为 `interrupted`，启动恢复仅清理已有目标。账户或参数不兼容时也先排空原资源。无法证明退出的目标保留未知状态。组件卸载、依赖撤销或应用正常关闭仍取消并等待所属 Run，空闲 worker 由其独立生命周期管理。
 
 ## 验证
 

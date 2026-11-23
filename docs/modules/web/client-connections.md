@@ -4,7 +4,9 @@
 
 `packages/app-harness/src/client/connections.ts` 的 `createConnectionsComponent(options)` 创建 Harness 私有 `client-connections`，提供稳定服务 `client.connections`，inject 同一客户端根的 `local-storage`。组件由 Harness 客户端 runtime 在打开应用时安装，停止时取消并等待自己的网络、配对及凭据操作；不由 distribution 常驻安装，不供 Claude Agent 使用。同目录 `connection-proxy.ts` 是本应用自己的转发实现。默认凭据 namespace 为 `anybox.client.agent`，自定义 namespace 追加 `.agent`；旧 namespace 只用于读取迁入。
 
-连接、管理 API 与界面均由 Anybox Harness 自己提供；应用停止释放组件资源，但保留本应用已保存连接与凭据。Claude Agent 的连接、凭据和管理界面独立。通用外壳不管理本地/远程目标。工作区侧栏底部将一处紧凑的“执行设备”选择器与只显示图标的“设置”按钮放在同一行；选择器保留屏幕阅读器标签，完整设备名称通过 title 提示。“管理连接”是 Anybox Harness 设置中的第五个分类，与“会话设置”“模型管理”“Prompt 管理”“已归档会话”共用同一弹窗。连接和归档分类跨设备展示，弹窗在这两个分类隐藏当前执行设备提示。所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备，归档列表不受所选设备筛选限制。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。独立的“管理本机 Computer worker”入口（`units-client.ts` 的 `setupLocalAttachments`）固定管理客户端服务所在设备：填入对方的 HTTPS 地址与附着码，设定允许对方使用的项目目录与工具契约上限，经本机 `/computer/*` 接口直接让 worker 消费附着码并拨出，不要求先启用本机 harness server，也不跟随所选远端连接；列表显示每条附着的连接状态（连接中、已连接、离线、对方实例已改变、已撤销），可修改上限及撤销。此前经所选设备 `/units/local-computer/attachments` 管理该设备 worker 的服务端路由仍保留兼容，新界面不再使用。附着码是秘密，关闭设置弹窗即丢弃输入与该面板。用户关闭设置或按 Esc 时清空未保存的访问令牌与已发行令牌的临时展示；临时停用应用保留已有草稿。关闭仅释放句柄，已保存连接和凭据保留。
+连接、管理 API 与界面均由 Anybox Harness 自己提供；应用停止释放组件资源，但保留本应用已保存连接与凭据。Claude Agent 的连接、凭据和管理界面独立。通用外壳不管理本地/远程目标。从工作区侧栏底部的设置按钮进入“会话设置”可切换执行设备，进入“管理连接”可添加、编辑或移除连接。连接和归档分类跨设备展示，弹窗在这两个分类隐藏当前执行设备提示。所选设备固定新增项目及模型、Prompt 设置的归属，已有会话保持所属设备，归档列表不受所选设备筛选限制。连接管理展示每台设备的 Agent 状态，并提供“启动 Agent”“停止 Agent”操作；这些控制通过网关调用目标宿主，连接组件仍只拥有连接和凭据。用户关闭设置或按 Esc 时清空未保存的访问令牌与已发行令牌的临时展示；临时停用应用保留已有草稿。关闭仅释放句柄，已保存连接和凭据保留。
+
+本机 Computer 工具服务和附着在“执行环境”中管理。 [Client Computer 组件](client-computer.md)
 
 设备切换先在应用路由中固定新选择，再重建本应用界面；旧工作区同步更新项目或会话查看位置时保留路由当前的设备选择，不能用重建前的连接覆盖它。查看项目与会话不自动改变设备选择，已有会话请求继续按自身 instanceId 路由。
 

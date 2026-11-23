@@ -1,3 +1,5 @@
+import type { RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
+import type { NativeManagedTools } from '@anybox/models'
 import type { JsonValue, NativeContinuation, NativeModelSnapshot, NativeImageResourceRef } from '@anybox/models'
 import type { FileRef, FileContent } from '../project-files/domain.js'
 import type { ImageRef } from '../image/port.js'
@@ -126,6 +128,7 @@ export interface RunResumeState {
   readonly settlement?: RunOutcome
 }
 export interface RunResumeRecord {
+  readonly access?: RunEnvironmentAccess
   readonly run: import('./domain.js').Run
   readonly projectId: string
   readonly initialization: NativeInitialization
@@ -200,6 +203,7 @@ export interface PreparedRunProgram {
 }
 
 export interface PrepareRunInput {
+  readonly managedTools?: NativeManagedTools
   readonly runId: string
   readonly sessionId: string
   readonly modelId: string
@@ -219,5 +223,5 @@ export const protocolAgentServiceKey = 'harness.protocol-agents'
 export interface ProtocolAgentPort {
   protocolForModel(modelId: string): string
   prepare(input: PrepareRunInput): Promise<PreparedRunProgram>
-  prepareResume(input: { readonly resume: RunResumeRecord; readonly signal: AbortSignal }): Promise<PreparedRunProgram>
+  prepareResume(input: { readonly managedTools?: NativeManagedTools; readonly resume: RunResumeRecord; readonly signal: AbortSignal }): Promise<PreparedRunProgram>
 }

@@ -12,7 +12,9 @@ async function openNative(root, modelId = 'default') {
   const model = root.get('models').get(modelId)
   const lease = root.get('models.protocols').acquire(model.parameters.protocolId)
   try {
-    const execution = await root.get('models').openNative({ modelId, lease })
+    const execution = await root.get('models').openNative({ modelId, lease,
+      managedTools: { functions: [], runSend() { throw new Error('inspecting model settings must not send a request') } },
+    })
     return { snapshot: execution.snapshot, async close() { try { return await execution.close() } finally { lease.release() } } }
   } catch (error) { lease.release(); throw error }
 }

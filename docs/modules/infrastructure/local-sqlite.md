@@ -20,7 +20,7 @@ Local SQLite 位于可选共享包 `@anybox/storage-sqlite`，为需要 SQL 的�
 
 `LocalSqliteOptions` 只包含可选 `serviceKey`。服务名默认 `local-storage`，显式提供时必须是非空白且不含 NUL 的字符串；工厂同步验证，不安装组件、不访问文件。同一 Nya 根可以安装多个 `local-sqlite` 实例，用不同服务名分别提供不同文件的端口。各实例的操作队列、迁移账本和关闭等待相互独立，端口名称不改变文件排他规则。
 
-组件打开数据库前拒绝已有 `<path>.lock`，报告离线迁移要求且不删除旧目录。随后设置 `locking_mode=EXCLUSIVE` 并实际执行 `BEGIN EXCLUSIVE; COMMIT`，在整个连接生命周期跨事务保持 OS 锁。同文件（含文件别名）竞争返回 `occupied`；异常退出无需手工清理新锁。不得让外部连接同时读取此业务库。
+组件识别布局 2、3 的专用 `<path>.lock/authority.sqlite` 检查点。遇到其他旧锁或不完整目录时，报告需要离线检查并保留现场。打开连接时设置 `locking_mode=EXCLUSIVE` 并执行 `BEGIN EXCLUSIVE; COMMIT`，在整个连接生命周期跨事务保持 OS 锁。同文件竞争返回 `occupied`。
 
 数据库与连接归本组件；客户端在自己的根以同一提供方拥有独立 client.sqlite。宿主安装事实与操作账本使用同根的独立命名端口及文件，不复用应用业务连接；具体表和迁移仍由账本所属组件声明。Models 配置和目录缓存仍由各自组件拥有。初始化失败或关闭通过 Effect 释放连接与锁，文件不删除。
 
@@ -31,6 +31,9 @@ Local SQLite 位于可选共享包 `@anybox/storage-sqlite`，为需要 SQL 的�
 | `read(work, signal?)` | 串行运行同步或异步回调；期间开启 `PRAGMA query_only = ON`，结束恢复；返回回调结果 |
 | `transaction(work, signal?)` | `BEGIN IMMEDIATE` 后运行同步或异步回调；成功提交，拒绝或取消回滚；可跨同一连接的多领域表 |
 | `migrate(domain, migrations)` | 对指定领域按版本补齐迁移；每个迁移与账本版本单独事务提交 |
+| `requireLayout(2)` | 在独占连接上启用布局 2 的独立检查点 |
+| `requireLayout(3, applicationId?)` | 从布局 1 或 2 原子升级到 3。可同时登记此应用写入所需的 `storage.sqlite` 最低能力 1.2.0 |
+| `minimumWriterCapability(applicationId)` | 只读查询该应用登记的最低存储能力，供共享执行宿主在创建其 runtime 前检查 |
 
 `StorageReader` 只有 `get(sql, values?)` 和 `all(sql, values?)`。`StorageTransaction` 额外提供 `execute(sql, values?)`，返回 `changes` 和 `lastInsertRowid`。参数与行值仅用 `string | number | bigint | Uint8Array | null`，不暴露驱动 statement 或 connection。
 
@@ -40,11 +43,17 @@ reader/transaction 仅在回调生命周期内有效，即使回调异步等待�
 
 通用提供方使用 SQLite `user_version = 1` 表示自身布局，包含 `schema_migrations(domain PRIMARY KEY, version)`。全新空库从 0 初始化；非空且无法识别的布局拒绝启动，不尝试猜测迁移。
 
+布局 2 和 3 在首次升级时建立与主库同身份的独立检查点。此后每个修改数据的事务和每次领域迁移，同时推进主库和检查点的修订及随机标记。两份文件使用 SQLite 回滚日志和同一连接的附加数据库事务提交。重启核对两侧身份、修订和标记，检测恢复到了较早修订或另一条写入历史。旧版存储遇到不认识的布局会拒绝打开。
+
+Anybox Harness 的执行根在打开 Models、领取环境账本所有权和运行领域迁移前要求布局 3。升级事务同步写主库和检查点的 `user_version=3`，保存应用自己的最低写入能力。从布局 2 升级还会推进两边的修订和标记。旧宿主的 SQLite 在打开文件时即拒绝布局 3。新宿主若加载旧应用包，会在创建该应用 runtime 前比较包显式要求的最低 SQLite 能力。旧包声明的 `^1.1.0` 会报告不兼容，其他同库应用的要求各自独立。Personal Agent 继续用自己的执行库与布局 2。
+
+备份时先关闭执行端并确认退出，保留主库及整个同级 `<path>.lock` 目录。单独覆盖主库会在下一次打开时校验失败。恢复整组旧备份前，需要从独立保留的最新检查点、撤权记录和提供方原操作核对恢复点之后的变更。两份文件一同回滚会失去本地比较依据，无法核实的旧副本应保持离线。
+
 各领域调用 `migrate(domain, migrations)`：domain 非空，迁移版本必须从 1 连续递增，内部会先排序。`up(tx)` 必须同步；返回 Promise 的迁移被拒绝。每个迁移在 `BEGIN IMMEDIATE` 内修改领域结构/数据并更新该领域版本，然后提交。失败回滚本条迁移及版本，已经提交的更早版本保留。
 
 不同领域的版本独立。数据库记录的领域版本高于应用提供的迁移数量时返回 `schema-version`，禁止用旧代码打开更新的领域结构。Session 的 `run-state` 账本、Prompt 和 Projects 表结构由各自组件解释，不写死在本组件工厂中。
 
-当前附件同样复用本连接：[Image Assets](../images/image-assets.md) 登记 `image-assets` v1，保存图片元数据及保留凭证；[Project Files](../sessions/project-files.md) 登记 `project-files` v1，保存文本 BLOB、准备批次及保留凭证。[Session](../sessions/session.md) 的 `run-state` 当前为 v11，v8 增加默认模型、v9 固定工具快照、v10 保存恢复游标与 owner、v11 固定单元附着引用，不新建存储组件。接受 Run 时，同一事务调用两个资源组件的同步 retainIn，附件引用与 Run 一起提交或回滚；通用存储不解释这些领域规则。
+当前附件同样复用本连接：[Image Assets](../images/image-assets.md) 登记 `image-assets` v1，保存图片元数据及保留凭证；[Project Files](../sessions/project-files.md) 登记 `project-files` v1，保存文本 BLOB、准备批次及保留凭证。[Session](../sessions/session.md) 的 `run-state` 账本保存默认模型、工具快照、恢复游标与 owner、单元附着引用及所选工作区，不新建存储组件。接受 Run 时，同一事务调用两个资源组件的同步 retainIn，附件引用与 Run 一起提交或回滚；通用存储不解释这些领域规则。
 
 ## 准入、取消与关闭
 

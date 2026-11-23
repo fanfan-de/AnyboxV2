@@ -12,6 +12,7 @@ import { parseHarnessServerConfig } from '../packages/app-harness/dist/server-co
 import { installHarnessServerCore, createHarnessServerAgentComponents } from '../packages/app-harness/dist/core/index.js'
 import { createImageAssetsComponent } from '../packages/app-harness/dist/core/image/component.js'
 import { runAdmissionServiceKey } from '../packages/app-harness/dist/core/run/component.js'
+import { mcpEnvironmentServiceKey } from '../packages/app-harness/dist/core/tool-environments/mcp.js'
 import { controlledModels, deferred } from './helpers/controlled-models.mjs'
 
 const agents = [{ id: 'assistant', modelId: 'default', instructions: 'Test.' }]
@@ -42,21 +43,26 @@ test('harness server owns its full installation and reopening preserves data in 
   for (const key of ['models', 'models.catalog', 'harness.prompts', 'harness.sessions', 'harness.computers', 'harness.workspaces', 'harness.computer-operations', 'computer.worker', 'harness.http']) assert.ok(root.get(key), key)
   for (const key of ['tools.bash', 'tools.apply-patch', 'tools.processes', 'tools.files']) assert.equal(root.get(key), undefined, `${key} is owned by the independent worker`)
   const components = createHarnessServerAgentComponents(root, { agents }, { isClosing: () => false })
-  assert.deepEqual(components.find(component => component.name === 'harness-run-runtime').inject, ['harness.session-runs', 'harness.computer-operations'])
+  assert.deepEqual(components.find(component => component.name === 'harness-run-runtime').inject,
+    ['harness.session-runs', 'harness.execution-environments', 'harness.computer-operations', mcpEnvironmentServiceKey])
   assert.ok(components.find(component => component.name === 'harness-computer-operations').inject.includes('computer.worker'))
   assert.equal(components.some(component => component.inject?.some(key => key.startsWith('tools.'))), false, 'Authority execution depends on durable operations, not worker tool services')
   assert.equal(existsSync(workerDirectory), false, 'opening Authority installs the proxy without activating a worker')
-  const models = root.get('models'), prompts = root.get('harness.prompts')
+  const models = root.get('models'), prompts = root.get('harness.prompts'), mcp = root.get(mcpEnvironmentServiceKey)
+  assert.deepEqual(mcp.connections(), [])
   const prompt = await prompts.createPrompt('owner', { name: 'Remember', kind: 'context', role: 'user', content: 'Keep this content' })
   await runtime.open(); assert.equal(root.get('models'), models)
   await runtime.stop()
   assert.equal(runtime.inspect(), 'disabled'); assert.equal(root.get('models'), undefined)
   assert.equal(root.get('harness.sessions'), undefined); assert.equal(root.get('harness.http'), undefined)
   assert.equal(root.get('computer.worker'), undefined); assert.equal(root.get('harness.computer-operations'), undefined)
+  assert.equal(root.get(mcpEnvironmentServiceKey), undefined)
   assert.equal(existsSync(workerDirectory), false)
   assert.ok(root.get('local-storage')); assert.equal(root.fiber.state, FiberState.ACTIVE)
   await runtime.open()
   assert.notEqual(root.get('models'), models)
+  assert.notEqual(root.get(mcpEnvironmentServiceKey), mcp)
+  assert.deepEqual(root.get(mcpEnvironmentServiceKey).connections(), [])
   assert.equal(root.get('harness.prompts').getPrompt('owner', prompt.id).draft.content, 'Keep this content')
   assert.ok(root.get('computer.worker')); assert.ok(root.get('harness.computer-operations'))
   assert.equal(existsSync(workerDirectory), false, 'reopening Authority still does not allocate execution resources')
@@ -182,4 +188,23 @@ test('host admission closes a pending assembly and joins its rollback before ret
   release.resolve(); await assert.rejects(opening); await idle
   assert.equal(cleaned, true); assert.equal(root.get('app'), undefined); assert.equal(root.get('late'), undefined)
   await assert.rejects(runtime.open()); await root.fiber.dispose()
+})
+
+test('the Harness runtime and standalone core gate the bound writer before installing any domain or Models owner', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-harness-writer-')), root = new Context()
+  t.after(async () => { await root.fiber.dispose(); await rm(directory, { recursive: true, force: true }) })
+  const config = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite'), ANYBOX_MODELS_DATABASE: join(directory, 'models.sqlite') })
+  const calls = [], serviceBindings = { 'local-storage': 'test.execution-storage' }
+  root.provide('test.execution-storage', {
+    async requireLayout(layout, applicationId) { calls.push([layout, applicationId]); throw Object.assign(new Error('older writer'), { code: 'schema-version' }) },
+    migrate() { throw Error('migration before writer check') },
+    transaction() { throw Error('owner claim before writer check') },
+  })
+  const runtime = createHarnessServerRuntime(root, config, { agents }, { serviceBindings })
+  await assert.rejects(runtime.open(), { code: 'schema-version' })
+  await assert.rejects(installHarnessServerCore(root, { agents, serviceBindings }), { code: 'schema-version' })
+  assert.deepEqual(calls, [[3, 'agent'], [3, 'agent']])
+  assert.equal(root.get('models'), undefined)
+  assert.equal(existsSync(config.modelsConfigPath), false)
+  assert.equal(root.get('harness.execution-environments'), undefined)
 })

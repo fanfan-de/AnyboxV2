@@ -2,6 +2,7 @@ import type { RunEventView, RunView, ToolTrace } from './client-types.js'
 import { isBashTrace, isApplyPatchTrace, isLibraryToolTrace } from './client-types.js'
 import { runTrace, traceElapsed } from './run-trace.js'
 import { imageURL } from './image-client.js'
+import { runFailureHint } from './client-errors.js'
 
 const record = (value: unknown): Readonly<Record<string, unknown>> | undefined =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, unknown>> : undefined
@@ -108,7 +109,7 @@ export function findProtocolToolFact(context: ProtocolToolContext | undefined, e
 }
 
 export function toolTraceStatus(call: ToolTrace): string {
-  if (isLibraryToolTrace(call) && isCommand(call.name)) {
+  if (isLibraryToolTrace(call) && isCommand(call.workspace?.originalName ?? call.name)) {
     const value = record(call.result)
     if (value?.timed_out === true) return '执行超时'
     if (value?.terminated === true) return '进程已终止'
@@ -172,11 +173,12 @@ function argumentPreview(args: Readonly<Record<string, unknown>> | undefined): s
 /** Only an observed result can establish success or actual file changes. */
 export function summarizeToolRequest(request: ToolRequestView, fact?: ToolTrace,
   readiness: ProtocolToolContext['readiness'] = 'loading', runStatus?: ProtocolToolContext['runStatus']): ToolSummary {
-  const title = toolDisplayName(request.name)
+  const name = fact?.workspace?.originalName ?? request.name
+  const title = fact?.workspace ? fact.workspace.name + ' · ' + toolDisplayName(name) : toolDisplayName(name)
   const args = parseToolArguments(request.arguments)
   let preview = isBashTrace(fact) ? oneLine(fact.command) : isApplyPatchTrace(fact) ? '补丁请求' :
-    !args ? '参数生成中' : request.name === 'bash' && typeof args.command === 'string' ? oneLine(args.command) :
-      request.name === 'apply_patch' ? '补丁请求' : /^(codex_|claude_code_|deepseek_harness_)/.test(request.name) ? argumentPreview(args) : '工具请求'
+    !args ? '参数生成中' : name === 'bash' && typeof args.command === 'string' ? oneLine(args.command) :
+      name === 'apply_patch' ? '补丁请求' : /^(codex_|claude_code_|deepseek_harness_)/.test(name) ? argumentPreview(args) : '工具请求'
   if (!fact) {
     const awaitingFacts = readiness !== 'failed' && (readiness === 'loading' || runStatus === 'running' || runStatus === 'cancelling')
     const statusLabel = readiness === 'failed' ? '执行记录读取失败' : awaitingFacts ? '执行事实待同步' : '执行结果未记录'
@@ -204,7 +206,7 @@ export function summarizeToolRequest(request: ToolRequestView, fact?: ToolTrace,
     else if (attention && typeof value?.signal === 'string') shortReason = `信号：${value.signal}`
   }
   if (attention && !shortReason) {
-    if (fact.category) shortReason = `失败类别：${fact.category}`
+    if (fact.category) shortReason = runFailureHint(fact.category) ?? `失败类别：${fact.category}`
     else if (isBashTrace(fact) && fact.signal) shortReason = `信号：${fact.signal}`
     else if (isBashTrace(fact) && typeof fact.exitCode === 'number' && fact.exitCode !== 0) shortReason = `退出码：${fact.exitCode}`
     else shortReason = toolTraceStatus(fact)
@@ -257,6 +259,7 @@ export function mountToolCallDetails(initial: ToolTrace, sessionId?: string,
     bar.append(name, copy); section.append(bar, content); element.append(section)
     fields.set(key, { element: section, content, copy, value: '' })
   }
+  field('environment', '执行环境与目标', 'pre', 'tool-output', true)
   field('command', '命令', 'code', 'tool-command')
   const result = document.createElement('p'); result.className = 'tool-result'; element.append(result)
   field('patch', '补丁'); field('stdout', 'stdout'); field('stderr', 'stderr')
@@ -281,14 +284,17 @@ export function mountToolCallDetails(initial: ToolTrace, sessionId?: string,
   }
   const update = (call: ToolTrace) => {
     if (disposed) return
-    label.textContent = toolDisplayName(call.name); status.textContent = toolTraceStatus(call)
+    const name = call.workspace?.originalName ?? call.name
+    label.textContent = [call.workspace?.name, toolDisplayName(name)].filter(Boolean).join(' · '); status.textContent = toolTraceStatus(call)
+    const tool = call.environmentTool
+    set('environment', tool && [call.workspace?.path, tool.environmentId, tool.targetId, tool.toolId, tool.version].filter(Boolean).join('\n'))
     const library = isLibraryToolTrace(call)
     const value = library ? record(call.result) : undefined
     if (options.showArguments !== false) set('arguments', library ? JSON.stringify(call.arguments, null, 2) : undefined)
     set('result', library && call.result !== undefined ? typeof call.result === 'string' && call.result.length ? call.result : JSON.stringify(call.result, null, 2) : undefined)
-    set('command', isBashTrace(call) ? call.command : library && isCommand(call.name) ? string(call.arguments.cmd ?? call.arguments.command) : undefined)
-    set('patch', isApplyPatchTrace(call) ? call.patch : library && call.name === 'codex_apply_patch' ? string(call.arguments.patch) : undefined)
-    set('stdout', isBashTrace(call) ? call.stdout : undefined); set('stderr', isBashTrace(call) ? call.stderr : undefined)
+    set('command', isBashTrace(call) ? call.command : library && (isCommand(name) || name === 'bash') ? string(call.arguments.cmd ?? call.arguments.command) : undefined)
+    set('patch', isApplyPatchTrace(call) ? call.patch : library && (name === 'codex_apply_patch' || name === 'apply_patch') ? string(call.arguments.patch) : undefined)
+    set('stdout', isBashTrace(call) ? call.stdout : call.workspace?.originalName === 'bash' ? string(value?.stdout) : undefined); set('stderr', isBashTrace(call) ? call.stderr : call.workspace?.originalName === 'bash' ? string(value?.stderr) : undefined)
     set('output', library ? string(value?.output) : undefined); set('text', library ? string(value?.text) : undefined)
     const matches = value?.paths ?? value?.matches
     set('matches', library && Array.isArray(matches) ? matches.map(item => {
@@ -313,7 +319,7 @@ export function mountToolCallDetails(initial: ToolTrace, sessionId?: string,
     } else {
       const notes = [call.category ? `失败类别：${call.category}` : '', typeof value?.path === 'string' ? `文件：${value.path}` : '',
         library && call.images?.length ? `已读取 ${call.images.length} 张图片` : '']
-      if (isCommand(call.name)) notes.push(typeof value?.session_id === 'number' ? `进程：${value.session_id}` : '',
+      if (isCommand(name)) notes.push(typeof value?.session_id === 'number' ? `进程：${value.session_id}` : '',
         value?.exit_code === undefined ? '' : `退出码：${value.exit_code === null ? '无' : value.exit_code}`, typeof value?.signal === 'string' ? `信号：${value.signal}` : '',
         typeof value?.wall_time_seconds === 'number' ? `耗时：${value.wall_time_seconds.toFixed(2)} 秒` : '', value?.timed_out === true ? '已超时' : '', value?.terminated === true ? '已终止' : '', value?.closed === true ? '已退出' : '')
       result.textContent = notes.filter(Boolean).join(' · ')

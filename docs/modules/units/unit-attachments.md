@@ -29,6 +29,8 @@
 
 本机附着在启动事务中幂等创建：按种类、`unitId`、来源与 `approved` 状态查找，缺失时插入附着 ID 为 `local:<kind>` 的记录并写入两条事件。同一启动事务新建的附着及其创建、批准事件使用同一个时间戳；`list()` 按创建时间、附着 ID 排序，时钟跨毫秒不会改变这批本机附着的顺序。Models 本机单元的 bootId 由 `inputs.newId()` 在每次 `apply` 生成，只进入 Run 的绑定引用，不持久保存；Computer 本机单元没有启动期 bootId，实际 workerId/bootId 仍由 Operations 在操作绑定时固定，打开 Authority 不触碰 worker 目录。
 
+单主工作区的 Run 继续保存 v1 引用。Harness 多工作区 Run 保存 v2 引用，每个工作区记录已核验的 ID、修订、附着和当时的名称、目录。名称及目录供观察，操作通过固定身份路由。恢复在同一次读事务中核对 Models 和所有选中 Computer 的附着。
+
 ## 执行、取消与清理
 
 没有长期任务或网络连接。所有异步入口经本组件的 pending 集合跟踪；Effect 先停止新准入（后续调用返回 `unit-attachments-closed`），再等待已接受的读写实际退出。`requireApprovedIn` 不拥有事务，随调用方事务提交或回滚。

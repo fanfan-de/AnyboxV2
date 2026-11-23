@@ -1,0 +1,26 @@
+{
+  "name": "@anybox/mcp-environment",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs"
+  },
+  "peerDependencies": {
+    "@nya/core": "^0.1.0-rc.1"
+  },
+  "dependencies": {
+    "@anybox/computer-tools": "0.1.0",
+    "@anybox/storage-sqlite": "0.1.0",
+    "@anybox/tool-api": "0.1.0"
+  }
+}

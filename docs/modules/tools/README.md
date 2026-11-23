@@ -8,6 +8,10 @@ Computer 工具库是受信静态内置目录：Codex、Claude Code、DeepSeek H
 
 ## 独立包与环境接入
 
+[执行环境授权组件](execution-environments.md)在每个应用的执行端持有 Agent 授权、准入和撤权排空。共享契约检验工具定义与具体目标，Run 保存本轮使用的确切绑定。
+
+[MCP 执行环境组件](mcp-environment.md)运行在 Anybox Harness 和 Personal Agent 各自的执行端，提供多条 Streamable HTTP 或 stdio 连接、工具发现和逐工具授权所需的目标目录。stdio 进程由执行端持有并等待实际退出。
+
 [`@anybox/tool-api`](../../../packages/tool-api/README.md) 定义中立的 `ToolDefinition`、`ToolDescriptor`、`ToolCall`、纯 `ToolEnvironmentDescriptor` 与带执行入口的 `ToolEnvironment`，不依赖模型、Harness、Nya 或传输。受信组合根把描述注入纯目录，Agent 的 `environmentIds` 选择其环境；省略时使用 `computer`。Session 只消费目录，运行时将当前依赖代的执行提供方精确绑定到目录；绑定不打开 scope，缺失、重复或声明不匹配均拒绝。模型协议 Loop 只编码已固定的定义。
 
 [`@anybox/computer-tools`](../../../packages/computer-tools/README.md) 是独立计算机工具能力包。`/contracts` 保存来源定义和纯校验，`/adapters` 将来源调用转换成中立请求，两者均不导入 Node 或执行组件。`/bash`、`/processes`、`/apply-patch`、`/files` 提供实际 Nya 组件。工具包不读取 Agent、Session、Projects 或 Computer 业务；Harness 的 Computer 环境适配继续持有工作区绑定、权限和耐久操作。

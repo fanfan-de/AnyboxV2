@@ -9,3 +9,5 @@
 组件拥有指定文件的一条排他连接、操作串行队列与 `schema_migrations` 账本。各领域在自己的组件初始化中调用 `migrate(domain, migrations)` 登记表，提供方不接收应用业务迁移。`read` 禁止写入；`transaction` 可以原子修改同一连接上多个领域的表，失败或取消回滚。回调退出后读写句柄失效。
 
 清理先拒绝新操作，等待已经接受的队列实际退出，再关闭连接。现有默认调用保留原来的路径、领域账本与事务边界，不分割业务数据库、不复制数据、不额外打开相同文件。`tests/storage.test.mjs` 覆盖重开、版本升级、跨领域事务、排他所有权、取消、关闭等待，以及同根不同服务端口的独立所有权和清理。运行 `npm test --workspace @anybox/storage-sqlite`。
+
+布局 2、3 使用独立 authority 检查点。应用通过 `requireLayout(3, applicationId)` 在升级事务内登记自己的最低写入能力。共享执行宿主仅在启动该应用时查询此要求，避免较旧的运行时代码先打开业务资源。[布局升级与离线恢复](../../docs/modules/infrastructure/local-sqlite.md#迁移与兼容规则)

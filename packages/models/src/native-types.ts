@@ -40,6 +40,7 @@ export type StoredParameters = NativeParameters | LegacyParameters;
 export type LegacyParameterConverter = (value: NativeObject) => NativeObject;
 export interface NativeModelSnapshot {
   readonly schemaVersion: 3;
+  readonly managedToolFingerprint?: string;
   readonly modelDefinitionId: string;
   readonly providerDefinitionId: string;
   readonly modelDefinitionVersionId: string;
@@ -125,9 +126,19 @@ export interface NativeProtocolLease<I extends NativeObject = NativeObject, R ex
   readonly types?: { readonly intent: I; readonly response: R; readonly event: E };
   release(): void;
 }
+/** App-owned, run-bound authorization. Only the digest of its declarations enters history. */
+export interface NativeManagedTools {
+  readonly functions: readonly { readonly name: string; readonly description?: string; readonly parameters: NativeObject }[];
+  readonly hostedSearchTarget?: string;
+  readonly bindingId?: string;
+  runSend<T>(exchangeId: string, start: (signal: AbortSignal) => ProtocolOperation<T>, signal: AbortSignal): Promise<T>;
+}
+export type NativeManagedSend = <T>(path: string, body: unknown, signal: AbortSignal, start: (signal: AbortSignal) => ProtocolOperation<T>) => Promise<T>;
+
 export interface OpenNativeModelInput<I extends NativeObject = NativeObject, R extends NativeObject = NativeObject, E extends NativeObject = NativeObject> {
   readonly modelId: string;
   readonly lease: NativeProtocolLease<I, R, E>;
+  readonly managedTools?: NativeManagedTools;
   readonly restore?: NativeRestoreState;
   readonly historyPrefix?: NativeHistoryPrefix;
   /** Supply the exact token from a clean exit. Mutually exclusive with restore and historyPrefix. */
@@ -157,6 +168,7 @@ export interface NativeProtocol<I extends NativeObject = NativeObject, R extends
   /** Produces explicit values for new configurations, respecting the model's declared capabilities. */
   initialParameters?(outputLimit?: number, declared?: DeclaredCapabilities): NativeObject;
   readonly supportsHistoryPrefix?: true;
+  readonly supportsManagedSend?: true;
   restore(records: readonly NativeRecordDraft[], prefix?: NativeObject): NativeObject;
   prepare(input: { readonly state: NativeObject; readonly intent: I; readonly remoteModelId: string; readonly parameters: NativeObject; readonly capabilities: EffectiveCapabilities; readonly responseMode?: NativeResponseMode }): NativeObject;
   exchange(input: ProtocolConnection & { readonly request: NativeObject; readonly onEvent: (event: E) => void; readonly resources?: NativeResourceResolver; readonly resourceRefs?: readonly NativeImageResourceRef[] }): ProtocolOperation<R>;

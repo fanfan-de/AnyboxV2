@@ -62,7 +62,9 @@ async function fixture(t, { expectedCleanupFailure = false } = {}) {
 }
 async function accepted(f, id, parentNodeId = null, initialization) {
   return (await registerNativeRun(f.records, id, { sessionId: f.session.id, parentNodeId, input: id, idempotencyKey: id }, now(), [],
-    modelSnapshot(), initialization ?? sessionInitialization(f.session))).run
+    modelSnapshot(), initialization ?? sessionInitialization(f.session), f.harness ? {
+      access: {agentId: f.session.agentId, functions: []}, selectionVersion: f.session.environmentSelection.version,
+    } : undefined)).run
 }
 
 test('same-parent Runs enter together, finish out of order, and inherit only their own ancestor path', async t => {

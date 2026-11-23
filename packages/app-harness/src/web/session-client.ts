@@ -14,6 +14,7 @@ import type { DraftImage, DraftStore, DraftFile, MessageDraft } from './draft-cl
 import type { ImageRenewal } from './image-client.js'
 import { validateImageBatch } from '../core/image/limits.js'
 import type { SessionDefaults } from '../core/session/domain.js'
+import { runFailureHint } from './client-errors.js'
 
 export interface BrowserStorage { getItem(key: string): string | null; setItem(key: string, value: string): void }
 export const pendingKey = 'anybox.web.v3.pending'
@@ -448,7 +449,8 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       finishLocation(job)
     }
     else {
-      notice = run.status === 'cancelled' ? '本次运行已取消。' : run.status === 'interrupted' ? '本次运行意外中断，请重新发送。' : `本次运行失败${run.error ? `：${run.error}` : '，请检查模型配置后重试。'}`
+      const failure = runFailureHint(run.errorCategory) ?? run.error
+      notice = run.status === 'cancelled' ? '本次运行已取消。' : run.status === 'interrupted' ? '本次运行意外中断，请重新发送。' : `本次运行失败${failure ? `：${failure}` : '，请检查模型配置后重试。'}`
       position = { ...position, follow: undefined }; remember()
     }
   }

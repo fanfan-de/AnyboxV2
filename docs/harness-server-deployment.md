@@ -77,7 +77,7 @@ npm run harness:server
 
 harness server 的端口规范变量为 `ANYBOX_HARNESS_PORT`；配置解析保留旧 `ANYBOX_WEB_PORT` 入口作为兼容回退。客户端继续使用 `ANYBOX_WEB_PORT` 配置自己的页面端口。
 
-加入远端执行环境无需重启或切换形态：在“执行环境”设置或 `POST /units/attach-codes` 生成 `computer` 附着码；在用户设备客户端“管理连接 → 管理本机 Computer worker”（或独立 CLI，无须本机 harness server）填入该 harness server 的 HTTPS 地址与附着码并设定目录/工具上限；该设备的 worker 随即以 `Unit` 凭证拨出。返回“执行环境”刷新状态后，在新增项目时选择该远端环境，或通过 API 为项目指定：`POST /projects` 传 `computerAttachmentId`，路径由该单元解析并限制在设备拥有者设定的目录上限内；一个 harness server 可同时服务本机项目与多个远端单元的项目。新项目缺省使用 harness server 所在的本机环境，既有项目与 Run 绑定不变。远端单元已离线且项目不可用时，新 Run 在准入阶段以 `project-unavailable` 拒绝；已接受操作仍保留原单元与操作身份，重连后按原 ID 查回，不切换环境或重放未知副作用。
+加入远端执行环境无需重启或切换形态：在“执行环境”设置或 `POST /units/attach-codes` 生成 `computer` 附着码；在用户设备客户端“执行环境 → 管理本机 Computer worker”（或独立 CLI，无须本机 harness server）填入该 harness server 的 HTTPS 地址与附着码并设定目录/工具上限；该设备的 worker 随即以 `Unit` 凭证拨出。返回“执行环境”刷新状态后，在新增项目时选择该远端环境，或通过 API 为项目指定：`POST /projects` 传 `computerAttachmentId`，路径由该单元解析并限制在设备拥有者设定的目录上限内；一个 harness server 可同时服务本机项目与多个远端单元的项目。新项目缺省使用 harness server 所在的本机环境，既有项目与 Run 绑定不变。远端单元已离线且项目不可用时，新 Run 在准入阶段以 `project-unavailable` 拒绝；已接受操作仍保留原单元与操作身份，重连后按原 ID 查回，不切换环境或重放未知副作用。
 
 本机 harness server 使用服务器 Computer 的实测形态（2026-10-15）：服务器上的 Anybox Harness 执行目标与 worker unit 保持运行（它是该 worker 的附着控制面），本机 harness server 只监听回环，因此由本机建立 SSH 反向隧道 `ssh -N -R 127.0.0.1:3101:127.0.0.1:3001 <user>@<server>`，服务器 worker 以 `harnessUrl=http://127.0.0.1:3101` 拨出：拨出规则只对回环放行明文 HTTP，加密由 SSH 负责；隧道端口只在服务器回环可达，拥有者路由仍要设备令牌、单元路由仍要附着凭证。附着后在本机 `POST /projects` 传服务器目录路径与 `computerAttachmentId` 即可，同时仍可服务本机项目；隧道由本机终端或 launchd 保持，断开期间该单元离线。
 

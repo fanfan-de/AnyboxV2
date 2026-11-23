@@ -9,7 +9,7 @@ import { createAgentLogo } from './agent-logo.js'
 import { setupToolsSettings } from './tools-client.js'
 import { setupUnitsSettings } from './units-client.js'
 import { messageFor } from './client-errors.js'
-import type { AgentView } from './client-types.js'
+import type { AgentView, Api } from './client-types.js'
 import type { MountedPage } from './page-lifecycle.js'
 import { setupSettingsNavigation } from './settings-client.js'
 import type { SettingsSection, SettingsViewState } from './settings-client.js'
@@ -21,6 +21,7 @@ export interface AgentMountedPage extends MountedPage {
 }
 export function mountAgentPage(root: HTMLElement, api: HarnessClient, options: {
   selectedId?: string; selectedName?: string; layoutKey?: string; isActive(): boolean;
+  localApi: Api;
   devices: readonly { id: string; name: string }[]; settingsState?: SettingsViewState; selectDevice(id: string): boolean;
   route: { read(): string; write(hash: string, push: boolean): void; subscribe(listener: () => void): () => void };
 }): AgentMountedPage {
@@ -62,8 +63,14 @@ settingsDialog.addEventListener('close', () => { void models.refresh(); workspac
 const hostApi = selected ? api.forConnection(selected.id) : undefined
 const hostModels = hostApi ? createModelsCatalog(hostApi, messageFor) : undefined
 const sessionDefaults = hostApi && hostModels ? setupSessionDefaults(hostApi, messageFor, hostModels, required('personal-agent--session-defaults')) : undefined
-const toolsSettings = hostApi ? setupToolsSettings(hostApi, messageFor, required('personal-agent--tools-settings')) : undefined
-const unitsSettings = hostApi ? setupUnitsSettings(hostApi, messageFor, required('personal-agent--units-settings')) : undefined
+const toolsSettings = hostApi && selected ? setupToolsSettings(hostApi, messageFor, required('personal-agent--tools-settings'),
+  JSON.stringify(['personal-agent', selected.instanceId]), agentId => {
+    const sessionId = workspace.continuousSessionId(agentId)
+    const ref = sessionId ? splitScopedId(sessionId) : undefined
+    return ref?.instanceId === selected.instanceId ? ref.id : undefined
+  }) : undefined
+const unitsSettings = setupUnitsSettings(hostApi, messageFor, required('personal-agent--units-settings'), options.localApi)
+settingsDialog.addEventListener('close', () => { void unitsSettings.close() }, { signal: lifetime.signal })
 const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, required('personal-agent--models-settings')) : undefined
 const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('personal-agent--prompt-settings'), JSON.stringify([selected.instanceId, 'prompts'])) : undefined
 const agentDirectory = hostApi && hostModels && selected ? setupAgentDirectory(hostApi, messageFor, hostModels,
@@ -84,7 +91,6 @@ if (!selected) {
     ['personal-agent--models-settings', 'personal-agent--models-settings-title', '模型管理', '模型与配置'],
     ['personal-agent--prompt-settings', 'personal-agent--prompt-title', 'Prompt 管理', 'Prompt'],
     ['personal-agent--tools-settings', 'personal-agent--tools-title', 'Agent 工具', '工具'],
-    ['personal-agent--units-settings', 'personal-agent--units-title', '执行环境', '执行环境'],
   ] as const) {
     const panel = required<HTMLElement>(id)
     panel.replaceChildren()
@@ -103,7 +109,7 @@ function canLeave(): boolean {
   if (toolsSettings && !toolsSettings.canLeave()) { revealSettings('tools'); return false }
   if (modelsSettings && !modelsSettings.canLeave()) { revealSettings('models'); return false }
   if (promptSettings && !promptSettings.canLeave()) { revealSettings('prompts'); return false }
-  if (unitsSettings && !unitsSettings.canLeave()) { revealSettings('units'); return false }
+  if (!unitsSettings.canLeave()) { revealSettings('units'); return false }
   return true
 }
 let knownAgents: readonly AgentView[] = []
@@ -127,6 +133,7 @@ const settings = setupSettingsNavigation(root, {
   initialState: options.settingsState, isActive: options.isActive, selectDevice: options.selectDevice,
   refreshArchive: () => workspace.refreshArchive(),
   resetModelsView: () => modelsSettings?.resetView(),
+  refreshTools: () => toolsSettings?.refresh(),
   refreshAgents: () => { agentDirectory?.refresh(); refreshAgentList() },
   leaveAgents: () => agentDirectory?.pauseLogo(),
 })
@@ -134,7 +141,7 @@ function updateActiveAgent(id: string): void {
   activeAgentId = id
   for (const [key, { button }] of agentButtons) button.setAttribute('aria-pressed', String(key === id))
   sessionDefaults?.selectAgent(id)
-  toolsSettings?.selectAgent(id)
+  toolsSettings?.selectAgent(id, agentFor(id)?.name)
 }
 function activateAgent(id: string): void {
   if (id !== activeAgentId && !canLeave()) return
@@ -257,7 +264,7 @@ return {
     for (const { logo } of agentButtons.values()) logo.dispose()
     agentButtons.clear()
     const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
-    await Promise.all([workspaceExit, agentDirectory?.dispose(), modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings?.dispose()])
+    await Promise.all([workspaceExit, agentDirectory?.dispose(), modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings.dispose()])
     await api.dispose()
   },
 }

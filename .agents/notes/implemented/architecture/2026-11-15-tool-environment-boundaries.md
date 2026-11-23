@@ -34,6 +34,7 @@ Session 同事务接纳、两端账本、owner 栅栏、原操作查询及真实
 ## 关联
 
 - [前项：环境提供工具与工具独立拆包](../../implemented/architecture/2026-11-15-environment-owned-tool-packages.md)
+- [后续：由环境适配器解析工具目标](2026-11-22-environment-adapter-target-resolution.md)
 - [环境提供工具](../../../../docs/tool-environments.md)
 - [RunRuntime](../../../../docs/modules/execution/run-runtime.md)
 - [环境注册表](../../../../packages/app-harness/src/core/tool-environments/registry.ts)

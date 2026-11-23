@@ -1,3 +1,4 @@
+import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
 /** Public, serializable transport projections. No execution handles or private recovery records. */
 import type { FileRef } from './project-files/domain.js'
 import type { Model, Provider, NativeModelSnapshot, ProviderTemplate } from '@anybox/models'
@@ -13,6 +14,7 @@ export type UnitAttachmentView = UnitAttachment
 
 export interface AgentView { readonly id: string; readonly harnessName?: string }
 export interface SessionView {
+  readonly workspaceBindings?: readonly import('./session/domain.js').SessionWorkspaceBinding[]
   readonly id: string
   readonly title: string | null
   readonly projectId: string
@@ -27,6 +29,7 @@ export interface SessionView {
 }
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 export interface ProjectView {
+  readonly workspaceCount?: number
   readonly instanceId?: string
   readonly harnessName?: string
   readonly id: string
@@ -58,12 +61,15 @@ export interface RunView {
   readonly error?: string
   readonly errorCategory?: string
 }
-export type ToolCallView =
+export interface ToolWorkspaceView { readonly name: string; readonly path: string; readonly originalName: string }
+export type ToolCallView = { readonly environmentTool?: EnvironmentTool; readonly workspace?: ToolWorkspaceView } & (
   | { readonly id: string; readonly name: 'bash'; readonly command: string }
   | { readonly id: string; readonly name: 'apply_patch'; readonly patch: string; readonly patchTruncated: boolean }
   | { readonly id: string; readonly name: string; readonly arguments: Readonly<Record<string, import('@anybox/models').JsonValue>> }
+)
 export type LibraryToolName = `codex_${string}` | `claude_code_${string}` | `deepseek_harness_${string}`
 export interface ProcessExitView {
+  readonly targetId?: string
   readonly sessionId: number
   readonly exitCode: number | null
   readonly signal: string | null
@@ -74,7 +80,7 @@ export interface ProcessExitView {
   readonly error?: string
 }
 export type RunEventView = { readonly seq: number; readonly at: string } & (
-  | { readonly kind: 'operation-started'; readonly operationId: string; readonly operationKind: 'model' | 'operation' }
+  | { readonly kind: 'operation-started'; readonly operationId: string; readonly operationKind: 'model' | 'operation'; readonly hostedSearch?: EnvironmentTool }
   | { readonly kind: 'operation-observed'; readonly operationId: string; readonly processes?: readonly ProcessExitView[] }
   | { readonly kind: 'operation-failed'; readonly operationId: string; readonly category: string; readonly processes?: readonly ProcessExitView[] }
   | { readonly kind: 'model-started' | 'terminal' | 'interrupted' }

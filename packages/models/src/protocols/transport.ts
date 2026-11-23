@@ -17,6 +17,24 @@ export interface RequestOptions {
 }
 /** Own the fetch, reader, abort listener and asynchronous stream cancellation. */
 export function request<T>(options: ProtocolOptions, connection: ProtocolConnection, path: string, body: unknown | undefined, parse: (reader: Reader) => Promise<T>, requestOptions: RequestOptions = {}): ProtocolOperation<T> {
+  if (connection.managedSend) {
+    const { managedSend, ...pinned } = connection;
+    const controller = new AbortController();
+    const unlink = abortLink(pinned.signal, controller);
+    let active: ProtocolOperation<T> | undefined;
+    const result = managedSend(path, body, controller.signal, admitted => {
+      active = sendRequest(options, { ...pinned, signal: admitted }, path, body, parse, requestOptions, true);
+      return active;
+    });
+    // An admission denial has no transport resources. A failed transport exit remains observable.
+    const done = result.then(() => active?.done, () => active?.done).finally(unlink);
+    void result.catch(() => {}); void done.catch(() => {});
+    return { result, done, cancel: () => controller.abort() };
+  }
+  return sendRequest(options, connection, path, body, parse, requestOptions);
+}
+function sendRequest<T>(options: ProtocolOptions, connection: ProtocolConnection, path: string, body: unknown | undefined,
+  parse: (reader: Reader) => Promise<T>, requestOptions: RequestOptions, pinOrigin = false): ProtocolOperation<T> {
   const controller = new AbortController();
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let reachedEnd = false;
@@ -46,7 +64,7 @@ export function request<T>(options: ProtocolOptions, connection: ProtocolConnect
       if (controller.signal.aborted) throw modelsError('cancelled');
       if (connection.provider.auth === 'api-key' && !connection.credential) throw modelsError('credential-missing');
       const response = await (options.fetch ?? globalThis.fetch)(`${connection.provider.baseUrl.replace(/\/+$/u, '')}/${path}`, {
-        method: body === undefined ? 'GET' : 'POST',
+        method: body === undefined ? 'GET' : 'POST', ...(pinOrigin ? { redirect: 'error' } : {}),
         headers: {
           Accept: 'application/json, text/event-stream',
           ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),

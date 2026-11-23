@@ -18,7 +18,7 @@
 
 ## 账本与执行提交
 
-`WorkerOperation` 事实带工具操作的 `sessionId`（来自固定声明），拨出循环据此读取并推送该操作的图片字节。`computer-worker` 迁移域归执行器，当前 v2：v1 使用独立 `worker.sqlite` 保存 Run owner、不可变 binding、scope 状态，以及 operation 声明、摘要、接纳 receipt、实际 dispatch 次数、结果、错误、ProcessRef 与图片引用；v2 在 Run 表增加 `attachment_id`，旧行默认 `local:computer`。SQLite 使用跨事务排他 OS 锁；Runtime 无权打开此连接。workerId 跨启动稳定，bootId 每次启动更新；进程恢复凭证不能只由 PID 构成。
+`WorkerOperation` 事实带工具操作的 `sessionId`（来自固定声明），拨出循环据此读取并推送该操作的图片字节。`computer-worker` 迁移域归执行器，当前 v3：v1 使用独立 `worker.sqlite` 保存 Run owner、不可变 binding、scope 状态，以及 operation 声明、摘要、接纳 receipt、实际 dispatch 次数、结果、错误、ProcessRef 与图片引用；v2 在 Run 表增加 `attachment_id`，旧行默认 `local:computer`。v3 增加可空的父 Run 和工作区绑定身份，新声明在首次接纳工具的事务中固定它们。SQLite 使用跨事务排他 OS 锁；Runtime 无权打开此连接。workerId 跨启动稳定，bootId 每次启动更新；进程恢复凭证不能只由 PID 构成。
 
 接纳先校验 owner、工具契约及完整声明摘要，固定 Run placement，再同一 worker 事务创建 receipt/queued 记录。同 ID、同摘要及同 binding 返回原 receipt；冲突拒绝。启动前先耐久记录 starting 和 executeCount，再同步取得工具资源，保存 running；等 result/done 实际退出后保存终态及原始结果。重复领取返回原结果，包括固定输出范围、截断、部分补丁事实和调用时间，不再次执行或 drain 输出。
 
@@ -31,6 +31,12 @@
 每个授权还带 `attachmentId`：`claimRun` 在事务内经附着账本要求该附着为 approved（回环 `local:computer` 恒为 approved，不存在或已撤销返回 `worker-attachment-rejected`），Run 首次 claim 固定其附着，之后其他附着对同一 Run 的 claim、submit 与 get 一律 `worker-owner-rejected`。新工具接纳在同一事务里按 worker 本机 canonical 身份检查固定的 `binding.path` 是否同时落在设备 ceiling 与批准 scope 的 projects 内，并复核两者的工具契约 ID 许可；越界返回 `worker-scope-rejected`，不产生副作用。既有 operation 幂等读取及控制/恢复不重新套用新工作准入。附着被撤销时执行器取消并排空该附着尚未关闭的 Run：置位取消、终止活动调用、关闭 scope 并保存清理结果，无法证明退出的 Run 保留 uncertain；其他附着的 Run 不受影响。
 
 Codex exec 的数字 session_id 映射到包含 worker boot、Run 与确切实例代次的 ProcessRef。长进程仍在原 worker scope 中；每次 write_stdin/poll 是独立稳定 operation，重复同 ID 返回原结果。此阶段保证 worker 存活时 Runtime 换代接续；worker 自身崩溃不能据账本恢复原 OS 管道。
+
+## 项目工作区的独立执行
+
+当前 worker 在 `info()` 中报告 `workspaceScopeVersion: 1`。harness server 在首次派发每个新工作区操作前，向它的确切附着检查当前 boot 的能力。旧 worker 无此能力时，操作账本保留 `worker-scope-version-unsupported`，公开 Run 和工具轨迹以 `computer-worker-upgrade-required` 提示用户升级并重启该工作区设备上的 worker。
+
+v2 Computer 声明包含父 Run、项目工作区绑定和确切附着身份。这些字段进入声明摘要。worker 核对本次交付的附着、授权代次以及推导出的子 scope ID，同一物理 worker 经不同附着接入时也独立持有各自的工具进程和关闭回执。即时输出和恢复均按原操作 ID 查询。旧 v1 声明及历史控制操作保留原摘要与 ID。
 
 ## 取消、清理与故障边界
 

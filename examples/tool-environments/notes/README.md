@@ -18,7 +18,7 @@ node examples/tool-environments/notes/demo.mjs
 ## 接入的两个步骤
 
 1. 实现环境，见 [`environment.mjs`](environment.mjs)。声明稳定环境 ID/版本、工具 ID/版本、模型可见的名称/描述/参数，并用 `openScope()` 提供执行、取消与清理。执行入口只处理工具请求，不认识 Agent、Session 或 Models。
-2. 在组合根插入实例，并选择 Agent 可用的环境。下面使用已有 `root` 与 Agent 配置；完整启动装配见 [`demo.mjs`](demo.mjs)。
+2. 在组合根注册提供方，并选择 Agent 可用的环境。下面使用已有 `root` 与 Agent 配置，完整启动装配见 [`demo.mjs`](demo.mjs)。
 
 ```js
 import { installHarnessServerCore } from '@anybox/app-harness/core/index'
@@ -27,7 +27,7 @@ import { createNotesEnvironment } from './environment.mjs'
 const notes = createNotesEnvironment(documents)
 await installHarnessServerCore(root, {
   agents: [{ ...existingAgent, environmentIds: ['notes'] }],
-  toolEnvironments: [notes],
+  registerTools: tools => tools.register(notes),
 })
 ```
 
@@ -36,6 +36,8 @@ await installHarnessServerCore(root, {
 如果还需要 Computer 工具，选择 `environmentIds: ['computer', 'notes']`；Computer 的项目附着规则保持原样。显式 `[]` 表示没有工具环境，省略该字段沿用默认 Computer 环境。
 
 ## 实际观察
+
+本例以不可变资料快照的摘要作为资源身份。首次以空环境启动后，再插入资料库时，示例会显式授权原 Agent 使用这份资料的搜索和读取工具。指向另一份资料需要对新目标授权。已创建的空环境会话继续保留原声明。
 
 脚本使用同一个 Agent ID、instructions、任务与模型配置，先运行无环境版本，再关闭并重新装配含 `notes` 的版本：
 

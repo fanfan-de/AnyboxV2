@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -302,4 +302,95 @@ test('an unrecognized database layout fails startup and releases ownership', asy
     await context.fiber.dispose()
     rmSync(directory, { recursive: true, force: true })
   }
+})
+
+test('protected stores reject both pre-cutover and previously valid offline backups after revocation', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-restore-'))
+  const file = join(directory, 'state.sqlite')
+  const rejectedOpen = async () => {
+    const context = new Context()
+    try {
+      await assert.rejects(async () => { await context.installComponent(createLocalSqliteComponent(file)) },
+        error => error.code === 'schema-version')
+    } finally { await context.fiber.dispose() }
+  }
+  try {
+    let owner = await open(file)
+    await owner.context.fiber.dispose()
+    copyFileSync(file, join(directory, 'baseline'))
+    owner = await open(file)
+    await owner.store.requireLayout(2)
+    await owner.store.requireLayout(2)
+    await owner.store.transaction(tx => tx.execute("INSERT INTO notes VALUES ('grant', 'issued')"))
+    await owner.context.fiber.dispose()
+    copyFileSync(file, join(directory, 'granted'))
+    owner = await open(file)
+    await owner.store.transaction(tx => tx.execute("UPDATE notes SET body='revoked'"))
+    await owner.context.fiber.dispose()
+    copyFileSync(file, join(directory, 'revoked'))
+
+    for (const backup of ['baseline', 'granted']) {
+      copyFileSync(join(directory, backup), file)
+      await rejectedOpen()
+    }
+    copyFileSync(join(directory, 'revoked'), file)
+    owner = await open(file)
+    assert.equal((await owner.store.read(r => r.get('SELECT body FROM notes'))).body, 'revoked')
+    await owner.context.fiber.dispose()
+    rmSync(join(file + '.lock', 'authority.sqlite'))
+    const context = new Context()
+    try {
+      await assert.rejects(async () => { await context.installComponent(createLocalSqliteComponent(file)) },
+        error => error.code === 'occupied')
+    } finally { await context.fiber.dispose() }
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+})
+
+test('an incomplete layout cutover blocks writes that were already queued', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-layout-conflict-'))
+  const file = join(directory, 'state.sqlite')
+  const { context, store } = await open(file)
+  try {
+    mkdirSync(file + '.lock')
+    const cutover = store.requireLayout(2)
+    let ran = false
+    const queued = store.transaction(() => { ran = true })
+    await Promise.all([cutover, queued].map(promise => assert.rejects(promise, { code: 'open-failed' })))
+    assert.equal(ran, false)
+  } finally { await context.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) }
+})
+
+for (const previous of [1, 2]) test(`layout ${previous} upgrades atomically to 3 and preserves the writer requirement on reopen`, async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'anybox-layout3-')), file = join(directory, 'state.sqlite')
+  let owner = await open(file)
+  t.after(async () => { await owner.context.fiber.dispose(); rmSync(directory, { recursive: true, force: true }) })
+  if (previous === 2) await owner.store.requireLayout(2)
+  await owner.store.transaction(tx => tx.execute("INSERT INTO notes VALUES ('a', 'preserved')"))
+  await owner.context.fiber.dispose()
+  copyFileSync(file, join(directory, 'previous.sqlite'))
+
+  owner = await open(file)
+  assert.equal(await owner.store.minimumWriterCapability('notes'), undefined)
+  await owner.store.requireLayout(3, 'notes')
+  const checkpoint = () => owner.store.read(r => r.get('SELECT revision,token FROM storage_layout_fence'))
+  const first = await checkpoint()
+  await owner.store.requireLayout(3, 'notes')
+  assert.deepEqual(await checkpoint(), first, 'identical requirements do not advance the checkpoint')
+  await assert.rejects(owner.store.requireLayout(2), { code: 'schema-version' })
+  assert.equal(await owner.store.minimumWriterCapability('other'), undefined)
+  await owner.store.requireLayout(3, 'second')
+  assert.ok((await checkpoint()).revision > first.revision, 'an additional writer registration advances the checkpoint')
+  await owner.context.fiber.dispose()
+
+  owner = await open(file)
+  assert.equal(await owner.store.minimumWriterCapability('notes'), '1.2.0')
+  assert.equal(await owner.store.minimumWriterCapability('second'), '1.2.0')
+  assert.equal(await owner.store.read(r => r.get('SELECT body FROM notes').body), 'preserved')
+  assert.deepEqual(await owner.store.read(r => [r.get('PRAGMA main.user_version').user_version, r.get('PRAGMA authority.user_version').user_version]), [3, 3])
+  await owner.context.fiber.dispose()
+
+  copyFileSync(join(directory, 'previous.sqlite'), file)
+  const root = new Context()
+  try { await assert.rejects(async () => { await root.installComponent(createLocalSqliteComponent(file)) }, { code: 'schema-version' }) }
+  finally { await root.fiber.dispose() }
 })

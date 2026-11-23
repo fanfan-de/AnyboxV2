@@ -26,6 +26,20 @@ const migrations: readonly StorageMigration[] = [{ version: 1, up(tx) {
     computer_id TEXT NOT NULL, computer_instance_id TEXT NOT NULL, instance_generation INTEGER NOT NULL,
     workspace_epoch INTEGER NOT NULL, revision INTEGER NOT NULL, local_path TEXT NOT NULL, prepared_at TEXT NOT NULL
   )`)
+} }, { version: 2, up(tx) {
+  // Rebuild the unique-per-project table in place so existing reservation/binding FKs retain their ids.
+  tx.execute('PRAGMA defer_foreign_keys = ON')
+  tx.execute('CREATE TABLE harness_workspace_legacy AS SELECT * FROM harness_workspaces')
+  tx.execute('DROP TABLE harness_workspaces')
+  tx.execute(`CREATE TABLE harness_workspaces (
+    workspace_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, project_workspace_id TEXT NOT NULL,
+    pinned_path TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode = 'pinned-local'), revision INTEGER NOT NULL CHECK(revision = 0),
+    workspace_epoch INTEGER NOT NULL CHECK(workspace_epoch > 0), created_at TEXT NOT NULL,
+    UNIQUE(project_id, project_workspace_id)
+  )`)
+  tx.execute(`INSERT INTO harness_workspaces SELECT workspace_id, project_id, project_id,
+    pinned_path, mode, revision, workspace_epoch, created_at FROM harness_workspace_legacy`)
+  tx.execute('DROP TABLE harness_workspace_legacy')
 } }]
 
 function workspace(row: StorageRow): Workspace {
@@ -50,7 +64,7 @@ function binding(row: StorageRow): WorkspaceBinding {
 }
 
 function reservationRow(reader: StorageReader, id: string): StorageRow | undefined {
-  return reader.get(`SELECT r.*, w.project_id, w.pinned_path, w.revision, w.workspace_epoch
+  return reader.get(`SELECT r.*, w.project_id, w.project_workspace_id, w.pinned_path, w.revision, w.workspace_epoch
     FROM harness_workspace_reservations r JOIN harness_workspaces w ON w.workspace_id = r.workspace_id
     WHERE r.reservation_id = ?`, [id])
 }
@@ -110,13 +124,18 @@ export function createWorkspacesComponent(options: WorkspacesOptions = {}): Comp
       await Promise.allSettled([...calls].map(call => call.done))
       await Promise.allSettled([...pending])
     }, 'join workspace operations')
+    function checkMember(reader: StorageReader, row: StorageRow) {
+      if (row.project_workspace_id === row.project_id) return // The primary binding cannot be retired or moved.
+      const selected = projects.workspacesIn(reader, workspaceText(row.project_id)).workspaces.find(value => value.id === row.project_workspace_id)
+      if (!selected || selected.path !== row.pinned_path) throw workspaceError('workspace-binding-conflict')
+    }
     const service: WorkspacesPort = {
       get(id) { return track(async () => {
         const row = await db.read(reader => reader.get('SELECT * FROM harness_workspaces WHERE workspace_id = ?', [workspaceText(id)]))
         return row ? workspace(row) : undefined
       }) },
       getForProject(id) { return track(async () => {
-        const row = await db.read(reader => reader.get('SELECT * FROM harness_workspaces WHERE project_id = ?', [workspaceText(id)]))
+        const row = await db.read(reader => reader.get('SELECT * FROM harness_workspaces WHERE project_id = ? AND project_workspace_id = project_id', [workspaceText(id)]))
         return row ? workspace(row) : undefined
       }) },
       getBinding(id) { return track(async () => {
@@ -128,20 +147,24 @@ export function createWorkspacesComponent(options: WorkspacesOptions = {}): Comp
         const id = workspaceText(input.reservationId), scopeId = workspaceText(input.scopeId)
         const projectId = workspaceText(input.projectId), project = projects.getIn(tx, projectId)
         if (!project) throw workspaceError('workspace-missing')
-        const path = workspacePath(project.path)
+        const memberId = input.projectWorkspaceId === undefined ? projectId : workspaceText(input.projectWorkspaceId)
+        const member = memberId === projectId ? project : projects.workspacesIn(tx, projectId).workspaces.find(value => value.id === memberId)
+        if (!member || input.projectWorkspaceRevision !== undefined && input.projectWorkspaceRevision !== 1 ||
+          input.computerAttachmentId !== undefined && member.computerAttachmentId !== input.computerAttachmentId) throw workspaceError('workspace-binding-conflict')
+        const path = workspacePath(member.path)
         const prior = reservationRow(tx, id)
         if (prior) {
-          if (prior.project_id !== projectId || prior.scope_id !== scopeId || prior.pinned_path !== path) throw workspaceError('workspace-reservation-conflict')
+          if (prior.project_id !== projectId || prior.project_workspace_id !== memberId || prior.scope_id !== scopeId || prior.pinned_path !== path) throw workspaceError('workspace-reservation-conflict')
           if (prior.released_at !== null) throw workspaceError('workspace-released')
           return reservation(prior)
         }
-        const priorWorkspace = tx.get('SELECT * FROM harness_workspaces WHERE project_id = ?', [projectId])
+        const priorWorkspace = tx.get('SELECT * FROM harness_workspaces WHERE project_id = ? AND project_workspace_id = ?', [projectId, memberId])
         if (priorWorkspace && priorWorkspace.pinned_path !== path) throw workspaceError('workspace-reservation-conflict')
         const workspaceId = priorWorkspace ? workspaceText(priorWorkspace.workspace_id) : workspaceText(newId())
         const at = timestamp()
         if (!priorWorkspace) tx.execute(`INSERT INTO harness_workspaces
-          (workspace_id, project_id, pinned_path, mode, revision, workspace_epoch, created_at) VALUES (?, ?, ?, 'pinned-local', 0, 1, ?)`,
-        [workspaceId, projectId, path, at])
+          (workspace_id, project_id, project_workspace_id, pinned_path, mode, revision, workspace_epoch, created_at) VALUES (?, ?, ?, ?, 'pinned-local', 0, 1, ?)`,
+        [workspaceId, projectId, memberId, path, at])
         tx.execute('INSERT INTO harness_workspace_reservations (reservation_id, workspace_id, scope_id, created_at) VALUES (?, ?, ?, ?)',
           [id, workspaceId, scopeId, at])
         return reservation(reservationRow(tx, id)!)
@@ -154,7 +177,9 @@ export function createWorkspacesComponent(options: WorkspacesOptions = {}): Comp
         const row = await db.read(reader => reservationRow(reader, id), cancel)
         if (!row) throw workspaceError('workspace-missing')
         if (row.released_at !== null) throw workspaceError('workspace-released')
-        const project = await projects.requireAvailable(workspaceText(row.project_id))
+        const projectId = workspaceText(row.project_id)
+        const project = row.project_workspace_id === projectId ? await projects.requireAvailable(projectId)
+          : await projects.requireWorkspaceAvailable(projectId, workspaceText(row.project_workspace_id))
         if (project.path !== row.pinned_path) throw workspaceError('workspace-binding-conflict')
         if (cancel.aborted) throw workspaceError('workspace-cancelled')
         const prior = await db.read(reader => bindingRow(reader, id), cancel)
@@ -163,7 +188,7 @@ export function createWorkspacesComponent(options: WorkspacesOptions = {}): Comp
         const preparationId = workspaceText(newId())
         const prepared: PreparedWorkspaceBinding = Object.freeze({
           ...(prior ? binding(prior) : { bindingId: workspaceText(newId()), reservationId: id, workspaceId: workspaceText(row.workspace_id),
-            projectId: project.id, scopeId: workspaceText(row.scope_id), computerId: instance.computerId,
+            projectId, scopeId: workspaceText(row.scope_id), computerId: instance.computerId,
             computerInstanceId: instance.computerInstanceId, instanceGeneration: instance.instanceGeneration,
             workspaceEpoch: workspacePositive(row.workspace_epoch), revision: 0, path: project.path, preparedAt: timestamp() }),
           preparationId,
@@ -177,6 +202,7 @@ export function createWorkspacesComponent(options: WorkspacesOptions = {}): Comp
         const row = reservationRow(tx, id)
         if (!row) throw workspaceError('workspace-missing')
         if (row.released_at !== null) throw workspaceError('workspace-released')
+        checkMember(tx, row)
         const prior = bindingRow(tx, id)
         if (prior) {
           const existing = binding(prior)
@@ -199,6 +225,7 @@ export function createWorkspacesComponent(options: WorkspacesOptions = {}): Comp
         const row = reservationRow(tx, workspaceText(input.reservationId))
         if (!row) throw workspaceError('workspace-missing')
         if (row.released_at !== null) throw workspaceError('workspace-released')
+        checkMember(tx, row)
         const selected = bindingRow(tx, input.reservationId)
         if (!selected) throw workspaceError('workspace-unavailable')
         const current = binding(selected)

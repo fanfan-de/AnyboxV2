@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "lifecycleVersion": 1,
   "appId": "personal-agent",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "publisher": "anybox",
   "displayName": "Personal Agent",
   "applicationApi": "^0.1.0",
@@ -57,7 +57,7 @@
     },
     "execution": {
       "required": {
-        "storage.sqlite": "^1.0.0"
+        "storage.sqlite": "^1.1.0"
       },
       "optional": {
         "system.directory-picker": "^1.0.0"

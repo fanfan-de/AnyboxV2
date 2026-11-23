@@ -1,44 +1,31 @@
-import type { ToolDescriptor, ToolEnvironment, ToolEnvironmentDescriptor } from '@anybox/tool-api'
-import type { JsonValue } from '@anybox/models'
-import type { OwnedCall } from '../contracts.js'
-import type { ToolObservation, ValidatedToolRequest } from '../run/domain.js'
-import type { ToolEnvironmentSnapshot } from './domain.js'
+import type { FunctionBindingTarget, FunctionBindings } from '@anybox/execution-environments/bindings'
+import type { ToolEnvironmentCatalog } from '@anybox/execution-environments/catalog'
+import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
+import type { Project, ProjectWorkspace } from '../project/component.js'
+import type { PromptSnapshot } from '../prompt/domain.js'
+import type { Session } from '../session/domain.js'
+import type { RunUnitBindings, UnitAttachment, UnitAttachmentsPort } from '../unit/port.js'
 
-export interface ToolEnvironmentRunContext {
-  readonly runId: string
-  readonly runOwnerEpoch: number
-  readonly signal: AbortSignal
-  readonly resuming?: boolean
-}
+export type { ToolEnvironmentCatalog, ToolEnvironmentCatalogEntry, ToolEnvironmentRegistry, ToolEnvironmentRun, ToolEnvironmentRunContext, ToolEnvironmentRuntimeBinding } from '@anybox/execution-environments/catalog'
 
-export interface ToolEnvironmentRun {
-  execute(request: ValidatedToolRequest, operationId: string, resuming?: boolean): OwnedCall<ToolObservation>
-  hasResources(): boolean
-  cancel(): Promise<void>
-  close(): OwnedCall<JsonValue>
-}
-
-/** Pure selection and history policy owned by the environment's trusted adapter. */
-export interface ToolEnvironmentCatalogEntry {
-  readonly descriptor: ToolEnvironmentDescriptor
-  readonly historyTools?: readonly ToolDescriptor[]
-  readonly validateSelection?: (tools: readonly ToolDescriptor[]) => void
-}
-
-export interface ToolEnvironmentCatalog {
-  snapshot(environmentIds: readonly string[], toolIdsByEnvironment?: Readonly<Record<string, readonly string[]>>): ToolEnvironmentSnapshot
-  validate(snapshot: ToolEnvironmentSnapshot): ToolEnvironmentSnapshot
-  bind(providers: readonly ToolEnvironment[]): ToolEnvironmentRegistry
-  readonly environments: readonly ToolEnvironmentDescriptor[]
-}
-
-/** Executable providers bound once to the current component dependency generation. */
-export interface ToolEnvironmentRegistry {
-  openRun(snapshot: ToolEnvironmentSnapshot, context: ToolEnvironmentRunContext): ToolEnvironmentRun
-}
-
-/** Trusted assembly contributes dependencies without introducing another resource owner. */
-export interface ToolEnvironmentRuntimeBinding {
+export interface ToolEnvironmentAssembly {
   readonly inject: readonly string[]
-  bind(deps: Readonly<Record<string, unknown>>): ToolEnvironmentRegistry
+  readonly trustedConfigurationEnvironmentIds: ReadonlySet<string>
+  readonly prepareRun: PrepareRunToolEnvironment
+  readonly runTargets: RunToolTargets
+  inventoryTargets(units: readonly UnitAttachment[]): ReadonlyMap<string, readonly FunctionBindingTarget[]>
+  describe(deps: Readonly<Record<string, unknown>>): { readonly catalog: ToolEnvironmentCatalog; readonly bindings: FunctionBindings }
 }
+
+export type RunToolTargets = (units: RunUnitBindings | undefined) => ReadonlyMap<string, string>
+
+export type PrepareRunToolEnvironment = (input: {
+  readonly project: Project
+  readonly workspaces?: readonly ProjectWorkspace[]
+  readonly session: Pick<Session, 'toolEnvironments' | 'toolSelection'>
+  readonly modelSupportsTools: boolean
+}, attachments: Pick<UnitAttachmentsPort, 'local' | 'binding' | 'get'>) => Promise<{
+  readonly units?: RunUnitBindings
+  readonly supports?: (tool: EnvironmentTool) => boolean
+  readonly prompts?: readonly PromptSnapshot[]
+}>

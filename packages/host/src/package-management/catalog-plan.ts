@@ -1,3 +1,4 @@
+import { localStorageCapabilityVersion } from '@anybox/storage-sqlite/port'
 import { rcompare, satisfies } from 'semver'
 import type { ApplicationCapabilityProvider, ApplicationRegistration } from '@anybox/application-api/nya'
 import type { ApplicationArchiveManifest, VerifyApplicationArchiveOptions } from './archive.js'
@@ -28,7 +29,7 @@ export async function planInstalledRoles(view: PackageRegistryView, options: Ins
     assertInstalledApplicationLifecycle(archive)
     candidates.push({ identity: target, manifest: archive.manifest, fresh: facts.selected === null })
   }
-  const offers = [{ id: 'storage.sqlite', version: '1.0.0', supported: true }, ...(options.providers ?? [])]
+  const offers = [{ id: 'storage.sqlite', version: localStorageCapabilityVersion, supported: true }, ...(options.providers ?? [])]
   return options.roles.map(role => {
     const included = candidates.filter(item => role === 'client' ? !!item.manifest.entries?.client || !!item.manifest.web : role === 'execution' ? !!item.manifest.entries?.execution : role === 'computer-worker' ? !!item.manifest.entries?.computerWorker : !!item.manifest.web)
     const entries = included.map(item => {

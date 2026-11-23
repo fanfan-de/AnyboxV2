@@ -10,7 +10,7 @@
 
 | 方法 | 行为 |
 | --- | --- |
-| `info()` | 按需确认本机 worker 的身份、平台与架构，以及可选的工具支持清单；环境列表查询不调用此方法 |
+| `info(attachmentId?)` | 读取指定附着的 worker 身份、平台、架构、工具清单和工作区协议支持；省略附着时走本机回环。多工作区工具首次派发时向原目标复核 `workspaceScopeVersion` 和启动身份。环境列表继续使用已有观察 |
 | `claimRun` / `submit` / `get` / `query` | 按 `attachmentId` 路由。远端：同一单元 boot 上已成功的 claim 不重复投递；`get` 附带上次状态让单元在本地等待变化；`query(input, signal?)` 复核附着仍 approved 后投递；目录 scope 与 ceiling 的 canonical 交集由持有文件系统的 worker 统一检查 |
 | `shutdown()` | 只停止自己拥有的本机 worker；远端拨出不提供停止整个 worker 的请求 |
 | `activate({ resource, previousInstance })` | `spec.providerId` 为 `local` 时向本机 worker 取身份；为 `unit` 时按 `resource.computerId = unit:<attachmentId>` 向该单元请求 `info`。校验平台/架构后返回 `providerRef = workerId:bootId`；上一实例属于同一提供方且 workerId 相同、bootId 不同时附带 `previousExited: true`（同一 worker 目录只有一个存活进程，旧 boot 必已退出），让 Computers 在旧实例仍有未释放 pin 时也能换代。不可达返回 `computer-unavailable`，取消返回 `computer-cancelled`。`providerIds` 列出本组合服务的提供方 ID，Computers 按它接受资源 |

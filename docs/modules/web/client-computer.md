@@ -18,6 +18,6 @@ Effect 停止本代新观察、取消 HTTP 并等待在途观察退出；不停�
 
 HTTP 仅在客户端应用路径 `/api/client/v1/apps/agent/computer` 下提供 `GET /status`、`POST /start`、`POST /attachments`、`POST /attachments/:id/permissions`、`POST /attachments/:id/revoke`。受客户端回环 Host/Origin 及桌面私有传输保护，不在远端连接代理白名单内。浏览器不收到 endpoint URL/令牌或单元凭据。
 
-浏览器入口在“管理连接”的独立本机区域，手动刷新，不跟随所选 harness server。已停止的 worker 返回状态但不离线读取其数据库；启动后才能查看持久附着详情。CLI 使用同一观察工厂和协议，不要求启动客户端进程。
+浏览器入口在“执行环境 → 客户端电脑 → 管理本机 Computer worker”，可以手动刷新。该入口固定管理客户端服务所在的设备，尚未选择执行设备时也可打开。已停止的 worker 返回状态，启动后可查看持久附着详情。“连接到其他执行设备”表单按需展开。CLI 使用同一观察工厂和协议，可以独立使用。
 
 验证：`tests/computer-worker-management.test.mjs` 覆盖独立 HTTP / CLI、权限准入、取消后实际退出、并发撤销、断开观察与持久化；`tests/runtime-roles.test.mjs` 在真实客户端子进程中禁止执行端导入和子进程创建，检查恢复及只读状态无副作用；`tests/units-client.test.mjs` 验证按钮与 API 绑定。

@@ -15,7 +15,7 @@ import { createUnitTransportComponent, unitTransportServiceKey } from '../packag
 import { openComputerWorker } from '../packages/app-harness/dist/core/computer/worker-server.js'
 import { connectLocalComputerWorker } from '../packages/app-harness/dist/core/computer/worker-client.js'
 import { workerBuildId } from '../packages/app-harness/dist/core/computer/worker-runtime.js'
-import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
+import { computerDeclarationDigest, computerWorkspaceScopeId } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { ceilingPermits, localWorkerAttachment, validateHarnessUrl, validateWorkerAttachment } from '../packages/app-harness/dist/core/computer/worker-attachments-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 import { createComputerToolManifest } from '../packages/app-harness/dist/core/computer/tool-support.js'
@@ -114,7 +114,7 @@ test('a worker serves a remote harness server through dial-out under the device 
   // Requests travel through the mailbox; the unit derives the authorization from the attachment that delivered them.
   const id = attached.attachmentId
   const request = (kind, payload) => remote.transport.request(id, { kind, payload })
-  assert.deepEqual(await request('info', {}), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: manifest, buildId: workerBuildId, runtime: { state: 'ready' } })
+  assert.deepEqual(await request('info', {}), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: manifest, workspaceScopeVersion: 1, buildId: workerBuildId, runtime: { state: 'ready' } })
   const pollUrl = `${remote.web.url}/api/v1/apps/agent/units/unit/poll?${new URLSearchParams({ unitId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, waitMs: '0' })}`
   const pollHeaders = { authorization: unitAuthorization(id, memory.values().next().value), 'x-anybox-instance-id': remote.access.instance.instanceId }
   for (const value of ['{broken', JSON.stringify({ tooLarge: 'x'.repeat(8192) })]) {
@@ -208,12 +208,53 @@ test('a worker restart keeps approved attachments and resumes dial-out from the 
   assert.notEqual(worker.endpoint.bootId, firstBoot)
   const connection = await until(() => { const c = remote.transport.connection(attached.attachmentId); return c?.connected && c.bootId === worker.endpoint.bootId ? c : undefined }, 'second boot polls with the stored credential')
   assert.equal(connection.unitId, worker.endpoint.workerId)
-  assert.deepEqual(await remote.transport.request(attached.attachmentId, { kind: 'info', payload: {} }), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: createComputerToolManifest(), buildId: workerBuildId, runtime: { state: 'ready' } })
+  assert.deepEqual(await remote.transport.request(attached.attachmentId, { kind: 'info', payload: {} }), { workerId: worker.endpoint.workerId, bootId: worker.endpoint.bootId, platform: process.platform, architecture: process.arch, toolManifest: createComputerToolManifest(), workspaceScopeVersion: 1, buildId: workerBuildId, runtime: { state: 'ready' } })
   assert.deepEqual(connection.capabilities, { computerTools: createComputerToolManifest() }, 'the new boot reports its own tool contracts')
   assert.equal(memory.size, 1)
   const relink = connectLocalComputerWorker({ directory: join(directory, 'worker') })
   assert.equal((await relink.control.listAttachments())[0].connection, 'connected')
   await relink.closeObserver()
+})
+
+test('one worker independently owns loopback and dial-out workspaces of one Run', { timeout: 60_000 }, async t => {
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'anybox-sibling-worker-')))
+  const remote = await harnessServer(t, dir)
+  const worker = await openComputerWorker(join(dir, 'worker'), { ...memoryEntries(), dialout: { pollWaitMs: 200 } })
+  const local = connectLocalComputerWorker({ directory: join(dir, 'worker') })
+  t.after(async () => { try { await local.closeObserver(); await worker.close() } finally { await rm(dir, { recursive: true, force: true }) } })
+  const scope = fullScope('computer')
+  const { code } = await remote.units.createAttachCode({ unitKind: 'computer', scope })
+  const attached = await local.control.consumeAttachCode({ harnessUrl: remote.web.url, code, ceiling: scope })
+  await until(() => remote.transport.connection(attached.attachmentId)?.connected, 'worker dial-out')
+  const byRemote = (kind, data) => remote.transport.request(attached.attachmentId, { kind, payload: data })
+  const boot = worker.endpoint.bootId, tool = getToolById('anybox.bash')
+  const makeTarget = async (id, attachmentId, unitId, call) => {
+    const workspaceScope = { parentRunId: 'shared-run', bindingId: id, attachmentId, unitId, unitEpoch: 1 }
+    const runId = computerWorkspaceScopeId(workspaceScope)
+    const owner = { runId, attachmentId, runOwnerEpoch: 1 }
+    const path = join(dir, id); await mkdir(path)
+    await call('claim', owner)
+    const binding = { bindingId: id, reservationId: id, workspaceId: id, projectId: 'shared-project', scopeId: runId, computerId: attachmentId,
+      computerInstanceId: worker.endpoint.workerId + ':' + boot, instanceGeneration: 1, workspaceEpoch: 1, revision: 0, path, preparedAt: 'now' }
+    const invoke = async operationId => {
+      const declaration = { schemaVersion: 2, workspaceScope, operationId, runId, sessionId: 'session', projectId: 'shared-project', tool,
+        request: { id: operationId, name: 'bash', arguments: { command: nodeCommand('process.stdout.write(process.cwd())', true) } },
+        workspaceId: id, workspaceRevision: 0, computerId: attachmentId, spec: { providerId: 'unit', platform: process.platform, architecture: process.arch } }
+      const input = { ...owner, operationId, kind: 'tool', workerBootId: boot, declaration, binding, declarationDigest: computerDeclarationDigest(declaration) }
+      await call('submit', input)
+      return until(async () => { const op = await call('get', { ...owner, operationId }); return terminal(op.state) && op }, 'work appears in its original directory')
+    }
+    return { owner, path, invoke }
+  }
+  const a = await makeTarget('a', 'local:computer', localComputerUnitId,
+    (kind, data) => kind === 'claim' ? local.claimRun(data) : kind === 'get' ? local.get(data) : local.submit(data))
+  const b = await makeTarget('b', attached.attachmentId, worker.endpoint.workerId, byRemote)
+  assert.notEqual(a.owner.runId, b.owner.runId)
+  assert.equal((await a.invoke('read-a')).observation.result.stdout, a.path)
+  await local.submit({ ...a.owner, operationId: 'cancel-a', kind: 'cancel', declarationDigest: 'cancel-a' })
+  assert.equal((await b.invoke('read-b')).observation.result.stdout, b.path)
+  await assert.rejects(byRemote('claim', { ...a.owner, runOwnerEpoch: 2 }), { code: 'worker-owner-rejected' })
+  assert.equal((await b.invoke('read-b')).executeCount, 1)
 })
 
 test('unit credentials round-trip through the real system keyring', { skip: !process.env.ANYBOX_KEYRING_TESTS, timeout: 120_000 }, async t => {

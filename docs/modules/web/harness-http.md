@@ -37,8 +37,10 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 | `POST /projects/directories/browse` | `{action:"open",path?,query?,showHidden?}` 预留会话；`{action:"page",browseId,page}` 分页浏览 |
 | `POST /projects/directories/close` | `{browseId}`，幂等关闭并等待清理 |
 | `POST /projects/directories/create` | `{browseId,name}`，在已读取且属于当前认证调用方的目录下创建一个子目录，返回 201 与 `{path}`；不登记项目 |
+| `GET /projects/:id/workspaces` | 项目配置修订和已核验的具名工作区，主工作区排首 |
+| `POST /projects/:id/workspaces`、成员的 `/:workspaceId/rename` 与 `/:workspaceId/remove` | 使用请求 ID 和预期修订添加、改名或移除附加绑定，目标设备核验新增目录 |
 | `GET /projects/:id/sessions` | 项目下未归档会话 |
-| `POST /sessions` | `{ projectId, agentId, modelId? }`；创建事务按显式模型、已保存 Agent 覆盖、启动后备值复制 modelId |
+| `POST /sessions` | `{ projectId, agentId, modelId?, workspaceIds?, projectWorkspaceRevision? }`；创建事务按显式模型、已保存 Agent 覆盖、启动后备值复制 modelId |
 | `GET /sessions/archived` | 跨项目归档列表，按归档时间倒序 |
 | `GET /sessions/:id` | 会话 DTO |
 | `POST /sessions/:id/archive`、`POST /sessions/:id/restore` | `{}`；幂等归档 / 恢复，归档要求没有活动 Run |
@@ -54,7 +56,7 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 | `POST /sessions/:id/images/renew` | `{ assetIds }`（最多 8 项）；返回 `{ valid, invalid }`，不复活已过期图片 |
 | `GET /runs/:id` | 已提交 Run 状态 DTO |
 | `GET /runs/:id/view` | 原生白名单视图；运行中可为 provisional，结束后为 committed |
-| `GET /runs/:id/events` | 可选非负安全整数 `afterSeq`，默认 0 |
+| `GET /runs/:id/events` | 可选非负安全整数 `afterSeq`，默认 0。多工作区工具轨迹包括原工具名、Run 固定的工作区名称及目录 |
 | `GET /runs/:id/wait` | 可选 `timeoutMs`（0..25000，默认 25000）；返回 `{ done, timedOut, run }` |
 | `POST /runs/:id/cancel` | `{}`；请求取消并返回当前状态，实际结束由 wait/查询确认 |
 | `GET /changes` | 重复 `sessionId` 参数，订阅 1..4 个不同会话的 SSE |
@@ -74,7 +76,7 @@ Effect 停止新业务，取消并等待受管资源请求和 SSE、释放目录
 | `GET /units/attachments` | 附着记录列表，含本机自动附着；不含附着码或凭证 |
 | `POST /units/attach-codes` | `{ unitKind, scope, ttlMs? }`；记录 pending 附着并返回 201 与一次性 `code`；种类与作用域不一致或 ttl 非整数返回 400 |
 | `POST /units/attachments/:id/revoke` | `{}`；远端附着幂等撤销并递增 epoch；本机附着返回 `409 unit-attachment-local`，未知 ID 返回 404 |
-| `POST /projects`（既有路由） | 新增可选 `computerAttachmentId`：把项目绑定到该 Computer 附着，路径由单元解析；缺省为组合的默认绑定。Project DTO 带 `computerAttachmentId` |
+| `POST /projects`（既有路由） | 新增可选 `computerAttachmentId`：把项目绑定到该 Computer 附着，路径由单元解析；缺省为组合的默认绑定。Project DTO 带主工作区的 `computerAttachmentId` 及工作区数量 `workspaceCount` |
 | `GET /units/local-computer/attachments` | 本机 worker 的附着记录及连接状态，经 `computer.local-worker-control` 回环转发；远端 Computer 形态没有该服务时返回 503 |
 | `POST /units/local-computer/attachments` | `{ harnessUrl, code, ceiling }`；本机 worker 消费另一台 harness server 的附着码并设定目录与工具上限，返回 201；远端返回的 `unit-*` 错误码按附着错误映射，地址非法返回 400，不可达返回 502 |
 | `POST /units/local-computer/attachments/:id/revoke` | `{}`；本机 worker 撤销自己的远端附着并删除凭证；`local:computer` 返回 409，未知返回 404 |

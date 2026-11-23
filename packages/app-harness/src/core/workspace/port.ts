@@ -15,6 +15,9 @@ export interface WorkspacesPort {
     readonly reservationId: string
     readonly scopeId: string
     readonly projectId: string
+    readonly projectWorkspaceId?: string
+    readonly projectWorkspaceRevision?: number
+    readonly computerAttachmentId?: string
   }): WorkspaceReservation
   /** Only explicit computer tools call prepare. Local readiness checks happen outside a transaction. */
   prepare(input: { readonly reservationId: string; readonly instance: ComputerInstance }, signal?: AbortSignal): OwnedCall<PreparedWorkspaceBinding>

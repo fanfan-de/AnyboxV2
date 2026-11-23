@@ -100,7 +100,8 @@ export function createApplicationCatalog(input: readonly ApplicationRegistration
 }
 
 /** One host owns these lazy factories across Products component restarts. */
-export function createApplicationRuntimes(root: Context, catalog: ApplicationCatalog, providers: readonly ApplicationCapabilityProvider[] = [], serviceBindings: Readonly<Record<string, string>> = {}) {
+export function createApplicationRuntimes(root: Context, catalog: ApplicationCatalog, providers: readonly ApplicationCapabilityProvider[] = [], serviceBindings: Readonly<Record<string, string>> = {},
+  checkWriter?: (application: ApplicationRegistration) => Promise<ApplicationCapabilityStatus | undefined>) {
   serviceBindings = Object.freeze({ ...serviceBindings })
   const instances = new Map<string, ApplicationRuntime>()
   const capabilities = createApplicationCapabilityManager(root, providers, serviceBindings)
@@ -144,6 +145,12 @@ export function createApplicationRuntimes(root: Context, catalog: ApplicationCat
       if (current) { await current.open(); return }
       failure = undefined; blocked = false
       try {
+        const incompatible = await checkWriter?.(application)
+        guard()
+        if (incompatible) {
+          statuses = [...capabilities.inspect(application.capabilityRequirements).filter(status => status.id !== incompatible.id), incompatible]
+          blocked = true; return
+        }
         lease = await capabilities.acquire(application.capabilityRequirements)
         statuses = lease.statuses
         guard()

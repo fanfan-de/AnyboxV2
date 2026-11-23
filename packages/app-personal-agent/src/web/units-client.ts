@@ -1,3 +1,4 @@
+import type { EnvironmentInventoryTarget } from '@anybox/execution-environments/management'
 import type { Api } from './client-types.js'
 import type { UnitAttachment, UnitScope } from '../core/unit/domain.js'
 import type { ComputerEnvironment, ComputerEnvironments } from '../core/computer/environments.js'
@@ -13,6 +14,8 @@ const environmentStateLabel = (environment: ComputerEnvironment): string => ({
 /** Owner-side unit attachments of one fixed device: list, issue one-time attach codes, revoke. */
 export interface UnitsSettingsView {
   canLeave(): boolean
+  close(): Promise<void>
+  closeLocalComputer(): Promise<void>
   refresh(): Promise<void>
   issue(input: { readonly projects: readonly string[]; readonly tools: readonly string[] }): Promise<string>
   revoke(attachmentId: string): Promise<void>
@@ -54,7 +57,7 @@ export interface LocalAttachmentsView {
   dispose(): Promise<void>
 }
 /** Local client management, independent of every saved Personal Agent 执行服务 connection. */
-export function setupLocalAttachments(source: Api, messageFor: (error: unknown) => string, section: HTMLElement, deviceName: string): LocalAttachmentsView {
+export function setupLocalAttachments(source: Api, messageFor: (error: unknown) => string, section: HTMLElement, deviceName: string, close?: () => void): LocalAttachmentsView {
   const requests = createPageRequests(source), api = requests.api
   let attachments: readonly LocalAttachmentView[] = [], notice = '', disposed = false, busy = false, running = false, supported = true, unavailable = false, restartRequired = false
   let disposal: Promise<void> | undefined
@@ -65,30 +68,49 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
     if (className) node.className = className
     return node
   }
-  const title = el('h3', `${deviceName} · Computer worker`), hint = el('p', '允许远端 Agent 使用本机执行工具。附着码由对方在“执行环境”设置中生成。此入口管理客户端服务所在设备，无须启动本机 Personal Agent 执行服务。', 'settings-hint')
-  const workerStatus = el('p', '正在读取状态…'), startButton = el('button', '启动 Computer worker'), refreshButton = el('button', '刷新状态')
+  const title = el('h5', `${deviceName} · Computer worker`)
+  const workerStatus = el('span', '正在读取状态…', 'execution-environment-status')
+  const startButton = el('button', '启动 Computer worker', 'secondary-button'), refreshButton = el('button', '刷新状态', 'secondary-button')
   workerStatus.setAttribute('role', 'status'); startButton.type = refreshButton.type = 'button'; startButton.disabled = true
+  const header = el('div', undefined, 'execution-environment-toolbar')
+  const workerHeading = el('div', undefined, 'execution-environment-row-heading'); workerHeading.append(title, workerStatus)
   const list = el('div', undefined, 'units-list'), status = el('p', undefined, 'notice'); status.hidden = true
-  const form = el('form', undefined, 'settings-card')
-  const urlLabel = el('label', '远端 Personal Agent 执行服务 地址（HTTPS）'), urlInput = el('input'); urlInput.type = 'url'; urlInput.required = true; urlLabel.append(urlInput)
-  const codeLabel = el('label', '附着码'), codeInput = el('input'); codeInput.type = 'password'; codeInput.required = true; codeLabel.append(codeInput)
+  const connection = el('details', undefined, 'execution-environment-disclosure'); connection.hidden = true
+  const form = el('form', undefined, 'execution-environment-form')
+  const urlLabel = el('label', '目标执行设备地址（HTTPS）'), urlInput = el('input'); urlInput.type = 'url'; urlInput.required = true; urlLabel.append(urlInput)
+  const codeLabel = el('label', '附着码'), codeInput = el('input'); codeInput.type = 'password'; codeInput.required = true; codeInput.autocomplete = 'off'; codeLabel.append(codeInput)
   const projectsLabel = el('label', '允许对方访问的目录（每行一个绝对路径，留空表示不限）'), projectsInput = el('textarea'); projectsInput.rows = 3; projectsLabel.append(projectsInput)
   const toolsLabel = el('label', '允许对方使用的工具契约 ID（逗号分隔，留空表示不限）'), toolsInput = el('input'); toolsInput.type = 'text'; toolsLabel.append(toolsInput)
   const attachButton = el('button', '附着', 'primary-button'); attachButton.type = 'submit'
-  form.append(urlLabel, codeLabel, projectsLabel, toolsLabel, attachButton)
+  form.append(el('p', '在对方执行设备的「执行环境」中生成附着码，再填写地址和附着码。', 'settings-hint'), urlLabel, codeLabel, projectsLabel, toolsLabel, attachButton)
+  connection.append(el('summary', '连接到其他执行设备'), form)
   const controls = el('div', undefined, 'settings-actions'); controls.append(startButton, refreshButton)
-  section.append(title, hint, workerStatus, controls, status, list, form)
+  const closeButton = close && el('button', '收起', 'secondary-button')
+  if (close && closeButton) {
+    closeButton.type = 'button'
+    closeButton.addEventListener('click', close)
+    controls.append(closeButton)
+  }
+  header.append(workerHeading, controls)
+  section.append(header, status, connection, list)
+  closeButton?.focus()
   const setNotice = (message: string) => { notice = message; status.textContent = message; status.hidden = !message }
   const render = () => {
     if (disposed) return
+    list.hidden = !running && !attachments.length
     list.replaceChildren(...attachments.map(attachment => {
       const row = el('section', undefined, 'settings-card unit-row'); row.dataset.attachmentId = attachment.attachmentId
-      row.append(el('strong', attachment.attachmentId), el('p', describeLocalAttachment(attachment)))
+      const heading = el('div', undefined, 'execution-environment-row-heading')
+      const badge = el('span', connectionLabels[attachment.connection], 'execution-environment-status'); badge.dataset.state = attachment.connection
+      heading.append(el('strong', attachment.harnessUrl), badge)
+      const details = el('details', undefined, 'execution-environment-disclosure')
+      details.append(el('summary', '身份与权限'), el('p', attachment.attachmentId), el('p', describeLocalAttachment(attachment)))
+      row.append(heading, details)
       if (attachment.state === 'approved') {
-        const edit = el('button', '配置权限'); edit.type = 'button'
+        const edit = el('button', '配置权限', 'secondary-button'); edit.type = 'button'
         edit.addEventListener('click', () => {
           if (busy) return
-          const editor = el('form'), projectLabel = el('label', '允许访问的目录（每行一个，留空表示不允许）'), projects = el('textarea')
+          const editor = el('form', undefined, 'execution-environment-form'), projectLabel = el('label', '目录（每行一个，留空表示不允许）'), projects = el('textarea')
           projects.rows = 3; projects.value = attachment.ceiling.projects === 'all' ? '' : attachment.ceiling.projects.join('\n'); projectLabel.append(projects)
           const allProjectsLabel = el('label', '不限目录', 'computer-grant-toggle'), allProjects = el('input'); allProjects.type = 'checkbox'; allProjects.checked = attachment.ceiling.projects === 'all'; allProjectsLabel.append(allProjects)
           const toolLabel = el('label', '工具契约 ID（逗号分隔，留空表示不允许）'), tools = el('input')
@@ -96,20 +118,20 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
           const allToolsLabel = el('label', '不限工具', 'computer-grant-toggle'), allTools = el('input'); allTools.type = 'checkbox'; allTools.checked = attachment.ceiling.tools === 'all'; allToolsLabel.append(allTools)
           projects.disabled = allProjects.checked; tools.disabled = allTools.checked
           allProjects.addEventListener('change', () => { projects.disabled = allProjects.checked }); allTools.addEventListener('change', () => { tools.disabled = allTools.checked })
-          const save = el('button', '保存权限并停止当前执行'); save.type = 'submit'
-          const cancel = el('button', '取消'); cancel.type = 'button'
+          const save = el('button', '保存权限并停止当前执行', 'primary-button'); save.type = 'submit'
+          const cancel = el('button', '取消', 'secondary-button'); cancel.type = 'button'
           cancel.addEventListener('click', () => render())
           editor.append(allProjectsLabel, projectLabel, allToolsLabel, toolLabel, el('p', '保存后会取消并等待该附着的当前工具执行退出。新请求使用新的权限上限。', 'settings-hint'), save, cancel)
           editor.addEventListener('submit', event => { event.preventDefault(); void view.permissions(attachment.attachmentId, { projects: allProjects.checked ? 'all' : parseGrantList(projects.value), tools: allTools.checked ? 'all' : parseGrantList(tools.value) }).catch(() => {}) })
           row.replaceChildren(el('strong', attachment.harnessUrl), editor)
         })
-        const revoke = el('button', '撤销附着'); revoke.type = 'button'
+        const revoke = el('button', '撤销附着', 'secondary-button'); revoke.type = 'button'
         revoke.addEventListener('click', () => { void view.revoke(attachment.attachmentId).catch(() => {}) })
-        row.append(edit, revoke)
+        const actions = el('div', undefined, 'settings-actions'); actions.append(edit, revoke); row.append(actions)
       }
       return row
     }))
-    if (!attachments.length && running) list.append(el('p', '这台设备尚未附着到其他 Personal Agent 执行服务。'))
+    if (running && !attachments.length) list.append(el('p', '尚未连接到其他执行设备。', 'settings-hint'))
   }
   const guarded = async <T>(work: () => Promise<T>): Promise<T> => {
     if (busy) throw Object.assign(new Error('busy'), { status: 409, code: 'product-busy' })
@@ -126,10 +148,15 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
         if (disposed) return
         restartRequired = value.state === 'restart-required'
         running = value.state === 'running' || restartRequired; supported = value.supported; unavailable = value.state === 'unavailable'; attachments = value.attachments
-        workerStatus.textContent = restartRequired ? 'Computer worker 的版本或运行条件已变化，已暂停新工具调用。请在任务退出后停止并重新启动 worker。'
-          : !supported ? '当前平台尚不支持 Computer worker。' : running ? `运行中 · ${value.workerId}` : value.state === 'stopped' ? '尚未启动。启动后可查看和管理附着。' : '无法连接本机 worker，请检查进程状态后刷新。'
+        workerStatus.textContent = restartRequired ? '需要重启' : !supported ? '当前平台不支持' : running ? '运行中' : unavailable ? '无法连接' : '尚未启动'
+        workerStatus.dataset.state = value.state
+        workerStatus.title = value.workerId ?? ''
         startButton.hidden = running; startButton.disabled = busy || !supported || value.state === 'unavailable'
-        form.hidden = !running || restartRequired; attachButton.disabled = !running || restartRequired || busy; setNotice('')
+        connection.hidden = !running || restartRequired
+        if (connection.hidden) { connection.open = false; codeInput.value = '' }
+        attachButton.disabled = connection.hidden || busy
+        setNotice(restartRequired ? 'Computer worker 的版本或运行条件已变化，已暂停新工具调用。请在任务退出后停止并重新启动 worker。'
+          : unavailable ? '无法连接本机 worker，请检查进程状态后刷新。' : '')
       }
       catch (error) { if (!disposed) setNotice(messageFor(error)) }
       render()
@@ -150,21 +177,59 @@ export function setupLocalAttachments(source: Api, messageFor: (error: unknown) 
       return disposal = requests.dispose()
     },
   }
-  form.hidden = true
   startButton.addEventListener('click', () => { void view.start().catch(() => {}) })
   refreshButton.addEventListener('click', () => { if (!busy) void view.refresh() })
+  connection.addEventListener('toggle', () => { if (!connection.open) codeInput.value = '' })
   form.addEventListener('submit', event => {
     event.preventDefault()
-    const code = codeInput.value
-    void view.attach({ harnessUrl: urlInput.value.trim(), code: code.trim(), projects: parseGrantList(projectsInput.value), tools: parseGrantList(toolsInput.value) }).catch(() => {})
+    const code = codeInput.value.trim()
+    codeInput.value = ''
+    void view.attach({ harnessUrl: urlInput.value.trim(), code, projects: parseGrantList(projectsInput.value), tools: parseGrantList(toolsInput.value) }).catch(() => {})
   })
   void view.refresh()
   return view
 }
 
-export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => string, panel: HTMLElement): UnitsSettingsView {
-  const requests = createPageRequests(source), api = requests.api
+/** The local worker has its own client API and only starts observing after opening its controls. */
+export function setupLocalComputerSettings(source: Api, messageFor: (error: unknown) => string, panel: HTMLElement) {
+  const lifetime = new AbortController()
+  const button = document.createElement('button'), section = document.createElement('section')
+  button.type = 'button'; button.textContent = '管理本机 Computer worker'; button.setAttribute('data-computer', '')
+  button.className = 'secondary-button'
+  section.className = 'computer-management'; section.setAttribute('data-attachments', ''); section.hidden = true
+  panel.append(button, section)
+  let active: LocalAttachmentsView | undefined, exit: Promise<void> | undefined
+  let joiningWrite = false
+  button.addEventListener('click', () => {
+    if (active || exit) return
+    section.hidden = false
+    active = setupLocalAttachments(source, messageFor, section, '本机', () => { void close().then(() => { if (!lifetime.signal.aborted) button.focus() }).catch(() => {}) })
+    button.hidden = true
+  }, { signal: lifetime.signal })
+  const close = () => {
+    if (!active) return exit ?? Promise.resolve()
+    const previous = active
+    joiningWrite = !previous.canLeave()
+    active = undefined
+    section.hidden = true
+    button.hidden = false; button.disabled = true
+    const closing = exit = previous.dispose()
+    void closing.finally(() => {
+      exit = undefined; joiningWrite = false; button.disabled = false
+    }).catch(() => {})
+    return closing
+  }
+  return {
+    canLeave: () => !joiningWrite && (active?.canLeave() ?? true),
+    close,
+    dispose() { lifetime.abort(); return close() },
+  }
+}
+
+export function setupUnitsSettings(source: Api | undefined, messageFor: (error: unknown) => string, panel: HTMLElement, localSource?: Api): UnitsSettingsView {
+  const requests = source && createPageRequests(source), api = requests?.api
   let attachments: readonly UnitAttachment[] = [], environments: readonly ComputerEnvironment[] = [], notice = '', code = '', disposed = false, busy = false
+  let targets: readonly EnvironmentInventoryTarget[] = [], catalogNotice = '', refreshEpoch = 0, issueEpoch = 0
   let disposal: Promise<void> | undefined
   panel.replaceChildren()
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] => {
@@ -174,16 +239,42 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
     return node
   }
   const heading = el('header', undefined, 'settings-panel-heading'), title = el('h3', '执行环境'); title.id = 'personal-agent--units-title'
-  heading.append(title, el('p', 'Agent 在本机执行环境中使用自己的工作目录。这里也可管理已附着的远端环境。附着码只显示一次，请在远端设备的“管理连接”中输入。'))
-  const refreshButton = el('button', '刷新执行环境'); refreshButton.type = 'button'; heading.append(refreshButton)
+  const titleRow = el('div', undefined, 'settings-title-row'); titleRow.append(title)
+  heading.append(titleRow, el('p', '执行环境决定 Agent 的工具在哪里运行。', 'settings-scope-description'))
+  const computer = el('section', undefined, 'execution-environment-section')
+  const computerHeading = el('div', undefined, 'execution-environment-toolbar')
+  const refreshButton = el('button', '刷新', 'secondary-button'); refreshButton.type = 'button'
+  refreshButton.setAttribute('aria-label', '刷新执行环境')
+  computerHeading.append(el('h4', '文件与命令在哪台电脑上运行'))
+  if (api) computerHeading.append(refreshButton)
+  computer.append(computerHeading)
   const list = el('div', undefined, 'units-list'), status = el('p', undefined, 'notice'); status.hidden = true
-  const form = el('form', undefined, 'settings-card'), formTitle = el('h3', '生成 Computer 附着码')
+  status.setAttribute('role', 'status')
+  const connect = el('details', undefined, 'execution-environment-disclosure')
+  const form = el('form', undefined, 'execution-environment-form')
   const projectsLabel = el('label', '允许访问的目录（每行一个绝对路径，留空表示不限）'), projectsInput = el('textarea'); projectsInput.rows = 3; projectsLabel.append(projectsInput)
   const toolsLabel = el('label', '允许的工具契约 ID（逗号分隔，留空表示不限）'), toolsInput = el('input'); toolsInput.type = 'text'; toolsLabel.append(toolsInput)
   const issueButton = el('button', '生成附着码', 'primary-button'); issueButton.type = 'submit'
   const once = el('p', undefined, 'token-once'); once.hidden = true
-  form.append(formTitle, projectsLabel, toolsLabel, issueButton, once)
-  panel.append(heading, status, list, form)
+  once.setAttribute('role', 'status')
+  form.append(el('p', '生成附着码后，在提供工具的电脑上打开「管理本机 Computer worker」使用该码。', 'settings-hint'), projectsLabel, toolsLabel, issueButton, once)
+  connect.append(el('summary', '接入另一台电脑'), form)
+  const clearIssuedCode = () => {
+    issueEpoch++; code = ''; once.textContent = ''; once.hidden = true
+  }
+  connect.addEventListener('toggle', () => { if (!connect.open) clearIssuedCode() })
+  const catalog = el('div', undefined, 'units-list')
+  const toolEnvironments = el('section', undefined, 'execution-environment-section')
+  toolEnvironments.append(el('h4', '由哪些环境提供工具'), el('p', '在「Agent 工具」中管理每个 Agent 的授权和偏好。', 'settings-hint'), catalog)
+  const localPanel = el('section', undefined, 'execution-environment-section')
+  localPanel.append(el('h4', '客户端电脑'), el('p', '检查客户端电脑的工具服务，或将这台电脑提供给其他执行设备。', 'settings-hint'))
+  const local = localSource && setupLocalComputerSettings(localSource, messageFor, localPanel)
+  panel.append(heading, computer)
+  if (api) {
+    computer.append(el('p', '「本机」指所选执行设备所在的电脑。连续对话使用这台电脑上的工作目录。', 'settings-hint'), status, list, connect)
+    panel.append(toolEnvironments)
+  } else computer.append(el('p', '启动并选择执行设备后，可查看该设备的工具和附着。', 'settings-hint'))
+  if (local) panel.append(localPanel)
   const setNotice = (message: string) => { notice = message; status.textContent = message; status.hidden = !message }
   const render = () => {
     if (disposed) return
@@ -192,49 +283,89 @@ export function setupUnitsSettings(source: Api, messageFor: (error: unknown) => 
       const row = el('section', undefined, 'settings-card unit-row')
       row.dataset.attachmentId = environment.environmentId
       const label = el('strong', environmentLabel(environment)); label.title = `${environment.environmentId}${environment.unitId ? ` · ${environment.unitId}` : ''}`
-      const details = el('details'); details.append(el('summary', '身份与权限'), el('p', environment.environmentId))
+      const rowHeading = el('div', undefined, 'execution-environment-row-heading')
+      const badge = el('span', environmentStateLabel(environment), 'execution-environment-status'); badge.dataset.state = environment.connectionState
+      rowHeading.append(label, badge)
+      const details = el('details', undefined, 'execution-environment-disclosure'); details.append(el('summary', '身份与权限'), el('p', environment.environmentId))
       if (attachment) details.append(el('p', describeAttachment(attachment)))
-      row.append(label, el('p', environmentStateLabel(environment)), details)
+      const support = environment.toolSupport
+      details.append(el('p', support?.state === 'reported'
+        ? 'Worker 最近报告的工具：' + (support.manifest.tools.map(tool => tool.toolId).join('、') || '无')
+        : '尚未收到可用的 Worker 工具报告。'))
+      details.append(el('p', '命令以执行设备的系统账户运行。项目目录限制用于工具准入，不提供操作系统级文件隔离。'))
+      row.append(rowHeading, details)
       if (environment.origin === 'remote' && environment.state !== 'revoked') {
-        const revoke = el('button', '撤销附着'); revoke.type = 'button'
+        const revoke = el('button', '撤销附着', 'secondary-button'); revoke.type = 'button'
         revoke.addEventListener('click', () => { void view.revoke(environment.environmentId).catch(() => {}) })
-        row.append(revoke)
+        details.append(revoke)
       }
       return row
     }))
     if (!environments.length) list.append(el('p', notice ? '无法读取执行环境，请重试。' : '尚无执行环境。'))
+    catalog.replaceChildren()
+    if (catalogNotice) catalog.append(el('p', catalogNotice))
+    else if (!targets.length) catalog.append(el('p', '尚无可授权的工具目标。'))
+    for (const target of targets) {
+      const details = el('details', undefined, 'settings-card execution-environment-disclosure')
+      const name = target.environmentId === 'mcp' ? `MCP · ${target.name}` : target.name
+      details.append(el('summary', name), el('p', `${target.environmentId} · ${target.targetId}`),
+        el('p', target.tools.map(tool => tool.toolId).join('、')))
+      if (target.agents.length) for (const agent of target.agents) {
+        details.append(el('p', (agent.name || agent.id) + ' 已获授权：' + agent.toolIds.join('、')))
+      }
+      else details.append(el('p', '尚无 Agent 获得此目标的工具授权。'))
+      catalog.append(details)
+    }
   }
-  const guarded = async <T>(work: () => Promise<T>): Promise<T> => {
+  const guarded = async <T>(work: (targetApi: Api) => Promise<T>): Promise<T> => {
+    if (!api) throw Object.assign(new Error('instance-unavailable'), { code: 'instance-unavailable' })
     if (busy) throw Object.assign(new Error('busy'), { status: 409, code: 'product-busy' })
     busy = true; issueButton.disabled = true
-    try { return await work() } catch (error) { setNotice(messageFor(error)); throw error }
+    try { return await work(api) } catch (error) { if (!disposed) setNotice(messageFor(error)); throw error }
     finally { busy = false; issueButton.disabled = false }
   }
   const view: UnitsSettingsView = {
-    canLeave: () => !busy && !requests.writing,
+    canLeave: () => !busy && !requests?.writing && (local?.canLeave() ?? true),
+    close() { connect.open = false; clearIssuedCode(); return view.closeLocalComputer() },
+    closeLocalComputer: () => local?.close() ?? Promise.resolve(),
     async refresh() {
+      if (!api) return
+      const epoch = ++refreshEpoch
       try {
-        const values = await Promise.all([api<readonly UnitAttachment[]>('/units/attachments'), api<ComputerEnvironments>('/computer-environments')])
-        if (disposed) return
+        const [values, projection] = await Promise.all([
+          Promise.all([api<readonly UnitAttachment[]>('/units/attachments'), api<ComputerEnvironments>('/computer-environments')]),
+          api<readonly EnvironmentInventoryTarget[]>('/tool-environments').then(
+            entries => ({ entries, notice: '' }), error => ({ entries: [], notice: messageFor(error) })),
+        ])
+        if (disposed || epoch !== refreshEpoch) return
+        targets = projection.entries
+        catalogNotice = projection.notice
         if (!Array.isArray(values[1]?.environments)) throw Object.assign(new Error('computer-environments-unavailable'), { code: 'computer-environments-unavailable' })
         attachments = values[0].filter(value => value.unitKind === 'computer'); environments = values[1].environments; setNotice('')
       }
-      catch (error) { if (!disposed) setNotice(messageFor(error)) }
-      render()
+      catch (error) { if (!disposed && epoch === refreshEpoch) setNotice(messageFor(error)) }
+      if (epoch === refreshEpoch) render()
     },
-    issue: input => guarded(async () => {
-      const issued = await api<{ attachment: UnitAttachment; code: string }>('/units/attach-codes', { unitKind: 'computer', scope: computerScope(input.projects, input.tools) })
-      code = issued.code
-      once.textContent = `仅本次显示，请在远端设备的“管理连接”中填入：${issued.code}`; once.hidden = false
+    issue: input => guarded(async targetApi => {
+      clearIssuedCode()
+      const epoch = issueEpoch
+      connect.open = true
+      const issued = await targetApi<{ attachment: UnitAttachment; code: string }>('/units/attach-codes', { unitKind: 'computer', scope: computerScope(input.projects, input.tools) })
+      if (!disposed && issueEpoch === epoch && connect.open) {
+        code = issued.code
+        once.textContent = `附着码（仅本次显示）：${issued.code}`; once.hidden = false
+      }
       await view.refresh()
       return issued.code
     }),
-    revoke: attachmentId => guarded(async () => { await api(`/units/attachments/${encodeURIComponent(attachmentId)}/revoke`, {}); await view.refresh() }),
+    revoke: attachmentId => guarded(async targetApi => {
+      await targetApi(`/units/attachments/${encodeURIComponent(attachmentId)}/revoke`, {}); await view.refresh()
+    }),
     snapshot: () => ({ attachments, notice, code }),
     dispose() {
       if (disposal) return disposal
-      disposed = true; code = ''; once.textContent = ''; panel.replaceChildren()
-      return disposal = requests.dispose()
+      disposed = true; clearIssuedCode(); panel.replaceChildren()
+      return disposal = Promise.all([requests?.dispose(), local?.dispose()]).then(() => {})
     },
   }
   form.addEventListener('submit', event => {

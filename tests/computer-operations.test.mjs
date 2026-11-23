@@ -18,6 +18,7 @@ import { workerError } from '../packages/app-harness/dist/core/computer/worker-p
 import { computerDeclarationDigest } from '../packages/app-harness/dist/core/computer/operations-domain.js'
 import { getToolById } from '../packages/app-harness/dist/core/tool/catalog.js'
 import { installComputerServices, createControlledComputerWorker, installComputerWorkerStub } from './helpers/computer-services.mjs'
+import { installUnitAttachments } from './helpers/unit-attachments.mjs'
 import { deferred, modelSnapshot } from './helpers/controlled-models.mjs'
 import { nativeRegistration, completedOutcome } from './helpers/native-records.mjs'
 
@@ -32,16 +33,21 @@ async function until(predicate) {
   assert.fail('expected state was not reached')
 }
 
-async function fixture(t) {
+async function fixture(t, { multi = false } = {}) {
+  const clock = multi ? { ...inputs, now: () => new Date().toISOString() } : inputs
   const directory = await mkdtemp(join(tmpdir(), 'anybox-computer-operations-')), root = new Context()
   await root.installComponent(createLocalSqliteComponent(join(directory, 'state.sqlite')))
   const worker = createControlledComputerWorker(root)
   await root.installComponent(worker.component)
-  await root.installComponent(createProjectComponent(inputs))
+  if (multi) await installUnitAttachments(root, clock)
+  await root.installComponent(createProjectComponent(clock, multi ? { enableWorkspaceAttachments: true,
+    computerQuery: async (_attachment, query) => ({ kind: 'stat', directory: true, canonical: query.path }) } : {}))
   const projects = root.get('harness.projects'), project = await projects.openProject(directory)
   const provider = createLocalComputerProvider(), events = { activations: 0, executions: [], cleanupFailed: false }
-  root.provide('computer.instance-provider', { ...provider, activate(input) { events.activations++; return provider.activate(input) } })
-  await installComputerServices(root, inputs, { worker })
+  const unitProvider = createLocalComputerProvider({ providerId: 'unit' })
+  root.provide('computer.instance-provider', { ...provider, providerIds: multi ? ['local', 'unit'] : ['local'],
+    activate(input) { events.activations++; return (input.resource.spec.providerId === 'unit' ? unitProvider : provider).activate(input) } })
+  await installComputerServices(root, clock, { worker })
   const db = root.get('local-storage'), ops = root.get('harness.computer-operations'), computers = root.get('harness.computers')
   t.after(async () => {
     try {
@@ -57,6 +63,138 @@ async function fixture(t) {
   const openRun = ({ execution, ...input }) => { worker.setExecution(input.runId, execution); return ops.openRun(input) }
   return { root, directory, db, ops, computers, projects, project, events, accept, executor, openRun, worker }
 }
+
+test('two workspace scopes isolate process handles, owner recovery and close receipts on the same parent Run', async t => {
+  const f = await fixture(t, { multi: true })
+  const units = f.root.get('harness.unit-attachments'), primary = (await units.local('computer')).binding
+  const ceiling = { kind: 'computer', projects: 'all', tools: 'all' }
+  const { code } = await units.createAttachCode({ unitKind: 'computer', scope: ceiling })
+  const { attachment } = await units.attach({ code, unitKind: 'computer', unitId: 'controlled-local', ceiling, contractVersion: 'computer-worker-1',
+    capabilities: { platform: process.platform, architecture: process.arch } })
+  const secondary = await units.binding(attachment.attachmentId)
+  const members = await f.projects.addProjectWorkspace(f.project.id, { expectedRevision: 1, requestId: 'add', name: 'secondary', path: '/other', computerAttachmentId: attachment.attachmentId })
+  const runId = 'parent', fields = unit => ({ runId, unit, workspaceBindingId: members.workspaces.find(row => row.computerAttachmentId === unit.attachmentId).id })
+  const submit = (id, unit, toolId, args, epoch = 1) => {
+    const tool = getToolById(toolId)
+    return f.db.transaction(tx => f.ops.acceptIn(tx, { ...fields(unit), workspaceBindingRevision: 1, operationId: id, projectId: f.project.id,
+      sessionId: 'session', runOwnerEpoch: epoch, tool, request: { id, name: tool.definition.name, arguments: args } }))
+  }
+  const first = await submit('first', primary, 'codex.exec_command', { cmd: 'echo first' })
+  const second = await submit('second', secondary, 'codex.exec_command', { cmd: 'echo second' })
+  assert.notEqual(first.declaration.runId, second.declaration.runId)
+  assert.deepEqual(first.declaration.workspaceScope.parentRunId, runId)
+  const info = f.worker.service.info.bind(f.worker.service)
+  f.worker.service.info = async () => ({ ...await info(), workspaceScopeVersion: 1 })
+  for (const op of [first, second]) f.worker.setExecution(op.declaration.runId, f.executor(
+    req => immediate({ name: req.name, result: { session_id: 1, output: 'test' } }),
+    () => immediate({ processes: [{ session_id: 1, exit_code: 0 }, { session_id: 42, exit_code: 0 }] })))
+  const scopeA = f.ops.openRun(fields(primary)), scopeB = f.ops.openRun(fields(secondary))
+  const a = await joined(scopeA.execute('first')), b = await joined(scopeB.execute('second'))
+  assert.notEqual(a.result.session_id, b.result.session_id, 'equal worker numbers become distinct model-visible handles')
+  assert.deepEqual(f.events.executions.map(call => call.binding.path), [f.project.path, '/other'])
+  await assert.rejects(submit('wrong', secondary, 'codex.write_stdin', { session_id: a.result.session_id }), { category: 'invalid-tool-request' })
+  assert.equal(await f.ops.get('wrong'), undefined)
+  const correct = await submit('right', secondary, 'codex.write_stdin', { session_id: b.result.session_id })
+  assert.equal(correct.declaration.request.arguments.session_id, 1)
+  assert.equal((await joined(scopeB.execute('right'))).result.session_id, b.result.session_id)
+  const exitA = await joined(scopeA.close())
+  assert.equal(exitA.processes[0].session_id, a.result.session_id)
+  assert.equal((await f.computers.getPin('computer-run:' + second.declaration.runId)).releasedAt, null)
+  const exitB = await joined(scopeB.close())
+  assert.equal(exitB.processes[0].session_id, b.result.session_id)
+  assert.equal(new Set([...exitA.processes, ...exitB.processes].map(p => p.session_id)).size, 4)
+  assert.deepEqual(await joined(f.ops.openRun(fields(secondary)).close()), exitB, 'closed scopes return the already translated receipt')
+  assert.equal(f.worker.records.get(first.declaration.runId + ':computer-close-scope').executeCount, 0)
+  assert.equal(f.worker.records.get(second.declaration.runId + ':computer-close-scope').state, 'succeeded')
+  await f.db.transaction(tx => f.ops.claimRunIn(tx, runId, 2))
+  assert.equal((await f.ops.get('second')).runOwnerEpoch, 2)
+  assert.equal((await f.ops.get('first')).runOwnerEpoch, 2)
+})
+
+test('a workspace preserves translated process handles in partial cleanup results and on recovery', async t => {
+  const f = await fixture(t, { multi: true })
+  const unit = (await f.root.get('harness.unit-attachments').local('computer')).binding
+  const target = { runId: 'partial-cleanup', workspaceBindingId: f.project.id, unit }
+  const tool = getToolById('codex.exec_command'), rawId = 41
+  const op = await f.db.transaction(tx => f.ops.acceptIn(tx, { ...target, workspaceBindingRevision: 1, operationId: 'start-process',
+    projectId: f.project.id, sessionId: 'session', tool, request: { id: 'start-process', name: tool.definition.name, arguments: { cmd: 'echo value' } } }))
+  const info = f.worker.service.info.bind(f.worker.service)
+  f.worker.service.info = async () => ({ ...await info(), workspaceScopeVersion: 1 })
+  const workerFact = { cleanup: 'failed', processes: [{ session_id: rawId, output: 'remaining output' }] }
+  f.worker.setExecution(op.declaration.runId, f.executor(req => immediate({ name: req.name, result: { session_id: rawId } }),
+    () => ({ result: Promise.resolve(workerFact), done: Promise.reject(new Error('injected partial exit')), cancel() {} })))
+  const scope = f.ops.openRun(target)
+  const handle = (await joined(scope.execute('start-process'))).result.session_id
+  assert.notEqual(handle, rawId)
+  const expected = { cleanup: 'failed', processes: [{ session_id: handle, output: 'remaining output' }] }
+  f.events.cleanupFailed = true
+  for (const attempt of [() => scope.close(), () => f.ops.openRun(target).close()]) {
+    const close = attempt()
+    assert.deepEqual(await close.result, expected)
+    await assert.rejects(close.done, { code: 'computer-operation-cleanup' })
+  }
+  const row = await f.db.read(reader => reader.get('SELECT closed,result_json FROM harness_computer_scopes WHERE run_id=?', [op.declaration.runId]))
+  assert.equal(row.closed, 0)
+  assert.deepEqual(JSON.parse(row.result_json), expected)
+  assert.equal((await f.computers.getPin('computer-run:' + op.declaration.runId)).releasedAt, null)
+})
+
+test('a workspace declaration cannot dispatch through an older worker', async t => {
+  const f = await fixture(t, { multi: true })
+  const unit = (await f.root.get('harness.unit-attachments').local('computer')).binding
+  const target = { runId: 'scoped', workspaceBindingId: f.project.id, unit }
+  const tool = getToolById('anybox.bash')
+  await f.db.transaction(tx => f.ops.acceptIn(tx, { ...target, workspaceBindingRevision: 1, operationId: 'old-worker', projectId: f.project.id,
+    sessionId: 'session', tool, request: request('old-worker') }))
+  const scope = f.ops.openRun(target)
+  await assert.rejects(joined(scope.execute('old-worker')), { code: 'worker-scope-version-unsupported', category: 'computer-worker-upgrade-required' })
+  assert.equal(f.worker.records.size, 0)
+  await joined(scope.close())
+  const restored = f.ops.openRun(target)
+  await assert.rejects(joined(restored.execute('old-worker')), { category: 'computer-worker-upgrade-required' })
+  await joined(restored.close())
+})
+
+test('a worker boot change detected before first dispatch closes the workspace without an uncertain pin', async t => {
+  const f = await fixture(t, { multi: true }), unit = (await f.root.get('harness.unit-attachments').local('computer')).binding
+  const target = { runId: 'replaced', workspaceBindingId: f.project.id, unit }, info = f.worker.service.info.bind(f.worker.service)
+  f.worker.service.info = async () => ({ ...await info(), bootId: 'replacement-boot', workspaceScopeVersion: 1 })
+  const op = await f.db.transaction(tx => f.ops.acceptIn(tx, { ...target, workspaceBindingRevision: 1, operationId: 'preflight',
+    projectId: f.project.id, sessionId: 'session', tool: getToolById('anybox.bash'), request: request('preflight') }))
+  const scope = f.ops.openRun(target)
+  await assert.rejects(joined(scope.execute('preflight')), { code: 'worker-instance-replaced' })
+  assert.equal((await f.ops.get('preflight')).state, 'failed')
+  assert.equal(f.worker.records.size, 0)
+  await joined(scope.close())
+  assert.notEqual((await f.computers.getPin('computer-run:' + op.declaration.runId)).releasedAt, null)
+})
+
+for (const received of ['lost reply', 'acknowledged queued operation']) test(`a workspace tool with a ${received} and no original worker record remains unknown and is never resubmitted`, async t => {
+  const f = await fixture(t, { multi: true })
+  const unit = (await f.root.get('harness.unit-attachments').local('computer')).binding
+  const target = { runId: 'orphan', workspaceBindingId: f.project.id, unit }
+  const { declaration } = await f.db.transaction(tx => f.ops.acceptIn(tx, { ...target, workspaceBindingRevision: 1, operationId: 'lost',
+    projectId: f.project.id, sessionId: 'session', tool: getToolById('anybox.bash'), request: request('lost') }))
+  const info = f.worker.service.info.bind(f.worker.service), submit = f.worker.service.submit.bind(f.worker.service)
+  f.worker.service.info = async () => ({ ...await info(), workspaceScopeVersion: 1 })
+  let sent = 0
+  f.worker.service.submit = async input => {
+    if (input.kind !== 'tool') return submit(input)
+    sent++
+    if (received === 'acknowledged queued operation' && sent === 1) return { operationId: input.operationId, runId: input.runId,
+      declarationDigest: input.declarationDigest, state: 'queued', receipt: 'original-receipt', executeCount: 0 }
+    throw workerError('worker-unavailable')
+  }
+  const scope = f.ops.openRun(target)
+  f.events.cleanupFailed = true
+  await assert.rejects(joined(scope.execute('lost')))
+  await assert.rejects(joined(scope.close()))
+  const operation = await f.ops.get('lost')
+  assert.equal(operation.state, 'outcome-unknown')
+  assert.equal(operation.workerReceipt, received === 'acknowledged queued operation' ? 'original-receipt' : undefined)
+  assert.equal((await f.computers.getPin('computer-run:' + declaration.runId)).releasedAt, null)
+  assert.equal(sent, 1)
+})
 
 test('pushed tool images are resolved from the Session scope instead of being imported again, and mismatched receipts are rejected', async t => {
   const f = await fixture(t)
@@ -239,6 +377,47 @@ test('component reconstruction preserves uncertain execution facts and never rep
     assert.equal(f.events.activations, 0)
     assert.equal(f.events.executions.length, 0)
   } finally { await second.fiber.dispose() }
+})
+
+test('migration of a v3 single-target scope preserves its identity, digest, process number and close receipt', async t => {
+  const f = await fixture(t), runId = 'legacy-run', id = 'legacy-exec'
+  const tool = getToolById('codex.exec_command')
+  const original = await f.db.transaction(tx => f.ops.acceptIn(tx, { runId, operationId: id, projectId: f.project.id, sessionId: 'legacy-session',
+    tool, request: { id, name: tool.definition.name, arguments: { cmd: 'echo legacy' } } }))
+  const observation = { name: tool.definition.name, result: { session_id: 52, output: 'legacy' } }
+  const cleanup = { processes: [{ session_id: 52, output: 'tail' }] }
+  const scope = f.openRun({ runId, execution: f.executor(() => immediate(observation), () => immediate(cleanup)) })
+  assert.deepEqual(await joined(scope.execute(id)), observation)
+  assert.deepEqual(await joined(scope.close()), cleanup)
+  const receipt = (await f.ops.get(id)).workerReceipt
+  // Restore the exact scope table and migration version written by the previous release.
+  await f.db.transaction(tx => {
+    tx.execute('DROP TABLE harness_computer_process_handles')
+    tx.execute('DROP INDEX harness_computer_scopes_workspace')
+    tx.execute('ALTER TABLE harness_computer_scopes DROP COLUMN workspace_binding_id')
+    tx.execute('ALTER TABLE harness_computer_scopes DROP COLUMN parent_run_id')
+    tx.execute("UPDATE schema_migrations SET version=3 WHERE domain='computer-operations'")
+  })
+  await f.root.fiber.dispose()
+  const next = new Context()
+  try {
+    await next.installComponent(createLocalSqliteComponent(join(f.directory, 'state.sqlite')))
+    await installComputerWorkerStub(next)
+    await next.installComponent(createProjectComponent(inputs))
+    await installComputerServices(next, inputs)
+    const operations = next.get('harness.computer-operations'), db = next.get('local-storage')
+    await db.transaction(tx => operations.claimRunIn(tx, runId, 2))
+    const restored = await operations.get(id)
+    assert.deepEqual(restored.declaration, original.declaration)
+    assert.equal(restored.declarationDigest, original.declarationDigest)
+    assert.equal(restored.workerReceipt, receipt)
+    assert.equal(restored.processRef.sessionId, 52)
+    const scope = operations.openRun({ runId, runOwnerEpoch: 2 })
+    assert.deepEqual(await joined(scope.execute(id)), observation)
+    assert.deepEqual(await joined(scope.close()), cleanup)
+    const row = await db.read(reader => reader.get('SELECT parent_run_id,workspace_binding_id,close_receipt FROM harness_computer_scopes WHERE run_id=?', [runId]))
+    assert.deepEqual({ ...row }, { parent_run_id: runId, workspace_binding_id: null, close_receipt: 'receipt:legacy-run:computer-close-scope' })
+  } finally { await next.fiber.dispose() }
 })
 
 test('Run intent and ComputerOperation admission share the Session transaction; model and historical plan Runs leave computer idle', async t => {

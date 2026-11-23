@@ -1,6 +1,7 @@
 import { Context } from '@nya/core'
+import { gte, minVersion } from 'semver'
 import { createLocalSqliteComponent } from '@anybox/storage-sqlite/sqlite'
-import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
+import { localStorageCapabilityVersion, localStorageServiceKey, type LocalStoragePort } from '@anybox/storage-sqlite/port'
 import { createApplicationApiComponent, hostHttpServiceKey } from './component.js'
 import type { ApplicationHttpServer } from './http-server.js'
 import { createHostAccessComponent, hostAccessServiceKey } from './access.js'
@@ -34,10 +35,18 @@ export async function createExecutionHost(options: ExecutionHostOptions) {
   const install = (component: Parameters<Context['installComponent']>[0]) => { const fiber = root.installComponent(component, undefined, { bindings }); installed.push(fiber); return fiber }
   const catalog = createApplicationCatalog(options.applications)
   const runtime = createApplicationRuntimes(root, catalog, [
-    { id: 'storage.sqlite', version: '1.0.0', services: [localStorageServiceKey], resident: true,
+    { id: 'storage.sqlite', version: localStorageCapabilityVersion, services: [localStorageServiceKey], resident: true,
       create: () => createLocalSqliteComponent(options.databasePath) },
     ...(options.providers ?? []),
-  ], bindings)
+  ], bindings, async application => {
+    const storage = root.get<LocalStoragePort>(key(localStorageServiceKey))
+    const minimum = await storage?.minimumWriterCapability?.(application.definition.id)
+    if (!minimum) return
+    const range = application.capabilityRequirements?.required?.['storage.sqlite']
+    const declared = range && minVersion(range)
+    if (declared && gte(declared, minimum)) return
+    return { id: 'storage.sqlite', range: range ?? '*', version: localStorageCapabilityVersion, required: true, status: 'incompatible' }
+  })
   let products: ProductsPort | undefined
   let preparingClose: Promise<void> | undefined, closing: Promise<void> | undefined, restoring: Promise<void> | undefined, drainingRequests: Promise<void> | undefined
   let admissionClosed = false

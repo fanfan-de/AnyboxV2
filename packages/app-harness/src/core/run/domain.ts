@@ -26,7 +26,7 @@ export interface RunQuery { readonly active?: boolean; readonly parentNodeId?: s
 export type RunStatus = 'running' | 'cancelling' | 'completed' | 'cancelled' | 'failed' | 'interrupted'
 
 export type RunFailureCategory = ModelFailureCategory |
-  'invalid-tool-request' | 'limit-exceeded' | 'tool-unavailable' | 'tool-timeout' | 'tool-cancelled' | 'tool-cleanup-failure' | 'state-write-failure'
+  'invalid-tool-request' | 'limit-exceeded' | 'tool-unavailable' | 'computer-worker-upgrade-required' | 'tool-timeout' | 'tool-cancelled' | 'tool-cleanup-failure' | 'state-write-failure'
 
 export class RunFailure extends Error {
   constructor(readonly category: Exclude<RunFailureCategory, ModelFailureCategory>) {
@@ -34,6 +34,7 @@ export class RunFailure extends Error {
       'invalid-tool-request': 'model tool request is invalid',
       'limit-exceeded': 'run limit was exceeded',
       'tool-unavailable': 'tool is unavailable',
+      'computer-worker-upgrade-required': 'Upgrade and restart the Computer worker on this workspace’s device to run tools in a multi-workspace session.',
       'tool-timeout': 'tool call timed out',
       'tool-cancelled': 'tool call was cancelled',
       'tool-cleanup-failure': 'tool cleanup failed',
@@ -65,7 +66,13 @@ function freezeToolValue<T>(value: T): T {
 
 /** Validate the complete batch envelope before acquiring any tool resource.
  * Patch syntax is an execution observation so the model can correct it. */
-export function validateToolBatch(calls: unknown, allowed?: readonly ToolDefinition[]): readonly ValidatedToolRequest[] {
+export function originalComputerNames(initialization: NativeInitialization): ReadonlyMap<string, string> | undefined {
+  if (initialization.schemaVersion !== 3 || initialization.toolEnvironments.schemaVersion !== 3) return undefined
+  const computer = initialization.toolEnvironments.environments.find(entry => entry.environmentId === 'computer')
+  return new Map(computer?.tools.flatMap(tool => tool.originalName ? [[tool.definition.name, tool.originalName] as const] : []))
+}
+
+export function validateToolBatch(calls: unknown, allowed?: readonly ToolDefinition[], aliases?: ReadonlyMap<string, string>): readonly ValidatedToolRequest[] {
   if (!Array.isArray(calls) || calls.length === 0) throw new RunFailure('invalid-tool-request')
   const ids = new Set<string>()
   return Object.freeze(calls.map((call: unknown): ValidatedToolRequest => {
@@ -83,9 +90,11 @@ export function validateToolBatch(calls: unknown, allowed?: readonly ToolDefinit
         name: call.name, parameters: { type: 'object', additionalProperties: true },
       }
       const args = validateToolArguments(definition, call.arguments)
-      const builtin = allowed && getToolByName(definition.name)
+      const originalName = aliases?.get(definition.name) ?? definition.name
+      const original = originalName === definition.name ? definition : { ...definition, name: originalName }
+      const builtin = allowed && getToolByName(originalName)
       // Exact legacy Computer contracts retain their source-specific pure preflight checks.
-      if (builtin && isDeepStrictEqual(builtin.definition, definition)) validateComputerToolArguments(definition.name, args)
+      if (builtin && isDeepStrictEqual(builtin.definition, original)) validateComputerToolArguments(originalName, args)
       return Object.freeze({ id: call.id, name: definition.name, arguments: freezeToolValue(structuredClone(args)) })
     } catch { throw new RunFailure('invalid-tool-request') }
   }))

@@ -1,32 +1,50 @@
 import type { JsonValue } from '@anybox/tool-api'
+import type { RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
 import type { RunOperationStart, SavedRunOperation, SessionRunPort } from '../session/port.js'
 import { legacyToolSelection } from '../tool/catalog.js'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
-import { computerToolEnvironmentVersion } from './computer.js'
+import { computerToolEnvironmentId, computerToolEnvironmentVersion } from './computer.js'
 import { parseToolEnvironmentSnapshot } from './domain.js'
 import type { ToolEnvironmentSnapshot } from './domain.js'
 
 /** Old initialization formats keep their exact declarations, including retired plan tools. */
 export function legacyToolEnvironmentSnapshot(initialization: { readonly schemaVersion: number; readonly toolSelection?: ToolSelectionSnapshot }): ToolEnvironmentSnapshot {
   const selection = initialization.schemaVersion >= 2 && initialization.toolSelection ? initialization.toolSelection : legacyToolSelection
-  return parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: [{ environmentId: 'computer', version: computerToolEnvironmentVersion, tools: selection.tools }] })
+  return parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: [{ environmentId: computerToolEnvironmentId, version: computerToolEnvironmentVersion, tools: selection.tools }] })
+}
+
+/** Older Runs can only recover the original Computer and the grants imported at cutover. */
+export function canBindLegacyComputerAccess(access: RunEnvironmentAccess, originalTargetProven: boolean): boolean {
+  return !access.search && (access.functions.length === 0 || originalTargetProven && access.functions.every(({ grant }) =>
+    grant.tool.environmentId === computerToolEnvironmentId && grant.generation === 1 && grant.source === 'trusted-configuration'))
 }
 
 function object(value: JsonValue | undefined): Readonly<Record<string, JsonValue>> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Readonly<Record<string, JsonValue>> : undefined
 }
 
-/** Read old Computer receipts and the Computer member of a uniform environment report. */
+export function computerCleanupTargets(value: JsonValue | undefined): readonly {
+  readonly targetId?: string; readonly receipt: Readonly<Record<string, JsonValue>>
+}[] {
+  const report = object(value)
+  if (!report) return []
+  if (!Array.isArray(report.environments)) return Array.isArray(report.processes) ? [{ receipt: report }] : []
+  return report.environments.flatMap(item => {
+    const entry = object(item)
+    const receipt = entry?.environmentId === 'computer' && object(entry.result)
+    return receipt && Array.isArray(receipt.processes) ? [{ receipt, ...(typeof entry.targetId === 'string' ? { targetId: entry.targetId } : {}) }] : []
+  })
+}
+
+export function computerCleanupReceipts(value: JsonValue | undefined): readonly Readonly<Record<string, JsonValue>>[] {
+  return computerCleanupTargets(value).map(target => target.receipt)
+}
+
+/** The historical single-Computer receipt is only meaningful for an unambiguous target. */
 export function computerCleanupReceipt(value: JsonValue | undefined): Readonly<Record<string, JsonValue>> | undefined {
   const report = object(value)
-  if (!report) return undefined
-  if (Array.isArray(report.environments)) {
-    const computers = report.environments.map(object).filter(entry => entry?.environmentId === 'computer')
-    if (computers.length !== 1) return undefined
-    const receipt = object(computers[0]!.result)
-    return receipt && Array.isArray(receipt.processes) ? receipt : undefined
-  }
-  return Array.isArray(report.processes) ? report : undefined
+  if (Array.isArray(report?.environments) && report.environments.filter(item => object(item)?.environmentId === 'computer').length !== 1) return undefined
+  return computerCleanupReceipts(value)[0]
 }
 
 export interface EnvironmentCleanupOperation {

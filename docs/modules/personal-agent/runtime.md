@@ -18,7 +18,7 @@
 
 执行组件使用 `personal-agent.*` 服务和事件名。独立的 Models 与 SQL 在执行注册中绑定到 `personal-agent.models.*`、`personal-agent.models` 和 `personal-agent.local-storage`。同根执行宿主仍拥有请求认证、应用目标与活动准入。依赖、运行和退出规则见[各组件手册](README.md#组件文档)。
 
-浏览器入口使用 `/apps/personal-agent/0.2.0/` 下的版本专属资源，外壳工作区路由为 `#/apps/personal-agent`。点击左侧头像打开所选 Agent 的[连续历史](history.md)，支持文件树、实时 Run 视图与草稿。设置面板提供设备选择，并管理 Agent、模型、Prompt、工具和 Computer。页面卸载会清理该页观察和控件，执行端仍持有已接纳的 Run。
+浏览器入口使用 `/apps/personal-agent/0.2.5/` 下的版本专属资源，外壳工作区路由为 `#/apps/personal-agent`。点击左侧头像打开所选 Agent 的[连续历史](history.md)，支持文件树、实时 Run 视图与草稿。设置面板提供设备选择，并管理 Agent、模型、Prompt、工具和 Computer。Agent 工具设置支持 [Streamable HTTP 和 stdio MCP 连接](../tools/mcp-environment.md)及逐工具授权。页面卸载会清理该页观察和控件，执行端仍持有已接纳的 Run。
 
 ## 工作目录
 

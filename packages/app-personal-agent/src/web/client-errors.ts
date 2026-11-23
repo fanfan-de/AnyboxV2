@@ -24,7 +24,7 @@ export function messageFor(error: unknown): string {
     'connection-unavailable': '无法连接执行设备。已有运行可能仍在继续。',
     'cross-instance-input': '该输入包含另一台设备的资源，请重新选择。',
     'instance-unavailable': '对应的 Personal Agent 执行服务 尚未连接，旧请求不会发送到其他设备。',
-    'unit-code-invalid': '附着码无效或已被使用，请在目标 Personal Agent 执行服务 重新生成。',
+    'unit-code-invalid': '附着码无效或已被使用，请在目标执行设备的「执行环境」中重新生成。',
     'unit-code-expired': '附着码已过期，请重新生成。',
     'unit-kind-mismatch': '附着码的单元种类不匹配。',
     'unit-scope-exceeded': '目标 Personal Agent 执行服务 请求的目录或工具超出了此设备允许的上限。',
@@ -54,6 +54,16 @@ export function messageFor(error: unknown): string {
   }
   if (connectionErrors[error.code]) return connectionErrors[error.code]
   return {
+    'environment-grant-conflict': '其他操作已更新授权。请重新读取后再修改。',
+    'environment-revision-conflict': '环境授权已更新。请重新读取后再修改。',
+    'environment-selection-conflict': '环境选择已更新。请重新读取后再修改。',
+    'environment-tool-unavailable': '环境目标或工具契约已变化。请刷新后核对当前可授权工具。',
+    'environment-authorization-changed': '授权已变化。请核对当前工具和环境后再试。',
+    'environment-adoption-unavailable': '只有当前 Agent 的连续对话可以采用新环境。',
+    'environment-target-unavailable': '运行原先绑定的执行环境或目标暂时不可用。',
+    'environment-exit-unknown': '原操作退出尚未得到确认。',
+    'environment-grant-revoked': '这个 Agent 使用该工具的授权已被撤销。',
+    'invalid-environment-input': '环境或工具身份无效。请刷新环境设置。',
     'invalid-input': '输入无效，请检查内容后重试。',
     'file-invalid': '文件路径或引用无效，请重新选择工作目录中的普通文件。',
     'file-missing': '文件或快照不存在，或不属于此会话。',

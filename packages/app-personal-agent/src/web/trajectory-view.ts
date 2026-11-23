@@ -176,6 +176,10 @@ export function createTrajectoryView(container: HTMLElement, actions: Trajectory
       const name = document.createElement('h4'), content = document.createElement('pre')
       name.textContent = label; content.textContent = text; content.className = 'trajectory-detail-text'; nodes.push(name, content)
     }
+    if (row.step?.kind === 'model' && row.step.hostedSearch) {
+      const tool = row.step.hostedSearch
+      append('此次模型请求获准的搜索环境', [tool.environmentId, tool.targetId, tool.toolId, tool.version].join('\n'))
+    }
     if (row.provisional) append('临时展示', '模型正在生成，最终以已提交记录为准。')
     if (row.tool && !row.requestOnly) {
       let mounted = detailTools.get(row.id)

@@ -1,3 +1,7 @@
+import type { RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
+import { grantUpdate, preferenceUpdate, selectionUpdate } from '@anybox/execution-environments/management'
+import type { EnvironmentManagement, EnvironmentSelection, SelectionUpdate } from '@anybox/execution-environments/management'
+import type { McpEnvironmentPort } from '@anybox/mcp-environment'
 import type { ActivityLease, ProductActivityPort } from '@anybox/application-api/contracts'
 import type { ApplicationHttpPort, ApplicationHttpContext } from '@anybox/application-api/node'
 import type { SessionView, RunView, ProcessExitView } from '../core/api.js'
@@ -45,6 +49,10 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   getAgent(id: string): AgentDetail | undefined
   createAgent(input: unknown): Promise<AgentDetail>
   updateAgent(id: string, input: unknown): Promise<AgentDetail>
+  environmentManagement: EnvironmentManagement
+  mcpConnections?: Pick<McpEnvironmentPort, 'connections' | 'createConnection' | 'refreshConnection' | 'disableConnection'>
+  readSessionEnvironments(sessionId: string): Promise<EnvironmentSelection>
+  adoptSessionEnvironments(sessionId: string, input: SelectionUpdate & { readonly expectedGrantRevision: number }): Promise<EnvironmentSelection>
   listTools(): ReturnType<typeof listTools>
   directoryPickerSupported(): boolean
   localDirectorySelectionSupported?(): boolean
@@ -82,6 +90,7 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   getRun(id: string): Promise<Run | undefined>
   getRunView(id: string): Promise<ProtocolViewSnapshot | undefined>
   listRuns(sessionId: string, query?: RunQuery): Promise<readonly Run[]>
+  getRunEnvironmentAccess?: SessionPort['getRunEnvironmentAccess']
   getRunEvents(id: string, afterSeq?: number): Promise<readonly RunEvent[] | undefined>
   cancelRun(id: string): Promise<Run | undefined>
   readonly modelsSettings: ModelsSettingsService
@@ -259,22 +268,25 @@ function outputSummary(value: string): { readonly text: string; readonly truncat
   return { text: value, truncated: false }
 }
 
-function toolCallView(call: ValidatedToolRequest): object {
-  if (call.name === 'bash' && typeof call.arguments.command === 'string') return { id: call.id, name: call.name, command: call.arguments.command }
-  if (call.name !== 'apply_patch' || typeof call.arguments.patch !== 'string') return { id: call.id, name: call.name, arguments: call.arguments }
+function toolCallView(call: ValidatedToolRequest, access?: RunEnvironmentAccess): object {
+  const grant = access?.functions.find(route => route.name === call.name)?.grant
+  const binding = grant ? { environmentTool: grant.tool } : {}
+  if (call.name === 'bash' && typeof call.arguments.command === 'string') return { ...binding, id: call.id, name: call.name, command: call.arguments.command }
+  if (call.name !== 'apply_patch' || typeof call.arguments.patch !== 'string') return { ...binding, id: call.id, name: call.name, arguments: call.arguments }
   const patch = outputSummary(call.arguments.patch)
-  return { id: call.id, name: call.name, patch: patch.text, patchTruncated: patch.truncated }
+  return { ...binding, id: call.id, name: call.name, patch: patch.text, patchTruncated: patch.truncated }
 }
 
-function runEventView(event: RunEvent): object {
+function runEventView(event: RunEvent, access?: RunEnvironmentAccess): object {
   const base = { seq: event.seq, at: event.at, kind: event.kind }
   switch (event.kind) {
-    case 'operation-started': return { ...base, operationId: event.operationId, operationKind: event.operationKind }
+    case 'operation-started': return { ...base, operationId: event.operationId, operationKind: event.operationKind,
+      ...(event.operationKind === 'model' && access?.search ? { hostedSearch: access.search.tool } : {}) }
     case 'operation-observed': return { ...base, operationId: event.operationId, ...processExitProjection(event.result) }
     case 'operation-failed': return { ...base, operationId: event.operationId, category: event.category, ...processExitProjection(event.result) }
     case 'model-started': return base
-    case 'model-tool-calls': return { ...base, calls: event.calls.map(toolCallView) }
-    case 'tool-started': return { ...base, ...toolCallView(event.call), requestId: event.call.id }
+    case 'model-tool-calls': return { ...base, calls: event.calls.map(call => toolCallView(call, access)) }
+    case 'tool-started': return { ...base, ...toolCallView(event.call, access), requestId: event.call.id }
     case 'tool-observed': {
       if (event.name === 'apply_patch') return { ...base, name: event.name, requestId: event.requestId, result: event.result }
       const result = event.result && typeof event.result === 'object' && !Array.isArray(event.result)
@@ -669,6 +681,62 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
         json(response, 200, sessionView(await commands.openContinuousSession(body.projectId as string | undefined, agentId)))
         return
       }
+      if (path === '/api/v1/mcp-connections' && commands.mcpConnections) {
+        if (method === 'GET') {
+          json(response, 200, commands.mcpConnections.connections()); return
+        }
+        if (method === 'POST') {
+          const input = await requestObject(request, ['name', 'transport', 'endpoint', 'command', 'args', 'cwd'])
+          if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+          const created = commands.mcpConnections.createConnection(input)
+          context.retainUntil(created)
+          json(response, 201, await created); return
+        }
+      }
+      const mcpConnection = /^\/api\/v1\/mcp-connections\/([^/]+)\/(refresh|disable)$/.exec(path)
+      if (method === 'POST' && mcpConnection && commands.mcpConnections) {
+        await requestObject(request, [])
+        if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+        const id = decodeURIComponent(mcpConnection[1])
+        const changed = mcpConnection[2] === 'refresh' ? commands.mcpConnections.refreshConnection(id) : commands.mcpConnections.disableConnection(id)
+        context.retainUntil(changed)
+        json(response, 200, await changed); return
+      }
+      if (method === 'GET' && path === '/api/v1/tool-environments') {
+        json(response, 200, await commands.environmentManagement.targets()); return
+      }
+      const access = /^\/api\/v1\/agents\/([^/]+)\/environment-access(?:\/(grants|preferences|changes\/([^/]+)))?$/.exec(path)
+      if (access) {
+        const agentId = decodeURIComponent(access[1]), action = access[2]
+        if (method === 'GET' && !action) {
+          json(response, 200, await commands.environmentManagement.view(agentId)); return
+        }
+        if (method === 'GET' && access[3]) {
+          json(response, 200, await commands.environmentManagement.observe(agentId, decodeURIComponent(access[3]))); return
+        }
+        if (method === 'POST' && action === 'grants') {
+          const input = grantUpdate(await requestObject(request, ['expectedRevision', 'requestId', 'tools'], 1_048_576))
+          if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+          json(response, 200, await commands.environmentManagement.setGrants(agentId, input)); return
+        }
+        if (method === 'POST' && action === 'preferences') {
+          const input = preferenceUpdate(await requestObject(request, ['expectedVersion', 'environmentIds', 'toolIdsByEnvironment', 'toolIdsByTarget'], 1_048_576))
+          if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+          json(response, 200, await commands.environmentManagement.setPreference(agentId, input)); return
+        }
+      }
+      const sessionEnvironments = /^\/api\/v1\/sessions\/([^/]+)\/environments$/.exec(path)
+      if (sessionEnvironments) {
+        const sessionId = decodeURIComponent(sessionEnvironments[1])
+        if (method === 'GET') { json(response, 200, await commands.readSessionEnvironments(sessionId)); return }
+        if (method === 'POST') {
+          const body = await requestObject(request, ['environmentIds', 'expectedVersion', 'expectedGrantRevision', 'toolIdsByTarget'])
+          const input = selectionUpdate(body), grantRevision = body.expectedGrantRevision
+          if (typeof grantRevision !== 'number' || !Number.isSafeInteger(grantRevision) || grantRevision < 0) throw failure(400, 'invalid-input')
+          if (closing || context.signal.aborted) throw failure(503, 'service-unavailable')
+          json(response, 200, await commands.adoptSessionEnvironments(sessionId, { ...input, expectedGrantRevision: grantRevision })); return
+        }
+      }
       if (method === 'GET' && path === '/api/v1/tools') {
         json(response, 200, commands.listTools()); return
       }
@@ -983,9 +1051,11 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
       }
       const runEventsMatch = /^\/api\/v1\/runs\/([^/]+)\/events$/.exec(path)
       if (method === 'GET' && runEventsMatch) {
-        const events = await commands.getRunEvents(decodeURIComponent(runEventsMatch[1]), integerQuery(url, 'afterSeq', 0, 0, Number.MAX_SAFE_INTEGER))
+        const id = decodeURIComponent(runEventsMatch[1])
+        const events = await commands.getRunEvents(id, integerQuery(url, 'afterSeq', 0, 0, Number.MAX_SAFE_INTEGER))
         if (!events) throw failure(404, 'not-found')
-        json(response, 200, events.map(runEventView))
+        const access = events.length ? await commands.getRunEnvironmentAccess?.(id) : undefined
+        json(response, 200, events.map(event => runEventView(event, access)))
         return
       }
       const waitMatch = /^\/api\/v1\/runs\/([^/]+)\/wait$/.exec(path)
@@ -1044,7 +1114,7 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
     handle,
     capabilities: () => {
       const current = options.currentCommands?.() ?? commands
-      return [...(current.listComputerEnvironments ? ['computer-environments'] : []), ...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
+      return [...(current.environmentManagement ? ['agent-environment-access.v1'] : []), ...(current.mcpConnections ? ['mcp-environment.v1'] : []), ...(current.listComputerEnvironments ? ['computer-environments'] : []), ...(current.directoryBrowsingSupported?.() ? ['projects.browse'] : []),
         ...(current.directoryCreationSupported?.() ? ['projects.create-directory'] : []),
         ...(current.localDirectorySelectionSupported?.() === true ? ['projects.local-directories'] : [])]
     },

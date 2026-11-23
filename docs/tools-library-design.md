@@ -1,6 +1,6 @@
 # Anybox Harness 工具库
 
-自 0.1.3 起，Agent 从插入的受信环境取得工具，创建 Session 时固定环境与工具快照；本页描述的是内置 Computer 环境的来源工具库。中立接口位于 `@anybox/tool-api`，四个执行组件与原生资源位于 `@anybox/computer-tools`，具体装配、兼容与取消恢复见[环境提供工具](tool-environments.md)。不使用 MCP；环境配置只影响新会话。
+自 0.1.3 起，Agent 从插入的受信环境取得工具，创建 Session 时固定环境与工具快照。本页描述内置 Computer 环境的来源工具库，中立契约位于 `@anybox/tool-api`，四个执行组件和原生资源位于 `@anybox/computer-tools`。装配、兼容与取消恢复见[环境提供工具](tool-environments.md)。外部 MCP 工具由独立的 [MCP 执行环境](modules/tools/mcp-environment.md) 提供。
 
 状态：2026-11-14，独立 computer worker 已承担实际工具执行；公开目录保留 19 个工具契约，计划与待办工具已退出新选择和新会话，旧会话快照及执行保持兼容。组件入口见[工具模块](./modules/tools/README.md)。
 

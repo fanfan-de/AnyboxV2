@@ -1,3 +1,4 @@
+import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
 import type { FileSelection, FileRef } from '../core/project-files/domain.js'
 import type { ApplyPatchResult } from '@anybox/computer-tools/apply-patch-types'
 import type { ImageRef } from '../core/image/port.js'
@@ -7,6 +8,7 @@ export type * from '../core/api.js'
 export type ToolTraceState = 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled' | 'interrupted' |
   ApplyPatchResult['status']
 interface ToolTraceBase {
+  environmentTool?: EnvironmentTool
   readonly id: string
   state: ToolTraceState
   category?: string

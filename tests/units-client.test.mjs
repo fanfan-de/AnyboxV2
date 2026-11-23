@@ -1,19 +1,28 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { setupUnitsSettings, setupLocalAttachments, parseGrantList, computerScope, describeAttachment, describeLocalAttachment } from '../packages/app-harness/dist/web/units-client.js'
+import { setupUnitsSettings, setupLocalAttachments, parseGrantList, computerScope, describeLocalAttachment } from '../packages/app-harness/dist/web/units-client.js'
+import { setupUnitsSettings as setupPersonalUnitsSettings } from '../packages/app-personal-agent/dist/web/units-client.js'
 import { allowedProxyPath } from '../packages/app-harness/dist/client/gateway.js'
 
 class Element extends EventTarget {
-  hidden = false; disabled = false; value = ''; textContent = ''; className = ''; children = []; dataset = {}
+  hidden = false; disabled = false; open = false; value = ''; textContent = ''; className = ''; children = []; dataset = {}
+  constructor(tagName) { super(); this.tagName = tagName }
   append(...children) { this.children.push(...children) }
   replaceChildren(...children) { this.children = children }
-  setAttribute(name, value) { this[name] = value }
+  focus() {}
+  setAttribute(name, value) {
+    this[name] = value
+    if (name.startsWith('data-')) this.dataset[name.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] = value
+  }
   find(predicate) { for (const child of this.children) { if (predicate(child)) return child; const nested = child.find?.(predicate); if (nested) return nested } return undefined }
+}
+function elementText(node) {
+  return [node.textContent, ...node.children.map(elementText)].filter(Boolean).join(' ')
 }
 const flush = async () => { for (let n = 0; n < 5; n++) await new Promise(resolve => setImmediate(resolve)) }
 function dom(t) {
   const previous = globalThis.document
-  globalThis.document = { createElement: () => new Element() }
+  globalThis.document = { createElement: tagName => new Element(tagName) }
   t.after(() => { globalThis.document = previous })
 }
 function api(handlers) {
@@ -23,6 +32,99 @@ function api(handlers) {
 }
 const messageFor = error => `message:${error?.code ?? 'unknown'}`
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done }); return { promise, resolve } }
+
+for (const [app, setup] of [['Harness', setupUnitsSettings], ['Personal Agent', setupPersonalUnitsSettings]]) {
+  test(`${app} keeps local Computer management in execution settings without a selected connection`, async t => {
+    dom(t)
+    const pending = deferred()
+    const { source, calls } = api({
+      '/computer/status': () => ({ state: 'running', supported: true, workerId: 'local-worker', attachments: [] }),
+      '/computer/attachments': () => pending.promise,
+    })
+    const panel = new Element(), view = setup(undefined, messageFor, panel, source)
+    t.after(async () => { pending.resolve({ attachmentId: 'accepted' }); await view.dispose() })
+    const control = () => panel.find(node => node.tagName === 'button' && node.textContent === '管理本机 Computer worker')
+    const codeField = () => panel.find(node => node.type === 'password')
+    const openLocalWorker = async () => {
+      assert.ok(control(), 'execution settings contains the client-local Computer worker entry')
+      control().dispatchEvent(new Event('click'))
+      await flush()
+      assert.ok(panel.find(node => node.textContent === '运行中'))
+    }
+    assert.ok(panel.find(node => node.textContent === '执行环境'))
+    assert.deepEqual(calls, [], 'mounting the settings does not start or query the worker')
+    await openLocalWorker()
+    const sharing = panel.find(node => node.tagName === 'details' && node.find(child => child.textContent === '连接到其他执行设备'))
+    assert.ok(sharing)
+    assert.equal(sharing.open, false, 'sharing is collapsed even when the worker is running')
+    sharing.open = true
+    const draft = codeField()
+    draft.value = 'unsent-code'
+    sharing.open = false
+    sharing.dispatchEvent(new Event('toggle'))
+    assert.equal(draft.value, '', 'collapsing sharing clears a typed attachment code')
+    draft.value = 'another-unsent-code'
+    await view.closeLocalComputer()
+    assert.equal(draft.value, '', 'closing settings clears a typed attachment code')
+    assert.deepEqual(calls.map(call => call.path), ['/computer/status'])
+
+    await openLocalWorker()
+    const code = codeField()
+    code.value = 'one-time-code'
+    panel.find(node => node.type === 'url').value = 'https://remote.example'
+    const form = panel.find(node => node.tagName === 'form' && node.find(child => child === code))
+    assert.ok(form)
+    form.dispatchEvent(new Event('submit', { cancelable: true }))
+    await flush()
+    assert.equal(view.canLeave(), false, 'an accepted attachment blocks leaving the page')
+    assert.equal(code.value, '')
+    assert.deepEqual(calls.find(call => call.path === '/computer/attachments'), {
+      path: '/computer/attachments', body: { harnessUrl: 'https://remote.example', code: 'one-time-code', ceiling: computerScope([], []) },
+    })
+    let exited = false
+    const closing = view.closeLocalComputer().then(() => { exited = true })
+    await flush()
+    assert.equal(exited, false, 'closing the settings still owns the accepted local request')
+    assert.equal(view.canLeave(), false, 'a closed panel still protects the pending write')
+    pending.resolve({ attachmentId: 'accepted' })
+    await closing
+    assert.equal(view.canLeave(), true)
+    assert.ok(calls.every(call => call.path.startsWith('/computer/')), 'only client-local worker routes are used')
+  })
+
+  test(`${app} prioritizes the selected execution device and hides codes when settings close`, async t => {
+    dom(t)
+    const pending = deferred()
+    const environment = { environmentId: 'local:computer', origin: 'local', state: 'approved', unitId: 'computer-local', connectionState: 'on-demand' }
+    const { source } = api({
+      '/units/attachments': () => [],
+      '/computer-environments': () => ({ defaultEnvironmentId: environment.environmentId, environments: [environment] }),
+      '/tool-environments': () => [{ environmentId: 'mcp', targetId: 'mcp-notes', name: 'Notes', agents: [], tools: [{ toolId: 'notes.read' }] }],
+      '/units/attach-codes': () => pending.promise,
+    })
+    const local = api({ '/computer/status': () => ({ state: 'stopped', supported: true, attachments: [] }) })
+    const panel = new Element(), view = setup(source, messageFor, panel, local.source)
+    t.after(async () => { pending.resolve({ attachment: {}, code: 'one-time-code' }); await view.dispose() })
+    await flush()
+    const sections = panel.children.filter(node => node.className.split(' ').includes('execution-environment-section'))
+    assert.equal(sections.length, 3)
+    assert.ok(sections[0].find(node => node.dataset.attachmentId === 'local:computer'))
+    assert.ok(sections[1].find(node => node.tagName === 'summary' && elementText(node).includes('Notes')))
+    assert.ok(sections[2].find(node => node.textContent === '管理本机 Computer worker'))
+    assert.deepEqual(local.calls, [])
+    const connecting = sections[0].find(node => node.tagName === 'details' && node.find(child => child.textContent === '接入另一台电脑'))
+    assert.equal(connecting?.open, false)
+    connecting.open = true
+    const issuing = view.issue({ projects: [], tools: [] })
+    await flush()
+    await view.close()
+    pending.resolve({ attachment: {}, code: 'one-time-code' })
+    assert.equal(await issuing, 'one-time-code')
+    assert.equal(view.snapshot().code, '')
+    assert.equal(connecting.open, false)
+    assert.equal(panel.find(node => node.textContent.includes('one-time-code')), undefined)
+  })
+}
 
 test('closing an attachment view drops its code immediately and joins writes without clearing a replacement view', async t => {
   dom(t)
@@ -82,8 +184,6 @@ test('grant lists and scopes are pure and attachment descriptions stay free of s
   assert.deepEqual(parseGrantList(' /a\n/b,/a , '), ['/a', '/b'])
   assert.deepEqual(computerScope([], []), { kind: 'computer', projects: 'all', tools: 'all' })
   assert.deepEqual(computerScope(['/a'], ['anybox.bash']), { kind: 'computer', projects: ['/a'], tools: ['anybox.bash'] })
-  const text = describeAttachment({ attachmentId: 'a', unitKind: 'computer', origin: 'remote', state: 'approved', unitId: 'laptop', epoch: 2, scope: { kind: 'computer', projects: ['/work'], tools: 'all' }, requestedScope: { kind: 'computer', projects: ['/work'], tools: 'all' } })
-  assert.ok(text.includes('laptop') && text.includes('/work') && text.includes('epoch 2'))
   assert.ok(describeLocalAttachment({ attachmentId: 'a', harnessUrl: 'https://h.example', instanceId: 'i', state: 'approved', connection: 'offline', lastError: 'unit-unreachable', ceiling: { kind: 'computer', projects: 'all', tools: 'all' } }).includes('离线'))
 })
 
@@ -109,6 +209,7 @@ test('the owner-side units settings list, issue one-time codes and revoke throug
   assert.equal(view.snapshot().attachments.length, 2)
   const row = panel.find(node => node.dataset?.attachmentId === 'remote-1')
   assert.ok(row); assert.ok(row.find(node => node.textContent === '撤销附着'), 'remote attachments can be revoked')
+  assert.ok(elementText(row).includes('/work'), 'the pending attachment shows its requested directory scope')
   assert.equal(panel.find(node => node.dataset?.attachmentId === 'local:computer').find(node => node.textContent === '撤销附着'), undefined, 'local attachments cannot be revoked')
   await view.revoke('remote-1')
   assert.equal(view.snapshot().attachments[1].state, 'revoked')
@@ -137,7 +238,7 @@ test('the device-owner attachment entry consumes codes with explicit ceilings an
   const view = setupLocalAttachments(source, messageFor, section, 'Laptop')
   t.after(() => view.dispose())
   await flush()
-  assert.ok(section.find(node => node.textContent === '这台设备尚未附着到其他 harness server。'))
+  assert.ok(section.find(node => node.textContent === '尚未连接到其他执行设备。'))
   await assert.rejects(view.attach({ harnessUrl: 'https://h.example', code: 'bad', projects: [], tools: [] }), { code: 'unit-code-invalid' })
   assert.equal(view.snapshot().notice, 'message:unit-code-invalid')
   const attached = await view.attach({ harnessUrl: 'https://h.example', code: 'good', projects: ['/work'], tools: ['anybox.bash'] })
@@ -159,9 +260,9 @@ test('execution environment settings show Computer sources and their connection 
     { attachmentId: 'local:models', unitKind: 'models', origin: 'local', state: 'approved', unitId: 'models-local', epoch: 1, scope: { kind: 'models', access: 'manage', configurations: 'all' }, requestedScope: { kind: 'models', access: 'manage', configurations: 'all' } },
   ]
   const environments = [
-    { environmentId: 'local:computer', origin: 'local', state: 'approved', unitId: 'computer-local', platform: 'linux', architecture: 'x64', connectionState: 'on-demand' },
-    { environmentId: 'remote-laptop', origin: 'remote', state: 'approved', unitId: 'laptop', platform: 'win32', architecture: 'x64', connectionState: 'offline' },
-    { environmentId: 'remote-server', origin: 'remote', state: 'approved', unitId: 'server', platform: 'linux', architecture: 'arm64', connectionState: 'connected' },
+    { environmentId: 'local:computer', origin: 'local', state: 'approved', unitId: 'computer-local', platform: 'linux', architecture: 'x64', connectionState: 'on-demand', toolSupport: { state: 'unknown' } },
+    { environmentId: 'remote-laptop', origin: 'remote', state: 'approved', unitId: 'laptop', platform: 'win32', architecture: 'x64', connectionState: 'offline', toolSupport: { state: 'reported', manifest: { tools: [] } } },
+    { environmentId: 'remote-server', origin: 'remote', state: 'approved', unitId: 'server', platform: 'linux', architecture: 'arm64', connectionState: 'connected', toolSupport: { state: 'reported', manifest: { tools: [{ toolId: 'codex.exec_command' }] } } },
   ]
   const { source } = api({ '/units/attachments': () => attachments,
     '/computer-environments': () => ({ defaultEnvironmentId: 'local:computer', environments }) })
@@ -169,13 +270,75 @@ test('execution environment settings show Computer sources and their connection 
   t.after(() => view.dispose())
   await flush()
   assert.equal(view.snapshot().attachments.length, 1)
-  assert.ok(panel.find(node => node.textContent === '本机（默认）'))
-  assert.ok(panel.find(node => node.textContent === '远端环境 · win32/x64 · remote-l'))
-  assert.ok(panel.find(node => node.textContent === '远端环境 · linux/arm64 · remote-s'))
-  assert.equal(panel.find(node => node.textContent === '远端环境 · win32/x64 · remote-l').title, 'remote-laptop · laptop')
-  assert.ok(panel.find(node => node.textContent === '离线'))
-  assert.ok(panel.find(node => node.textContent === '已连接'))
+  assert.ok(panel.find(node => node.textContent === '项目电脑'))
+  for (const [id, label, state, count] of [
+    ['local:computer', '本机（默认）', '按需启动', null],
+    ['remote-laptop', 'Windows 电脑', '离线', 0],
+    ['remote-server', 'Linux 电脑', '已连接', 1],
+  ]) {
+    const row = panel.find(node => node.dataset.attachmentId === id)
+    const details = row.tagName === 'details' ? row : row.find(node => node.tagName === 'details')
+    assert.equal(details.open, false)
+    const summary = elementText(details.children.find(node => node.tagName === 'summary'))
+    assert.ok(summary.includes(label) && summary.includes(state), summary)
+    assert.ok(!summary.includes(id), 'the summary omits the full environment identifier')
+    const identity = details.find(node => node.tagName === 'details' && node.children.some(child =>
+      child.tagName === 'summary' && child.textContent === '技术标识'))
+    assert.ok(identity)
+    assert.equal(identity.open, false)
+    assert.ok(elementText(identity).includes(id))
+    if (count === null) {
+      assert.doesNotMatch(summary, /0 项工具/)
+      assert.match(elementText(details), /Worker 尚未报告工具/)
+    } else assert.ok(summary.includes(`Worker 已报告 ${count} 项工具`), summary)
+  }
   assert.equal(panel.find(node => node.textContent === 'local:models'), undefined)
+})
+
+test('Harness tool sources summarize grants and list each tool with its authorized agents', async t => {
+  dom(t)
+  const targetId = JSON.stringify(['local:computer', 'computer-local', 1])
+  const toolIds = ['codex.exec_command', 'codex.write_stdin', 'codex.view_image']
+  const { source } = api({
+    '/units/attachments': () => [],
+    '/computer-environments': () => ({ defaultEnvironmentId: 'local:computer', environments: [] }),
+    '/tool-environments': () => [{
+      environmentId: 'computer', targetId, name: '执行端本机',
+      tools: toolIds.map(toolId => ({ environmentId: 'computer', targetId, toolId, version: '1' })),
+      agents: [{ id: 'dev', name: '开发助手', toolIds: toolIds.slice(0, 2) }, { id: 'reviewer', toolIds: toolIds.slice(0, 1) }],
+    }],
+  })
+  const panel = new Element(), view = setupUnitsSettings(source, messageFor, panel)
+  t.after(() => view.dispose())
+  await flush()
+  assert.ok(panel.find(node => node.textContent === '工具来源'))
+  const target = panel.find(node => node.tagName === 'details' && node.children.some(child =>
+    child.tagName === 'summary' && elementText(child).includes('执行端本机')))
+  assert.ok(target)
+  assert.equal(target.open, false)
+  const summary = elementText(target.children.find(node => node.tagName === 'summary'))
+  assert.match(summary, /3 项工具/)
+  assert.match(summary, /2 个已授权 Agent/)
+  assert.ok(!summary.includes(targetId))
+  target.open = true
+  const identities = target.find(node => node.tagName === 'details' && node.children.some(child =>
+    child.tagName === 'summary' && child.textContent === '技术标识'))
+  assert.ok(identities)
+  assert.equal(identities.open, false)
+  assert.ok(elementText(identities).includes(targetId))
+  assert.equal(elementText(target).split(targetId).length - 1, 1)
+  const expectedGrants = [['开发助手', 'reviewer'], ['开发助手'], ['未授权']]
+  for (const [index, toolId] of toolIds.entries()) {
+    const row = target.find(node => node.tagName === 'tr' && elementText(node).includes(toolId))
+    assert.ok(row, toolId)
+    assert.equal(elementText(target).split(toolId).length - 1, 1)
+    const grants = elementText(row.children.find(node => node.tagName === 'td'))
+    assert.deepEqual(grants.split('、').sort(), expectedGrants[index].sort())
+  }
+  await view.refresh()
+  const refreshed = panel.find(node => node.tagName === 'details' && node.children.some(child =>
+    child.tagName === 'summary' && elementText(child).includes('执行端本机')))
+  assert.equal(refreshed.open, true, 'refresh keeps the same tool source expanded')
 })
 
 test('opening and refreshing local worker management never starts it; explicit start enables attachment controls', async t => {

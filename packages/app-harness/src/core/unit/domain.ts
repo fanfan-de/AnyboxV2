@@ -7,6 +7,7 @@ export const unitKinds: readonly UnitKind[] = Object.freeze(['models', 'computer
 /** The in-process Models component and this Authority's own worker attach as local units with fixed identities. */
 export const localModelsUnitId = 'models-local'
 export const localComputerUnitId = 'computer-local'
+export const maxRunWorkspaces = 32
 
 export type UnitScope =
   | { readonly kind: 'computer'; readonly projects: 'all' | readonly string[]; readonly tools: 'all' | readonly string[] }
@@ -44,11 +45,18 @@ export interface RunUnitBinding {
   /** Boot that accepted the Run. Informational for the in-process Models unit; workers fix their boot per operation. */
   readonly bootId?: string
 }
-export interface RunUnitBindings {
-  readonly schemaVersion: 1
+export interface RunWorkspaceUnit {
+  readonly name: string
+  readonly path: string
+  readonly id: string
+  readonly revision: number
+  readonly unit: RunUnitBinding
+}
+export type RunUnitBindings = {
   readonly models: RunUnitBinding
   readonly computer: RunUnitBinding
-}
+} & ({ readonly schemaVersion: 1; readonly workspaces?: undefined } |
+  { readonly schemaVersion: 2; readonly workspaces: readonly RunWorkspaceUnit[] })
 
 export type UnitErrorCode = 'unit-invalid' | 'unit-attachment-missing' | 'unit-attachment-state' | 'unit-code-invalid' | 'unit-code-expired' |
   'unit-kind-mismatch' | 'unit-scope-exceeded' | 'unit-already-attached' | 'unit-attachment-local' | 'unit-attachment-mismatch' | 'unit-attachments-closed' |
@@ -188,8 +196,25 @@ export function validateRunUnitBinding(value: unknown): RunUnitBinding {
 export function validateRunUnitBindings(value: unknown): RunUnitBindings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw unitError('unit-invalid')
   const bindings = value as Record<string, unknown>
-  if (bindings.schemaVersion !== 1 || Object.keys(bindings).some(key => !['schemaVersion', 'models', 'computer'].includes(key))) throw unitError('unit-invalid')
+  const keys = ['schemaVersion', 'models', 'computer']
+  if (bindings.schemaVersion === 2) keys.push('workspaces')
+  if ((bindings.schemaVersion !== 1 && bindings.schemaVersion !== 2) || Object.keys(bindings).some(key => !keys.includes(key))) throw unitError('unit-invalid')
   const models = validateRunUnitBinding(bindings.models), computer = validateRunUnitBinding(bindings.computer)
   if (models.unitKind !== 'models' || computer.unitKind !== 'computer') throw unitError('unit-invalid')
-  return Object.freeze({ schemaVersion: 1, models, computer })
+  if (bindings.schemaVersion === 1) return Object.freeze({ schemaVersion: 1, models, computer })
+  if (!Array.isArray(bindings.workspaces) || bindings.workspaces.length < 2 || bindings.workspaces.length > maxRunWorkspaces) throw unitError('unit-invalid')
+  const ids = new Set<string>(), attachments = new Set<string>()
+  const workspaces = bindings.workspaces.map((row: unknown) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) throw unitError('unit-invalid')
+    const entry = row as Record<string, unknown>
+    if (Object.keys(entry).some(key => !['id', 'revision', 'name', 'path', 'unit'].includes(key)) || !Number.isSafeInteger(entry.revision) ||
+      (entry.revision as number) < 1) throw unitError('unit-invalid')
+    const id = identifier(entry.id), unit = validateRunUnitBinding(entry.unit)
+    if (unit.unitKind !== 'computer' || ids.has(id) || attachments.has(unit.attachmentId)) throw unitError('unit-invalid')
+    ids.add(id); attachments.add(unit.attachmentId)
+    return Object.freeze({ id, revision: entry.revision as number, name: identifier(entry.name, 256), path: identifier(entry.path, 8192), unit })
+  })
+  const primary = workspaces[0]!.unit
+  if (primary.attachmentId !== computer.attachmentId || primary.unitId !== computer.unitId || primary.epoch !== computer.epoch) throw unitError('unit-invalid')
+  return Object.freeze({ schemaVersion: 2, models, computer, workspaces: Object.freeze(workspaces) })
 }

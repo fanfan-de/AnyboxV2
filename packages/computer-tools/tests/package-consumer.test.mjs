@@ -27,6 +27,7 @@ import { Context } from '@nya/core'
 import { createApplyPatchComponent } from '@anybox/computer-tools/apply-patch'
 import { createFileToolsComponent } from '@anybox/computer-tools/files'
 import { adaptFileToolCall } from '@anybox/computer-tools/adapters'
+import { createComputerToolEnvironment } from '@anybox/computer-tools/environment'
 import { spawnManagedProcess, processRuntimeAvailable } from '@anybox/computer-tools/platform/process-runtime'
 const root = new Context()
 const joinCall = async call => { try { return await call.result } finally { await call.done } }
@@ -39,9 +40,34 @@ try {
   const patched = await joinCall(root.get('tools.apply-patch').execute({ workspacePath: process.cwd(),
     patch: '*** Begin Patch\\n*** Add File: independent.txt\\n+Independent tools\\n*** End Patch' }))
   assert.equal(patched.status, 'applied')
-  const read = await joinCall(root.get('tools.files').execute({ scopeId: 'consumer', workspacePath: process.cwd(), imageInput: false,
-    request: adaptFileToolCall('claude_code_Read', { file_path: 'independent.txt' }) }))
+  const request = { name: 'claude_code_Read', arguments: { file_path: 'independent.txt' } }
+  const environment = createComputerToolEnvironment({
+    async getAcceptedOperation(scopeId, operationId) {
+      assert.equal(scopeId, 'consumer')
+      return operationId === 'read' ? { request } : undefined
+    },
+    async openRunScope({ scopeId }) {
+      return {
+        execute(operationId) {
+          assert.equal(operationId, 'read')
+          return root.get('tools.files').execute({ scopeId, workspacePath: process.cwd(), imageInput: false,
+            request: adaptFileToolCall(request.name, request.arguments) })
+        },
+        async cancel() {},
+        close: () => ({ result: Promise.resolve({ processes: [] }), done: Promise.resolve(), cancel() {} }),
+      }
+    },
+    async hasRunResources() { return false },
+  })
+  const descriptor = environment.tools.find(tool => tool.definition.name === request.name)
+  assert.ok(descriptor)
+  const scope = environment.openScope({ scopeId: 'consumer', ownerEpoch: 1, signal: new AbortController().signal })
+  const call = { operationId: 'read', toolId: descriptor.toolId, version: descriptor.version, arguments: request.arguments, resuming: false }
+  await assert.rejects(joinCall(scope.execute({ ...call, arguments: { file_path: 'other.txt' } })), { category: 'unavailable' })
+  assert.equal(scope.hasResources(), false)
+  const read = await joinCall(scope.execute(call))
   assert.match(read.result.text, /Independent tools/)
+  await joinCall(scope.close())
   assert.equal(processRuntimeAvailable(), true)
   const child = spawnManagedProcess({ executable: process.execPath, args: ['-e', 'process.stdout.write("independent process")'],
     cwd: process.cwd(), env: process.env, stdin: 'ignore' })

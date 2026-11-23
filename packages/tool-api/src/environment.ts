@@ -34,6 +34,8 @@ export interface ToolEnvironmentScope {
 
 /** Pure capability declaration; describing an environment never acquires execution resources. */
 export interface ToolEnvironmentDescriptor {
+  /** Stable backing resource identity. Providers omitting it are scoped to their runtime generation. */
+  readonly resourceId?: string
   readonly environmentId: string
   readonly version: string
   readonly tools: readonly ToolDescriptor[]
@@ -44,4 +46,6 @@ export interface ToolEnvironmentDescriptor {
 /** Trusted executable provider. Opening a scope does not execute a tool or replay earlier work. */
 export interface ToolEnvironment extends ToolEnvironmentDescriptor {
   openScope(context: ToolEnvironmentScopeContext): ToolEnvironmentScope
+  /** Observe and close the original scope after interruption without creating replacement work. */
+  restoreScope?(context: ToolEnvironmentScopeContext): ToolEnvironmentScope
 }

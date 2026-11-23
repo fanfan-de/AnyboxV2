@@ -211,7 +211,7 @@ export interface ProtocolOperation<T> {
   readonly done: Promise<void>;
   cancel(reason?: string): void;
 }
-export interface ProtocolConnection { readonly provider: ProviderSettingsInput; readonly credential?: string; readonly signal: AbortSignal }
+export interface ProtocolConnection { readonly managedSend?: import('./native-types.js').NativeManagedSend; readonly provider: ProviderSettingsInput; readonly credential?: string; readonly signal: AbortSignal }
 export const modelsServiceKey = 'models';
 export const modelsSettingsServiceKey = 'models.settings';
 export const modelsProtocolsServiceKey = 'models.protocols';

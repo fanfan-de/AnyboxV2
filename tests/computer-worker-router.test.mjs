@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { grantComputerTools } from './helpers/computer-grants.mjs'
+import { createServer } from 'node:http'
+import { pathToFileURL } from 'node:url'
 import { existsSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
@@ -251,6 +254,7 @@ test('remote project bindings survive reassembly while the local environment rem
   const api = core.api
   const selection = await api.getAgentTools('assistant')
   await api.setAgentTools('assistant', { toolIds: ['anybox.bash', 'anybox.apply_patch'], expectedRevision: selection.revision })
+  await grantComputerTools(root, api, [attached.attachmentId], ['anybox.bash', 'anybox.apply_patch'])
   assert.deepEqual(await root.get(computerWorkerServiceKey).query({ attachmentId: attached.attachmentId, query: { kind: 'stat', path: projectDirectory } }), { kind: 'stat', directory: true, canonical: projectDirectory })
   const localProject = await api.openProject(projectDirectory)
   assert.equal(localProject.computerAttachmentId, 'local:computer', 'new projects default to this harness server environment')
@@ -321,8 +325,9 @@ test('the default local environment coexists with multiple remote environments a
   let script = []
   const models = controlledModels({ call(input) {
     const result = (async () => {
-      if (input.messages.at(-1)?.role === 'tool') return { status: 'completed', text: 'done', toolCalls: [] }
-      const next = script.shift()
+      const step = script.shift()
+      const next = typeof step === 'function' ? step(input) : step
+      if (typeof next === 'string') return { status: 'completed', text: next, toolCalls: [] }
       return next ? { status: 'completed', text: '', toolCalls: [next] } : { status: 'completed', text: 'nothing', toolCalls: [] }
     })()
     void result.catch(() => {})
@@ -375,6 +380,7 @@ test('the default local environment coexists with multiple remote environments a
   const api = core.api
   const selection = await api.getAgentTools('assistant')
   await api.setAgentTools('assistant', { toolIds: ['anybox.bash'], expectedRevision: selection.revision })
+  await grantComputerTools(root, api, ['local:computer', attached.attachmentId], ['anybox.bash'])
   // Projects bind to a Computer attachment; the same path on different units is two projects, and the unit's ceiling applies to remote ones.
   const local = await api.openProject(localProject)
   assert.equal(local.computerAttachmentId, 'local:computer')
@@ -403,6 +409,14 @@ test('the default local environment coexists with multiple remote environments a
   assert.equal(remoteRun.status, 'completed', JSON.stringify(remoteRun.error ?? null)); assert.equal(remoteRun.units.computer.attachmentId, attached.attachmentId)
   assert.equal(await readFile(join(remoteProject, 'where.txt'), 'utf8'), 'remote')
   const remote2 = await api.openProject(remoteProject2, { computerAttachmentId: attached2.attachmentId })
+  const ungranted = await api.createSession(remote2.id, 'assistant')
+  script = [{ id: 'unauthorized-second', name: 'bash', arguments: { command: 'touch never.txt' } }]
+  const denied = await api.waitRun((await api.startRun({ sessionId: ungranted.id, parentNodeId: null, input: 'go', idempotencyKey: 'ungranted-remote-2' })).id)
+  assert.equal(denied.status, 'completed', 'the model can finish the text turn after its unselected call was rejected')
+  assert.equal((await api.getRunEvents(denied.id)).some(event => event.kind === 'tool-observed'), false)
+  assert.deepEqual((await api.getRunEnvironmentAccess(denied.id)).functions, [])
+  assert.equal(existsSync(join(remoteProject2, 'never.txt')), false)
+  await grantComputerTools(root, api, [attached2.attachmentId], ['anybox.bash'])
   const remoteSession2 = await api.createSession(remote2.id, 'assistant')
   script = [{ id: 'call-remote-2', name: 'bash', arguments: { command: 'printf second > where.txt' } }]
   const remoteRun2 = await api.waitRun((await api.startRun({ sessionId: remoteSession2.id, parentNodeId: null, input: 'go', idempotencyKey: 'remote-2' })).id)
@@ -415,4 +429,266 @@ test('the default local environment coexists with multiple remote environments a
   const joinedCall = async call => { try { return await call.result } finally { await call.done } }
   assert.deepEqual(await joinedCall(api.searchProjectFiles(remoteSession.id, 'where')), { paths: ['where.txt'], incomplete: false })
   assert.equal((await joinedCall(api.previewProjectFile(remoteSession.id, { kind: 'project-file', path: 'where.txt' }))).text, 'remote')
+
+  await t.test('one Run edits and tests locally, publishes an immutable artifact and deploys and reads logs on the attached Computer', async t => {
+    const initial = await api.listProjectWorkspaces(local.id)
+    const configured = await api.addProjectWorkspace(local.id, { name: '预发布', path: remoteProject,
+      computerAttachmentId: attached.attachmentId, requestId: 'attach-staging', expectedRevision: initial.revision })
+    const staging = configured.workspaces.find(item => !item.primary)
+    const selection = { workspaceIds: [staging.id], projectWorkspaceRevision: configured.revision }
+    await assert.rejects(api.createSession(local.id, 'assistant', undefined, { ...selection, projectWorkspaceRevision: initial.revision }),
+      { code: 'project-workspace-conflict' })
+    const beforeRevocation = await api.createSession(local.id, 'assistant', undefined, selection)
+    const stagingTarget = beforeRevocation.toolEnvironments.environments.find(item => item.environmentId === 'computer')
+      .tools.find(tool => tool.workspaceBindingId === staging.id).targetId
+    const authority = root.get('harness.execution-environments'), grants = await authority.get('assistant')
+    await authority.set({ agentId: 'assistant', expectedRevision: grants.revision, requestId: 'revoke-before-first-workspace-run',
+      tools: grants.grants.map(grant => grant.tool).filter(tool => tool.targetId !== stagingTarget) })
+    const opens = models.opens.length
+    await assert.rejects(api.startRun({ sessionId: beforeRevocation.id, parentNodeId: null, input: 'check both workspaces',
+      idempotencyKey: 'revoked-before-start' }), { code: 'workspace-tools-unavailable' })
+    assert.equal(models.opens.length, opens, 'a first Run cannot silently omit a workspace or open the model to send the narrowed declaration')
+    await grantComputerTools(root, api, [attached.attachmentId], ['anybox.bash'])
+    const session = await api.createSession(local.id, 'assistant', undefined, selection)
+    assert.deepEqual((await api.getSession(session.id)).workspaceBindings, session.workspaceBindings)
+    const tools = session.toolEnvironments.environments.find(env => env.environmentId === 'computer').tools
+    const bash = id => tools.find(tool => tool.workspaceBindingId === id && tool.toolId === 'anybox.bash').definition.name
+    assert.notEqual(bash(local.id), bash(staging.id))
+    const routedWorker = root.get(computerWorkerServiceKey), originalInfo = routedWorker.info, originalSubmit = routedWorker.submit
+    const viewer = await root.get(hostAccessServiceKey).issue('workspace trace reader')
+    const headers = { Authorization: 'Bearer ' + viewer.token, 'X-Anybox-Instance-Id': root.get(hostAccessServiceKey).instance.instanceId }
+    const modelService = root.get('models'), originalGet = modelService.get
+    modelService.get = id => {
+      const model = originalGet(id)
+      return model && { ...model, effectiveCapabilities: { ...model.effectiveCapabilities, tools: false } }
+    }
+    try {
+      const response = await fetch(web.url + '/api/v1/apps/agent/sessions/' + session.id + '/runs', {
+        method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parentNodeId: null, input: 'use both workspaces', idempotencyKey: 'text-only' }),
+      })
+      assert.equal(response.status, 409)
+      assert.equal((await response.json()).error.code, 'workspace-model-tools-required')
+      assert.equal(models.opens.length, opens)
+      assert.equal(await root.get('harness.session-runs').loadNativeInitialization(session.id), undefined)
+    } finally { modelService.get = originalGet }
+    let submissions = 0
+    routedWorker.info = async attachmentId => {
+      const info = await originalInfo(attachmentId)
+      return attachmentId === attached.attachmentId ? { ...info, workspaceScopeVersion: undefined } : info
+    }
+    routedWorker.submit = async input => { if (input.kind === 'tool') submissions++; return originalSubmit(input) }
+    try {
+      script = [{ id: 'old-worker', name: bash(staging.id), arguments: { command: 'printf unexpected > old-worker.txt' } }]
+      const rejected = await api.waitRun((await api.startRun({ sessionId: session.id, parentNodeId: null,
+        input: 'check staging compatibility', idempotencyKey: 'old-staging-worker' })).id)
+      assert.equal(rejected.status, 'failed')
+      assert.equal(rejected.errorCategory, 'computer-worker-upgrade-required')
+      assert.match(rejected.error, /Upgrade and restart the Computer worker/)
+      const response = await fetch(web.url + '/api/v1/apps/agent/runs/' + rejected.id, { headers })
+      assert.equal(response.status, 200)
+      const publicRun = await response.json()
+      assert.equal(publicRun.error, rejected.error)
+      assert.equal(publicRun.errorCategory, rejected.errorCategory)
+      assert.equal((await api.getRunEvents(rejected.id)).find(event => event.kind === 'tool-failed').category, rejected.errorCategory)
+      assert.equal(submissions, 0)
+      assert.equal(existsSync(join(remoteProject, 'old-worker.txt')), false)
+    } finally { routedWorker.info = originalInfo; routedWorker.submit = originalSubmit }
+    const artifact = Buffer.from('export default 42\n'), digest = createHash('sha256').update(artifact).digest('hex')
+    const published = new Map(), requests = []
+    let corruptDownload = false
+    const registry = createServer(async (request, response) => {
+      requests.push([request.method, request.url])
+      if (request.url === '/health') {
+        try {
+          const file = join(remoteProject, 'deployed.mjs'), content = await readFile(file)
+          const hash = createHash('sha256').update(content).digest('hex')
+          const service = await import(pathToFileURL(file).href + '?' + hash)
+          response.end(JSON.stringify({ version: hash, answer: service.default }))
+        } catch { response.writeHead(503); response.end() }
+      } else if (request.method === 'PUT') {
+        const chunks = []
+        for await (const chunk of request) chunks.push(chunk)
+        const bytes = Buffer.concat(chunks), hash = createHash('sha256').update(bytes).digest('hex')
+        published.set(hash, bytes); response.end(hash)
+      } else {
+        const bytes = published.get(request.url.slice(1))
+        response.writeHead(bytes ? 200 : 404)
+        response.end(corruptDownload && bytes ? Buffer.from('unexpected artifact bytes') : bytes)
+      }
+    })
+    await new Promise(resolve => registry.listen(0, '127.0.0.1', resolve))
+    try {
+      const registryURL = 'http://127.0.0.1:' + registry.address().port
+      await writeFile(join(localProject, 'publish.mjs'), `
+        import { readFile } from 'node:fs/promises'
+        import assert from 'node:assert/strict'
+        assert.equal((await import('./source.mjs')).default, 42, 'local test failed')
+        const put = await fetch(${JSON.stringify(registryURL)}, { method: 'PUT', body: await readFile('source.mjs') })
+        assert.equal(put.ok, true); console.log(await put.text())
+      `)
+      await writeFile(join(remoteProject, 'deploy.mjs'), `
+        import { writeFile, appendFile } from 'node:fs/promises'
+        import { createHash } from 'node:crypto'
+        import assert from 'node:assert/strict'
+        const [hash, request] = process.argv.slice(2)
+        const response = await fetch(${JSON.stringify(registryURL)} + '/' + hash)
+        assert.equal(response.ok, true)
+        const bytes = Buffer.from(await response.arrayBuffer())
+        assert.equal(createHash('sha256').update(bytes).digest('hex'), hash, 'artifact digest mismatch')
+        await writeFile('deployed.mjs', bytes)
+        assert.equal((await import('./deployed.mjs')).default, 42)
+        await appendFile('release.log', request + ' ' + hash + ' healthy\\n')
+      `)
+      await writeFile(join(remoteProject, 'verify.mjs'), `
+        import assert from 'node:assert/strict'
+        import { readFile } from 'node:fs/promises'
+        const response = await fetch(${JSON.stringify(registryURL + '/health')})
+        assert.deepEqual(await response.json(), { version: process.argv[2], answer: 42 })
+        console.log(await readFile('release.log', 'utf8'))
+      `)
+      const testAndDeploy = requestId => [
+        { id: 'test-publish', name: bash(local.id), arguments: { command: 'node publish.mjs' } },
+        input => {
+          const last = input.messages.at(-1)
+          assert.equal(last.role, 'tool')
+          const result = JSON.parse(last.content)
+          if (result.exitCode !== 0) return 'Local tests failed. Deployment stopped.'
+          const testedVersion = result.stdout.trim()
+          assert.match(testedVersion, /^[a-f0-9]{64}$/)
+          return { id: 'deploy', name: bash(staging.id), arguments: { command: `node deploy.mjs ${testedVersion} ${requestId}` } }
+        },
+      ]
+      script = [
+        { id: 'edit', name: bash(local.id), arguments: { command: "printf 'export default 42\\n' > source.mjs" } },
+        ...testAndDeploy('request-1'),
+        { id: 'logs', name: bash(staging.id), arguments: { command: `node verify.mjs ${digest}` } },
+      ]
+      const run = await api.waitRun((await api.startRun({ sessionId: session.id, parentNodeId: null, input: '修改、测试并发布到预发布，检查日志', idempotencyKey: 'mixed-release' })).id)
+      assert.equal(run.status, 'completed', JSON.stringify({ error: run.error, events: await api.getRunEvents(run.id) }))
+      const observed = (await api.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed')
+      assert.deepEqual(observed.map(event => event.name), [bash(local.id), bash(local.id), bash(staging.id), bash(staging.id)])
+      assert.match(JSON.stringify(observed.at(-1).result), new RegExp('request-1 ' + digest + ' healthy'))
+      const response = await fetch(web.url + '/api/v1/apps/agent/runs/' + run.id + '/events', { headers })
+      assert.equal(response.status, 200)
+      const trace = (await response.json()).filter(event => event.kind === 'tool-started')
+      assert.deepEqual(trace.map(event => event.workspace.path), [localProject, localProject, remoteProject, remoteProject])
+      assert.equal(trace.at(-1).workspace.name, '预发布')
+      assert.equal(trace.at(-1).workspace.originalName, 'bash')
+      assert.deepEqual(await readFile(join(remoteProject, 'deployed.mjs')), artifact)
+      assert.deepEqual(await readFile(join(localProject, 'source.mjs')), artifact)
+      assert.equal(existsSync(join(localProject, 'release.log')), false)
+      assert.equal(existsSync(join(remoteProject, 'source.mjs')), false)
+
+      const originalLog = await readFile(join(remoteProject, 'release.log'), 'utf8')
+      const attemptRelease = async key => api.waitRun((await api.startRun({ sessionId: session.id, parentNodeId: run.resultNodeId,
+        input: 'Test and deploy the candidate', idempotencyKey: key })).id)
+      await t.test('a failed local test prevents publication and deployment', async () => {
+        requests.length = 0
+        script = [
+          { id: 'edit-broken', name: bash(local.id), arguments: { command: "printf 'export default 41\\n' > source.mjs" } },
+          ...testAndDeploy('broken-build'),
+        ]
+        const attempt = await attemptRelease('failed-local-test')
+        assert.equal(attempt.output, 'Local tests failed. Deployment stopped.')
+        const calls = (await api.getRunEvents(attempt.id)).filter(event => event.kind === 'tool-observed')
+        assert.deepEqual(calls.map(event => event.name), [bash(local.id), bash(local.id)])
+        assert.equal(calls[1].result.exitCode, 1)
+        assert.match(calls[1].result.stderr, /local test failed/)
+        assert.deepEqual(requests, [])
+        assert.deepEqual(await readFile(join(remoteProject, 'deployed.mjs')), artifact)
+        assert.equal(await readFile(join(remoteProject, 'release.log'), 'utf8'), originalLog)
+      })
+      await t.test('a mismatched download leaves the deployed version and release log intact', async () => {
+        const source = 'export default 42 /* candidate */'
+        const candidate = createHash('sha256').update(source + '\n').digest('hex')
+        requests.length = 0
+        corruptDownload = true
+        script = [
+          { id: 'edit-candidate', name: bash(local.id), arguments: { command: `printf '%s\\n' '${source}' > source.mjs` } },
+          ...testAndDeploy('corrupt-download'),
+          input => {
+            const result = JSON.parse(input.messages.at(-1).content)
+            assert.equal(result.exitCode, 1)
+            assert.match(result.stderr, /artifact digest mismatch/)
+            return 'Deployment rejected the artifact digest.'
+          },
+        ]
+        try {
+          const attempt = await attemptRelease('failed-digest')
+          assert.equal(attempt.output, 'Deployment rejected the artifact digest.')
+          const calls = (await api.getRunEvents(attempt.id)).filter(event => event.kind === 'tool-observed')
+          assert.deepEqual(calls.map(event => [event.name, event.result.exitCode]), [[bash(local.id), 0], [bash(local.id), 0], [bash(staging.id), 1]])
+          assert.equal(calls[1].result.stdout.trim(), candidate)
+          assert.deepEqual(requests, [['PUT', '/'], ['GET', '/' + candidate]])
+          assert.deepEqual(await readFile(join(remoteProject, 'deployed.mjs')), artifact)
+          assert.deepEqual(await (await fetch(registryURL + '/health')).json(), { version: digest, answer: 42 })
+          assert.equal(await readFile(join(remoteProject, 'release.log'), 'utf8'), originalLog)
+        } finally { corruptDownload = false }
+      })
+      const retired = await api.removeProjectWorkspace(local.id, staging.id, { requestId: 'detach-staging', expectedRevision: configured.revision })
+      assert.equal(retired.workspaces.length, 1)
+      await assert.rejects(api.startRun({ sessionId: session.id, parentNodeId: run.resultNodeId, input: '再查日志', idempotencyKey: 'retired' }))
+    } finally {
+      registry.closeAllConnections()
+      await new Promise(resolve => registry.close(resolve))
+    }
+  })
+
+  await t.test('two workspace processes accept stdin through their own model-facing handles when the native handles coincide', async () => {
+    const mainDirectory = join(directory, 'stdin-project')
+    await mkdir(mainDirectory)
+    const main = await api.openProject(mainDirectory)
+    const current = await api.listProjectWorkspaces(main.id)
+    const configured = await api.addProjectWorkspace(main.id, { name: 'Integration', path: remoteProject2,
+      computerAttachmentId: attached2.attachmentId, requestId: 'add-integration', expectedRevision: current.revision })
+    const toolIds = ['codex.exec_command', 'codex.write_stdin']
+    await api.setAgentTools('assistant', { toolIds, expectedRevision: (await api.getAgentTools('assistant')).revision })
+    await grantComputerTools(root, api, ['local:computer', attached2.attachmentId], toolIds)
+    const session = await api.createSession(main.id, 'assistant', undefined, {
+      workspaceIds: configured.workspaces.map(workspace => workspace.id), projectWorkspaceRevision: configured.revision })
+    const handles = {}
+    const readLine = (id, workspace) => ({ id, name: workspace + '__codex_exec_command',
+      arguments: { cmd: 'IFS= read -r value && printf "%s" "$value" > workspace-stdin.txt', yield_time_ms: 0 } })
+    const sendLine = (workspace, value) => ({ id: 'write-' + workspace, name: workspace + '__codex_write_stdin',
+      arguments: { session_id: handles[workspace], chars: value + '\n', yield_time_ms: 3_000 } })
+    script = [
+      readLine('start-main', 'main'),
+      input => { handles.main = JSON.parse(input.messages.at(-1).content).session_id; return readLine('start-remote', 'workspace2') },
+      input => { handles.workspace2 = JSON.parse(input.messages.at(-1).content).session_id; return sendLine('workspace2', 'remote') },
+      () => sendLine('main', 'local'),
+    ]
+    const run = await api.waitRun((await api.startRun({ sessionId: session.id, parentNodeId: null,
+      input: 'Use both process sessions', idempotencyKey: 'workspace-processes' })).id)
+    assert.equal(run.status, 'completed', JSON.stringify(run.error))
+    assert.equal(await readFile(join(mainDirectory, 'workspace-stdin.txt'), 'utf8'), 'local')
+    assert.equal(await readFile(join(remoteProject2, 'workspace-stdin.txt'), 'utf8'), 'remote')
+    const rows = await root.get('local-storage').read(reader => reader.all(`SELECT handle, worker_session_id FROM harness_computer_process_handles
+      WHERE scope_id IN (SELECT run_id FROM harness_computer_scopes WHERE parent_run_id=?) ORDER BY handle`, [run.id]))
+    assert.deepEqual(rows.map(row => row.handle), [handles.main, handles.workspace2])
+    assert.notEqual(handles.main, handles.workspace2)
+    assert.equal(rows[0].worker_session_id, rows[1].worker_session_id)
+  })
+
+  await t.test('three selected workspaces route independently of the requested selection order', async () => {
+    const before = await api.listProjectWorkspaces(local.id)
+    const first = await api.addProjectWorkspace(local.id, { name: 'blue', path: remoteProject, computerAttachmentId: attached.attachmentId,
+      requestId: 'blue-workspace', expectedRevision: before.revision })
+    const both = await api.addProjectWorkspace(local.id, { name: 'green', path: remoteProject2, computerAttachmentId: attached2.attachmentId,
+      requestId: 'green-workspace', expectedRevision: first.revision })
+    await api.setAgentTools('assistant', { expectedRevision: (await api.getAgentTools('assistant')).revision, toolIds: ['anybox.bash'] })
+    await grantComputerTools(root, api, ['local:computer', attached.attachmentId, attached2.attachmentId], ['anybox.bash'])
+    const selected = [...both.workspaces].reverse()
+    const session = await api.createSession(local.id, 'assistant', undefined, {
+      workspaceIds: selected.map(item => item.id), projectWorkspaceRevision: both.revision })
+    const tools = session.toolEnvironments.environments.find(env => env.environmentId === 'computer').tools
+    script = selected.map((member, index) => ({ id: 'pwd-' + index,
+      name: tools.find(tool => tool.workspaceBindingId === member.id && tool.toolId === 'anybox.bash').definition.name,
+      arguments: { command: 'pwd' } }))
+    const run = await api.waitRun((await api.startRun({ sessionId: session.id, parentNodeId: null,
+      input: 'Read all three working directories', idempotencyKey: 'three-workspaces' })).id)
+    assert.equal(run.status, 'completed', JSON.stringify(run.error))
+    const observations = (await api.getRunEvents(run.id)).filter(event => event.kind === 'tool-observed')
+    assert.deepEqual(observations.map(event => event.result.stdout.trim()), selected.map(item => item.path))
+  })
 })

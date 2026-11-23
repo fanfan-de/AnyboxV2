@@ -166,12 +166,33 @@ test('Personal Agent uses an isolated native execution and retains earlier Perso
   assert.equal((await execution('/products/agent/open', {}, 404)).error.code, 'not-found')
   assert.equal(host.execution.products.get('agent').state, 'disabled')
   assert.equal((await host.execution.products.open('agent')).state, 'running')
+  const layout = store => store.read(reader => reader.get('PRAGMA user_version').user_version)
+  assert.equal(await layout(host.root.get('host.execution.storage')), 3)
+  assert.equal(await layout(host.root.get('personal-agent.local-storage')), 2)
+
+  const accessPath = '/agents/assistant/environment-access'
+  const harnessBase = clientApi + '/apps/agent/connections/' + encodeURIComponent(harnessConnection.id) + '/v1'
+  const harnessBinding = { 'X-Anybox-Product-Id': 'agent', 'X-Anybox-Expected-Instance-Id': harnessConnection.instanceId,
+    'X-Anybox-Connection-Revision': String(harnessConnection.revision) }
+  const harnessAccess = () => request(origin, harnessBase + accessPath, undefined, harnessBinding)
+  const personalBefore = await execution(accessPath), harnessBefore = await harnessAccess()
+  assert.ok(personalBefore.authorization.grants.length > 0)
+  assert.ok(harnessBefore.authorization.grants.length > 0)
+  const revoke = { requestId: 'private-personal-revoke', expectedRevision: personalBefore.authorization.revision, tools: [] }
+  const completed = await execution(accessPath + '/grants', revoke)
+  assert.equal(completed.state, 'completed')
+  assert.deepEqual(await execution(accessPath + '/grants', revoke), completed)
+  assert.deepEqual(await execution(accessPath + '/changes/' + revoke.requestId), completed)
+  const personalAfter = await execution(accessPath)
+  assert.deepEqual(personalAfter.preference, personalBefore.preference)
+  assert.deepEqual(personalAfter.authorization.grants, [])
+  assert.deepEqual((await harnessAccess()).authorization, harnessBefore.authorization)
+  await request(origin, harnessBase + accessPath + '/changes/' + revoke.requestId, undefined, harnessBinding, 404)
 
   const providers = await execution('/models/provider-settings')
   assert.ok(providers.some(provider => provider.id === existingModel.providerId && provider.credentialConfigured))
   assert.deepEqual(await execution(`/models/settings?providerId=${encodeURIComponent(existingModel.providerId)}`), [existingModel])
   assert.equal(host.root.get('harness.models.settings').configuredProviders().length, 0)
-  await execution('/agents/assistant/tools', { toolIds: [], expectedRevision: 0 })
   const project = await execution('/projects', { path: directory })
   const harnessProjects = await request(origin, clientApi + '/apps/agent/connections/' + harnessConnection.id + '/v1/projects')
   assert.deepEqual(harnessProjects, [])
@@ -186,7 +207,9 @@ test('Personal Agent uses an isolated native execution and retains earlier Perso
   assert.equal(calls.length, 1)
   assert.equal(calls[0].auth, 'Bearer personal-test-secret')
   assert.equal(calls[0].url, 'https://model.invalid/v1/chat/completions')
+  assert.deepEqual(calls[0].input.tools ?? [], [])
   assert.ok(calls[0].input.messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Personal Agent request')))
+  await execution('/agents/assistant/tools', { toolIds: [], expectedRevision: 0 })
 
   await host.close()
   host = undefined
@@ -663,6 +686,9 @@ test('Personal Agent keeps native Chat Completions across restarts and renders a
       SELECT id, ?, continuous_initialization_json, ? FROM harness_runs WHERE id IN (?, ?)`)
       .run(legacyRootId, JSON.stringify({ rootId: legacyRootId, recentNodeIds: [], memoryNodeIds: [] }), firstRun.id, secondRun.id)
     legacyDatabase.exec(`CREATE VIRTUAL TABLE harness_continuous_search USING fts5(terms, session_id UNINDEXED, project_id UNINDEXED);
+      DROP TABLE harness_run_environment_access;
+      DROP TABLE harness_session_environments;
+      DROP TABLE harness_environment_preferences;
       DROP TRIGGER harness_runs_history_insert;
       DROP TRIGGER harness_runs_application_prefix_immutable;
       DROP TRIGGER harness_runs_continuous_initialization_immutable;
@@ -756,7 +782,7 @@ test('Personal Agent keeps native Chat Completions across restarts and renders a
   host = undefined
   const upgraded = new DatabaseSync(personalConfig.harnessDatabasePath, { readOnly: true })
   try {
-    assert.equal(upgraded.prepare("SELECT version FROM schema_migrations WHERE domain = 'run-state'").get().version, 19)
+    assert.equal(upgraded.prepare("SELECT version FROM schema_migrations WHERE domain = 'run-state'").get().version, 20)
     assert.equal(upgraded.prepare("SELECT name FROM sqlite_schema WHERE name = 'harness_continuous_search'").get(), undefined)
   } finally { upgraded.close() }
 })
@@ -1211,4 +1237,57 @@ test('Personal Agent reuses compatible context and rebuilds complete history acr
       } else assert.equal(events.length, 2)
     }
   } finally { database.close() }
+})
+
+test('Personal Agent gateway explicitly adopts a hosted environment into an existing empty continuous conversation', { timeout: 60000 }, async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'anybox-personal-environments-'))
+  let host
+  t.after(async () => {
+    try { await host?.close() } finally { await rm(directory, { recursive: true, force: true }) }
+  })
+  const clientPath = join(directory, 'client.sqlite'), { openEntry } = vault()
+  const config = parsePersonalAgentServerConfig({}, clientPath)
+  const [model] = await seedPersonalModels(config, openEntry, { id: 'hosted-model', protocolId: 'responses' })
+  const executionConfig = parseHarnessServerConfig({ ANYBOX_HARNESS_DATABASE: join(directory, 'harness.sqlite') })
+  const application = personalAgentServerApplication(config, { models: { openEntry, catalogAutoRefresh: false } })
+  host = await createLocalWebHost({ client: { path: clientPath, port: 0, openEntry },
+    execution: { config: executionConfig, options: { applications: [application] } } })
+  const execution = personalExecution(host.url, await managedConnection(host.url, 'personal-agent'))
+  await execution('/products/personal-agent/open', {})
+  const agent = await execution('/agents', { name: 'Reader', instructions: 'Read the sources.', description: '', modelId: model.id,
+    requestId: 'new-reader' }, 201)
+  const path = '/agents/' + encodeURIComponent(agent.id)
+  const project = await execution('/projects', { path: directory })
+  const continuous = await execution(path + '/session', { projectId: project.id })
+  const sessionPath = '/sessions/' + encodeURIComponent(continuous.id) + '/environments'
+  const initialSession = await execution(sessionPath)
+  const initial = await execution(path + '/environment-access')
+  assert.deepEqual(initialSession.environmentIds, [])
+  assert.deepEqual(initial.authorization.grants, [])
+  const target = initial.targets.find(value => value.environmentId === 'model-search')
+  assert.ok(target?.tools.length)
+  const tool = target.tools[0]
+  const catalog = await execution('/tool-environments')
+  assert.ok(catalog.some(value => value.targetId === target.targetId))
+  const preferences = { environmentIds: ['model-search'], toolIdsByEnvironment: { 'model-search': [tool.toolId] },
+    expectedVersion: initial.preference.version }
+  const preference = await execution(path + '/environment-access/preferences', preferences)
+  assert.deepEqual(preference.toolIdsByEnvironment, preferences.toolIdsByEnvironment)
+  const access = await execution(path + '/environment-access')
+  assert.deepEqual(access.authorization, initial.authorization)
+  const adoption = { environmentIds: preference.environmentIds, expectedVersion: initialSession.version,
+    expectedGrantRevision: access.authorization.revision }
+  await execution(sessionPath, adoption, 409)
+  assert.deepEqual(await execution(sessionPath), initialSession)
+  await execution(path + '/environment-access/grants', { tools: [{ ...tool, targetId: 'untrusted' }], requestId: 'wrong-target',
+    expectedRevision: access.authorization.revision }, 403)
+  const change = await execution(path + '/environment-access/grants', { tools: [tool], requestId: 'hosted-grant',
+    expectedRevision: access.authorization.revision })
+  await execution(sessionPath, adoption, 409)
+  const adopted = await execution(sessionPath, { ...adoption, expectedGrantRevision: change.revision })
+  assert.deepEqual(adopted.environmentIds, ['model-search'])
+  assert.equal(adopted.version, initialSession.version + 1)
+  await execution(sessionPath, { ...adoption, expectedGrantRevision: change.revision }, 409)
+  const ordinary = await execution('/sessions', { projectId: project.id, agentId: agent.id })
+  await execution('/sessions/' + ordinary.id + '/environments', { ...adoption, expectedGrantRevision: change.revision }, 409)
 })

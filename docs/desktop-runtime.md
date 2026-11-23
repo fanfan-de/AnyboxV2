@@ -60,4 +60,4 @@ macOS 取消由主进程私有 Node-API/Cocoa 适配器处理：只接收本次�
 
 ## 本机 Computer 独立管理
 
-“管理连接 → 管理本机 Computer worker”直接访问客户端服务的 `client.computer`，无需本机执行角色。状态查询无启动副作用，显式启动时复用或启动 `data/harness.sqlite.computer-worker` 下的独立 worker；客户端和桌面退出只结束管理观察，worker 继续提供远端设备服务。目录与已有本机执行角色保持相同，避免复制账本与设备身份。完整流程见 [独立管理](computer-worker-management.md)。
+“执行环境 → 管理本机 Computer worker”直接访问客户端服务的 `client.computer`，无需本机执行角色。状态查询无启动副作用，显式启动时复用或启动 `data/harness.sqlite.computer-worker` 下的独立 worker；客户端和桌面退出只结束管理观察，worker 继续提供远端设备服务。目录与已有本机执行角色保持相同，避免复制账本与设备身份。完整流程见 [独立管理](computer-worker-management.md)。
