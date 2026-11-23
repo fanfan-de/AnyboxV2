@@ -20,7 +20,11 @@ PR 与提交可查看检查结果和步骤日志。NyaCore 修订需要在 Anybo
 
 ## 验证
 
-工作流通过 `actionlint` 1.7.12 检查。已核对固定的 NyaCore 提交可在 GitHub 上读取。云端类型检查、构建和测试的结果保存在 [CI 运行记录](https://github.com/fanfan-de/AnyboxV2/actions/workflows/ci.yml)，验证范围为 Ubuntu 24.04 的源码检查。
+工作流通过 `actionlint` 1.7.12 检查，固定的 NyaCore 提交可在 GitHub 上读取。
+
+在本机 Ubuntu 26.04、Node.js 24.16.0 上，从全新的相邻检出执行两个仓库的 `npm ci`、NyaCore 的 `npm run build` 和 Anybox 的 `npm run check`。类型检查和构建通过，2,509 项测试通过，22 项按条件跳过，0 项失败。
+
+GitHub 收到 `main` 的推送并创建了首次运行。平台在分配 runner 前因账户限制阻止任务启动，云端的安装、构建和测试步骤均未执行。[首次运行记录](https://github.com/fanfan-de/AnyboxV2/actions/runs/45148793040)
 
 ## 关联
 
