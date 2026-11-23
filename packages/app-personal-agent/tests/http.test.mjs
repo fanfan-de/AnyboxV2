@@ -133,11 +133,13 @@ test('Personal Agent uses an isolated native execution and retains earlier Perso
   const { openEntry, secrets } = vault()
   const [existingModel] = await seedPersonalModels(personalConfig, openEntry, { id: 'retained-model', apiKey: 'personal-test-secret' })
   const calls = []
+  const pendingAnswer = Promise.withResolvers()
   const application = personalAgentServerApplication(personalConfig, { models: {
     openEntry, catalogAutoRefresh: false,
     async fetch(url, init) {
       const input = JSON.parse(init.body)
       calls.push({ url: String(url), auth: new Headers(init.headers).get('authorization'), input })
+      await pendingAnswer.promise
       return chatResponse('Personal Agent native answer', input.stream)
     },
   } })
@@ -164,6 +166,17 @@ test('Personal Agent uses an isolated native execution and retains earlier Perso
   assert.ok((await execution('/instance')).capabilities.includes('personal-agent.v1'))
   assert.equal((await execution('/products/personal-agent/open', {})).state, 'running')
   assert.equal((await execution('/products/agent/open', {}, 404)).error.code, 'not-found')
+  assert.equal(host.root.get('personal-agent.prompts'), undefined)
+  assert.equal(host.root.get('personal-agent.agent-prompts'), undefined)
+  const { token } = await host.root.get('host.access').issue('Personal Agent API test')
+  const direct = (path, body, status) => request(host.execution.url, '/api/v1/apps/personal-agent' + path, body, {
+    Authorization: `Bearer ${token}`, 'X-Anybox-Instance-Id': host.execution.instance.instanceId,
+  }, status)
+  assert.equal((await direct('/agents/assistant')).id, 'assistant')
+  for (const [path, body] of [['/prompts', undefined], ['/prompts', {}], ['/agents/assistant/prompts', undefined], ['/agents/assistant/prompts', {}]]) {
+    assert.equal((await direct(path, body, 404)).error.code, 'not-found')
+    assert.equal((await execution(path, body, 404)).error.code, 'not-found')
+  }
   assert.equal(host.execution.products.get('agent').state, 'disabled')
   assert.equal((await host.execution.products.open('agent')).state, 'running')
   const layout = store => store.read(reader => reader.get('PRAGMA user_version').user_version)
@@ -196,8 +209,19 @@ test('Personal Agent uses an isolated native execution and retains earlier Perso
   const project = await execution('/projects', { path: directory })
   const harnessProjects = await request(origin, clientApi + '/apps/agent/connections/' + harnessConnection.id + '/v1/projects')
   assert.deepEqual(harnessProjects, [])
-  const session = await execution('/sessions', { projectId: project.id, agentId: 'assistant', modelId: existingModel.runtimeModelId })
-  const run = await execution('/sessions/' + session.id + '/runs', { input: 'Personal Agent request', parentNodeId: null, idempotencyKey: 'first-personal-run' })
+  const retiredCreate = { projectId: project.id, agentId: 'assistant', modelId: existingModel.runtimeModelId }
+  assert.equal((await direct('/sessions', retiredCreate, 404)).error.code, 'not-found')
+  assert.equal((await execution('/sessions', retiredCreate, 404)).error.code, 'not-found')
+  const session = await execution('/agents/assistant/session', { projectId: project.id })
+  let run
+  try {
+    run = await execution(`/sessions/${session.id}/runs`, { input: 'Personal Agent request', parentNodeId: null,
+      projectId: project.id, modelId: existingModel.runtimeModelId, idempotencyKey: 'first-personal-run' })
+    const liveHistory = await execution(`/sessions/${session.id}/history`)
+    assert.equal(liveHistory.headNodeId, null)
+    assert.deepEqual(liveHistory.nodes, [])
+    assert.equal(liveHistory.runs.find(item => item.id === run.id)?.status, 'running')
+  } finally { pendingAnswer.resolve() }
   const settled = await execution('/runs/' + run.id + '/wait')
   assert.equal(settled.done, true)
   assert.equal(settled.run.status, 'completed')
@@ -211,6 +235,43 @@ test('Personal Agent uses an isolated native execution and retains earlier Perso
   assert.ok(calls[0].input.messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Personal Agent request')))
   await execution('/agents/assistant/tools', { toolIds: [], expectedRevision: 0 })
 
+  const legacy = { sessionId: 'legacy-project-session', runId: 'legacy-project-run', nodeId: 'legacy-project-node',
+    requestId: 'legacy-project-request', input: 'Original project question.', output: 'Original project answer.' }
+  const storage = host.root.get('personal-agent.local-storage')
+  await storage.transaction(tx => {
+    // Store a non-continuous native project session as produced by the former API.
+    tx.execute(`INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode, protocol_id)
+      SELECT ?, project_id, agent_id, created_at, ?, 'native-local-v1', 'chat-completions' FROM harness_sessions WHERE id = ?`,
+    [legacy.sessionId, existingModel.runtimeModelId, session.id])
+    tx.execute(`INSERT INTO harness_native_initializations (id, session_id, protocol_id, payload_json)
+      SELECT ?, ?, protocol_id, payload_json FROM harness_native_initializations WHERE session_id = ?`,
+    ['legacy-project-initialization', legacy.sessionId, session.id])
+    tx.execute(`INSERT INTO harness_runs (id, session_id, idempotency_key, input, status, created_at, updated_at, prompts_json, model_snapshot_json,
+      output, history_kind, context_version, model_id, binding_json, native_input_json, initialization_id, execution_json)
+      SELECT ?, ?, ?, ?, 'completed', created_at, updated_at, prompts_json, model_snapshot_json, ?, 'tree', 'native-local-v1', model_id,
+        binding_json, ?, ?, execution_json FROM harness_runs WHERE id = ?`,
+    [legacy.runId, legacy.sessionId, legacy.requestId, legacy.input, legacy.output,
+      JSON.stringify({ schemaVersion: 3, raw: legacy.input, text: legacy.input, images: [], files: [], template: null }),
+      'legacy-project-initialization', run.id])
+    tx.execute(`INSERT INTO harness_nodes (id, session_id, input, output, source_run_id) VALUES (?, ?, ?, ?, ?)`,
+      [legacy.nodeId, legacy.sessionId, legacy.input, legacy.output, legacy.runId])
+    tx.execute('UPDATE harness_runs SET result_node_id = ? WHERE id = ?', [legacy.nodeId, legacy.runId])
+  })
+  const legacyPath = `/sessions/${legacy.sessionId}`
+  const projectSessions = await execution(`/projects/${project.id}/sessions`)
+  assert.deepEqual(projectSessions.map(item => item.id), [legacy.sessionId])
+  const [legacyNode] = await execution(`${legacyPath}/nodes/${legacy.nodeId}/path`)
+  assert.equal(legacyNode.input, legacy.input)
+  assert.equal(legacyNode.output, legacy.output)
+  assert.equal(legacyNode.sourceRunId, legacy.runId)
+  const submittedLegacy = { input: legacy.input, parentNodeId: null, idempotencyKey: legacy.requestId }
+  const originalRun = await execution(`${legacyPath}/runs/by-key/${legacy.requestId}`)
+  assert.equal(originalRun.id, legacy.runId)
+  assert.deepEqual(await execution(`${legacyPath}/runs`, submittedLegacy), originalRun)
+  assert.equal((await execution(`${legacyPath}/runs`, { ...submittedLegacy, idempotencyKey: 'new-project-request' }, 409)).error.code,
+    'legacy-session-readonly')
+  assert.equal(calls.length, 1)
+
   await host.close()
   host = undefined
   const retained = new DatabaseSync(clientPath, { readOnly: true })
@@ -221,7 +282,7 @@ test('Personal Agent uses an isolated native execution and retains earlier Perso
   }
 })
 
-test('Personal Agent gateway persists Agent settings and shader avatars without adding them to execution', { timeout: 60000 }, async t => {
+test('Personal Agent persists and isolates each Agent Prompt and keeps shader avatars out of execution', { timeout: 60000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'anybox-personal-agent-directory-'))
   let host
   t.after(async () => {
@@ -232,17 +293,45 @@ test('Personal Agent gateway persists Agent settings and shader avatars without 
     ANYBOX_MODELS_DATABASE: join(directory, 'harness-models.sqlite') })
   const personalConfig = parsePersonalAgentServerConfig({}, clientPath)
   const legacyFields = { name: 'Older Agent', description: 'A directory record from before avatars.', instructions: 'Read the project.', modelId: null }
+  const seedInstructions = 'Prior published instructions for the assistant.'
   const legacyRoot = new Context()
   try {
     await legacyRoot.installComponent(createLocalSqliteComponent(personalConfig.harnessDatabasePath))
-    await legacyRoot.get('local-storage').migrate('personal-agent-directory', [{ version: 1, up(tx) {
+    const storage = legacyRoot.get('local-storage')
+    await storage.migrate('personal-agent-directory', [{ version: 1, up(tx) {
       tx.execute(`CREATE TABLE personal_agent_directory (
         id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, instructions TEXT NOT NULL,
         instruction_version_id TEXT, model_id TEXT, environment_ids_json TEXT, revision INTEGER NOT NULL,
         creation_request_id TEXT UNIQUE, creation_digest TEXT)`)
-      tx.execute(`INSERT INTO personal_agent_directory (id, name, description, instructions, revision, creation_request_id, creation_digest)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`, ['older-agent', legacyFields.name, legacyFields.description, legacyFields.instructions, 2,
+      tx.execute(`INSERT INTO personal_agent_directory (id, name, description, instructions, instruction_version_id, revision, creation_request_id, creation_digest)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, ['older-agent', legacyFields.name, legacyFields.description, legacyFields.instructions, 'legacy-instruction', 2,
         'older-request', createHash('sha256').update(JSON.stringify(legacyFields)).digest('hex')])
+    } }])
+    await storage.migrate('prompt', [{ version: 1, up(tx) {
+      tx.execute(`CREATE TABLE prompt_versions (
+        id TEXT PRIMARY KEY, document_id TEXT NOT NULL, ordinal INTEGER NOT NULL, owner_id TEXT NOT NULL,
+        kind TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL)`)
+      for (const [id, kind, role, content] of [
+        ['legacy-instruction', 'agent-instruction', 'developer', legacyFields.instructions],
+        ['seed-instruction', 'agent-instruction', 'system', seedInstructions],
+        ['legacy-context', 'context', 'developer', 'Former shared context.'],
+        ['legacy-template', 'task-template', 'user', 'Former wrapper: {{input}}'],
+      ]) {
+        tx.execute('INSERT INTO prompt_versions VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)',
+          [id, `${id}-document`, 'owner', kind, role, content, '2026-11-19T00:00:00Z', 'owner'])
+      }
+    } }])
+    await storage.migrate('agent-prompt', [{ version: 1, up(tx) {
+      tx.execute(`CREATE TABLE agent_prompt_bindings (
+        agent_id TEXT NOT NULL, kind TEXT NOT NULL, version_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY(agent_id, kind))`)
+      for (const [agentId, kind, version] of [
+        ['assistant', 'agent-instruction', 'seed-instruction'],
+        ['older-agent', 'context', 'legacy-context'],
+        ['older-agent', 'task-template', 'legacy-template'],
+      ]) {
+        tx.execute('INSERT INTO agent_prompt_bindings VALUES (?, ?, ?, ?, ?)', [agentId, kind, version, '2026-11-19T00:00:00Z', 'owner'])
+      }
     } }])
   } finally { await legacyRoot.fiber.dispose() }
   const { openEntry } = vault()
@@ -268,8 +357,9 @@ test('Personal Agent gateway persists Agent settings and shader avatars without 
     return execution
   }
 
-  async function runMessage(execution, session, input, parentNodeId, idempotencyKey) {
-    const run = await execution(`/sessions/${session.id}/runs`, { input, parentNodeId, idempotencyKey })
+  async function runMessage(execution, session, input, parentNodeId, idempotencyKey, modelId) {
+    const run = await execution(`/sessions/${session.id}/runs`, { input, parentNodeId, idempotencyKey, projectId: session.projectId,
+      ...(modelId === undefined ? {} : { modelId }) })
     const settled = await execution(`/runs/${run.id}/wait`)
     assert.equal(settled.done, true)
     assert.equal(settled.run.status, 'completed')
@@ -279,6 +369,7 @@ test('Personal Agent gateway persists Agent settings and shader avatars without 
   let execution = await openExecution()
   const initialAgents = await execution('/agents')
   assert.ok(initialAgents.some(agent => agent.id === 'assistant'))
+  assert.equal((await execution('/agents/assistant')).instructions, seedInstructions)
   assert.deepEqual(await execution('/agents/older-agent'), { id: 'older-agent', ...legacyFields, revision: 2 })
   assert.equal((await execution('/agents', { ...legacyFields, requestId: 'older-request', logoShader: null }, 201)).id, 'older-agent')
 
@@ -303,21 +394,20 @@ test('Personal Agent gateway persists Agent settings and shader avatars without 
   const agentPath = '/agents/' + encodeURIComponent(created.id)
   assert.deepEqual(await execution(agentPath), created)
   const firstEdit = { name: created.name, description: created.description, instructions: created.instructions,
-    modelId: firstModel.id, expectedRevision: created.revision }
+    modelId: firstModel.runtimeModelId, expectedRevision: created.revision }
   const configured = await execution(agentPath, firstEdit)
-  assert.equal(configured.modelId, firstModel.id)
+  assert.equal(configured.modelId, firstModel.runtimeModelId)
   assert.equal(configured.logoShader, originalShader)
   assert.ok(configured.revision > created.revision)
 
   const project = await execution('/projects', { path: directory })
   const continuous = await execution(`${agentPath}/session`, { projectId: project.id })
-  const oldSession = await execution('/sessions', { projectId: project.id, agentId: created.id })
-  assert.equal(oldSession.modelId, firstModel.id)
-  const firstRun = await runMessage(execution, oldSession, 'Find evidence for the initial report.', null, 'initial-message')
+  assert.equal(continuous.modelId, firstModel.runtimeModelId)
+  const firstRun = await runMessage(execution, continuous, 'Find evidence for the initial report.', null, 'initial-message')
   assert.equal(firstRun.output, 'Response from mock-original')
 
   const rename = { name: 'Research Desk', description: 'Evaluates research evidence', instructions: updatedInstructions,
-    modelId: secondModel.id, logoShader: updatedShader, expectedRevision: configured.revision }
+    modelId: secondModel.runtimeModelId, logoShader: updatedShader, expectedRevision: configured.revision }
   const updated = await execution(agentPath, rename)
   assert.equal(updated.id, created.id)
   assert.equal(updated.logoShader, updatedShader)
@@ -332,23 +422,36 @@ test('Personal Agent gateway persists Agent settings and shader avatars without 
   const agents = await execution('/agents')
   assert.equal(agents.length, initialAgents.length + 1)
   assert.deepEqual(agents.find(agent => agent.id === created.id), { id: created.id, name: rename.name, description: rename.description, logoShader: updatedShader })
-  assert.equal((await execution(`${agentPath}/session`, { projectId: project.id })).id, continuous.id)
+  const continuousAfterEdit = await execution(`${agentPath}/session`, { projectId: project.id })
+  assert.equal(continuousAfterEdit.id, continuous.id)
+  assert.equal(continuousAfterEdit.modelId, secondModel.runtimeModelId)
+  assert.equal(continuousAfterEdit.headNodeId, firstRun.resultNodeId)
+  const continued = await runMessage(execution, continuousAfterEdit, 'Review the new report.', firstRun.resultNodeId, 'new-message')
+  assert.equal(continued.output, 'Response from mock-updated')
 
-  const newSession = await execution('/sessions', { projectId: project.id, agentId: created.id })
-  assert.equal(newSession.modelId, secondModel.id)
-  const newRun = await runMessage(execution, newSession, 'Review the new report.', null, 'new-message')
-  assert.equal(newRun.output, 'Response from mock-updated')
-  const continued = await runMessage(execution, oldSession, 'Continue the initial report.', firstRun.resultNodeId, 'follow-up')
-  assert.equal(continued.output, 'Response from mock-original')
-
-  assert.deepEqual(calls.map(call => call.model), ['mock-original', 'mock-updated', 'mock-original'])
+  assert.deepEqual(calls.map(call => call.model), ['mock-original', 'mock-updated'])
   const systemMessages = call => call.messages.filter(message => message.role === 'system').map(message => message.content)
-  assert.ok(systemMessages(calls[0]).includes(originalInstructions))
-  assert.ok(systemMessages(calls[1]).includes(updatedInstructions))
-  assert.ok(systemMessages(calls[2]).includes(originalInstructions))
-  assert.ok(!systemMessages(calls[2]).includes(updatedInstructions))
-  assert.ok(calls[2].messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Find evidence for the initial report.')))
+  assert.deepEqual(calls.map(systemMessages), [[originalInstructions], [updatedInstructions]])
+  assert.ok(calls[1].messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('Find evidence for the initial report.')))
   assert.ok(calls.every(call => !JSON.stringify(call).includes('vec3 paint')))
+
+  await execution('/agents/older-agent/tools', { toolIds: [], expectedRevision: 0 })
+  const migratedSession = await execution('/agents/older-agent/session', { projectId: project.id })
+  const migratedRun = await runMessage(execution, migratedSession, 'Use my plain message.', null, 'migrated-agent-message', firstModel.runtimeModelId)
+  assert.deepEqual(calls.at(-1).messages, [
+    { role: 'developer', content: legacyFields.instructions },
+    { role: 'user', content: 'Use my plain message.' },
+  ])
+  const editedInstructions = 'Use only the current Agent instructions.'
+  await execution('/agents/older-agent', { ...legacyFields, instructions: editedInstructions, expectedRevision: 2 })
+  await runMessage(execution, migratedSession, 'Read my next message.', migratedRun.resultNodeId, 'migrated-agent-edited-message', firstModel.runtimeModelId)
+  const migratedMessages = calls.at(-1).messages
+  assert.deepEqual(migratedMessages, [
+    { role: 'system', content: editedInstructions },
+    { role: 'user', content: 'Use my plain message.' },
+    { role: 'assistant', content: migratedRun.output },
+    { role: 'user', content: 'Read my next message.' },
+  ])
 
   const defaultsPath = agentPath + '/session-defaults'
   const defaults = await execution(defaultsPath)
@@ -426,6 +529,7 @@ test('Personal Agent preserves continuous history across models and lets the pro
   assert.equal(first.headNodeId, null)
 
   const session = `/sessions/${first.id}`
+  assert.deepEqual(await execution(`${session}/history`), { headNodeId: null, nodes: [], subchains: [], runs: [] })
   const files = await execution(`${session}/project-files/tree/open?projectId=${beta.id}`, { path: '' })
   assert.ok(files.entries.some(item => item.name === 'beta-notes.txt'))
   const [reference] = await execution(`${session}/project-files/prepare`, { projectId: beta.id, preparationKey: 'beta-reference',
@@ -437,6 +541,7 @@ test('Personal Agent preserves continuous history across models and lets the pro
 
   let parentNodeId = null
   let next = 0
+  const completed = []
   async function send(projectId, input, modelId) {
     const body = { input, projectId, parentNodeId, modelId, idempotencyKey: `continuous-${++next}` }
     const run = await execution(`${session}/runs`, body)
@@ -446,6 +551,7 @@ test('Personal Agent preserves continuous history across models and lets the pro
     assert.equal(settled.projectId, projectId)
     assert.equal(settled.history.parentNodeId, parentNodeId)
     parentNodeId = settled.resultNodeId
+    completed.push(settled)
     return { body, run: settled, messages: calls.at(-1).messages }
   }
 
@@ -495,17 +601,74 @@ test('Personal Agent preserves continuous history across models and lets the pro
   const furtherMessages = furtherInputs.flatMap(content => [{ role: 'assistant', content: 'Recorded.' }, { role: 'user', content }])
   assert.deepEqual(calls.at(-1).messages, [...followUp.messages, ...furtherMessages])
 
+  const historyPath = `${session}/history`
+  assert.equal((await execution(`${historyPath}?limit=51`, undefined, 400)).error.code, 'invalid-input')
+  assert.equal((await execution(`/sessions/${personal.id}/history?before=${encodeURIComponent(opening.run.resultNodeId)}`, undefined, 400)).error.code,
+    'invalid-input')
+  const fullHistory = await execution(`${historyPath}?limit=50`)
+  assert.equal(fullHistory.headNodeId, parentNodeId)
+  assert.equal(fullHistory.nextCursor, undefined)
+  assert.deepEqual(fullHistory.nodes.map(node => node.id), completed.map(run => run.resultNodeId))
+  assert.deepEqual(fullHistory.nodes.map(node => node.parentId), completed.map(run => run.history.parentNodeId))
+  assert.equal(fullHistory.subchains.length, 1)
+  const subchains = new Map(fullHistory.subchains.map(subchain => [subchain.id, subchain]))
+  for (const [index, node] of fullHistory.nodes.entries()) {
+    const previous = fullHistory.nodes[index - 1]
+    const subchain = subchains.get(node.subchainId)
+    assert.ok(subchain)
+    if (previous?.subchainId !== node.subchainId) {
+      assert.equal(subchain.parentId, previous?.subchainId ?? null)
+      assert.equal(subchain.anchorNodeId, previous?.id ?? null)
+    }
+  }
+
+  const pages = []
+  let paged = await execution(`${historyPath}?limit=3`)
+  const earlierPageCursor = paged.nextCursor
+  for (let index = 0; ; index++) {
+    assert.ok(index < completed.length)
+    assert.equal(paged.headNodeId, parentNodeId)
+    assert.ok(paged.nodes.length > 0 && paged.nodes.length <= 3)
+    for (const node of paged.nodes) {
+      assert.ok(paged.runs.some(run => run.id === node.sourceRunId))
+      assert.ok(paged.subchains.some(subchain => subchain.id === node.subchainId))
+    }
+    pages.unshift(...paged.nodes)
+    if (paged.nextCursor === undefined) break
+    assert.equal(paged.nextCursor, paged.nodes[0].id)
+    paged = await execution(`${historyPath}?limit=3&before=${encodeURIComponent(paged.nextCursor)}`)
+  }
+  assert.deepEqual(pages, fullHistory.nodes)
+  assert.equal(pages[0].input, original)
+  assert.equal(pages[0].output, 'Recorded.')
+
   await host.close()
   host = undefined
-  const database = new DatabaseSync(personalConfig.harnessDatabasePath, { readOnly: true })
+  const database = new DatabaseSync(personalConfig.harnessDatabasePath)
   try {
     assert.equal(database.prepare('SELECT count(*) AS count FROM harness_continuous_roots').get().count, 0)
     assert.equal(database.prepare('SELECT count(*) AS count FROM harness_continuous_run_contexts').get().count, 0)
+    // Upgrade populated upstream v20 history, which has environment records but no subchain projection or head-attempt index.
+    database.exec('BEGIN IMMEDIATE')
+    database.exec(`DROP TRIGGER harness_nodes_history_subchain;
+      DROP TABLE harness_history_subchains;
+      DROP INDEX harness_runs_head_attempts`)
+    const downgrade = database.prepare("UPDATE schema_migrations SET version = 20 WHERE domain = 'run-state' AND version = 21").run()
+    assert.equal(downgrade.changes, 1)
+    database.exec('COMMIT')
   } finally { database.close() }
   execution = await openExecution()
+  const upgraded = await host.root.get('personal-agent.local-storage').read(reader => ({
+    version: reader.get("SELECT version FROM schema_migrations WHERE domain = 'run-state'").version,
+    hasAttemptIndex: Boolean(reader.get("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'harness_runs_head_attempts'")),
+  }))
+  assert.deepEqual(upgraded, { version: 21, hasAttemptIndex: true })
   const reopened = await execution(sessionRoute, { projectId: beta.id })
   assert.equal(reopened.id, first.id)
   assert.equal(reopened.headNodeId, parentNodeId)
+  assert.deepEqual(await execution(`${historyPath}?limit=50`), fullHistory)
+  assert.equal((await execution(`${session}/runs`, followUp.body)).id, followUp.run.id)
+  assert.equal(calls.length, next)
   const managed = await execution(sessionRoute, {})
   assert.equal(managed.id, first.id)
   assert.equal(managed.headNodeId, parentNodeId)
@@ -552,6 +715,18 @@ test('Personal Agent preserves continuous history across models and lets the pro
   assert.equal(calls.at(-1).model, 'model-after')
   assert.deepEqual(differentModel.messages, [...originalMessages, { role: 'assistant', content: 'Recorded.' }, { role: 'user', content: modelSwitch }])
   assert.equal((await execution(sessionRoute, { projectId: alpha.id })).headNodeId, differentModel.run.resultNodeId)
+
+  const switchedPage = await execution(`${historyPath}?limit=3`)
+  const firstSwitched = switchedPage.nodes.at(-1)
+  const previousNode = switchedPage.nodes.at(-2)
+  assert.equal(previousNode.id, afterRotation.run.resultNodeId)
+  assert.notEqual(firstSwitched.subchainId, previousNode.subchainId)
+  assert.deepEqual(switchedPage.subchains.find(chain => chain.id === firstSwitched.subchainId), {
+    id: firstSwitched.subchainId, parentId: previousNode.subchainId, anchorNodeId: previousNode.id,
+  })
+  const earlierPage = await execution(`${historyPath}?limit=3&before=${encodeURIComponent(earlierPageCursor)}`)
+  assert.equal(earlierPage.headNodeId, differentModel.run.resultNodeId)
+  assert.deepEqual(earlierPage.nodes, fullHistory.nodes.slice(-6, -3))
 
   const parameters = { protocolId: 'chat-completions', formatVersion: 1, value: { max_tokens: 600 } }
   await execution(`/models/settings/${encodeURIComponent(updatedModel.id)}`, { patch: { parameters }, expectedRevision: updatedModel.revision })
@@ -685,7 +860,9 @@ test('Personal Agent keeps native Chat Completions across restarts and renders a
     legacyDatabase.prepare(`INSERT INTO harness_continuous_run_contexts (run_id, root_id, initialization_json, selection_json)
       SELECT id, ?, continuous_initialization_json, ? FROM harness_runs WHERE id IN (?, ?)`)
       .run(legacyRootId, JSON.stringify({ rootId: legacyRootId, recentNodeIds: [], memoryNodeIds: [] }), firstRun.id, secondRun.id)
-    legacyDatabase.exec(`CREATE VIRTUAL TABLE harness_continuous_search USING fts5(terms, session_id UNINDEXED, project_id UNINDEXED);
+    legacyDatabase.exec(`DROP TRIGGER harness_nodes_history_subchain;
+      DROP TABLE harness_history_subchains;
+      CREATE VIRTUAL TABLE harness_continuous_search USING fts5(terms, session_id UNINDEXED, project_id UNINDEXED);
       DROP TABLE harness_run_environment_access;
       DROP TABLE harness_session_environments;
       DROP TABLE harness_environment_preferences;
@@ -713,6 +890,12 @@ test('Personal Agent keeps native Chat Completions across restarts and renders a
   } finally { legacyDatabase.close() }
 
   execution = await openExecution()
+  const legacyPage = await execution(`/sessions/${session.id}/history?limit=1`)
+  assert.deepEqual(legacyPage.subchains, [{ id: legacyRootId, parentId: null, anchorNodeId: null }])
+  assert.equal(legacyPage.nodes[0].subchainId, legacyRootId)
+  const legacyFirst = await execution(`/sessions/${session.id}/history?limit=1&before=${legacyPage.nextCursor}`)
+  assert.deepEqual(legacyFirst.subchains, [{ id: legacyRootId, parentId: null, anchorNodeId: null }])
+  assert.equal(legacyFirst.nodes[0].subchainId, legacyRootId)
   const migratedResume = await host.root.get('personal-agent.session-runs').loadRunResume(secondRun.id)
   assert.equal(migratedResume.run.estimatedInputTokens, undefined)
   assert.deepEqual(migratedResume.history, resumed.history)
@@ -782,7 +965,7 @@ test('Personal Agent keeps native Chat Completions across restarts and renders a
   host = undefined
   const upgraded = new DatabaseSync(personalConfig.harnessDatabasePath, { readOnly: true })
   try {
-    assert.equal(upgraded.prepare("SELECT version FROM schema_migrations WHERE domain = 'run-state'").get().version, 20)
+    assert.equal(upgraded.prepare("SELECT version FROM schema_migrations WHERE domain = 'run-state'").get().version, 21)
     assert.equal(upgraded.prepare("SELECT name FROM sqlite_schema WHERE name = 'harness_continuous_search'").get(), undefined)
   } finally { upgraded.close() }
 })
@@ -1109,6 +1292,22 @@ test('Personal Agent reuses compatible context and rebuilds complete history acr
   assert.deepEqual(readIds(chatReads, 'application'), new Set(runIds.slice(0, -1)), 'switching back rebuilds from the whole conversation')
   assert.equal((await execution(sessionRoute, { projectId: project.id })).headNodeId, parentNodeId)
 
+  const historyPath = `/sessions/${session.id}/history`
+  const recent = await execution(`${historyPath}?limit=3`)
+  const middle = await execution(`${historyPath}?limit=3&before=${recent.nextCursor}`)
+  const firstPage = await execution(`${historyPath}?limit=3&before=${middle.nextCursor}`)
+  assert.equal(firstPage.nextCursor, undefined)
+  const nodes = [...firstPage.nodes, ...middle.nodes, ...recent.nodes]
+  assert.deepEqual(nodes.map(node => node.sourceRunId), runIds)
+  assert.deepEqual(nodes.map(node => node.subchainId), [0, 1, 2, 3, 3, 3, 6].map(index => nodes[index].id))
+  const chains = new Map([...firstPage.subchains, ...middle.subchains, ...recent.subchains].map(chain => [chain.id, chain]))
+  for (const index of [0, 1, 2, 3, 6]) {
+    const preceding = nodes[index - 1]
+    assert.deepEqual(chains.get(nodes[index].id), {
+      id: nodes[index].id, parentId: preceding?.subchainId ?? null, anchorNodeId: preceding?.id ?? null,
+    })
+  }
+
   const endpoints = ['chat/completions', 'responses', 'messages', 'interactions']
   const authHeaders = ['authorization', 'authorization', 'x-api-key', 'x-goog-api-key']
   for (const [index, provider] of providers.entries()) {
@@ -1288,6 +1487,12 @@ test('Personal Agent gateway explicitly adopts a hosted environment into an exis
   assert.deepEqual(adopted.environmentIds, ['model-search'])
   assert.equal(adopted.version, initialSession.version + 1)
   await execution(sessionPath, { ...adoption, expectedGrantRevision: change.revision }, 409)
-  const ordinary = await execution('/sessions', { projectId: project.id, agentId: agent.id })
-  await execution('/sessions/' + ordinary.id + '/environments', { ...adoption, expectedGrantRevision: change.revision }, 409)
+  await execution('/sessions', { projectId: project.id, agentId: agent.id }, 404)
+  const legacySessionId = 'legacy-session-for-environment-adoption'
+  await host.root.get('personal-agent.local-storage').transaction(tx => {
+    tx.execute(`INSERT INTO harness_sessions (id, project_id, agent_id, created_at, history_mode)
+      VALUES (?, ?, ?, ?, 'native-local-v1')`, [legacySessionId, project.id, agent.id, continuous.createdAt])
+  })
+  const rejected = await execution(`/sessions/${legacySessionId}/environments`, { ...adoption, expectedGrantRevision: change.revision }, 409)
+  assert.equal(rejected.error.code, 'environment-adoption-unavailable')
 })

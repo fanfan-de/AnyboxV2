@@ -1,7 +1,7 @@
 import type { Context } from '@nya/core'
 import { modelsSettingsServiceKey } from '@anybox/models'
 import type { ModelsSettingsService } from '@anybox/models'
-import { createHarnessServerAgentComponents, createHarnessServerPromptComponents, validateComputerEnvironmentOptions } from './core/index.js'
+import { createHarnessServerAgentComponents, validateComputerEnvironmentOptions } from './core/index.js'
 import type { HarnessServerCoreOptions } from './core/index.js'
 import type { AgentDefinition } from './core/agent/domain.js'
 import { createImageAssetsComponent } from './core/image/component.js'
@@ -42,7 +42,7 @@ export function createHarnessServerRuntime(root: Context, config: HarnessServerC
     const serverCoreOptions: HarnessServerCoreOptions = { ...options, serviceBindings: integration.serviceBindings, localWorkerDirectory: options.localWorkerDirectory ?? `${config.harnessDatabasePath}.computer-worker`, initialProjects: options.projects ?? options.initialProjects,
       agentWorkspacesDirectory: options.agentWorkspacesDirectory ?? `${config.harnessDatabasePath}.workspaces`,
       agents: options.agents ?? definitions.map(agent => ({ ...agent, ...(hasDefault ? { modelId: 'default' } : {}) })) }
-    for (const component of [...createHarnessServerPromptComponents(serverCoreOptions), createImageAssetsComponent({ directory: config.imageAssetsDirectory }),
+    for (const component of [createImageAssetsComponent({ directory: config.imageAssetsDirectory }),
       ...createHarnessServerAgentComponents(root, serverCoreOptions, installation), createHarnessServerHttpComponent(root, integration.http)]) installation.install(component)
   }, () => service<RunAdmissionPort>(runAdmissionServiceKey)?.closeAdmission(), integration.serviceBindings)
 }

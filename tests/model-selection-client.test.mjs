@@ -15,6 +15,7 @@ function fixture({ personal = false } = {}) {
     api: async (path, body) => {
       if (body) writes.push({ path, body })
       if (path === '/sessions/s') return { ...session }
+      if (personal && path === '/sessions/s/history') return { headNodeId: session.headNodeId, nodes: [], subchains: [], runs: runs.map(value => ({ ...value })) }
       if (path === '/sessions/s/model') { session = { ...session, modelId: body.modelId }; return { ...session } }
       if (path.endsWith('/path')) return []
       if (path.includes('/nodes?')) return { nodes: [] }

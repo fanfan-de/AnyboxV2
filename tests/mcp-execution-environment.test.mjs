@@ -91,7 +91,8 @@ function modelFixture() {
   let forced
   return { declared, force(name, query = 'proof') { forced = { name, query } }, async fetch(_url, init) {
     const request = JSON.parse(init.body)
-    const observed = request.messages.filter(message => message.role === 'tool')
+    const turn = request.messages.slice(request.messages.findLastIndex(message => message.role === 'user') + 1)
+    const observed = turn.filter(message => message.role === 'tool')
     if (observed.length) return Response.json({ choices: [{ index: 0, finish_reason: 'stop',
       message: { role: 'assistant', content: observed.map(message => message.content).join('\n') } }] })
     const names = (request.tools ?? []).map(tool => tool.function.name)
@@ -100,7 +101,7 @@ function modelFixture() {
     forced = undefined
     if (!requested.length) return Response.json({ choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'no tools' } }] })
     return Response.json({ choices: [{ index: 0, finish_reason: 'tool_calls', message: { role: 'assistant', content: null,
-      tool_calls: requested.map(({ name, query }, index) => ({ id: `search-${index}`, type: 'function', function: {
+      tool_calls: requested.map(({ name, query }, index) => ({ id: `search-${declared.length}-${index}`, type: 'function', function: {
         name, arguments: JSON.stringify({ query }),
       } })) } }] })
   } }
@@ -131,6 +132,26 @@ async function appApi(host, appId) {
   const binding = { 'X-Anybox-Product-Id': appId, 'X-Anybox-Expected-Instance-Id': connection.instanceId,
     'X-Anybox-Connection-Revision': String(connection.revision) }
   return (path, input, expected) => request(host.url, `${base}/connections/${encodeURIComponent(connection.id)}/v1${path}`, input, binding, expected)
+}
+
+function openAgentSession(api, appId, projectId, modelId, agentId = 'assistant') {
+  return appId === 'personal-agent' ? api(`/agents/${agentId}/session`, { projectId })
+    : api('/sessions', { projectId, agentId, modelId })
+}
+
+function startRun(api, session, key, modelId, expected) {
+  return api(`/sessions/${session.id}/runs`, { input: key, idempotencyKey: key, parentNodeId: session.headNodeId ?? null,
+    ...(session.continuous ? { projectId: session.projectId, modelId } : {}) }, expected)
+}
+
+async function createMcpAgent(api, purpose, modelId, tools, toolIdsByTarget) {
+  const agent = await api('/agents', { name: purpose, description: '', instructions: 'Use MCP tools to answer.',
+    modelId, requestId: purpose }, 201)
+  const path = `/agents/${agent.id}/environment-access`
+  const { authorization, preference } = await api(path)
+  const grant = await api(`${path}/grants`, { requestId: purpose, expectedRevision: authorization.revision, tools })
+  const saved = await api(`${path}/preferences`, { environmentIds: ['mcp'], toolIdsByTarget, expectedVersion: preference.version })
+  return { id: agent.id, path, grant, preference: saved }
 }
 
 async function openMcpApps(directory) {
@@ -191,14 +212,14 @@ test('both applications route same-named MCP tools by granted connection through
       const toolIdsByTarget = Object.fromEntries(targets.map(target => [JSON.stringify(['mcp', target.selectionId]), [target.tools[0].toolId]]))
       await api(`${accessPath}/preferences`, { environmentIds: ['mcp'], toolIdsByTarget, expectedVersion: view.preference.version })
       const project = await api('/projects', { path: directory })
-      const newSession = () => api('/sessions', { projectId: project.id, agentId: 'assistant', modelId })
-      const run = async (session, key, extra = {}) => {
-        const accepted = await api(`/sessions/${session.id}/runs`, { input: key, parentNodeId: null, idempotencyKey: key, ...extra })
+      const openSession = agentId => openAgentSession(api, appId, project.id, modelId, agentId)
+      const run = async (session, key) => {
+        const accepted = await startRun(api, session, key, modelId)
         const status = await api(`/runs/${accepted.id}/wait`)
         assert.equal(status.done, true, JSON.stringify(status))
         return status.run
       }
-      const one = await newSession()
+      const one = await openSession()
       assert.equal(one.toolEnvironments.schemaVersion, 2)
       const definitions = one.toolEnvironments.environments.find(item => item.environmentId === 'mcp').tools
       const workName = definitions.find(tool => tool.targetId === workSearch.targetId).definition.name
@@ -212,12 +233,12 @@ test('both applications route same-named MCP tools by granted connection through
       assert.deepEqual(counts(), [workBefore + 1, personalBefore])
 
       fixture.force(personalName)
-      const rejected = await run(await newSession(), 'ungranted-search')
+      const rejected = await run(await openSession(), 'ungranted-search')
       assert.match(rejected.output, /unknown-tool/)
       assert.deepEqual(counts(), [workBefore + 1, personalBefore], 'an ungranted alias reaches neither connection')
 
-      const bothGrants = await api(`${accessPath}/grants`, { requestId: 'both', expectedRevision: first.revision, tools: [workSearch, personalSearch] })
-      const both = await newSession()
+      await api(`${accessPath}/grants`, { requestId: 'both', expectedRevision: first.revision, tools: [workSearch, personalSearch] })
+      const both = await openSession()
       const result = await run(both, 'both-searches')
       assert.equal(result.status, 'completed', JSON.stringify(result))
       assert.deepEqual(new Set(fixture.declared.at(-1)), new Set([workName, personalName]))
@@ -228,19 +249,18 @@ test('both applications route same-named MCP tools by granted connection through
       assert.deepEqual(personal.calls.at(-1), { name: 'search', arguments: { query: 'proof' } })
 
       if (appId === 'personal-agent') {
-        const current = await api(accessPath)
         const workKey = JSON.stringify(['mcp', targets[0].selectionId])
-        const workPreference = await api(`${accessPath}/preferences`, { environmentIds: ['mcp'],
-          toolIdsByTarget: { [workKey]: [workSearch.toolId] }, expectedVersion: current.preference.version })
-        const continuous = await api('/agents/assistant/session', { projectId: project.id })
+        const adopting = await createMcpAgent(api, 'test-environment-adoption', modelId, [workSearch, personalSearch],
+          { [workKey]: [workSearch.toolId] })
+        const continuous = await openSession(adopting.id)
         const environmentsPath = `/sessions/${continuous.id}/environments`
-        await api(`${accessPath}/preferences`, { environmentIds: ['mcp'], toolIdsByTarget, expectedVersion: workPreference.version })
+        await api(`${adopting.path}/preferences`, { environmentIds: ['mcp'], toolIdsByTarget, expectedVersion: adopting.preference.version })
         const beforeAdoption = await api(environmentsPath)
         assert.deepEqual(Object.keys(beforeAdoption.toolIdsByTarget), [workKey])
         const adopted = await api(environmentsPath, { environmentIds: ['mcp'], toolIdsByTarget,
-          expectedVersion: beforeAdoption.version, expectedGrantRevision: bothGrants.revision })
+          expectedVersion: beforeAdoption.version, expectedGrantRevision: adopting.grant.revision })
         assert.deepEqual(adopted.toolIdsByTarget, toolIdsByTarget)
-        const continuousResult = await run(continuous, 'adopted-searches', { projectId: project.id, modelId })
+        const continuousResult = await run(continuous, 'adopted-searches')
         assert.equal(continuousResult.status, 'completed', JSON.stringify(continuousResult))
         assert.match(continuousResult.output, /work:proof/)
         assert.match(continuousResult.output, /personal:proof/)
@@ -248,8 +268,16 @@ test('both applications route same-named MCP tools by granted connection through
 
       const beforeDisable = counts()
       assert.equal((await api(`/mcp-connections/${connections[1].id}/disable`, {})).status, 'disabled')
-      const previous = await api(`/sessions/${both.id}/runs`, { input: 'stale binding', parentNodeId: null, idempotencyKey: 'stale' }, 409)
-      assert.equal(previous.error.code, 'history-incompatible')
+      if (both.continuous) {
+        fixture.force(personalName)
+        const stale = await run(await openSession(), 'stale')
+        assert.equal(stale.status, 'completed', JSON.stringify(stale))
+        assert.deepEqual(fixture.declared.at(-1), [workName])
+        assert.match(stale.output, /unknown-tool/)
+      } else {
+        const previous = await startRun(api, both, 'stale', modelId, 409)
+        assert.equal(previous.error.code, 'history-incompatible')
+      }
       assert.deepEqual(counts(), beforeDisable)
     })
   }
@@ -314,14 +342,14 @@ test('both applications authorize stdio targets independently and join their rea
       const toolIdsByTarget = Object.fromEntries(tools.map(target => [JSON.stringify(['mcp', target.selectionId]), [target.tools[0].toolId]]))
       await api(`${accessPath}/preferences`, { environmentIds: ['mcp'], toolIdsByTarget, expectedVersion: view.preference.version })
       const project = await api('/projects', { path: directory })
-      const newSession = () => api('/sessions', { projectId: project.id, agentId: 'assistant', modelId })
-      const start = (session, key) => api(`/sessions/${session.id}/runs`, { input: key, parentNodeId: null, idempotencyKey: key })
+      const openSession = agentId => openAgentSession(api, appId, project.id, modelId, agentId)
+      const start = (session, key) => startRun(api, session, key, modelId)
       const wait = async id => {
         const status = await api(`/runs/${id}/wait`)
         assert.equal(status.done, true, JSON.stringify(status))
         return status.run
       }
-      const firstSession = await newSession()
+      const firstSession = await openSession()
       const sessionTools = firstSession.toolEnvironments.environments.find(environment => environment.environmentId === 'mcp').tools
       const workName = sessionTools.find(tool => tool.targetId === workSearch.targetId).definition.name
       const personalName = sessionTools.find(tool => tool.targetId === personalSearch.targetId).definition.name
@@ -339,12 +367,12 @@ test('both applications authorize stdio targets independently and join their rea
       assertExited(workBeforeDenied.find(item => item.event === 'call').pid, 'completed Run waits for its stdio server')
 
       fixture.force(personalName)
-      assert.match((await wait((await start(await newSession(), 'stdio-denied')).id)).output, /unknown-tool/)
+      assert.match((await wait((await start(await openSession(), 'stdio-denied')).id)).output, /unknown-tool/)
       assert.deepEqual(await work.events(), workBeforeDenied)
       assert.deepEqual(await personal.events(), personalBeforeDenied, 'an ungranted tool cannot launch a process')
 
       const allGrants = await grant('stdio-both', onlyWork.revision, [workSearch, personalSearch])
-      const both = await wait((await start(await newSession(), 'stdio-both')).id)
+      const both = await wait((await start(await openSession(), 'stdio-both')).id)
       assert.equal(both.status, 'completed', JSON.stringify(both))
       assert.match(both.output, /work:proof/)
       assert.match(both.output, /personal:proof/)
@@ -355,10 +383,10 @@ test('both applications authorize stdio targets independently and join their rea
         assertExited(called.pid, 'both routed children must exit before successful Run settlement')
       }
 
-      async function hold(target, alias, key) {
+      async function hold(target, alias, key, agentId) {
         const previous = (await target.events()).length
         fixture.force(alias, 'hold')
-        const run = await start(await newSession(), key)
+        const run = await start(await openSession(agentId), key)
         const processTree = await waitFor(async () => (await target.events()).slice(previous).find(item => item.event === 'holding'),
           `${key} did not start the resistant process tree`)
         assert.doesNotThrow(() => process.kill(processTree.pid, 0))
@@ -366,7 +394,9 @@ test('both applications authorize stdio targets independently and join their rea
         return { run, processTree }
       }
 
-      const activeWork = await hold(work, workName, 'stdio-cancel')
+      const workSelection = { [JSON.stringify(['mcp', tools[0].selectionId])]: [workSearch.toolId] }
+      const otherAgent = appId === 'personal-agent' ? await createMcpAgent(api, 'test-concurrent-cancellation', modelId, [workSearch], workSelection) : undefined
+      const activeWork = await hold(work, workName, 'stdio-cancel', otherAgent?.id)
       const activePersonal = await hold(personal, personalName, 'stdio-revoke')
       await api(`/runs/${activeWork.run.id}/cancel`, {})
       const cancelled = await wait(activeWork.run.id)
@@ -386,7 +416,14 @@ test('both applications authorize stdio targets independently and join their rea
       assertExited(activePersonal.processTree.childPid, 'revocation must wait for descendant exit')
       await wait(activePersonal.run.id)
       assert.equal((await api(`/mcp-connections/${personal.connection.id}/disable`, {})).status, 'disabled')
-      const remaining = await wait((await start(await newSession(), 'stdio-work-still-authorized')).id)
+      const remainingSession = await openSession()
+      if (remainingSession.continuous) {
+        const path = `/sessions/${remainingSession.id}/environments`
+        const previous = await api(path)
+        await api(path, { environmentIds: ['mcp'], toolIdsByTarget: workSelection,
+          expectedVersion: previous.version, expectedGrantRevision: revoked.revision })
+      }
+      const remaining = await wait((await start(remainingSession, 'stdio-work-still-authorized')).id)
       assert.equal(remaining.status, 'completed', JSON.stringify(remaining))
       assert.match(remaining.output, /work:proof/)
 

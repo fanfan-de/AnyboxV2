@@ -91,7 +91,9 @@ export function createSessionComponent(inputs: RuntimeInputs, environmentSource?
           const session = await records.getSession(nonEmpty(sessionId, 'sessionId'))
           if (!session) throw new Error(`unknown session ${sessionId}`)
           if (writable && session.archivedAt !== null) throw treeError('session-archived')
-          if (session.historyMode !== 'native-local-v1' && (access !== 'project-read' || writable)) throw treeError('legacy-session-readonly')
+          if ((writable && !session.continuous) || (session.historyMode !== 'native-local-v1' && access !== 'project-read')) {
+            throw treeError('legacy-session-readonly')
+          }
           combined.throwIfAborted()
           const call = await start(combined, session)
           let cancellationRequested = false, valueFailed = false, valueError: unknown, value!: T
@@ -235,30 +237,20 @@ export function createSessionComponent(inputs: RuntimeInputs, environmentSource?
           const selection = createToolSelection(input.toolIds)
           return records.setAgentTools(agent.id, { toolIds: selection.tools.map(tool => tool.toolId), expectedRevision: input.expectedRevision })
         }),
-        createSession(projectId, agentId, requestedModelId) {
-          return track(async () => {
-            const agent = requireAgent(agentId)
-            await projects.requireAvailable(nonEmpty(projectId, 'projectId'), agent.id)
-            const modelId = requestedModelId === undefined ? agent.modelId : nonEmpty(requestedModelId, 'modelId')
-            return records.createSession(inputs.newId(), projectId, agent.id, inputs.now(), modelId, agent.environmentIds)
-          })
-        },
         openContinuousSession(projectId, agentId) {
           return track(async () => {
             const agent = requireAgent(agentId)
             const project = projectId === undefined ? await projects.openAgentWorkspace(agent.id) :
               await projects.requireAvailable(nonEmpty(projectId, 'projectId'), agent.id)
-            return withEffectiveModel(await records.createSession(inputs.newId(), project.id, agent.id, inputs.now(), null, agent.environmentIds, true))
+            return withEffectiveModel(await records.openAgentSession(inputs.newId(), project.id, agent.id, inputs.now(), agent.environmentIds))
           })
         },
-        selectSessionModel(sessionId, rawModelId, protocolId) {
+        selectSessionModel(sessionId, rawModelId) {
           return track(async () => {
             const modelId = nonEmpty(rawModelId, 'modelId')
-            return withEffectiveModel(await records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId, protocolId))
+            return withEffectiveModel(await records.selectSessionModel(nonEmpty(sessionId, 'sessionId'), modelId))
           })
         },
-        archiveSession: id => track(() => records.archiveSession(nonEmpty(id, 'sessionId'))),
-        restoreSession: id => track(() => records.restoreSession(nonEmpty(id, 'sessionId'))),
         listArchivedSessions: () => track(() => records.listArchivedSessions()),
         getSession: id => track(async () => {
           const session = await records.getSession(id)
@@ -269,6 +261,7 @@ export function createSessionComponent(inputs: RuntimeInputs, environmentSource?
           return records.listSessions(projectId)
         }),
         getNode: (sessionId, id) => track(() => records.getNode(sessionId, id)),
+        getContinuousHistory: (sessionId, before, limit) => track(() => records.getContinuousHistory(sessionId, before, limit)),
         getNodePath: (sessionId, id) => track(() => records.getNodePath(sessionId, id)),
         listNodes: (sessionId, id, query) => track(() => records.listNodes(sessionId, id, query)),
         getRun: id => track(() => records.getRun(id)),
@@ -283,9 +276,6 @@ export function createSessionComponent(inputs: RuntimeInputs, environmentSource?
         findAcceptedRun: input => track(() => records.findAcceptedRun(input)),
         registerRun: (id, input, now, prompts, model, native) => track(() => records.registerRun(id, input, now, prompts, model, native)),
         getRunEnvironmentAccess: id => track(() => records.getRunEnvironmentAccess(id)),
-        checkLegacyAccess: (...args) => track(() => records.checkLegacyAccess(...args)),
-        loadSessionAccess: id => track(() => records.loadSessionAccess(id)),
-        loadNativeInitialization: sessionId => track(() => records.loadNativeInitialization(sessionId)),
         loadNativeHistory: (sessionId, parentNodeId, scope) => track(() => records.loadNativeHistory(sessionId, parentNodeId, scope)),
         loadApplicationHistory: (sessionId, parentNodeId, scope) => track(() => records.loadApplicationHistory(sessionId, parentNodeId, scope)),
         getCompletedContextRef: (sessionId, nodeId, runId) => track(() => records.getCompletedContextRef(sessionId, nodeId, runId)),

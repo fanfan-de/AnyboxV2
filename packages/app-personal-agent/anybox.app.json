@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "lifecycleVersion": 1,
   "appId": "personal-agent",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "publisher": "anybox",
   "displayName": "Personal Agent",
   "applicationApi": "^0.1.0",

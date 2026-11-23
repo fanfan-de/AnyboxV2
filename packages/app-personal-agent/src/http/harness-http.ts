@@ -20,10 +20,6 @@ import type { ProjectPort } from '../core/project/component.js'
 import type { HarnessServerApiCommands, HarnessServerHttpHandler } from './handler.js'
 import { directoryPickerServiceKey } from '@anybox/directory-picker'
 import type { DirectoryPickerPort } from '@anybox/directory-picker'
-import { promptServiceKey } from '../core/prompt/component.js'
-import type { PromptPort } from '../core/prompt/component.js'
-import { agentPromptServiceKey } from '../core/agent/prompt-binding-component.js'
-import type { AgentPromptPort } from '../core/agent/prompt-binding-component.js'
 import { agentDirectoryServiceKey } from '../core/agent/directory-component.js'
 import type { AgentDirectoryPort } from '../core/agent/directory-component.js'
 import { agentDetail } from '../core/agent/domain.js'
@@ -41,8 +37,6 @@ import type { ComputerWorkerPort, LocalComputerWorkerControl } from '../core/com
 
 export const harnessServerHttpServiceKey = 'personal-agent.http'
 
-const localActorId = 'local-web-user'
-
 type CommandDependencies = {
   [environmentManagerKey]: ExecutionEnvironmentManager
   [mcpEnvironmentServiceKey]?: McpEnvironmentPort
@@ -53,8 +47,6 @@ type CommandDependencies = {
   [modelsCatalogServiceKey]: ModelsCatalogService
   [projectServiceKey]: ProjectPort
   [directoryPickerServiceKey]?: DirectoryPickerPort
-  [promptServiceKey]: PromptPort
-  [agentPromptServiceKey]: AgentPromptPort
   [agentDirectoryServiceKey]: AgentDirectoryPort
   [unitAttachmentsServiceKey]: UnitAttachmentsPort
   [unitTransportServiceKey]: UnitTransportPort
@@ -137,10 +129,6 @@ function createCommands(deps: CommandDependencies, instanceId: () => string | nu
     },
     openProject: (path, options) => deps[projectServiceKey].openProject(path, options),
     listProjects: () => deps[projectServiceKey].listProjects(),
-    createSession(projectId, agentId, modelId) {
-      if (modelId !== undefined && !deps[modelsServiceKey].get(modelId)) throw modelsError('not-found')
-      return deps[sessionServiceKey].createSession(projectId, agentId, modelId)
-    },
     openContinuousSession: (projectId, agentId) => deps[sessionServiceKey].openContinuousSession(projectId, agentId),
     getSessionDefaults: agentId => deps[sessionServiceKey].getSessionDefaults(agentId),
     setSessionDefaults(agentId, modelId, expectedRevision) {
@@ -154,14 +142,13 @@ function createCommands(deps: CommandDependencies, instanceId: () => string | nu
     selectSessionModel(sessionId, modelId) {
       const model = deps[modelsServiceKey].get(modelId)
       if (!model) throw modelsError('not-found')
-      return deps[sessionServiceKey].selectSessionModel(sessionId, modelId, model.parameters.protocolId)
+      return deps[sessionServiceKey].selectSessionModel(sessionId, modelId)
     },
     getSession: id => deps[sessionServiceKey].getSession(id),
-    archiveSession: id => deps[sessionServiceKey].archiveSession(id),
-    restoreSession: id => deps[sessionServiceKey].restoreSession(id),
     listArchivedSessions: () => deps[sessionServiceKey].listArchivedSessions(),
     listSessions: id => deps[sessionServiceKey].listSessions(id),
     getNode: (sessionId, id) => deps[sessionServiceKey].getNode(sessionId, id),
+    getContinuousHistory: (sessionId, before, limit) => deps[sessionServiceKey].getContinuousHistory(sessionId, before, limit),
     getNodePath: (sessionId, id) => deps[sessionServiceKey].getNodePath(sessionId, id),
     listNodes: (sessionId, parentId, query) => deps[sessionServiceKey].listNodes(sessionId, parentId, query),
     getRunByKey: (id, key) => deps[sessionServiceKey].getRunByKey(id, key),
@@ -202,19 +189,6 @@ function createCommands(deps: CommandDependencies, instanceId: () => string | nu
     get modelsCatalog() { return deps[modelsCatalogServiceKey] },
     listModels: () => deps[modelsServiceKey].list(),
     modelTemplates: () => harnessServerProviderTemplates,
-    listPrompts: () => deps[promptServiceKey].listPrompts(localActorId),
-    getPrompt: id => deps[promptServiceKey].getPrompt(localActorId, id),
-    createPrompt: input => deps[promptServiceKey].createPrompt(localActorId, input),
-    editPrompt: (id, revision, patch) => deps[promptServiceKey].editPrompt(localActorId, id, revision, patch),
-    publishPrompt(id, revision) {
-      const document = deps[promptServiceKey].getPrompt(localActorId, id)
-      if (!document) throw new Error(`unknown prompt ${id}`)
-      if (document.draft.revision !== revision) throw new Error('prompt draft revision conflict')
-      return deps[promptServiceKey].publishPrompt(localActorId, id)
-    },
-    getPromptVersions: id => deps[promptServiceKey].getPromptVersions(localActorId, id),
-    getAgentPrompts: id => deps[agentPromptServiceKey].getAgentPrompts(localActorId, id),
-    bindPrompt: (id, versionId) => deps[agentPromptServiceKey].bindPrompt(localActorId, id, versionId),
   }
 }
 
@@ -239,7 +213,7 @@ export function createHarnessServerHttpComponent(root: Context,
     const snapshots = new Map<string, unknown>()
     const services = {} as CommandDependencies
     for (const key of [environmentManagerKey, mcpEnvironmentServiceKey, sessionServiceKey, runServiceKey, modelsServiceKey, modelsSettingsServiceKey, modelsCatalogServiceKey,
-      projectServiceKey, directoryPickerServiceKey, promptServiceKey, agentPromptServiceKey, agentDirectoryServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey, localComputerWorkerServiceKey] as const) {
+      projectServiceKey, directoryPickerServiceKey, agentDirectoryServiceKey, unitAttachmentsServiceKey, unitTransportServiceKey, localComputerWorkerControlServiceKey, localComputerWorkerServiceKey] as const) {
       snapshots.set(key, key === directoryPickerServiceKey && hooks.directoryPicker !== undefined ? hooks.directoryPicker : root.get(serviceName(key)))
       Object.defineProperty(services, key, { get() {
         const service = snapshots.get(key)

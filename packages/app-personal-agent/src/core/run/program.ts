@@ -43,7 +43,7 @@ export type NativeInitialization = {
   readonly toolEnvironments: ToolEnvironmentSnapshot
 }
 
-/** The template is applied exactly once before protocol encoding. */
+/** Earlier Runs may carry a template and the resulting text in their saved input. */
 export type NativeRunInput = {
   readonly schemaVersion: 1
   readonly raw: string

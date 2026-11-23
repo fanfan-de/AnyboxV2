@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+import type { PromptSnapshot } from '../prompt/domain.js'
 import { nonEmpty } from '../validation.js'
 
 export interface AgentDefinition {
@@ -24,7 +26,7 @@ export interface AgentDetail extends AgentSummary {
 }
 
 export interface AgentRecord extends AgentDetail {
-  readonly instructionVersionId: string | null
+  readonly instructionRole: 'system' | 'developer'
   readonly environmentIds?: readonly string[]
 }
 
@@ -37,6 +39,14 @@ export function agentSummary({ id, name, description, logoShader }: AgentSummary
 
 export function agentDetail(agent: AgentRecord): AgentDetail {
   return { ...agentSummary(agent), instructions: agent.instructions, modelId: agent.modelId, revision: agent.revision }
+}
+
+export function agentPrompt({ id, instructions, instructionRole }: AgentRecord): PromptSnapshot {
+  const digest = createHash('sha256').update(JSON.stringify([instructionRole, instructions])).digest('hex')
+  return Object.freeze({
+    versionId: `agent:${id}:${digest}`, documentId: `agent:${id}`,
+    kind: 'agent-instruction', role: instructionRole, content: instructions,
+  })
 }
 
 function text(value: unknown, field: string, max: number, allowEmpty = false): string {

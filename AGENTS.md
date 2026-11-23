@@ -42,7 +42,7 @@ D0a 后增加 D0a.1 应用业务服务独立运行，再推进 D0b 按消费者�
 
 密钥由通用 Models Vault 保管，通过 `@napi-rs/keyring` 使用 macOS Keychain、Windows Credential Manager 和 Linux Secret Service，禁止回退到内核 keyring、SQLite 或明文文件。配置库只保存引用和操作日志；密钥写入先登记意图，再写新条目，最后提交引用，异常恢复清理孤立条目。同一提供方的设置、模型参数修改与 execution 初始化顺序协调，`openNative()` 读取一次本地凭据，后续续轮复用；网络不占配置队列。系统凭据不可用时报告固定错误，非秘密配置仍可查看。Web 仅通过 `models.settings` 管理提供方的 Key，读取只返回配置状态。Nya 服务命名不构成访问边界。测试通过 `openEntry` 使用内存替身；真实平台验证仍由 `ANYBOX_KEYRING_TESTS=1` 门控，本次接入不代表新 Vault 已完成跨平台验收。`packages/api-key-manager` 保留独立包及客户端连接、Computer worker 附着的系统凭据适配用途。
 
-深度使用 NyaCore 的组件式框架：按真实资源和替换边界拆分模型、Session、Run 准入、RunRuntime、Bash 和 Apply Patch 等服务组件，由 Nya 负责依赖就绪、重启和清理顺序。Agent 定义是启动时校验的只读配置，由组合根传给 Session、Agent Prompt 和 Run，不建立独立 Nya 组件；修改定义需重新装配 harness server。不要在组合根手工复制依赖图或生命周期。组件通过 `inject` 声明服务，并从 `apply(ctx, config, deps)` 的 `deps` 使用本轮依赖快照；受信根控制面处理外部请求时用 `context.get()` 获取当前服务。不要缓存跨组件重启的服务引用。只从 `@nya/core` 公共入口导入；框架修改在 NyaCore 仓库进行。保持 TypeScript strict。
+深度使用 NyaCore 的组件式框架：按真实资源和替换边界拆分模型、Session、Run 准入、RunRuntime、Bash 和 Apply Patch 等服务组件，由 Nya 负责依赖就绪、重启和清理顺序。Anybox Harness 的 Agent 定义是启动时校验的只读配置，由组合根传给 Session、Agent Prompt 和 Run，不建立独立 Nya 组件；修改定义需重新装配 harness server。不要在组合根手工复制依赖图或生命周期。组件通过 `inject` 声明服务，并从 `apply(ctx, config, deps)` 的 `deps` 使用本轮依赖快照；受信根控制面处理外部请求时用 `context.get()` 获取当前服务。不要缓存跨组件重启的服务引用。只从 `@nya/core` 公共入口导入；框架修改在 NyaCore 仓库进行。保持 TypeScript strict。
 
 在合适的位置使用函数式编程：输入校验、提示词组装、状态转换与恢复计划写成无副作用的函数，以显式参数传入时间、ID 和决策，并返回新值。副作用集中在模型、工具、状态提供方、Nya 装配和宿主边界；使用函数组合与闭包管理组件行为和生命周期，不新增业务类。不要为了追求纯函数而绕开 Nya 的服务注入、Effect 或资源所有权。
 
@@ -78,7 +78,9 @@ Anybox 是 NyaCore 应用的宿主应用。当前通用宿主在 `packages/host/
 
 正式目录目前提供 Anybox Harness（稳定 ID agent）、Claude Agent（稳定 ID claude-agent）和 Personal Agent（稳定 ID personal-agent）；应用随项目构建，通过 `@anybox/application-api/node`（Nya 应用使用 `/nya`）的受信 ApplicationRegistration 注册，由 `packages/host/src/applications/registration.ts` 校验目录。通用 `packages/host/src/execution.ts` 与 `packages/host/src/client.ts` 显式接收应用目录，空目录仍是合法宿主；默认 Anybox Harness 组合由 distribution 的 entrypoints 和 `packages/distribution/src/composition/harness-server.ts` 选择。客户端和执行端分别注入目录，按 ID 有独立目标、控制队列和运行时；不同应用并行，同应用串行。`packages/application-api/src/nya.ts` 只登记根上 Fiber/Effect 的安装归属和每代取消信号，不复制 Nya 依赖图，不建立应用 Context。通用业务存储契约在 `packages/storage-sqlite/src/port.ts`。新增应用只改自己的入口与正式组合目录，不修改 Products、通用 HTTP、应用工作区管理或 Anybox Harness。测试应用仅位于 tests，不能进入正式目录。
 
-Personal Agent 0.2.0 从 Anybox Harness `ab04844` 建立独立应用源码基线，覆盖工作区和执行协议。默认 Web 与桌面按已有角色组合在同一执行根提供 `personal-agent`，应用打开时持有自己的 SQLite、Models、图片和 Worker 资源，连接配置、凭据、浏览器状态和 Run 事件单独归属。首版任务、对话和成果留在旧客户端库，兼容的 Personal Agent Models JSON 与 Vault 继续使用。详见 [Personal Agent](docs/modules/personal-agent/README.md)。
+Personal Agent 0.2.0 从 Anybox Harness `ab04844` 建立独立应用源码基线，覆盖工作区和执行协议。默认 Web 与桌面按已有角色组合在同一执行根提供 `personal-agent`，应用打开时持有自己的 SQLite、Models、图片和 Worker 资源，连接配置、凭据、浏览器状态和 Run 事件单独归属。各 Agent 的 Prompt 由 `personal-agent.agents` 随目录记录保存，在「Agent 管理」直接编辑。新 Run 取得该 Agent 当前 Prompt，已接受 Run 的历史和恢复读取原快照。升级保留生效指令的文本和角色，旧 Prompt 管理与绑定由 Agent 目录取代。首版任务、对话和成果留在旧客户端库，兼容的 Personal Agent Models JSON 与 Vault 继续使用。详见 [Personal Agent](docs/modules/personal-agent/README.md)。
+
+Personal Agent 的每个 Agent 在其执行设备上只有一个可写 Session，经 `POST /agents/:id/session` 打开或创建，Run 在事务中沿唯一末端推进。旧上下文根的成功轮次保留子链身份，新轮次依原生上下文的续接边界分组。切换模型或 API 时沿同一末端重组完整应用历史。`GET /sessions/:id/history` 以轮次 ID 为向前的游标，分页读取子链、轮次与关联 Run，工作区从最近一页向前加载。旧项目会话只读，原有幂等查询与符合条件的 Run 恢复沿用旧记录。现有 Session、Run、节点与根身份保留。详见 [Session 子链与模型上下文](docs/modules/personal-agent/history.md)。
 
 app.products 维护 app-products v2 目标表，事务补齐新 ID 默认关闭，移出目录的行和旧自定义组合数据保留但不装配。app.activity 按应用 ID 管理活动、同步冻结与停止 guard，不再接受 Anybox Harness capability 参数。停止和重新装配的重试先检查忙碌再提交目标，提交失败解冻；观察实际退出后卸载，清理失败要求重启。harness server 的 Run 准备到实际退出由安装所属 guard 保护。业务组件的迁移域、资源与凭据所有权保持原边界。
 

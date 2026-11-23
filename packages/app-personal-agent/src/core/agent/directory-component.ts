@@ -3,15 +3,11 @@ import type { Component } from '@nya/core'
 import { modelsSettingsServiceKey } from '@anybox/models'
 import type { ModelsSettingsService } from '@anybox/models'
 import { localStorageServiceKey } from '@anybox/storage-sqlite/port'
-import type { LocalStoragePort, StorageMigration, StorageRow } from '@anybox/storage-sqlite/port'
+import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow } from '@anybox/storage-sqlite/port'
 import type { RuntimeInputs } from '../contracts.js'
-import { promptServiceKey } from '../prompt/component.js'
-import type { PromptPort } from '../prompt/component.js'
-import type { PromptBinding } from '../prompt/domain.js'
 import { sessionDefaultsConflict } from '../session/domain.js'
 import { agentSummary, validateAgentFields, validateAgentRequestId, validateAgentRevision } from './domain.js'
 import type { AgentDefinition, AgentRecord, AgentSummary } from './domain.js'
-import { openAgentPromptBindings } from './prompt-binding-storage.js'
 
 export const agentDirectoryServiceKey = 'personal-agent.agents'
 
@@ -21,8 +17,6 @@ export interface AgentDirectoryPort {
   create(input: unknown): Promise<AgentRecord>
   update(id: string, input: unknown): Promise<AgentRecord>
   setDefaultModel(id: string, modelId: string | null, expectedRevision: number): Promise<AgentRecord>
-  getContextBindings(id: string): readonly PromptBinding[]
-  bindPrompt(id: string, binding: PromptBinding): Promise<void>
 }
 
 const migrations: readonly StorageMigration[] = [{
@@ -38,17 +32,33 @@ const migrations: readonly StorageMigration[] = [{
 }, {
   version: 2,
   up(tx) { tx.execute('ALTER TABLE personal_agent_directory ADD COLUMN logo_shader TEXT') },
+}, {
+  version: 3,
+  up(tx) {
+    tx.execute(`ALTER TABLE personal_agent_directory ADD COLUMN instruction_role TEXT NOT NULL DEFAULT 'system'
+      CHECK (instruction_role IN ('system', 'developer'))`)
+    if (hasTable(tx, 'prompt_versions')) {
+      tx.execute(`UPDATE personal_agent_directory AS agent SET instruction_role = 'developer'
+        WHERE EXISTS (SELECT 1 FROM prompt_versions AS version WHERE version.id = agent.instruction_version_id
+          AND version.kind = 'agent-instruction' AND version.role = 'developer' AND version.content = agent.instructions)`)
+    }
+    tx.execute('ALTER TABLE personal_agent_directory DROP COLUMN instruction_version_id')
+  },
 }]
+
+function hasTable(db: StorageReader, name: string): boolean {
+  return db.get("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [name]) !== undefined
+}
 
 function error(status: number, code: string): Error {
   return Object.assign(new Error(code), { status, code })
 }
 
 function storedAgent(row: StorageRow): AgentRecord {
-  const { id, name, description, instructions, model_id: modelId, instruction_version_id: instructionVersionId,
+  const { id, name, description, instructions, model_id: modelId, instruction_role: instructionRole,
     revision, environment_ids_json: environments, logo_shader: logoShader } = row
   if (typeof id !== 'string' || typeof name !== 'string' || typeof description !== 'string' || typeof instructions !== 'string' ||
-    modelId !== null && typeof modelId !== 'string' || instructionVersionId !== null && typeof instructionVersionId !== 'string' ||
+    modelId !== null && typeof modelId !== 'string' || instructionRole !== 'system' && instructionRole !== 'developer' ||
     logoShader !== null && typeof logoShader !== 'string') {
     throw new Error('invalid stored Agent')
   }
@@ -56,29 +66,26 @@ function storedAgent(row: StorageRow): AgentRecord {
   if (environmentIds !== undefined && (!Array.isArray(environmentIds) || environmentIds.some(id => typeof id !== 'string'))) {
     throw new Error('invalid stored Agent environments')
   }
-  return Object.freeze({ id, name, description, instructions, modelId, instructionVersionId, revision: validateAgentRevision(revision),
+  return Object.freeze({ id, name, description, instructions, modelId, instructionRole, revision: validateAgentRevision(revision),
     ...(logoShader === null ? {} : { logoShader }),
     ...(environmentIds === undefined ? {} : { environmentIds: Object.freeze(environmentIds as string[]) }) })
 }
 
 /** Owns the current effective Agent definition and its durable creation identity. */
-export function createAgentDirectoryComponent(inputs: RuntimeInputs, seeds: readonly AgentDefinition[], legacyPromptStorePath?: string): Component.Object<void, {
+export function createAgentDirectoryComponent(inputs: RuntimeInputs, seeds: readonly AgentDefinition[]): Component.Object<void, {
   [localStorageServiceKey]: LocalStoragePort
-  [promptServiceKey]: PromptPort
   [modelsSettingsServiceKey]: ModelsSettingsService
 }> {
   return {
     name: 'personal-agent-directory',
-    inject: [localStorageServiceKey, promptServiceKey, modelsSettingsServiceKey],
+    inject: [localStorageServiceKey, modelsSettingsServiceKey],
     async apply(ctx, _config, deps) {
-      const db = deps[localStorageServiceKey], prompts = deps[promptServiceKey], models = deps[modelsSettingsServiceKey]
-      const bindings = await openAgentPromptBindings(db, prompts, legacyPromptStorePath)
+      const db = deps[localStorageServiceKey], models = deps[modelsSettingsServiceKey]
       let accepting = true, tail = Promise.resolve()
       ctx.effect(() => async () => {
         accepting = false
         await tail
-        await bindings.close()
-      }, 'join Agent directory and Prompt binding writes')
+      }, 'join Agent directory writes')
       const write = <T>(work: () => Promise<T>): Promise<T> => {
         if (!accepting) return Promise.reject(error(503, 'service-unavailable'))
         const result = tail.then(work)
@@ -88,16 +95,18 @@ export function createAgentDirectoryComponent(inputs: RuntimeInputs, seeds: read
 
       await db.migrate('personal-agent-directory', migrations)
       const entries = await db.transaction(tx => {
-        const hasLegacyDefaults = tx.get("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'harness_session_defaults'") !== undefined
+        const hasLegacyDefaults = hasTable(tx, 'harness_session_defaults')
+        const hasLegacyBindings = hasTable(tx, 'agent_prompt_bindings') && hasTable(tx, 'prompt_versions')
         for (const seed of seeds) {
           if (tx.get('SELECT id FROM personal_agent_directory WHERE id = ?', [seed.id])) continue
-          const binding = bindings.get(seed.id).find(value => value.kind === 'agent-instruction')
-          const version = binding ? prompts.getPublishedVersion(binding.versionId) : undefined
+          const version = hasLegacyBindings ? tx.get(`SELECT version.content, version.role FROM agent_prompt_bindings AS binding
+            JOIN prompt_versions AS version ON version.id = binding.version_id AND version.kind = binding.kind
+            WHERE binding.agent_id = ? AND binding.kind = 'agent-instruction'`, [seed.id]) : undefined
           const saved = hasLegacyDefaults ? tx.get('SELECT model_id, revision FROM harness_session_defaults WHERE agent_id = ?', [seed.id]) : undefined
           tx.execute(`INSERT INTO personal_agent_directory
-            (id, name, description, instructions, instruction_version_id, model_id, environment_ids_json, revision)
+            (id, name, description, instructions, instruction_role, model_id, environment_ids_json, revision)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [seed.id, seed.name ?? seed.id, seed.description ?? '', version?.content ?? seed.instructions,
-            version?.id ?? null, saved?.model_id ?? seed.modelId ?? null, seed.environmentIds === undefined ? null : JSON.stringify(seed.environmentIds),
+            version?.role ?? 'system', saved?.model_id ?? seed.modelId ?? null, seed.environmentIds === undefined ? null : JSON.stringify(seed.environmentIds),
             saved?.revision ?? 0])
         }
         return new Map(tx.all('SELECT * FROM personal_agent_directory ORDER BY rowid').map(row => {
@@ -113,15 +122,16 @@ export function createAgentDirectoryComponent(inputs: RuntimeInputs, seeds: read
       const validateModel = (modelId: string | null) => {
         if (modelId !== null && !models.modelSettings().some(model => model.runtimeModelId === modelId)) throw error(400, 'model-not-found')
       }
-      const update = async (prior: AgentRecord, changes: Partial<Pick<AgentRecord, 'name' | 'description' | 'instructions' | 'modelId' | 'instructionVersionId'>> & { logoShader?: string | null }): Promise<AgentRecord> => {
+      const update = async (prior: AgentRecord, changes: Partial<Pick<AgentRecord, 'name' | 'description' | 'instructions' | 'modelId'>> & { logoShader?: string | null }): Promise<AgentRecord> => {
         const { logoShader: oldLogo, ...previous } = prior
         const { logoShader: requestedLogo, ...fields } = changes
         const logoShader = requestedLogo === undefined ? oldLogo : requestedLogo
-        const next = Object.freeze({ ...previous, ...fields, revision: prior.revision + 1, ...(logoShader == null ? {} : { logoShader }) })
+        const instructionRole = fields.instructions === undefined || fields.instructions === prior.instructions ? prior.instructionRole : 'system'
+        const next = Object.freeze({ ...previous, ...fields, instructionRole, revision: prior.revision + 1, ...(logoShader == null ? {} : { logoShader }) })
         await db.transaction(tx => {
           const result = tx.execute(`UPDATE personal_agent_directory SET name = ?, description = ?, instructions = ?,
-            instruction_version_id = ?, model_id = ?, logo_shader = ?, revision = ? WHERE id = ? AND revision = ?`,
-          [next.name, next.description, next.instructions, next.instructionVersionId, next.modelId, next.logoShader ?? null, next.revision, next.id, prior.revision])
+            instruction_role = ?, model_id = ?, logo_shader = ?, revision = ? WHERE id = ? AND revision = ?`,
+          [next.name, next.description, next.instructions, next.instructionRole, next.modelId, next.logoShader ?? null, next.revision, next.id, prior.revision])
           if (Number(result.changes) !== 1) throw error(409, 'agent-revision-conflict')
         })
         entries.set(next.id, next)
@@ -144,7 +154,7 @@ export function createAgentDirectoryComponent(inputs: RuntimeInputs, seeds: read
                 return requireAgent(String(existing.id))
               }
               validateModel(fields.modelId)
-              const agent = Object.freeze({ ...fields, id: inputs.newId(), revision: 0, instructionVersionId: null, environmentIds: Object.freeze([]) })
+              const agent = Object.freeze({ ...fields, id: inputs.newId(), revision: 0, instructionRole: 'system' as const, environmentIds: Object.freeze([]) })
               tx.execute(`INSERT INTO personal_agent_directory
                 (id, name, description, instructions, model_id, environment_ids_json, revision, creation_request_id, creation_digest, logo_shader)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [agent.id, agent.name, agent.description, agent.instructions, agent.modelId,
@@ -162,7 +172,7 @@ export function createAgentDirectoryComponent(inputs: RuntimeInputs, seeds: read
             const prior = requireAgent(id)
             if (prior.revision !== expected) throw error(409, 'agent-revision-conflict')
             if (fields.modelId !== prior.modelId) validateModel(fields.modelId)
-            return update(prior, { ...fields, instructionVersionId: fields.instructions === prior.instructions ? prior.instructionVersionId : null })
+            return update(prior, fields)
           })
         },
         setDefaultModel(id, modelId, expectedRevision) {
@@ -172,16 +182,6 @@ export function createAgentDirectoryComponent(inputs: RuntimeInputs, seeds: read
             if (prior.revision !== expectedRevision) throw sessionDefaultsConflict()
             if (modelId !== prior.modelId) validateModel(modelId)
             return update(prior, { modelId })
-          })
-        },
-        getContextBindings: id => bindings.get(id).filter(binding => binding.kind !== 'agent-instruction'),
-        bindPrompt(id, binding) {
-          return write(async () => {
-            const prior = requireAgent(id)
-            if (binding.kind !== 'agent-instruction') return bindings.bind(id, binding)
-            const version = prompts.getPublishedVersion(binding.versionId)
-            if (!version || version.kind !== binding.kind) throw new Error('invalid Agent role instruction binding')
-            await update(prior, { instructions: version.content, instructionVersionId: version.id })
           })
         },
       }

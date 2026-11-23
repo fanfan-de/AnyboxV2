@@ -6,7 +6,7 @@
 
 客户端注册由 [`client/registration.ts`](../../../packages/app-personal-agent/src/client/registration.ts) 提供。打开产品后装配设备连接、应用网关和 Computer worker 的本机观察与管理。网关使用宿主同源命名空间 `/api/client/v1/apps/personal-agent`，以受管设备连接访问 Personal Agent 执行端 `/api/v1/apps/personal-agent`。执行设备身份和连接修订参与请求绑定。
 
-执行注册由 [`registration.ts`](../../../packages/app-personal-agent/src/registration.ts) 提供。执行产品打开后才装配业务组件、Models 及原生协议、工作目录、Session、图片与文件、Prompt、Run/RunRuntime、Computer 和 HTTP。长期执行由 RunRuntime 持有。Computer worker 独立运行，保存实际工具调用及退出结果。
+执行注册由 [`registration.ts`](../../../packages/app-personal-agent/src/registration.ts) 提供。执行产品打开后才装配业务组件、Models 及原生协议、Agent 目录、工作目录、Session、图片与文件、Run/RunRuntime、Computer 和 HTTP。Prompt 由各 Agent 的目录记录持有。长期执行由 RunRuntime 持有。Computer worker 独立运行，保存实际工具调用及退出结果。
 
 | 组件名称 | 提供服务 |
 | --- | --- |
@@ -18,11 +18,11 @@
 
 执行组件使用 `personal-agent.*` 服务和事件名。独立的 Models 与 SQL 在执行注册中绑定到 `personal-agent.models.*`、`personal-agent.models` 和 `personal-agent.local-storage`。同根执行宿主仍拥有请求认证、应用目标与活动准入。依赖、运行和退出规则见[各组件手册](README.md#组件文档)。
 
-浏览器入口使用 `/apps/personal-agent/0.2.5/` 下的版本专属资源，外壳工作区路由为 `#/apps/personal-agent`。点击左侧头像打开所选 Agent 的[连续历史](history.md)，支持文件树、实时 Run 视图与草稿。设置面板提供设备选择，并管理 Agent、模型、Prompt、工具和 Computer。Agent 工具设置支持 [Streamable HTTP 和 stdio MCP 连接](../tools/mcp-environment.md)及逐工具授权。页面卸载会清理该页观察和控件，执行端仍持有已接纳的 Run。
+浏览器入口使用 `/apps/personal-agent/0.2.6/` 下的版本专属资源，外壳工作区路由为 `#/apps/personal-agent`。点击左侧头像打开所选 Agent 的[唯一可写 Session](history.md)，支持历史分页、文件树、实时 Run 视图与草稿。设置面板提供设备选择，并管理 Agent、模型、工具和 Computer。Prompt 在 [Agent 管理](agent-directory.md)中编辑，工具设置支持 [Streamable HTTP 和 stdio MCP 连接](../tools/mcp-environment.md)及逐工具授权。页面卸载会清理该页观察和控件，执行端仍持有已接纳的 Run。
 
 ## 工作目录
 
-`personal-agent-projects`（服务 `personal-agent.projects`）维护目录身份和 Computer 绑定。首次打开 Agent 的连续对话时，在执行库路径加 `.workspaces` 的目录下按 Agent ID 派生目录名，登记稳定工作目录身份并绑定本机 Computer。后续重新打开、改名、改头像或重启继续使用同一身份和路径。Run 与文件接口使用相同的目录身份，旧项目目录由其既有记录继续定位。实现与兼容契约见 [工作目录组件](../../../packages/app-personal-agent/src/core/project/component.ts)和[连续历史](history.md#组件所有权与接口)。
+`personal-agent-projects`（服务 `personal-agent.projects`）维护目录身份和 Computer 绑定。首次打开 Agent 的 Session 时，在执行库路径加 `.workspaces` 的目录下按 Agent ID 派生目录名，登记稳定工作目录身份并绑定本机 Computer。后续重新打开、改名、改头像或重启继续使用同一身份和路径。Run 与文件接口使用相同的目录身份，旧项目目录由其既有记录继续定位。实现与兼容契约见 [工作目录组件](../../../packages/app-personal-agent/src/core/project/component.ts)和[Session 接口](history.md#组件所有权与接口)。
 
 ## 数据与凭据
 

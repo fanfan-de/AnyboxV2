@@ -254,8 +254,9 @@ export function createTrajectoryView(container: HTMLElement, actions: Trajectory
     turns.setAttribute('aria-pressed', String(allTurns)); turns.title = allTurns ? '展开所有轮次' : '折叠所有轮次'; turns.setAttribute('aria-label', turns.title)
     calls.setAttribute('aria-pressed', String(allCalls)); calls.title = allCalls ? '展开所有调用' : '折叠所有调用'; calls.setAttribute('aria-label', calls.title)
     const remaining = loaded?.pending ?? 0, failed = loaded?.failed ?? 0
+    ledger.setAttribute('aria-label', snapshot.continuous ? '已加载的运行轨迹' : '本会话全部运行轨迹')
     progress.textContent = hasQuery ? `${all.length} 条匹配 · 已读取 ${loaded?.loaded ?? 0}/${loaded?.total ?? snapshot.runs.length} 次运行${remaining ? ' · 其余历史正在读取…' : ''}${failed ? ` · ${failed} 次读取失败` : ''}`
-      : `本会话 ${runOrder.length} 次运行${loaded ? ` · 已读取 ${loaded.loaded}/${loaded.total}` : ''}${remaining ? ' · 滚动读取更多' : ''}${failed ? ` · ${failed} 次读取失败` : ''} · 搜索覆盖已加载的展示内容`
+      : `${snapshot.continuous ? '已加载' : '本会话'} ${runOrder.length} 次运行${loaded ? ` · 已读取 ${loaded.loaded}/${loaded.total}` : ''}${remaining ? ' · 滚动读取更多' : ''}${failed ? ` · ${failed} 次读取失败` : ''} · 搜索覆盖已加载的展示内容`
     if (key !== nextKey) {
       key = nextKey
       const focused = ledger.contains(document.activeElement) ? document.activeElement as HTMLElement : undefined

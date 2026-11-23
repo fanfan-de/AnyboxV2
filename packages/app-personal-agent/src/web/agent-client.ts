@@ -2,7 +2,6 @@ import { splitScopedId } from './harness-client.js'
 import type { HarnessClient } from './harness-client.js'
 import { setupWorkspace } from './workspace-client.js'
 import { createModelsCatalog, setupModelsSettings } from './models-client.js'
-import { setupPromptSettings } from './prompt-client.js'
 import { setupSessionDefaults } from './session-defaults-client.js'
 import { setupAgentDirectory } from './agent-directory-client.js'
 import { createAgentLogo } from './agent-logo.js'
@@ -72,12 +71,10 @@ const toolsSettings = hostApi && selected ? setupToolsSettings(hostApi, messageF
 const unitsSettings = setupUnitsSettings(hostApi, messageFor, required('personal-agent--units-settings'), options.localApi)
 settingsDialog.addEventListener('close', () => { void unitsSettings.close() }, { signal: lifetime.signal })
 const modelsSettings = hostApi && hostModels && selected ? setupModelsSettings(hostApi, messageFor, hostModels, required('personal-agent--models-settings')) : undefined
-const promptSettings = hostApi && selected ? setupPromptSettings(hostApi, messageFor, required('personal-agent--prompt-settings'), JSON.stringify([selected.instanceId, 'prompts'])) : undefined
 const agentDirectory = hostApi && hostModels && selected ? setupAgentDirectory(hostApi, messageFor, hostModels,
   required('personal-agent--agent-directory'), selected.instanceId, agent => {
     api.rememberAgent(selected.id, agent)
     sessionDefaults?.refreshAgent(agent.id)
-    promptSettings?.receiveAgent(agent)
     refreshAgentList()
   }) : undefined
 settingsDialog.addEventListener('close', () => agentDirectory?.pauseLogo(), { signal: lifetime.signal })
@@ -89,7 +86,6 @@ if (!selected) {
   for (const [id, titleId, title, text] of [
     ['personal-agent--agent-directory', 'personal-agent--agent-directory-title', 'Agent 管理', 'Agent'],
     ['personal-agent--models-settings', 'personal-agent--models-settings-title', '模型管理', '模型与配置'],
-    ['personal-agent--prompt-settings', 'personal-agent--prompt-title', 'Prompt 管理', 'Prompt'],
     ['personal-agent--tools-settings', 'personal-agent--tools-title', 'Agent 工具', '工具'],
   ] as const) {
     const panel = required<HTMLElement>(id)
@@ -108,7 +104,6 @@ function canLeave(): boolean {
   if (sessionDefaults && !sessionDefaults.canLeave()) { revealSettings('general'); return false }
   if (toolsSettings && !toolsSettings.canLeave()) { revealSettings('tools'); return false }
   if (modelsSettings && !modelsSettings.canLeave()) { revealSettings('models'); return false }
-  if (promptSettings && !promptSettings.canLeave()) { revealSettings('prompts'); return false }
   if (!unitsSettings.canLeave()) { revealSettings('units'); return false }
   return true
 }
@@ -264,7 +259,7 @@ return {
     for (const { logo } of agentButtons.values()) logo.dispose()
     agentButtons.clear()
     const workspaceExit = workspace.dispose(); models.dispose(); hostModels?.dispose()
-    await Promise.all([workspaceExit, agentDirectory?.dispose(), modelsSettings?.dispose(), promptSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings.dispose()])
+    await Promise.all([workspaceExit, agentDirectory?.dispose(), modelsSettings?.dispose(), sessionDefaults?.dispose(), toolsSettings?.dispose(), unitsSettings.dispose()])
     await api.dispose()
   },
 }

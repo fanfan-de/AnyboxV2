@@ -2,7 +2,7 @@ import type { TargetedToolManagement } from '@anybox/execution-environments/mana
 import type { EnvironmentTool } from '@anybox/execution-environments/contracts'
 import type { EnvironmentSelection, SelectionInput, AdoptionInput, RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
 import type { FileSelection, FileContent, FileRef, FileSearch, FilePreview, FileRenewal, FileTreePage } from '../project-files/domain.js'
-import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput, ConversationNode, NodePage, NodeQuery } from './domain.js'
+import type { Session, SessionDefaults, AgentToolsSelection, AgentToolsInput, ConversationNode, NodePage, NodeQuery, ContinuousHistoryPage } from './domain.js'
 import type { Run, RunInput, RunOutcome, RunQuery } from '../run/domain.js'
 import type { RunEvent, RunExecution } from '../run/execution.js'
 import type { NativeModelSnapshot, JsonValue } from '@anybox/models'
@@ -41,15 +41,13 @@ export interface SessionPort {
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SessionDefaults>
   getAgentTools(agentId: string): Promise<AgentToolsSelection>
   setAgentTools(agentId: string, input: AgentToolsInput): Promise<AgentToolsSelection>
-  createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
   openContinuousSession(projectId: string | undefined, agentId: string): Promise<Session>
-  selectSessionModel(sessionId: string, modelId: string, protocolId?: string): Promise<Session>
-  archiveSession(id: string): Promise<Session>
-  restoreSession(id: string): Promise<Session>
+  selectSessionModel(sessionId: string, modelId: string): Promise<Session>
   listArchivedSessions(): Promise<readonly Session[]>
   getSession(id: string): Promise<Session | undefined>
   listSessions(projectId: string): Promise<readonly Session[]>
   getNode(sessionId: string, id: string): Promise<ConversationNode | undefined>
+  getContinuousHistory(sessionId: string, before?: string, limit?: number): Promise<ContinuousHistoryPage>
   getNodePath(sessionId: string, id: string | null): Promise<readonly ConversationNode[]>
   listNodes(sessionId: string, parentId: string | null, query?: NodeQuery): Promise<NodePage>
   getRun(id: string): Promise<Run | undefined>
@@ -79,10 +77,7 @@ export interface SessionRunPort {
     prompts: readonly PromptSnapshot[], model: NativeModelSnapshot, native: NativeRunRegistration): Promise<{ readonly run: Run; readonly created: boolean }>
   loadRunContext(id: string): Promise<RunContext | undefined>
   getRunEnvironmentAccess(runId: string): Promise<RunEnvironmentAccess | undefined>
-  checkLegacyAccess(sessionId: string, access: RunEnvironmentAccess, units: RunUnitBindings | undefined, initialization: NativeInitialization): Promise<boolean>
-  loadSessionAccess(id: string): Promise<RunEnvironmentAccess | undefined>
-  loadNativeInitialization(sessionId: string): Promise<NativeInitialization | undefined>
-  loadNativeHistory(sessionId: string, parentNodeId: string | null, scope?: ContinuousNativeHistoryScope): Promise<NativeHistory | undefined>
+  loadNativeHistory(sessionId: string, parentNodeId: string | null, scope: ContinuousNativeHistoryScope): Promise<NativeHistory | undefined>
   loadApplicationHistory(sessionId: string, parentNodeId: string, scope: ContinuousNativeHistoryScope): Promise<ApplicationHistory>
   getCompletedContextRef(sessionId: string, nodeId: string, runId: string): Promise<string | undefined>
   loadRunResume(id: string): Promise<RunResumeRecord | undefined>

@@ -1,4 +1,4 @@
-export type SettingsSection = 'general' | 'agents' | 'connections' | 'archive' | 'models' | 'prompts' | 'tools' | 'units'
+export type SettingsSection = 'general' | 'agents' | 'connections' | 'archive' | 'models' | 'tools' | 'units'
 export interface SettingsViewState { section: SettingsSection; open: boolean; focusDevice: boolean }
 
 /** The current device remains fixed until its owner accepts a guarded page replacement. */
@@ -35,8 +35,7 @@ export function setupSettingsNavigation(root: HTMLElement, options: {
   const name = options.selectedName ?? options.devices.find(item => item.id === selected)?.name ?? '所选设备'
   const descriptions: Record<Exclude<SettingsSection, 'models' | 'units'>, string> = {
     general: `设置${name}上所选 Agent 的默认模型。未手动指定模型时，后续运行使用此设置。`,
-    agents: `在${name}上创建 Agent，或编辑已有 Agent 的资料、指令和默认模型。`,
-    prompts: `这里的 Prompt 供${name}上的 Agent 使用。`,
+    agents: `在${name}上创建 Agent，或编辑已有 Agent 的资料、Prompt 和默认模型。`,
     tools: `为${name}上所选 Agent 管理工具授权与偏好。撤权会阻止新的调用。`,
     connections: '连接执行设备并管理访问凭据。Agent、模型配置和会话保存在对应设备上。',
     archive: '查看已连接设备上的旧版对话及已归档记录。',

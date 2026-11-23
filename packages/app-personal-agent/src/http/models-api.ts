@@ -3,7 +3,7 @@ import { resolveCatalogConnections } from '@anybox/models'
 import type { ProviderInput, ModelInput, ProviderSettingsInput, ModelSettingsInput } from '@anybox/models'
 import type { HarnessServerApiCommands } from './handler.js'
 import { json, requestObject, failure } from '@anybox/application-api/node'
-import { promptRevision } from './validation.js'
+import { expectedRevision } from './validation.js'
 export async function handleModelsApi(commands: HarnessServerApiCommands, request: IncomingMessage, response: ServerResponse, url: URL,
   modelRequest: <T>(response: ServerResponse, work: (signal: AbortSignal) => Promise<T>) => Promise<T>): Promise<boolean> {
   const method = request.method, path = url.pathname
@@ -42,7 +42,7 @@ export async function handleModelsApi(commands: HarnessServerApiCommands, reques
         if (method === 'GET' && definitionProviderMatch[2] === 'history') { json(response, 200, commands.modelsSettings.providerHistory(id)); return true }
         if (method === 'POST' && !definitionProviderMatch[2]) {
           const body = await requestObject(request, ['patch', 'expectedRevision'])
-          json(response, 200, await commands.modelsSettings.updateProvider(id, body.patch as Partial<ProviderInput>, promptRevision(body.expectedRevision))); return true
+          json(response, 200, await commands.modelsSettings.updateProvider(id, body.patch as Partial<ProviderInput>, expectedRevision(body.expectedRevision))); return true
         }
       }
       if (path === '/api/v1/models/definitions') {
@@ -64,7 +64,7 @@ export async function handleModelsApi(commands: HarnessServerApiCommands, reques
         if (method === 'GET' && definitionModelMatch[2] === 'history') { json(response, 200, commands.modelsSettings.modelHistory(id)); return true }
         if (method === 'POST' && !definitionModelMatch[2]) {
           const body = await requestObject(request, ['patch', 'expectedRevision'])
-          json(response, 200, await commands.modelsSettings.updateModel(id, body.patch as Partial<ModelInput>, promptRevision(body.expectedRevision))); return true
+          json(response, 200, await commands.modelsSettings.updateModel(id, body.patch as Partial<ModelInput>, expectedRevision(body.expectedRevision))); return true
         }
       }
       if (path === '/api/v1/models/provider-settings') {
@@ -82,19 +82,19 @@ export async function handleModelsApi(commands: HarnessServerApiCommands, reques
         if (method === 'POST') {
           if (!action) {
             const body = await requestObject(request, ['patch', 'expectedRevision'])
-            json(response, 200, await commands.modelsSettings.updateProviderSettings(id, body.patch as Partial<ProviderSettingsInput>, promptRevision(body.expectedRevision))); return true
+            json(response, 200, await commands.modelsSettings.updateProviderSettings(id, body.patch as Partial<ProviderSettingsInput>, expectedRevision(body.expectedRevision))); return true
           }
           if (action === 'key') {
             const body = await requestObject(request, ['apiKey', 'expectedRevision'])
-            json(response, 200, await commands.modelsSettings.setApiKey(id, body.apiKey as string, promptRevision(body.expectedRevision))); return true
+            json(response, 200, await commands.modelsSettings.setApiKey(id, body.apiKey as string, expectedRevision(body.expectedRevision))); return true
           }
           if (action === 'key/delete') {
             const body = await requestObject(request, ['expectedRevision'])
-            json(response, 200, await commands.modelsSettings.deleteApiKey(id, promptRevision(body.expectedRevision))); return true
+            json(response, 200, await commands.modelsSettings.deleteApiKey(id, expectedRevision(body.expectedRevision))); return true
           }
           if (action === 'delete') {
             const body = await requestObject(request, ['expectedRevision'])
-            await commands.modelsSettings.deleteProviderSettings(id, promptRevision(body.expectedRevision))
+            await commands.modelsSettings.deleteProviderSettings(id, expectedRevision(body.expectedRevision))
             json(response, 200, { ok: true }); return true
           }
           if (action === 'retry') {
@@ -122,7 +122,7 @@ export async function handleModelsApi(commands: HarnessServerApiCommands, reques
         if (method === 'GET' && settingsMatch[2] === 'history') { json(response, 200, commands.modelsSettings.modelSettingsHistory(id)); return true }
         if (method === 'POST' && !settingsMatch[2]) {
           const body = await requestObject(request, ['patch', 'expectedRevision'])
-          json(response, 200, await commands.modelsSettings.updateModelSettings(id, body.patch as Partial<ModelSettingsInput>, promptRevision(body.expectedRevision))); return true
+          json(response, 200, await commands.modelsSettings.updateModelSettings(id, body.patch as Partial<ModelSettingsInput>, expectedRevision(body.expectedRevision))); return true
         }
       }
   return false

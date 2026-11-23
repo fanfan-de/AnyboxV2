@@ -7,7 +7,6 @@ import type { ApplicationHttpPort, ApplicationHttpContext } from '@anybox/applic
 import type { SessionView, RunView, ProcessExitView } from '../core/api.js'
 import { handleModelsApi } from './models-api.js'
 import { failure, json, requestObject } from '@anybox/application-api/node'
-import { promptRevision } from './validation.js'
 import type { SessionPort } from '../core/session/port.js'
 import { validateFileSelections, validateSnapshotIds, validateFileTreePath, validId } from '../core/project-files/domain.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -33,8 +32,6 @@ import { openRunChangeStream } from './run-change-stream.js'
 import type { RunChangeStream } from './run-change-stream.js'
 import type { RunChange } from '../core/run/notifications.js'
 import type { ProtocolViewFrame, ProtocolViewSnapshot } from '../core/view/types.js'
-import type { PromptBinding, PromptCreateInput, PromptDocument, PromptEditInput,
-  PromptSnapshot, PromptVersion } from '../core/prompt/domain.js'
 import type { AttachCodeInput, AttachRequest, UnitAttachment, UnitKind, UnitScope } from '../core/unit/port.js'
 import { isUnitError, validateUnitKind, validateUnitScope } from '../core/unit/domain.js'
 import { isTransportError, parseUnitCapabilitiesHeader, unitCapabilitiesHeader, validateUnitRegistration } from '../core/unit/transport-domain.js'
@@ -44,7 +41,7 @@ import type { ComputerEnvironments } from '../core/computer/environments.js'
 import type { AgentDetail, AgentSummary } from '../core/agent/domain.js'
 
 export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
-  'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> {
+  'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired' | 'getContinuousHistory'> {
   listAgents(): readonly AgentSummary[]
   getAgent(id: string): AgentDetail | undefined
   createAgent(input: unknown): Promise<AgentDetail>
@@ -66,15 +63,12 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   pickProject(signal: AbortSignal): Promise<Project | null>
   openProject?(path: string, options?: { readonly computerAttachmentId?: string }): Promise<Project>
   listProjects(): Promise<readonly Project[]>
-  createSession(projectId: string, agentId: string, modelId?: string): Promise<Session>
   openContinuousSession(projectId: string | undefined, agentId: string): Promise<Session>
   getSessionDefaults(agentId: string): Promise<SessionDefaults>
   setSessionDefaults(agentId: string, modelId: string | null, expectedRevision: number): Promise<SessionDefaults>
   getAgentTools(agentId: string): Promise<AgentToolsSelection>
   setAgentTools(agentId: string, input: AgentToolsInput): Promise<AgentToolsSelection>
   selectSessionModel(sessionId: string, modelId: string): Promise<Session>
-  archiveSession(id: string): Promise<Session>
-  restoreSession(id: string): Promise<Session>
   listArchivedSessions(): Promise<readonly Session[]>
   getSession(id: string): Promise<Session | undefined>
   listSessions(projectId: string): Promise<readonly Session[]>
@@ -97,14 +91,6 @@ export interface HarnessServerApiCommands extends Pick<SessionPort, 'searchProje
   readonly modelsCatalog: ModelsCatalogService
   listModels(): readonly RunnableModelSummary[]
   modelTemplates(): readonly ProviderTemplate[]
-  listPrompts(): readonly PromptDocument[]
-  getPrompt(id: string): PromptDocument | undefined
-  createPrompt(input: PromptCreateInput): Promise<PromptDocument>
-  editPrompt(id: string, revision: number, patch: PromptEditInput): Promise<PromptDocument>
-  publishPrompt(id: string, revision: number): Promise<PromptVersion>
-  getPromptVersions(id: string): readonly PromptVersion[]
-  getAgentPrompts(id: string): readonly PromptSnapshot[]
-  bindPrompt(id: string, versionId: string): Promise<PromptBinding>
   listComputerEnvironments?(): Promise<ComputerEnvironments>
   listUnitAttachments(): Promise<readonly UnitAttachment[]>
   createUnitAttachCode(input: AttachCodeInput): Promise<{ readonly attachment: UnitAttachment; readonly code: string }>
@@ -186,21 +172,16 @@ function knownFailure(error: unknown): HttpFailure {
       return failure(['worker-attachment-invalid', 'worker-invalid'].includes(code) ? 400 : code === 'worker-attachment-missing' ? 404
         : ['worker-attachment-local', 'worker-attachment-conflict'].includes(code) ? 409 : /^worker-attach-/.test(code) ? 502 : 503, code)
     }
-    if (/^unknown (agent|session|project|prompt) /.test(error.message)) return failure(404, 'not-found')
-    if (error.message === 'prompt draft revision conflict') return failure(409, 'prompt-conflict')
-    if (error.message === 'prompt draft has no unpublished changes') return failure(409, 'prompt-publication-conflict')
-    if (error.message === 'prompt access denied' || error.message === 'agent configuration access denied') {
-      return failure(403, 'prompt-forbidden')
-    }
+    if (/^unknown (agent|session|project) /.test(error.message)) return failure(404, 'not-found')
     if ('code' in error && error.code === 'node-not-found') return failure(404, 'node-not-found')
     if ('code' in error && error.code === 'invalid-history') return failure(409, 'invalid-history')
     if ('code' in error && error.code === 'session-defaults-conflict') return failure(409, 'session-defaults-conflict')
     if ('code' in error && error.code === 'agent-tools-conflict') return failure(409, 'agent-tools-conflict')
-    if ('code' in error && ['session-archived', 'session-has-active-runs', 'legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable', 'history-position-changed', 'continuous-session'].includes(String(error.code))) return failure(409, String(error.code))
+    if ('code' in error && ['session-archived', 'session-has-active-runs', 'legacy-session-readonly', 'protocol-mismatch', 'history-incompatible', 'native-history-unavailable', 'history-position-changed'].includes(String(error.code))) return failure(409, String(error.code))
     if (/idempotency key already used/.test(error.message)) {
       return failure(409, 'conflict')
     }
-    if (/service is unavailable|harness server is closing|service is closing|prompt storage is closing|agent prompt bindings are closing/.test(error.message)) {
+    if (/service is unavailable|harness server is closing|service is closing/.test(error.message)) {
       return failure(503, 'service-unavailable')
     }
   }
@@ -241,20 +222,6 @@ function runView(run: Run): RunView {
     ...(run.errorCategory === undefined ? {} : { errorCategory: run.errorCategory }),
   }
 }
-
-function promptView(document: PromptDocument): object {
-  const { revision, kind, role, content } = document.draft
-  return { id: document.id, name: document.name, description: document.description,
-    draft: { revision, kind, role, content }, versionIds: document.versionIds,
-    ...(document.publishedDraftRevision === undefined ? {} : { publishedDraftRevision: document.publishedDraftRevision }) }
-}
-
-function promptVersionView(version: PromptVersion): object {
-  const { id, documentId, kind, role, content, createdAt } = version
-  return { id, documentId, kind, role, content, createdAt }
-}
-
-
 
 function outputSummary(value: string): { readonly text: string; readonly truncated: boolean } {
   const parts: string[] = []
@@ -767,53 +734,6 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
           body.modelId as string | null, body.expectedRevision))
         return
       }
-      const promptFields = ['name', 'description', 'kind', 'role', 'content']
-      if (path === '/api/v1/prompts' && method === 'GET') {
-        json(response, 200, commands.listPrompts().map(promptView))
-        return
-      }
-      if (path === '/api/v1/prompts' && method === 'POST') {
-        const body = await requestObject(request, promptFields, 1_048_576)
-        json(response, 200, promptView(await commands.createPrompt(body as unknown as PromptCreateInput)))
-        return
-      }
-      const promptMatch = /^\/api\/v1\/prompts\/([^/]+)$/.exec(path)
-      if (promptMatch && method === 'GET') {
-        const document = commands.getPrompt(decodeURIComponent(promptMatch[1]))
-        if (!document) throw failure(404, 'not-found')
-        json(response, 200, promptView(document))
-        return
-      }
-      if (promptMatch && method === 'POST') {
-        const { expectedRevision, ...patch } = await requestObject(request, [...promptFields, 'expectedRevision'], 1_048_576)
-        json(response, 200, promptView(await commands.editPrompt(decodeURIComponent(promptMatch[1]),
-          promptRevision(expectedRevision), patch as PromptEditInput)))
-        return
-      }
-      const versionsMatch = /^\/api\/v1\/prompts\/([^/]+)\/versions$/.exec(path)
-      if (versionsMatch && method === 'GET') {
-        json(response, 200, commands.getPromptVersions(decodeURIComponent(versionsMatch[1])).map(promptVersionView))
-        return
-      }
-      const publishMatch = /^\/api\/v1\/prompts\/([^/]+)\/publish$/.exec(path)
-      if (publishMatch && method === 'POST') {
-        const body = await requestObject(request, ['expectedRevision'])
-        json(response, 200, promptVersionView(await commands.publishPrompt(decodeURIComponent(publishMatch[1]),
-          promptRevision(body.expectedRevision))))
-        return
-      }
-      const agentPromptsMatch = /^\/api\/v1\/agents\/([^/]+)\/prompts$/.exec(path)
-      if (agentPromptsMatch && method === 'GET') {
-        json(response, 200, commands.getAgentPrompts(decodeURIComponent(agentPromptsMatch[1])))
-        return
-      }
-      if (agentPromptsMatch && method === 'POST') {
-        const body = await requestObject(request, ['versionId'])
-        if (typeof body.versionId !== 'string' || !body.versionId.trim()) throw failure(400, 'invalid-input')
-        const binding = await commands.bindPrompt(decodeURIComponent(agentPromptsMatch[1]), body.versionId)
-        json(response, 200, { kind: binding.kind, versionId: binding.versionId })
-        return
-      }
       if (method === 'GET' && path === '/api/v1/projects') {
         json(response, 200, await commands.listProjects())
         return
@@ -846,21 +766,19 @@ export function createHarnessServerHttpHandler(initialCommands: HarnessServerApi
       if (method === 'GET' && path === '/api/v1/sessions/archived') {
         json(response, 200, (await commands.listArchivedSessions()).map(sessionView)); return
       }
-      const sessionArchiveMatch = /^\/api\/v1\/sessions\/([^/]+)\/(archive|restore)$/.exec(path)
-      if (method === 'POST' && sessionArchiveMatch) {
-        const id = decodeURIComponent(sessionArchiveMatch[1])
-        const session = await (sessionArchiveMatch[2] === 'archive' ? commands.archiveSession(id) : commands.restoreSession(id))
-        json(response, 200, sessionView(session)); return
-      }
-      if (method === 'POST' && path === '/api/v1/sessions') {
-        const body = await requestObject(request, ['projectId', 'agentId', 'modelId'])
-        json(response, 200, sessionView(await commands.createSession(body.projectId as string, body.agentId as string, body.modelId as string | undefined)))
-        return
-      }
       const sessionModelMatch = /^\/api\/v1\/sessions\/([^/]+)\/model$/.exec(path)
       if (method === 'POST' && sessionModelMatch) {
         const body = await requestObject(request, ['modelId'])
         json(response, 200, sessionView(await commands.selectSessionModel(decodeURIComponent(sessionModelMatch[1]), body.modelId as string)))
+        return
+      }
+      const historyMatch = /^\/api\/v1\/sessions\/([^/]+)\/history$/.exec(path)
+      if (method === 'GET' && historyMatch) {
+        const before = url.searchParams.get('before')
+        if (before !== null && !validId(before)) throw failure(400, 'invalid-input')
+        const page = await commands.getContinuousHistory(decodeURIComponent(historyMatch[1]), before ?? undefined,
+          integerQuery(url, 'limit', 24, 1, 50))
+        json(response, 200, { ...page, runs: page.runs.map(runView) })
         return
       }
       const nodesMatch = /^\/api\/v1\/sessions\/([^/]+)\/nodes$/.exec(path)

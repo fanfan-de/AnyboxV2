@@ -15,7 +15,7 @@ Anybox Harness 的[原生 Computer 支持](../native-platform-support.md)由既�
 | [products/](./products/README.md) | 固定应用目录、按需装配与活动准入 | 2 |
 | [package-management/](./package-management/README.md) | 独占安装注册库、耐久操作、版本快照、跨进程使用凭证、本地文件安装、正式加载、生效、卸载回收与恢复，以及归档/产物辅助工具 | 3 |
 | [claude-agent/](./claude-agent/README.md) | Claude Agent：线程索引、SDK 适配器、Run 准入与审批、HTTP/SSE、本机角色通道、独立服务访问和监听、客户端远端连接与网关 | 9 |
-| [personal-agent/](./personal-agent/README.md) | Personal Agent 独立客户端、执行端与 worker 的装配、数据隔离和对应组件手册 | 沿用对应组件手册 |
+| [personal-agent/](./personal-agent/README.md) | Personal Agent 的 Agent 目录及独立 Prompt、唯一 Session 与历史子链、客户端与执行端装配 | Agent 目录及对应组件手册 |
 | [models/](./models/README.md) | 可复用模型配置、凭据、原生驱动及可选公开目录 | 11 |
 | [execution/](./execution/README.md) | Run 准入、运行资源、原生协议 Agent 绑定与循环 | 7 |
 | [computers/](./computers/README.md) | 按需本机资源、独立 worker、固定工作区、耐久工具操作协调、单元拨出与按附着路由 | 9 |

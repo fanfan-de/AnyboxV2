@@ -6,7 +6,7 @@ import type { ProtocolViewSnapshot } from '../core/view/types.js'
 import { createRunChangeClient } from './run-change-client.js'
 import { openChangeStream } from './event-stream.js'
 export interface HarnessConnection { readonly id: string; readonly name: string; readonly endpoint: string; readonly instanceId: string; readonly revision: number; readonly credentialConfigured: boolean }
-const identityKeys = new Set(['id', 'agentId', 'viewNodeId', 'focusedRunId', 'activePaneId', 'projectId', 'sessionId', 'runId', 'parentId', 'parentNodeId', 'headNodeId', 'nodeId', 'sourceRunId', 'resultNodeId', 'modelId', 'fallbackModelId', 'effectiveModelId', 'requestedModelId', 'assetId', 'snapshotId', 'connectionId', 'providerId', 'modelDefinitionId', 'assetIds', 'snapshotIds', 'invalid'])
+const identityKeys = new Set(['id', 'agentId', 'viewNodeId', 'focusedRunId', 'activePaneId', 'projectId', 'sessionId', 'runId', 'parentId', 'parentNodeId', 'headNodeId', 'nodeId', 'sourceRunId', 'resultNodeId', 'subchainId', 'anchorNodeId', 'modelId', 'fallbackModelId', 'effectiveModelId', 'requestedModelId', 'assetId', 'snapshotId', 'connectionId', 'providerId', 'modelDefinitionId', 'assetIds', 'snapshotIds', 'invalid'])
 export function scopedId(instanceId: string, id: string): string { return `h:${instanceId}:${id}` }
 export function splitScopedId(value: string): { instanceId: string; id: string } | undefined {
   const match = /^h:([0-9a-f-]{36}):([\s\S]+)$/.exec(value)

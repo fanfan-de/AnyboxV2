@@ -42,10 +42,6 @@
 .agent-logo [hidden] { display: none; }
 .sidebar-settings-button { justify-content: flex-start; width: 100%; height: 44px; gap: 11px; padding: 0 14px; border-radius: 14px; color: #656565; font: inherit; font-size: 13px; }
 .sidebar-settings-button:hover { background: var(--hover); color: var(--text); }
-.navigation-list { min-height: 0; display: flex; flex-direction: column; gap: 2px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
-.navigation-list button { width: 100%; flex-shrink: 0; border: 0; border-radius: 6px; background: transparent; color: #525252; text-align: left; padding: 7px 9px; font-size: 12px; line-height: 18px; }
-.navigation-list button:hover { background: var(--hover); }
-.navigation-list button.selected { background: var(--selected); color: #111; }
 .sidebar-footer { display: flex; align-items: center; flex-shrink: 0; padding: 10px 12px max(14px, env(safe-area-inset-bottom)); }
 .local-badge>span { width: 5px; height: 5px; flex-shrink: 0; border-radius: 50%; background: #788b72; }
 /* Sidebars fit the mounted application container. */
@@ -158,6 +154,9 @@
 .pane-notice button { margin-left: 8px; padding: 2px 0; border: 0; background: transparent; color: inherit; font: inherit; text-decoration: underline; text-underline-offset: 3px; }
 .transcript { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; padding: 18px var(--gutter) 30px; display: flex; flex-direction: column; gap: 14px; width: 100%; }
 .transcript>* { flex-shrink: 0; width: 100%; max-width: var(--reading-width); margin-left: auto; margin-right: auto; }
+.older-dialogue { display: flex; justify-content: center; }
+.older-dialogue button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; color: var(--secondary); background: var(--panel); font-size: 12px; }
+.older-dialogue button[aria-disabled=true] { opacity: .65; cursor: default; }
 .run-history-empty { display: flex; align-items: center; justify-content: center; flex: 1; min-height: 120px; padding: 24px; text-align: center; color: var(--secondary); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 .message { font-size: 15px; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message.user { width: fit-content; max-width: min(80%, var(--reading-width)); align-self: flex-end; margin-left: max(0px, calc((100% - var(--reading-width)) / 2)); margin-right: max(0px, calc((100% - var(--reading-width)) / 2)); padding: 13px 18px; border: 1px solid #eaeaea; border-radius: 20px 20px 5px 20px; background: #eaeaea; }
@@ -288,12 +287,10 @@
 .tool-result { font-size: 11px; color: var(--secondary); margin: 10px 0 0; }
 .tool-output-label { display: block; margin-top: 10px; font-size: 10px; color: var(--muted); }
 .tool-output { font: 11px/1.6 "IBM Plex Mono", SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; background: #e2e2e2; border-radius: 4px; padding: 10px; margin: 4px 0 0; }
-/* Native dialogs keep the existing Key and Prompt behavior. */
 .settings-dialog { width: min(540px, calc(100% - 32px)); max-height: calc(100dvh - 40px); padding: 0; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--canvas); color: var(--text); box-shadow: 0 20px 80px #0002; overflow: hidden; }
 .settings-dialog[open] { display: flex; flex-direction: column; }
 .settings-dialog::backdrop { background: #0004; backdrop-filter: blur(3px); }
 .settings-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px; }
-.settings-section+.settings-section { border-top: 1px solid var(--line); margin-top: 24px; padding-top: 24px; }
 .settings-dialog h2 { font-size: 16px; font-weight: 600; margin: 0; }
 .settings-dialog h3 { font-size: 13px; font-weight: 600; margin: 0 0 14px; }
 .settings-dialog p { font-size: 12px; line-height: 1.7; color: var(--secondary); margin: 8px 0 12px; }
@@ -306,28 +303,6 @@
 .settings-dialog .close-settings { border: 0; padding: 4px; width: 28px; height: 28px; background: transparent; color: var(--secondary); font-size: 18px; }
 .settings-dialog #delete-key, .settings-dialog .secondary-button { background: transparent; color: var(--secondary); border-color: var(--line-strong); }
 .settings-dialog #key-notice { color: #815728; }
-.prompt-dialog { width: min(980px, calc(100% - 32px)); height: min(850px, calc(100dvh - 40px)); }
-.prompt-workspace { display: grid; grid-template-columns: 210px minmax(0, 1fr); min-height: 0; flex: 1; }
-.prompt-library { display: flex; flex-direction: column; gap: 12px; min-height: 0; padding: 20px 16px; border-right: 1px solid var(--line); background: var(--sidebar); }
-.prompt-library>button { flex-shrink: 0; }
-.prompt-library .navigation-list { min-height: 60px; }
-.prompt-library .navigation-list button { background: transparent; border: 0; color: var(--secondary); text-align: left; }
-.prompt-library .navigation-list button.selected { background: var(--selected); color: var(--text); }
-.prompt-editor { min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 24px; }
-.prompt-inline { display: flex; align-items: center; gap: 8px; }
-.prompt-inline select { flex: 1; }
-.prompt-inline button { flex-shrink: 0; }
-.prompt-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
-.prompt-section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-.prompt-section-heading h3 { margin: 0; }
-.prompt-section-heading span { font-size: 11px; color: var(--secondary); }
-.prompt-dialog input+label { margin-top: 12px; }
-.prompt-dialog textarea { display: block; width: 100%; min-height: 160px; max-height: 360px; resize: vertical; padding: 12px; border: 1px solid var(--line-strong); border-radius: 5px; background: #fff9; font: 12px/1.7 "IBM Plex Mono", SFMono-Regular, Consolas, monospace; }
-.prompt-dialog .prompt-notice { flex-shrink: 0; max-height: 90px; overflow: auto; margin: 12px 24px; padding: 10px 12px; border-radius: 5px; background: #e1e9e0; color: #41543c; }
-.prompt-dialog .prompt-notice[data-error=true] { background: #fff1e7; color: #815728; }
-.prompt-preview { max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; padding: 12px; border-radius: 5px; background: #e7e7e7; font: 12px/1.7 SFMono-Regular, Consolas, monospace; }
-#personal-agent--prompt-bindings details { margin-top: 8px; font-size: 12px; color: var(--secondary); }
-#personal-agent--prompt-bindings summary { cursor: pointer; overflow-wrap: anywhere; }
 @container (max-width: 520px) {
   .branch-position { display: none; }
   .branch-controls { gap: 2px; }
@@ -384,13 +359,6 @@
   .empty-branches { max-height: 90px; overflow: auto; }
   .workspace-empty .empty-actions { flex-direction: column; }
   .settings-content { padding: 20px 18px; }
-  .prompt-workspace { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .prompt-library { border-right: 0; border-bottom: 1px solid var(--line); max-height: 155px; padding: 12px 16px; }
-  .prompt-library .navigation-list { min-height: 0; max-height: 80px; }
-  .prompt-library>p { margin: 0; }
-  .prompt-editor { padding: 18px 16px; }
-  .prompt-inline { flex-wrap: wrap; }
-  .prompt-inline select { min-width: 140px; }
 }
 @media (hover: none) {
 }
@@ -864,16 +832,6 @@
 
 /* Project browsing is owned by the selected execution device. */
 
-/* Harness keeps one workspace; model and Prompt management stay in its settings. */
-#personal-agent--prompt-settings { width: 100%; height: auto; }
-#personal-agent--prompt-settings .prompt-workspace { grid-template-columns: 180px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-#personal-agent--prompt-settings .prompt-editor { overflow: visible; }
-#personal-agent--prompt-settings .prompt-notice { margin: 12px 0; }
-@media (max-width: 760px) {
- #personal-agent--prompt-settings .prompt-workspace { display: flex; flex-direction: column; }
- #personal-agent--prompt-settings .prompt-library { max-height: 200px; border-right: 0; border-bottom: 1px solid var(--line); }
- #personal-agent--prompt-settings .prompt-editor { padding: 20px 16px; }
-}
 .harness-app { height: 100%; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .harness-app>.app-shell { height: 100%; min-height: 0; }
 .harness-content { flex: 1; min-height: 0; overflow: auto; }

@@ -100,7 +100,7 @@ export function messageFor(error: unknown): string {
     'session-has-active-runs': 'Agent 正在处理一条消息。请等待完成，或取消并等待清理后再发送。',
     'history-position-changed': '对话已更新。草稿已保留，请查看最新回复后重新发送。',
     'context-too-large': '完整历史和本次输入超出模型的上下文容量。缩短本次消息或减少附件后可重试。',
-    'legacy-session-readonly': '旧版文本会话仅供查看，请新建原生会话。',
+    'legacy-session-readonly': '旧对话仅供查看，请回到这个 Agent 的连续对话。',
     'protocol-mismatch': '此会话已固定协议，请新建会话使用其他协议。',
     'history-incompatible': '当前配置或已保存的记录无法恢复完整历史。请检查模型、连接、指令、工具和工作目录。',
     'native-history-unavailable': '原生历史目前无法恢复；已有记录仍可查看。',
@@ -126,9 +126,6 @@ export function messageFor(error: unknown): string {
     'picker-busy': '目录选择窗口已打开，请先完成当前选择。',
     'picker-unsupported': '当前系统暂不支持原生目录选择。',
     'picker-unavailable': '无法打开目录选择窗口，请稍后重试。',
-    'prompt-conflict': '草稿已被其他页面修改。请先复制保留你的内容，再点击“放弃修改 / 重新读取”。',
-    'prompt-publication-conflict': '草稿已发布或在发布期间发生变化，请重新读取后再操作。',
-    'prompt-forbidden': '当前用户无权管理这个 Prompt 或 Agent。',
     'request-too-large': '内容过长，请缩短后重试。',
   }[error.code] ?? '请求未能完成，请重试。'
 }

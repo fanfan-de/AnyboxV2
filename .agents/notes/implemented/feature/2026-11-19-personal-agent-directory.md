@@ -27,3 +27,4 @@ Linux 上根 `npm run check` 通过，2390 项中 2368 通过、22 跳过、0 �
 - [Personal Agent 的 0.2 基线](../../implemented/architecture/2026-11-19-personal-agent-harness-baseline.md)
 - [Agent 目录组件手册](../../../../docs/modules/personal-agent/agent-directory.md)
 - [头像导航与工作目录](../simplification/2026-11-19-personal-agent-avatar-navigation.md) 接续目录的工作区选择入口。
+- [Personal Agent 的独立 Prompt](../simplification/2026-11-20-personal-agent-owned-prompts.md) 接续目录配置，替代共享 Prompt 发布与绑定方向。

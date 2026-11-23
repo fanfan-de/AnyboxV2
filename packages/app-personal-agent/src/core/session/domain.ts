@@ -4,6 +4,7 @@ import type { ImageRef } from '../image/port.js'
 import { createToolSelection } from '../tool/catalog.js'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 import type { ToolEnvironmentSnapshot } from '../tool-environments/domain.js'
+import type { Run } from '../run/domain.js'
 export interface Session {
   readonly environmentSelection?: import('@anybox/execution-environments/bindings').EnvironmentSelection
   readonly id: string
@@ -78,9 +79,24 @@ export interface NodePage {
   readonly nextCursor?: string
 }
 
+/** A subchain starts at the first successful turn under a durable context root. */
+export interface HistorySubchain {
+  readonly id: string
+  readonly parentId: string | null
+  readonly anchorNodeId: string | null
+}
+
+export interface ContinuousHistoryPage {
+  readonly headNodeId: string | null
+  readonly nodes: readonly (ConversationNode & { readonly subchainId: string })[]
+  readonly subchains: readonly HistorySubchain[]
+  readonly runs: readonly Run[]
+  readonly nextCursor?: string
+}
+
 export interface NodeQuery { readonly cursor?: string; readonly limit?: number }
 
-export function treeError(code: 'session-archived' | 'session-has-active-runs' | 'node-not-found' | 'invalid-history' | 'idempotency-conflict' | 'legacy-session-readonly' | 'protocol-mismatch' | 'history-incompatible' | 'history-position-changed' | 'continuous-session'): Error & { readonly code: string } {
+export function treeError(code: 'session-archived' | 'session-has-active-runs' | 'node-not-found' | 'invalid-history' | 'idempotency-conflict' | 'legacy-session-readonly' | 'protocol-mismatch' | 'history-incompatible' | 'history-position-changed'): Error & { readonly code: string } {
   return Object.assign(new Error(code === 'idempotency-conflict' ? 'idempotency key already used with different input or history' : code), { code })
 }
 

@@ -17,8 +17,6 @@ import { validateAgents } from './agent/domain.js'
 import type { AgentDefinition, AgentSummary } from './agent/domain.js'
 import { agentDirectoryServiceKey, createAgentDirectoryComponent } from './agent/directory-component.js'
 import type { AgentDirectoryPort } from './agent/directory-component.js'
-import { agentPromptServiceKey, createAgentPromptComponent } from './agent/prompt-binding-component.js'
-import type { AgentPromptPort } from './agent/prompt-binding-component.js'
 import { createRunComponent, runServiceKey } from './run/component.js'
 import type { RunPort } from './run/component.js'
 import { createRunRuntimeComponent } from './run/runtime-component.js'
@@ -27,8 +25,6 @@ import { createProtocolAgentsComponent, createProtocolAgentBindingComponent, sup
 import { createSessionComponent } from './session/component.js'
 import { sessionServiceKey } from './session/port.js'
 import type { SessionPort } from './session/port.js'
-import { createPromptComponent, promptServiceKey } from './prompt/component.js'
-import type { PromptPort } from './prompt/component.js'
 import { createProjectComponent, projectServiceKey } from './project/component.js'
 import type { ProjectPort } from './project/component.js'
 import { createLocalComputerWorkerComponent } from './computer/worker-client.js'
@@ -78,15 +74,9 @@ export interface HarnessServerCoreOptions extends Partial<RuntimeInputs> {
   readonly projectDirectoryHome?: string
   readonly initialProjects?: readonly string[]
   readonly agentWorkspacesDirectory?: string
-  /** Optional one-time import of the previous Prompt JSON store. The source is left untouched. */
-  readonly legacyPromptStorePath?: string
-  /** Host-provided authorization for changing an Agent's prompt bindings. */
-  readonly canManageAgent?: (actorId: string, agentId: string) => boolean
 }
 
-export interface HarnessServerApi extends RunPort, Omit<SessionPort, 'targetedTools'>, Omit<ProjectPort, 'requireAvailable' | 'getIn' | 'openAgentWorkspace'>,
-  Omit<PromptPort, 'getPublishedVersion'>,
-  Omit<AgentPromptPort, 'resolveRunPrompts' | 'resolveInitialPrompts' | 'resolveTaskTemplate'> {
+export interface HarnessServerApi extends RunPort, Omit<SessionPort, 'targetedTools'>, Omit<ProjectPort, 'requireAvailable' | 'getIn' | 'openAgentWorkspace'> {
   listAgents(): readonly AgentSummary[]
   listTools(): ReturnType<typeof listTools>
   listComputerEnvironments(): Promise<ComputerEnvironments>
@@ -113,19 +103,12 @@ function runtimeInputs(options: HarnessServerCoreOptions): RuntimeInputs {
   return { now: options.now ?? (() => new Date().toISOString()), newId: options.newId ?? randomUUID }
 }
 
-/** Installs the Prompt library and durable Agent configuration before execution. */
-export function createHarnessServerPromptComponents(options: HarnessServerCoreOptions): readonly Component<any, any>[] {
-  const agents = validateAgents(options.agents), inputs = runtimeInputs(options)
-  return [createPromptComponent(inputs, options.legacyPromptStorePath),
-    createAgentDirectoryComponent(inputs, agents, options.legacyPromptStorePath),
-    createAgentPromptComponent(inputs, options.canManageAgent ?? (() => true))]
-}
-
 /** Describes the Agent component closure; callers keep every installation on their root. */
 export function createHarnessServerAgentComponents(context: Context, options: HarnessServerCoreOptions, lifetime: HarnessServerLifetime): readonly Component<any, any>[] {
   validateComputerEnvironmentOptions(options)
   const lookup = <T>(name: string) => context.get<T>(options.serviceBindings?.[name] ?? name)
   const inputs = runtimeInputs(options)
+  const agents = validateAgents(options.agents)
   const tools = createToolRegistry(randomUUID(), registry => {
     registry.register(computerToolRegistration)
     for (const provider of options.toolEnvironments ?? []) registry.register(provider)
@@ -163,7 +146,9 @@ export function createHarnessServerAgentComponents(context: Context, options: Ha
     if (!worker) return Promise.reject(projectUnavailableError())
     return worker.query({ attachmentId, query })
   }
-  return [createExecutionEnvironmentComponent({ serviceKey: environmentManagerKey }), createMcpEnvironmentComponent({ serviceKey: mcpEnvironmentServiceKey }), ...protocolComponents, ...attachmentComponents, ...workerComponents,
+  return [createAgentDirectoryComponent(inputs, agents),
+    createExecutionEnvironmentComponent({ serviceKey: environmentManagerKey }), createMcpEnvironmentComponent({ serviceKey: mcpEnvironmentServiceKey }),
+    ...protocolComponents, ...attachmentComponents, ...workerComponents,
     createProjectComponent(inputs, { directoryHome: options.projectDirectoryHome, initialProjects: options.initialProjects,
       agentWorkspacesDirectory: options.agentWorkspacesDirectory, computerQuery }),
     createProjectFilesComponent(inputs),
@@ -203,18 +188,6 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     if (lifetime.isClosing()) throw new Error('harness server is closing')
     const service = lookup<ProjectPort>(projectServiceKey)
     if (!service) throw new Error('project service is unavailable')
-    return service
-  }
-  const currentPrompts = (): PromptPort => {
-    if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const service = lookup<PromptPort>(promptServiceKey)
-    if (!service) throw new Error('prompt service is unavailable')
-    return service
-  }
-  const currentAgentPrompts = (): AgentPromptPort => {
-    if (lifetime.isClosing()) throw new Error('harness server is closing')
-    const service = lookup<AgentPromptPort>(agentPromptServiceKey)
-    if (!service) throw new Error('agent prompt service is unavailable')
     return service
   }
   const currentUnits = (): UnitAttachmentsPort => {
@@ -269,14 +242,10 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
       if (modelId !== null) validateSelectedModel(modelId, true)
       return currentSessions().setSessionDefaults(agentId, modelId, expectedRevision)
     },
-    createSession: (projectId, agentId, modelId) => {
-      if (modelId !== undefined) validateSelectedModel(modelId)
-      return currentSessions().createSession(projectId, agentId, modelId)
-    },
     openContinuousSession: (projectId, agentId) => currentSessions().openContinuousSession(projectId, agentId),
     selectSessionModel: (sessionId, modelId) => {
-      const protocolId = validateSelectedModel(modelId)
-      return currentSessions().selectSessionModel(sessionId, modelId, protocolId)
+      validateSelectedModel(modelId)
+      return currentSessions().selectSessionModel(sessionId, modelId)
     },
     getSession: id => currentSessions().getSession(id),
     openProjectFileTree: (...args) => currentSessions().openProjectFileTree(...args),
@@ -292,10 +261,9 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     getImage: (sessionId, assetId, signal) => currentSessions().getImage(sessionId, assetId, signal),
     renewImages: (sessionId, assetIds) => currentSessions().renewImages(sessionId, assetIds),
     getNode: (sessionId, id) => currentSessions().getNode(sessionId, id),
+    getContinuousHistory: (sessionId, before, limit) => currentSessions().getContinuousHistory(sessionId, before, limit),
     getNodePath: (sessionId, id) => currentSessions().getNodePath(sessionId, id),
     listNodes: (sessionId, parentId, query) => currentSessions().listNodes(sessionId, parentId, query),
-    archiveSession: id => currentSessions().archiveSession(id),
-    restoreSession: id => currentSessions().restoreSession(id),
     listArchivedSessions: () => currentSessions().listArchivedSessions(),
     listSessions: id => currentSessions().listSessions(id),
     startRun: input => current().startRun(input),
@@ -307,14 +275,6 @@ export function createHarnessServerApi(context: Context, options: HarnessServerC
     getView: id => current().getView(id),
     cancelRun: id => current().cancelRun(id),
     waitRun: (id, signal) => current().waitRun(id, signal),
-    createPrompt: (actorId, input) => currentPrompts().createPrompt(actorId, input),
-    editPrompt: (actorId, id, revision, patch) => currentPrompts().editPrompt(actorId, id, revision, patch),
-    publishPrompt: (actorId, id) => currentPrompts().publishPrompt(actorId, id),
-    getPrompt: (actorId, id) => currentPrompts().getPrompt(actorId, id),
-    listPrompts: actorId => currentPrompts().listPrompts(actorId),
-    getPromptVersions: (actorId, id) => currentPrompts().getPromptVersions(actorId, id),
-    bindPrompt: (actorId, agentId, versionId) => currentAgentPrompts().bindPrompt(actorId, agentId, versionId),
-    getAgentPrompts: (actorId, agentId) => currentAgentPrompts().getAgentPrompts(actorId, agentId),
   }
 }
 
@@ -341,8 +301,7 @@ export async function installHarnessServerCore(context: Context, options: Harnes
   }
   const lifetime: HarnessServerLifetime = { isClosing: () => closing, signal: abort.signal }
   try {
-    // Prompt providers are available before their Agent consumers start.
-    for (const component of [...createHarnessServerPromptComponents(options), ...createHarnessServerAgentComponents(context, options, lifetime)]) {
+    for (const component of createHarnessServerAgentComponents(context, options, lifetime)) {
       const fiber = context.installComponent(component, undefined, { bindings: options.serviceBindings })
       fibers.push(fiber)
       await fiber

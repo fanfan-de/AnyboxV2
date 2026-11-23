@@ -35,3 +35,4 @@ Personal Agent 从 Harness 继承项目会话列表和显式分支操作。用�
 - [Agent 目录](2026-11-19-personal-agent-directory.md)
 - [头像导航与工作目录](../simplification/2026-11-19-personal-agent-avatar-navigation.md) 将工作区的项目选择改为自动分配 Agent 工作目录。
 - [统一从 Agent 设置选模](../simplification/2026-11-21-personal-agent-default-model-in-settings.md) 取代本文的连续会话 Composer 手动选模方向。
+- [Personal Agent 的 Session 子链](../architecture/2026-11-20-personal-agent-session-subchains.md) 接续本项，为长期历史接入子链分页并退役旧项目会话的写入入口。

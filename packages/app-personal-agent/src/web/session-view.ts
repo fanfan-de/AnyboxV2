@@ -99,6 +99,7 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
   let contentKey = '', savedScroll = { ...initialScroll }
   let dialogueAtBottom = initialScroll.dialogue === 0, dialogueNeedsBottom = dialogueAtBottom
   let dialogueScrollReady = false, runsScrollReady = false
+  let pagingHistory = false
   let visibleMode: SessionViewMode = controller.snapshot().position.viewMode === 'runs' ? 'runs' : 'dialogue'
   let locateRunId: string | undefined
   const turns = new Map<string, MountedProtocolTurn>()
@@ -214,6 +215,10 @@ export function createSessionPanel(pane: Pane, controller: SessionController, cl
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button')
     if (!button) return
     const data = button.dataset
+    if (data.olderHistory && button.getAttribute('aria-disabled') !== 'true') {
+      pagingHistory = true
+      void controller.moreHistory(data.olderHistory).finally(() => { pagingHistory = false })
+    }
     if (data.focusRun || data.showRun) {
       const id = data.focusRun ?? data.showRun!
       locateRunId = id
@@ -299,8 +304,8 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       panel.captureScroll()
       const state = controller.snapshot()
       usageView.render(contextUsage(state, models?.snapshot().models))
-      const tree = conversationTree(state)
       const continuous = Boolean(state.continuous)
+      const tree = continuous ? undefined : conversationTree(state)
       visibleMode = state.position.viewMode === 'runs' ? 'runs' : 'dialogue'
       const records = visibleMode === 'runs'
       runHistory.hidden = !records
@@ -310,7 +315,9 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       if (records) usageView.close()
       get('.branch-controls').hidden = records || continuous
       get('.branch-controls').inert = records || continuous
-      get('.run-history-scope').hidden = !records
+      const historyScope = get('.run-history-scope')
+      historyScope.hidden = !records
+      historyScope.textContent = continuous ? '已加载的运行' : '全部运行'
       const showTree = treeOpen && !records && !continuous
       treeContainer.hidden = !showTree
       treeContainer.inert = !showTree
@@ -318,7 +325,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       treeToggle.setAttribute('aria-expanded', String(showTree))
       treeToggle.setAttribute('aria-label', showTree ? '关闭分支总览' : '打开分支总览')
       treeToggle.title = showTree ? '关闭分支总览' : '打开分支总览'
-      if (showTree) treeView.update(state, tree)
+      if (showTree && tree) treeView.update(state, tree)
       for (const button of viewButtons) {
         const selected = button.dataset.viewMode === visibleMode
         button.setAttribute('aria-selected', String(selected))
@@ -331,7 +338,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       get('.run-count-wide').textContent = `${activeCount} 运行中`
       get('.run-count-compact').textContent = String(activeCount)
       get('[data-view-mode="runs"]').setAttribute('aria-label', activeCount ? `轨迹，${activeCount} 个运行中` : '轨迹')
-      get('[data-view-mode="runs"]').title = activeCount ? `${activeCount} 个运行中（含正在取消）` : '查看全部运行'
+      get('[data-view-mode="runs"]').title = activeCount ? `${activeCount} 个运行中（含正在取消）` : continuous ? '查看已加载的运行' : '查看全部运行'
       const conversationTitle = state.session?.title
       if (conversationTitle && !continuous) {
         get('.pane-title strong').textContent = conversationTitle
@@ -424,12 +431,16 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
       get('.empty-state h2').textContent = state.loading ? '正在打开对话…' : readOnly ? '历史对话' : activeCount ? 'Agent 正在思考…' : '有什么想法？'
       get('.empty-state > p').textContent = state.loading ? '正在读取对话。' : readOnly ? state.children.length ? '选择历史分支查看记录。' : '这里没有已保存的消息。' : activeCount ? '回答完成后即可查看。' : '发送消息，与 Personal Agent 一起完成工作。'
       trajectory.update(state)
-      const key = JSON.stringify([state.path, state.children, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.position.follow, state.busy, readOnly, state.session?.historyMode, [...state.views], state.traceLoading && [...state.traceLoading.states]])
+      const key = JSON.stringify([state.path, state.children, state.runs, [...state.events], [...state.expanded], state.pending, state.position.focusedRunId, state.position.follow, state.busy, readOnly, state.session?.historyMode, [...state.views], state.traceLoading && [...state.traceLoading.states], state.olderHistory, state.loadingHistory])
       if (key === contentKey) { panel.restoreScroll(savedScroll); return }
       contentKey = key
       const content = records ? runHistory : transcript
       const focused = content.contains(document.activeElement) ? document.activeElement as HTMLButtonElement : undefined
       const focusedData = focused && Object.keys(focused.dataset).length ? JSON.stringify(focused.dataset) : undefined
+      const visibleNode = continuous && !records && (!dialogueAtBottom || pagingHistory) && measurable(transcript)
+        ? [...transcript.querySelectorAll<HTMLElement>('[data-node-id]')].find(node => node.getBoundingClientRect().bottom > transcript.getBoundingClientRect().top)
+        : undefined
+      const previousTop = visibleNode?.getBoundingClientRect().top
       renderNodes = []
       const appendTurn = (runId: string | null): boolean => {
         if (!runId) return false
@@ -453,9 +464,22 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         button.dataset[key] = id
         return button
       }
+      const older = new Map(state.olderHistory?.map(({ firstNodeId, cursor }) => [firstNodeId, cursor]))
       for (const node of state.path) {
+        const cursor = older.get(node.id)
+        if (cursor) {
+          const row = document.createElement('div')
+          row.className = 'older-dialogue'
+          const button = action(cursor === state.loadingHistory ? '正在加载更早对话…' : '加载更早对话', 'olderHistory', cursor)
+          button.setAttribute('aria-disabled', String(Boolean(state.loadingHistory || state.busy)))
+          row.append(button); renderNodes.push(row)
+        }
         addMessage('user', node.input, false, node.images, node.files)
-        if (continuous) (renderNodes.at(-1) as HTMLElement).dataset.nodeId = node.id
+        if (continuous) {
+          const message = renderNodes.at(-1) as HTMLElement
+          message.dataset.nodeId = node.id
+          message.tabIndex = -1
+        }
         if (!appendTurn(node.sourceRunId)) {
           if ((continuous && node.output) || state.session?.historyMode === 'dialogue-v1') addMessage('assistant', node.output)
           else {
@@ -468,7 +492,7 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         if (continuous) continue
         const actions = document.createElement('div')
         actions.className = 'node-actions'
-        const siblings = tree.children.get(node.parentId) ?? [], siblingIndex = siblings.findIndex(value => value.id === node.id)
+        const siblings = tree?.children.get(node.parentId) ?? [], siblingIndex = siblings.findIndex(value => value.id === node.id)
         if (siblings.length > 1 && siblingIndex >= 0) {
           const versions = document.createElement('div'); versions.className = 'node-versions'
           versions.setAttribute('aria-label', '此轮分支切换')
@@ -514,10 +538,18 @@ function addMessage(role: 'user' | 'assistant', content: string, isPending = fal
         else transcript.insertBefore(node, cursor)
       }
       while (cursor) { const next: ChildNode | null = cursor.nextSibling; cursor.remove(); cursor = next }
-      if (dialogueAtBottom) dialogueNeedsBottom = true
+      const anchor = visibleNode && transcript.querySelector<HTMLElement>(`[data-node-id="${CSS.escape(visibleNode.dataset.nodeId!)}"]`)
+      if (anchor && previousTop !== undefined) {
+        savedScroll.dialogue = transcript.scrollTop + anchor.getBoundingClientRect().top - previousTop
+        dialogueNeedsBottom = false
+      } else if (dialogueAtBottom) dialogueNeedsBottom = true
       panel.restoreScroll(savedScroll)
       if (focused?.isConnected && content.contains(focused)) focused.focus({ preventScroll: true })
-      else if (focusedData) [...content.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)?.focus({ preventScroll: true })
+      else if (focusedData) {
+        const match = [...content.querySelectorAll('button')].find(button => JSON.stringify(button.dataset) === focusedData)
+        const target = match ?? (focused?.dataset.olderHistory ? anchor || transcript : undefined)
+        target?.focus({ preventScroll: true })
+      }
     },
     setAgent(agent) {
       if (!logo) return

@@ -3,7 +3,7 @@ import type { FileRef, FileSelection, FileSearch, FilePreview, FileContent, File
 import { pendingFilesValid, pendingFileDrafts } from './file-client.js'
 import type { RunnableModelSummary } from '@anybox/models'
 import { canUseModel } from './models-client.js'
-import type { Api, ApiError, PendingSubmission, RunEventView, RunView, SessionView, NodeView, NodePage, SessionPosition, SessionViewMode } from './client-types.js'
+import type { Api, ApiError, ContinuousHistoryPage, PendingSubmission, RunEventView, RunView, SessionView, NodeView, NodePage, SessionPosition, SessionViewMode } from './client-types.js'
 import type { SessionRef } from './workspace-layout.js'
 import type { ProtocolViewSnapshot } from '../core/view/types.js'
 import { getProtocolWebModule } from './protocols/modules.js'
@@ -79,6 +79,8 @@ export interface SessionSnapshot {
   readonly path: readonly NodeView[]
   readonly children: readonly NodeView[]
   readonly moreChildren: boolean
+  readonly olderHistory?: readonly { readonly firstNodeId: string; readonly cursor: string }[]
+  readonly loadingHistory?: string
   readonly pending?: PendingSubmission
   readonly busy: boolean
   readonly loading: boolean
@@ -135,6 +137,7 @@ export interface SessionController {
   navigate(id: string | null, draft?: string, images?: readonly ImageRef[], files?: readonly FileRef[]): Promise<void>
   focusRun(id: string): void
   moreChildren(): Promise<void>
+  moreHistory(cursor: string): Promise<void>
   regenerate(node: NodeView): Promise<void>
 }
 export interface SessionEnvironment {
@@ -156,6 +159,31 @@ export interface SessionEnvironment {
   readonly historyOnly?: boolean
 }
 
+interface HistoryWindow {
+  readonly nodes: readonly NodeView[]
+  readonly nextCursor?: string
+}
+
+/** Windows are ordered newest first, and each one contains contiguous turns in reading order. */
+function mergeHistoryPage(windows: readonly HistoryWindow[], page: ContinuousHistoryPage, index: number, prepend: boolean): readonly HistoryWindow[] {
+  if (!prepend && !page.nodes.length) return []
+  let nodes: readonly NodeView[] = prepend ? [...page.nodes, ...windows[index]!.nodes] : page.nodes
+  let nextCursor = page.nextCursor
+  let end = index + Number(prepend)
+  while (end < windows.length) {
+    const older = windows[end]!
+    const first = nodes[0]!
+    const olderTail = older.nodes.at(-1)!.id
+    const overlap = older.nodes.findIndex(node => node.id === first.id)
+    if (overlap !== -1 || olderTail === first.parentId) {
+      nodes = [...(overlap === -1 ? older.nodes : older.nodes.slice(0, overlap)), ...nodes]
+      nextCursor = older.nextCursor
+    } else if (!nodes.some(node => node.id === olderTail)) break
+    end++
+  }
+  return [...windows.slice(0, index), { nodes, nextCursor }, ...windows.slice(end)]
+}
+
 /** One controller per Session. A view may detach while its already-issued write still settles. */
 export function createSessionController(ref: SessionRef, env: SessionEnvironment): SessionController {
   let session: SessionView | undefined, runs: readonly RunView[] = []
@@ -163,6 +191,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
   const initialPosition = env.position ?? { viewNodeId: null }
   let position: SessionPosition = { ...initialPosition, viewMode: initialPosition.viewMode === 'runs' ? 'runs' : 'dialogue' }
   let pathNodes: readonly NodeView[] = [], children: readonly NodeView[] = [], childCursor: string | undefined
+  let historyWindows: readonly HistoryWindow[] = [], loadingHistory: string | undefined
   let notice = '', busy = false, loading = true, locationVersion = 0
   let listener: (() => void) | undefined, generation = 0, timer: unknown, refreshJob: Promise<void> | undefined
   let refreshAgain = false, locationAgain = false, live = false, locationJob: Promise<void> | undefined
@@ -382,17 +411,22 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     }
     pumpTrace()
   }
+  const acceptHistoryPage = (page: ContinuousHistoryPage, index = 0, prepend = false) => {
+    historyWindows = mergeHistoryPage(historyWindows, page, index, prepend)
+    pathNodes = [...historyWindows].reverse().flatMap(window => window.nodes)
+    for (const run of page.runs) adopt(run)
+  }
   const readLocation = async (append = false): Promise<void> => {
     const version = generation, location = locationVersion, nodeId = position.viewNodeId
     const cursor = append ? childCursor : undefined
     try {
       const nodes = append ? pathNodes : await read<readonly NodeView[]>(`${path}/nodes/${encodeURIComponent(nodeId ?? 'root')}/path`, version)
-      const page = env.continuous ? undefined : await read<NodePage>(`${path}/nodes?parentNodeId=${encodeURIComponent(nodeId ?? 'root')}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, version)
+      const page = await read<NodePage>(`${path}/nodes?parentNodeId=${encodeURIComponent(nodeId ?? 'root')}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, version)
       if (location !== locationVersion) return
       pathNodes = nodes
-      children = append ? [...children, ...(page?.nodes ?? [])] : page?.nodes ?? []
-      childCursor = page?.nextCursor
-      for (const node of env.continuous ? [] : nodes) {
+      children = append ? [...children, ...page.nodes] : page.nodes
+      childCursor = page.nextCursor
+      for (const node of nodes) {
         const run = runs.find(value => value.id === node.sourceRunId)
         if (run?.protocolBinding && views.get(run.id)?.status !== 'committed') await loadTrace(run.id, version)
       }
@@ -400,7 +434,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       loading = false
     } catch (error) {
       if (version !== generation || location !== locationVersion || !attached()) return
-      if (!env.continuous && isApiError(error) && error.status === 404 && nodeId !== null) {
+      if (isApiError(error) && error.status === 404 && nodeId !== null) {
         position = { viewNodeId: null, viewMode: position.viewMode }
         remember()
         pathNodes = []; children = []; childCursor = undefined
@@ -417,6 +451,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     if (!run || isActive(run)) return
     if (locationJob) { locationAgain = true; return }
     if (run.status === 'completed' && run.resultNodeId) {
+      if (env.continuous) return
       const version = generation, location = locationVersion, nodeId = run.resultNodeId
       const current = () => attached() && version === generation && location === locationVersion &&
         position.follow === follow && position.viewNodeId === follow.parentNodeId
@@ -569,7 +604,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       notice = '会话已归档，未接受的消息已保留为草稿。恢复后可继续。'
     }
     else if (session?.historyMode === 'dialogue-v1' || ![1, 2, 3].includes(submission.schemaVersion ?? 0) || submission.invalidImages || submission.invalidFiles || submission.parentNodeId === undefined || (submission.schemaVersion !== 3 && env.models && submission.modelId === undefined)) {
-      notice = session?.historyMode === 'dialogue-v1' ? '旧版会话仅供查看。待提交消息已恢复为草稿；请新建原生会话。' : '旧版待提交消息尚未被接受，已保留输入。请确认对话位置后重新发送。'
+      notice = session?.historyMode === 'dialogue-v1' ? '旧对话仅供查看，请回到这个 Agent 的连续对话。待提交消息已恢复为草稿。' : '旧版待提交消息尚未被接受，已保留输入。请确认对话位置后重新发送。'
       if (!draftAt(position.viewNodeId).text && !draftAt(position.viewNodeId).images.length && !draftAt(position.viewNodeId).files.length) {
         const restored = { ...draftFromInput(submission.input, submission.images), files: pendingFileDrafts(submission) }
         setDraftAt(position.viewNodeId, submission.invalidImages ? { ...restored, images: [...restored.images, { id: 'invalid-pending-image', name: '待恢复图片', status: 'failed', byteLength: 0, error: '图片信息不兼容，请移除后重新添加。' }] } : restored)
@@ -581,6 +616,10 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     snapshot: () => ({ session, continuous: env.continuous, historyOnly: env.historyOnly, runs,
       run: (env.continuous ? runs.find(isActive) : undefined) ?? runs.find(item => item.id === position.focusedRunId), position,
       path: pathNodes, children, moreChildren: Boolean(childCursor), pending: pending(), busy, loading, notice,
+      ...(env.continuous ? {
+        olderHistory: historyWindows.flatMap(({ nodes, nextCursor }) => nextCursor ? [{ firstNodeId: nodes[0]!.id, cursor: nextCursor }] : []),
+        loadingHistory,
+      } : {}),
       draft: draftAt(position.viewNodeId).text, images: draftAt(position.viewNodeId).images, files: draftAt(position.viewNodeId).files, events, expanded, views, traceLoading: traceLoading() }),
     attach(value) { listener = value; session = undefined; loading = true; invalidate(); void controller.refresh() },
     detach() {
@@ -737,6 +776,24 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
       await job
       finishLocation(job)
     },
+    async moreHistory(cursor) {
+      if (!env.continuous || !attached() || busy || loadingHistory || !historyWindows.some(window => window.nextCursor === cursor)) return
+      const version = generation
+      loadingHistory = cursor
+      notice = ''
+      emit()
+      try {
+        const page = await read<ContinuousHistoryPage>(`${path}/history?before=${encodeURIComponent(cursor)}`, version)
+        const index = historyWindows.findIndex(window => window.nextCursor === cursor)
+        if (index !== -1) acceptHistoryPage(page, index, true)
+      } catch (error) {
+        if (version === generation && attached()) notice = env.messageFor(error)
+      } finally {
+        loadingHistory = undefined
+        syncTraceReads()
+        emit()
+      }
+    },
     refresh() {
       clearTimer()
       pumpTrace()
@@ -750,27 +807,35 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
           try {
             const currentSession = await read<SessionView>(path, version)
             if (env.continuous ? !currentSession.continuous : currentSession.projectId !== ref.projectId) { env.missing(ref); return }
+            const history = env.continuous ? await read<ContinuousHistoryPage>(`${path}/history`, version) : undefined
             const becameArchived = Boolean(session && !session.archivedAt && currentSession.archivedAt)
-            session = currentSession
+            session = history ? { ...currentSession, headNodeId: history.headNodeId } : currentSession
             if (becameArchived && env.archived) {
               // Reconcile uncertainty before closing; a failed read leaves pending input intact.
               try { await recover(version) }
               finally { if (version === generation && attached()) env.archived(ref) }
               return
             }
-            // Discover every run, including work started through another tab or host.
-            const loaded = await read<readonly RunView[]>(`${path}/runs`, version)
-            for (const value of loaded) adopt(value)
-            if (env.continuous && position.viewNodeId !== (currentSession.headNodeId ?? null)) {
-              locationVersion++
-              loading = true
-              position = { ...position, viewNodeId: currentSession.headNodeId ?? null, follow: undefined }
-              remember()
+            if (history) {
+              acceptHistoryPage(history)
+              const currentRunIds = new Set(history.runs.map(run => run.id))
+              runs = runs.filter(run => !isActive(run) || currentRunIds.has(run.id))
+              if (position.viewNodeId !== history.headNodeId) {
+                locationVersion++
+                position = { ...position, viewNodeId: history.headNodeId, follow: undefined }
+                remember()
+              }
+              loading = false
+            } else {
+              const loaded = await read<readonly RunView[]>(`${path}/runs`, version)
+              for (const value of loaded) adopt(value)
             }
             // A display read failure must not prevent pending reconciliation or following a successful result.
             await Promise.allSettled(runs.filter(value => isActive(value) || terminalTrace.has(value.id) || expanded.has(value.id) || unfinishedAtPosition(value)).map(value => loadTrace(value.id, version)))
-            if (locationJob) locationAgain = true
-            else await readLocation()
+            if (!history) {
+              if (locationJob) locationAgain = true
+              else await readLocation()
+            }
             syncTraceReads()
             await recover(version)
             await followResult()
@@ -787,7 +852,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     async submit() {
       if (!session || env.historyOnly || busy || loading || (env.continuous && runs.some(isActive))) return
       if (session.archivedAt) { await recover(generation); notice = '会话已归档，请先恢复后再继续。'; emit(); return }
-      if (session.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
+      if (session.historyMode === 'dialogue-v1') { notice = '旧对话仅供查看，请回到这个 Agent 的连续对话。'; emit(); return }
       let submission = pending()
       if (!submission) {
         if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
@@ -813,7 +878,7 @@ export function createSessionController(ref: SessionRef, env: SessionEnvironment
     },
     async regenerate(node) {
       if (env.continuous || readOnly() || busy || pending() || node.sessionId !== ref.sessionId) return
-      if (session?.historyMode === 'dialogue-v1') { notice = '旧版会话仅供查看，请新建原生会话。'; emit(); return }
+      if (session?.historyMode === 'dialogue-v1') { notice = '旧对话仅供查看，请回到这个 Agent 的连续对话。'; emit(); return }
       if (env.models && !canUseModel(env.models().find(value => value.id === session?.modelId))) {
         notice = '请在 Agent 设置中配置可用的默认模型。'; emit(); return
       }

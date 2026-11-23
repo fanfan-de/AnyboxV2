@@ -1,5 +1,4 @@
 import type { JsonValue } from '@anybox/tool-api'
-import type { RunEnvironmentAccess } from '@anybox/execution-environments/bindings'
 import type { RunOperationStart, SavedRunOperation, SessionRunPort } from '../session/port.js'
 import { legacyToolSelection } from '../tool/catalog.js'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
@@ -11,12 +10,6 @@ import type { ToolEnvironmentSnapshot } from './domain.js'
 export function legacyToolEnvironmentSnapshot(initialization: { readonly schemaVersion: number; readonly toolSelection?: ToolSelectionSnapshot }): ToolEnvironmentSnapshot {
   const selection = initialization.schemaVersion >= 2 && initialization.toolSelection ? initialization.toolSelection : legacyToolSelection
   return parseToolEnvironmentSnapshot({ schemaVersion: 1, environments: [{ environmentId: computerToolEnvironmentId, version: computerToolEnvironmentVersion, tools: selection.tools }] })
-}
-
-/** Older Runs can only recover the original Computer and the grants imported at cutover. */
-export function canBindLegacyComputerAccess(access: RunEnvironmentAccess, originalTargetProven: boolean): boolean {
-  return !access.search && (access.functions.length === 0 || originalTargetProven && access.functions.every(({ grant }) =>
-    grant.tool.environmentId === computerToolEnvironmentId && grant.generation === 1 && grant.source === 'trusted-configuration'))
 }
 
 function object(value: JsonValue | undefined): Readonly<Record<string, JsonValue>> | undefined {

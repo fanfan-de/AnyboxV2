@@ -42,7 +42,6 @@
           <button type="button" data-settings-section="connections" aria-controls="personal-agent--connections-settings"><span>管理连接</span></button>
           <button type="button" data-settings-section="models" aria-controls="personal-agent--models-settings"><span>模型管理</span></button>
           <button type="button" data-settings-section="tools" aria-controls="personal-agent--tools-settings"><span>Agent 工具</span></button>
-          <button type="button" data-settings-section="prompts" aria-controls="personal-agent--prompt-settings"><span>Prompt 管理</span></button>
           <button type="button" data-settings-section="archive" aria-controls="personal-agent--archive-settings"><span>历史对话</span></button>
           <button type="button" data-settings-section="units" aria-controls="personal-agent--units-settings"><span>执行环境</span></button>
         </nav>
@@ -94,7 +93,11 @@
                   <div class="agent-logo-presets" role="group" aria-labelledby="personal-agent--logo-examples-title" data-agent-logo-presets></div>
                 </div>
               </fieldset>
-              <div><label for="personal-agent--agent-instructions">指令</label><textarea id="personal-agent--agent-instructions" data-agent-instructions rows="7" maxlength="100000" required spellcheck="false"></textarea></div>
+              <div>
+                <label for="personal-agent--agent-instructions">Prompt</label>
+                <textarea id="personal-agent--agent-instructions" data-agent-instructions rows="7" maxlength="100000" required spellcheck="false" aria-describedby="personal-agent--agent-instructions-hint"></textarea>
+                <p id="personal-agent--agent-instructions-hint" class="settings-hint">Prompt 随 Agent 保存，供它后续的连续对话使用。</p>
+              </div>
               <div>
                 <label for="personal-agent--agent-model">默认模型</label><select id="personal-agent--agent-model" data-agent-model aria-describedby="personal-agent--agent-model-hint"></select>
                 <p id="personal-agent--agent-model-hint" class="settings-hint" data-agent-model-hint>Agent 的新运行使用此默认模型。</p>
@@ -117,40 +120,6 @@
         <section id="personal-agent--models-settings" class="settings-panel" data-settings-panel="models" aria-labelledby="personal-agent--models-settings-title" hidden></section>
         <section id="personal-agent--tools-settings" class="settings-panel" data-settings-panel="tools" aria-labelledby="personal-agent--tools-title" hidden></section>
         <section id="personal-agent--units-settings" class="settings-panel" data-settings-panel="units" aria-labelledby="personal-agent--units-title" hidden></section>
-        <section id="personal-agent--prompt-settings" class="settings-panel prompt-dialog" data-settings-panel="prompts" aria-labelledby="personal-agent--prompt-title" hidden>
-          <header class="settings-panel-heading"><h3 id="personal-agent--prompt-title">Prompt 管理</h3><p>保存草稿 → 发布版本 → 应用到 Agent</p></header>
-          <p id="personal-agent--prompt-notice" class="prompt-notice" role="status" aria-live="polite" hidden></p>
-          <div class="prompt-workspace">
-            <aside class="prompt-library" aria-label="Prompt 文档">
-              <button id="personal-agent--new-prompt" type="button">新建 Prompt</button>
-              <div id="personal-agent--prompt-list" class="navigation-list" aria-label="Prompt 列表"></div>
-              <p id="personal-agent--prompt-empty">还没有 Prompt。新建一个，或从当前 Agent 指令开始编辑。</p>
-            </aside>
-            <div class="prompt-editor">
-              <section class="settings-section" aria-labelledby="personal-agent--prompt-agent-title">
-                <label id="personal-agent--prompt-agent-title" for="personal-agent--prompt-agent">应用到哪个 Agent</label>
-                <div class="prompt-inline"><select id="personal-agent--prompt-agent"></select><button id="personal-agent--edit-agent-prompt" class="secondary-button" type="button">编辑当前指令</button></div>
-                <div id="personal-agent--prompt-bindings"></div>
-                <p class="settings-hint">后续运行使用新版本，正在进行的运行保持原内容。</p>
-              </section>
-              <form id="personal-agent--prompt-form" class="settings-section">
-                <div class="prompt-section-heading"><h3>草稿</h3><span id="personal-agent--prompt-draft-status">新建草稿</span></div>
-                <label for="personal-agent--prompt-name">名称</label><input id="personal-agent--prompt-name" maxlength="200" required placeholder="例如：代码助手指令">
-                <label for="personal-agent--prompt-description">说明（可选）</label><input id="personal-agent--prompt-description" maxlength="2000" placeholder="这个 Prompt 用于什么任务">
-                <div class="prompt-fields"><div><label for="personal-agent--prompt-kind">用途</label><select id="personal-agent--prompt-kind"><option value="agent-instruction">Agent 指令</option><option value="task-template">任务模板</option><option value="context">上下文</option></select></div><div><label for="personal-agent--prompt-role">消息角色</label><select id="personal-agent--prompt-role"></select></div></div>
-                <p id="personal-agent--prompt-content-hint" class="settings-hint"></p>
-                <label for="personal-agent--prompt-content">内容</label><textarea id="personal-agent--prompt-content" rows="9" maxlength="100000" aria-describedby="personal-agent--prompt-content-hint" required placeholder="输入 Prompt 内容…" spellcheck="false"></textarea>
-                <div class="settings-actions"><button id="personal-agent--save-prompt" type="submit">保存草稿</button><button id="personal-agent--publish-prompt" type="button">发布版本</button><button id="personal-agent--discard-prompt" class="secondary-button" type="button">放弃修改 / 重新读取</button></div>
-              </form>
-              <section class="settings-section" aria-labelledby="personal-agent--prompt-versions-title">
-                <h3 id="personal-agent--prompt-versions-title">已发布版本</h3>
-                <label for="personal-agent--prompt-version">版本</label><div class="prompt-inline"><select id="personal-agent--prompt-version"></select><button id="personal-agent--apply-prompt" type="button">应用到 Agent</button></div>
-                <p id="personal-agent--prompt-version-status">保存并发布后，可以在这里应用版本。</p>
-                <pre id="personal-agent--prompt-version-content" class="prompt-preview" tabindex="0" aria-label="已发布版本内容" hidden></pre>
-              </section>
-            </div>
-          </div>
-        </section>
       </div>
     </div>
   </dialog>

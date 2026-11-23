@@ -25,7 +25,7 @@ import type { ApplicationHistory, NativeHistory, NativeInitialization, NativeRun
 import type { PromptSnapshot } from '../prompt/domain.js'
 import type { LocalStoragePort, StorageMigration, StorageReader, StorageRow, StorageTransaction } from '@anybox/storage-sqlite/port'
 import { assemblePath, treeError, createSession, deriveSessionTitle, agentToolsConflict } from './domain.js'
-import type { Session, AgentToolsSelection, ConversationNode } from './domain.js'
+import type { Session, AgentToolsSelection, ConversationNode, HistorySubchain } from './domain.js'
 import { createToolSelection, defaultToolIds, getToolById, legacyToolSelection } from '../tool/catalog.js'
 import type { ToolSelectionSnapshot } from '../tool/catalog.js'
 import { requestCancellation, settleRun, validateRunInput } from '../run/domain.js'
@@ -35,17 +35,28 @@ import type { RunEventData } from '../run/execution.js'
 import type { ContinuousNativeHistoryScope, SessionPort, SessionRunPort } from './port.js'
 import { environmentForTool, parseToolEnvironmentSnapshot } from '../tool-environments/domain.js'
 import type { RunToolTargets, ToolEnvironmentCatalog } from '../tool-environments/port.js'
-import { canBindLegacyComputerAccess, computerCleanupReceipt } from '../tool-environments/history.js'
+import { computerCleanupReceipt } from '../tool-environments/history.js'
 import { addHistoryUsage, nativeHistoryUsage } from './continuous-history.js'
 import type { HistoryUsage } from './continuous-history.js'
 import { portableHistory } from './portable-history.js'
 import type { PortableHistoryEvent } from './portable-history.js'
 
-type SessionRecords = Omit<SessionPort, 'targetedTools' | 'environmentTools' | 'getAgentEnvironmentSelection' | 'setAgentEnvironmentSelection' | 'createSession' | 'openContinuousSession' | 'getSessionDefaults' | 'setSessionDefaults' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
+type SessionRecords = Omit<SessionPort, 'targetedTools' | 'environmentTools' | 'getAgentEnvironmentSelection' | 'setAgentEnvironmentSelection' | 'openContinuousSession' | 'getSessionDefaults' | 'setSessionDefaults' | 'importImage' | 'getImage' | 'renewImages' | 'searchProjectFiles' | 'previewProjectFile' | 'prepareProjectFiles' | 'getFileSnapshot' | 'renewProjectFiles' |
   'openProjectFileTree' | 'readProjectFileTreePage' | 'closeProjectFileTree' | 'onProjectFileTreeRetired'> & Omit<SessionRunPort, 'describeImages' | 'readFileSnapshots'> & {
   getAgentEnvironmentSelection(id: string, fallback: readonly string[]): Promise<EnvironmentSelection>
   setAgentEnvironmentSelection(id: string, input: import('@anybox/execution-environments/bindings').SelectionInput, fallback: readonly string[]): Promise<EnvironmentSelection>
-  createSession(id: string, projectId: string, agentId: string, now: string, modelId: string | null, environmentIds?: readonly string[], continuous?: true): Promise<Session>
+  openAgentSession(id: string, projectId: string, agentId: string, now: string, environmentIds?: readonly string[]): Promise<Session>
+}
+
+function ensureEnvironmentTables(tx: StorageTransaction): void {
+  tx.execute('CREATE TABLE IF NOT EXISTS harness_environment_preferences (agent_id TEXT PRIMARY KEY, version INTEGER NOT NULL, ids_json TEXT NOT NULL)')
+  tx.execute(`CREATE TABLE IF NOT EXISTS harness_session_environments (
+    session_id TEXT NOT NULL REFERENCES harness_sessions(id), version INTEGER NOT NULL, ids_json TEXT NOT NULL, PRIMARY KEY(session_id, version)
+  )`)
+  tx.execute(`CREATE TABLE IF NOT EXISTS harness_run_environment_access (
+    run_id TEXT PRIMARY KEY REFERENCES harness_runs(id), access_json TEXT NOT NULL, format_version INTEGER NOT NULL CHECK(format_version = 1),
+    selection_version INTEGER NOT NULL, grant_revision INTEGER NOT NULL
+  )`)
 }
 
 const migrations: readonly StorageMigration[] = [{
@@ -370,10 +381,33 @@ const migrations: readonly StorageMigration[] = [{
   },
 }, {
   version: 20,
+  up: ensureEnvironmentTables,
+}, {
+  version: 21,
   up(tx) {
-    tx.execute('CREATE TABLE harness_environment_preferences (agent_id TEXT PRIMARY KEY, version INTEGER NOT NULL, ids_json TEXT NOT NULL)')
-    tx.execute('CREATE TABLE harness_session_environments (session_id TEXT NOT NULL REFERENCES harness_sessions(id), version INTEGER NOT NULL, ids_json TEXT NOT NULL, PRIMARY KEY(session_id,version))')
-    tx.execute('CREATE TABLE harness_run_environment_access (run_id TEXT PRIMARY KEY REFERENCES harness_runs(id), access_json TEXT NOT NULL, format_version INTEGER NOT NULL CHECK(format_version=1), selection_version INTEGER NOT NULL, grant_revision INTEGER NOT NULL)')
+    // The local v20 created history boundaries while the upstream v20 created environment tables.
+    ensureEnvironmentTables(tx)
+    tx.execute(`CREATE INDEX IF NOT EXISTS harness_runs_head_attempts ON harness_runs(session_id, parent_node_id)
+      WHERE project_id IS NOT NULL AND status != 'completed'`)
+    if (tx.get("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'harness_history_subchains'")) return
+    // A boundary belongs to the first successful node of each subchain. Existing context roots
+    // keep their public identity, including when their first admitted Run failed.
+    tx.execute(`CREATE TABLE harness_history_subchains (
+      seq INTEGER PRIMARY KEY REFERENCES harness_nodes(seq), session_id TEXT NOT NULL REFERENCES harness_sessions(id),
+      id TEXT NOT NULL, anchor_node_id TEXT REFERENCES harness_nodes(id)
+    )`)
+    tx.execute('CREATE INDEX harness_history_subchains_session ON harness_history_subchains(session_id, seq)')
+    const recordBoundaries = `INSERT INTO harness_history_subchains(seq, session_id, id, anchor_node_id)
+      SELECT n.seq, n.session_id, COALESCE(current.root_id, n.id), n.parent_id
+      FROM harness_nodes n JOIN harness_sessions s ON s.id = n.session_id AND s.continuous = 1
+      JOIN harness_runs r ON r.id = n.source_run_id
+      LEFT JOIN harness_continuous_run_contexts current ON current.run_id = n.source_run_id
+      LEFT JOIN harness_nodes p ON p.id = n.parent_id
+      LEFT JOIN harness_continuous_run_contexts previous ON previous.run_id = p.source_run_id
+      WHERE (n.parent_id IS NULL OR current.root_id IS NOT previous.root_id OR r.application_prefix = 1)`
+    tx.execute(recordBoundaries)
+    tx.execute(`CREATE TRIGGER harness_nodes_history_subchain AFTER INSERT ON harness_nodes
+      BEGIN ${recordBoundaries} AND n.seq = NEW.seq; END`)
   },
 }]
 
@@ -387,18 +421,6 @@ function environmentSelection(reader: StorageReader, id: string, fallback: reado
 function readRunAccess(reader: StorageReader, id: string) {
   const row = reader.get('SELECT access_json FROM harness_run_environment_access WHERE run_id=?', [id])
   return row ? parseRunAccess(String(row.access_json)) : undefined
-}
-
-function checkLegacyAccess(reader: StorageReader, sessionId: string, access: import('@anybox/execution-environments/bindings').RunEnvironmentAccess,
-  units: import('../unit/port.js').RunUnitBindings | undefined, initialization: NativeInitialization, excludeRun = ''): boolean {
-  const row = reader.get('SELECT unit_bindings_json FROM harness_runs WHERE session_id=? AND id<>? ORDER BY rowid LIMIT 1', [sessionId,excludeRun])
-  if (!row) return true
-  const saved = optional(row,'unit_bindings_json')
-  const prior = saved ? validateRunUnitBindings(JSON.parse(saved)).computer : undefined
-  const target = units?.computer
-  const same = target && (prior ? target.attachmentId === prior.attachmentId && target.unitId === prior.unitId && target.epoch === prior.epoch :
-    initialization.schemaVersion < 3 && target.attachmentId === 'local:computer')
-  return canBindLegacyComputerAccess(access, Boolean(same))
 }
 
 const initialResumeState: RunResumeState = Object.freeze({ schemaVersion: 1, runOwnerEpoch: 1, revision: 0,
@@ -1014,7 +1036,9 @@ export async function openSqliteSessionRecords(
     adoptSessionEnvironments(id, input) {
       return db.transaction(tx => {
         const row = tx.get('SELECT * FROM harness_sessions WHERE id=?', [id]); if (!row) throw new Error('unknown session')
-        if (row.continuous !== 1 || !manager) throw environmentError('environment-adoption-unavailable', 409)
+        if (row.continuous !== 1 || row.history_mode !== 'native-local-v1' || row.archived_at !== null || !manager) {
+          throw environmentError('environment-adoption-unavailable', 409)
+        }
         const grants = manager.readIn(tx, required(row, 'agent_id'))
         const previous = environmentSelection(tx, id, [], true)
         if (grants.revision !== input.expectedGrantRevision || previous.version !== input.expectedVersion) throw environmentError('environment-revision-conflict', 409)
@@ -1033,53 +1057,31 @@ export async function openSqliteSessionRecords(
         return { ...selection, version: previous.version + 1 }
       })
     },
-    createSession(id, projectId, agentId, now, modelId, environmentIds, continuous) {
+    openAgentSession(id, projectId, agentId, now, environmentIds) {
       return db.transaction(tx => {
         if (!tx.get('SELECT id FROM harness_projects WHERE id = ?', [projectId])) {
           throw new Error(`unknown project ${projectId}`)
         }
-        if (continuous) {
-          const prior = tx.get('SELECT * FROM harness_sessions WHERE agent_id = ? AND continuous = 1', [agentId])
-          if (prior) return Object.freeze({ ...sessionFromRow(prior, tx), projectId })
-        }
+        const prior = tx.get('SELECT * FROM harness_sessions WHERE agent_id = ? AND continuous = 1', [agentId])
+        if (prior) return Object.freeze({ ...sessionFromRow(prior, tx), projectId })
         const preference = environmentSelection(tx, agentId, environmentIds ?? ['computer'])
         const { toolSelection, toolEnvironments } = snapshotAgentTools(tx, agentId, environments, preference.environmentIds.filter(id => id !== 'model-search'), preference.toolIdsByEnvironment, preference.toolIdsByTarget)
-        const session = createSession(id, projectId, agentId, now, modelId, toolSelection, toolEnvironments)
-        tx.execute("INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json, tool_environments_json, continuous) VALUES (?, ?, ?, ?, ?, 'native-local-v1', ?, ?, ?)",
-          [id, projectId, agentId, now, modelId, serialize(toolSelection), toolEnvironments ? serialize(toolEnvironments) : null, continuous ? 1 : 0])
-        tx.execute('INSERT INTO harness_session_environments VALUES(?,0,?)', [id,JSON.stringify(preference)])
-        return Object.freeze({ ...session, environmentSelection: { ...preference, version: 0 }, ...(continuous ? { continuous, headNodeId: null } : {}) })
+        const session = createSession(id, projectId, agentId, now, null, toolSelection, toolEnvironments)
+        tx.execute(`INSERT INTO harness_sessions (id, project_id, agent_id, created_at, model_id, history_mode, tool_selection_json, tool_environments_json, continuous)
+          VALUES (?, ?, ?, ?, NULL, 'native-local-v1', ?, ?, 1)`,
+        [id, projectId, agentId, now, serialize(toolSelection), toolEnvironments ? serialize(toolEnvironments) : null])
+        tx.execute('INSERT INTO harness_session_environments VALUES (?, 0, ?)', [id, serialize(preference)])
+        return Object.freeze({ ...session, environmentSelection: { ...preference, version: 0 }, continuous: true, headNodeId: null })
       })
     },
-    selectSessionModel(sessionId, modelId, protocolId) {
+    selectSessionModel(sessionId, modelId) {
       return db.transaction(tx => {
         requireSession(tx, sessionId)
         const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!, tx)
         if (session.archivedAt !== null) throw treeError('session-archived')
-        if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
-        if (!session.continuous && session.protocolId && session.protocolId !== protocolId) throw treeError('protocol-mismatch')
+        if (!session.continuous) throw treeError('legacy-session-readonly')
         tx.execute('UPDATE harness_sessions SET model_id = ? WHERE id = ?', [modelId, sessionId])
         return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])!, tx)
-      })
-    },
-    archiveSession(id) {
-      return db.transaction(tx => {
-        requireSession(tx, id)
-        const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!, tx)
-        if (session.continuous) throw treeError('continuous-session')
-        if (session.archivedAt !== null) return session
-        if (tx.get("SELECT id FROM harness_runs WHERE session_id = ? AND status IN ('running', 'cancelling') LIMIT 1", [id])) {
-          throw treeError('session-has-active-runs')
-        }
-        tx.execute('UPDATE harness_sessions SET archived_at = ? WHERE id = ?', [inputs.now(), id])
-        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!, tx)
-      })
-    },
-    restoreSession(id) {
-      return db.transaction(tx => {
-        requireSession(tx, id)
-        tx.execute('UPDATE harness_sessions SET archived_at = NULL WHERE id = ?', [id])
-        return sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [id])!, tx)
       })
     },
     listArchivedSessions() {
@@ -1103,6 +1105,48 @@ export async function openSqliteSessionRecords(
         requireSession(reader, sessionId)
         const row = reader.get('SELECT * FROM harness_nodes WHERE session_id = ? AND id = ?', [sessionId, id])
         return row ? nodeFromRow(row, reader) : undefined
+      })
+    },
+    getContinuousHistory(sessionId, before, limit = 24) {
+      return db.read(reader => {
+        const session = reader.get('SELECT continuous, head_node_id FROM harness_sessions WHERE id = ?', [sessionId])
+        if (!session) throw new Error(`unknown session ${sessionId}`)
+        if (session.continuous !== 1) throw treeError('legacy-session-readonly')
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) throw new TypeError('invalid history page limit')
+        const headNodeId = optional(session, 'head_node_id') ?? null
+        const boundary = before === undefined ? undefined : reader.get('SELECT seq FROM harness_nodes WHERE session_id = ? AND id = ?', [sessionId, before])
+        if (before !== undefined && !boundary) throw new TypeError('invalid history cursor')
+        const rows = reader.all(`SELECT n.*, chain.id AS subchain_id, chain.anchor_node_id, parent.id AS parent_subchain_id
+          FROM harness_nodes n
+          LEFT JOIN harness_history_subchains chain ON chain.seq = (
+            SELECT max(seq) FROM harness_history_subchains WHERE session_id = n.session_id AND seq <= n.seq)
+          LEFT JOIN harness_nodes anchor ON anchor.id = chain.anchor_node_id AND anchor.session_id = n.session_id
+          LEFT JOIN harness_history_subchains parent ON parent.seq = (
+            SELECT max(seq) FROM harness_history_subchains WHERE session_id = n.session_id AND seq <= anchor.seq)
+          WHERE n.session_id = ? AND n.seq < COALESCE(?, 9223372036854775807)
+          ORDER BY n.seq DESC LIMIT ?`, [sessionId, boundary?.seq ?? null, limit + 1])
+        const subchains = new Map<string, HistorySubchain>()
+        const nodes = rows.slice(0, limit).reverse().map(row => {
+          const subchainId = required(row, 'subchain_id')
+          if (!subchains.has(subchainId)) {
+            const anchorNodeId = optional(row, 'anchor_node_id') ?? null
+            const parentId = optional(row, 'parent_subchain_id') ?? null
+            if (Boolean(anchorNodeId) !== Boolean(parentId) || subchainId === parentId) throw treeError('invalid-history')
+            subchains.set(subchainId, { id: subchainId, parentId, anchorNodeId })
+          }
+          return { ...nodeFromRow(row, reader), subchainId }
+        })
+        const runs = nodes.map(node => {
+          const run = node.sourceRunId && getRun(reader, node.sourceRunId)
+          if (!run) throw treeError('invalid-history')
+          return run
+        })
+        if (before === undefined) {
+          const attempts = reader.all(`SELECT * FROM harness_runs WHERE session_id = ? AND parent_node_id IS ?
+            AND project_id IS NOT NULL AND status != 'completed' ORDER BY rowid DESC LIMIT 20`, [sessionId, headNodeId])
+          runs.push(...attempts.slice().reverse().map(runFromRow))
+        }
+        return { headNodeId, nodes, subchains: [...subchains.values()], runs, ...(rows.length > limit ? { nextCursor: nodes[0]!.id } : {}) }
       })
     },
     getNodePath(sessionId, id) { return db.read(reader => nodePath(reader, sessionId, id)) },
@@ -1140,18 +1184,14 @@ export async function openSqliteSessionRecords(
         const prior = accepted(tx, input)
         if (prior) return { run: prior, created: false }
         const session = sessionFromRow(tx.get('SELECT * FROM harness_sessions WHERE id = ?', [input.sessionId])!, tx)
+        if (!session.continuous || session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
         if (session.archivedAt !== null) throw treeError('session-archived')
-        if (session.historyMode !== 'native-local-v1') throw treeError('legacy-session-readonly')
-        if (session.continuous) {
-          if (!input.projectId) throw new TypeError('projectId is required for a continuous Session')
-          if (tx.get("SELECT id FROM harness_runs WHERE session_id = ? AND project_id IS NOT NULL AND status IN ('running', 'cancelling')", [session.id])) throw treeError('session-has-active-runs')
-          if (session.headNodeId !== input.parentNodeId) throw treeError('history-position-changed')
-        } else if (input.projectId !== undefined) {
-          throw treeError('invalid-history')
-        }
-        const projectId = input.projectId ?? session.projectId
+        const { projectId } = input
+        if (!projectId) throw new TypeError('projectId is required for a continuous Session')
+        if (tx.get("SELECT id FROM harness_runs WHERE session_id = ? AND project_id IS NOT NULL AND status IN ('running', 'cancelling')", [session.id])) throw treeError('session-has-active-runs')
+        if (session.headNodeId !== input.parentNodeId) throw treeError('history-position-changed')
         if (!native || model.schemaVersion !== 3 || (input.parentNodeId === null) !== (native.parentContextRef === null)) throw treeError('invalid-history')
-        if (native.applicationPrefix && (!session.continuous || input.parentNodeId === null)) throw treeError('invalid-history')
+        if (native.applicationPrefix && input.parentNodeId === null) throw treeError('invalid-history')
         if (session.toolEnvironments && native.initialization.schemaVersion !== 3) throw treeError('history-incompatible')
         if (native.initialization.schemaVersion !== 1 && !isDeepStrictEqual(native.initialization.toolSelection, session.toolSelection)) throw treeError('history-incompatible')
         if (native.initialization.schemaVersion === 3 && !isDeepStrictEqual(native.initialization.toolEnvironments, session.toolEnvironments)) throw treeError('history-incompatible')
@@ -1160,23 +1200,17 @@ export async function openSqliteSessionRecords(
           try { environments.validate(native.initialization.toolEnvironments) } catch { throw treeError('history-incompatible') }
         }
         const binding = checkedBinding(native.binding)
-        if (binding.protocolId !== model.protocolId || (!session.continuous && session.protocolId && session.protocolId !== binding.protocolId)) throw treeError('protocol-mismatch')
+        if (binding.protocolId !== model.protocolId) throw treeError('protocol-mismatch')
         const units = native.units === undefined ? undefined : validateRunUnitBindings(native.units)
-        if (session.continuous) {
-          if (input.parentNodeId !== null) {
-            if (native.applicationPrefix) {
-              const parent = continuousCompletedStep(tx, session.id, input.parentNodeId, { projectId, units })
-              if (parent?.contextRef !== native.parentContextRef) throw treeError('history-incompatible')
-            } else {
-              const parent = continuousNativeStep(tx, session.id, input.parentNodeId, { projectId, units })
-              if (parent?.contextRef !== native.parentContextRef || !sameNativeModelScope(parent.modelSnapshot, model) ||
-                !isDeepStrictEqual(parent.initialization, native.initialization)) throw treeError('history-incompatible')
-            }
+        if (input.parentNodeId !== null) {
+          if (native.applicationPrefix) {
+            const parent = continuousCompletedStep(tx, session.id, input.parentNodeId, { projectId, units })
+            if (parent?.contextRef !== native.parentContextRef) throw treeError('history-incompatible')
+          } else {
+            const parent = continuousNativeStep(tx, session.id, input.parentNodeId, { projectId, units })
+            if (parent?.contextRef !== native.parentContextRef || !sameNativeModelScope(parent.modelSnapshot, model) ||
+              !isDeepStrictEqual(parent.initialization, native.initialization)) throw treeError('history-incompatible')
           }
-        } else {
-          nodePath(tx, input.sessionId, input.parentNodeId)
-          const parent = input.parentNodeId === null ? undefined : tx.get('SELECT context_ref FROM harness_nodes WHERE id = ?', [input.parentNodeId])
-          if ((parent ? optional(parent, 'context_ref') ?? null : null) !== native.parentContextRef) throw treeError('invalid-history')
         }
         const initializationJson = serialize(native.initialization)
         const savedInitialization = tx.get('SELECT * FROM harness_native_initializations WHERE session_id = ?', [input.sessionId])
@@ -1194,7 +1228,6 @@ export async function openSqliteSessionRecords(
           tx.execute('INSERT INTO harness_native_initializations (id, session_id, protocol_id, payload_json) VALUES (?, ?, ?, ?)',
             [initializationId, input.sessionId, binding.protocolId, initializationJson])
         }
-        if (!session.continuous && savedInitialization && (required(savedInitialization, 'protocol_id') !== binding.protocolId || required(savedInitialization, 'payload_json') !== initializationJson)) throw treeError('history-incompatible')
         if (native.input.raw !== input.input || ![1, 2, 3].includes(native.input.schemaVersion) ||
           !isDeepStrictEqual(inputFiles(native.input).map(file => file.snapshotId), (input.files ?? []).map(file => file.snapshotId)) ||
           !isDeepStrictEqual(inputImages(native.input).map(image => image.assetId), (input.images ?? []).map(image => image.assetId))) throw treeError('invalid-history')
@@ -1203,7 +1236,6 @@ export async function openSqliteSessionRecords(
         if (inputFiles(native.input).length) files.retainIn(tx, input.sessionId, `run-input:${id}`, inputFiles(native.input))
         if (units) { attachments.requireApprovedIn(tx, units.models); attachments.requireApprovedIn(tx, units.computer) }
         const execution = { ...initialRunExecution, phase: 'active' }
-        if (!session.continuous) tx.execute('UPDATE harness_sessions SET protocol_id = ? WHERE id = ? AND protocol_id IS NULL', [binding.protocolId, input.sessionId])
         tx.execute(`INSERT INTO harness_runs (
           id, session_id, idempotency_key, input, status, created_at, updated_at,
           prompts_json, model_snapshot_json, history_kind, parent_node_id, context_version, model_id, requested_model_id,
@@ -1212,8 +1244,8 @@ export async function openSqliteSessionRecords(
         ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, 'tree', ?, 'native-local-v1', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
           id, input.sessionId, input.idempotencyKey, input.input, now, now,
           serialize(prompts), serialize(model), input.parentNodeId, model.modelId, input.modelId ?? null,
-          serialize(binding), serialize(native.input), initializationId, native.parentContextRef, serialize(execution), units ? serialize(units) : null, input.projectId ?? null,
-          session.continuous ? initializationJson : null, native.applicationPrefix ? 1 : 0, native.estimatedInputTokens ?? null,
+          serialize(binding), serialize(native.input), initializationId, native.parentContextRef, serialize(execution), units ? serialize(units) : null, projectId,
+          initializationJson, native.applicationPrefix ? 1 : 0, native.estimatedInputTokens ?? null,
         ])
         if (manager) {
           if (!native.access || native.access.agentId !== session.agentId ||
@@ -1229,12 +1261,6 @@ export async function openSqliteSessionRecords(
           if (!isDeepStrictEqual(resolved.access, native.access) ||
             native.access.search && (!session.environmentSelection?.environmentIds.includes('model-search') ||
               session.environmentSelection.toolIdsByEnvironment?.['model-search']?.includes('web_search') === false)) throw environmentError('environment-authorization-changed', 409)
-          if (!session.continuous) {
-            const previous = tx.get('SELECT a.access_json FROM harness_runs r JOIN harness_run_environment_access a ON a.run_id=r.id WHERE r.session_id=? ORDER BY r.rowid LIMIT 1', [session.id])
-            const compatible = previous ? isDeepStrictEqual(parseRunAccess(String(previous.access_json)), native.access) :
-              checkLegacyAccess(tx, session.id, native.access, units, native.initialization, id)
-            if (!compatible) throw environmentError('environment-authorization-changed', 409)
-          }
           tx.execute('INSERT INTO harness_run_environment_access VALUES(?,?,1,?,?)', [id,JSON.stringify(native.access),native.selectionVersion ?? 0,current.revision])
         }
         tx.execute('INSERT INTO harness_run_resumes (run_id, state_json) VALUES (?, ?)', [id, serialize(initialResumeState)])
@@ -1244,24 +1270,7 @@ export async function openSqliteSessionRecords(
       return result
     },
     getRunEnvironmentAccess: id => db.read(reader => readRunAccess(reader, id)),
-    checkLegacyAccess: (...args) => db.read(reader => checkLegacyAccess(reader, ...args)),
-    loadSessionAccess(id) {
-      return db.read(reader => {
-        const row = reader.get('SELECT a.access_json FROM harness_runs r JOIN harness_run_environment_access a ON a.run_id=r.id WHERE r.session_id=? ORDER BY r.rowid LIMIT 1', [id])
-        return row ? parseRunAccess(String(row.access_json)) : undefined
-      })
-    },
-    loadNativeInitialization(sessionId) { return db.read(reader => {
-      const session = reader.get('SELECT * FROM harness_sessions WHERE id = ?', [sessionId])
-      if (!session) throw new Error(`unknown session ${sessionId}`)
-      if (required(session, 'history_mode') !== 'native-local-v1') throw treeError('legacy-session-readonly')
-      const initialization = reader.get('SELECT * FROM harness_native_initializations WHERE session_id = ?', [sessionId])
-      if (!initialization) return undefined
-      if (required(initialization, 'protocol_id') !== optional(session, 'protocol_id')) throw treeError('invalid-history')
-      return Object.freeze(JSON.parse(required(initialization, 'payload_json')) as NativeInitialization)
-    }) },
     loadNativeHistory(sessionId, parentNodeId, scope) { return db.read(reader => {
-      if (!scope) return nativeHistory(reader, sessionId, parentNodeId)
       requireContinuousHead(reader, sessionId, parentNodeId)
       return continuousNativeHistory(reader, sessionId, parentNodeId, scope)
     }) },

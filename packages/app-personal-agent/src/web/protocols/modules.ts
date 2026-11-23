@@ -18,7 +18,7 @@ export interface ProtocolWebModule {
   mount(initial: ProtocolViewSnapshot, options?: ProtocolTurnOptions): MountedProtocolTurn
 }
 
-/** Text is sent unchanged. Prompt/template expansion belongs exclusively to the server. */
+/** Each protocol receives the message text unchanged. */
 function encodeTextInput(text: string, imageCount = 0, fileCount = 0): string {
   if (typeof text !== 'string' || (!text.trim() && !imageCount && !fileCount)) throw new TypeError('请输入消息、添加图片或引用文件。')
   return text

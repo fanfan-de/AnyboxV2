@@ -9,6 +9,7 @@ import type { ToolSelectionSnapshot } from './tool/catalog.js'
 import type { ToolEnvironmentSnapshot } from './tool-environments/domain.js'
 import type { UnitAttachment } from './unit/domain.js'
 import type { AgentSummary } from './agent/domain.js'
+import type { ContinuousHistoryPage as StoredHistoryPage } from './session/domain.js'
 export type { ImageRef } from './image/port.js'
 /** Attachment facts carry no code or credential material, so the ledger record is its own public view. */
 export type UnitAttachmentView = UnitAttachment
@@ -63,6 +64,7 @@ export interface RunView {
   readonly error?: string
   readonly errorCategory?: string
 }
+export type ContinuousHistoryPage = Omit<StoredHistoryPage, 'runs'> & { readonly runs: readonly RunView[] }
 export type ToolCallView = { readonly environmentTool?: EnvironmentTool } & (
   | { readonly id: string; readonly name: 'bash'; readonly command: string }
   | { readonly id: string; readonly name: 'apply_patch'; readonly patch: string; readonly patchTruncated: boolean }

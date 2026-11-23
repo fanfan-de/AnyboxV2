@@ -18,17 +18,17 @@ export interface HarnessGateway { handle(request: IncomingMessage, response: Ser
 const id = '[^/]+'
 const paths: Record<string, readonly RegExp[]> = {
   GET: [ new RegExp(`^/agents/${id}/environment-access(/changes/${id})?$`), new RegExp(`^/sessions/${id}/environments$`),
-    /^\/(instance|agents|projects|models|prompts|tools|tool-environments|computer-environments|mcp-connections|access\/tokens|changes)$/, /^\/products\/personal-agent$/, new RegExp(`^/projects/${id}/sessions$`),
-    new RegExp(`^/agents/${id}(/(prompts|session-defaults|tools))?$`), new RegExp(`^/prompts/${id}(/versions)?$`),
-    new RegExp(`^/sessions/${id}(/runs(/by-key/${id})?|/nodes(/${id}(/path)?)?|/images/${id}/content|/project-files/(search|preview|snapshots/${id}))?$`),
+    /^\/(instance|agents|projects|models|tools|tool-environments|computer-environments|mcp-connections|access\/tokens|changes)$/, /^\/products\/personal-agent$/, new RegExp(`^/projects/${id}/sessions$`),
+    new RegExp(`^/agents/${id}(/(session-defaults|tools))?$`),
+    new RegExp(`^/sessions/${id}(/history|/runs(/by-key/${id})?|/nodes(/${id}(/path)?)?|/images/${id}/content|/project-files/(search|preview|snapshots/${id}))?$`),
     new RegExp(`^/runs/${id}(/(view|events|wait))?$`),
     new RegExp(`^/models/(templates|protocols|catalog|providers|definitions|provider-settings|settings)(/${id}(/(history|models))?)?$`),
     /^\/units\/(attachments|local-computer\/attachments)$/ ],
   POST: [ /^\/mcp-connections$/, new RegExp(`^/mcp-connections/${id}/(refresh|disable)$`), new RegExp(`^/agents/${id}/environment-access/(grants|preferences)$`), new RegExp(`^/sessions/${id}/environments$`),
-    /^\/(agents|projects|sessions|prompts|access\/tokens)$/, /^\/products\/personal-agent\/(open|stop|retry)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
+    /^\/(agents|projects|access\/tokens)$/, /^\/products\/personal-agent\/(open|stop|retry)$/, new RegExp(`^/access/tokens/${id}/revoke$`),
     /^\/projects\/directories\/(browse|close|create)$/,
-    new RegExp(`^/agents/${id}(/(prompts|session-defaults|tools|session))?$`), new RegExp(`^/prompts/${id}(/publish)?$`),
-    new RegExp(`^/sessions/${id}/(model|archive|restore|runs|images(/renew)?|project-files/(preview|prepare|renew|tree/(open|page|close)))$`), new RegExp(`^/runs/${id}/cancel$`),
+    new RegExp(`^/agents/${id}(/(session-defaults|tools|session))?$`),
+    new RegExp(`^/sessions/${id}/(model|runs|images(/renew)?|project-files/(preview|prepare|renew|tree/(open|page|close)))$`), new RegExp(`^/runs/${id}/cancel$`),
     /^\/models\/catalog\/refresh$/, new RegExp(`^/models/(providers|definitions|provider-settings|settings)(/${id}(/(retry|key|key/delete|delete|discover|check))?)?$`),
     // Owner-side unit attachment control; unit-side `/units/unit/*` is never proxied, units dial the harness server directly.
     /^\/units\/(attach-codes|local-computer\/attachments)$/, new RegExp(`^/units/(attachments|local-computer/attachments)/${id}/revoke$`) ],

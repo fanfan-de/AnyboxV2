@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import type { ApplicationAsset } from '@anybox/application-api/node'
-export const personalAgentAssetPrefix = '/apps/personal-agent/0.2.5'
+export const personalAgentAssetPrefix = '/apps/personal-agent/0.2.6'
 export const personalAgentWebEntry = `${personalAgentAssetPrefix}/web/harness-app.js`
 export const personalAgentAssets: readonly ApplicationAsset[] = [
   { path: `${personalAgentAssetPrefix}/web/client-types.js`, file: fileURLToPath(new URL('./web/client-types.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
@@ -13,10 +13,8 @@ export const personalAgentAssets: readonly ApplicationAsset[] = [
   { path: `${personalAgentAssetPrefix}/web/agent-logo-editor.js`, file: fileURLToPath(new URL('./web/agent-logo-editor.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/agent-logo-presets.js`, file: fileURLToPath(new URL('./web/agent-logo-presets.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/settings-client.js`, file: fileURLToPath(new URL('./web/settings-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
-  { path: `${personalAgentAssetPrefix}/web/product-view-state.js`, file: fileURLToPath(new URL('./web/product-view-state.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/page-lifecycle.js`, file: fileURLToPath(new URL('./web/page-lifecycle.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/event-stream.js`, file: fileURLToPath(new URL('./web/event-stream.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
-  { path: `${personalAgentAssetPrefix}/web/prompt-client.js`, file: fileURLToPath(new URL('./web/prompt-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/session-defaults-client.js`, file: fileURLToPath(new URL('./web/session-defaults-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/tools-client.js`, file: fileURLToPath(new URL('./web/tools-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
   { path: `${personalAgentAssetPrefix}/web/units-client.js`, file: fileURLToPath(new URL('./web/units-client.js', import.meta.url)), type: 'text/javascript; charset=utf-8' },
