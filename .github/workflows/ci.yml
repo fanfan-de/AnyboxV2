@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out Anybox
+        uses: actions/checkout@v6
+        with:
+          path: AnyboxV2
+          persist-credentials: false
+
+      - name: Check out NyaCore
+        uses: actions/checkout@v6
+        with:
+          repository: fanfan-de/NyaCore
+          ref: 11f959d577aecbd18b9ef14be4bee6e11f9a9a42
+          path: NyaCore
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+
+      - name: Install and build NyaCore
+        working-directory: NyaCore
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Anybox dependencies
+        working-directory: AnyboxV2
+        run: npm ci
+
+      - name: Type-check, build and test Anybox
+        working-directory: AnyboxV2
+        run: npm run check
